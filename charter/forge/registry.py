@@ -6,6 +6,7 @@ record carries a ``forge`` stamp so a merged, multi-forge inventory stays unambi
 from __future__ import annotations
 
 import re
+import urllib.parse
 
 from .base import Forge
 from .github import GitHubForge
@@ -222,6 +223,32 @@ def _host_of(url: str) -> str:
     if m:
         return m.group(1).lower()
     return ""
+
+
+def namespace_of(url: str) -> str | None:
+    """``path_with_namespace`` out of a git remote URL — the other half of
+    :func:`_host_of`, and the value every forge API path is built from.
+
+    Handles both shapes git accepts (``scheme://host/group/sub/repo`` and scp-style
+    ``git@host:group/sub/repo``) and strips a trailing ``.git``. ``None`` when there is no
+    path to take, which callers must treat as *this clone names no repository on a forge* —
+    never as a guess.
+
+    Here rather than beside its one caller because two of them already exist:
+    `glstate._remote_path` has parsed remotes this way since the status line learned to
+    show open changes, and the change surface asks the same question. One parser, so a
+    remote shape that confuses one cannot quietly answer differently for the other.
+    """
+    url = (url or "").strip()
+    if not url:
+        return None
+    if url.endswith(".git"):
+        url = url[:-4]
+    if "://" in url:
+        return urllib.parse.urlparse(url).path.strip("/") or None
+    if ":" in url:                      # scp-like: git@host:group/sub/repo
+        return url.split(":", 1)[1].strip("/") or None
+    return None
 
 
 def resolve_host(url: str, root) -> Forge | None:

@@ -24,13 +24,54 @@ import json
 import urllib.parse
 
 from .. import util
-from .base import CI_STATES, LIST_TIMEOUT, STATUS_TIMEOUT, ForgeError
+from .base import (CHECKS_FAILED, CHECKS_PASSED, CHECKS_RUNNING,
+                   CHECKS_UNKNOWN, CI_STATES, Checks, ForgeError, ForgeWriteError,
+                   LIST_TIMEOUT, REQUEST_CLOSED, REQUEST_MERGED, REQUEST_OPEN,
+                   STATUS_TIMEOUT, Request, worst)
 
 #: GitHub rollup state → the neutral vocabulary. Anything unlisted becomes None.
 _CI_MAP = {
     "SUCCESS": "success", "FAILURE": "failed", "ERROR": "failed",
     "PENDING": "pending", "EXPECTED": "pending",
 }
+
+#: A concluded check run's ``conclusion`` → charter's check vocabulary.
+#:
+#: Three of these are judgements the table in the spec would otherwise have left to an
+#: implementer, and they are decided here so nobody re-decides them per backend.
+#: ``skipped`` and ``neutral`` **count as passed** — they are how a forge says *nothing to
+#: do here*, and a ``paths:`` filter or an ``if:`` condition produces them constantly, so
+#: any other reading refuses the gate on most real repositories. ``action_required`` is
+#: **failed**: it is the forge asking for a human, and a check waiting on a person did not
+#: pass. Anything unlisted degrades to :data:`CHECKS_UNKNOWN` — never to passed.
+_CONCLUSIONS = {
+    "success": CHECKS_PASSED, "neutral": CHECKS_PASSED, "skipped": CHECKS_PASSED,
+    "failure": CHECKS_FAILED, "cancelled": CHECKS_FAILED, "canceled": CHECKS_FAILED,
+    "timed_out": CHECKS_FAILED, "startup_failure": CHECKS_FAILED,
+    "action_required": CHECKS_FAILED,
+}
+
+#: A run the forge itself has DISOWNED. It does not count toward ``total`` at all: if it is
+#: the only run at the head, ``NOT RUN`` is the honest answer, because GitHub has said this
+#: result no longer describes this commit.
+_STALE = "stale"
+
+#: ``status`` values that mean the run has not concluded. A run whose ``status`` is none of
+#: these and whose ``conclusion`` charter cannot map is ``unknown``.
+_UNCONCLUDED = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
+
+#: Combined **Commit Status** state → charter's check vocabulary. This is the other half of
+#: "every check the forge would show a human": Jenkins, Buildkite and CircleCI's status
+#: integration POST here and appear in no check-runs reply at all.
+_STATUS_STATES = {
+    "success": CHECKS_PASSED, "pending": CHECKS_RUNNING,
+    "failure": CHECKS_FAILED, "error": CHECKS_FAILED,
+}
+
+#: How many pages of check runs charter will read before it declares it could not
+#: enumerate them. A head with more than this many checks is not one charter can answer
+#: about honestly, so it answers ``UNKNOWN`` rather than the subset it managed to read.
+_MAX_PAGES = 10
 
 _ROLLUP_QUERY = """
 query($owner:String!, $name:String!, $ref:String!) {
@@ -40,6 +81,23 @@ query($owner:String!, $name:String!, $ref:String!) {
   }
 }
 """
+
+
+def _run_state(run) -> str | None:
+    """One check run's state, or ``None`` when it does not count toward ``total`` at all.
+
+    ``None`` is only ever ``stale`` — a run GitHub itself has disowned. Everything else
+    produces a state, because a run charter cannot read is still a run that exists, and
+    dropping it would let an unreadable check leave a head looking like ``NOT RUN``.
+    """
+    run = run if isinstance(run, dict) else {}
+    conclusion = (run.get("conclusion") or "").lower()
+    if conclusion == _STALE:
+        return None
+    if conclusion:
+        return _CONCLUSIONS.get(conclusion, CHECKS_UNKNOWN)
+    status = (run.get("status") or "").lower()
+    return CHECKS_RUNNING if status in _UNCONCLUDED else CHECKS_UNKNOWN
 
 
 class _NotAnOrg(Exception):
@@ -244,6 +302,188 @@ class GitHubForge:
         rollup = ((node.get("target") or {}).get("statusCheckRollup") or {})
         state = _CI_MAP.get(rollup.get("state") or "")
         return state if state in CI_STATES else None
+
+    # --- the change surface: reads ------------------------------------------------
+    def _api_strict(self, path: str):
+        """JSON GET that RAISES rather than degrading. The `_api_strict` GitLab already
+        ships, in GitHub's own error vocabulary, for the one caller whose return type has
+        no value meaning "I could not ask"."""
+        try:
+            p = util.run([self.cli, "api", "--hostname", self.host, path],
+                         check=False, timeout=LIST_TIMEOUT)
+        except util.ProcTimeout as e:
+            raise ForgeError(f"GitHub API call ({path}) {e}") from e
+        if p.returncode != 0:
+            detail = (p.stderr or p.stdout or "").strip() or f"gh exited {p.returncode}"
+            raise ForgeError(f"GitHub API call failed ({path}): {detail}")
+        if not p.stdout.strip():
+            return []
+        try:
+            return json.loads(p.stdout)
+        except ValueError as e:
+            raise ForgeError(f"GitHub API returned malformed JSON ({path}): {e}") from e
+
+    def _check_runs(self, owner: str, name: str, sha: str) -> list[str] | None:
+        """Per-run states for every Check Run at *sha*, or ``None`` if charter could not
+        enumerate them **completely** — a failed call, or a reply whose ``total_count``
+        says there is more than charter read. Incomplete is `unknown`, never `not_run`."""
+        out: list[str] = []
+        for page in range(1, _MAX_PAGES + 1):
+            data = self._api(f"repos/{owner}/{name}/commits/{sha}/check-runs"
+                             f"?per_page=100&page={page}")
+            if not isinstance(data, dict):
+                return None
+            runs = data.get("check_runs")
+            if not isinstance(runs, list):
+                return None
+            for r in runs:
+                state = _run_state(r)
+                if state is not None:                # `stale` is dropped, not counted
+                    out.append(state)
+            if len(runs) < 100:
+                return out                           # a short page is the last page
+        return None                                  # more pages than charter will read
+
+    def _commit_statuses(self, owner: str, name: str, sha: str) -> list[str] | None:
+        """Per-status states for every Commit Status at *sha*, or ``None``.
+
+        The endpoint deduplicates to the latest status per context, which is what GitHub
+        shows a human, so no aggregation is invented here."""
+        data = self._api(f"repos/{owner}/{name}/commits/{sha}/status?per_page=100")
+        if not isinstance(data, dict):
+            return None
+        statuses = data.get("statuses")
+        if not isinstance(statuses, list):
+            return None
+        declared = data.get("total_count")
+        if isinstance(declared, int) and declared > len(statuses):
+            return None                       # more than one page: not enumerated
+        return [_STATUS_STATES.get((s or {}).get("state") or "", CHECKS_UNKNOWN)
+                for s in statuses]
+
+    def checks_at(self, path: str, sha: str, number: int | None = None) -> Checks:
+        """See :meth:`base.Forge.checks_at`. **Two reads, summed into one total.**
+
+        The check-runs endpoint alone misses every Jenkins/Buildkite/CircleCI status and
+        would render a green head as ``NOT RUN``, permanently — this section's own failure
+        arriving from the other direction, against a gate that deliberately offers no
+        ``--force``. *number* is unused here: GitHub keys checks to the commit, so the
+        pull request adds nothing a sha lookup does not already have."""
+        owner, _, name = path.partition("/")
+        enc_owner = urllib.parse.quote(owner, safe="")
+        enc_name = urllib.parse.quote(name, safe="")
+        enc_sha = urllib.parse.quote(sha, safe="")
+        runs = self._check_runs(enc_owner, enc_name, enc_sha)
+        if runs is None:
+            return Checks(None, CHECKS_UNKNOWN)
+        statuses = self._commit_statuses(enc_owner, enc_name, enc_sha)
+        if statuses is None:
+            return Checks(None, CHECKS_UNKNOWN)
+        seen = runs + statuses
+        return Checks(len(seen), worst(seen))
+
+    def request_for(self, path: str, branch: str) -> Request | None:
+        """See :meth:`base.Forge.request_for`. ``state=all``, newest first — the one thing
+        `open_change` cannot do, and the reason ``REJECTED`` is derivable at all."""
+        owner, _, name = path.partition("/")
+        enc_owner = urllib.parse.quote(owner, safe="")
+        enc_name = urllib.parse.quote(name, safe="")
+        enc_branch = urllib.parse.quote(branch, safe="")
+        arr = self._api_strict(
+            f"repos/{enc_owner}/{enc_name}/pulls?state=all"
+            f"&head={enc_owner}:{enc_branch}&sort=created&direction=desc&per_page=1")
+        if not arr:
+            return None
+        pr = arr[0] if isinstance(arr, list) else {}
+        number = pr.get("number")
+        if not isinstance(number, int):
+            raise ForgeError(
+                f"GitHub returned a pull request for {path}@{branch} with no number")
+        merged_at = pr.get("merged_at")
+        if merged_at:
+            state, merge = REQUEST_MERGED, pr.get("merge_commit_sha") or None
+        elif (pr.get("state") or "") == "closed":
+            state, merge = REQUEST_CLOSED, None
+        else:
+            # `merge_commit_sha` is populated on an OPEN pull request too, with the sha of
+            # a throwaway test merge that is on no branch. Read only when merged.
+            state, merge = REQUEST_OPEN, None
+        return Request(number=number, state=state,
+                       head=((pr.get("head") or {}).get("sha") or ""), merge=merge)
+
+    def change_body(self, path: str, number: int) -> str:
+        owner, _, name = path.partition("/")
+        enc_owner = urllib.parse.quote(owner, safe="")
+        enc_name = urllib.parse.quote(name, safe="")
+        data = self._api_strict(
+            f"repos/{enc_owner}/{enc_name}/pulls/{int(number)}")
+        if not isinstance(data, dict):
+            raise ForgeError(f"GitHub returned no pull request #{int(number)} on {path}")
+        return data.get("body") or ""
+
+    # --- the change surface: writes ------------------------------------------------
+    def _write(self, args: list[str], what: str):
+        """One write, and never through :meth:`_api`. ADR 0002: *a write needs to fail
+        loudly, which means it needs a path that is not ``_api``*."""
+        try:
+            p = util.run([self.cli, "api", "--hostname", self.host, *args],
+                         check=False, timeout=LIST_TIMEOUT)
+        except util.ProcTimeout as e:
+            raise ForgeWriteError(f"{what} {e}") from e
+        if p.returncode != 0:
+            detail = (p.stderr or p.stdout or "").strip() or f"gh exited {p.returncode}"
+            raise ForgeWriteError(f"{what} failed: {detail}")
+        if not p.stdout.strip():
+            return None
+        try:
+            return json.loads(p.stdout)
+        except ValueError as e:
+            raise ForgeWriteError(f"{what}: GitHub returned malformed JSON: {e}") from e
+
+    def create_change(self, path: str, base: str, head: str,
+                      title: str, body: str) -> int:
+        # `-f/--raw-field`, never `-F/--field` (#323). `-F` gives an `@`-prefixed value
+        # file-read semantics, which turned a status refresh into an arbitrary local file
+        # read by a process holding the forge token. A change's title and body carry the
+        # `why` and the member names — committed values from someone else's machine — so
+        # this applies HARDER on a write than it did on the read it was found in.
+        owner, _, name = path.partition("/")
+        enc_owner = urllib.parse.quote(owner, safe="")
+        enc_name = urllib.parse.quote(name, safe="")
+        what = f"opening a pull request on {path} from '{head}' onto '{base}'"
+        data = self._write([f"repos/{enc_owner}/{enc_name}/pulls", "-X", "POST",
+                            "-f", f"title={title}", "-f", f"body={body}",
+                            "-f", f"head={head}", "-f", f"base={base}"], what)
+        number = data.get("number") if isinstance(data, dict) else None
+        if not isinstance(number, int):
+            raise ForgeWriteError(f"{what}: GitHub returned no pull request number")
+        return number
+
+    def update_change_body(self, path: str, number: int, body: str) -> None:
+        owner, _, name = path.partition("/")
+        enc_owner = urllib.parse.quote(owner, safe="")
+        enc_name = urllib.parse.quote(name, safe="")
+        self._write([f"repos/{enc_owner}/{enc_name}/pulls/{int(number)}", "-X", "PATCH",
+                     "-f", f"body={body}"],
+                    f"updating pull request #{int(number)} on {path}")
+
+    def merge_change(self, path: str, number: int, method: str,
+                     title: str, message: str) -> str:
+        owner, _, name = path.partition("/")
+        enc_owner = urllib.parse.quote(owner, safe="")
+        enc_name = urllib.parse.quote(name, safe="")
+        what = f"merging pull request #{int(number)} on {path} ({method})"
+        data = self._write(
+            [f"repos/{enc_owner}/{enc_name}/pulls/{int(number)}/merge", "-X", "PUT",
+             "-f", f"merge_method={method}",
+             "-f", f"commit_title={title}", "-f", f"commit_message={message}"], what)
+        data = data if isinstance(data, dict) else {}
+        sha = data.get("sha")
+        if not data.get("merged") or not isinstance(sha, str) or not sha:
+            raise ForgeWriteError(
+                f"{what}: GitHub did not confirm a merge "
+                f"({(data.get('message') or 'no message')!r})")
+        return sha
 
     def credential_helper(self) -> str:
         return f"!{self.cli} auth git-credential"
