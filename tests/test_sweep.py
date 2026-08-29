@@ -3135,6 +3135,68 @@ class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
     def test_one_shards_trouble_does_not_cancel_the_others(self):
         self.assertEqual(self.jobs["sweep"]["strategy"]["fail-fast"], "false")
 
+    def _collect_step(self, step_id):
+        for step in self.jobs["collect"]["steps"]:
+            if step.get("id") == step_id:
+                return step
+        self.fail(f"collect has no step with id {step_id!r}")
+
+    def test_a_sweep_that_never_sized_itself_does_not_borrow_the_shard_sentence(self):
+        """#654. `cancel-in-progress` means a second push cancels the first run, and
+        `always()` carries that run into this job anyway — where the shard arithmetic
+        answered about shards nobody ever planned. Measured on this branch: run 99, cancelled
+        by run 100, published `no verdict: 1 of 1 shard did not report`.
+
+        The property is not that a step exists. It is that the words this path publishes are
+        NOT the words the shard path publishes — #626's sentence has to keep meaning what it
+        means, and a run that never sized itself must not be able to say it."""
+        headline = self._collect_step("superseded")["run"]
+        self.assertIn("did not size itself", headline)
+        self.assertNotIn("shard", headline)
+        self.assertNotIn("survivor", headline)
+
+    def test_the_two_answers_are_exact_negations_so_neither_can_shadow_the_other(self):
+        """`headline` is `say || superseded`, which is only a choice between one value and
+        one empty string while exactly one of them can run. Two conditions that merely
+        looked different would make the `||` a precedence question, and a run could answer
+        twice — the second answer silently losing to whichever `||` saw first."""
+        yes = self._collect_step("superseded")["if"]
+        no = self._collect_step("say")["if"]
+        self.assertEqual(yes, "${{ needs.plan.result == 'cancelled' }}")
+        self.assertEqual(no, yes.replace("==", "!="))
+
+    def test_the_discriminator_is_the_sizing_job_and_not_the_runs_own_cancellation(self):
+        """`cancelled()` was the obvious answer and it is the wrong one — measured, not
+        reasoned. Run 99 was cancelled (`conclusion=cancelled`, `Size the sweep` cancelled,
+        the shard cancelled) and `collect` still took the `say` branch. In a job running
+        under `always()`, `cancelled()` does not answer for the run.
+
+        `needs.plan.result` does, and it is also the narrower question: it is `cancelled`
+        exactly when the sizing job did not finish, which is the only state in which the
+        shard arithmetic is answering about shards nobody planned. A shard that exceeds its
+        own `timeout-minutes` leaves `plan` succeeded, so #626 is untouched."""
+        for step_id in ("superseded", "say"):
+            self.assertNotIn("cancelled()", self._collect_step(step_id)["if"], step_id)
+            self.assertIn("needs.plan.result", self._collect_step(step_id)["if"], step_id)
+
+    def test_the_superseded_answer_needs_nothing_a_cancellation_would_have_skipped(self):
+        """The one state this step exists for is the state in which every step above it was
+        cancelled — checkout, setup-python and the artifact download included. A step that
+        reached for the tree, the interpreter or the shard files could not run there, and
+        the run would fall back to no headline at all."""
+        step = self._collect_step("superseded")
+        self.assertNotIn("uses", step)
+        for reach in ("python", "tools/sweep.py", "shards", "$GITHUB_STEP_SUMMARY"):
+            self.assertNotIn(reach, step["run"], reach)
+
+    def test_both_step_ids_reach_the_jobs_output(self):
+        """A step that answers into `$GITHUB_OUTPUT` and is not named in `outputs:` is a
+        verdict nothing collects — which is this file's own failure mode, one job over."""
+        for key in ("headline", "conclusion"):
+            out = self.jobs["collect"]["outputs"][key]
+            self.assertIn(f"steps.say.outputs.{key}", out, key)
+            self.assertIn(f"steps.superseded.outputs.{key}", out, key)
+
     def _commands(self):
         """Every line of every `run:` body that is a command rather than a comment.
 
