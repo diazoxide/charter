@@ -1881,7 +1881,7 @@ def _bottom(fid: str) -> str:
     `$CHARTER_SESSION_ID`/`$CLAUDE_CODE_SESSION_ID` a launched panel inherits whole from
     the harness (`_right`'s docstring makes the identical point for `_persona_chips`).
 
-    **Four candidate fields on that row, each shown WHOLE or dropped WHOLE — never one
+    **Six candidate fields on that row, each shown WHOLE or dropped WHOLE — never one
     assembled string cut once from the right.** The attention row is one row and its
     WIDTH is the frame's own, not a narrow side panel's, so ordinarily every field fits
     comfortably and this never has to choose. But `layout.py`'s own module docstring
@@ -1895,13 +1895,27 @@ def _bottom(fid: str) -> str:
     Priority order, highest first: the one alert (`_alerts()`'s own top pick — an
     actionable control-plane problem, carrying its own fix); the in-flight spinner
     (:func:`_inflight_field` — work happening RIGHT NOW, and the only thing on this row
-    that will be different in a second); `_session_news` (this session's own activity —
-    silent unless it already has something to say, so its mere presence is the signal);
-    the todo count (persistent state, not urgent); the configured hotkey hint (the one
-    thing always rediscoverable another way, so it is first to give up its columns). Once
-    decided, the survivors are RE-JOINED in the original reading order (todo, alert,
-    inflight, news, hotkey) — priority governs only who is dropped when the pane is
-    starved, not how a healthy pane reads.
+    that will be different in a second); the selected repo's detail
+    (:func:`_selected_detail` — the direct answer to the last thing the operator DID, which
+    is why it outranks the two ambient fields below it and not the two urgent ones above);
+    `_session_news` (this session's own activity — silent unless it already has something
+    to say, so its mere presence is the signal); the todo count (persistent state, not
+    urgent); the configured hotkey hint (the one thing always rediscoverable another way,
+    so it is first to give up its columns). Once decided, the survivors are RE-JOINED in
+    the original reading order (todo, alert, inflight, news, hotkey, repo) — priority
+    governs only who is dropped when the pane is starved, not how a healthy pane reads.
+
+    **The selected repo's detail is the row's "right side" and is drawn LAST**, which is
+    what the ask for a tooltip resolves to on a row composed left to right: last is as far
+    right as a field gets without a second layout rule for one field. It is also empty on
+    every plane that has never selected anything, and `_fit_fields` drops an empty field
+    whole — so a frame nobody has clicked draws the row it always drew.
+
+    **At `terse` it is subject to the same one-field limit as everything else**, so a
+    selection made on a minimal frame shows only when nothing above it has anything to say.
+    That is the density doing what it is for rather than an exception carved for the newest
+    field; `charter frame-density full` is a keypress away and the highlight in the table
+    is still there either way.
 
     **`_session_news` is asked to leave its own in-flight count out** (`inflight=False`).
     Both would otherwise draw the same fact from the same tracker on the same row —
