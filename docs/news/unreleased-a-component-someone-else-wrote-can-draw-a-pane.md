@@ -58,7 +58,7 @@ frame with a panel silently missing from it.
 import that raises, an API version charter does not speak, two distributions claiming one
 id, a `render` that throws — each of those is now a pane naming the distribution and the
 reason, with the rest of the frame drawn around it. That is the surface the standin was
-built for last release and had nowhere to appear on.
+built for one step earlier in this same release and had nowhere to appear on.
 
 ## The slot names
 

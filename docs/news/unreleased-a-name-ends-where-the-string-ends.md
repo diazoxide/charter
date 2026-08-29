@@ -21,13 +21,13 @@ characters Python's `$` treats as "the end" is exactly `{U+000A}`. `\r`, U+2028 
 SEPARATOR, U+0085 NEXT LINE and the two ASCII vertical spaces are **not** in it, which is
 why this needed no normalisation pass: one codepoint, one word per call site.
 
-**Fourteen call sites, not the two the report named.** The report listed nine anchored name
-rules; the sweep that went looking for a tenth found eleven more anchored patterns and a
-tenth name rule the report had missed — `commands_secrets._ENV_NAME_RE`, which guards the
-name written into a dotenv file and whose caller does not strip. Every rule that *admits* a
-value now asks `fullmatch`: persona names, workspace names, doc topics, plugin ids and
-marketplace names, MCP and tool permission rules, both environment-variable rules, both
-version rules, forge hostnames and `--since` ages.
+**Fifteen call sites in ten files, not the two the report named.** The report listed nine
+anchored name rules; the sweep that went looking for a tenth found eleven more anchored
+patterns and a tenth name rule the report had missed — `commands_secrets._ENV_NAME_RE`,
+which guards the name written into a dotenv file and whose caller does not strip. Every
+rule that *admits* a value now asks `fullmatch`: persona names, workspace names, doc
+topics, plugin ids and marketplace names, MCP and tool permission rules, both
+environment-variable rules, both version rules, forge hostnames and `--since` ages.
 
 **Two were "already correct" only because a caller remembered `.strip()`.** That is a caller
 compensating, not a rule being right, and the eleventh caller inherits nothing from it. The
@@ -41,7 +41,7 @@ gate before a requirement specifier"* and interpolates the raw value into
 it. Reading a pin out of `charter.toml` already strips, so pinned planes are unchanged; what
 changed is that the gate now checks the value that is spent.
 
-**Five patterns deliberately keep `.match`, and that is the interesting half.** An
+**Six patterns deliberately keep `.match`, and that is the interesting half.** An
 *admitter* answers "is this value acceptable?", and over-matching admits what the rule
 exists to refuse. A *detector* answers "is this token a redirection, a duration, a config
 key I must account for?", and over-matching makes a guard fire on **more** inputs —
@@ -49,9 +49,11 @@ tightening it makes the guard fire on fewer. Measured against the real guards: s
 `hooks._REDIRECT_READ_RE` to `fullmatch` stops the leak guard seeing a vault the shell opens
 for `< <vault> true`, and switching `hooks._DURATION_RE` makes `timeout 5<LF> cat <vault>`
 name `'5\n'` as the program instead of `cat`. The same `$` is a defect in one and
-load-bearing in the other, and a sweep that "finished the job" would have turned five
-security guards fail-open. Those five are pinned as detectors, with the measurement attached
-so the next sweep argues with a test rather than with a comment.
+load-bearing in the other, and a sweep that "finished the job" would have turned six
+security guards fail-open — `hooks._REDIRECT_RE`, `_REDIRECT_READ_RE`, `_DURATION_RE`,
+`_CONFIG_KEY_RE` and `_GIT_CONFIG_KEY_ENV_RE`, and `toolgate._VERSIONED`. All six are pinned
+as detectors, with the measurement attached so the next sweep argues with a test rather than
+with a comment.
 
 **Who this refuses that it used to accept.** Only a name ending in a newline — a name no
 `charter persona create` could mint, because it enforces this same rule. Every name charter

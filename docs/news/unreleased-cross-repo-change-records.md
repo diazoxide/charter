@@ -67,3 +67,11 @@ keeps a block that never mentions `changes` — and the records would simply nev
 repairs them all. It creates no directory: `changes/` is created by the first
 `charter change create`, because a path that exists with nothing tracked under it is exactly
 what makes `charter workspace live --off` fail whole.
+
+**Run `charter workspace reinit --all` once after upgrading**, and you do not have to
+remember to: every workspace made by an older charter says so itself. `charter workspace
+list` marks each stale row with `⚠` and closes with `⚠ N workspace(s) need reinit (…) —
+bring their structure up to date: charter workspace reinit --all`, and the status line's
+alert block carries `⚠ reinit N ws · charter ws reinit --all`. It is additive and idempotent:
+it creates what is missing, re-stamps the marker, refreshes the managed `.gitignore` block,
+and destroys nothing.

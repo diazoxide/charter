@@ -14,9 +14,12 @@ machine, this minute, in this shell".
 a false GREEN: both sides of one assertion collapsed to an ambient `$CHARTER_WORKSPACE`, so
 a mutation that dies with a clean environment survived under the pin. A test that stops
 testing when a variable happens to be set is worse than one that fails, and that one hid a
-real defect through two separate investigations. Behind it sat the measurement: 108 of the
-suite's 168 `patch.dict(os.environ, …)` calls omit `clear=True`, across 38 unrelated files,
-so whatever the developer's shell holds reaches the code under test.
+real defect through two separate investigations. Behind it sat the measurement: **most of
+the suite's `patch.dict(os.environ, …)` calls omit `clear=True`** — 139 of 283, across 59
+unrelated files, counted by parsing this release's `tests/` tree — so whatever the
+developer's shell holds reaches the code under test. That count moves every time somebody
+writes a test, which is the point of fixing it as a class rather than call site by call
+site.
 
 **Fixed as a class, the way the plane guards were.** 0.52.0 refused writes into your real
 `.charter/`; 0.53.0 refused reads of the `[update] channel` your own `charter.toml`
@@ -25,13 +28,13 @@ without noticing:
 
 * Charter's variables are **removed from the suite's environment** before charter is first
   imported. What is gone cannot leak — not into a bulk `dict(os.environ)`, not into a
-  subprocess that inherits this process, not into any of those 108 call sites. That alone
+  subprocess that inherits this process, not into any of those call sites. That alone
   is what makes the answer identical in a frame and on a CI runner.
 * A **targeted read of one of them is refused** while a test runs, unless that test said
   what it holds. Removal on its own would only silence the red: the test would still be
   asserting against a value it never chose, and the day its expectation coincides with the
   ambient one it goes quietly green for the wrong reason. The refusal is what makes the
-  109th instance fail on the pull request that introduces it, on a runner that never had
+  next instance fail on the pull request that introduces it, on a runner that never had
   the variable set.
 
 The refusal names the test that made the read, the variable, and both ways out —

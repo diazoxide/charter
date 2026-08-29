@@ -8,17 +8,28 @@ submenu, no way to scroll and no way to search. It now opens a **palette** — a
 charter draws, filters as you type, and runs on Enter.
 
 ```
-charter · 7 to choose from
-> detach — leave the harness running
+charter · 12 to choose from
+> workspace: alpha — pick another   cannot switch: $CHARTER_WORKSPACE pins this fr…
+    persona: steward — pick another
+    change: component-api-2 — pick another
+    detach — leave the harness running
+    repo: select the next row
+    repo: select the previous row
     density: minimal
     density: normal
   * density: full
-  * workspace: alpha             cannot switch: $CHARTER_WORKSPACE pins this fr…
-    workspace: default           cannot switch: $CHARTER_WORKSPACE pins this fr…
-    workspace: zebra             cannot switch: $CHARTER_WORKSPACE pins this fr…
+    chrome: off
+  * chrome: dark
+    chrome: light
 
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```
+
+*(That is the list as this release leaves it. The palette shipped listing every workspace and
+every persona on the plane, one row each; two later changes in this same release turned those
+into the `workspace:` / `persona:` doorways above and made names match as you type — see
+*The palette stops listing every workspace and starts opening a picker for them* and *Typing
+at the palette finds a workspace or persona by name*.)*
 
 **Type to narrow it.** Matching is case-insensitive, on the row's title and its id, in the
 order the rows were offered — nothing is re-ranked between keystrokes, because a list that
@@ -27,7 +38,7 @@ character back; only Escape leaves.
 
 **Everything is listed, and what cannot run says why.** A frame launched with
 `$CHARTER_WORKSPACE` set is pinned, and nothing charter writes outranks a variable already
-sitting in a live pane's environment — so every workspace row carries `cannot switch:
+sitting in a live pane's environment — so the workspace row carries `cannot switch:
 $CHARTER_WORKSPACE pins this frame to '<name>'` instead of quietly disappearing. An option
 you cannot see is one you cannot ask about, which is the same defect as a repo table
 drawing "no repos" over a plane that has them. A provider whose action charter could not
@@ -35,19 +46,21 @@ load gets a row too, saying which distribution and what to do about it.
 
 **No row cap.** The old nine-row limit was charter's, not tmux's — tmux 3.1c draws twenty
 rows fine, and the twelve-name cap on the workspace and persona submenus existed because a
-`display-menu` is drawn inside your terminal and does not scroll. The palette is a pane:
-it scrolls, and a plane with forty workspaces lists forty.
+`display-menu` is drawn inside your terminal and does not scroll. The palette is a pane: it
+scrolls, so nothing charter can offer has to be dropped to fit, and a plane with forty
+workspaces lists forty of them in the picker its `workspace:` row opens.
 
 **The menu is gone, not deprecated.** `charter frame-menu` and `charter frame-action` no
 longer exist as commands, `frame/menu.py` is deleted, and no `display-menu` is left
 anywhere in charter. Keeping both would have left two answers to "how do I do a thing",
 which is how the single menu became weird in the first place.
 
-Everything the menu offered is a palette row: **Detach**, the three **density** levels with
-a `*` on the one in effect, and every **workspace** and every **persona** on the plane.
-`charter frame-density <level>` and `charter frame-switch --workspace|--persona <name>` are
-unchanged and still typeable by hand from inside a frame — the palette starts exactly those
-commands.
+Everything the menu offered the palette reaches: **Detach**, the three **density** levels
+with a `*` on the one in effect, and every **workspace** and every **persona** on the plane —
+those two behind a doorway row apiece by the end of this release, and reachable from the top
+level by typing the name. `charter frame-density <level>` and `charter frame-switch
+--workspace|--persona <name>` are unchanged and still typeable by hand from inside a frame —
+the palette starts exactly those commands.
 
 **Nothing goes stale any more.** The menu was a table on disk, written at launch, so a
 density change or a switch had to remember to rewrite it or the next `F2` named the

@@ -3,10 +3,11 @@ version: unreleased
 headline: A click and a scroll reach the panel you pointed at, in its own cells, without taking your keyboard with them
 ---
 
-`Component.events` lists six kinds. Three of them started firing last release; `click` and
-`scroll` are the two this one adds. `key` remains the one charter does not carry, and the
-reason has not changed: the harness owns the keyboard, so the only keystrokes a panel could
-ever see are the ones you typed into the wrong pane.
+`Component.events` lists six kinds. `focus`, `blur` and `resize` started firing earlier in
+this same release (*A component can be told when its pane is focused, blurred or resized*);
+`click` and `scroll` are the two that make it five. `key` remains the one charter does not
+carry, and the reason has not changed: the harness owns the keyboard, so the only keystrokes
+a panel could ever see are the ones you typed into the wrong pane.
 
 ## Why the pointer was held back, and what changed
 
@@ -15,9 +16,10 @@ click does not focus the pane it lands in — so a click on an unfocused panel w
 second focus, disagreeing with your keyboard's, with nothing anywhere saying which of the
 two a component was being driven by.
 
-What removed it is the release before this one. A component can now see `focus` and `blur`,
-so *you are pointing at me* and *you are typing into me* are two states it can render
-differently instead of one it has to guess at. The two alternatives stayed refused:
+What removed it is the dispatcher that landed earlier in this release. A component can now
+see `focus` and `blur`, so *you are pointing at me* and *you are typing into me* are two
+states it can render differently instead of one it has to guess at. The two alternatives
+stayed refused:
 click-to-focus, because the frame exists to keep the harness the thing you type into; and
 delivering only to the active pane, because that makes the pointer useless everywhere
 except the one pane you are already typing in.

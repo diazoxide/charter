@@ -24,14 +24,22 @@ Charter now puts a background behind the frame's rules as well, and **you config
 nothing** — it is derived from the colours you already wrote.
 
 **Which colour, when a rule has a different pane on each side.** There is no "panel side" to
-match: tmux draws one border, not two half-borders. So the rule takes the surface your
-components **agree** on when they all resolve to the same background, and the frame-wide
-`chrome` colour when they name different ones. A gutter in the frame's own colour between two
-differently-coloured panels is what an application looks like; a gutter in *no* colour
-between two identically-coloured panels is a seam. A plane that never set a `bg` sees the
-rules take the `chrome` colour, which is what every pane in it was already wearing — and a
-plane at `chrome = "off"` with no `bg` anywhere gets exactly the frame it got before, byte
-for byte.
+match: tmux draws one border, not two half-borders. A gutter in *no* colour between two
+identically-coloured panels is a seam, and that is the whole report. A plane that never set a
+`bg` sees the rules take the `chrome` colour, which is what every pane in it was already
+wearing — and a plane at `chrome = "off"` with no `bg` anywhere gets exactly the frame it got
+before, byte for byte.
+
+**Below tmux 3.7, one colour is all charter can say, and it says the one the panels agree
+on** — the frame-wide `chrome` surface where they name different ones. That is
+`instance.border_bg`, and it is now the *floor's* answer rather than the frame's: two later
+changes in this same release replaced it above the floor, where tmux resolves each border
+cell against one pane and can therefore be told more than one thing. Each panel's edges take
+that panel's own surface (*Each panel's edges are drawn in that panel's own colour*), and the
+three rules that run round your harness take the surface every panel agrees on, or nothing at
+all when they do not (*One rule, one colour — including the three that run round your own
+session*). Read those two for what a 3.7 frame actually draws. What holds at every version
+is the property, not the value: no rule cell is left in a colour no pane beside it wears.
 
 **One rule colour and not two.** tmux draws the active pane's border from a second option
 whose default is a format expression (`#{?pane_in_mode,fg=yellow,…}`), and letting the two
@@ -41,14 +49,15 @@ that changed there would be that defect an order of magnitude more visible, so b
 get the same value or neither does. Which pane is live is still shown on the pane itself —
 its background is one shade off the others — never on the border.
 
-**Window-scoped, and that was measured rather than assumed.** `pane-border-style` is a pane
-option on tmux 3.7c, where tmux draws each border cell from the pane above or left of it and
-ignores the other side's outright. At charter's floor, tmux 3.2, it is not a pane option at
-all: `set -p` returns 0 but writes the **window's** value, and `set -p -u` would remove
-charter's own pin for the whole window. So per-side border colours are unavailable at the
-floor, silently window-wide there, and one-sided where they exist. Both border options
-accept the combined value and read it back verbatim on 3.7c and on 3.2 alike, and a tmux
-that refuses one of these settings is reported and not fatal, as it already was.
+**Window-scoped below the floor, and that was measured rather than assumed.**
+`pane-border-style` is a pane option on tmux 3.7c, where tmux draws each border cell from the
+pane above or left of it and ignores the other side's outright. At charter's own floor, tmux
+3.2, it is not a pane option at all: `set -p` returns 0 but writes the **window's** value, and
+`set -p -u` would remove charter's own pin for the whole window. So per-side border colours
+are unavailable below 3.7, silently window-wide there, and one-sided where they exist — which
+is the line the two entries named above are drawn along. Both border options accept the
+combined value and read it back verbatim on 3.7c and on 3.2 alike, and a tmux that refuses
+one of these settings is reported and not fatal, as it already was.
 
 `NO_COLOR` takes the background off the rules and leaves the rules drawn: the dim
 foreground is an attribute over your own palette rather than a colour charter chose, and a

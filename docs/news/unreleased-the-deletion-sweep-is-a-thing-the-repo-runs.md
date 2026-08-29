@@ -80,9 +80,11 @@ over a real deletion. Second, `--second-order` applies survivors that share an e
 function *together*, because two guards in sequence hide behind each other and each looks
 harmless alone.
 
-It is not wired into CI yet, and that is on purpose: a gate whose baseline nobody has seen
-gets disabled the first time it is inconvenient. `--all` charges the whole tree instead of
-a diff, which is how that baseline gets counted for the first time.
+It is not wired into CI at this point, and that was on purpose: a gate whose baseline
+nobody has seen gets disabled the first time it is inconvenient. `--all` charges the whole
+tree instead of a diff, which is how that baseline gets counted for the first time. The
+baseline was counted, and by the end of this release CI runs the sweep on every pull request
+— see *The deletion sweep runs on every pull request, and it can now see a string*.
 
 Nothing to adopt — it is a tool in the repository, not a change to charter. Run it on a
 branch before you ask anyone to read it:

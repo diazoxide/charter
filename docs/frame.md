@@ -1106,7 +1106,7 @@ frame your `slots` (or `density`, or the default) describes. You see your whole 
 not take effect, which is something you can act on, rather than one pane's worth of quiet
 fiction. A `key` charter will not bind, a key two components both claim, and a key equal to
 your frame's own `hotkey` are on that list too — and so are a `bg` that is not one of the
-seventeen words, a `pad` outside `0`–`8`, and a `size` charter cannot give the component
+seventeen words, a `pad` outside `0` to `5`, and a `size` charter cannot give the component
 (any number but its own on the three whose height is fixed, and anything that is not a
 whole number of cells on the repo table).
 

@@ -3141,17 +3141,26 @@ class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
                 return step
         self.fail(f"collect has no step with id {step_id!r}")
 
-    def test_a_sweep_that_never_sized_itself_does_not_borrow_the_shard_sentence(self):
+    def test_a_cancelled_sweep_does_not_borrow_the_shard_sentence(self):
         """#654. `cancel-in-progress` means a second push cancels the first run, and
         `always()` carries that run into this job anyway — where the shard arithmetic
-        answered about shards nobody ever planned. Measured on this branch: run 99, cancelled
+        answered for a run that had been stopped. Measured on this branch: run 99, cancelled
         by run 100, published `no verdict: 1 of 1 shard did not report`.
 
         The property is not that a step exists. It is that the words this path publishes are
         NOT the words the shard path publishes — #626's sentence has to keep meaning what it
-        means, and a run that never sized itself must not be able to say it."""
+        means, and a cancelled run must not be able to say it.
+
+        **And the words have to be true of every cancelled `plan`, which is why "did not
+        size itself" is refused here by name.** A cancelled sizing job has two causes and
+        only two — a newer push, or `plan`'s own `timeout-minutes` — and either way it may
+        have written its outputs before it was stopped. Run 99 is the proof: `1 of 1` is
+        `expected_shards` reading a real `shards=1`, so that run HAD sized itself and was
+        cancelled afterwards. What is true of all of them is that the sweep did not
+        finish."""
         headline = self._collect_step("superseded")["run"]
-        self.assertIn("did not size itself", headline)
+        self.assertIn("did not finish", headline)
+        self.assertNotIn("size", headline)
         self.assertNotIn("shard", headline)
         self.assertNotIn("survivor", headline)
 
@@ -3173,8 +3182,9 @@ class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
 
         `needs.plan.result` does, and it is also the narrower question: it is `cancelled`
         exactly when the sizing job did not finish, which is the only state in which the
-        shard arithmetic is answering about shards nobody planned. A shard that exceeds its
-        own `timeout-minutes` leaves `plan` succeeded, so #626 is untouched."""
+        shard arithmetic is answering for a run that was stopped rather than about a branch.
+        A SHARD that exceeds its own `timeout-minutes` leaves `plan` succeeded, so #626 is
+        untouched."""
         for step_id in ("superseded", "say"):
             self.assertNotIn("cancelled()", self._collect_step(step_id)["if"], step_id)
             self.assertIn("needs.plan.result", self._collect_step(step_id)["if"], step_id)

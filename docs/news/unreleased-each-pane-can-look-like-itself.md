@@ -96,10 +96,11 @@ is the padded width, and its rows are inset on the way out.
 
 `NO_COLOR` still refuses every background — the fill is tmux's paint, not charter's, and
 "no colour on your screen caused by charter" means none whichever process puts the bytes
-there. A `bg` charter does not know, or a `pad` outside `0`–`8`, takes the whole arrangement
-out of play the way any other unusable value in `[[frame.component]]` does: you see your
-arrangement ignored, which is visible, rather than one pane quietly losing what it asked
-for.
+there. A `bg` charter does not know, or a `pad` outside `0` to `5`, takes the whole
+arrangement out of play the way any other unusable value in `[[frame.component]]` does: you
+see your arrangement ignored, which is visible, rather than one pane quietly losing what it
+asked for. Five is the widest inset the narrowest pane charter draws — the 22-column sidebar
+— can take and still have room for a name (`instance.FRAME_PANE_PAD_MAX`).
 
 Nothing to adopt — every existing frame draws exactly as it did. `chrome` is unchanged and
 is still the right way to say one thing about the whole frame.

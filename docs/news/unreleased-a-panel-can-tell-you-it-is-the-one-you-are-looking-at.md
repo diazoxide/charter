@@ -7,7 +7,10 @@ headline: A component can be told when its pane is focused, blurred or resized �
 `events = ["scroll"]`, pass every check charter makes, and receive nothing, ever. There was
 no dispatcher. The vocabulary was validated and read by nothing.
 
-There is one now, and it delivers three of the six kinds.
+There is one now. It arrived carrying `focus`, `blur` and `resize`, and by the end of this
+same release it carries `click` and `scroll` too — five of the six kinds
+(`frame/events.py`'s `DELIVERED`). This entry is the three that came first; the pointer half
+has its own, *A click and a scroll reach the panel you pointed at*.
 
 ## What fires
 
@@ -41,21 +44,20 @@ contract asks you to degrade in: **never fires, rather than fires wrongly.**
 
 ## What does not fire, and why it is still declarable
 
-`key`, `click` and `scroll` are decoded and routed nowhere.
+`key` is the one kind charter does not carry, and that has not changed. Your harness owns
+the keyboard: tmux sends typing to the active pane, which is the harness's, so the only
+keystrokes a panel could ever see are the ones you typed into the wrong pane — and acting
+on those is worse than dropping them.
 
-`key` is not delivered because your harness owns the keyboard. tmux sends typing to the
-active pane, which is the harness's, so the only keystrokes a panel could ever see are the
-ones you typed into the wrong pane — and acting on those is worse than dropping them.
-
-`click` and `scroll` are the harder one, and the answer is *not yet* rather than *no*.
-Mouse reporting comes from the active pane's own request, which is why `[frame] mouse`
-defaults to off and costs you your terminal's text selection when it is on. The experiment
-behind this work measured the rest: **tmux routes a pointer by position, and a click does
-not focus the pane it lands in.** So a click on an unfocused panel would be a second focus,
-disagreeing with where your keyboard is going, with nothing anywhere saying which one is
-driving the component. Charter would rather deliver nothing than deliver that, and the
-decision about what a click on a non-active pane should mean is written down in the pull
-request rather than guessed at here.
+`click` and `scroll` were held back at this point, and the answer written down for them was
+*not yet* rather than *no*. What held them was a real measurement — **tmux routes a pointer
+by position, and a click does not focus the pane it lands in**, so a click on an unfocused
+panel would be a second focus, disagreeing with where your keyboard is going, with nothing
+anywhere saying which one is driving the component. What removed it is `focus` and `blur`
+themselves: with both delivered, *you are pointing at me* and *you are typing into me* are
+two states a component can render differently rather than one it has to guess at. Both are
+delivered by the end of this release; *A click and a scroll reach the panel you pointed
+at* has the measurements.
 
 Declaring a kind that does not fire stays legal and stays free. A declaration says what
 your component *handles*; it was never a promise from charter that the event happens.
@@ -69,8 +71,9 @@ declared events it was never receiving, which is the defect this release is abou
 
 A panel whose component declares nothing charter delivers is untouched: no dispatcher is
 built, its pane's terminal keeps whatever mode it was in, and the loop sleeps exactly as it
-did. Charter's own four panels are in that group, so the frame you have today is the frame
-you had yesterday.
+did. Every panel charter draws is in that group at this point in the release — by the end of
+it `repos` declares `scroll` and `click` and the other three still declare nothing, so a
+frame you did not add a component to is the frame you had before.
 
 ## When a handler goes wrong
 
