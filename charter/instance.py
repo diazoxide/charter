@@ -1491,7 +1491,7 @@ def _placement(cid: str, *, edge: str, size, visible: bool = True,
             "size": size, "visible": visible, "key": key, "bg": bg, "pad": pad}
 
 
-def _built_in_placement(reg, cid: str, **style) -> dict:
+def _built_in_placement(reg, cid: str, *, size=None, **style) -> dict:
     """:func:`_placement` for one of charter's own, in the rectangle it declares.
 
     **It forwards *style* and restates none of it, which is a defect fixed rather than a
@@ -1504,9 +1504,62 @@ def _built_in_placement(reg, cid: str, **style) -> dict:
 
     So the rectangle — ``edge`` and ``size``, which is all this function is FOR — is what
     it supplies, and everything else is the caller's or :func:`_placement`'s.
+
+    ``size`` is the one half of that rectangle a plane may now REPLACE, and ``None`` means
+    "whatever the component declares" — every caller that is not resolving a committed
+    ``size`` (the `slots` shorthand, a density level) passes nothing and gets exactly the
+    placement it always got. The override exists for the one built-in whose height is not
+    derived at import: see :func:`_built_in_size`. It is a parameter rather than a second
+    ``_placement`` literal at the call site for this function's own reason — a second dict
+    on the second path is the two-implementations shape #547 cost.
     """
     c = reg.get(cid)
-    return _placement(cid, edge=c.edge, size=c.size, **style)
+    return _placement(cid, edge=c.edge, size=c.size if size is None else size, **style)
+
+
+def _built_in_size(c, value):
+    """The size policy a committed ``size = <n>`` on the built-in *c* resolves to, or
+    ``None`` for a number charter will not honour.
+
+    **A committed value is accepted exactly where something reads it, and refused
+    everywhere else — which is the rule :func:`component_tables` already keeps for
+    ``edge``, not a new one.** `layout._derive` turns each component's declared size into
+    :data:`layout.SLOT_SIZE` once, at import, and `layout._size_of` answers `top`,
+    `bottom` and `right` out of that table on every launch. There is no per-plane
+    override between `charter.toml` and `split-window` for those three, so a ``size`` that
+    disagreed with the declaration would be a value read, validated, stored and then
+    ignored — the convincing empty the whole form is written against. It may therefore
+    only ECHO, which is what it could do before.
+
+    ``repos`` is the exception because it is the one placed built-in charter declares
+    ``Content()``, and a `Content` height is not in that table at all: `layout.slot_sizes`
+    routes it to `layout.repos_rows`, which is recomputed from the RESOLVED config on
+    every launch and on every `window-resized` (`commands_frame._reassert_sizes`). So
+    there is somewhere for a number to be read, and pinning it is what makes the strip a
+    fixed height instead of one that collapses to two rows on a two-repo plane.
+
+    The pin is `Fixed`, and `component.Fixed` is asked rather than re-checked: it refuses
+    a `bool`, a non-int and anything below one cell in `component.cells`, which is the one
+    place that rule is written. Asked inside a ``try`` because this runs while a committed
+    file is being resolved — on the path of `charter --version` as much as `charter frame`
+    — and a `ComponentError` escaping here would take every command with it, where the
+    form's own answer to a value it cannot honour is to refuse the arrangement whole
+    (#535).
+
+    ``not isinstance(value, bool)`` stays on the echo branch and is not redundant beside
+    it: ``True == 1`` in Python, so without it a ``size = true`` on `identity` or
+    `attention` — both `Fixed(1)` — would compare equal and be accepted as the number
+    nobody wrote. Four separate shapes of that trap have been caught in this suite.
+    """
+    from .frame.component import ComponentError, Content, Fixed
+    if isinstance(c.size, Content):
+        try:
+            return Fixed(value)
+        except ComponentError:
+            return None
+    if isinstance(c.size, Fixed) and value == c.size.n and not isinstance(value, bool):
+        return c.size
+    return None
 
 
 def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None:
@@ -1725,11 +1778,25 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
             c = reg.get(cid)
             if "edge" in table and table["edge"] != c.edge:
                 return None
-            if "size" in table and not (isinstance(c.size, Fixed)
-                                        and table["size"] == c.size.n
-                                        and not isinstance(table["size"], bool)):
-                return None
-            out.append(_built_in_placement(reg, cid, visible=visible, key=key,
+            # The one key on a built-in that a plane may do more with than echo, and
+            # :func:`_built_in_size` is where that asymmetry is argued: `top`, `bottom`
+            # and `right` are read out of a table `layout` derives at IMPORT, so a
+            # different number there could only be ignored; `repos` is `Content()` and its
+            # height is recomputed from this resolved arrangement on every launch and
+            # every resize, so a number there is read. `None` is refused the way every
+            # other unusable value in this loop is — whole arrangement, #535.
+            #
+            # `None` rather than `c.size` for a table that names no size, and that is this
+            # function's own #547 rule kept: `_built_in_placement` already declares what a
+            # built-in's rectangle is, and a second copy of it here is the masked default
+            # the sweep is written to catch — mutate the one in `_built_in_placement` and
+            # nothing would move, because every call arriving through here carried its own.
+            size = None
+            if "size" in table:
+                size = _built_in_size(c, table["size"])
+                if size is None:
+                    return None
+            out.append(_built_in_placement(reg, cid, size=size, visible=visible, key=key,
                                            bg=bg, pad=pad))
             continue
         # Not one of charter's own: a component id, which is placeable exactly when an
