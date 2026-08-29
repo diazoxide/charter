@@ -1774,7 +1774,16 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         pad = pane_pad(table.get("pad", 0))
         if pad is None:
             return None
-        if cid in _builtins.SLOT_OF:
+        # **`places`, not `cid in SLOT_OF`, and the difference is Phase 5's two bars.**
+        # That table is the shorthand between a committed `[frame] slots` word and a
+        # component id; this asks the question this branch is actually about — is *cid*
+        # one charter's own registry puts on an edge. The two were the same set for as
+        # long as every component charter placed had a slot name, and `chats` and
+        # `workspaces` are the first that do not (`frame/builtins.places` argues why they
+        # have none). Asked the old way they fell to the provider branch below, which
+        # refuses anything no installed distribution supplies — so a component charter
+        # registers, sizes, and can draw was one no configuration could ever ask for.
+        if _builtins.places(cid):
             c = reg.get(cid)
             if "edge" in table and table["edge"] != c.edge:
                 return None

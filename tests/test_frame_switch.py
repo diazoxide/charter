@@ -277,18 +277,19 @@ class ThePaletteOffersAPickerForEach(PersonaIso, unittest.TestCase):
         state.frame_dir(self.FID, create=True)
         state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
 
-    def test_the_palette_opens_with_the_three_pickers_then_charters_own_actions(self):
+    def test_the_palette_opens_with_the_pickers_then_charters_own_actions(self):
         """The order is fixed and the pickers are first, so an operator who presses `F2`
         and Enter without reading opens a list rather than detaching their harness.
 
-        Three since `change` joined `choose.NOUNS`, and it is LAST of the three: a change
-        is the narrowest thing a frame is looking at, so it sits after the plane and the
-        person looking at it."""
+        Four since Phase 5's `chat` joined `choose.NOUNS`, and it is LAST: the first
+        three move what THIS frame is looking at — the plane, the person looking, and the
+        piece of work, narrowest last — while a chat is a sibling frame, which is a
+        different kind of thing rather than a narrower one."""
         _plane_workspaces("alpha")
         ids = [r.id for r in _rows(self.FID)]
-        self.assertEqual(ids[:4], ["pick:workspace", "pick:persona", "pick:change",
-                                   "frame.detach"])
-        self.assertTrue(any(i.startswith("density.") for i in ids[4:7]), ids)
+        self.assertEqual(ids[:5], ["pick:workspace", "pick:persona", "pick:change",
+                                   "pick:chat", "frame.detach"])
+        self.assertTrue(any(i.startswith("density.") for i in ids[5:8]), ids)
 
     def test_each_doorway_says_which_name_the_frame_is_on(self):
         """So the palette still answers "which workspace am I on" without opening

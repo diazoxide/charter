@@ -74,7 +74,7 @@ numbers of their own and are never placed, which `Registry.on_edge` is what enfo
 
 from __future__ import annotations
 
-from .component import Component, Content, Fill, Fixed
+from .component import EDGES, Component, Content, Fill, Fixed
 from .registry import Registry
 
 #: Component id → the `[frame] slots` name it is spelled with in a committed charter.toml
@@ -119,6 +119,34 @@ def component_id(name):
     away from the line that was wrong.
     """
     return COMPONENT_OF.get(name, name) if isinstance(name, str) else name
+
+
+def places(cid) -> bool:
+    """Whether charter's OWN registry puts *cid* on an edge — a component a plane may
+    place, whether or not it has a committed slot-name spelling.
+
+    **The question `SLOT_OF` was standing in for, asked directly.** That table is the
+    shorthand between two vocabularies — a committed `[frame] slots` name and a component
+    id — and three separate places had come to read "is it in `SLOT_OF`" as "is it one of
+    charter's own placeable components". Those were the same set for as long as every
+    component charter placed had a slot name, and Phase 5's two bars are the first that do
+    not: they have no committed spelling, because there is no `[frame] slots` word for a
+    thing that did not exist when that list was frozen, and adding one would put them on
+    every operator's frame (`build`'s own comment measures what that costs).
+
+    Without this the bars would be registered and unplaceable — a component charter can
+    draw that no configuration can ask for, which is dead code wearing a feature's name.
+    With it they are exactly as placeable as a provider's component, through the one form
+    that can place one: a `[[frame.component]]` table.
+
+    `Registry.on_edge` is what answers, so a composite's PARTS are excluded for free —
+    `personas`, `todos` and `changes` are drawn inside the sidebar's pane, and a part that
+    could be placed as well would be drawn twice.
+    """
+    if not isinstance(cid, str):
+        return False
+    reg = build()
+    return any(c.id == cid for edge in EDGES for c in reg.on_edge(edge))
 
 
 def supplies(cid) -> bool:
@@ -239,6 +267,23 @@ def _repos_events(fid: str):
         return True
 
     return on_event
+
+
+def _chats(ctx) -> list[str]:
+    """The chat bar — `slots.chats_bar` at this pane's OWN width.
+
+    `ctx.width`, unlike the four wrapped whole-pane renderers (:func:`_panel`), which
+    measure their own tty and ignore it. A bar written for the contract can read the
+    geometry the contract carries, and this is the first charter component that does.
+    """
+    from . import slots
+    return slots.chats_bar(ctx.fid, ctx.width)
+
+
+def _workspaces(ctx) -> list[str]:
+    """The workspace bar — `slots.workspaces_bar` at this pane's own width."""
+    from . import slots
+    return slots.workspaces_bar(ctx.fid, ctx.width)
 
 
 def _personas(ctx) -> list[str]:
@@ -371,4 +416,31 @@ def build(fid: str = "") -> Registry:
         id="sidebar", title="sidebar", edge="right", size=Fixed(22),
         needs=("gather", "changes"), render=_panel("right"),
         children=("personas", "todos", "changes")))
+    # **Phase 5's two bars, and they are REGISTERED but not PLACED** — the same shape
+    # `changes` takes above, and for a stronger version of its argument.
+    #
+    # `changes` is not in `SLOT_OF` because a plane with no cross-repo change is the
+    # ordinary, permanent state and a pane saying so on every frame is a pane earning
+    # nothing. A plane with ONE chat is that state too, and the numbers are worse rather
+    # than better: measured on this tree, a chat switch is 41 tmux invocations and ~360 ms
+    # (3.7c) / ~395 ms (3.2) with four panels, and each placed pane is ~7 of those
+    # invocations on the way out and back — so a bar placed by default makes every switch
+    # slower for every operator, permanently, to draw a name most of them already know
+    # from `top`. The palette reaches every chat in two keystrokes at every width (§3.6:
+    # the bar is a readout, not the mechanism), so nothing is unreachable without them.
+    #
+    # A plane that wants a bar writes a `[[frame.component]]` table — which is also the
+    # only way any component gets a toggle key, built-in or not, and a key on the chat bar
+    # is exactly what an operator who wants it occasionally should have.
+    #
+    # Both declare nothing in `needs`: neither renderer goes near `gather`.
+    # `slots.chats_bar` reads `.charter/frame/` and `slots.workspaces_bar` reads
+    # `workspaces/`, and a declaration naming a slice `ctx` carries would make the frame's
+    # cost budget describe a cost that is not there — `identity`'s own reasoning, above.
+    reg.register(Component(
+        id="chats", title="chats", edge="top", size=Fixed(1),
+        needs=(), render=_chats))
+    reg.register(Component(
+        id="workspaces", title="workspaces", edge="top", size=Fixed(1),
+        needs=(), render=_workspaces))
     return reg

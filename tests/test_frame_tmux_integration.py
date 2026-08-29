@@ -80,6 +80,7 @@ one does.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import pty
 import re
@@ -87,9 +88,11 @@ import select
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import time
 import unittest
@@ -103,7 +106,7 @@ from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
 from tests import _tmuxreap
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, child_plane_env, run_hook
 from tests._planeguard import allow_background_children
 # Imported rather than re-declared: a second copy of the stub that keeps a launch's
 # detached `frame-gather` child off the developer's real plane is a copy that can drift
@@ -4961,20 +4964,14 @@ class FocusEventsIntegration(_NeedsAttachedClient, PersonaIso, unittest.TestCase
             "session-scoped, reached the sibling here — this probe measures nothing")
 
 
-class ChatsAreWindowsOnOneWorkspaceSession(_TmuxServerFixture, PersonaIso):
-    """Phase 5 Stage 5a, against a real server: a workspace is a SESSION and a chat is a
-    WINDOW in it.
+class _ChatsOnOneSession:
+    """Opening real chats as real windows of one workspace's session.
 
-    Every claim here is one a mock cannot make. Whether `new-window -n` pins a name and
-    whether a pane can take it back; whether a window user option survives that; whether
-    a pane-scoped `pane-died[1] kill-window` leaves its siblings alone and still ends the
-    session when it is the last window; and whether a per-window `-e` really beats a
-    session-wide `set-environment` in the pane's own environment.
-
-    **Re-run against tmux 3.2 — `tmuxctl.FLOOR` — as well as 3.7c**, by putting a 3.2
-    built from the release tarball first on `$PATH` and running this module: every
-    assertion below passed identically on both, so nothing here carries a version gate.
-    The two versions' answers are quoted in the tests that turn on them.
+    A mixin rather than a base class with tests in it, for `_TmuxServerFixture`'s own
+    reason: `unittest` collects an inherited test as the subclass's own, so a second
+    class about chats would re-run every one of Stage 5a's against its own server for
+    nothing. What is shared is the FIXTURE — the production builders, the cleanup, and
+    the two readings every chat test needs — and nothing else.
     """
 
     #: The workspace these chats belong to — the tmux SESSION's name, and the part of each
@@ -5035,6 +5032,24 @@ class ChatsAreWindowsOnOneWorkspaceSession(_TmuxServerFixture, PersonaIso):
                 return True
             time.sleep(0.05)
         return False
+
+
+class ChatsAreWindowsOnOneWorkspaceSession(_ChatsOnOneSession, _TmuxServerFixture,
+                                           PersonaIso):
+    """Phase 5 Stage 5a, against a real server: a workspace is a SESSION and a chat is a
+    WINDOW in it.
+
+    Every claim here is one a mock cannot make. Whether `new-window -n` pins a name and
+    whether a pane can take it back; whether a window user option survives that; whether
+    a pane-scoped `pane-died[1] kill-window` leaves its siblings alone and still ends the
+    session when it is the last window; and whether a per-window `-e` really beats a
+    session-wide `set-environment` in the pane's own environment.
+
+    **Re-run against tmux 3.2 — `tmuxctl.FLOOR` — as well as 3.7c**, by putting a 3.2
+    built from the release tarball first on `$PATH` and running this module: every
+    assertion below passed identically on both, so nothing here carries a version gate.
+    The two versions' answers are quoted in the tests that turn on them.
+    """
 
     def test_two_chats_in_one_workspace_are_two_windows_on_one_session(self):
         """The shape, end to end. One session named for the workspace, one window per
@@ -5263,6 +5278,249 @@ class ChatsAreWindowsOnOneWorkspaceSession(_TmuxServerFixture, PersonaIso):
             "run-shell", "-b", "-t", self.WS,
             f"printenv CHARTER_SESSION_ID > {seen}").returncode, 0)
         self.assertEqual(_await_text(seen), "session-wide")
+
+
+class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
+                                                     _NeedsAttachedClient,
+                                                     _TmuxServerFixture, PersonaIso):
+    """Phase 5 Stage 5b, Task 4: every claim the switch rests on, against a REAL attached
+    client whose size this test changes.
+
+    **A mock cannot make any of these**, which is why the module's own fake server is
+    only ever asked about ARGV and ORDER (`tests/test_frame_chat_switch.py`). Whether a
+    background window keeps stale geometry, whether `select-window` corrects it by the
+    time the very next command runs, whether a pane split before that switch is born at
+    the wrong width, and whether `select-pane` on another window's pane drags the client
+    with it — all four are facts about tmux, and the design is wrong if any of them is
+    not what it was measured to be.
+
+    **Re-run against tmux 3.2 — `tmuxctl.FLOOR` — as well as 3.7c**, by putting a 3.2
+    built from the release tarball first on `$PATH`. Every assertion below was identical
+    on both, so nothing here carries a version gate; the two numbers are quoted in the
+    tests that turn on them.
+    """
+
+    #: The client's size before and after the resize each test makes. Two shapes rather
+    #: than one because the whole property is that a background window keeps the FIRST
+    #: while the client is at the SECOND — so a single size would measure nothing.
+    BIG = (200, 50)
+    SMALL = (100, 30)
+
+    def _resize(self, fd: int, cols: int, rows: int) -> None:
+        """Change the pty's size the way a terminal emulator does — `TIOCSWINSZ`, which
+        is what makes tmux resize the client and, at the switch, the window."""
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+    def _window_of(self, pane: str) -> str:
+        return self._srv("display-message", "-p", "-t", pane,
+                         "#{window_id}").stdout.strip()
+
+    def _current_window(self) -> str:
+        return self._srv("display-message", "-p", "-t", f"{self.WS}:",
+                         "#{window_id}").stdout.strip()
+
+    def _size_of(self, window: str) -> tuple[int, int]:
+        out = self._srv("display-message", "-p", "-t", window,
+                        "#{window_width}:#{window_height}").stdout.strip()
+        w, _, h = out.partition(":")
+        return int(w), int(h)
+
+    def _two_chats_and_a_client(self):
+        """Two chats on one session, a real client attached at :data:`BIG`, **both**
+        windows already at that size, and the client sitting on the first chat.
+
+        Returns the two panes and the client's pty fd. The attach is
+        `_NeedsAttachedClient`'s, so a machine tmux will not attach a client on skips
+        rather than asserting about a switch nothing was there to see.
+
+        **Both windows are visited once on purpose.** A window is created at the SESSION's
+        size (80x24 here, `layout.session_argv`'s own), so a second chat that has never
+        been selected is already stale — which would make every test below pass for the
+        wrong reason, measuring "a window nobody looked at kept its birth size" instead of
+        "a window that WAS correct went stale when the client moved". Selecting each once
+        puts both at the client's size, so the only staleness left is the one the resize
+        creates.
+        """
+        one, _ = self._chat(f"{self.WS}.1", first=True)
+        two, _ = self._chat(f"{self.WS}.2", first=False)
+        _name, fd, _screen = self._attach_pty(self.WS)
+        self._resize(fd, *self.BIG)
+        for pane in (two, one):
+            self._srv("select-window", "-t", pane)
+            self.assertTrue(
+                self._wait_until(lambda p=pane: self._size_of(self._window_of(p))[0]
+                                 == self.BIG[0]),
+                "the client never took the size this test set, so nothing below "
+                "measures what it claims to")
+        self.assertEqual(self._current_window(), self._window_of(one))
+        return one, two, fd
+
+    def test_a_background_chats_window_keeps_stale_geometry_until_the_switch(self):
+        """§7.4, re-measured on this tree because the whole design turns on it.
+
+        With the client resized 200x50 → 100x30 the ACTIVE chat's window follows and the
+        background chat's does not — it is still 200 columns wide. Identical on tmux 3.7c
+        and tmux 3.2. That is why panels may not simply be left running in a background
+        chat: they are not idle, they are rendering at a width that is not their
+        window's.
+        """
+        one, two, fd = self._two_chats_and_a_client()
+        self._resize(fd, *self.SMALL)
+        self.assertTrue(
+            self._wait_until(lambda: self._size_of(self._window_of(one))[0]
+                             == self.SMALL[0]),
+            "the active window never followed the client's resize")
+        self.assertEqual(self._size_of(self._window_of(two))[0], self.BIG[0],
+                         "the background window followed the resize on this tmux — the "
+                         "stale-geometry premise this design rests on is gone and the "
+                         "decision should be re-argued")
+
+    def test_select_window_corrects_that_geometry_by_the_very_next_command(self):
+        """And this is why the switch splits panels AFTER the select and not before.
+
+        No sleep, no hook, no poll: the invocation immediately after `select-window`
+        already reports the target window at the client's own size. Measured 200x50 →
+        100x29 on tmux 3.7c and identically on tmux 3.2 — which matters because
+        `set-hook -w window-resized` does not exist at all on 3.2 (`invalid option`,
+        rc=1), so there is nothing there to repair a window charter did not correct
+        itself.
+        """
+        one, two, fd = self._two_chats_and_a_client()
+        self._resize(fd, *self.SMALL)
+        self.assertTrue(
+            self._wait_until(lambda: self._size_of(self._window_of(one))[0]
+                             == self.SMALL[0]))
+        self.assertEqual(self._srv("select-window", "-t", two).returncode, 0)
+        self.assertEqual(self._size_of(self._window_of(two))[0], self.SMALL[0],
+                         "the target window was still stale on the command after the "
+                         "switch, so panels split here would be born at the wrong width")
+
+    def test_a_pane_split_before_the_switch_is_born_at_the_wrong_width(self):
+        """The defect the ordering exists to avoid, demonstrated rather than argued.
+
+        Split into the background chat while it is still stale and the new pane is 200
+        columns wide in a window the client will draw at 100. `panel._component_text`'s
+        `width=slots._width()` guard is what that would have reached.
+        """
+        one, two, fd = self._two_chats_and_a_client()
+        self._resize(fd, *self.SMALL)
+        self.assertTrue(
+            self._wait_until(lambda: self._size_of(self._window_of(one))[0]
+                             == self.SMALL[0]))
+        early = self._srv("split-window", "-d", "-t", two, "-l", "3",
+                          "-P", "-F", "#{pane_id}", "sleep", "600")
+        self.assertEqual(early.returncode, 0, early.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(early.stdout.strip()))
+        stale_width = int(self._srv("display-message", "-p", "-t",
+                                    early.stdout.strip(),
+                                    "#{pane_width}").stdout.strip())
+
+        self.assertEqual(self._srv("select-window", "-t", two).returncode, 0)
+        late = self._srv("split-window", "-d", "-t", two, "-l", "3",
+                         "-P", "-F", "#{pane_id}", "sleep", "600")
+        self.assertEqual(late.returncode, 0, late.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(late.stdout.strip()))
+        fresh_width = int(self._srv("display-message", "-p", "-t",
+                                    late.stdout.strip(),
+                                    "#{pane_width}").stdout.strip())
+
+        self.assertEqual(stale_width, self.BIG[0])
+        self.assertEqual(fresh_width, self.SMALL[0])
+
+    def test_select_pane_on_another_windows_pane_does_not_move_the_client(self):
+        """**The measurement that makes the switch safe to run DETACHED.**
+
+        `_close_palette` runs in the palette's own process, after `cmd_chat` has been
+        started, and aims `select-pane` at the harness of the chat being LEFT. If that
+        moved the client, the two processes would be racing for which window the operator
+        ends on. It does not: current window `@0` before and `@0` after, on tmux 3.7c and
+        on tmux 3.2. The pane it names becomes its own window's active pane and nothing
+        else happens.
+        """
+        one, two, _fd = self._two_chats_and_a_client()
+        before = self._current_window()
+        self.assertEqual(self._srv("select-pane", "-t", two).returncode, 0)
+        self.assertEqual(self._current_window(), before,
+                         "`select-pane` dragged the client to another window on this "
+                         "tmux — the palette's own close would then undo every switch")
+
+    def test_kill_pane_works_on_the_window_the_client_has_just_left(self):
+        """The teardown half. The chat being left is a background window by the time its
+        panels are killed, and tmux is as happy to close a pane there as anywhere."""
+        one, two, _fd = self._two_chats_and_a_client()
+        extra = self._srv("split-window", "-d", "-t", one, "-l", "3",
+                          "-P", "-F", "#{pane_id}", "sleep", "600")
+        self.assertEqual(extra.returncode, 0, extra.stderr)
+        panel = extra.stdout.strip()
+        self.assertEqual(self._srv("select-window", "-t", two).returncode, 0)
+        self.assertEqual(self._srv("kill-pane", "-t", panel).returncode, 0)
+        self.assertNotIn(panel, self._srv("list-panes", "-a", "-F",
+                                          "#{pane_id}").stdout.split())
+        self.assertIn(one, self._srv("list-panes", "-a", "-F",
+                                     "#{pane_id}").stdout.split(),
+                      "killing the chat's panel took its harness with it")
+
+    def test_the_whole_command_moves_the_client_and_re_lays_out_the_target(self):
+        """`commands_frame.cmd_chat` end to end on a real server with a real client.
+
+        The client starts on chat one with a panel pane; the switch is run; the client
+        ends on chat two, chat one has lost its panel, and chat two has gained panes that
+        are the CLIENT's width rather than the stale one. This is the exit criterion
+        "switching between chats loses nothing" expressed as the smallest thing that can
+        fail.
+        """
+        one, two, fd = self._two_chats_and_a_client()
+        # A stand-in panel for chat one, recorded exactly as `_draw_panels` records one,
+        # so the teardown path is charter's own rather than this test's.
+        extra = self._srv("split-window", "-d", "-t", one, "-l", "3",
+                          "-P", "-F", "#{pane_id}", "sleep", "600")
+        self.assertEqual(extra.returncode, 0, extra.stderr)
+        state.record_panes(f"{self.WS}.1", panels={"top": extra.stdout.strip()})
+        # Resized while chat two is in the background, which is the case a bare
+        # `select-window` would leave broken on tmux 3.2.
+        self._resize(fd, *self.SMALL)
+        self.assertTrue(
+            self._wait_until(lambda: self._size_of(self._window_of(one))[0]
+                             == self.SMALL[0]))
+
+        # The panels this splits are REAL `charter panel` children, so they are handed a
+        # throwaway plane — `tests._planeguard` refuses the spawn otherwise, and it is
+        # right to: a panel resolving the developer's own plane would rewrite its caches.
+        # BOTH halves are needed and they are two different things. The `-e` is what the
+        # PANE's process gets, and `_relayout_pane_env` builds it out of `state.identity`
+        # — which is why the root is recorded there. `$CHARTER_ROOT` in this process is
+        # what the tmux CLIENT inherits, because a live re-layout hands `tmuxctl.run` no
+        # client environment at all (`_relayout`'s `env=None`), and that is what the
+        # guard resolves a spawn's plane from.
+        plane, _child = child_plane_env(self)
+        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+             mock.patch.dict(os.environ,
+                             {"CHARTER_SESSION_ID": f"{self.WS}.1",
+                              "CHARTER_WORKSPACE": self.WS,
+                              "CHARTER_ROOT": str(plane)}, clear=False):
+            for chat in (f"{self.WS}.1", f"{self.WS}.2"):
+                state.record_workspace(chat, self.WS)
+                state.record_identity(chat, {"CHARTER_SESSION_ID": chat,
+                                             "CHARTER_ROOT": str(plane),
+                                             "CHARTER_WORKSPACE": self.WS})
+            rc = commands_frame.cmd_chat(
+                SimpleNamespace(chat_id=f"{self.WS}.2", chat=f"{self.WS}.1"))
+        self.assertEqual(rc, 0)
+
+        self.assertEqual(self._current_window(), self._window_of(two),
+                         "the client did not end on the chat that was switched to")
+        self.assertEqual(state.panes(f"{self.WS}.1"), {},
+                         "the chat that was left kept its panels, so they are now "
+                         "rendering at a width that is not their window's")
+        self.assertNotIn(extra.stdout.strip(),
+                         self._srv("list-panes", "-a", "-F",
+                                   "#{pane_id}").stdout.split())
+        for pane in state.panes(f"{self.WS}.2").values():
+            width = int(self._srv("display-message", "-p", "-t", pane,
+                                  "#{pane_width}").stdout.strip())
+            self.assertLessEqual(width, self.SMALL[0],
+                                 "a panel was born at the background window's stale "
+                                 "width")
 
 
 if __name__ == "__main__":

@@ -67,19 +67,35 @@ class Declared(unittest.TestCase):
         measurement is `frame/builtins.py`'s own — a placed component has to be in
         `instance.FRAME_SLOTS`, and that list is pinned to agree with the shipped `slots`
         and with `full`, so placing it would put a pane saying "no changes" on every
-        operator's frame for a feature most planes never use."""
+        operator's frame for a feature most planes never use.
+
+        `chats` and `workspaces` are last, registered and not placed for the same reason
+        one measurement further on: a plane with one chat is that same ordinary,
+        permanent state, and every placed pane is ~7 of a switch's 41 tmux invocations."""
         self.assertEqual([c.id for c in self.reg.all()],
                          ["identity", "attention", "repos", "personas", "todos",
-                          "changes", "sidebar"])
+                          "changes", "sidebar", "chats", "workspaces"])
 
-    def test_only_the_four_placed_components_are_on_an_edge(self):
+    def test_only_the_components_charter_places_are_split_for(self):
         """`personas`, `todos` and `changes` are registered and never split for: their
         parent draws them inside its own pane, and a part that appeared on an edge too
-        would be drawn twice — once in its own pane and once inside the sidebar's."""
+        would be drawn twice — once in its own pane and once inside the sidebar's.
+
+        **`chats` and `workspaces` DO declare an edge and are still not placed**, and the
+        two kinds of absence are the point. A sidebar part cannot be placed at all — its
+        parent draws it. A bar is a pane charter COULD split and deliberately does not, so
+        it carries the edge and the size it would take, and a `[[frame.component]]` table
+        naming it gets exactly that geometry. What keeps it off every operator's frame is
+        `instance.FRAME_SLOTS`, not the registry."""
         placed = {edge: [c.id for c in self.reg.on_edge(edge)]
                   for edge in component.EDGES}
-        self.assertEqual(placed, {"top": ["identity"], "bottom": ["attention", "repos"],
+        self.assertEqual(placed, {"top": ["identity", "chats", "workspaces"],
+                                  "bottom": ["attention", "repos"],
                                   "left": [], "right": ["sidebar"]})
+        for bar in ("chats", "workspaces"):
+            self.assertNotIn(bar, builtins.SLOT_OF,
+                             f"{bar} became a placed slot — a bar on every operator's "
+                             f"frame is the decision `frame/builtins.py` argues against")
 
     def test_the_sidebar_is_the_composite_of_personas_then_todos_then_changes(self):
         """In the order the pane stacks them, which is not split order — nothing splits
@@ -103,12 +119,18 @@ class Declared(unittest.TestCase):
 
         `changes` is on `right` with a CAP, which is what says it is a section of the
         sidebar rather than a pane: it is bounded like `todos` and for the same reason —
-        a column that is one list has no room to let a second one grow without end."""
+        a column that is one list has no room to let a second one grow without end.
+
+        The two bars are `Fixed(1)` on `top`, §3.6's own literals: a bar is one row or it
+        is nothing, and a `Content()` bar would be a row that appeared and disappeared as
+        a sibling chat opened, moving every pane below it."""
         got = {c.id: (c.edge, c.size) for c in self.reg.all()}
         self.assertEqual(got, {
             "identity": ("top", component.Fixed(1)),
             "attention": ("bottom", component.Fixed(1)),
             "repos": ("bottom", component.Content(None)),
+            "chats": ("top", component.Fixed(1)),
+            "workspaces": ("top", component.Fixed(1)),
             "personas": ("right", component.Fill()),
             "todos": ("right", component.Content(slots._MAX_TODO_LINES)),
             "changes": ("right", component.Content(slots._MAX_CHANGE_LINES)),

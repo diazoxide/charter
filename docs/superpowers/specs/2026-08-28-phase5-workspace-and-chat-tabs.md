@@ -988,6 +988,59 @@ claims.
   (`RESIZE_HOOK_FLOOR`, `PANE_ENV_FLOOR`) are read from tmux's own CHANGES, and only their
   endpoints were run.
 
+### 7.10 The switch, measured against §7.7's extrapolation (Stage 5b)
+
+**Added 2026-08-30, when Task 4 was built. §7.7's ~16 ms is wrong by a factor of 22, and
+the reason is that it counted the wrong commands.**
+
+§7.7 timed `select-window` (4.4 ms), four `kill-pane` chained (4.9 ms) and four
+`split-window` chained (6.7 ms) and added them up — nine tmux commands. Charter's one live
+pane-mutation path (`commands_frame._apply_arrangement` → `_relayout`) issues **41**, and
+the extra thirty-two are not incidental: `_disarm_panel_respawn` before each kill,
+`_arm_panel_respawn` after each split, `_panel_mark_argv`, the pane surface and border
+options, `_install_resize_hook`, and `_reassert_sizes` — which exists precisely because a
+`kill-pane` or a `split-window -l` makes tmux redistribute every surviving pane.
+
+Measured end to end: `cmd_chat` between two real chats of one workspace session, a real
+attached client at 200x50, four panels on the chat being left, six switches alternating
+direction.
+
+```
+tmux 3.7c   median 360.2 ms   min 282.2   max 600.3   41 invocations each
+tmux 3.2    median 394.7 ms   min 330.2   max 428.4   41 invocations each
+one tmux invocation, median: 6.18 ms (3.7c) / 6.70 ms (3.2)
+```
+
+41 × 6.2 ms is 254 ms of round trips; the rest is charter's own work between them.
+
+**What this changes and what it does not.** §3.7's decision stands and is not close: 41
+invocations once per switch against 758 MB of panel processes permanently rendering at
+widths that are wrong is not a trade this reopens. What changes is the adversary's answer
+in §3.7 — "16 ms instead of 4.4 ms, both comfortably inside the band where a terminal reads
+as instant" is no longer true at 360 ms, and the honest statement is that a switch is
+perceptible and roughly half a second before the panels have text in them.
+
+**And it changes the plan's Task 4 step 4.** "One `tmuxctl.chain` per group … chaining is
+worth 3.3× here and is not optional" was derived from the nine-command model. The eight
+commands a chain would collapse are under a fifth of the forty-one, so chaining them buys
+about 10 % of the switch. The rest is in the other thirty-three, which means the real
+optimisation is collapsing the whole of `_relayout` into one invocation — a change to the
+funnel a density change and every component's toggle key also go through, and not one to
+make at the end of a stage. Stage 5b therefore ships the switch over the existing funnel,
+unchained, and this is the measurement that says why.
+
+### 7.11 `layout._DROP_ORDER` was read by nothing (Stage 5b)
+
+**§3.6's instruction "Both join `layout._DROP_ORDER`, **above `top`**" does not, on its
+own, do anything.** Checked on the tree at `7dcf09c`: `grep -rn _DROP_ORDER charter/`
+returns the definition and one docstring mention. `layout.visible_slots` spells the same
+order out by hand — `s != "right"`, then `s != "top"` — so adding two names to the tuple
+would have left both bars surviving exactly the shortage that takes the identity row, which
+is the wrong way round for a readout the palette makes redundant.
+
+Stage 5b derives the row-edge half of the list (`layout._ROW_DROPS`) from `_DROP_ORDER`, so
+the constant is now the mechanism and an entry deleted from it changes what a short
+terminal draws.
 ---
 
 ## 8. What this spec deliberately does not do

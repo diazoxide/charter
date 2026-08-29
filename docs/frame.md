@@ -243,6 +243,55 @@ terminals attached to the same workspace look at the same chat. Opening a second
 a second terminal moves both. That is what "one workspace, several chats" means — the
 chats are independent, the *view* is the session's.
 
+### Switching between them
+
+`F2` → `chat` lists this workspace's chats with the one you are typing in marked and the
+harness each is running beside it; choose one and the client moves to that chat's window.
+Typing the chat's name at the palette finds the same row without the doorway, so a chat is
+two keystrokes away at any terminal width. `charter frame-chat <chat id>` is the same
+switch by hand.
+
+**The panels move with you rather than existing per chat**, and that is correctness before
+it is thrift. A tmux window that is not the current one keeps the size it had when it was —
+measured on tmux 3.7c and at the 3.2 floor alike — so panels left running in a chat you
+switched away from are not idle, they are drawing at a width that is not their window's.
+The switch therefore tears the old chat's panels down, selects the new window (tmux resizes
+it *at* that moment), and splits fresh panels into a window that is already the right size.
+
+**It costs about a third of a second.** Measured with a real client and four panels: 41
+tmux commands, median 360 ms on tmux 3.7c and 395 ms at the 3.2 floor, with the panels
+painting roughly 90 ms after that. That is the price of not keeping four panel processes
+per chat drawing at the wrong width, and it is the whole cost — nothing is lost, no harness
+is restarted, and the chat you left goes on running exactly as it was.
+
+A switch is refused, with the reason on your own screen, for a chat this workspace does not
+have, one whose window has gone, one charter has no pane record for, and the chat you are
+already in.
+
+### The two bars, and why they are off unless you ask
+
+`chats` and `workspaces` are one-row components: the chat bar names every chat in this
+workspace with yours marked, and the workspace bar does the same for the plane. Where the
+names do not all fit the bar keeps yours whole and counts the rest (`*api.2  +2`); narrower
+still it says only where you are (`2/3`). It never shows half a name.
+
+**Neither is drawn unless a plane places it**, and that is deliberate rather than
+unfinished: on the ordinary plane there is one chat, and a row saying so permanently costs
+a row off your harness, a 24 MB panel process, and about seven of every switch's 41 tmux
+commands — to draw a name `F2` already reaches in two keystrokes. Turn one on with a
+`[[frame.component]]` table, which is also how it gets a key of its own:
+
+```toml
+[[frame.component]]
+use = "chats"
+edge = "top"
+size = 1
+key = "F9"
+```
+
+Both are the first things a short terminal gives up — before the identity row, because the
+palette reaches everything they show and nothing is lost but the reminder.
+
 ## Inside a tmux you already have
 
 **Run from inside an existing tmux session, the frame does not nest.** Charter reads

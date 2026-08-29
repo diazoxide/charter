@@ -146,7 +146,8 @@ class APickerRowIsNotAnAction(_Frame, unittest.TestCase):
         opens = {r.id: choose.noun_of(r) for r in choose.open_rows(self.FID)}
         self.assertEqual(opens, {"pick:workspace": choose.WORKSPACE,
                                  "pick:persona": choose.PERSONA,
-                                 "pick:change": choose.CHANGE})
+                                 "pick:change": choose.CHANGE,
+                                 "pick:chat": choose.CHAT})
         for stranger in ("frame.detach", "density.full", "workspace:n0", "acme.deploy"):
             self.assertIsNone(choose.noun_of(overlay.Row(id=stranger, title="x")))
 
