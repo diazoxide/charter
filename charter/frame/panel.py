@@ -262,7 +262,7 @@ def _unmeasured() -> str | None:
     return _UNMEASURED
 
 
-def _paint(slot: str, fid: str) -> None:
+def _paint(slot: str, fid: str, evs=None) -> None:
     """Clear the pane and draw *slot* whole, clamped to this pane's real row count.
 
     `slots.render` already clamps every line to the pane's WIDTH; clamping the line
@@ -273,36 +273,37 @@ def _paint(slot: str, fid: str) -> None:
     A pane that could not be measured is told so instead (:func:`_unmeasured`), and
     `slots.render` is not called at all: every line of it would be clamped to a width this
     pane has not agreed to.
+
+    *evs* is this panel's event path, and it is here because **charter's own panels are
+    drawn by `slots.SLOTS` and never through the registry**, which was fine while none of
+    them took events and is not fine now that one does (`repos`, #607's first consumer).
+    `Registry.draw` is what turns a component's failure into a message in its own pane, and
+    a built-in never goes near it — so a handler that raised would have `events.Dispatcher`
+    retire the input path, correctly, and leave the pane drawing a perfectly good table
+    that had silently stopped being clickable. That is the convincing-empty §4b refuses and
+    #512 measured the cost of. ``None`` — the default, and the whole of what the three
+    built-ins that declare nothing pass — makes :func:`_failure_text` answer ``""`` and
+    this line exactly what it was.
     """
-    _write(_unmeasured() or slots.render(slot, fid))
+    _write(_unmeasured() or _failure_text(evs, slot) or slots.render(slot, fid))
 
 
 def _slot_painter(evs):
-    """:func:`_paint`, plus the one thing a raw slot render cannot say for itself.
+    """:func:`_paint` with this panel's event path bound in — the shape `_tick` takes.
 
-    **Charter's own panels are drawn by `slots.SLOTS` and not through the registry**, which
-    was fine while none of them took events and is not fine now that one does (`repos`,
-    #607's first consumer). `Registry.draw` is what turns a component's failure into a
-    message in its own pane, and a built-in never goes near it — so a handler that raised
-    would have `events.Dispatcher` retire the input path, correctly, and leave the pane
-    drawing a perfectly good table that had silently stopped being clickable. That is the
-    convincing-empty §4b refuses and #512 measured the cost of: a component that quietly
-    stops being interactive is indistinguishable from one nobody has clicked yet.
+    A binder and nothing more: `_tick` calls what it is given with ``(slot, fid)``, and
+    `_paint` grew a third parameter that only `_run` knows the value of.
 
-    So the failure is painted here, ahead of the renderer, exactly as
-    :func:`_component_text` paints it for a provider's component — same wrap, same width,
-    same containment, same trade (a working ``render`` loses its pane because its HANDLER
-    broke, which `frame/events.py` argues is the smaller of the two wrongs).
-
-    **Only built for a panel that has a dispatcher at all.** The other three built-ins
-    declare no events, `_run` hands them ``paint=None``, and `_watch` calls :func:`_paint`
-    exactly as it did before this function existed — so their panes are byte-identical and
-    syscall-identical to the release before, which is the promise `_dispatcher`'s own
-    docstring makes and this must not spend.
+    **Built for EVERY built-in, not only the one with a dispatcher**, and the conditional
+    that used to stand here was deleted rather than kept. `_failure_text(None, …)` answers
+    ``""``, so a panel with no event path paints through this closure exactly what it
+    painted through `_paint` — the branch could not change an outcome, which is the sweep's
+    own definition of a line that should not be there and #568's argument for deleting the
+    last one of those. What the three quiet panels are promised is that their pane's
+    TERMINAL is untouched and their loop still sleeps rather than polls, and that is
+    `_dispatcher` answering ``None`` — not this.
     """
-    def paint(slot: str, fid: str) -> None:
-        _write(_unmeasured() or _failure_text(evs, slot) or slots.render(slot, fid))
-    return paint
+    return lambda slot, fid: _paint(slot, fid, evs)
 
 
 def _failure_text(evs, name: str) -> str:
