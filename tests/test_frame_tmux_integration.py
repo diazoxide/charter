@@ -1602,6 +1602,74 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                 f"the pane #515 has to name explicitly, because with three strips the "
                 f"two below it trade rows with each other and never with it")
 
+    def test_a_pinned_table_really_lands_on_its_committed_height(self):
+        """A `size` on the repo table's `[[frame.component]]` table, driven against real
+        tmux — and it is the DESIGN this proves, not only the arithmetic.
+
+        The strip is the one pane `_reassert_sizes` never asserts a height for: in a stack
+        of N panes only N-1 boundaries are free, so `top`, `bottom` and the harness are
+        told their sizes and the table takes the remainder. That is the mechanism a
+        content-sized table already uses, and the whole claim of a pin is that it changes
+        the NUMBER the others are sized around and nothing else. Nothing inside charter
+        can check that claim — the remainder is tmux's arithmetic, not charter's — so it
+        is asked of tmux.
+
+        Which is also why the obvious alternative is not what shipped. Calling a pinned
+        table a FIXED row and adding it to `_RESIZE_FLAG` would assert all N heights, and
+        that is the measured failure `_reassert_sizes`' own docstring carries: at 200x50,
+        asserting `top`, `bottom` and `repos` in split order left the table 1 row and the
+        attention strip 6, the two sizes having swapped panes.
+
+        `repos_rows_wanted` is stubbed to a number the pin must beat and one it must not
+        lose to — 2 clones and 30 — because a pin that were quietly still content-sized
+        would pass a single-content-count version of this test at whichever of the two
+        happened to match.
+        """
+        fid = state.frame_id("pin", os.getpid())
+        r = _tmux("new-session", "-d", "-s", "pin", "-x", "120", "-y", "50",
+                  "-P", "-F", "#{pane_id}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        panes = {}
+        for slot, args in (("top", ("-v", "-b", "-l", "1")),
+                           ("bottom", ("-v", "-l", "1")),
+                           ("repos", ("-v", "-l", "6"))):
+            out = _tmux("split-window", "-t", harness_pane, *args,
+                        "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+            self.assertEqual(out.returncode, 0, out.stderr)
+            panes[slot] = out.stdout.strip()
+
+        pinned = instance.frame_of({"frame": {"component": [
+            {"use": "identity"}, {"use": "attention"},
+            {"use": "repos", "size": 15}, {"use": "sidebar"}]}})
+        self.assertEqual(
+            [p["size"].n for p in pinned["components"] if p["slot"] == "repos"], [15],
+            "the arrangement did not resolve the pin at all — everything below this "
+            "would then be asserting the content-sized behaviour under a new name")
+
+        for content in (2, 30):
+            with self.subTest(content=content):
+                with mock.patch.dict(config.FRAME, pinned), \
+                        mock.patch("charter.frame.slots.repos_rows_wanted",
+                                   return_value=content):
+                    commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
+                                                   harness_pane=harness_pane,
+                                                   window_cols=120, window_rows=50)
+                height = _tmux("display-message", "-p", "-t", panes["repos"],
+                               "#{pane_height}").stdout.strip()
+                self.assertEqual(
+                    height, "15",
+                    f"the table pane is {height} rows on a plane with {content} clones "
+                    f"and a committed `size = 15` — a pinned strip is a constant, and "
+                    f"tmux is the only thing that can say whether it really landed")
+                harness = _tmux("display-message", "-p", "-t", harness_pane,
+                                "#{pane_height}").stdout.strip()
+                # 50 - top(1) - bottom(1) - repos(15) - a border for each of the three.
+                self.assertEqual(harness, "30",
+                                 f"the harness has {harness} rows, so the rows the pin "
+                                 f"took came from somewhere the arithmetic does not "
+                                 f"describe")
+
     def test_the_table_panes_width_is_tmuxs_answer_and_not_the_recorded_order(self):
         """#510, against the one authority there is.
 
