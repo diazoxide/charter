@@ -2239,6 +2239,14 @@ class TheGateSaysWhichOfThreeThingsItFound(unittest.TestCase):
         unsized = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
                                      missing=1, shards=0)
         self.assertIn("| **did not report** | ? |", unsized)
+        # And the PROSE below the table has to agree with the row above it. There are
+        # three `shards >= 1` in this renderer — the headline, the cell, and the section —
+        # and pinning two of them let the third drift, which reads as a page saying
+        # "1 of 1" in the table and "never sized itself" underneath.
+        self.assertIn("2 of 3 shard(s) wrote no result", counted)
+        self.assertIn("1 of 1 shard(s) wrote no result", lone)
+        self.assertIn("never said how many shards it needed", unsized)
+        self.assertNotIn("wrote no result", unsized)
 
     def test_a_page_with_every_shard_in_still_says_the_branch_is_clean(self):
         text = sweep.gate_summary(sweep.classify([_result("pinned")]),

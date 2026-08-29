@@ -2517,7 +2517,13 @@ def merge(directory: Path, shards: int) -> tuple[list[Result], int]:
     """
     results: list[Result] = []
     reported = 0
-    for f in sorted(Path(directory).glob("*.json")) if Path(directory).is_dir() else []:
+    # No `is_dir()` check in front of the glob, and that absence is a finding of this tool
+    # against itself. It was written, the self-sweep collapsed the conditional to its first
+    # arm, and every test stayed green: `Path.glob` on a path that is missing — or that is
+    # a file rather than a directory — yields nothing and raises nothing, on 3.12 and 3.14
+    # alike. The guard was answering a question the standard library had already answered.
+    # §4 again: an equivalent mutant and a dead line are one finding.
+    for f in sorted(Path(directory).glob("*.json")):
         try:
             results.extend(results_from_json(f.read_text(encoding="utf-8")))
         except (OSError, ValueError, KeyError, TypeError):

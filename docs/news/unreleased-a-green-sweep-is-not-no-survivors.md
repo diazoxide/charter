@@ -91,7 +91,7 @@ kind of pass.
 
 ## The sweep swept the gate that reports it
 
-127 mutations, against a change whose whole subject is the sweep. It found eight lines of
+127 mutations, against a change whose whole subject is the sweep. It found ten lines of
 its own that no test went red without.
 
 **The unsharded path had stopped being tested.** Forcing `if shard is not None` to
@@ -144,7 +144,20 @@ order the shard files happened to be read in. Those two sort now, which is where
 belongs, and the merge stays ordered so the result set does not depend on a directory
 listing either.
 
-All eight are pinned now. A ninth survivor is not a finding about this code at all: it is a
+**The same question was asked in three places and answered in two.** Whether the sweep
+knows how many shards it expected decides three things — the check's name, the count in the
+table, and the paragraph under it. Two of the three were pinned; the third drifted, and a
+page that says "1 of 1" in its table and "never sized itself" underneath is worse than
+either. All three are asserted together now.
+
+**And one line went the other way: it was deleted.** The merge checked that its results
+directory existed before globbing it. `Path.glob` on a path that is missing — or that is a
+file rather than a directory — yields nothing and raises nothing, so the check was
+answering a question the standard library had already answered. Collapsing it changed no
+behaviour, which is the definition this repo uses: an equivalent mutant and a dead line are
+one finding, and the finding is that the line should go.
+
+All ten are settled now. An eleventh survivor is not a finding about this code at all: it is a
 string inside a *type annotation*, which `from __future__ import annotations` means the
 interpreter never evaluates, so no test can ever go red without it. That is a blind spot
 in the string operator's scoping rather than a guard, and it is filed as one (#632)
