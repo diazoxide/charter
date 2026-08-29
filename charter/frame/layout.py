@@ -259,6 +259,34 @@ def _key(name):
     return _builtins.SLOT_OF.get(name, name) if isinstance(name, str) else name
 
 
+def _arrangement():
+    """The placements this plane resolved, or nothing — the one read of `config.FRAME`.
+
+    **One line, because there are two callers and the fallback in it is unpinned.**
+    :func:`_placed_here` reads the arrangement for a component charter did not write and
+    :func:`_pinned_rows` reads it for the one built-in whose height a plane may commit; the
+    `or ()` is the same defence for both, and a second copy of it is a second line nothing
+    can fail without. `tools/sweep.py` reported exactly that copy the day it appeared and
+    `docs/news/unreleased-the-deletion-sweep-is-a-thing-the-repo-runs.md` records the
+    original at this module's line 289 as a survivor it examined — so the answer to a
+    second one is to have one, not to accept two.
+
+    It stays a fallback rather than a plain subscript. `instance.frame_of` sets
+    ``components`` before its own early return, deliberately ("a key present on one path
+    and absent on another is two shapes for one answer"), so nothing in production reaches
+    here without it — but `config.FRAME` is module state that a caller may replace whole,
+    and a `KeyError` out of :func:`repos_rows` costs a launch its entire frame. Pinning it
+    would mean a test constructing a `config.FRAME` that `frame_of` cannot produce, which
+    is a test of the line rather than of any property.
+
+    Imported inside the call, the way :func:`_table_min_cols` reaches for `statusline` and
+    for the same reason: this module is imported by every launch path, and `config`'s
+    import resolves the plane root.
+    """
+    from .. import config
+    return config.FRAME.get("components") or ()
+
+
 def _placed_here() -> dict[str, tuple[str, int]]:
     """name → (edge, cells) for what THIS PLANE places and charter did not write.
 
@@ -274,19 +302,19 @@ def _placed_here() -> dict[str, tuple[str, int]]:
     wrong and each test could omit — which is how the two answers to "how wide is the
     table's pane" came apart in #500.
 
-    Imported inside the call, the way :func:`_table_min_cols` reaches for `statusline` and
-    for the same reason: this module is imported by every launch path, and `config`'s
-    import resolves the plane root.
+    The read itself is :func:`_arrangement`'s, which is where the "imported inside the
+    call" reasoning moved when a second caller appeared.
 
     Only names the shipped tables do not already carry. A plane cannot move charter's own
-    `right` from here — `component_tables` refuses an edge or a size on a built-in that
-    disagrees with its declaration, because `layout` derives the built-in geometry at
-    import and a value read, validated and then ignored is the convincing empty this phase
-    was written against.
+    `right` from here — `component_tables` refuses an edge on a built-in that disagrees
+    with its declaration, and refuses a size on the three whose geometry `layout` derives
+    at import, because a value read, validated and then ignored is the convincing empty
+    this phase was written against. The repo table is the exception both of those rules now
+    have (`instance._built_in_size`), and it is still not read HERE: its height is
+    :func:`repos_rows`', and :func:`_pinned_rows` is what reads the number for it.
     """
-    from .. import config
     out: dict[str, tuple[str, int]] = {}
-    for placed in config.FRAME.get("components") or ():
+    for placed in _arrangement():
         name = placed.get("slot")
         if isinstance(name, str) and name not in SLOT_SIZE:
             out[name] = (placed["edge"], _policy_cells(placed["size"]))
@@ -313,7 +341,8 @@ def _pinned_rows() -> int | None:
     :func:`_placed_here`'s reason word for word — and this function is on exactly the path
     that docstring names. :func:`repos_rows` already reaches `config.FRAME` transitively
     through :func:`_is_fixed_row`, so nothing about when this module talks to the config
-    boundary changes.
+    boundary changes. Through :func:`_arrangement`, which both readers share so that the
+    fallback in it is one line rather than two.
 
     ``isinstance(placed["size"], Fixed)`` asks which POLICY the arrangement resolved to,
     which is the property and not a stand-in for it: a plane that writes its arrangement
@@ -323,8 +352,7 @@ def _pinned_rows() -> int | None:
     component it belongs to; without it the first placement in file order would decide the
     table's height, and on charter's own plane that is `identity`, `Fixed(1)`.
     """
-    from .. import config
-    for placed in config.FRAME.get("components") or ():
+    for placed in _arrangement():
         if placed.get("slot") == "repos" and isinstance(placed["size"], Fixed):
             return placed["size"].n
     return None

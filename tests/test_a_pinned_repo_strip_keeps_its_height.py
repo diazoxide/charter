@@ -31,7 +31,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, config, instance
-from charter.frame import component, layout
+from charter.frame import builtins, component, layout
 
 
 def _arrangement(**repos) -> dict:
@@ -110,6 +110,26 @@ class TheConfigBoundaryDecidesWhichBuiltInsMayCarryASize(unittest.TestCase):
                                  [component.Fixed(echo)])
                 self.assertIsNone(instance.component_tables(
                     {"component": [{"use": use, "size": other}]}))
+
+    def test_a_component_with_no_number_to_echo_is_refused_rather_than_raising(self):
+        """The third size policy, asked of the one component that really has it.
+
+        `personas` is `Fill()` — neither a number to echo nor a content height to pin. It
+        is a CHILD of the sidebar today, so it cannot reach `_built_in_size` through
+        `builtins.SLOT_OF`, and that is exactly why the question is put to the function
+        rather than to a committed file: `value == c.size.n` on a `Fill` is an
+        `AttributeError`, raised while a committed file is being resolved — on the path of
+        `charter --version` as much as `charter frame` — where this form's answer to a
+        value it cannot honour is to refuse the arrangement and draw the `slots` frame.
+
+        Without this the `isinstance(c.size, Fixed)` half of that condition is a survivor
+        masked by the `Content` branch above it: every component `SLOT_OF` currently
+        reaches is one or the other, so nothing could observe it. Asked here, it is the
+        line that stands between a future `Fill` placement and a traceback.
+        """
+        fill = builtins.build().get("personas")
+        self.assertIsInstance(fill.size, component.Fill)
+        self.assertIsNone(instance._built_in_size(fill, 5))
 
     def test_an_arrangement_with_a_pin_round_trips_through_the_written_out_form(self):
         """`frame_components` promises the mapping is lossless in both directions, and a
