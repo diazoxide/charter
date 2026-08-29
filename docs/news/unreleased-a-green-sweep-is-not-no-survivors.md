@@ -91,7 +91,7 @@ kind of pass.
 
 ## The sweep swept the gate that reports it
 
-127 mutations, against a change whose whole subject is the sweep. It found ten lines of
+127 mutations, against a change whose whole subject is the sweep. It found fourteen lines of
 its own that no test went red without.
 
 **The unsharded path had stopped being tested.** Forcing `if shard is not None` to
@@ -157,11 +157,35 @@ answering a question the standard library had already answered. Collapsing it ch
 behaviour, which is the definition this repo uses: an equivalent mutant and a dead line are
 one finding, and the finding is that the line should go.
 
-All ten are settled now. An eleventh survivor is not a finding about this code at all: it is a
-string inside a *type annotation*, which `from __future__ import annotations` means the
-interpreter never evaluates, so no test can ever go red without it. That is a blind spot
-in the string operator's scoping rather than a guard, and it is filed as one (#632)
-instead of being worked around here.
+**And one that is the whole argument in miniature.** `parse_shard` refuses an argument
+that is not `N/M`. Delete the refusal outright and every test still passed — because
+`int("")` and `int("two")` raise `ValueError` too, and the test asserted the *type* of the
+exception. `assertRaises(SomeError)` is an assertion about type, and **type is not the
+reason**:
+
+```
+with the refusal     --shard wants N/M, not '2'
+without it           invalid literal for int() with base 10: ''
+```
+
+That is #558 — the finding this whole harness was built around, where deleting
+`release.yml`'s `-z "$claimed"` left the run still exiting 1 for a different reason —
+reproduced inside the harness built around #558. The refusals now assert their reasons,
+and the two of them say different things so neither can stand in for the other.
+
+**Three of the fourteen were deleted rather than tested**, because they were answering
+questions something else had already answered: a directory check in front of a glob that
+yields nothing for a missing path anyway, a `not sep` conjunct that could never be the
+clause that fired, and a `.strip()` in front of an `int()` that already ignores
+whitespace. A fourth looked identical and was the opposite — the `str()` in that same
+line is the only thing stopping `3.9` from being read as three shards, so it is pinned
+instead. Which is why each one needed a measurement rather than a reading.
+
+All fourteen are settled now. A fifteenth survivor was never a finding about this code at
+all: a string inside a *type annotation*, which `from __future__ import annotations` means
+the interpreter never evaluates, so no test could ever go red without it. That was a blind
+spot in the string operator's scoping rather than a guard, it was filed as one (#632), and
+it is fixed.
 
 Nothing to adopt — this is CI, not the CLI. The gate still reports and still blocks
 nothing.

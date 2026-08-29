@@ -2625,8 +2625,12 @@ def parse_shard(text: str) -> tuple[int, int]:
     merge step reports a whole plan. So `2`, `2/`, `0/3` and `4/3` are all errors here,
     where they would all be survivable further in.
     """
-    index, sep, count = str(text).partition("/")
-    if not sep or not index.strip().isdigit() or not count.strip().isdigit():
+    # No `not sep` conjunct, and its absence is a finding of this tool against itself.
+    # It was written, the self-sweep dropped it, and every test stayed green — because
+    # `partition` leaves `count` empty when there is no separator, and `"".isdigit()` is
+    # already False. It could never be the clause that fired. §4 once more.
+    index, _, count = str(text).partition("/")
+    if not index.strip().isdigit() or not count.strip().isdigit():
         raise ValueError(f"--shard wants N/M, not {text!r}")
     pair = (int(index), int(count))
     if not 1 <= pair[0] <= pair[1]:
@@ -2641,9 +2645,16 @@ def expected_shards(text: str | None) -> int:
     far as sizing itself, which is the loudest failure this workflow has. Reading it as
     zero would turn that into the quietest kind of pass, which is the whole of #617.
     """
+    # No `.strip()` and no `AttributeError`, and both absences are findings of this tool
+    # against itself. `int()` already ignores surrounding whitespace, so the strip could be
+    # swapped for `lstrip` with nothing observable changing; and `str()` always returns a
+    # str, on which neither `.strip()` nor `int()` can raise an AttributeError, so that
+    # clause could never catch anything. Measured on every shape this is called with —
+    # None, a str, an int, a list, an object, bytes — the reachable answers are exactly
+    # `ok` and `ValueError`. §4: an equivalent mutant and a dead line are one finding.
     try:
-        n = int(str(text).strip())
-    except (TypeError, ValueError, AttributeError):
+        n = int(str(text))
+    except (TypeError, ValueError):
         return 0
     return n if n > 0 else 0
 

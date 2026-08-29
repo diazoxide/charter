@@ -2316,10 +2316,28 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
                 sweep.shard_of(plan, index, count)
 
     def test_the_shard_argument_is_parsed_strictly(self):
+        """And the REFUSAL is asserted by its reason, not by its exception type.
+
+        Found by the self-sweep on this file: drop the shape check entirely and every case
+        below still raises `ValueError`, because `int("")` and `int("two")` do too. The
+        test passed over a deleted refusal — which is #558's finding exactly, the one this
+        whole harness was built around, arriving in the harness's own argument parser. The
+        difference the guard makes is what the operator reads:
+
+            with it     --shard wants N/M, not '2'
+            without it  invalid literal for int() with base 10: ''
+        """
         self.assertEqual(sweep.parse_shard("2/3"), (2, 3))
-        for bad in ("2", "2/", "/3", "0/3", "4/3", "", "two/three", "2/3/4"):
-            with self.assertRaises(ValueError, msg=bad):
+        for bad in ("2", "2/", "/3", "", "two/three", "2/3/4"):
+            with self.assertRaises(ValueError, msg=bad) as caught:
                 sweep.parse_shard(bad)
+            self.assertIn("--shard wants N/M", str(caught.exception), bad)
+        # A well-formed pair that is not a shard of anything trips the OTHER refusal, and
+        # says so — two guards, two reasons, and neither standing in for the other.
+        for out_of_range in ("0/3", "4/3"):
+            with self.assertRaises(ValueError, msg=out_of_range) as caught:
+                sweep.parse_shard(out_of_range)
+            self.assertIn("is not a shard of anything", str(caught.exception))
 
     def test_one_shard_measures_what_it_can_finish_in_its_budget(self):
         """Forty minutes a shard, eleven of which are gone before the first mutation — the
@@ -2716,6 +2734,13 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
         self.assertEqual(sweep.expected_shards(" 3 "), 3)
         for nothing in ("", None, "0", "-1", "many", "3.5", []):
             self.assertEqual(sweep.expected_shards(nothing), 0, repr(nothing))
+        # And the value is read as TEXT, which is what it is — a `$GITHUB_OUTPUT` line.
+        # Found by the self-sweep: drop the `str()` and `int()` coerces instead of
+        # refusing, so 3.9 becomes three shards and b"3" becomes three. A fractional or
+        # binary shard count is not a shard count somebody wrote, and the string cases
+        # above cannot tell the difference — "3.5" fails to parse either way.
+        for coerced in (3.9, 2.9, b"3"):
+            self.assertEqual(sweep.expected_shards(coerced), 0, repr(coerced))
 
 
 class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
@@ -2858,6 +2883,26 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         self.assertEqual(code, 0, said)
         self.assertEqual(seen, [(2, 3)])
 
+    def test_a_gate_run_with_no_shard_asks_for_the_whole_plan(self):
+        """`[40/42]` from the self-sweep: collapse `parse_shard(args.shard) if args.shard
+        else None` to its first arm and every test still passed.
+
+        Nothing ran `--gate` without `--shard` far enough to reach :func:`sweep` — the one
+        test that omits it returns early on an empty diff — so the mutant crashed on
+        `parse_shard(None)` in a path no test walked. That path is how this tool is used
+        from a terminal.
+        """
+        seen = []
+        for name, stub in (("sweep", lambda *a, **k: (seen.append(a[-1]), ([], []))[1]),
+                           ("load_map", lambda *a, **k: {})):
+            real = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, real)
+        code, said = self._cli("--gate", "--jobs", "1", "--base", self.base,
+                               "--no-baseline", "--workdir", str(self.workdir))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(seen, [None])
+
     def test_the_slice_a_shard_takes_is_the_slice_it_says_it_took(self):
         """The log line a cancelled run leaves behind is the only trace of what it was
         doing, so it names the shard and how much of the plan the shard was given."""
@@ -2946,6 +2991,30 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
                           "headline": "no verdict: the sweep never sized itself"})
         self.assertIn("never said how many shards it needed", self.summary.read_text())
         self.assertIn("an unknown number of shard(s)", said)
+
+    def test_a_plan_that_never_ran_is_no_verdict_even_when_a_shard_did_report(self):
+        """`[42/42]` from the self-sweep, and the worst of them.
+
+        `if not shards: missing = max(missing, 1)` could be deleted with every test still
+        green, because the case that covered it used an EMPTY directory — where `merge`
+        already returns `missing=1` and the guard has nothing left to do. Give it one
+        stray artifact and the guard is the only thing standing between a failed plan job
+        and the page saying **no survivors**:
+
+            without it   clean      / "no survivors"
+            with it      no-verdict / "no verdict: the sweep never sized itself"
+
+        Which is #617 exactly — a sweep that never sized itself, reported as a clean
+        branch — reproduced inside the change that exists to prevent it.
+        """
+        where = self._shards([_result("pinned", path="charter/b.py")])
+        code, said = self._cli("--verdict", str(where), "--shards", "",
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self._read_outputs(),
+                         {"conclusion": "no-verdict",
+                          "headline": "no verdict: the sweep never sized itself"})
 
     def test_a_complete_merge_of_a_clean_branch_says_no_survivors(self):
         where = self._shards([_result("pinned", path="charter/a.py")],
