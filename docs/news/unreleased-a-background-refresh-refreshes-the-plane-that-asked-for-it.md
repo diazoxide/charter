@@ -36,9 +36,15 @@ whatever directory the render happened to run in. Both refreshers now decline to
 
 ## What this was found by
 
-charter's own test suite, forking 131 detached charter processes in a single run — every
-one of them against the machine's live control plane, refreshing its forge state and
-rewriting its caches. `tests/_planeguard.py` had said for months that it could not see this:
+charter's own test suite, forking 131 detached charter processes in a single run that
+carried no `$CHARTER_ROOT` and therefore landed on the machine's live control plane —
+refreshing its forge state and rewriting its caches. That is the count of **mis-planed**
+children, taken before this fix. *How many the suite forks at all* is a different question
+with a different answer, measured later in this release at 66 per green run and then closed
+to zero — see *charter's own test suite stops spending the machine it runs on*. Both figures
+are recorded in `tests/_planeguard.py`, each beside the question it answers, because they
+have been read as the same number before. `tests/_planeguard.py` had said for months that it
+could not see this:
 
 > **What this cannot see: a subprocess.** … isolating this process does nothing for it.
 

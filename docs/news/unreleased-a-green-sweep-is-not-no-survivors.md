@@ -65,10 +65,15 @@ the others nothing. Round-robin also spreads the expensive ones, which arrive in
 survivor costs a full suite run where a red costs seconds, and survivors cluster in the
 function that has no test.
 
-The selection map — one trace of the whole suite, **250 s on a GitHub runner** — is now
-warmed once and restored by every shard in seconds, so a second machine costs its own
+The selection map — one trace of the whole suite, and **minutes on a GitHub runner** — is
+now warmed once and restored by every shard in seconds, so a second machine costs its own
 baseline and not its own trace. That the map was cached was the premise for sharding, and
 it was not true before: the workflow had no cache step at all, so every run rebuilt it.
+
+The exact figure is written down twice and not identically: `SHARD_FIXED`'s budget note in
+`tools/sweep.py` says 250 s and `sweep.yml`'s cache step says 350 s. The 12-minute
+`SHARD_FIXED` covers either reading, so nothing downstream turns on which is right — but
+neither number is one to quote until somebody re-measures, so this entry does not.
 
 The budget is written for the case where the cache misses anyway, because a fork's pull
 request cannot write one and a budget that only holds on a hit fails on exactly the runs

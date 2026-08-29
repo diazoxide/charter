@@ -46,9 +46,11 @@ as repos are cloned or go quiet. Anchoring the alert to the terminal's last line
 more than anchoring the table. An alert you have to go looking for is one you read late.
 
 **The table is headed now**, `▪ repos 6` — the same heading style the sidebar's sections
-got last release, from the same code, so the frame's two bordered components are labelled
-the same way. It also gives the tree something to hang from: the first row is `├─`, a glyph
-that means *there is more above me*, and once the status line moved out there was nothing.
+got one step earlier in this same release (*The frame's sidebar gets headings, a badge
+column, and this workspace's todos*), from the same code, so the frame's two bordered
+components are labelled the same way. It also gives the tree something to hang from: the
+first row is `├─`, a glyph that means *there is more above me*, and once the status line
+moved out there was nothing.
 
 **A workspace with no clones says so instead of showing you an empty box.** While the
 table shared a pane with the status row, having nothing to table just meant no rows and

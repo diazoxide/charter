@@ -39,9 +39,11 @@ costs of charter being a guest.
 
 ## The overlay itself
 
-The surface the palette and the pickers will be drawn on is in this release, though
-nothing opens it yet. Three decisions in it are worth knowing about, because they are what
-you will feel when Task 4 lands:
+The escape hatch shipped before anything that could need it, and the surface it rescues you
+from landed alongside it: the overlay that every modal charter draws is built on. By the end
+of this release `F2` opens that overlay as the palette, with the workspace, persona and
+change pickers behind it (*F2 opens a palette you type into*). Three decisions in the overlay
+are worth knowing about, because they are what you feel every time one is open:
 
 **It is a full pane, not a tmux popup.** A popup would have been prettier. On tmux 3.2 —
 which charter still launches on — any resize of your terminal kills a popup outright, with

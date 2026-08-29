@@ -3,21 +3,31 @@ version: unreleased
 headline: The palette stops listing every workspace and starts opening a picker for them
 ---
 
-`F2` used to hand you one flat list with everything in it — detach, three densities, and
-then every workspace and every persona the plane has, one row each. On a plane with thirty
-workspaces the four things a frame can *do* were four rows in thirty-seven.
+The palette arrived earlier in this same release handing you one flat list with everything
+in it — detach, three densities, and then every workspace and every persona the plane has,
+one row each. On a plane with thirty workspaces the four things a frame can *do* were four
+rows in thirty-seven.
 
-**Two rows now, and each opens a list of its own:**
+**One row per noun now, and each opens a list of its own:**
 
 ```
-charter · 6 to choose from
+charter · 12 to choose from
 > workspace: alpha — pick another
     persona: steward — pick another
+    change: component-api-2 — pick another
     detach — leave the harness running
+    repo: select the next row
+    repo: select the previous row
     density: minimal
     density: normal
   * density: full
+    chrome: off
+  * chrome: dark
+    chrome: light
 ```
+
+Two of those doorways are this change; `change:` is a third, added with the cross-repo change
+surface later in the same release, on exactly the same mechanism.
 
 Enter on `workspace:` redraws the **same pane** with the names alone:
 

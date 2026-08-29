@@ -17,7 +17,9 @@ The suite forked **66 detached charter children per green run**: 27 `charter
 _version-check`, each of them a GET to PyPI; 36 `charter gl-refresh`, each running the
 forge client over every clone in the workspace; and 3 `charter frame-gather`. Every one of
 them correctly pointed at a throwaway plane since #527, and not one of them was waited for
-or asserted about.
+or asserted about. This is *how many* — a different question from #527's *which plane*,
+whose own count (131 mis-planed children, earlier in this release) is not this one and must
+not be read as it.
 
 The count was taken in-process, by wrapping `subprocess.Popen.__init__` before the test
 package is imported. That matters: the first attempt at this number sampled a running

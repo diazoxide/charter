@@ -197,8 +197,8 @@ jobs:
       # for one sweep. The run it cancels still reaches this job — `always()` above is what
       # #626 needs and it does not distinguish a cancellation from a shard that died — so
       # the cancelled run read its own empty `needs.plan.outputs.shards` and published
-      # `no verdict: the sweep never sized itself`. True of that run, and indistinguishable
-      # on the checks list from the sentence #617 built this gate to say.
+      # `no verdict: the sweep never sized itself` — indistinguishable, on the checks list,
+      # from the sentence #617 built this gate to say.
       #
       # Measured on #652 at `74ccfdab40c2`: runs 86 and 87 created in the SAME SECOND, 87
       # cancelled 86 by concurrency group, and 86's `collect` completed and published that
@@ -209,25 +209,32 @@ jobs:
       # reasoned.** The first version of this step used it and did not fire: run 99 on this
       # branch was cancelled by run 100 (`conclusion=cancelled`, `Size the sweep` cancelled,
       # the shard cancelled) and `collect` still took the `say` branch and published
-      # `no verdict: 1 of 1 shard did not report` — the #626 sentence, from a run where no
-      # shard was ever asked to report. In a job running under `always()`, `cancelled()`
+      # `no verdict: 1 of 1 shard did not report` — the #626 sentence, worn by a run that
+      # was stopped rather than by a branch. In a job running under `always()`, `cancelled()`
       # does not answer for the run the way the docs' one-line summary suggests.
       #
       # `needs.plan.result` does. It is `cancelled` exactly when the sizing job did not
-      # finish, and that is the only state in which the shard arithmetic below is answering
-      # about shards nobody planned. #626's own case is untouched: a shard that exceeds its
-      # `timeout-minutes` leaves `plan` SUCCEEDED, so `no verdict: N of M shards did not
-      # report` still means what it meant and still blocks nothing.
+      # finish, which has two causes and only two: a newer push cancelled this run, or
+      # `plan` hit its own `timeout-minutes: 30`. #626's own case is untouched: a SHARD that
+      # exceeds its `timeout-minutes` leaves `plan` SUCCEEDED, so `no verdict: N of M shards
+      # did not report` still means what it meant and still blocks nothing.
+      #
+      # **The sentence names the cancellation and not the sizing, and run 99 is why.** A
+      # cancelled `plan` may or may not have got as far as writing its outputs: run 86
+      # (#654) had not, so `shards` was empty; run 99 HAD — `1 of 1` is `expected_shards`
+      # reading a real `shards=1`, so that run sized itself and was stopped afterwards.
+      # "This sweep did not size itself" is therefore false on exactly the run that was
+      # measured. What is true of both, and of a timeout, is that the sweep did not finish.
       #
       # It depends on nothing a cancellation would have skipped — no checkout, no artifact,
       # no python. `printf` into `$GITHUB_OUTPUT` and nothing else, because a step that
       # needed the tree could not run in the one state it exists for.
-      - name: A sweep that never sized itself says that, and nothing more
+      - name: A cancelled sweep says it was cancelled, and nothing more
         id: superseded
         if: ${{ needs.plan.result == 'cancelled' }}
         run: |
           set -euo pipefail
-          printf 'headline=cancelled: this sweep did not size itself\n' >>"$GITHUB_OUTPUT"
+          printf 'headline=cancelled: this sweep did not finish\n' >>"$GITHUB_OUTPUT"
           printf 'conclusion=cancelled\n' >>"$GITHUB_OUTPUT"
       # The exact negation of the step above, and not the default `success()`: the download
       # is `continue-on-error` precisely so that "no artifacts at all" reaches this step, and

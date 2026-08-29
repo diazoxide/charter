@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: The frame turns focus events on, and stops promising you clickable panels it cannot deliver
+headline: The frame turns focus events on, and the mouse trade turns out to be permanent rather than deferred
 ---
 
 Two small things, both of which were charter saying something that was not true.
@@ -14,7 +14,9 @@ on any machine, for anyone. tmux ships `focus-events` **off**, and with it off t
 option was simply missing from the config charter writes for its own server.
 
 It is there now. `charter frame` turns `focus-events` on for the private tmux server it
-launches, so a component that declares `focus` or `blur` receives them.
+launches, so a component that declares `focus` or `blur` receives them — which is what the
+dispatcher later in this release delivers through (*A component can be told when its pane is
+focused, blurred or resized*).
 
 Two honest edges on that, both measured rather than assumed:
 
@@ -52,7 +54,9 @@ clickable while it is active, and you lose drag-select for as long as it is. Cha
 not own that program and will not claim otherwise.
 
 So `click` and `scroll` in the component contract declare what a component **handles**,
-never that the event fires. Give every pointer affordance a key as well. A surface charter
+never that the event fires — charter delivers both by the end of this release (*A click and a
+scroll reach the panel you pointed at*), and this paragraph is why delivering them is still
+not a promise that they happen. Give every pointer affordance a key as well. A surface charter
 draws over a whole pane and drives itself is the exception and needs no setting: while it is
 open it *is* the active pane, so its own request is the one that reaches your terminal.
 
@@ -61,4 +65,5 @@ open it *is* the active pane, so its own request is the one that reaches your te
 Nothing. `[frame] mouse` still defaults to off and still means what it meant; the frame
 gains one tmux option it should always have set. If you have been waiting for the release
 that makes panels clickable without costing you text selection, stop waiting — that release
-does not exist, and charter now says so where you would look for it.
+does not exist, and charter now says so where you would look for it. Panels *are* clickable
+by the end of this one; what no release removes is the price.

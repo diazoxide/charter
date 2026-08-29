@@ -122,3 +122,8 @@ comes out green over nothing.
 Unchanged from the record entry, and repeated because a plane may take both at once:
 `STRUCTURE_VERSION` went 2 → 3 so every existing workspace flags itself, and one command
 repairs them all. It creates no directory.
+
+You do not have to remember it. `charter workspace list` marks each stale row with `⚠` and
+closes with `⚠ N workspace(s) need reinit (…) — bring their structure up to date: charter
+workspace reinit --all`, and the status line's alert block carries `⚠ reinit N ws · charter
+ws reinit --all`. Running it is additive and idempotent.
