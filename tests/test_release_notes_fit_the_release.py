@@ -64,6 +64,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -235,6 +236,9 @@ class NewsDir(unittest.TestCase):
 
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
+        # Removed rather than left behind: these fixtures are hundreds of kilobytes each,
+        # which is the whole point of them.
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
         patch = mock.patch.object(news, "_PACKAGED", self.dir)
         patch.start()
         self.addCleanup(patch.stop)
