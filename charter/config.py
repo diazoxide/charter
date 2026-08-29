@@ -274,6 +274,39 @@ def _mkdir_0700(d: "Path") -> None:
         pass
 
 
+def claim_private_dir(p) -> None:
+    """Create *p* at 0700 and **raise ``FileExistsError`` when the name is already taken.**
+
+    :func:`private_mkdir` with its one idempotence removed, and that removal is the whole
+    of it. `private_mkdir` swallows ``FileExistsError`` on a directory (#331) because
+    every caller it has is asking "make sure this exists"; an **allocator** is asking the
+    opposite question — "is this name mine?" — and for that, idempotence is not a
+    convenience, it is the bug. `frame.state.new_chat_id` claims a chat's ordinal by
+    calling this: the ``mkdir`` IS the mutual exclusion, so two launchers racing the same
+    workspace cannot both be told they won, and ``FileExistsError`` means "taken, try
+    ``n+1``" rather than "already done".
+
+    Here rather than in the caller, for the reason `private_mkdir` is here at all: the
+    umask must not decide the mode of the plane's own state, and a bare ``os.mkdir``
+    spelled at a call site is a bare ``os.mkdir`` the next call site copies.
+    ``os.mkdir``'s own *mode* is masked by the umask, so the explicit ``os.chmod``
+    afterwards is what actually names 0700 — the same pair, in the same order, as
+    :func:`_mkdir_0700`.
+
+    The parents are NOT created. An allocator that could bring the frame root into being
+    on the way past would resurrect a directory `reap` had just deleted; the caller makes
+    the root through :func:`private_mkdir` first, where creating it is the declared job.
+    """
+    p = Path(p)
+    os.mkdir(p, 0o700)
+    try:
+        os.chmod(p, 0o700)
+    except OSError:
+        # Same posture as `_mkdir_0700`: the directory exists at the mode `mkdir` managed,
+        # and a claim that succeeded must not be reported as a failure over the chmod.
+        pass
+
+
 def under_state(p) -> bool:
     """Is *p* the state directory, or a path inside it?
 

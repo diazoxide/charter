@@ -333,7 +333,8 @@ class Conf(unittest.TestCase):
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
         self.assertIn('bind -n F2 run-shell \'"$CHARTER_PY" -m charter '
-                      'frame-palette "#{client_name}"\'', text)
+                      'frame-palette "#{client_name}" --chat "#{@charter_chat}"\'',
+                      text)
         self.assertNotIn("frame palette", text)
 
     def test_the_menu_is_gone_rather_than_left_beside_the_palette(self):
@@ -545,11 +546,20 @@ class PaneDiedHooks(unittest.TestCase):
         action = cmd[-1]
         self.assertIn(f"${{v:-{commands_frame._UNKNOWN_DEATH_CODE}}}", action)
 
-    def test_the_teardown_hook_is_a_constant_kill_session_at_index_1(self):
+    def test_the_teardown_hook_is_a_constant_kill_window_at_index_1(self):
+        """`kill-window`, and the literal is the test.
+
+        A session is a WORKSPACE now and a chat is one window in it, so `kill-session`
+        here would take every other chat in the workspace down with the one whose harness
+        died — mid-turn, in another agent's terminal. Measured on tmux 3.7c and on tmux
+        3.2: a pane-scoped `pane-died[1] kill-window` on a harness that exits leaves every
+        sibling window and the session itself listed, and killing a session's LAST window
+        destroys the session, so the one-chat case ends exactly as it always did."""
         cmd = commands_frame._pane_died_teardown_hook_argv(socket="charter", harness_pane="%9")
         self.assertEqual(cmd[cmd.index("-t") + 1], "%9")
         self.assertIn("pane-died[1]", cmd)
-        self.assertEqual(cmd[-1], "kill-session")
+        self.assertEqual(cmd[-1], "kill-window")
+        self.assertNotIn("kill-session", cmd)
 
     def test_both_hooks_are_clean_argv_lists_naming_the_socket(self):
         for cmd in (commands_frame._pane_died_write_hook_argv(socket="charter", harness_pane="%0"),
@@ -559,28 +569,39 @@ class PaneDiedHooks(unittest.TestCase):
                 self.assertIsInstance(part, str)
             self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
 
-    def test_the_status_path_is_carried_out_of_band(self):
+    def test_the_frame_root_is_carried_out_of_band(self):
         """`set-environment` takes the path as ONE argv value — no shell, no tmux
         text-command parsing of it at all — verified by hand to round-trip a space, a
         literal `'`, and a `$(...)` injection attempt correctly precisely because
-        nothing here ever re-parses it as text."""
-        path = "/tmp/My Plane's exit $(touch pwned)/exit"
-        cmd = commands_frame._exit_path_env_argv(socket="charter", session="demo-1",
-                                                 status_path=path)
-        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo-1",
-                              "CHARTER_FRAME_EXIT", path])
+        nothing here ever re-parses it as text.
+
+        The value is the frame ROOT rather than one chat's `exit` file, and that is not
+        cosmetic: this variable is SESSION-scoped and a session holds several chats, so a
+        value naming one chat's file is one the next chat's launch repoints — after which
+        the first chat's death writes its status into the second chat's file. The write
+        hook appends `#{@charter_chat}` itself."""
+        root = "/tmp/My Plane's frames $(touch pwned)"
+        cmd = commands_frame._exit_path_env_argv(socket="charter", session="demo",
+                                                 frame_root=root)
+        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo",
+                              "CHARTER_FRAME_EXIT", root])
 
     def test_the_frame_id_is_carried_to_its_own_palette(self):
         """Without this, `run-shell` fired from a LATER frame sharing `SOCKET` falls
         back to the SERVER's own starting environment — the FIRST frame's
         `CHARTER_SESSION_ID`, not this one's (verified by hand against tmux 3.7c: a
         second session on an already-running server, `run-shell`'d with no override of
-        its own, reported the first frame's id). The value carried is the session's own
-        name — `_session_id_env_argv` hands a session its own id back, unlike
-        `_exit_path_env_argv`, which carries a SEPARATE value (`status_path`)."""
-        cmd = commands_frame._session_id_env_argv(socket="charter", session="demo-1")
-        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo-1",
-                              "CHARTER_SESSION_ID", "demo-1"])
+        its own, reported the first frame's id).
+
+        **The TARGET is the workspace's session and the VALUE is the chat**, which used
+        to be one string and is two now. Pinned as literals that differ, so a version
+        that hands the session its own name back — which is what this call did while a
+        frame WAS a session — fails here rather than silently naming the workspace as
+        every chat's frame id."""
+        cmd = commands_frame._session_id_env_argv(socket="charter", session="demo",
+                                                  chat="demo.2")
+        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo",
+                              "CHARTER_SESSION_ID", "demo.2"])
 
 
 class PanelRespawnHook(unittest.TestCase):
@@ -1051,7 +1072,10 @@ class Respawn(PersonaIso, unittest.TestCase):
         fake = _RespawnTmux()
         _respawn(fake, on_argv=True)
         self.assertEqual(fake.liveness[0][:3], ["tmux", "-L", commands_frame.SOCKET])
-        self.assertIn("list-sessions", fake.liveness[0])
+        # Two questions, both of charter's own server: the chat ids its windows carry
+        # (`@charter_chat`), and — for a frame launched by a charter that predates chats
+        # and is still a session named by its id — `list-sessions`.
+        self.assertTrue(any("list-sessions" in c for c in fake.liveness), fake.liveness)
         self.assertEqual(fake.respawns[0][:3], ["tmux", "-L", commands_frame.SOCKET])
 
     def test_an_operators_server_that_does_not_answer_is_not_respawned_into(self):
@@ -1434,13 +1458,14 @@ class _FakeTmux:
 
     def __init__(self, *, pane_id="%7", exit_code=None, race_death_status=None,
                 still_live=False, pre_existing_sessions=frozenset(),
+                pre_existing_chats=frozenset(), list_windows_rc=0,
                 panel_pane_ids=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
                 kill_rc=0, arm_rc=0, hatch_rc=0, mark_rc=0, chrome_rc=0,
                 resize_hook_rc=0,
                 capture_rc=0,
-                respawn_hook_rc=0,
+                respawn_hook_rc=0, chat_option_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
         self.exit_code = exit_code
@@ -1449,6 +1474,13 @@ class _FakeTmux:
         # command that died before `attach` ever got the chance to say anything (#384).
         self.pane_capture = pane_capture
         self.still_live = still_live
+        #: Chats the server already reports through `@charter_chat` — a workspace that
+        #: already has one chat open, which is what makes a launch into it the SECOND
+        #: chat rather than the first.
+        self.pre_existing_chats = frozenset(pre_existing_chats)
+        #: A server that answers `list-sessions` and then refuses `list-windows` — the
+        #: one state in which charter cannot tell which chats are live and must not reap.
+        self.list_windows_rc = list_windows_rc
         self.pre_existing_sessions = pre_existing_sessions
         # slot -> pane id `split-window` reports for it. Empty by default (see
         # `split-window`'s own handler below for why that matters for every other test
@@ -1473,24 +1505,47 @@ class _FakeTmux:
         self.resize_hook_rc = resize_hook_rc
         self.capture_rc = capture_rc
         self.respawn_hook_rc = respawn_hook_rc
+        self.chat_option_rc = chat_option_rc
         # Distinct from every other stderr string in this fake — a test needs to
         # control it independently to exercise the "invalid option" degrade (fix
         # round 3, item 2) separately from an ordinary resize-hook failure.
         self.resize_hook_stderr = resize_hook_stderr
         self.calls: list[list[str]] = []
+        #: The CHAT id, learned from the `@charter_chat` window option the launcher
+        #: writes — never from `new-session -s`, which names the WORKSPACE now.
         self.fid = None
+        #: The tmux SESSION name, which is the workspace.
+        self.session = None
         self.sourced_conf_text = None
         self.new_session_env = None
         self.kill_session_called = False
+        self.kill_window_called = False
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
         if "new-session" in cmd:
-            self.fid = cmd[cmd.index("-s") + 1]
+            self.session = cmd[cmd.index("-s") + 1]
             self.new_session_env = kwargs.get("env")
             return subprocess.CompletedProcess(cmd, self.session_rc,
                                                stdout=(self.pane_id + "\n") if self.session_rc == 0 else "",
                                                stderr="" if self.session_rc == 0 else "no space for a new pane")
+        if "new-window" in cmd:
+            # A SECOND chat joining a workspace session that already exists.
+            self.session = cmd[cmd.index("-t") + 1]
+            self.new_session_env = kwargs.get("env")
+            return subprocess.CompletedProcess(cmd, self.session_rc,
+                                               stdout=(self.pane_id + "\n") if self.session_rc == 0 else "",
+                                               stderr="" if self.session_rc == 0 else "no space for a new window")
+        if commands_frame._CHAT_OPTION in cmd:
+            # Which chat this window draws — matched on the production constant, and
+            # BEFORE the `set-option`/chrome branches below for the same reason the hatch
+            # option is: the value is a plain id that another branch could answer for.
+            # This is also the one place this fake can learn the chat id at all, the
+            # session being the workspace.
+            self.fid = cmd[-1]
+            return subprocess.CompletedProcess(cmd, self.chat_option_rc, stdout="",
+                                               stderr="" if self.chat_option_rc == 0
+                                               else "cannot set")
         if "source-file" in cmd:
             conf_path = cmd[cmd.index("source-file") + 1]
             self.sourced_conf_text = Path(conf_path).read_text()
@@ -1567,15 +1622,34 @@ class _FakeTmux:
             self.kill_session_called = True
             return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
                                                stderr="" if self.kill_rc == 0 else "no such session")
+        if "kill-window" in cmd:
+            self.kill_window_called = True
+            return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
+                                               stderr="" if self.kill_rc == 0 else "no such window")
+        if "select-window" in cmd:
+            return subprocess.CompletedProcess(cmd, self.select_rc, stdout="",
+                                               stderr="" if self.select_rc == 0 else "no such window")
         if "attach" in cmd:
             if self.exit_code is not None and self.fid:
                 state.record_exit(self.fid, self.exit_code)
             return subprocess.CompletedProcess(cmd, self.attach_rc, stdout="", stderr="")
         if "list-sessions" in cmd:
-            if self.fid is None:
+            if self.session is None:
                 live = set(self.pre_existing_sessions)
             else:
-                live = {self.fid} if self.still_live else set()
+                live = {self.session} if self.still_live else set()
+            return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
+        if "list-windows" in cmd:
+            if self.list_windows_rc != 0:
+                return subprocess.CompletedProcess(cmd, self.list_windows_rc, stdout="",
+                                                   stderr="server exited unexpectedly")
+            # `commands_frame._live_chats`: the chat ids the server's windows carry.
+            # Empty until this launch has named its own window, `{fid}` after — the same
+            # `still_live` switch `list-sessions` reads, because a chat that is still
+            # live is a window that is still there.
+            live = set(self.pre_existing_chats)
+            if self.fid and self.still_live:
+                live.add(self.fid)
             return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
         raise AssertionError(f"unexpected tmux command in test: {cmd}")
 
@@ -1712,6 +1786,440 @@ def _launch(fake: _FakeTmux, *, cols=200, rows=50, version=(3, 7), harness="clau
         return commands_frame.cmd_launch(args)
 
 
+class PickingAWorkspaceLocksTheChatToIt(PersonaIso, unittest.TestCase):
+    """`_pin_workspace` — lifted out of `cmd_launch` because both launch paths now
+    allocate their chat id after their own reap, so the pointer can only be written once
+    the id exists.
+
+    Nothing pinned either half of it while it was inline, and both are behaviour an
+    operator sees: a launch that resolved silently must write no pointer at all (#518 —
+    starting to would move every framed session's workspace on a path nobody asked
+    anything on), and the sentence that says it locked carries a name read off disk into
+    a line an operator reads."""
+
+    def test_a_pick_writes_the_pointer_under_the_chats_own_id(self):
+        from charter import workspace
+        buf = []
+        with mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
+            commands_frame._pin_workspace("alpha", "demo.2", True)
+        self.assertEqual(workspace.for_session("demo.2"), "alpha",
+                         "inside a frame the CHAT is the charter session (ADR 0019), so "
+                         "the pointer is what makes two chats hold two workspaces")
+        self.assertTrue(any("locked" in m for m in buf), buf)
+
+    def test_a_launch_that_picked_nothing_writes_nothing_and_says_nothing(self):
+        """The guard, and it is the whole of #518's "must not answer a prompt every
+        launch": an ordinary `charter claude` resolves its workspace silently and must
+        leave every pointer exactly as it found it."""
+        from charter import workspace
+        buf = []
+        with mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
+            commands_frame._pin_workspace("alpha", "demo.2", False)
+        self.assertIsNone(workspace.for_session("demo.2"),
+                          "a launch nobody answered a prompt for locked the session to a "
+                          "workspace anyway")
+        self.assertEqual(buf, [])
+
+    def test_the_workspace_name_is_contained_before_it_reaches_the_line(self):
+        """The name comes off `workspace.json` or a directory listing, and this line is
+        charter's own report format (#453/#472): a newline in it writes a second line that
+        looks exactly as much like charter's output as the first."""
+        buf = []
+        with mock.patch.object(commands_frame.workspace, "set_active"), \
+             mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
+            commands_frame._pin_workspace("alpha\n✗ Vault unlocked", "demo.2", True)
+        self.assertEqual(len(buf), 1, buf)
+        self.assertNotIn("\n✗", buf[0],
+                         "a workspace name forged a second line of charter's own output")
+        self.assertIn("alpha", buf[0])
+
+
+class AWorkspaceIsASessionAndAChatIsAWindow(PersonaIso, unittest.TestCase):
+    """Stage 5a's shape, at the launcher. The real-tmux half is
+    `tests/test_frame_tmux_integration.ChatsAreWindowsOnOneWorkspaceSession`; this is what
+    the launcher SENDS, and which of the two commands it sends."""
+
+    def test_the_session_is_the_workspace_and_the_window_is_the_chat(self):
+        fake = _FakeTmux(exit_code=0, still_live=True)
+        _launch(fake)
+        new_session = next(c for c in fake.calls if "new-session" in c)
+        self.assertEqual(new_session[new_session.index("-s") + 1], "demo",
+                         "the tmux session is the WORKSPACE — a chat is a window in it")
+        self.assertEqual(new_session[new_session.index("-n") + 1], "demo.1",
+                         "and the window is named for the chat, so `list-windows` is "
+                         "legible beside the chat ids on disk")
+
+    def test_a_second_chat_joins_the_workspaces_session_rather_than_starting_one(self):
+        """`new-window`, not `new-session`, and it is targeted at the workspace. This is
+        the whole of "a workspace holds several chats": two harnesses, two windows, one
+        session, one client."""
+        # The workspace already has a chat: its window on the server AND its directory
+        # on disk. Both, because they answer different questions — the window is what
+        # `reap` keeps the record for, the directory is what the allocator has to step
+        # over.
+        state.record_server("demo.1", commands_frame.SOCKET)
+        fake = _FakeTmux(exit_code=0, still_live=True,
+                         pre_existing_sessions=("demo",),
+                         pre_existing_chats=("demo.1",))
+        _launch(fake)
+        self.assertFalse([c for c in fake.calls if "new-session" in c],
+                         "a second chat started a second session for one workspace")
+        new_window = next(c for c in fake.calls if "new-window" in c)
+        self.assertEqual(new_window[new_window.index("-t") + 1], "demo")
+        self.assertEqual(new_window[new_window.index("-n") + 1], "demo.2")
+        self.assertEqual(fake.fid, "demo.2")
+
+    def test_the_chat_is_written_on_its_window_before_either_hook(self):
+        """`@charter_chat` is what `_live_chats`, the write hook's `#{@charter_chat}` and
+        `conf_text`'s binds all read, so it has to be there before anything can fire.
+        Ordered by index against the FIRST `set-hook`, the same way the two hooks' own
+        ordering is pinned."""
+        fake = _FakeTmux(exit_code=0, still_live=True)
+        _launch(fake)
+        chat_calls = [c for c in fake.calls if commands_frame._CHAT_OPTION in c]
+        self.assertEqual(len(chat_calls), 1,
+                         f"the chat must be named exactly once: {fake.calls}")
+        cmd = chat_calls[0]
+        self.assertEqual(cmd[cmd.index("-t") + 1], fake.pane_id,
+                         "window-scoped through the harness PANE, never `-g` — a global "
+                         "write hands every window on this shared server one chat's id")
+        self.assertIn("-w", cmd)
+        self.assertEqual(cmd[-1], "demo.1")
+        hook_idx = next(i for i, c in enumerate(fake.calls) if "set-hook" in c)
+        self.assertLess(fake.calls.index(cmd), hook_idx)
+
+    def test_the_identity_rides_on_new_session_at_the_floor_and_not_below_it(self):
+        """`new-session -e` arrived in tmux 3.2 (`tmuxctl.SESSION_ENV_FLOOR`), and `-e` is
+        not a flag `new-session` degrades on — it is one it REFUSES, which takes the whole
+        launch down. So the boundary is `>=` and both sides of it are asserted: AT the
+        floor the identity rides, one release below it does not.
+
+        `new-window -e` has no such gate and needs none: window `-e` is available at
+        `tmuxctl.PANE_ENV_FLOOR` (3.0), below the floor charter warns at."""
+        at_floor = _FakeTmux(exit_code=0, still_live=True)
+        _launch(at_floor, version=tmuxctl.SESSION_ENV_FLOOR)
+        cmd = next(c for c in at_floor.calls if "new-session" in c)
+        self.assertIn("CHARTER_SESSION_ID=demo.1", cmd,
+                      "the floor is the version this WORKS on, not the first one above it")
+
+        major, minor = tmuxctl.SESSION_ENV_FLOOR
+        below = _FakeTmux(exit_code=0, still_live=True)
+        _launch(below, version=(major, minor - 1))
+        cmd = next(c for c in below.calls if "new-session" in c)
+        self.assertNotIn("-e", cmd,
+                         "a tmux that cannot parse `-e` was handed one, and `new-session` "
+                         "refuses rather than degrades")
+
+    def test_the_reap_set_carries_the_chats_as_well_as_the_sessions(self):
+        """A chat's id holds no launcher pid, so `list-windows -F '#{@charter_chat}'` is
+        the only thing that can keep its directory — and an old frame is still a SESSION
+        named by its id, so `list-sessions` is still asked too. Both, or one of the two
+        shapes is reaped while it is running."""
+        fake = _FakeTmux(exit_code=0, still_live=True)
+        _launch(fake)
+        formats = [c[c.index("-F") + 1] for c in fake.calls
+                   if "list-windows" in c and "-F" in c]
+        self.assertIn("#{@charter_chat}", formats,
+                      "liveness was not asked of the chat option")
+        self.assertNotIn("#{window_name}", formats,
+                         "a window NAME is not an identity — a pane with "
+                         "`allow-rename on` takes it, measured on tmux 3.7c and 3.2")
+        self.assertTrue([c for c in fake.calls if "list-sessions" in c])
+
+    def test_the_attach_and_the_reattach_line_name_the_workspaces_session(self):
+        """`tmux attach -t <chat>` is not a thing: the chat is a window. Both the real
+        attach and the sentence an operator is told to retype have to say the session."""
+        fake = _FakeTmux(still_live=True)
+        buf = []
+        with mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
+            _launch(fake)
+        attach = next(c for c in fake.calls if "attach" in c)
+        self.assertEqual(attach[attach.index("-t") + 1], "demo")
+        self.assertTrue(any(f"attach -t demo" in m for m in buf), buf)
+
+    def test_the_launched_chat_is_selected_before_the_client_attaches(self):
+        """`chat_window_argv` creates the window detached, so a client already in this
+        workspace is not dragged onto a half-built one. Selecting it afterwards is what
+        pays that back — and it targets the harness PANE, which tmux resolves to its own
+        window (measured on tmux 3.7c and 3.2)."""
+        state.record_server("demo.1", commands_frame.SOCKET)
+        fake = _FakeTmux(exit_code=0, still_live=True,
+                         pre_existing_sessions=("demo",),
+                         pre_existing_chats=("demo.1",))
+        _launch(fake)
+        select = next(c for c in fake.calls if "select-window" in c)
+        self.assertEqual(select[select.index("-t") + 1], fake.pane_id)
+        self.assertLess(fake.calls.index(select),
+                        next(i for i, c in enumerate(fake.calls) if "attach" in c))
+
+    def test_a_server_that_will_not_list_its_windows_reaps_nothing(self):
+        """The guard a chat needs and an old frame did not.
+
+        `reap` keeps an old `{workspace}-{pid}` frame's directory because the pid in its
+        name is still a live process (#383), so a `list-sessions` that came back empty
+        because the server was wedged cost nothing. A chat has no pid, so the window list
+        is the whole of what keeps its directory — and a server that answers "sessions:
+        yes, windows: no" would take every live chat's version file and unread exit code
+        with it. Not reaping costs a directory until the next launch.
+
+        The live chat here is a SIBLING's, deliberately: this launch's own id is allocated
+        after the reap, so a launcher that reaped everything would not be visible in its
+        own directory."""
+        state.record_server("demo.1", commands_frame.SOCKET)
+        state.record_exit("demo.1", 42)
+        fake = _FakeTmux(exit_code=0, still_live=True,
+                         pre_existing_sessions=("demo",), list_windows_rc=1)
+        _launch(fake)
+        self.assertEqual(state.exit_code("demo.1"), 42,
+                         "a wedged server's silence was read as `no chats are live`, and "
+                         "a running chat's state went with it")
+
+    def test_a_server_that_is_not_running_at_all_still_reaps(self):
+        """The other half, and the one that keeps the guard from being a leak: an EMPTY
+        session list is not silence, it is the answer. Nothing recorded against a server
+        that is not running is live — a reboot leaves exactly that — so the stale
+        directory goes, which is `reap`'s whole job."""
+        state.record_server("stale.1", commands_frame.SOCKET)
+        state.bump("stale.1")
+        fake = _FakeTmux(exit_code=0, still_live=True, list_windows_rc=1)
+        _launch(fake)
+        self.assertFalse(state.frame_dir("stale.1").exists(),
+                         "a directory recorded against a server that is not running was "
+                         "kept — nothing else will ever remove it")
+
+    def test_a_window_option_tmux_refused_is_reported_with_what_it_costs(self):
+        """The other way this can fail, and it fails differently: charter built a usable
+        command and tmux would not take it. Continuing is right — the harness is already
+        running — but silently is not: without the option this chat is invisible to
+        `_live_chats`, so `reap` deletes its state while it runs, and the write hook's
+        `#{@charter_chat}` expands to nothing so its exit code lands nowhere."""
+        buf = []
+        with mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            rc = _launch(_FakeTmux(exit_code=0, still_live=True, chat_option_rc=1))
+        self.assertEqual(rc, 0, "a refused window option must not fail the launch")
+        self.assertTrue(any("reaped while it is still running" in m for m in buf), buf)
+        self.assertTrue(any("exit code may not be" in m for m in buf), buf)
+
+    def test_a_chat_id_tmux_could_not_carry_is_reported_rather_than_silently_dropped(self):
+        """`_chat_option_argv` refuses anything outside `_FRAME_ID_RE`, and the launch
+        says what that costs — reaping while the chat is still running, and no exit code
+        — rather than carrying on as though the window had been named."""
+        buf = []
+        with mock.patch.object(commands_frame, "_chat_option_argv", return_value=None), \
+             mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            _launch(_FakeTmux(exit_code=0, still_live=True))
+        self.assertTrue(any("reaped while it is still running" in m for m in buf), buf)
+
+
+class TheChatOptionIsCheckedWhereItEntersTmux(unittest.TestCase):
+    """`_chat_option_argv`. The value goes on to be expanded by tmux inside a `pane-died`
+    action AND inside a key bind, so it is checked where it enters those grammars rather
+    than trusted from `state.new_chat_id` — the same rule `_PANE_ID_RE` applies to a pane
+    id that arrived off `split-window`'s stdout."""
+
+    def test_a_chat_is_written_as_a_window_option_on_the_harness_pane(self):
+        cmd = commands_frame._chat_option_argv(socket="charter", harness_pane="%9",
+                                               chat="demo.2")
+        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-option", "-w", "-t", "%9",
+                               "@charter_chat", "demo.2"])
+        self.assertNotIn("-g", cmd,
+                         "a global write hands every window on this shared server one "
+                         "chat's id")
+
+    def test_a_chat_outside_the_alphabet_is_refused(self):
+        """`None`, never a sanitised spelling: rewriting a hostile value into a
+        safe-looking one invents a second identity for it, which is the failure
+        `contain.child` documents one layer down."""
+        for hostile in ("a;b", "a b", "../../etc", "a\nb", "a$b", "a#{pane_pid}b",
+                        "a'b", 'a"b'):
+            with self.subTest(hostile=hostile):
+                self.assertIsNone(commands_frame._chat_option_argv(
+                    socket="charter", harness_pane="%9", chat=hostile))
+
+    def test_no_chat_at_all_is_refused_rather_than_raising(self):
+        """`""` and `None` are both "charter has no chat to write here", and this is
+        called from inside a launch — where a `TypeError` out of a regex would take the
+        whole launch down for a bookkeeping value."""
+        for empty in ("", None):
+            with self.subTest(empty=empty):
+                self.assertIsNone(commands_frame._chat_option_argv(
+                    socket="charter", harness_pane="%9", chat=empty))
+
+
+class TheChatListIsParsedLineByLine(unittest.TestCase):
+    """`_live_chats`' own reading of what tmux printed, asked of the text rather than of a
+    server — because the two things this pins are properties of the PARSE.
+
+    A window with no `@charter_chat` prints an EMPTY line (tmux prints a format's literal
+    text whether or not anything expands into it), and an empty string in the live set is
+    a name `state.reap` would then compare every directory against. And the value is
+    stripped, so a line that arrived with an edge of whitespace still names the chat it
+    names rather than a string no directory can equal."""
+
+    def _reading(self, stdout: str):
+        done = subprocess.CompletedProcess(["tmux"], 0, stdout=stdout, stderr="")
+        with mock.patch.object(commands_frame.tmuxctl, "run", return_value=done):
+            return commands_frame._live_chats("charter")
+
+    def test_a_window_with_no_chat_contributes_nothing(self):
+        self.assertEqual(self._reading("demo.1\n\ndemo.2\n"), {"demo.1", "demo.2"})
+
+    def test_a_server_with_no_chats_at_all_is_an_empty_set_not_a_set_holding_one(self):
+        self.assertEqual(self._reading("\n\n\n"), set())
+
+    def test_each_name_is_stripped(self):
+        self.assertEqual(self._reading("  demo.1  \n\tdemo.2\t\n"),
+                         {"demo.1", "demo.2"})
+
+    def test_a_server_that_did_not_answer_is_not_an_empty_set(self):
+        """`None`, and it is the whole of the refusal both callers make: a chat has no
+        launcher pid, so "no chats" and "no answer" would otherwise reap the same."""
+        done = subprocess.CompletedProcess(["tmux"], 1, stdout="", stderr="no server")
+        with mock.patch.object(commands_frame.tmuxctl, "run", return_value=done):
+            self.assertIsNone(commands_frame._live_chats("charter"))
+
+
+class ThePresserOwnChatIsWhatTheBindCarries(unittest.TestCase):
+    """`_pressers_chat`. Measured on tmux 3.7c and on tmux 3.2: a `run-shell` child —
+    which every `bind -n` action is — reads the SESSION's `set-environment` and never the
+    window's `-e`, so `$CHARTER_SESSION_ID` hands every chat in one workspace the same
+    id. `#{@charter_chat}`, expanded in the presser's own window, is what does not."""
+
+    def test_the_argv_chat_wins_over_the_session_variable(self):
+        args = SimpleNamespace(chat="demo.2")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "demo.1"}, clear=True):
+            self.assertEqual(commands_frame._pressers_chat(args), "demo.2")
+
+    def test_an_empty_chat_falls_back_to_the_variable(self):
+        """A window with no `@charter_chat` expands to nothing — which is every frame
+        launched by a charter that predates the option, whose bind text is REPLACED by
+        the new one the moment a newer frame launches on the shared server."""
+        for value in ("", "   ", None):
+            with self.subTest(value=value):
+                args = SimpleNamespace(chat=value)
+                with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "demo.1"},
+                                     clear=True):
+                    self.assertEqual(commands_frame._pressers_chat(args), "demo.1")
+
+    def test_a_chat_that_arrived_with_an_edge_of_whitespace_is_still_that_chat(self):
+        """Stripped, and the trailing end is the one a mutation can move: `--chat` is also
+        typeable by hand, and `_FRAME_ID_RE` holds no whitespace — so a value that kept a
+        trailing space would fail the shape check and fall back to the session variable,
+        silently resolving somebody else's chat."""
+        for spelling in ("demo.2 ", " demo.2", "  demo.2\t"):
+            with self.subTest(spelling=spelling):
+                args = SimpleNamespace(chat=spelling)
+                with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "demo.1"},
+                                     clear=True):
+                    self.assertEqual(commands_frame._pressers_chat(args), "demo.2")
+
+    def test_a_chat_outside_the_alphabet_falls_back_rather_than_being_carried(self):
+        """The far end of a trip a frame id already makes to tmux: this value came back
+        out of a tmux format, and it is on its way to a state path."""
+        for hostile in ("../../etc", "a b", "a;b", "a\nb", "a$b"):
+            with self.subTest(hostile=hostile):
+                args = SimpleNamespace(chat=hostile)
+                with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "demo.1"},
+                                     clear=True):
+                    self.assertEqual(commands_frame._pressers_chat(args), "demo.1")
+
+    def test_with_neither_it_is_the_empty_string(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(commands_frame._pressers_chat(SimpleNamespace(chat="")), "")
+
+
+class NothingIsAddedToCarriable(unittest.TestCase):
+    """Phase 5's own constraint, asserted rather than remembered. A tmux `-e` becomes
+    world-readable argv, so the funnel every `-e` charter builds goes through is a closed
+    list — and identity being per chat is a matter of WHICH of these a window is given,
+    never of adding one."""
+
+    def test_the_list_is_exactly_what_it_was(self):
+        self.assertEqual(set(layout.CARRIABLE), {
+            "CHARTER_SESSION_ID", "CHARTER_HARNESS", "CHARTER_ROOT",
+            "CHARTER_WORKSPACE", "CHARTER_PERSONA", "PATH"})
+
+    def test_a_chat_window_may_carry_only_those_names(self):
+        with self.assertRaises(ValueError) as caught:
+            layout.chat_window_argv(socket="charter", session="demo", chat="demo.2",
+                                    cwd="/tmp", harness_argv=["claude"],
+                                    env={"CHARTER_SESSION_ID": "demo.2",
+                                         "OP_SERVICE_ACCOUNT_TOKEN": "sekrit"})
+        self.assertIn("OP_SERVICE_ACCOUNT_TOKEN", str(caught.exception))
+        self.assertNotIn("sekrit", str(caught.exception),
+                         "a value that does not belong on a command line does not belong "
+                         "in a traceback either")
+
+    def test_a_chat_window_carries_the_identity_it_is_given(self):
+        cmd = layout.chat_window_argv(socket="charter", session="demo", chat="demo.2",
+                                      cwd="/tmp", harness_argv=["codex"],
+                                      env={"CHARTER_SESSION_ID": "demo.2",
+                                           "CHARTER_HARNESS": "codex"})
+        self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+        self.assertIn("new-window", cmd)
+        self.assertEqual(cmd[cmd.index("-n") + 1], "demo.2")
+        self.assertEqual(cmd[cmd.index("-t") + 1], "demo")
+        self.assertIn("-a", cmd)
+        self.assertIn("-e", cmd)
+        self.assertIn("CHARTER_SESSION_ID=demo.2", cmd)
+        self.assertIn("CHARTER_HARNESS=codex", cmd)
+        # Every `-e` before the `--`: they are `new-window`'s options, never something to
+        # graft onto the harness's own argv.
+        self.assertTrue(all(cmd.index(x) < cmd.index("--")
+                            for x in ("-e", "CHARTER_SESSION_ID=demo.2")))
+        self.assertEqual(cmd[cmd.index("--") + 1:], ["codex"])
+
+
+class TwoChatsAreTwoCharterSessions(PersonaIso, unittest.TestCase):
+    """Task 3's consequence, and the reason it needs no new code: `session.current()`
+    reads `$CHARTER_SESSION_ID`, which under tabs is the CHAT's id, so every per-session
+    pointer charter already has becomes per chat.
+
+    Asserted through the real pointer writers rather than by spelling paths, because the
+    claim is about what those writers do with two different ids — `.persona`, `.workspace`
+    and `.tools` under `.charter/sessions/<chat id>` are the files, and there is exactly
+    one place each is keyed."""
+
+    def test_two_chats_hold_two_personas(self):
+        from charter import persona
+        persona.set_active("release", session_id="demo.1")
+        persona.set_active("forge", session_id="demo.2")
+        for chat, expected in (("demo.1", "release"), ("demo.2", "forge")):
+            with self.subTest(chat=chat):
+                with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": chat},
+                                     clear=True):
+                    self.assertEqual(persona.resolve_active(), expected)
+
+    def test_two_chats_hold_two_workspaces(self):
+        from charter import workspace
+        workspace.set_active("alpha", session_id="demo.1", force=True)
+        workspace.set_active("beta", session_id="demo.2", force=True)
+        self.assertEqual(workspace.for_session("demo.1"), "alpha")
+        self.assertEqual(workspace.for_session("demo.2"), "beta")
+
+    def test_two_chats_hold_two_tool_ceilings(self):
+        """`toolgate.snapshot` writes `.charter/sessions/<sid>.tools`, keyed on
+        `session.current()` — so two chats freeze independently and one chat widening its
+        persona's `tools:` line mid-session cannot widen the other's ceiling.
+
+        Driven through the real writer with the persona set faked at ONE seam
+        (`persona.effective_tools`), because the subject is the KEYING, not what a
+        persona happens to declare on this plane."""
+        from charter import persona, toolgate
+        with mock.patch.object(persona, "list_personas", return_value=["release"]), \
+             mock.patch.object(persona, "effective_tools", return_value={"Bash"}):
+            toolgate.snapshot(session_id="demo.1")
+        # The working tree widens between the two chats' SessionStarts — an ordinary
+        # edit, and exactly what a frozen ceiling exists to stop reaching chat one.
+        with mock.patch.object(persona, "list_personas", return_value=["release"]), \
+             mock.patch.object(persona, "effective_tools",
+                               return_value={"Bash", "Read"}):
+            toolgate.snapshot(session_id="demo.2")
+        self.assertEqual(toolgate.frozen_tools("release", "demo.1"), {"Bash"},
+                         "one chat's ceiling moved when another chat froze its own")
+        self.assertEqual(toolgate.frozen_tools("release", "demo.2"), {"Bash", "Read"})
+
+
 class Launch(PersonaIso, unittest.TestCase):
     def test_the_write_hook_targets_the_pane_tmux_actually_reported(self):
         """The regression correction 3 names directly: the hook's target must be the id
@@ -1756,7 +2264,8 @@ class Launch(PersonaIso, unittest.TestCase):
         with mock.patch.dict(config.FRAME, frame):
             _launch(fake)
         self.assertIn("bind -n F7 run-shell "
-                      "'\"$CHARTER_PY\" -m charter frame-toggle repos'",
+                      "'\"$CHARTER_PY\" -m charter frame-toggle repos "
+                      "--chat \"#{@charter_chat}\"'",
                       fake.sourced_conf_text)
 
     def test_a_plane_that_binds_no_component_keys_sources_no_toggle_binds(self):
@@ -1801,10 +2310,11 @@ class Launch(PersonaIso, unittest.TestCase):
                          "the exit-status path must be carried out of band exactly "
                          f"once: {fake.calls}")
         cmd = exit_calls[0]
-        self.assertEqual(cmd[cmd.index("-t") + 1], fake.fid)
-        self.assertEqual(cmd[-1], str(state.frame_dir(fake.fid) / "exit"),
-                         "the path carried must be THIS frame's own `exit` file — the "
-                         "one `state.exit_code` reads back")
+        self.assertEqual(cmd[cmd.index("-t") + 1], fake.session)
+        self.assertEqual(cmd[-1], str(state.frame_dir(fake.fid).parent),
+                         "the frame ROOT: the variable is session-scoped and a session "
+                         "holds several chats, so the hook appends `#{@charter_chat}` "
+                         "and this must not name one chat's file")
         hook_idx = next(i for i, c in enumerate(fake.calls)
                        if "set-hook" in c and "pane-died[1]" not in c)
         self.assertLess(fake.calls.index(cmd), hook_idx)
@@ -1820,8 +2330,11 @@ class Launch(PersonaIso, unittest.TestCase):
         sid_calls = [c for c in fake.calls if "set-environment" in c and "CHARTER_SESSION_ID" in c]
         self.assertEqual(len(sid_calls), 1,
                          "the frame's own id must be carried out of band exactly once")
-        self.assertEqual(sid_calls[0][sid_calls[0].index("-t") + 1], fake.fid)
-        self.assertEqual(sid_calls[0][-1], fake.fid)
+        self.assertEqual(sid_calls[0][sid_calls[0].index("-t") + 1], fake.session,
+                         "targeted at the workspace's session — there is no window scope "
+                         "for `set-environment`")
+        self.assertEqual(sid_calls[0][-1], fake.fid,
+                         "and the VALUE is the chat, not the session's own name")
         sid_idx = fake.calls.index(sid_calls[0])
         hook_idx = next(i for i, c in enumerate(fake.calls)
                        if "set-hook" in c and "pane-died[1]" not in c)
@@ -1841,7 +2354,7 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(len(py_calls), 1,
                          f"the interpreter must be carried exactly once: {fake.calls}")
         cmd = py_calls[0]
-        self.assertEqual(cmd[cmd.index("-t") + 1], fake.fid,
+        self.assertEqual(cmd[cmd.index("-t") + 1], fake.session,
                          "session-scoped: two planes on one laptop can be two different "
                          "charter installs, so a `-g` write would hand frame N's "
                          "interpreter to frame N-1")
@@ -1864,7 +2377,7 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(len(safepath_calls), 1,
                          f"PYTHONSAFEPATH must be carried exactly once: {fake.calls}")
         cmd = safepath_calls[0]
-        self.assertEqual(cmd[cmd.index("-t") + 1], fake.fid,
+        self.assertEqual(cmd[cmd.index("-t") + 1], fake.session,
                          "session-scoped, same reasoning as CHARTER_PY: two planes on "
                          "one laptop can be two different charter installs")
         self.assertEqual(cmd[-1], "1")
@@ -2123,18 +2636,22 @@ class Launch(PersonaIso, unittest.TestCase):
 
         The check for this is EAGER — run immediately after both hooks are installed,
         before `attach` is ever called — not merely a fallback after `attach` returns.
-        Verified by hand against a real tmux 3.7c: with nothing left to run
-        `kill-session`, `remain-on-exit` legitimately keeps the session alive forever,
-        so an `attach` reaching this state BLOCKS FOREVER rather than returning 0 early.
-        A correct launcher must therefore finish the hooks' own job itself (record the
-        code, run `kill-session`) and skip `attach` entirely — this test fails if
+        Verified by hand against a real tmux 3.7c: with nothing left to run the
+        teardown, `remain-on-exit` legitimately keeps the pane alive forever, so an
+        `attach` reaching this state BLOCKS FOREVER rather than returning 0 early. A
+        correct launcher must therefore finish the hooks' own job itself (record the
+        code, end the chat's window) and skip `attach` entirely — this test fails if
         `attach` is ever reached in this scenario, not only if the wrong code comes
-        back."""
+        back.
+
+        **`kill-window`, not `kill-session`.** A session is a workspace now and holds
+        every chat in it, so ending the session here would take a sibling chat's harness
+        down for a death that was not its own."""
         fake = _FakeTmux(race_death_status=42)
         # `state.record_exit` is asserted on directly, mid-call, rather than by reading
         # `state.exit_code` back after `_launch` returns: `reap()` legitimately deletes
         # a frame's directory once its session is truly gone (which it is here, once
-        # `kill-session` runs), and this test's own `_FakeTmux` reports nothing live —
+        # `kill-window` runs), and this test's own `_FakeTmux` reports nothing live —
         # so a post-hoc read would see the sentinel `None` regardless of whether the
         # code was ever written, for a reason that has nothing to do with this test.
         with mock.patch("charter.frame.state.record_exit",
@@ -2143,14 +2660,17 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 42)
         rec.assert_called_once_with(fake.fid, 42)
         self.assertTrue(any("display-message" in c for c in fake.calls))
-        self.assertTrue(fake.kill_session_called,
-                        "nothing else was ever going to end this session")
+        self.assertTrue(fake.kill_window_called,
+                        "nothing else was ever going to end this chat")
+        self.assertFalse(fake.kill_session_called,
+                         "a session is a WORKSPACE now — ending it takes every other "
+                         "chat in it down with this one")
         self.assertFalse(any("attach" in c for c in fake.calls),
                          "attach must never be reached against a session already known "
                          "to be over — reaching it here would hang against real tmux")
 
     def test_a_failed_teardown_after_an_early_death_is_reported(self):
-        """`kill-session`, run directly after the eager check recovers an early death,
+        """`kill-window`, run directly after the eager check recovers an early death,
         was the module's own last unchecked tmux return code — correction 2 applies to
         it too."""
         fake = _FakeTmux(race_death_status=9, kill_rc=1)
@@ -2158,7 +2678,7 @@ class Launch(PersonaIso, unittest.TestCase):
         with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
             rc = _launch(fake)
         self.assertEqual(rc, 9)
-        self.assertTrue(any("ending the frame" in m for m in buf), buf)
+        self.assertTrue(any("ending the chat" in m for m in buf), buf)
 
     def test_remain_on_exit_is_armed_before_the_pane_id_is_even_known(self):
         """The other half of Critical 1: the placeholder loaded via `new-session`'s own
@@ -2281,15 +2801,16 @@ class Launch(PersonaIso, unittest.TestCase):
         with mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
             rc = _launch(fake)
         self.assertEqual(rc, 0)
-        self.assertTrue(any("detach" in m.lower() and fake.fid in m for m in buf),
+        # The reattach line names the SESSION, which is the workspace: the chat is a
+        # window inside it and `tmux attach -t <chat>` is not a thing an operator can
+        # type. The chat id is what the frame's own state is under, and it is asserted
+        # separately below.
+        self.assertTrue(any("detach" in m.lower() and fake.session in m for m in buf),
                         f"no reattach message was printed: {buf}")
-        # The frame's own directory must not be reaped while the session is still live.
-        # Weak evidence for the live-session rule specifically, and deliberately not
-        # dressed up as more: since #383 this directory is kept by EITHER rule, because
-        # `fid` ends in the launcher's pid and the launcher is this test process. That
-        # is inherent — a launch's own id always names a live pid — so `Reap`'s fixtures
-        # in tests/test_frame_state.py are where the live-session rule is pinned alone,
-        # deliberately named after dead pids so nothing else can keep them.
+        # The chat's own directory must not be reaped while its window is still there.
+        # Stronger evidence than it used to be, and that is the change: a chat id carries
+        # no launcher pid, so `reap`'s pid rule abstains and the LIVENESS LIST is the only
+        # thing keeping this directory. `still_live=True` is what puts the chat in it.
         self.assertTrue(state.frame_dir(fake.fid).exists())
 
     def test_refuses_to_attach_when_the_teardown_hook_fails_to_install(self):
@@ -2827,7 +3348,13 @@ class Launch(PersonaIso, unittest.TestCase):
         frame's id" (ADR 0019, `state.record_harness_pane`). Not recorded, `is_live`
         answers `None != <pane>` and no frame ever suppresses — a duplicated status line,
         which nobody reports as a bug and no other test would notice."""
-        fake = _FakeTmux(exit_code=0)
+        # `still_live=True`, and that is a real change rather than a fixture tweak. A
+        # chat id carries no launcher pid, so `reap` no longer keeps a finished frame's
+        # directory just because the launcher process that started it is still running —
+        # the launch's own closing reap removes it, which is the bounding property
+        # `state.reap`'s docstring is about. Reading the record therefore has to happen
+        # while the chat is still there.
+        fake = _FakeTmux(exit_code=0, still_live=True)
         rc = _launch(fake)
         self.assertEqual(rc, 0)
         self.assertEqual(state.harness_pane(fake.fid), fake.pane_id)
@@ -3004,32 +3531,66 @@ class Launch(PersonaIso, unittest.TestCase):
                          "alive — that launcher now returns a fabricated 0 for a "
                          "harness that exited 42")
 
-    def test_a_launch_does_not_inherit_an_exit_code_from_an_earlier_life_of_its_pid(self):
-        """The bill for #383's fix, paid here rather than left to be discovered. A frame
-        id is `<workspace>-<launcher pid>` and pids are recycled — Linux wraps at
-        `kernel.pid_max`, 32768 by default — so a launcher for the same workspace really
-        does land on a pid an earlier launcher already used. `reap` now keeps a directory
-        for as long as the pid in its name is live, and on THIS launch that pid is live
-        because it is ours: the earlier frame's directory, `exit` file and all, is still
-        there when this launch adopts the same id.
+    def test_a_launch_claims_an_id_no_directory_already_holds(self):
+        """The bill for #383's fix, no longer paid — because the id is ALLOCATED.
 
-        Read back, that stale code becomes this launch's own return value. Asserted on
-        the DETACH path, where nothing new is ever recorded and the stale file is
-        therefore the only thing `state.exit_code` can find — a harness running perfectly
-        well, detached, would be reported as having failed with a dead frame's number and
-        the reattach line would never print."""
-        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
-        state.record_exit(stale, 99)
+        A frame id used to be `<workspace>-<launcher pid>` and pids are recycled — Linux
+        wraps at `kernel.pid_max`, 32768 by default — so a launcher for the same workspace
+        really did land on a pid an earlier launcher had used, and adopted that frame's
+        whole directory: its `exit` file read back as this launch's own return value, its
+        `gather.json` drew on every panel, its spent respawn budget refused this frame's
+        first panel death. That is what `state.clear_exit` / `clear_shape` /
+        `clear_respawn` / `gather.discard` on the launch path were for.
 
-        fake = _FakeTmux(still_live=True)
+        `state.new_chat_id` claims its ordinal with a `mkdir` that FAILS when the name is
+        taken, so a launch cannot land on an occupied directory at all — the collision is
+        prevented rather than cleaned up after. Pinned as literals: workspace `demo`,
+        `demo.1` already on disk, so the launch must take `demo.2`.
+        """
+        state.record_exit("demo.1", 99)
+
+        fake = _FakeTmux(still_live=True, pre_existing_chats=("demo.1",),
+                         pre_existing_sessions=("demo",))
         buf = []
         with mock.patch("charter.util.info", side_effect=lambda m: buf.append(m)):
             rc = _launch(fake)
 
-        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
+        self.assertEqual(fake.fid, "demo.2",
+                         "the launch adopted an id whose directory already existed")
         self.assertEqual(rc, 0, "a previous frame's exit code was returned as this one's")
         self.assertTrue(any("detach" in m.lower() for m in buf),
-                        f"no reattach message — the stale code suppressed it: {buf}")
+                        f"no reattach message — a stale code suppressed it: {buf}")
+
+    def test_a_launch_leaves_the_record_of_the_chat_it_stepped_over(self):
+        """The other half, and the one an adopt-then-clear design cannot give.
+
+        Skipping a taken ordinal means the launch never writes in that directory — so a
+        COLD chat's record (Stage 5c reopens one) survives a sibling launching beside it,
+        where a launcher that adopted the id and cleared it would have deleted exactly
+        that. Every file a launch used to clear is asserted still there, by name, because
+        four separate clears used to be four separate defects."""
+        state.record_exit("demo.1", 99)
+        state.record_density("demo.1", "minimal")
+        state.record_panes("demo.1", panels={"left": "%98"})
+        state.record_harness_session("demo.1", "a-harness-session")
+        state.bump("demo.1")
+        for _ in range(commands_frame._RESPAWN_ATTEMPTS + 1):
+            state.respawn_attempt("demo.1", "top")
+        gather.save("demo.1", {"gathered_at": 1.0, "workspace": "a-cold-chat",
+                               "current_repo": None, "repos": [], "worktrees": []})
+
+        fake = _FakeTmux(still_live=True, pre_existing_chats=("demo.1",),
+                         pre_existing_sessions=("demo",))
+        _launch(fake)
+
+        self.assertEqual(fake.fid, "demo.2")
+        self.assertEqual(state.exit_code("demo.1"), 99)
+        self.assertEqual(state.density("demo.1"), "minimal")
+        self.assertEqual(state.panes("demo.1"), {"left": "%98"})
+        self.assertEqual(state.harness_session("demo.1"), "a-harness-session")
+        self.assertEqual(state.respawn_attempt("demo.1", "top"),
+                         commands_frame._RESPAWN_ATTEMPTS + 2)
+        self.assertEqual(gather.read("demo.1")["workspace"], "a-cold-chat")
 
     def test_a_launch_records_the_frames_own_charter_identity(self):
         """#411 on the density path. A hotkey pressed later runs as a `run-shell` child of
@@ -3052,82 +3613,42 @@ class Launch(PersonaIso, unittest.TestCase):
                          "every identity name must be recorded, including the empty ones "
                          "— an omitted name is inherited from the server, which is the bug")
 
-    def test_a_launch_does_not_inherit_a_density_from_an_earlier_life_of_its_pid(self):
-        """The third file the recycled directory carries (#387). `density` is written by
-        the palette and by nothing else — it is the "for the running frame only"
-        override — so a frame that adopts one has a keypress from a session that is over
-        silently outranking this plane's own `[frame] density`, with nothing anywhere to
-        explain why the frame came up narrower than the file says. `panes` goes with it:
-        it names tmux panes of a frame that no longer exists, and a launch that dies
-        before `_draw_panels` rewrites it would leave the next density change killing
-        whatever tmux has since reused those ids for."""
-        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
-        state.record_density(stale, "minimal")
-        state.record_panes(stale, panels={"left": "%98"})
+    def test_the_chat_the_launch_claimed_carries_none_of_a_neighbours_state(self):
+        """The consequence for the frame that DID launch, asserted at its own id.
 
-        fake = _FakeTmux(still_live=True)
+        Each of these four was its own defect when a launch could adopt a directory (#383
+        for `exit`, #387 for `density`/`panes`, #382 for the respawn budget, and the
+        panel hot path for `gather.json`), so each is asked separately rather than folded
+        into "the directory is empty" — a single assertion could not say which reader had
+        started serving a neighbour's record."""
+        state.record_exit("demo.1", 99)
+        state.record_density("demo.1", "minimal")
+        state.record_panes("demo.1", panels={"left": "%98"})
+        state.bump("demo.1")
+        for _ in range(commands_frame._RESPAWN_ATTEMPTS + 1):
+            state.respawn_attempt("demo.1", "top")
+        gather.save("demo.1", {"gathered_at": 1.0, "workspace": "from-a-dead-frame",
+                               "current_repo": None, "repos": [], "worktrees": []})
+
+        fake = _FakeTmux(still_live=True, pre_existing_chats=("demo.1",),
+                         pre_existing_sessions=("demo",))
         _launch(fake)
 
-        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
-        self.assertIsNone(state.density(stale),
-                          "a dead frame's density override outlived it")
-        self.assertEqual(state.panes(stale), {},
-                         "a dead frame's pane map outlived it")
-
-    def test_a_launch_does_not_inherit_a_cached_scan_from_an_earlier_life_of_its_pid(self):
-        """The second file the recycled directory carries, and the second reader that
-        inherits it. `exit` is read once, by this launcher; `gather.json` is read by
-        every PANEL, on every repaint, and `gather.read` has no freshness check by
-        design — it is a panel's hot path, kept current by `notify.plane_changed`.
-
-        So a launch adopting a dead frame's directory draws that frame's repos,
-        branches and CI, and nothing corrects it: a panel repaints only on a
-        `state.version` bump, so a scan from another day sits on screen until the
-        session's first hook fires. Before #383 this was unreachable — `reap` had
-        deleted the directory and `read` fell through to a live `scan` — and clearing
-        the file on the launch path is what puts it back on exactly that path.
-
-        `scan` is mocked to a sentinel, so this fails if the stale cache is served AND
-        distinguishes that from "a live gather happened to agree"."""
-        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
-        gather.save(stale, {"gathered_at": 1.0, "workspace": "from-a-dead-frame",
-                            "current_repo": None, "repos": [], "worktrees": []})
-
-        fake = _FakeTmux(still_live=True)
-        _launch(fake)
-
-        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
+        self.assertEqual(fake.fid, "demo.2")
+        self.assertIsNone(state.density(fake.fid),
+                          "a neighbour's density override outranked this plane's own")
+        self.assertEqual(state.panes(fake.fid), {},
+                         "a neighbour's pane map would name tmux panes this frame never "
+                         "split, and the next density change would kill them")
+        self.assertEqual(state.respawn_attempt(fake.fid, "top"), 1,
+                         "this frame's first panel death was charged to another chat's "
+                         "budget and would never be respawned")
         fresh = {"gathered_at": 0.0, "workspace": "sentinel", "current_repo": None,
                  "repos": [], "worktrees": []}
         with mock.patch.object(gather, "scan", return_value=fresh):
             self.assertEqual(gather.read(fake.fid), fresh,
-                             "a panel of this frame would draw a dead frame's scan "
-                             "until the session's first hook bump")
-
-    def test_a_launch_does_not_inherit_a_spent_respawn_budget_from_its_pid(self):
-        """The third thing the recycled directory carries (#382 meeting #383), and the
-        one whose inheritance is not merely stale but already exhausted.
-
-        `state.respawn_attempt` never resets — three deaths across a frame's whole life,
-        deliberately — and every panel's `pane-died` hook fires during its own frame's
-        TEARDOWN, so a directory left behind by a finished frame always has counts in it
-        and may well be at `_RESPAWN_ATTEMPTS` already. Adopted by a new frame, those
-        counts are charged to panels that have not died once: the first real death of
-        this frame's `top` panel would be refused as attempt 4, and a panel that charter
-        promises to bring back would simply stay dead, with nothing anywhere saying it
-        was another frame's budget that ran out."""
-        stale = state.frame_id("demo", os.getpid())   # the id `_launch` is about to mint
-        state.bump(stale)
-        for _ in range(commands_frame._RESPAWN_ATTEMPTS + 1):
-            state.respawn_attempt(stale, "top")
-
-        fake = _FakeTmux(still_live=True)
-        _launch(fake)
-
-        self.assertEqual(fake.fid, stale, "the fixture stopped colliding — proves nothing")
-        self.assertEqual(state.respawn_attempt(fake.fid, "top"), 1,
-                         "this frame's first panel death was charged to a dead frame's "
-                         "budget and would never be respawned")
+                             "a panel of this frame would draw a neighbour's scan until "
+                             "the session's first hook bump")
 
 
 class TheTablePaneIsSplitForWhatItCanDraw(PersonaIso, unittest.TestCase):
@@ -3298,14 +3819,14 @@ class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
                         f"the pane's own last words never reached the operator: {buf}")
 
     def test_the_pane_is_read_before_the_session_is_killed(self):
-        """Ordering, and load-bearing rather than incidental — `kill-session` destroys
+        """Ordering, and load-bearing rather than incidental — `kill-window` destroys
         the pane, so a capture issued after it can only ever come back empty. Pinned by
         comparing indices, the same way
         `test_the_write_hook_is_installed_before_the_teardown_hook` pins the other
         ordering this launcher depends on.
 
         `"set-hook" not in c` is not decoration: `_pane_died_teardown_hook_argv`'s ACTION
-        is the literal string `kill-session`, so an unfiltered search finds the hook
+        is the literal string `kill-window`, so an unfiltered search finds the hook
         INSTALL — issued long before either the capture or the real teardown — and this
         test failed against a correct implementation until it stopped matching that."""
         fake = _FakeTmux(race_death_status=127, pane_capture="boom\n")
@@ -3313,7 +3834,7 @@ class EarlyDeathIsLegible(PersonaIso, unittest.TestCase):
             _launch(fake, harness="", rest=["--", "nosuchthing-xyz"])
         capture_idx = next(i for i, c in enumerate(fake.calls) if "capture-pane" in c)
         kill_idx = next(i for i, c in enumerate(fake.calls)
-                        if "kill-session" in c and "set-hook" not in c)
+                        if "kill-window" in c and "set-hook" not in c)
         self.assertLess(capture_idx, kill_idx,
                         "the pane must be read BEFORE it is destroyed, or there is "
                         "nothing left to read")
@@ -4053,7 +4574,7 @@ class _FakeOperatorTmux:
                  pre_existing_windows=("zsh",), list_windows_rc=0,
                  new_window_rc=0, arm_rc=0, chrome_rc=0, respawn_rc=0, panel_rc=0,
                  panel_pane_ids=None, resize_hook_rc=0, select_rc=0, kill_rc=0,
-                 pane_capture="", capture_rc=0):
+                 pane_capture="", capture_rc=0, chat_option_rc=0, chat_list_rc=0):
         self.window_id = window_id
         self.pane_id = pane_id
         self.polls_alive = polls_alive
@@ -4077,6 +4598,11 @@ class _FakeOperatorTmux:
         self.resize_hook_rc = resize_hook_rc
         self.select_rc = select_rc
         self.kill_rc = kill_rc
+        self.chat_option_rc = chat_option_rc
+        #: A server that answers `list-windows` for the NAMES and refuses it for the
+        #: chats — the two questions `_reap_this_server` asks, and the one state in which
+        #: charter cannot tell which chats are live and must not reap.
+        self.chat_list_rc = chat_list_rc
         self.calls: list[list[str]] = []
         self.status_queries = 0
         self.window_killed = False
@@ -4092,10 +4618,27 @@ class _FakeOperatorTmux:
                 return subprocess.CompletedProcess(
                     cmd, self.list_windows_rc, stdout="",
                     stderr=f"error connecting to {OPERATOR_SOCKET} (No such file)")
-            live = list(self.pre_existing_windows)
+            # TWO questions share this command and they want different answers:
+            # `_live_windows` asks for `#{window_name}`, `_live_chats` for
+            # `#{@charter_chat}`. Told apart by the FORMAT charter actually sent, so a
+            # test cannot pass by having one answer stand in for the other — the whole
+            # point of `_live_chats` is that a window's name and its chat are not the
+            # same fact.
+            chats = commands_frame._CHAT_OPTION in cmd[-1]
+            if chats and self.chat_list_rc != 0:
+                return subprocess.CompletedProcess(
+                    cmd, self.chat_list_rc, stdout="",
+                    stderr=f"error connecting to {OPERATOR_SOCKET} (No such file)")
+            live = [] if chats else list(self.pre_existing_windows)
             if self.window_killed is False and any("new-window" in c for c in self.calls):
                 live.append(_frame_id())
             return self._ok(cmd, stdout="\n".join(live))
+        if commands_frame._CHAT_OPTION in cmd:
+            # Which chat this window draws. BEFORE the `set-option`/chrome branches, for
+            # the reason the hatch option is: the value is a plain id.
+            return subprocess.CompletedProcess(cmd, self.chat_option_rc, stdout="",
+                                               stderr="" if self.chat_option_rc == 0
+                                               else "cannot set")
         if "new-window" in cmd:
             if self.new_window_rc != 0:
                 return subprocess.CompletedProcess(cmd, self.new_window_rc, stdout="",
@@ -4168,7 +4711,13 @@ class _FakeOperatorTmux:
 
 
 def _frame_id():
-    return state.frame_id("demo", os.getpid())
+    """The chat id a launch for workspace `demo` allocates in a fresh plane.
+
+    A LITERAL, not `state.new_chat_id("demo")`: every test here runs against its own
+    empty state directory, so the first ordinal a launch can claim is `1`, and an
+    expectation computed from the allocator under test would follow it wherever it went.
+    """
+    return "demo.1"
 
 
 def _launch_inside(fake: _FakeOperatorTmux, *, version=(3, 7), harness="claude",
@@ -4479,6 +5028,32 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertEqual(armed[0][armed[0].index("-t") + 1], "%9")
         self.assertIn(f"--frame {_frame_id()}", armed[0][-1])
 
+    def test_a_finished_frame_leaves_no_directory_behind_on_this_path(self):
+        """The CLOSING reap, and it needs a fixture the opening one cannot satisfy.
+
+        `_launch_in_operator_tmux` reaps twice: once before it builds anything, and once
+        after `_close_window`. The test below spies on the SERVER each reap was given, so
+        deleting the closing call leaves the opening one answering for it — two guards in
+        sequence, the first masking the second, which is exactly the shape the deletion
+        sweep found here (`_reap_this_server`'s whole `if` came out and the suite stayed
+        green).
+
+        What only the closing reap can do is remove THIS frame's own directory:
+        `state.new_chat_id` creates it after the opening reap has already run, and a chat
+        id carries no launcher pid for `reap`'s second rule to keep it by. So a launch
+        that has returned must leave nothing under the frame root at all — and with the
+        closing reap gone, its own directory is still standing."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        rc = _launch_inside(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(fake.window_killed,
+                        "the window was never closed, so the closing reap had nothing to "
+                        "notice and this test would pass on the opening one")
+        self.assertFalse(state.frame_dir(_frame_id()).exists(),
+                         "the finished frame's own directory outlived it — nothing else "
+                         "will ever remove it, because a chat id carries no pid for "
+                         "`reap`'s launcher rule to ask about")
+
     def test_the_frames_state_is_reaped_against_the_operators_server(self):
         """A frame here is a window on their socket and appears in no `tmux -L charter
         list-sessions` output at all. Reaping on the wrong server's list deletes a
@@ -4591,6 +5166,38 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertFalse([c for c in fake.calls if "split-window" in c],
                          "a 60x8 tmux window has no room for a panel")
 
+    def test_a_server_that_will_not_list_its_chats_reaps_nothing_here_either(self):
+        """The guest path's half of the same refusal, and it needs a server that answers
+        one of the two questions and not the other — `_live_windows` for the names,
+        `_live_chats` for `@charter_chat`. Both failing is already covered by
+        `test_a_server_that_stops_answering_is_not_treated_as_empty`, and that case cannot
+        tell the chat conjunct from the window one.
+
+        A chat has no launcher pid, so this list is the whole of what keeps its directory:
+        read a wedged server's silence as "no chats" and a running frame's version file
+        and unread exit code go with it."""
+        state.record_server("survivor.1", OPERATOR_SOCKET)
+        state.record_exit("survivor.1", 42)
+        fake = _FakeOperatorTmux(exit_code=0, pane_vanishes=True, chat_list_rc=1)
+        _launch_inside(fake)
+        self.assertEqual(state.exit_code("survivor.1"), 42,
+                         "a server that would not list its chats was read as having "
+                         "none, and a running chat's state went with it")
+
+    def test_the_chat_is_written_on_the_window_here_too(self):
+        """The guest path names its window for the chat and writes the option on it —
+        which is what stops `_reap_this_server` losing a frame whose window the harness
+        renamed. `allow-rename on` is an ordinary thing to have in somebody's own
+        `.tmux.conf`, which is why this matters MORE here than on charter's own server."""
+        fake = _FakeOperatorTmux(exit_code=0, pane_id="%7", pane_vanishes=True)
+        _launch_inside(fake)
+        chat_calls = [c for c in fake.calls if commands_frame._CHAT_OPTION in c]
+        self.assertEqual(len(chat_calls), 1, f"expected exactly one: {fake.calls}")
+        cmd = chat_calls[0]
+        self.assertIn("-w", cmd)
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%7")
+        self.assertEqual(cmd[-1], _frame_id())
+
     def test_the_harness_pane_is_recorded_on_this_path_too(self):
         """ADR 0019's suppression asks `state.harness_pane(fid)` whether the process
         holding a frame id is actually inside that frame; a path that forgot to record it
@@ -4598,12 +5205,17 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         would report as a bug. Written down here rather than assumed shared, because the
         two launch paths capture their pane id in two different places and only one of
         them had a test."""
-        fake = _FakeOperatorTmux(exit_code=0, pane_id="%7",
+        # Read while the frame is still there. A chat id carries no launcher pid, so
+        # `reap` no longer keeps a finished frame's directory because the process that
+        # launched it is still running — this path closes its own window and then reaps,
+        # and the directory goes with it. `pane_vanishes` is the operator closing the
+        # window themselves, which is the one ending on this path that leaves the record
+        # standing (charter cannot know the code, so it kills nothing).
+        fake = _FakeOperatorTmux(exit_code=0, pane_id="%7", pane_vanishes=True,
                                  panel_pane_ids={"top": "%8", "bottom": "%9",
                                                  "right": "%11"})
         _launch_inside(fake)
-        fid = state.frame_id("demo", os.getpid())
-        self.assertEqual(state.harness_pane(fid), "%7")
+        self.assertEqual(state.harness_pane(_frame_id()), "%7")
 
     def test_the_panels_are_split_off_the_harness_pane(self):
         """The slot list is pinned here rather than left to the shipped default: this

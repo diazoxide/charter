@@ -116,14 +116,15 @@ PACKAGE = Path(__file__).resolve().parent.parent / "charter"
 #: The two routed spellings. A ``mkdir`` is never one of these — they are functions, not
 #: methods named ``mkdir`` — so this is documentation of what "routed" means rather than a
 #: filter, and is asserted against `config` so a rename cannot leave it stale.
-ROUTED = ("private_mkdir", "mkdir_for")
+ROUTED = ("private_mkdir", "mkdir_for", "claim_private_dir")
 
 #: `config`'s own walk, exempt because it **is** the routing. ``_mkdir_0700`` is the
 #: private mkdir itself; ``mkdir_for``'s bare one is the branch it takes having just
 #: decided at runtime that the path is not state. Flagging these would be asking the guard
 #: to route through itself. Named in full — ``module.function`` — so an unrelated
 #: ``_mkdir_0700`` appearing elsewhere would still be scanned.
-THE_WALK = ("config.private_mkdir", "config._mkdir_0700", "config.mkdir_for")
+THE_WALK = ("config.private_mkdir", "config._mkdir_0700", "config.mkdir_for",
+            "config.claim_private_dir")
 
 #: The routed spellings for a FILE (#505). Same shape as `ROUTED`, and the same reason it
 #: is documentation rather than a filter: none of these is named ``write_text``/``open``/

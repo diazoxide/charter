@@ -42,6 +42,277 @@ class FrameId(unittest.TestCase):
         self.assertNotIn("..", fid)
 
 
+class ChatIdIsAllocated(PersonaIso, unittest.TestCase):
+    """`state.new_chat_id` — the ordinal is CLAIMED, not computed.
+
+    The operator's own sketch was `{workspace}-{some-hash}`, and both halves of it fail.
+    A hash of the only inputs available at creation is a hash of a counter in disguise,
+    and it collides silently into a shared `.charter/frame/<fid>/` where one chat's
+    `session`, `panes` and `version` overwrite the other's. A `-{ordinal}` tail fails
+    worse — see :class:`TheDotIsTheVersionDiscriminator` for the measurement.
+    """
+
+    def test_the_first_chat_of_a_workspace_is_one(self):
+        self.assertEqual(state.new_chat_id("api"), "api.1")
+
+    def test_the_next_one_is_two(self):
+        self.assertEqual(state.new_chat_id("api"), "api.1")
+        self.assertEqual(state.new_chat_id("api"), "api.2")
+
+    def test_the_claim_is_the_directory(self):
+        """The `mkdir` IS the allocation, so the id comes back with its directory already
+        on disk at 0700 — charter's mode, not the umask's (#470/#505). A scan-then-create
+        allocator would return a name nothing had claimed yet."""
+        fid = state.new_chat_id("api")
+        d = state.frame_dir(fid)
+        self.assertTrue(d.is_dir())
+        self.assertEqual(oct(d.stat().st_mode & 0o777), oct(0o700))
+
+    def test_two_allocators_racing_one_workspace_never_agree(self):
+        """The property a scan cannot give. Twenty threads on one barrier, all asking for
+        the same workspace: `mkdir` is one syscall and the kernel picks, so each gets its
+        own ordinal. Read `max + 1` off a directory listing instead and two racers get
+        the same answer, and the loser silently adopts the winner's frame directory —
+        which is exactly the silent collision a hash was rejected for."""
+        import threading
+        n = 20
+        barrier = threading.Barrier(n)
+        got: list[str | None] = []
+        lock = threading.Lock()
+
+        def claim():
+            barrier.wait()
+            fid = state.new_chat_id("race")
+            with lock:
+                got.append(fid)
+
+        threads = [threading.Thread(target=claim) for _ in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(got), n)
+        self.assertNotIn(None, got, "an allocator gave up while ordinals were free")
+        self.assertEqual(len(set(got)), n, f"two allocators returned one id: {got}")
+        self.assertEqual(sorted(got), sorted(f"race.{i}" for i in range(1, n + 1)))
+
+    def test_a_workspace_spelled_like_a_chat_id_does_not_collide_with_one(self):
+        """Workspace `api.2` and chat 2 of workspace `api` are two different names, and
+        the allocator has to keep them that way: `api.2`'s own chats are `api.2.1`,
+        `api.2.2`, and the directory `api.2` belongs to whichever allocator claimed it.
+        Pinned as literals, because the point is which strings come out."""
+        self.assertEqual(state.new_chat_id("api"), "api.1")
+        self.assertEqual(state.new_chat_id("api"), "api.2")
+        self.assertEqual(state.new_chat_id("api.2"), "api.2.1")
+        self.assertEqual(state.new_chat_id("api"), "api.3")
+
+    def test_a_taken_ordinal_is_skipped_rather_than_adopted(self):
+        """A directory already holding another chat's record is not an id to hand out.
+        `config.private_mkdir` would have swallowed the `FileExistsError` (#331) and
+        returned it — idempotence being exactly wrong for an allocator — so the new chat
+        would have inherited that record's `exit`, `density`, `panes` and `session`."""
+        state.record_exit("api.1", 99)
+        self.assertEqual(state.new_chat_id("api"), "api.2")
+        self.assertEqual(state.exit_code("api.1"), 99,
+                         "the allocator wrote in a directory it did not claim")
+
+    def test_a_hostile_workspace_name_cannot_escape_the_frame_root(self):
+        """The id becomes a directory name, so the same sanitisation `frame_id` does."""
+        fid = state.new_chat_id("../../etc")
+        self.assertNotIn("/", fid)
+        self.assertNotIn("..", fid)
+        self.assertTrue(state.frame_dir(fid).is_dir())
+
+    def test_a_workspace_name_that_ends_in_a_dot_does_not_double_it(self):
+        """`workspace_prefix` strips BOTH ends, and the trailing one is what this is
+        about: `api.` would otherwise mint `api..1`, which reads as chat 1 of a workspace
+        called `api.` and is not a thing anyone can say out loud. Stripping the trailing
+        end is also what stops the prefix ever being `.` or `..`, the two names
+        `contain.segment_ok` refuses."""
+        self.assertEqual(state.workspace_prefix("api."), "api")
+        self.assertEqual(state.workspace_prefix("api-"), "api")
+        self.assertEqual(state.workspace_prefix("api_"), "api")
+        self.assertEqual(state.workspace_prefix("_api"), "api",
+                         "the leading end too, so `_launcher_pid` still finds a head")
+        self.assertEqual(state.workspace_prefix("a.p-i"), "a.p-i",
+                         "and only at the ENDS: the three characters are ordinary inside "
+                         "a name, or `harness-wrapper` would come back as `harness`")
+        self.assertEqual(state.new_chat_id("api."), "api.1")
+        self.assertEqual(state.workspace_prefix("..."), "frame",
+                         "a name that strips to nothing falls back, or `_launcher_pid` "
+                         "would read a head-less name")
+
+    def test_an_id_mkdir_will_not_take_is_a_refusal_rather_than_a_raise(self):
+        """`contain.child` bounds shape, not length, so a workspace name thousands of
+        characters long passes it and then hits `ENAMETOOLONG`. A launch has to be told
+        it cannot open a chat, not handed an exception."""
+        self.assertIsNone(state.new_chat_id("x" * 5000))
+
+    def test_giving_up_is_bounded_rather_than_a_spin(self):
+        """The loop has a ceiling, and it answers `None` at it. Asserted by shrinking the
+        ceiling rather than by making ten thousand directories."""
+        with mock.patch.object(state, "_CHAT_ORDINAL_MAX", 2):
+            self.assertEqual(state.new_chat_id("api"), "api.1")
+            self.assertEqual(state.new_chat_id("api"), "api.2")
+            self.assertIsNone(state.new_chat_id("api"))
+
+    def test_the_ceiling_is_the_number_it_was_argued_at(self):
+        """The test above shrinks it, so it cannot also say what it is. Ten thousand is
+        the number: the scan costs one `mkdir` per taken ordinal and a plane holds tens of
+        frame directories, so it is far past any real plane and small enough that giving
+        up is a refusal a caller can report rather than a spin nobody can see. Moving it
+        needs that argument re-made, which is what this literal asks for."""
+        self.assertEqual(state._CHAT_ORDINAL_MAX, 10_000)
+
+    def test_a_frame_root_that_cannot_be_made_is_a_refusal(self):
+        """The first thing that can fail, and it fails before any ordinal is tried. A
+        launch has to be told it cannot open a chat — not handed an `OSError` out of a
+        function this module promises never raises."""
+        with mock.patch.object(state.config, "private_mkdir",
+                               side_effect=OSError(28, "No space left on device")):
+            self.assertIsNone(state.new_chat_id("api"))
+
+    def test_a_filesystem_that_refuses_the_claim_is_a_refusal_too(self):
+        """The second, and it is deliberately NOT retried at `n+1`: a full filesystem or a
+        permission this plane does not have does not get better one ordinal along, and
+        looping over it would spend `_CHAT_ORDINAL_MAX` syscalls to answer the same
+        `None`. `FileExistsError` is the one `OSError` that DOES mean "try `n+1`", and
+        `test_a_taken_ordinal_is_skipped_rather_than_adopted` is what keeps the two
+        apart."""
+        with mock.patch.object(state.config, "claim_private_dir",
+                               side_effect=OSError(13, "Permission denied")) as claim:
+            self.assertIsNone(state.new_chat_id("api"))
+        self.assertEqual(claim.call_count, 1,
+                         "a failure that cannot get better was retried to the ceiling")
+
+
+class TheDotIsTheVersionDiscriminator(PersonaIso, unittest.TestCase):
+    """Why `{workspace}.{n}` and not `{workspace}-{n}`, measured rather than argued.
+
+    `_launcher_pid` reads a `-<digits>` tail as a launcher pid, and `reap` keeps any
+    directory whose launcher is still running. Pid 1 is `launchd`/`init` and pid 2 is a
+    kernel thread on every Unix, so a `-{ordinal}` id would make every dead chat look
+    live forever — and `reap` is the only thing bounding `.charter/frame/`.
+    """
+
+    def test_a_dash_ordinal_would_read_as_a_live_pid(self):
+        """The control, and the reason the dot is not cosmetic. Not a claim about the
+        design — a measurement of the function the design had to route around."""
+        self.assertEqual(state._launcher_pid("myws-2"), 2)
+        self.assertEqual(state._launcher_pid("myws-1"), 1)
+        self.assertTrue(state._launcher_is_alive(1),
+                        "pid 1 is init — if this is ever false the measurement above "
+                        "stops meaning what this class says it means")
+
+    def test_a_chat_id_carries_no_pid_at_all(self):
+        for name in ("api.3", "harness-wrapper.3", "a-b.1", "api.2.1"):
+            with self.subTest(name=name):
+                self.assertIsNone(state._launcher_pid(name))
+
+    def test_an_old_frame_id_still_parses_and_still_reports_liveness_by_pid(self):
+        """No migration ran, so a frame launched by a charter that predates chats keeps
+        the rule it was launched under."""
+        old = state.frame_id("legacy", os.getpid())
+        state.record_server(old, "charter")
+        state.record_harness_pane(old, "%3")
+        self.assertEqual(state._launcher_pid(old), os.getpid())
+        self.assertTrue(state.is_live(old, pane="%3"))
+        self.assertEqual(state.reap(set(), server="charter"), [],
+                         "an old frame whose launcher is alive was reaped")
+
+    def test_an_old_frame_whose_launcher_died_is_still_reaped_by_the_old_rule(self):
+        old = state.frame_id("legacy", _a_dead_pid())
+        state.bump(old)
+        self.assertEqual(state.reap(set(), server="charter"), [old])
+
+    def test_a_chat_is_kept_by_the_liveness_list_alone(self):
+        """The whole of a chat's bounding rule: no pid abstains in its favour, so the set
+        `reap` is handed decides. `commands_frame._live_chats` is what fills it."""
+        chat = state.new_chat_id("api")
+        state.bump(chat)
+        self.assertEqual(state.reap({chat}, server="charter"), [])
+        self.assertTrue(state.frame_dir(chat).exists())
+
+    def test_a_chat_whose_window_is_gone_is_removed_with_no_launcher_process_alive(self):
+        """The other half, and the one the dash would have broken: nothing in the name
+        can keep this directory, so an absent chat id really does reap."""
+        chat = state.new_chat_id("api")
+        state.bump(chat)
+        self.assertEqual(state.reap(set(), server="charter"), [chat])
+        self.assertFalse(state.frame_dir(chat).exists())
+
+    def test_an_old_frame_answers_live_with_no_pane_offered_at_all(self):
+        """`pane` is optional because `reap`'s question is the frame's EXISTENCE, not any
+        process's membership of it — `None` means "do not ask", never "assume no". Drop
+        the `pane is not None` half of that check and an old frame with a live launcher
+        reads as dead, which for `statusline` means a frame that never suppresses."""
+        old = state.frame_id("legacy", os.getpid())
+        state.record_server(old, "charter")
+        state.record_harness_pane(old, "%3")
+        self.assertTrue(state.is_live(old),
+                        "no pane was offered, so there was nothing to disagree with")
+        self.assertTrue(state.is_live(old, pane="%3"))
+        self.assertFalse(state.is_live(old, pane="%4"))
+
+    def test_a_chats_liveness_is_the_harness_pane_rather_than_a_pid(self):
+        """`is_live` runs on Claude Code's own repaint path, so it may not spawn a tmux
+        subprocess. For a chat the record of which pane the LAUNCHER started the harness
+        in is the evidence: a process running in that pane is inside a window that still
+        exists."""
+        chat = state.new_chat_id("api")
+        state.record_server(chat, "charter")
+        state.record_harness_pane(chat, "%4")
+        self.assertTrue(state.is_live(chat, pane="%4"))
+        self.assertFalse(state.is_live(chat, pane="%5"),
+                         "a process that merely inherited this chat's id is not its "
+                         "harness")
+        self.assertFalse(state.is_live(chat),
+                         "with no pane offered there is nothing here that can answer "
+                         "for a chat, and a claim with no evidence is the wrong answer")
+
+    def test_a_chat_with_no_server_marker_is_not_live(self):
+        """The marker is what says a LAUNCHER made this directory rather than a stray
+        `$CHARTER_SESSION_ID` and the first hook that fired for it."""
+        chat = state.new_chat_id("api")
+        state.record_harness_pane(chat, "%4")
+        self.assertFalse(state.is_live(chat, pane="%4"))
+
+
+class TheIdIsANameAndNotAPointer(PersonaIso, unittest.TestCase):
+    """Renaming a workspace under live chats changes nothing, because nothing ever parses
+    an id for meaning. `frame_workspace` reads the workspace out of the frame's own file,
+    which can be repointed."""
+
+    def test_two_live_chats_survive_their_workspace_being_renamed(self):
+        one, two = state.new_chat_id("oldname"), state.new_chat_id("oldname")
+        for fid in (one, two):
+            state.record_server(fid, "charter")
+            state.record_workspace(fid, "oldname")
+        self.assertEqual([one, two], ["oldname.1", "oldname.2"])
+
+        for fid in (one, two):
+            state.record_workspace(fid, "newname")
+
+        # Both still resolve, both keep the old-spelled id, and the bar reads the file.
+        for fid in (one, two):
+            with self.subTest(fid=fid):
+                self.assertTrue(fid.startswith("oldname."),
+                                "an id was rewritten — every $CHARTER_SESSION_ID already "
+                                "exported into a live process would now name nothing")
+                self.assertEqual(state.frame_workspace(fid), "newname")
+                self.assertTrue(state.frame_dir(fid).is_dir())
+        self.assertEqual(state.reap({one, two}, server="charter"), [])
+
+    def test_a_chat_allocated_after_the_rename_is_spelled_for_the_new_name(self):
+        """The one visible cost, and it is deliberately not fixed: allocation scans for
+        `{new name}.*`, so a renamed workspace's next chat is `newname.1` beside a
+        sibling still called `oldname.2`. Ugly, harmless, and rewriting ids to tidy it
+        would break every id already exported into a running process."""
+        state.new_chat_id("oldname")
+        state.new_chat_id("oldname")
+        self.assertEqual(state.new_chat_id("newname"), "newname.1")
+
+
 class Version(PersonaIso, unittest.TestCase):
     def test_a_fresh_frame_has_a_version(self):
         self.assertTrue(state.version("f-1"))

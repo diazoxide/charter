@@ -434,11 +434,14 @@ def discard(fid: str) -> None:
     """Forget the cached scan under *fid*, because a NEW frame is claiming the id.
 
     The gather half of ``state.clear_exit``'s bill, and the same recycled pid
-    underneath it (#383). A frame id is ``<workspace>-<launcher pid>``; since #383
-    ``state.reap`` keeps a directory for as long as the pid in its name is live, and
-    on a launch that pid is live because it is the launcher's own — so a launcher
-    landing on a pid an earlier launcher for the same workspace already used adopts
-    that earlier frame's whole directory, ``gather.json`` included.
+    underneath it (#383). A frame id WAS ``<workspace>-<launcher pid>``; ``state.reap``
+    keeps such a directory for as long as the pid in its name is live, and on a launch
+    that pid is live because it is the launcher's own — so a launcher landing on a pid an
+    earlier launcher for the same workspace already used adopted that earlier frame's
+    whole directory, ``gather.json`` included. A chat's id is allocated
+    (``state.new_chat_id``) and cannot collide that way, so on the launch path this is
+    now belt and braces; the case it is for is Stage 5c's reopen, which relaunches into a
+    cold chat's own existing directory.
 
     :func:`read` has no freshness check and needs none — it is the hot path a panel
     polls, and the cache is kept current by ``notify.plane_changed`` — so it hands

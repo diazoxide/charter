@@ -1,8 +1,15 @@
 """What one frame knows about itself, on disk.
 
-Under ``<STATE_DIR>/frame/<frame-id>/`` — per frame, never global, because two frames may
-run at once (one per session, named by workspace and pid) and a shared version file would
-make each frame's panels redraw for the other's activity.
+Under ``<STATE_DIR>/frame/<frame-id>/`` — per frame, never global, because several frames
+may run at once (a chat per tmux WINDOW, several windows to a workspace's session) and a
+shared version file would make each frame's panels redraw for the other's activity.
+
+**Two id shapes live here, and which one an id is decides how its liveness is read.** A
+chat's id is ``{workspace}.{n}``, allocated by :func:`new_chat_id`, and its liveness comes
+from the tmux window it is drawn in. A frame launched by a charter old enough to predate
+that is ``{workspace}-{launcher pid}`` (:func:`frame_id`) and keeps the pid rule.
+:func:`_launcher_pid` is the discriminator — it parses the second and not the first — so
+nothing was migrated and no frame carries a version field.
 
 ``config.STATE_DIR`` is read as an attribute at call time, everywhere below, and never
 imported as a bare name (``from ..config import STATE_DIR``) — the test harness repoints
@@ -51,21 +58,139 @@ from .. import config, contain
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
-def frame_id(workspace: str, pid: int) -> str:
-    """A stable id for one frame: the workspace it is for, and the launcher's pid.
+def workspace_prefix(workspace: str) -> str:
+    """*workspace*, reduced to the alphabet an id may be spelled in.
 
-    The same pair the tmux session and socket are named for, so a directory on disk and a
-    session in `tmux list-sessions` can always be matched up by eye. *workspace* is a name
-    read out of ``workspace.json`` or a directory listing rather than typed by an operator
-    (#328), so it is sanitised here rather than trusted — this is the one place in the
-    module that mints an identity instead of resolving one handed to it.
+    Shared by :func:`frame_id` and :func:`new_chat_id` so the two cannot drift: a name
+    read out of ``workspace.json`` or a directory listing rather than typed by an
+    operator (#328) is sanitised rather than trusted, and both minting paths have to
+    sanitise it identically or a chat's id would stop starting with the same characters
+    the frame ids beside it do.
+
+    ``or "frame"`` is what makes the result non-empty, which :func:`_launcher_pid`
+    depends on: a name with no head before its separator is not a pid claim.
+
+    ``strip``, both ends, and the trailing end is the one that matters here: a workspace
+    called ``api.`` would otherwise mint the chat id ``api..1``, whose directory
+    :func:`frame_dir` still resolves but which no operator can say out loud and which
+    reads as an ordinal on a workspace called ``api.``. It is also what makes the result
+    of this function unable to be ``.`` or ``..`` — the two names
+    :func:`charter.contain.segment_ok` refuses — so a name built from it is a path
+    segment by construction.
     """
-    safe = _UNSAFE.sub("_", workspace).strip("._-") or "frame"
-    return f"{safe}-{int(pid)}"
+    return _UNSAFE.sub("_", workspace).strip("._-") or "frame"
+
+
+def frame_id(workspace: str, pid: int) -> str:
+    """The OLD shape of a frame id: the workspace it is for, and the launcher's pid.
+
+    The same pair the tmux session and socket were named for, so a directory on disk and
+    a session in `tmux list-sessions` could always be matched up by eye.
+
+    **Nothing mints one of these any more.** A frame is a chat now
+    (:func:`new_chat_id`), and its liveness comes from the tmux window it is drawn in
+    rather than from a pid in its name. This stays because the shape is still READ:
+    :func:`_launcher_pid` is its exact inverse, and a frame launched by an older charter
+    — running across the upgrade, or left on disk by one that was — keeps being reported
+    live and reaped by the pid rule with no migration. It is the spelling those frames
+    are in, so it is spelled once, here.
+    """
+    return f"{workspace_prefix(workspace)}-{int(pid)}"
+
+
+#: The separator between a chat's workspace and its ordinal, and it is a `.` rather than
+#: a `-` for one measured reason: `_launcher_pid` reads a `-<digits>` tail as a launcher
+#: pid, so `myws-2` answers `2` — and pid 2 is alive on every Unix, so every dead chat
+#: would look live forever and `reap` would stop bounding `.charter/frame/` at all.
+#: Measured on this tree: ``_launcher_pid("myws-2") -> 2``, ``_launcher_pid("myws.2") ->
+#: None``. That ``None`` is not a gap, it is the **version discriminator** — an id this
+#: module can parse a pid out of is an old `frame_id` frame and keeps the pid rule; one
+#: it cannot is a chat and takes liveness from tmux's own window list.
+_CHAT_SEP = "."
+
+#: How far :func:`new_chat_id` will count before it gives up on a workspace.
+#:
+#: Not a policy about how many chats an operator may have — `[frame] max_chats` is that,
+#: and it is a different question asked somewhere else. This bounds the LOOP: allocation
+#: walks upwards from 1 claiming directories, and without a ceiling a plane whose frame
+#: root somehow refuses every name would spin instead of answering. Ten thousand is far
+#: past any real plane (the scan costs one `mkdir` per taken ordinal, and a plane holds
+#: tens of frame directories, not thousands) and small enough that giving up is a
+#: refusal a caller can report rather than a hang nobody can see.
+_CHAT_ORDINAL_MAX = 10_000
 
 
 def _root() -> Path:
     return Path(config.STATE_DIR) / "frame"
+
+
+def new_chat_id(workspace: str) -> str | None:
+    """Allocate the next chat id for *workspace* — ``{workspace}.{n}`` — or ``None``.
+
+    **Allocated, not computed, and the ``mkdir`` IS the allocation.** The alternative the
+    operator's own sketch reached for was ``{workspace}-{some-hash}``, and both halves of
+    it fail. A hash of the only inputs available at creation is a hash of a counter
+    wearing a disguise — (workspace, harness) is not unique by construction, two Claude
+    chats in one workspace hash the same — and a truncated hash COLLIDES SILENTLY into a
+    shared ``.charter/frame/<fid>/``, where one chat's ``session``, ``panes`` and
+    ``version`` overwrite the other's and nothing reports it. A `-{ordinal}` tail fails
+    differently and worse: see :data:`_CHAT_SEP` for the measurement.
+
+    A counter cannot collide because it is claimed rather than computed.
+    :func:`config.claim_private_dir` is `config.private_mkdir` with its idempotence
+    removed **on purpose** — `private_mkdir` swallows ``FileExistsError`` on a directory
+    (#331), which is exactly right for "make sure this exists" and exactly wrong for "is
+    this name mine?". Here ``FileExistsError`` is the claim failing, and the answer to it
+    is ``n+1``. Two allocators racing the same workspace cannot both win, because
+    ``mkdir`` is one syscall and the kernel picks.
+
+    **A scan is not a substitute.** Reading the directory and taking ``max + 1`` gives
+    two racers the same answer, and the loser silently adopts the winner's frame
+    directory — the collision this whole design exists to make impossible, reintroduced
+    by the cheaper-looking spelling.
+
+    ``None`` for every way this can fail to allocate: a frame root that cannot be made, a
+    name :func:`contain.child` refuses, an id so long ``mkdir`` answers ``ENAMETOOLONG``,
+    a filesystem that will not take the directory, or a workspace already holding
+    :data:`_CHAT_ORDINAL_MAX` chats. One answer for all of them, because the caller does
+    the same thing with each: report that it could not open a chat, rather than launch
+    one whose state has nowhere to live.
+
+    The id is a NAME and is never parsed for meaning. Renaming a workspace leaves its
+    live chats spelling the old one and changes nothing — `frame_workspace` reads the
+    workspace out of the frame's own ``workspace`` file, which can be repointed, and the
+    bars show that rather than the prefix of the id. The one visible cost is cosmetic and
+    deliberately not fixed: after a rename, chat 1 of the renamed workspace may be
+    ``newname.1`` beside a sibling still called ``oldname.2``. Rewriting ids to tidy that
+    would break every ``$CHARTER_SESSION_ID`` already exported into a live process.
+    """
+    prefix = workspace_prefix(workspace)
+    root = _root()
+    try:
+        config.private_mkdir(root)
+    except OSError:
+        return None
+    for n in range(1, _CHAT_ORDINAL_MAX + 1):
+        # A plain join, and the containment is asserted rather than branched on — the
+        # deletion sweep is why. `contain.child` here could only ever refuse a name
+        # `workspace_prefix` cannot produce: the alphabet holds no separator and no NUL,
+        # the head is non-empty (`or "frame"`), the strip rules out `.` and `..`, and the
+        # tail is a decimal integer. So `if d is None: return None` was a branch no test
+        # could reach and no mutation could redden — the shape `record_identity`'s own
+        # unreachable `isinstance` filter was deleted for. What still refuses a bad name
+        # is `frame_dir`, which every later reader of this id goes through, and which
+        # resolves through `contain.child` on the way back.
+        d = root / f"{prefix}{_CHAT_SEP}{n}"
+        try:
+            config.claim_private_dir(d)
+        except FileExistsError:
+            continue          # taken — by a sibling chat, by a racer, or by debris
+        except OSError:
+            # ENAMETOOLONG for an id no `mkdir` will take, a full filesystem, a
+            # permission the plane does not have. None of those gets better at `n+1`.
+            return None
+        return d.name
+    return None
 
 
 def frame_dir(fid: str, *, create: bool = False) -> Path | None:
@@ -191,7 +316,7 @@ def clear_exit(fid: str) -> None:
     """Forget any exit code recorded under *fid*, because a new frame is claiming the id.
 
     The bill for #383's rule, and the reason it is only a bill and not a defect. A frame
-    id is ``<workspace>-<launcher pid>`` and pids are recycled — Linux wraps at
+    id WAS ``<workspace>-<launcher pid>`` and pids are recycled — Linux wraps at
     ``kernel.pid_max``, 32768 by default — so a launcher for the same workspace really
     does land on a pid an earlier launcher already used. Since :func:`reap` keeps a
     directory for as long as the pid in its name is live, and on a launch that pid is
@@ -201,7 +326,13 @@ def clear_exit(fid: str) -> None:
     reported as having failed with a dead frame's number.
 
     A launch beginning is the one moment that can be certain about this — whatever is
-    recorded under the id was recorded before this frame existed. Only ``exit`` is
+    recorded under the id was recorded before this frame existed.
+
+    **A CHAT's id cannot be adopted that way at all**, because :func:`new_chat_id` claims
+    its ordinal with a ``mkdir`` that fails when the name is taken, so a launch never
+    lands on an occupied directory. On the launch path this is now belt and braces; the
+    case it is still for is reopening a COLD chat, which relaunches into that chat's own
+    existing directory. Only ``exit`` is
     removed: ``version`` is a counter panels poll, and moving it is :func:`bump`'s job.
     Never raises, and never creates, for the same reasons as everything else here.
     """
@@ -683,7 +814,9 @@ def clear_shape(fid: str) -> None:
     decision about one frame, and that frame is over.
 
     The fourth and fifth lines on :func:`clear_exit`'s bill, and the same recycled pid
-    underneath them (#383). A frame id is ``<workspace>-<launcher pid>``; :func:`reap`
+    underneath them (#383) — and the same narrowing: an ALLOCATED chat id cannot be a
+    previous frame's, so what this is for now is a cold chat being reopened into its own
+    directory. A frame id WAS ``<workspace>-<launcher pid>``; :func:`reap`
     keeps a directory while the pid in its name is live, and on a launch it is live
     BECAUSE IT IS THE LAUNCHER'S OWN — so a launcher landing on a pid an earlier launcher
     for the same workspace already used adopts that earlier frame's whole directory.
@@ -963,7 +1096,8 @@ def clear_respawn(fid: str) -> None:
     """Forget every respawn count under *fid*, because a NEW frame is claiming the id.
 
     The third line on :func:`clear_exit`'s bill, and the same recycled pid underneath it
-    (#383). A frame id is ``<workspace>-<launcher pid>``; since #383 :func:`reap` keeps a
+    (#383), narrowed the same way an allocated id narrows the other two. A frame id WAS
+    ``<workspace>-<launcher pid>``; since #383 :func:`reap` keeps a
     directory for as long as the pid in its name is live, and on a launch that pid is
     live BECAUSE IT IS THE LAUNCHER'S OWN — so a launcher landing on a pid an earlier
     launcher for the SAME workspace already used adopts that earlier frame's whole
@@ -1001,6 +1135,15 @@ def _launcher_pid(name: str) -> int | None:
     ``or "frame"`` fallback guarantees it), so a name without one did not come from here
     and its digits are not a claim about any process. ``rpartition`` rather than
     ``split``, because a workspace may contain ``-`` itself (``harness-wrapper-4242``).
+
+    **The separator is also the version discriminator, and that is a load-bearing use of
+    this function rather than a happy accident.** ``-`` is `frame_id`'s and ``.`` is
+    `new_chat_id`'s, so ``myws-2`` answers ``2`` and ``myws.2`` answers ``None`` — which
+    is what lets `is_live` and `reap` apply the pid rule to an old frame and the window
+    rule to a chat with no flag, no migration and no extra field on disk. Widening this
+    to accept ``.`` would hand every chat a launcher pid that is really its ordinal:
+    ``api.1`` would read as pid 1, ``launchd``/``init``, alive on every Unix, and `reap`
+    would keep every dead chat forever.
     """
     head, sep, tail = name.rpartition("-")
     if not sep or not head or not tail.isdigit():
@@ -1079,16 +1222,30 @@ def is_live(fid: str, *, pane: str | None = None) -> bool:
     *pane* is optional because :func:`reap`'s question is the frame's existence, not any
     process's membership of it. ``None`` means "do not ask", not "assume yes".
 
+    **A CHAT has no launcher pid, and the pane record is what answers instead.** An id
+    :func:`_launcher_pid` cannot parse is a `new_chat_id` chat (see :data:`_CHAT_SEP`),
+    and there is no process in its name to signal. The honest evidence available here —
+    with no tmux subprocess, on a path Claude Code re-runs every time it repaints its
+    footer — is :func:`record_harness_pane`'s: a process running in the pane a LAUNCHER
+    wrote down is a process inside a window that still exists, which is what "this chat
+    is live" means. So for a chat the pane is not an extra check on top of liveness, it
+    IS the liveness, and a caller that offers none gets ``False`` rather than a claim
+    nothing here can support. Both callers (`statusline`, `doctor`) already pass
+    ``$TMUX_PANE``.
+
     Every unknown answers ``False``, which for the status line means "render" — a
     duplicated line is recoverable in a way a line that vanished for an invisible reason
     is not.
     """
     if frame_server(fid) is None:
         return False
+    pane_matches = pane is not None and harness_pane(fid) == pane
     pid = _launcher_pid(fid)
-    if pid is None or not _launcher_is_alive(pid):
+    if pid is None:
+        return pane_matches
+    if not _launcher_is_alive(pid):
         return False
-    if pane is not None and harness_pane(fid) != pane:
+    if pane is not None and not pane_matches:
         return False
     return True
 
@@ -1098,8 +1255,22 @@ def reap(live: set[str], *, server: str) -> list[str]:
 
     Never by age: a frame open for two days is exactly a working frame, and an age
     heuristic would delete precisely that one. *live* names what that server still
-    reports — sessions on charter's own private one, windows on an operator's — so the
-    only frames removed are ones nothing is watching any more.
+    reports — on charter's own private server that is now its sessions AND the chat ids
+    its windows carry, on an operator's it is their windows — so the only frames removed
+    are ones nothing is watching any more.
+
+    **A chat is bounded by this list alone, and that is the whole of why the id has a dot
+    in it.** A `new_chat_id` id carries no launcher pid, so the second rule below
+    (:func:`_launcher_pid`) abstains for it and *live* decides on its own. Had the
+    ordinal been spelled `-{n}`, `myws-1` would read as pid 1 — ``launchd``/``init``,
+    alive on every Unix — and every dead chat would be kept forever: this function is the
+    only thing bounding ``.charter/frame/``, so that is not litter, it is an unbounded
+    directory. `commands_frame._live_chats` is what puts the chat ids in *live*, read
+    from the ``@charter_chat`` WINDOW OPTION rather than from ``#{window_name}``, because
+    a window name is not an identity (measured: with ``allow-rename on`` a pane's own
+    output renamed a `-n`-named window to ``PWNED`` on tmux 3.7c and on 3.2, while the
+    option was untouched — and a chat whose name has been taken from it is a chat this
+    function would delete the state of while it was still running).
 
     **Scoped to one server, because "not live" is only an answer the frame's OWN server
     can give.** A frame launched inside the operator's tmux is a window on their socket
