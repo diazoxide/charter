@@ -684,6 +684,29 @@ class ThePanelDeliversToCharterSOwnComponent(PersonaIso, unittest.TestCase):
             said = panel._failure_text(evs, "repos")
         self.assertIn("repos stopped taking events", tui.strip_ansi(said))
 
+    def test_the_pane_paints_the_failure_instead_of_the_table(self):
+        """Not just that the message COMPOSES — that `_paint` puts it on the pane instead
+        of the rows. A built-in is drawn off `slots.SLOTS` and never through
+        `Registry.draw`, so this `or` is the only thing standing between a handler that
+        raised and a pane that goes on drawing a perfectly good table nobody can click."""
+        state.frame_dir(FID, create=True)
+        gather.save(FID, _data([_row("alpha")]))
+        evs = events.Dispatcher(builtins.build(FID).get("repos"),
+                                stream=mock.MagicMock())
+        evs._failure = "repos stopped taking events — RuntimeError: no"
+        written = []
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((WIDE, 6))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True), \
+             mock.patch.object(panel, "_write", written.append):
+            panel._paint("repos", FID, evs)
+            self.assertIn("stopped taking events", tui.strip_ansi(written[-1]))
+            self.assertNotIn("▪ repos", tui.strip_ansi(written[-1]),
+                             "the table was drawn as though nothing had broken")
+            evs._failure = None
+            panel._paint("repos", FID, evs)
+        self.assertIn("▪ repos", tui.strip_ansi(written[-1]))
+
     def test_a_panel_still_taking_events_paints_its_rows(self):
         """The other side of the same branch, so "" is read as "nothing to say" rather
         than as a message of its own."""
@@ -733,6 +756,19 @@ class ASelectionBelongsToOneFrame(PersonaIso, unittest.TestCase):
         that leaves the table clickable."""
         state.record_selection("../escape", "alpha")
         self.assertIsNone(state.selection("../escape"))
+
+    def test_a_write_that_cannot_complete_leaves_the_previous_selection_alone(self):
+        """The other half of "must not raise", and the half a directory that cannot be
+        made does not reach: a full disk, a read-only tree, a `charter/` somebody chmod'd.
+        The atomic replace is what makes "left alone" the outcome rather than "left
+        half-written" — the temp file is what fails, and the file a reader is looking at
+        was never touched."""
+        state.frame_dir(FID, create=True)
+        state.record_selection(FID, "alpha")
+        with mock.patch.object(state.config, "write_for",
+                               side_effect=OSError("no room on device")):
+            state.record_selection(FID, "beta")
+        self.assertEqual(state.selection(FID), "alpha")
 
 
 class TheRankingStillAnswersEveryOtherCaller(unittest.TestCase):
