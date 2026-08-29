@@ -24,7 +24,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, config, contain, instance
-from charter.frame import chats, choose, state, tmuxctl
+from charter.frame import chats, choose, slots, state, tmuxctl
 from tests._isolation import PersonaIso
 # The one list of hostile display strings this suite has, imported rather than retyped:
 # a second copy is one that stops growing when somebody finds a ninth shape.
@@ -468,6 +468,45 @@ class AHostileChatRendersAsOneRowAndRunsNothing(PersonaIso, unittest.TestCase):
                 self.assertIn(word, ("#{pane_id}",
                                      "#{window_width}:#{window_height}"),
                               f"an unexpected tmux format reached the switch: {word!r}")
+
+    def test_every_chat_is_still_reachable_at_200_80_and_40_columns(self):
+        """**Stage 5b's first exit criterion**: every chat reachable in ≤2 keystrokes at
+        200, 80 and 40 columns — *including* the widths where no bar can be drawn.
+
+        Two keystrokes is `F2` and then either an arrow or a filter; what has to be true
+        at every width is that the row is in the surface and still maps back to its own
+        chat. Asserted through `Roster.name_of`, which is what
+        `commands_frame._chosen_name` calls — matching on the drawn title instead would be
+        matching on a string `Surface.render` has already contained, and would pass while
+        the switch went to the wrong chat or to none.
+
+        The chat bar draws nothing at all at 40 columns for this many chats, which is the
+        point: the palette is a full pane (§4k) and does not care how wide the frame is.
+        """
+        from charter.frame import overlay, palette
+        roster = choose.roster(choose.CHAT, "api.1")
+        self.assertEqual(len(roster.rows), len(HOSTILE))
+        for cols in (200, 80, 40):
+            with self.subTest(cols=cols):
+                surface = palette.Palette(catalogue=roster.rows, label=choose.CHAT)
+                drawn = surface.render(cols, 20)
+                self.assertEqual(len(drawn), 20)
+                for row in roster.rows:
+                    self.assertIsNotNone(roster.name_of(row))
+                # And typing narrows to exactly one of them, which is the second keystroke.
+                surface.handle(overlay.Event(overlay.KEY, "2"), 20)
+                self.assertEqual([r.id for r in surface.rows], ["chat:n1"],
+                                 f"typing `2` at {cols} columns did not reach api.2")
+                self.assertEqual(roster.name_of(surface.rows[0]), "api.2")
+        # And the width at which the BAR gives up its names is not a width at which the
+        # picker gives up anything — which is the whole of "the bar is a readout and the
+        # palette is the mechanism".
+        from charter import tui
+        narrow = slots.chats_bar("api.1", 40)
+        self.assertTrue(all("api.8" not in ln for ln in narrow),
+                        f"the bar still listed every chat at 40 columns: {narrow!r}")
+        for ln in narrow:
+            self.assertLessEqual(tui.width(ln), 40)
 
     def test_a_chat_id_outside_the_alphabet_is_refused_before_it_becomes_an_argv(self):
         """"Runs nothing" is the other half, and it is asked of the ID rather than of the
