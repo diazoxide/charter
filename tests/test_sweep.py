@@ -3141,28 +3141,43 @@ class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
                 return step
         self.fail(f"collect has no step with id {step_id!r}")
 
-    def test_a_superseded_run_says_superseded_and_never_claims_a_verdict(self):
+    def test_a_sweep_that_never_sized_itself_does_not_borrow_the_shard_sentence(self):
         """#654. `cancel-in-progress` means a second push cancels the first run, and
-        `always()` above carries that run into this job anyway — where its own empty
-        `needs.plan.outputs.shards` read as "the sweep never sized itself" and published
-        the sentence #617 built this gate to say.
+        `always()` carries that run into this job anyway — where the shard arithmetic
+        answered about shards nobody ever planned. Measured on this branch: run 99, cancelled
+        by run 100, published `no verdict: 1 of 1 shard did not report`.
 
-        The property is not that some step exists. It is that the words a superseded run
-        puts on the checks list are NOT the words an unanswered one puts there — asserted
-        against the fallback in `verdict`'s own name, so the two cannot drift together."""
+        The property is not that a step exists. It is that the words this path publishes are
+        NOT the words the shard path publishes — #626's sentence has to keep meaning what it
+        means, and a run that never sized itself must not be able to say it."""
         headline = self._collect_step("superseded")["run"]
-        self.assertIn("superseded", headline)
-        self.assertNotIn("no verdict", headline)
-        self.assertNotIn(self.jobs["verdict"]["name"].split("||")[-1].strip(" '}"),
-                         headline)
+        self.assertIn("did not size itself", headline)
+        self.assertNotIn("shard", headline)
+        self.assertNotIn("survivor", headline)
 
     def test_the_two_answers_are_exact_negations_so_neither_can_shadow_the_other(self):
         """`headline` is `say || superseded`, which is only a choice between one value and
         one empty string while exactly one of them can run. Two conditions that merely
         looked different would make the `||` a precedence question, and a run could answer
         twice — the second answer silently losing to whichever `||` saw first."""
-        self.assertEqual(self._collect_step("superseded")["if"], "cancelled()")
-        self.assertEqual(self._collect_step("say")["if"], "${{ !cancelled() }}")
+        yes = self._collect_step("superseded")["if"]
+        no = self._collect_step("say")["if"]
+        self.assertEqual(yes, "${{ needs.plan.result == 'cancelled' }}")
+        self.assertEqual(no, yes.replace("==", "!="))
+
+    def test_the_discriminator_is_the_sizing_job_and_not_the_runs_own_cancellation(self):
+        """`cancelled()` was the obvious answer and it is the wrong one — measured, not
+        reasoned. Run 99 was cancelled (`conclusion=cancelled`, `Size the sweep` cancelled,
+        the shard cancelled) and `collect` still took the `say` branch. In a job running
+        under `always()`, `cancelled()` does not answer for the run.
+
+        `needs.plan.result` does, and it is also the narrower question: it is `cancelled`
+        exactly when the sizing job did not finish, which is the only state in which the
+        shard arithmetic is answering about shards nobody planned. A shard that exceeds its
+        own `timeout-minutes` leaves `plan` succeeded, so #626 is untouched."""
+        for step_id in ("superseded", "say"):
+            self.assertNotIn("cancelled()", self._collect_step(step_id)["if"], step_id)
+            self.assertIn("needs.plan.result", self._collect_step(step_id)["if"], step_id)
 
     def test_the_superseded_answer_needs_nothing_a_cancellation_would_have_skipped(self):
         """The one state this step exists for is the state in which every step above it was

@@ -205,27 +205,36 @@ jobs:
       # verdict beside 87's real one. Both rows stay, because the verdict is the check's
       # NAME and two different names do not replace each other.
       #
-      # `cancelled()` is the run-level fact and is exactly the distinction wanted: a shard
-      # that exceeds its own `timeout-minutes` is a cancelled JOB in a run that was never
-      # cancelled, so #626 still reports `no verdict: N of M shards did not report` and
-      # only a superseding push reaches this step.
+      # **`cancelled()` is NOT the discriminator, and that was measured rather than
+      # reasoned.** The first version of this step used it and did not fire: run 99 on this
+      # branch was cancelled by run 100 (`conclusion=cancelled`, `Size the sweep` cancelled,
+      # the shard cancelled) and `collect` still took the `say` branch and published
+      # `no verdict: 1 of 1 shard did not report` — the #626 sentence, from a run where no
+      # shard was ever asked to report. In a job running under `always()`, `cancelled()`
+      # does not answer for the run the way the docs' one-line summary suggests.
+      #
+      # `needs.plan.result` does. It is `cancelled` exactly when the sizing job did not
+      # finish, and that is the only state in which the shard arithmetic below is answering
+      # about shards nobody planned. #626's own case is untouched: a shard that exceeds its
+      # `timeout-minutes` leaves `plan` SUCCEEDED, so `no verdict: N of M shards did not
+      # report` still means what it meant and still blocks nothing.
       #
       # It depends on nothing a cancellation would have skipped — no checkout, no artifact,
       # no python. `printf` into `$GITHUB_OUTPUT` and nothing else, because a step that
       # needed the tree could not run in the one state it exists for.
-      - name: A superseded run says so rather than claiming a verdict
+      - name: A sweep that never sized itself says that, and nothing more
         id: superseded
-        if: cancelled()
+        if: ${{ needs.plan.result == 'cancelled' }}
         run: |
           set -euo pipefail
-          printf 'headline=superseded: a newer push cancelled this sweep\n' >>"$GITHUB_OUTPUT"
-          printf 'conclusion=superseded\n' >>"$GITHUB_OUTPUT"
-      # `!cancelled()` and not the default `success()`: the download above is
-      # `continue-on-error` precisely so that "no artifacts at all" reaches this step, and
+          printf 'headline=cancelled: this sweep did not size itself\n' >>"$GITHUB_OUTPUT"
+          printf 'conclusion=cancelled\n' >>"$GITHUB_OUTPUT"
+      # The exact negation of the step above, and not the default `success()`: the download
+      # is `continue-on-error` precisely so that "no artifacts at all" reaches this step, and
       # a condition that stopped at the first failure would take that back.
       - name: One answer for the whole sweep
         id: say
-        if: ${{ !cancelled() }}
+        if: ${{ needs.plan.result != 'cancelled' }}
         env:
           # Empty when the plan job never finished — which `expected_shards` reads as "the
           # sweep never sized itself", not as "no shards were needed". Those two are the
