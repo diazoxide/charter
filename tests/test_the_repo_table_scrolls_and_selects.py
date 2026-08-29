@@ -687,11 +687,31 @@ class ASelectionBelongsToOneFrame(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.selection(FID))
 
     def test_never_recorded_reads_as_nothing_selected(self):
+        """The directory exists and the file does not, which is the ordinary state of
+        every frame nobody has clicked in — a missing file, not a missing frame."""
         state.frame_dir("f-untouched", create=True)
         self.assertIsNone(state.selection("f-untouched"))
 
+    def test_a_truncated_or_emptied_file_is_nothing_selected_and_not_an_empty_name(self):
+        """`None`, never ``""``. Two readers ask this — `slots._table_lines` matches it
+        against a row's name and `builtin_actions._select` looks it up in a list — and an
+        empty string is a THIRD value both of them would have to know about, for a file
+        that says exactly what a missing one says."""
+        d = state.frame_dir("f-empty", create=True)
+        (d / "selection").write_text("\n")
+        self.assertIsNone(state.selection("f-empty"))
+
     def test_a_frame_with_no_directory_answers_nothing_rather_than_raising(self):
         self.assertIsNone(state.selection("no-such-frame"))
+
+    def test_recording_for_an_id_no_directory_can_be_made_for_is_a_no_op(self):
+        """Every writer in `frame/state.py` makes this promise and this one is written
+        from a HANDLER — `frame/builtins._repos_events`, on the panel's own event path,
+        where an exception costs the component its events for the life of the pane
+        (`frame/events.py` retires a handler that raises). Degrading is the only answer
+        that leaves the table clickable."""
+        state.record_selection("../escape", "alpha")
+        self.assertIsNone(state.selection("../escape"))
 
 
 class TheRankingStillAnswersEveryOtherCaller(unittest.TestCase):
