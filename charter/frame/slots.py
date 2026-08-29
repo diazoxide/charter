@@ -457,13 +457,17 @@ class _Viewport:
     puts it back — the reset is the price of the singleton and is not hidden.
 
     **It holds an intent, and the renderer is what settles it against the data.** The
-    handler moves an offset knowing nothing about how many repos there are or how tall the
-    pane is — `Component.on_event` is handed no ctx by contract (§4f), and it must not grow
-    a second reading of a plane the repaint is about to read anyway. So :meth:`settle` is
-    called by `_repos` with the bound it just computed, and that is also the answer to *what
-    happens when the offset outlives a repo list that shrank under it*: the next paint
+    handler moves an offset knowing nothing about how many rows the table has or how tall
+    the pane is — `Component.on_event` is handed no ctx by contract (§4f), and it must not
+    grow a second reading of a plane the repaint is about to read anyway. So :meth:`settle`
+    is called by `_repos` with the bound it just computed, and that is also the answer to
+    *what happens when the offset outlives a table that shrank under it*: the next paint
     clamps it down and the pane draws the last window there is, rather than an empty table
     the operator has to guess their way back out of.
+
+    **The offset counts pane ROWS, not repos** (#663). A table is repo rows and the piece
+    rows nested under them, and a viewport whose unit was the repo could not move at all on
+    a plane with one clone — which was every control plane charter runs on.
 
     :attr:`limit` is that bound REMEMBERED, which is what lets the handler refuse a scroll
     that would change nothing. Zero until the first paint, and the first paint always
@@ -495,9 +499,10 @@ class _Viewport:
         """Record how far this table may scroll, and answer where it actually is.
 
         The clamp is here and nowhere else. `_scroll_limit` computes the bound from the
-        repo count and the pane's rows; this is what applies it, so an offset left over
-        from a longer list — the operator scrolled to the bottom, then a repo was removed —
-        comes back as the largest offset the CURRENT list has, on the very next paint.
+        table's ROW count (:func:`_content_rows`) and the pane's rows; this is what applies
+        it, so an offset left over from a longer table — the operator scrolled to the
+        bottom, then a repo or a worktree was removed — comes back as the largest offset
+        the CURRENT table has, on the very next paint.
 
         Never below zero, and that half is not symmetry: :meth:`move` already refuses to go
         under, so what this guards is a *limit* that has gone negative, which
@@ -561,44 +566,75 @@ VIEWPORT = _Viewport()
 SCROLL_ROWS = 1
 
 
-def _scroll_limit(repos: int, budget: int) -> int:
-    """The largest offset a table of *repos* repos may hold in a *budget*-row pane.
+def _piece_rows(data: dict) -> list[dict]:
+    """The rows this table nests UNDER a clone, or none at all.
 
-    **Zero whenever every repo already fits, and that is the tested nothing.** The `repos`
+    `statusline._detail_worktrees`' rule, asked of the cache rather than of the filesystem:
+    full piece rows exist only where the workspace resolves to exactly one repo, because at
+    two or more a repo must never lose its row to another repo's pieces — every other
+    plane's pieces are a `⑂N` badge on the repo's own row instead. `gather.scan` already
+    writes ``worktrees`` on that condition alone; asking it again here is what keeps a cache
+    written by another version from putting a piece row under each of six repos.
+
+    **One function because two callers must not disagree.** :func:`_table_lines` composes
+    these rows and :func:`_content_rows` counts them for :func:`_scroll_limit`; a count that
+    included a row the composer would not draw leaves an offset that scrolls onto nothing,
+    and one that excluded a drawn row leaves the bottom of the plane permanently out of
+    reach. #663 is what the second of those looks like when it ships.
+    """
+    return list(data.get("worktrees") or []) if len(data.get("repos") or []) == 1 else []
+
+
+def _content_rows(data: dict) -> int:
+    """How many ROWS of table this gather wants — the quantity :func:`_scroll_limit` bounds.
+
+    **Rows and not repos, and #663 is the whole cost of the difference.** The pane renders
+    rows: the budget is in rows, the overflow line takes a row, and :meth:`_Viewport.repo_at`
+    maps a row. A limit computed from the repo COUNT is therefore the one unit in that
+    expression that is not the pane's, and it agrees with this number only on a plane where
+    no repo has pieces. On the one-clone-many-worktrees plane — the ordinary state of a
+    control plane, and the state of the one #658 shipped from — it answered 0 for every
+    pane height, so the wheel was inert and the pieces past the pane's last row were
+    dropped with nothing on screen saying so.
+    """
+    return len(data.get("repos") or []) + len(_piece_rows(data))
+
+
+def _scroll_limit(rows: int, budget: int) -> int:
+    """The largest offset a table of *rows* content rows may hold in a *budget*-row pane.
+
+    *rows* is :func:`_content_rows` — repo rows and piece rows together, which is what the
+    pane actually draws. See that function for why counting repos here was #663.
+
+    **Zero whenever all of it already fits, and that is the tested nothing.** The `repos`
     pane is sized to its content (`layout.repos_rows`), so on an ordinary plane the pane is
     exactly tall enough and this answers 0 — every wheel notch then moves nothing, repaints
     nothing and costs nothing, because :meth:`_Viewport.move` reads this bound before it
     changes anything. A scroll that quietly did nothing *because the arithmetic happened to
     cancel* would be indistinguishable from a scroll that was dropped, which is the class of
-    convincing-empty this module refuses everywhere else.
+    convincing-empty this module refuses everywhere else. It is still the ordinary answer
+    for a one-clone plane: what changed is that it is now the answer because the pieces FIT,
+    not because they were never counted.
 
     The row the overflow line takes is subtracted here for the same reason
     :func:`_table_lines` reserves it out of the budget rather than trimming it off the end:
-    it is a row of the pane and a row the repos do not get. Reserved on exactly the same
-    condition — more repos than rows — so the two cannot disagree about whether that row
-    exists, which would leave the last repo permanently one notch out of reach.
-
-    **The window moves over REPOS and not over PIECES, and that is a stated limit rather
-    than an oversight.** Piece rows appear only in the one-repo shape (`_table_lines`, from
-    `gather`'s ``worktrees``), where one repo always fits and this answers 0; pieces past
-    the pane's remaining rows are dropped by that function as they always were. Scrolling
-    them would need a second kind of offset — an index into a nested list rather than into
-    the ranking — and one mechanism that answers for half the cases honestly is worth more
-    than two that overlap.
+    it is a row of the pane and a row the content does not get. Reserved on exactly the same
+    condition — more rows than the pane has — so the two cannot disagree about whether that
+    row exists, which would leave the last row permanently one notch out of reach.
 
     **A pane with room for one row is a pane with room for the overflow line and nothing
     else**, and it answers 0 too. :func:`_table_lines` spends a one-row budget on
-    `…(+N more)` rather than on an arbitrary repo — "there is more here than fits" outranks
+    `…(+N more)` rather than on an arbitrary row — "there is more here than fits" outranks
     "here is one of them" — so every offset over such a table draws the identical line. A
-    limit taken from the repo count alone would let the wheel repaint that line forty times,
-    each repaint byte-identical to the last: motion the operator can see is not happening,
-    charged to their terminal.
+    limit taken from the content count alone would let the wheel repaint that line forty
+    times, each repaint byte-identical to the last: motion the operator can see is not
+    happening, charged to their terminal.
     """
-    if repos <= budget:
+    if rows <= budget:
         return 0
     if budget <= 1:
         return 0
-    return repos - (budget - 1)
+    return rows - (budget - 1)
 
 
 def _table_row(lead: str, name_markup: str, r: dict, width: int,
@@ -687,26 +723,40 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
     The row it subtracts is `▪ repos N`, not the attention row — that is another pane's
     since #515, and a budget still reserving a row for it would cost the table its
     lowest-ranked repo row for nothing. The budget is spent in priority order —
-    repo rows first, then the `…(+N more)` line that admits what was dropped, then piece
-    rows — so a short pane loses DETAIL rather than losing a repo. That ordering is
-    `statusline._repo_rows`' own (`wt_budget` there), kept because the two tables are
-    meant to read alike.
+    repo rows first, then piece rows, with the `…(+N more)` line that admits what was
+    dropped reserved out of it — so a short pane loses DETAIL rather than losing a repo.
+    That ordering is `statusline._repo_rows`' own (`wt_budget` there), kept because the two
+    tables are meant to read alike.
 
-    Piece rows come from ``data["worktrees"]``, which `gather.scan` populates only when
-    the workspace resolves to exactly one repo — `statusline._detail_worktrees`' rule
-    verbatim. Every OTHER repo's pieces get a `⑂N` badge on the repo's own row instead,
-    from `worktree_count`; the badge means "there is more you cannot see here", so it is
-    dropped whenever every piece already has its own row.
+    Piece rows are :func:`_piece_rows` — ``data["worktrees"]`` where the workspace resolves
+    to exactly one repo, `statusline._detail_worktrees`' rule verbatim. Every OTHER repo's
+    pieces get a `⑂N` badge on the repo's own row instead, from `worktree_count`; the badge
+    means "there is more you cannot see here", so it is dropped whenever every piece has a
+    row **on this screen** — counted from the pieces actually DRAWN and not from the ones
+    the cache holds, or a scrolled table would drop the badge while nine of the fourteen
+    were off the pane.
 
-    *offset* is how far down the RANKING the window has been scrolled, and it changes
-    nothing at all at zero — which is the whole of how this stayed compatible.
-    `statusline._pick_rows` already sliced `[:budget]` off a ranked list, so `[offset:]` of
-    the same list is the same table one window further along: the repos come back in
-    priority order, the display order is still the cache's (a row that moved as it was
-    scrolled past would be the thing that function's own docstring refuses), and scrolling
-    back to zero lands on the exact bytes that were there before the first notch. The
-    `…(+N more)` line needs no arithmetic of its own for the same reason: what is HIDDEN is
-    still "every key that is not in *show*", which is true at every offset.
+    *offset* is how far down the table's own rows the window has been scrolled, and it
+    changes nothing at all at zero — which is the whole of how this stayed compatible.
+    **It is one index into one list, and the list is the repo rows in ranking order
+    followed by the piece rows in the cache's** — the same order the budget is spent in
+    above, read one window further along rather than truncated. So while the window still
+    holds repo rows it is `statusline._pick_rows`' own `[offset:offset + room]` slice of
+    the ranking (the repos come back in priority order, the display order is still the
+    cache's, and scrolling back to zero lands on the exact bytes that were there before the
+    first notch); once every repo row is above the window it is an index into the pieces,
+    which is what #663 is. The `…(+N more)` line needs no arithmetic of its own either: what
+    is HIDDEN is the complement of what was drawn, which is true at every offset. An offset
+    past what this table can hold is the CALLER's to clamp and is deliberately not clamped
+    again here — `_repos` settles it against :func:`_scroll_limit` on the same *data* and
+    the same *budget* this is handed, and a second clamp would be a second answer to where
+    the bottom is (`statusline._pick_rows` refuses the same thing for the same reason).
+
+    **The one-clone plane is where this changed, and it changed because it was wrong.** A
+    table of one repo and fourteen pieces in a six-row pane used to draw six rows and say
+    nothing about the nine it dropped, because `capped` counted repos and one repo always
+    fits. It now reserves the overflow row on the same condition every other shape does.
+    Offset zero on a many-clones plane is byte-for-byte what it was.
 
     *selected* is the repo `state.selection` says this frame has picked, and the row for it
     is drawn in reverse video by `frame/chrome.reverse` — the same call `persona_section`
@@ -749,28 +799,40 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
     cur_repo = data.get("current_repo")
     palette = {r["name"]: sl._PALETTE[i % len(sl._PALETTE)] for i, r in enumerate(repos)}
 
-    capped = len(keys) > budget
-    # `budget - 1` and no `max(1, …)` underneath it: the overflow line is reserved OUT of
-    # the budget rather than appended on top of it and trimmed off at the end. With a
-    # one-row budget the trimmed version showed a single repo row and dropped the
-    # `…(+N more)` line — a pane claiming that one clean repo is the whole plane, which is
-    # the false-clean reading this module refuses everywhere else. A budget of exactly one
+    pieces = _piece_rows(data)
+    # **What overflows is ROWS, pieces included** (#663). Counting repos here made this
+    # `False` on every one-clone plane however many worktrees hung off it, so a table that
+    # could not fit fifteen rows into six drew six and admitted nothing.
+    capped = _content_rows(data) > budget
+    # `- 1` and no `max(1, …)` underneath it: the overflow line is reserved OUT of the
+    # budget rather than appended on top of it and trimmed off at the end. With a one-row
+    # budget the trimmed version showed a single repo row and dropped the `…(+N more)`
+    # line — a pane claiming that one clean repo is the whole plane, which is the
+    # false-clean reading this module refuses everywhere else. A budget of exactly one
     # therefore spends it on the note, which is the honest half of the pair: "there is
     # more here than fits" outranks "here is an arbitrary one of them".
-    show = (sl._pick_rows(keys, budget - 1, cur_repo, by_key, by_key, offset=offset)
+    room = budget - (1 if capped else 0)
+    show = (sl._pick_rows(keys, room, cur_repo, by_key, by_key, offset=offset)
             if capped else keys)
 
-    pieces = list(data.get("worktrees") or [])
-    shown_pieces: dict = {}
-    for p in pieces:
-        shown_pieces[p.get("repo")] = shown_pieces.get(p.get("repo"), 0) + 1
+    # **The window is one window over one list, and the list is repo rows THEN piece rows.**
+    # That is the order this function already spent its budget in (`statusline._repo_rows`'
+    # `wt_budget`: a repo must never lose its row to another repo's pieces), so making the
+    # offset an index into it is the same ordering read one step further along rather than
+    # a second kind of offset. Where the window falls among the pieces is therefore
+    # whatever is left of it once the repo rows have been passed — zero while any repo row
+    # is still on screen, and `offset - len(keys)` once they are all above it.
+    # The `max` is on the START and not on the length: `offset - len(keys)` is negative
+    # while a repo row is still on screen and a negative index would count from the END of
+    # the pieces. `room - len(show)` needs no such guard — `_pick_rows` never returns more
+    # than the *room* it was given and an uncapped table's repos already fit in it, and a
+    # slice whose stop is below its start is empty either way.
+    start = max(0, offset - len(keys))
+    kids = pieces[start:start + room - len(show)]
 
-    # Rows left for piece detail once every repo has its own row and, if capped, the
-    # overflow line has been reserved. `statusline._repo_rows` spends its budget in
-    # exactly this order and for exactly this reason: a repo must never lose its row to
-    # another repo's pieces.
-    room = budget - len(show) - (1 if capped else 0)
-    kids = pieces[:max(0, room)] if len(show) == 1 else []
+    shown_pieces: dict = {}
+    for p in kids:
+        shown_pieces[p.get("repo")] = shown_pieces.get(p.get("repo"), 0) + 1
 
     lines: list[_Line] = []
     for i, k in enumerate(show):
@@ -794,18 +856,13 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
         lines.append(_Line(r["name"],
                            chrome.reverse(row, width) if r["name"] == selected else row))
 
-    if capped:
-        hidden = [k for k in keys if k not in set(show)]
-        quiet = not any(_needs_attention(by_key[k]) for k in hidden)
-        note = ", all clean" if quiet else ""
-        # **About no repo, so a click here selects nothing.** It stands for the rows that
-        # are NOT on screen, and picking one of them because the operator clicked the line
-        # that says they exist would be charter answering a question nobody asked.
-        lines.append(_Line(None, tui.truncate(
-            f"  {sl._DIM}…(+{len(hidden)} more{note}){sl._R}", width)))
-
     for j, p in enumerate(kids):
-        mark = sl._TREE_WT if j == len(kids) - 1 else sl._TREE_MID
+        # A piece row is where the tree ends only when nothing follows it, and the
+        # `…(+N more)` line follows every capped table — the same `not capped` the repo
+        # rows above ask before they take `_TREE_END`. Without it a starved one-clone plane
+        # closes its tree with `╰─` and then prints ten more rows' worth of admission
+        # underneath, which is the glyph saying the opposite of the line below it.
+        mark = sl._TREE_WT if j == len(kids) - 1 and not capped else sl._TREE_MID
         emph = f"{sl._BOLD}{sl._UNDER}" if p.get("current") else ""
         # `charter worktree add <repo> <piece>` names the branch after the piece, so by
         # default these two columns print the same word twice — empty the branch cell
@@ -823,6 +880,28 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
             f"  {sl._DIM}{sl._TREE_PIPE}{mark}{sl._R}",
             f"{emph}{sl._DIM}{p['name']}{sl._R}", p, width,
             branch_override="" if wb == p.get("name") else None)))
+
+    if capped:
+        # **Every row that is not on screen, repo rows and piece rows alike**, which is
+        # what makes the count honest at every offset: what is hidden is the complement of
+        # what was drawn, and that stays true wherever the window is. The pieces are
+        # excluded by INDEX rather than by membership — two worktrees of the same clone on
+        # the same branch are equal dicts, and `p not in kids` would call one of them
+        # shown because the other was.
+        hidden = ([by_key[k] for k in keys if k not in set(show)]
+                  + pieces[:start] + pieces[start + len(kids):])
+        quiet = not any(_needs_attention(r) for r in hidden)
+        note = ", all clean" if quiet else ""
+        # **About no repo, so a click here selects nothing.** It stands for the rows that
+        # are NOT on screen, and picking one of them because the operator clicked the line
+        # that says they exist would be charter answering a question nobody asked.
+        #
+        # **Last, under the rows it is about.** It used to be appended before the piece
+        # rows, which could not be told apart while `capped` and a piece row were mutually
+        # exclusive — they no longer are, and a "there is more below" line with three more
+        # rows below it is the note pointing at the wrong place.
+        lines.append(_Line(None, tui.truncate(
+            f"  {sl._DIM}…(+{len(hidden)} more{note}){sl._R}", width)))
     return lines[:budget]
 
 
@@ -2060,8 +2139,9 @@ def _repos(fid: str) -> str:
     (§4f), so it knows neither how many repos there are nor how tall this pane is. Both
     numbers are read on this line and nowhere else:
 
-    * :func:`_scroll_limit` is how far the window may move, handed to
-      :meth:`_Viewport.settle`, which clamps an offset left over from a longer list and
+    * :func:`_scroll_limit` is how far the window may move, asked about
+      :func:`_content_rows` — the table's ROWS, pieces included, which is #663 — and handed
+      to :meth:`_Viewport.settle`, which clamps an offset left over from a longer table and
       leaves the handler a bound it can refuse a pointless scroll against. On the ordinary
       plane — a pane sized to its own content — it is 0 and the wheel does nothing at all.
     * :meth:`_Viewport.publish` records which repo each PANE ROW is about, so a click that
@@ -2140,7 +2220,9 @@ def _repos(fid: str) -> str:
     # direction that matters: a pane starved to no rows by a resize would have kept
     # whatever bound the last taller paint recorded, and the wheel would go on moving an
     # offset over a table that is not on screen. `_scroll_limit` answers 0 for that pane.
-    offset = VIEWPORT.settle(_scroll_limit(len(repos), budget))
+    # **:func:`_content_rows` and not `len(repos)`** — the bound is over the rows this pane
+    # draws, and a repo with pieces draws more than one. See that function for #663.
+    offset = VIEWPORT.settle(_scroll_limit(_content_rows(data), budget))
     lines = _table_lines(data, w, budget, offset=offset, selected=state.selection(fid))
     # The heading is row 0 of the PANE and belongs to no repo, so the map the handler
     # resolves a click against starts with it — see :meth:`_Viewport.publish`.

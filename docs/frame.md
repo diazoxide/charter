@@ -122,12 +122,17 @@ a pointer is irreversible, because a click can reach a pane without its matching
 drag begun on a pane border delivers exactly one release), and a gesture that can arrive
 half-formed is not one to hang an action on.
 
-Two things follow that are worth saying plainly rather than leaving you to find:
+Three things follow that are worth saying plainly rather than leaving you to find:
 
 - **The wheel does nothing when the table already fits**, which is most of the time — the
   pane is sized to its own content. There is nothing below to scroll to, so nothing moves
-  and nothing repaints. It starts moving on a plane with more clones than the pane has rows,
-  which is the same plane that shows `…(+7 more)`.
+  and nothing repaints. It starts moving on any plane with more table ROWS than the pane
+  has, which is the same plane that shows `…(+7 more)`.
+- **Rows, not clones.** A worktree gets a row of its own on a plane with a single clone, and
+  those rows scroll like any other: a monorepo plane with twenty worktrees is a
+  twenty-one-row table however few repos are in it. Scrolling past the clone's own row
+  leaves its worktrees hanging from a `│` whose root is above the window, which is what a
+  scrolled tree looks like; a click on a worktree row selects the clone it is a piece of.
 - **You do not need a mouse.** `F2` → `repo: select the next row` (and `previous`) moves the
   selection with the arrow keys and Enter you already drive the palette with. That is the
   only route on a plane with `mouse = false`, which is the default, and charter will not
