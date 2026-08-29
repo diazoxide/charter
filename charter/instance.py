@@ -854,30 +854,17 @@ def chrome_option_names() -> tuple[str, ...]:
 PANE_BORDER_OPTIONS: tuple[str, ...] = ("pane-border-style", "pane-active-border-style")
 
 
-def pane_border_options(name, chrome, style: str) -> tuple[tuple[str, str], ...]:
-    """The ``(option, value)`` pairs that draw ONE panel pane's own edges in its own
-    surface — empty for a pane that has no surface to draw them in.
+def rule_options(surface: str | None, style: str) -> tuple[tuple[str, str], ...]:
+    """The ``(option, value)`` pairs that draw ONE pane's own edges over *surface* — empty
+    where there is no surface to draw them over.
 
-    **A pane's edges, not the frame's rules, and that distinction is the fix for #631.**
-    `border_bg` answers one colour for the whole window, which is all tmux below
-    `tmuxctl.PANE_BORDER_FLOOR` can be told. Above it every pane carries its own, and the
-    difference is the pane charter must NOT paint: the harness. A window-wide surface
-    reaches the rules around the harness too, so a frame whose panels were all grey drew a
-    grey box around the operator's own session on three sides — reported off a screenshot,
-    and the reason this function exists beside that one rather than instead of it.
-
-    **The harness gets its dark edges by being left alone**, which is the same construction
-    ADR 0018 already rests on: `commands_frame._surface_argvs` is only ever handed a PANEL
-    pane, so the harness keeps the window's own bare `_CHROME_STYLE` and every border cell
-    tmux resolves against the harness is drawn in it. Nothing here has to name the harness
-    to protect it.
-
-    *style* is the caller's rule style — `commands_frame._CHROME_STYLE`, `fg=default,dim` —
-    passed in rather than imported so the one place that decides what a charter rule looks
-    like stays the one place. The surface is `pane_bg_options(name) or
-    chrome_options(chrome)`'s ``window-style`` value, which is the SAME expression the
-    pane's interior is painted from: a pane and its own edges cannot come out two colours,
-    because they are read off one answer.
+    **The one place a rule's value is assembled, and that is why it is its own function.**
+    Two panes' edges are set from two different questions — a panel's from its own colour
+    (:func:`pane_border_options`), the harness's from the colour its neighbours agree on
+    (:func:`agreed_border_bg`) — and #514's whole defect is one rule coming out in two
+    colours. Assembling the value twice is how two answers to one question get written; one
+    assembler means a panel's edges and the harness's are byte-identical whenever the
+    surfaces they were resolved from are, without either caller knowing about the other.
 
     **Both options carry the identical value**, and that is #514's rule surviving the move
     to pane scope rather than being dropped by it. tmux picks between them per border CELL
@@ -888,13 +875,69 @@ def pane_border_options(name, chrome, style: str) -> tuple[tuple[str, str], ...]
     with the pair identical every rule cell held its colour, and the frame did not move when
     focus did.
 
+    *style* is the caller's rule style — `commands_frame._CHROME_STYLE`, `fg=default,dim` —
+    passed in rather than imported so the one place that decides what a charter rule looks
+    like stays the one place.
+
     Empty rather than a bare *style* for a pane with no surface: the window option is
-    already exactly that, so a pane that adds nothing must SET nothing, or `off` would
-    leave a pane-scoped copy of the window's own value behind for
-    `chrome_option_names`'s removal to miss.
+    already exactly that, so a pane that adds nothing must SET nothing. What a caller does
+    with the emptiness differs — a panel being drawn for the first time issues no command,
+    a pane that may be carrying yesterday's value issues the unset
+    (`commands_frame._harness_rule_argvs`) — and that is the caller's question, not this
+    one's.
     """
-    surface = dict(pane_bg_options(name) or chrome_options(chrome)).get("window-style")
     return tuple((n, f"{style},{surface}") for n in PANE_BORDER_OPTIONS) if surface else ()
+
+
+def pane_border_options(name, chrome, style: str) -> tuple[tuple[str, str], ...]:
+    """The ``(option, value)`` pairs that draw ONE panel pane's own edges in its own
+    surface — empty for a pane that has no surface to draw them in.
+
+    **A pane's edges, not the frame's rules, and that distinction is #631's.** `border_bg`
+    answers one colour for the whole window, which is all tmux below
+    `tmuxctl.PANE_BORDER_FLOOR` can be told. Above it every pane carries its own, so a
+    panel's edges can be the colour that panel is rather than the colour the frame settled
+    on — which is what an arrangement whose components name DIFFERENT backgrounds needs,
+    and the half of #631 that stands.
+
+    **This function is only ever asked about a PANEL**, and that is unchanged:
+    `commands_frame._surface_argvs`, its only caller, is only ever handed a panel pane. The
+    harness's edges are a different question with a different answer
+    (:func:`agreed_border_bg`) and its INTERIOR is not a question at all — `window-style`
+    is not in :data:`PANE_BORDER_OPTIONS`, so nothing assembled here can reach one.
+
+    *style* and the pair-building are :func:`rule_options`'. The surface is
+    ``pane_bg_options(name) or chrome_options(chrome)``'s ``window-style`` value, which is
+    the SAME expression the pane's interior is painted from: a pane and its own edges cannot
+    come out two colours, because they are read off one answer.
+    """
+    return rule_options(
+        dict(pane_bg_options(name) or chrome_options(chrome)).get("window-style"), style)
+
+
+def _component_surfaces(frame: dict, chrome) -> set:
+    """Every surface the panels of *frame* will actually wear, as a set — one walk over the
+    arrangement, read by both of the questions below.
+
+    Two walks is the shape #547 cost: they come to disagree about which placement resolves
+    to what, and here the disagreement would be invisible, because both answers are
+    plausible colours. :func:`border_bg` and :func:`agreed_border_bg` differ in what they do
+    with a set of more than one, and in nothing else — so the set itself is built once.
+
+    ``pane_bg_options(bg) or chrome_options(chrome)`` is `commands_frame._surface_argvs`'
+    own expression, asked of every placement at once instead of one at a time. That is what
+    makes "they agree" mean the thing an operator can see rather than "they wrote the same
+    word": a component that names no ``bg`` takes the frame-wide surface, and agrees with
+    one that named the colour that surface already is.
+
+    Empty for a plane that wrote no ``[[frame.component]]`` at all — which is every plane
+    spelled with ``slots``. That is not "they disagree": every panel on such a plane takes
+    the frame-wide surface, so they agree on it, and both callers below say so.
+    """
+    return {dict(pane_bg_options(placed.get("bg")) or chrome_options(chrome))
+            .get("window-style")
+            for placed in frame.get("components") or ()}
+
 
 
 def border_bg(frame: dict, chrome) -> str | None:
@@ -902,15 +945,14 @@ def border_bg(frame: dict, chrome) -> str | None:
     whose rules keep the terminal's own — `commands_frame._chrome_argvs`' *surface*.
 
     **BELOW `tmuxctl.PANE_BORDER_FLOOR` only, since #631.** One colour for every rule in
-    the window is all a tmux without pane-scoped border options can be told, and its cost
-    is the pane charter does not own: a window-wide surface paints the rules around the
-    HARNESS too, so a frame whose panels were all grey drew a grey box around the
-    operator's own session on three sides. Above the floor
-    :func:`pane_border_options` gives each panel its own edges and the harness keeps the
-    terminal's, which has no such cost. This stays because the floor cannot have that, and
-    a frame with no surface on its rules at all is the seam this whole key was written to
-    close — so below the floor the choice is between two imperfect renderings and this is
-    the one where the panels at least read as one surface.
+    the window is all a tmux without pane-scoped border options can be told, and its cost is
+    the frame-wide fallback: where the panels disagree this answers a colour that may match
+    neither side of some rule. Above the floor :func:`pane_border_options` gives each panel
+    its own edges and :func:`agreed_border_bg` gives the harness the one the panels agree
+    on, so no rule cell is ever a colour no pane beside it wears. This stays because the
+    floor cannot have that, and a frame with no surface on its rules at all is the seam this
+    whole key was written to close — so below the floor the choice is between two imperfect
+    renderings and this is the one where the panels at least read as one surface.
 
     **A pane border is the one cell that belongs to no pane, and that is the whole
     problem.** :func:`chrome_options` and :func:`pane_bg_options` paint a pane's INTERIOR
@@ -938,12 +980,9 @@ def border_bg(frame: dict, chrome) -> str | None:
     NO colour between two identically-coloured panels is a seam, and the seam is the whole
     report.
 
-    **Resolved by the same expression every pane resolves itself with** —
-    ``pane_bg_options(bg) or chrome_options(chrome)``, `commands_frame._surface_argvs`'
-    own — asked of every placement at once instead of one at a time. That is what makes
-    "they agree" mean the thing an operator can see rather than "they wrote the same word":
-    a component that names no ``bg`` takes the frame-wide surface, and agrees with one that
-    named the colour that surface already is.
+    **Resolved by the same expression every pane resolves itself with**, in
+    :func:`_component_surfaces` — one walk, shared with :func:`agreed_border_bg` so the two
+    cannot come to disagree about which placement resolves to what.
 
     **The universe is the ARRANGEMENT, not the panes on screen**, and that is deliberate
     twice over. It is what makes the launch path and the live path (`cmd_chrome`) answer
@@ -978,12 +1017,65 @@ def border_bg(frame: dict, chrome) -> str | None:
       (``bg=notacolour`` is rc 1, ``invalid style:``) is therefore not the boundary
       charter needs, and is not asked to be.
     """
-    surfaces = {dict(pane_bg_options(placed.get("bg"))
-                     or chrome_options(chrome)).get("window-style")
-                for placed in frame.get("components") or ()}
+    surfaces = _component_surfaces(frame, chrome)
     if len(surfaces) == 1:
         return surfaces.pop()
     return dict(chrome_options(chrome)).get("window-style")
+
+
+def agreed_border_bg(frame: dict, chrome) -> str | None:
+    """:func:`border_bg` MINUS its fallback: the surface every panel of *frame* wears, or
+    ``None`` where they wear more than one — `commands_frame._harness_rule_argvs`' *surface*.
+
+    **This is the colour the HARNESS'S OWN EDGES take, and the fallback is exactly why it
+    cannot be `border_bg`.** Above `tmuxctl.PANE_BORDER_FLOOR` tmux resolves each border
+    cell against one pane, and the pane that owns every cell around the harness is the
+    harness itself. Measured, not inferred: with a surface on the harness's two options and
+    on nothing else, its top, right and bottom rules all changed colour and no other cell in
+    the frame did. (tmux's own mechanism is `screen_redraw_check_cell`, which walks the
+    window's panes in order and takes the first whose border box holds the cell — and the
+    harness is the first pane charter's window has.) #631 left those two unset, which put
+    the terminal's own
+    background on them — and a horizontal rule that runs under the identity bar past the
+    harness's corner and on over the sidebar then came out in TWO colours, dark for the
+    cells the harness owns and the surface for the cells the sidebar owns. Rendered through
+    a nested client at 100x24, charter's real four-panel shape, every panel
+    ``bg = "brightblack"``::
+
+        #631         row 1: cols 0-77 ESC[49m   cols 78-99 ESC[100m   <- one rule, two colours
+        with this    row 1: cols 0-99 ESC[100m                        <- one rule, one colour
+
+    That is #514's own defect — a rule that changes colour where it passes a corner — in a
+    new place, and closing it is what this answers.
+
+    **The invariant both answers keep is that every rule cell wears the surface of a pane it
+    TOUCHES**, and the fallback is the one thing that would break it here. A panel's edges
+    take that panel's colour, so they always match the panel on their own side. The
+    harness's edges have the harness on one side — never painted, so never a colour to
+    match — and a panel on the other, so they must take that panel's. When the panels agree
+    there is one such colour and this returns it. When they do not, no single value can
+    match all three of the harness's neighbours, and :func:`border_bg`'s frame-wide fallback
+    would be a THIRD colour: a cell matching neither of the two panes beside it, which is
+    the definition of the seam #627 reported. ``None`` instead, which leaves those cells the
+    harness's own background — still one of the two panes they touch.
+
+    So: agreed, or bare. Never a compromise colour, and the universe is the whole
+    ARRANGEMENT rather than the panes on screen for :func:`border_bg`'s reasons, unchanged —
+    the launch path and `cmd_chrome` read `config.FRAME` and neither needs a pane map, and a
+    toggle key hiding a panel does not repaint the frame's rules.
+
+    **The computation names no pane**, and that is deliberate: what it reads is a property of
+    the PANELS — which colours they wear, and whether that is one — and `commands_frame` is
+    the only module that knows which pane the answer is for. What protects the harness's
+    INTERIOR is one option name over: `window-style` is not in :data:`PANE_BORDER_OPTIONS`,
+    so no value assembled from this can reach one.
+    """
+    # The one refusal, and the whole difference from `border_bg`: more than one surface
+    # means there is no colour the harness's three edges could all match, and a compromise
+    # would be a third colour on every one of them.
+    if len(_component_surfaces(frame, chrome)) > 1:
+        return None
+    return border_bg(frame, chrome)
 
 
 def verbosity_for(level) -> str:
