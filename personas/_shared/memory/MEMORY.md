@@ -35,3 +35,6 @@ Written by the persona as it learns; committed and shared.
 - [A PANEL PROCESS'S PANE *IS* sys.stdout. charter paints to it and measure](a-panel-process-s-pane-is-sys-stdout-charter-pai.md)
 - [test_plugin_freshness's test_every_top_level_directory_is_classified rea](test-plugin-freshness-s-test-every-top-level-dir.md)
 - [A TEST THAT COMPUTES ITS EXPECTATION FROM THE THING UNDER TEST SURVIVES](a-test-that-computes-its-expectation-from-the-th.md)
+- [THE COMMONEST UNPINNED-GUARD SHAPE IS AN ASSERTION ABOUT ABSENCE STANDIN](the-commonest-unpinned-guard-shape-is-an-asserti.md)
+- [MERGE RACES: compare headRefOid before and after, and diff content after](merge-races-compare-headrefoid-before-and-after-.md)
+- [--enforce ON THE SWEEP GATE HAS EXACTLY TWO HARD BLOCKERS, and the rende](enforce-on-the-sweep-gate-has-exactly-two-hard-b.md)

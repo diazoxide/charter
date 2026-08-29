@@ -147,6 +147,31 @@ PANE_BORDER_FLOOR = (3, 7)
 #: `commands_frame._charter_py_env_argv` for why the value travels out of band at all.
 CHARTER_PY_ENV = "CHARTER_PY"
 
+#: The mouse wheel, and the root-table key charter rebinds so the wheel scrolls tmux's own
+#: buffer rather than the terminal's (`commands_frame.conf_text`).
+WHEEL_KEY = "WheelUpPane"
+
+#: A left click on a pane, and the root-table key charter rebinds so a click on a PANEL
+#: does not move the keyboard off the harness (#634, `commands_frame.conf_text`). tmux's
+#: own default for it is `select-pane -t = \; send-keys -M`, which is the focus steal.
+CLICK_KEY = "MouseDown1Pane"
+
+#: Both of them, as the set of mouse keys charter binds for every frame on its own server.
+#:
+#: Defined HERE for :data:`CHARTER_PY_ENV`'s reason exactly — two modules need the same
+#: names for two different jobs and neither may spell them itself.
+#: `commands_frame.conf_text` WRITES a `bind -n` for each; `instance.component_tables`
+#: REFUSES each to a component's ``key``, because both lines are emitted before the toggle
+#: binds and tmux's key tables have no notion of a conflict — a later `bind -n` simply
+#: replaces the earlier, so a component claiming one would delete charter's mouse handling
+#: for every frame on the socket and `list-keys` would read back one line where two were
+#: meant (#566). Two spellings of these names is that deletion waiting for the day they
+#: stop matching.
+#:
+#: Both names pass `instance._HOTKEY_RE` — they are alphanumerics under twenty characters —
+#: so this is a reachable claim rather than a theoretical one.
+MOUSE_KEYS = (WHEEL_KEY, CLICK_KEY)
+
 #: How long any one tmux ADMIN command may take before charter stops waiting for it.
 #: Every command the launcher issues is a local, in-process request to a server on a
 #: unix socket; none of them is supposed to take measurable time at all, so a command

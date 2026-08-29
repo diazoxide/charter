@@ -1,0 +1,5 @@
+# MERGE RACES: compare headRefOid before and after, and diff content after
+
+_2026-08-29 03:33 · persistent_
+
+MERGE RACES: compare headRefOid before and after, and diff content after a squash. I merged one branch FOUR times mid-flight on 2026-08-28/29 and lost a commit each time (recoveries #613, #635, #637, #640) because I treated green CI as 'the author is finished'. It is not — an author's best work often lands AFTER the checks go green. The gate's author named the mechanical fix: compare 'gh pr view <n> --json headRefOid' against what the merge is about to take and refuse on mismatch — the same check release.yml makes about the version it publishes, for the same reason: an irreversible action should name what it is acting on. Two-part discipline that works: (1) read headRefOid, wait, read again, merge only if STABLE; (2) after a SQUASH merge the original sha is NEVER an ancestor of main, so verify with 'git diff <head> origin/main -- <paths>' expecting 0 lines — an ancestry check is the wrong test and will always say the work was lost.

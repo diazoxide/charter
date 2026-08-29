@@ -15,7 +15,7 @@ test told it to; it would not have caught `termios.error` failing to be an `OSEr
 which is the one defect the first version of that module actually had.
 
 The real tmux half — that tmux delivers ``\\x1b[I`` to a panel's pane at all, and only to
-one that asked — is `tests/test_frame_focus_reaches_a_component.py`.
+one that asked — is `tests/test_frame_input_reaches_a_component.py`.
 """
 
 from __future__ import annotations
@@ -166,7 +166,7 @@ class TheDeclarationAndTheHandlerAreOneThing(unittest.TestCase):
         self.assertIsNone(c.on_event)
 
 
-class CharterDeliversThreeOfTheSixAndSaysWhich(unittest.TestCase):
+class CharterDeliversFiveOfTheSixAndSaysWhich(unittest.TestCase):
     def test_delivered_is_a_subset_of_the_closed_vocabulary(self):
         """`EVENT_KINDS` is what may be DECLARED and `DELIVERED` is what charter carries.
         Two lists, and the smaller one must never contain a name the larger does not — a
@@ -174,22 +174,39 @@ class CharterDeliversThreeOfTheSixAndSaysWhich(unittest.TestCase):
         for kind in events.DELIVERED:
             self.assertIn(kind, component.EVENT_KINDS)
 
-    def test_the_undelivered_three_are_still_declarable(self):
+    def test_the_one_charter_does_not_carry_is_still_declarable(self):
         """`EVENT_KINDS`'s own rule: declaring is what you HANDLE, never a promise that it
-        FIRES. A component that declares `click` today must not be refused for it."""
-        for kind in ("key", "click", "scroll"):
-            self.assertNotIn(kind, events.DELIVERED)
-            c, _seen = _component(events=(kind,))
-            self.assertEqual(c.events, (kind,))
+        FIRES. `key` is the one left, because the harness owns the keyboard — a component
+        that declares it must not be refused for it."""
+        self.assertNotIn("key", events.DELIVERED)
+        c, _seen = _component(events=("key",))
+        self.assertEqual(c.events, ("key",))
+
+    def test_every_kind_read_off_the_pane_is_a_kind_charter_delivers(self):
+        """`_FROM_INPUT` is what makes `open` take the pane's input and change its terminal
+        mode. A kind in it that `DELIVERED` does not carry would put a pane in cbreak, ask
+        its terminal to report, decode what arrived and then drop every event — the cost of
+        the feature with none of it, on a provider's pane."""
+        for kind in events._FROM_INPUT:
+            self.assertIn(kind, events.DELIVERED)
+
+    def test_the_pointer_is_carried_now(self):
+        """The whole of this change, at the one constant that decides it. `click` and
+        `scroll` were declarable and delivered nowhere for a release; they are delivered
+        now, and `frame/events.py`'s module docstring carries the measurement that made
+        the difference — a pointer over a non-active pane acts where it points and moves
+        no focus, on tmux 3.7c and at the 3.2 floor alike."""
+        for kind in ("click", "scroll"):
+            self.assertIn(kind, events.DELIVERED)
 
     def test_wanted_is_the_intersection_in_declared_order(self):
-        c, _seen = _component(events=("resize", "click", "focus"))
+        c, _seen = _component(events=("resize", "key", "focus"))
         self.assertEqual(events.wanted(c), ("resize", "focus"))
 
     def test_a_component_charter_delivers_nothing_to_wants_nothing(self):
-        """The cost promise: `click` alone builds no dispatcher, so nothing touches the
+        """The cost promise: `key` alone builds no dispatcher, so nothing touches the
         pane's terminal."""
-        c, _seen = _component(events=("click", "scroll"))
+        c, _seen = _component(events=("key",))
         self.assertEqual(events.wanted(c), ())
 
     def test_a_component_with_no_handler_wants_nothing(self):
@@ -220,7 +237,7 @@ class TheWithdrawalUndoesExactlyWhatTheRequestAsked(unittest.TestCase):
     """The two mode constants are a PAIR, and the cases that watch them being written can
     only ever compare a constant to itself.
 
-    `FOCUS_ON`'s value is pinned for real by `tests/test_frame_focus_reaches_a_component.py`
+    `FOCUS_ON`'s value is pinned for real by `tests/test_frame_input_reaches_a_component.py`
     — a wrong private-mode number there means tmux sends nothing and the whole integration
     class goes red. `FOCUS_OFF` has no such witness: nothing observes a pane after charter
     has stopped reading it. So what is asked here is the RELATIONSHIP, which is where the
@@ -239,10 +256,12 @@ class TheWithdrawalUndoesExactlyWhatTheRequestAsked(unittest.TestCase):
         self.assertTrue(events.FOCUS_ON.startswith("\x1b[?"))
 
     def test_it_is_the_pair_the_overlay_does_not_already_own(self):
-        """`overlay.MOUSE_ON` is the same shape for the pointer. Asking that these are not
-        it keeps a copy-paste from arming mouse reporting on every panel that wanted to
-        know whether it was focused — which would take the operator's text selection
-        without `[frame] mouse` ever being set."""
+        """`overlay.MOUSE_ON` is the same shape for the pointer, and this module now writes
+        that one too — off a DIFFERENT declaration. Which is what makes keeping the two
+        constants distinct matter more than it did when only one was ever written: a
+        copy-paste that armed mouse reporting on a panel that wanted to know whether it was
+        focused would take the operator's text selection without `[frame] mouse` ever being
+        set, and the case below is what stops it."""
         self.assertNotIn(events.FOCUS_ON, overlay.MOUSE_ON)
         self.assertNotIn("1000", events.FOCUS_ON)
         self.assertNotIn("1006", events.FOCUS_ON)
@@ -281,6 +300,105 @@ class TheDecoderNamesFocusAndBlur(unittest.TestCase):
         """`\\x1bOA` is SS3 Up and must not be read as a blur because it contains an `O`."""
         evs, _tail = overlay.decode(b"\x1bOA")
         self.assertEqual([(e.kind, e.name) for e in evs], [(overlay.KEY, "up")])
+
+
+class TheDecoderReadsTheButtonNumberAsTheBitfieldItIs(unittest.TestCase):
+    """An SGR button number carries three separate things and each one is a defect if it
+    is read as part of the number instead of as itself.
+
+    The wheel's direction was already read by its low bit (#605's `button & 1`). These are
+    the other two, and both are reachable: right- and middle-clicks were MEASURED arriving
+    at a non-active pane on tmux 3.7c and 3.2 (`b'\\x1b[<2;20;5M'`, `b'\\x1b[<1;20;5M'`).
+    """
+
+    def test_each_button_is_named(self):
+        for button, name in ((0, "left"), (1, "middle"), (2, "right")):
+            with self.subTest(button=button):
+                evs, _t = overlay.decode(b"\x1b[<%d;20;5M" % button)
+                self.assertEqual([(e.kind, e.name) for e in evs],
+                                 [(overlay.CLICK, name)])
+
+    def test_a_modifier_does_not_become_a_different_button(self):
+        """Shift is bit 2, so a shift+click is `4` — and it is a LEFT click, which is what
+        the operator who pressed it meant. `_CSI`'s rule for a modified arrow, one
+        protocol over: the low bits name the gesture, the high ones name the keyboard."""
+        for button in (4, 8, 16, 4 | 8 | 16):
+            with self.subTest(button=button):
+                evs, _t = overlay.decode(b"\x1b[<%d;20;5M" % button)
+                self.assertEqual([(e.kind, e.name) for e in evs],
+                                 [(overlay.CLICK, "left")])
+
+    def test_motion_is_not_a_click(self):
+        """Bit 5 says the pointer MOVED. §4f closed the kinds without `drag`, so a report
+        carrying it is dropped — read as a button it is `32 & 3 == 0`, a LEFT click, at
+        every cell a drag crosses.
+
+        tmux was measured filtering these out on 3.7c and 3.2 with its own `mouse` both
+        off and on. This asks that charter's contract does not DEPEND on that filtering:
+        the bit is in the protocol, and what a component is handed is decided by what the
+        bit says rather than by another program's tidiness."""
+        for button in (32, 33, 32 | 4):
+            with self.subTest(button=button):
+                self.assertEqual(overlay.decode(b"\x1b[<%d;20;5M" % button), ([], b""))
+
+    def test_a_button_the_encoding_cannot_name_is_dropped_not_invented(self):
+        """`3` is the X10 encoding's "no button". In SGR a release names the button it
+        released and the trailing `m` is what makes it one, so a `3` is a terminal
+        speaking the wrong encoding — dropped rather than given a fourth name."""
+        self.assertEqual(overlay.decode(b"\x1b[<3;20;5M"), ([], b""))
+
+    def test_the_thumb_buttons_are_not_a_left_click(self):
+        """**Bit 7 is the third place xterm keeps the button number**, and reading only
+        the low two bits makes button 8 a `left` click — which a component that acts on
+        `left` then acts on.
+
+        Reachable, not theoretical: measured on tmux 3.7c and 3.2, `\\x1b[<128;20;5M`
+        injected at a non-active pane that asked for 1000+1006 was forwarded to it
+        VERBATIM, along with 129, 130 and 131. §4f named no kind for these, so a button
+        charter cannot name is one charter does not report."""
+        for button in (128, 129, 130, 131):
+            with self.subTest(button=button):
+                self.assertEqual(overlay.decode(b"\x1b[<%d;20;5M" % button), ([], b""))
+
+    def test_the_wheel_with_the_motion_bit_is_not_a_scroll(self):
+        """`96` is the wheel bit and the motion bit together. Testing bit 6 before bit 5
+        reports it as a scroll nobody performed; answering motion FIRST is what makes the
+        order impossible to get wrong."""
+        for button in (96, 97):
+            with self.subTest(button=button):
+                self.assertEqual(overlay.decode(b"\x1b[<%d;20;5M" % button), ([], b""))
+
+    def test_every_button_a_terminal_can_send_is_named_or_dropped(self):
+        """The whole 8-bit space, against the encoding rather than against the
+        implementation: motion first, then one number reassembled from its three bit
+        positions, then the six names this contract has. Nothing is left to a branch order.
+
+        A loop rather than eight cases because the defect this closes was in the SPACE
+        between the values anyone thought to write down — 0, 1, 2 and 64 were all correct
+        while 128 was a left click."""
+        names = {0: ("click", "left"), 1: ("click", "middle"), 2: ("click", "right"),
+                 4: ("scroll", "up"), 5: ("scroll", "down")}
+        for button in range(256):
+            number = ((button & 3) + (4 if button & 64 else 0)
+                      + (8 if button & 128 else 0))
+            want = [] if button & 32 else [names[number]] if number in names else []
+            evs, tail = overlay.decode(b"\x1b[<%d;20;5M" % button)
+            with self.subTest(button=button):
+                self.assertEqual([(e.kind, e.name) for e in evs], want)
+                self.assertEqual(tail, b"")
+
+    def test_press_and_release_are_told_apart_by_the_final_byte(self):
+        press, _t = overlay.decode(b"\x1b[<0;20;5M")
+        release, _t = overlay.decode(b"\x1b[<0;20;5m")
+        self.assertTrue(press[0].pressed)
+        self.assertFalse(release[0].pressed)
+
+    def test_the_coordinates_are_zero_based_and_nothing_else_is_subtracted(self):
+        """tmux has already taken `pane_left` and any `pane-border-status` row off —
+        measured, and `overlay.Event` carries the readings. All this does is 1-based to
+        0-based, and a decoder that "helpfully" did more would double tmux's own work."""
+        evs, _t = overlay.decode(b"\x1b[<0;20;5M")
+        self.assertEqual((evs[0].col, evs[0].row), (19, 4))
 
 
 class TheOverlayIgnoresTheKindsItNeverAsksFor(unittest.TestCase):
@@ -356,6 +474,61 @@ class ADispatcherTakesOnlyWhatItNeeds(unittest.TestCase):
         self.assertEqual(_mode(self.tty.slave), before)
         self.assertEqual(self.tty.sent(), events.FOCUS_OFF.encode())
         self.assertFalse(d.reading)
+
+    def test_the_pointer_opens_it_and_asks_for_mouse_reporting_and_not_focus(self):
+        """A component that declared only `click` is never told about focus.
+
+        The half that costs something if it is wrong is the OTHER direction — see
+        `test_focus_alone_never_arms_the_pointer` — but both are the same rule and neither
+        is free: a pane asking for reports nobody declared fills its own input buffer with
+        events that are decoded, dropped by `_deliver`, and paid for by the panel."""
+        c, _seen = _component(events=("click",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        self.assertTrue(d.reading)
+        self.assertEqual(self.tty.sent(), overlay.MOUSE_ON.encode())
+
+    def test_focus_alone_never_arms_the_pointer(self):
+        """The expensive direction, and the reason `open` asks per declaration rather than
+        once for the pair. `instance.FRAME_FIELDS` records the trade `MOUSE_ON` makes: the
+        instant a mouse-requesting pane is active, the operator's terminal stops doing its
+        own drag-select. A panel that only wanted to know whether it was focused must not
+        spend that on their behalf."""
+        c, _seen = _component(events=("focus", "blur"))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        sent = self.tty.sent()
+        self.assertEqual(sent, events.FOCUS_ON.encode())
+        self.assertNotIn(b"1000", sent)
+        self.assertNotIn(b"1006", sent)
+
+    def test_declaring_both_asks_for_both_and_withdraws_both(self):
+        c, _seen = _component(events=("focus", "scroll"))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.assertEqual(self.tty.sent(),
+                         (events.FOCUS_ON + overlay.MOUSE_ON).encode())
+        d.close()
+        self.assertEqual(self.tty.sent(),
+                         (overlay.MOUSE_OFF + events.FOCUS_OFF).encode())
+
+    def test_the_withdrawal_is_exactly_what_was_asked_and_no_more(self):
+        """A `close` that wrote both withdrawals unconditionally would tell a terminal to
+        stop reporting a mouse this pane never asked about. Harmless on its own, and wrong
+        in the way that matters here: charter writing a mode change into a pane on behalf
+        of a component that declared nothing of the kind."""
+        for declared, expected in (("focus", events.FOCUS_OFF),
+                                   ("click", overlay.MOUSE_OFF)):
+            with self.subTest(declared=declared):
+                tty = _Pty(self)
+                c, _seen = _component(events=(declared,))
+                d = events.Dispatcher(c, stream=tty.stream)
+                d.open()
+                tty.sent()
+                d.close()
+                self.assertEqual(tty.sent(), expected.encode())
 
     def test_close_returns_even_when_nothing_is_draining_the_pane(self):
         """`TCSADRAIN` waits for the terminal to consume what is already written, and on a
@@ -550,6 +723,18 @@ class TheRestoreIsTheThingCloseCannotAffordToLose(unittest.TestCase):
 class AnEventReachesTheComponentThatOwnsThePane(unittest.TestCase):
     def setUp(self):
         self.tty = _Pty(self)
+        # A pane charter CAN measure, which is what a panel in a tmux window has and what
+        # this process does not: these cases hand the dispatcher an explicit `stream`,
+        # while `pane.size()` measures the descriptor `pane.claim()` took — `sys.stdout`
+        # here, with no tty behind it under a test runner. `_on_canvas` refuses to
+        # translate a pointer against a rectangle charter could not measure, so without
+        # this every pointer case below would pass for the wrong reason: nothing delivered,
+        # because nothing was measurable. `AResizeIsTheRectangleMovingAndNotTheSignal`
+        # mocks the same call for the same reason.
+        patcher = mock.patch("charter.frame.pane.size",
+                             return_value=os.terminal_size((40, 8)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _open(self, c):
         d = events.Dispatcher(c, stream=self.tty.stream)
@@ -596,6 +781,34 @@ class AnEventReachesTheComponentThatOwnsThePane(unittest.TestCase):
         self.tty.deliver(b"hello\r\x1b[A\x1b[I")
         self.assertTrue(d.poll(1.0))
         self.assertEqual([e.kind for e in seen], [overlay.FOCUS])
+
+    def test_a_click_on_the_pane_reaches_the_handler(self):
+        """The other half of #607, and what this change is: bytes tmux routed by POSITION,
+        an `Event` in the component that owns the rectangle they landed in."""
+        c, seen = _component(events=("click",))
+        d = self._open(c)
+        self.tty.deliver(b"\x1b[<0;21;5M\x1b[<0;21;5m")
+        self.assertTrue(d.poll(1.0))
+        self.assertEqual([(e.kind, e.name, e.row, e.col, e.pressed) for e in seen],
+                         [(overlay.CLICK, "left", 4, 20, True),
+                          (overlay.CLICK, "left", 4, 20, False)])
+
+    def test_a_wheel_over_the_pane_reaches_it_as_a_scroll(self):
+        c, seen = _component(events=("scroll",))
+        d = self._open(c)
+        self.tty.deliver(b"\x1b[<64;21;5M\x1b[<65;21;5M")
+        self.assertTrue(d.poll(1.0))
+        self.assertEqual([(e.kind, e.name) for e in seen],
+                         [(overlay.SCROLL, "up"), (overlay.SCROLL, "down")])
+
+    def test_a_click_never_reaches_a_component_that_asked_only_to_scroll(self):
+        """Two kinds, one request: `MOUSE_ON` arms both, so the declared-kind filter is the
+        only thing between a `scroll` component and every click on its pane."""
+        c, seen = _component(events=("scroll",))
+        d = self._open(c)
+        self.tty.deliver(b"\x1b[<0;21;5M\x1b[<64;21;5M")
+        self.assertTrue(d.poll(1.0))
+        self.assertEqual([e.kind for e in seen], [overlay.SCROLL])
 
     def test_a_handler_that_answers_falsy_costs_no_repaint(self):
         """A component that ignores an event must not make the panel redraw for it."""
@@ -695,6 +908,199 @@ class AnEventReachesTheComponentThatOwnsThePane(unittest.TestCase):
                 break
             d.poll(0.05)
         self.assertFalse(d.reading)
+
+
+class APointerEventArrivesInTheComponentsOwnColumns(unittest.TestCase):
+    """Two subtractions stand between a terminal's column and a component's, and getting
+    which one is charter's wrong is a defect in either direction.
+
+    **tmux's is already done.** `pane_left` and any `pane-border-status` row are gone
+    before the bytes reach this process — measured on 3.7c and at the 3.2 floor, both
+    identical: a click at window column 100 with the pane at `left=80` arrived as
+    `b'\\x1b[<0;20;5M'`, and with `pane-border-status top` set a click on window row 5
+    arrived as row 4. Charter must not redo it.
+
+    **Charter's is not.** `[frame] pad` is drawn by `slots.inset_rows` after the component
+    has composed, and `slots.content_width` is the narrower canvas it was told it had.
+    tmux knows nothing about either, so a dispatcher that passed the pane's column through
+    would tell a component with `pad = 3` that a click on its first cell landed on its
+    fourth.
+    """
+
+    def setUp(self):
+        self.tty = _Pty(self)
+
+    def _clicked(self, *, pad: int, cols: int, col: int, kind=overlay.CLICK):
+        """EVERY event the handler was handed for a click at pane column *col*.
+
+        The whole list, not ``seen[0] if seen else None``, and the sweep is why. That
+        spelling could not tell a dropped event from a handler CALLED WITH ``None`` — the
+        recording handler appends whatever it is given — so deleting `_deliver`'s
+        ``if ev is None: return False`` left every margin case below still green while a
+        margin click reached a stranger's code as `None`. A component doing `ev.kind` on
+        it raises, is retired, and loses its pane. That survivor is what this signature
+        change closes.
+        """
+        c, seen = _component(events=(kind,))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((cols, 8))), \
+                mock.patch("charter.frame.slots.pad_for", return_value=pad):
+            d.open()
+            self.addCleanup(d.close)
+            self.tty.sent()
+            self.tty.deliver(b"\x1b[<0;%d;5M" % (col + 1))
+            d.poll(1.0)
+        return seen
+
+    def test_the_pad_is_taken_off_the_column(self):
+        """A pane 40 wide with `pad = 3` gives the component columns 0..33 at pane columns
+        3..36. A click on its first cell is pane column 3, and the component must be told
+        `0` — the cell it actually drew there."""
+        seen = self._clicked(pad=3, cols=40, col=3)
+        self.assertEqual([e.col for e in seen], [0])
+
+    def test_the_last_cell_of_the_canvas_is_the_last_cell_of_the_canvas(self):
+        """`content_width` is `cols - 2 * pad` = 34, so the component's last column is 33
+        and it sits at pane column 36. One off at this end is the end that silently drops
+        a real click rather than mis-reporting one."""
+        seen = self._clicked(pad=3, cols=40, col=36)
+        self.assertEqual([e.col for e in seen], [33])
+
+    def test_a_click_in_the_left_margin_reaches_the_handler_not_at_all(self):
+        """Those cells are charter's; the component never drew in them. A clamp would
+        report a click on a cell the operator can SEE is empty as a click on the first cell
+        of a row they can see is not — `EVENT_KINDS`'s "fires wrongly" at the one place the
+        distinction can still be made.
+
+        `assertEqual(seen, [])` and never `assertIsNone(seen[0] …)`: the handler must not
+        be CALLED, and the weaker spelling could not tell that from being called with
+        `None`. See :meth:`_clicked`."""
+        for col in (0, 1, 2):
+            with self.subTest(col=col):
+                self.assertEqual(self._clicked(pad=3, cols=40, col=col), [])
+
+    def test_a_click_in_the_right_margin_reaches_it_not_at_all_either(self):
+        for col in (37, 38, 39):
+            with self.subTest(col=col):
+                self.assertEqual(self._clicked(pad=3, cols=40, col=col), [])
+
+    def test_an_unpadded_pane_hands_the_column_straight_through(self):
+        """The shipped default is `pad = 0`, and there the test is the pane's own bounds —
+        which tmux has already guaranteed. A panel that asked for no pad pays nothing and
+        sees exactly what tmux reported."""
+        for col in (0, 17, 39):
+            with self.subTest(col=col):
+                self.assertEqual([e.col for e in self._clicked(pad=0, cols=40, col=col)],
+                                 [col])
+
+    def test_the_row_is_not_touched_at_all(self):
+        """Nothing insets a row: `inset_rows` pads the LEFT of each one and `panel._write`
+        homes the cursor before the first, so a component's row 0 is its pane's row 0. This
+        goes red the day anything grows a top inset without teaching this module about it —
+        which is the whole reason to assert a number that is currently a no-op."""
+        self.assertEqual([e.row for e in self._clicked(pad=3, cols=40, col=10)], [4],
+                         "the row was translated by something")
+
+    def test_a_pane_that_could_not_be_measured_fires_nothing(self):
+        """`slots._width()` answers its stated 80-column fallback for a pane it could not
+        measure, and `pane.size()` answers `None` — the difference is the whole guard.
+
+        Translating against the fallback would deliver a click in cells of an invented
+        canvas, and would do it at the one moment the pane is showing `panel._unmeasured`'s
+        message instead of the component's rows: the component would be told where it was
+        clicked while what is on screen is not the component. `note_resize` refuses the
+        same reading for the same reason — "a rectangle charter could not measure is not
+        one end of a comparison"."""
+        c, seen = _component(events=("click",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        self.tty.sent()
+        with mock.patch("charter.frame.pane.size", return_value=None):
+            self.tty.deliver(b"\x1b[<0;5;5M")
+            d.poll(1.0)
+        self.assertEqual(seen, [])
+
+    def test_a_scroll_is_translated_the_same_way(self):
+        """Both pointer kinds carry a position, so both are translated. A `scroll` left in
+        pane columns would be the same defect surviving in the kind nobody checked."""
+        c, seen = _component(events=("scroll",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))), \
+                mock.patch("charter.frame.slots.pad_for", return_value=3):
+            d.open()
+            self.addCleanup(d.close)
+            self.tty.sent()
+            self.tty.deliver(b"\x1b[<64;4;5M")     # pane column 3, the first cell
+            d.poll(1.0)
+        self.assertEqual([(e.kind, e.col) for e in seen], [(overlay.SCROLL, 0)])
+
+    def test_a_focus_event_is_not_given_a_position_it_never_had(self):
+        """`focus`, `blur` and `resize` carry no coordinates, so nothing is subtracted from
+        them. Translating one would move a `0` that means "no position" to `-3` and then
+        drop the event for landing in a margin it was never in."""
+        c, seen = _component(events=("focus",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))), \
+                mock.patch("charter.frame.slots.pad_for", return_value=3):
+            d.open()
+            self.addCleanup(d.close)
+            self.tty.sent()
+            self.tty.deliver(b"\x1b[I")
+            self.assertTrue(d.poll(1.0), "a focus event was dropped as out of bounds")
+        self.assertEqual([(e.kind, e.col) for e in seen], [(overlay.FOCUS, 0)])
+
+    def test_the_pad_taken_off_is_the_pad_that_pane_was_drawn_with(self):
+        """The cross-module agreement, and the one this whole class is worthless without:
+        `panel._component_text` insets by `slots.inset_rows(rows, cid)` and sizes by
+        `slots.content_width(cid)`, so the dispatcher has to ask under the SAME name or it
+        subtracts one component's pad from another component's click.
+
+        Asked by giving two names different pads and checking which one moved the column —
+        a case that a dispatcher asking under a slot name, a title, or a hard-coded default
+        would fail while every other case here still passed.
+        """
+        from charter import instance
+
+        def styled(_frame, name):
+            return {"bg": None, "pad": 3 if name == "acme.metrics" else 0}
+
+        c, seen = _component(events=("click",))
+        self.assertEqual(c.id, "acme.metrics")
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))), \
+                mock.patch.object(instance, "component_style", side_effect=styled):
+            d.open()
+            self.addCleanup(d.close)
+            self.tty.sent()
+            self.tty.deliver(b"\x1b[<0;4;5M")          # pane column 3
+            d.poll(1.0)
+        self.assertEqual([e.col for e in seen], [0],
+                         "the click was translated by some other name's pad")
+
+    def test_the_dispatcher_measures_the_pane_once_for_one_event(self):
+        """The pad taken off and the width tested against come from ONE reading. Asking
+        twice would let a `SIGWINCH` land in between — translating a click by a pad
+        afforded against one width and testing it against another — and `panel._watch`
+        repaints on exactly that signal, so the window is real rather than theoretical.
+
+        Asked of the dispatcher rather than of `content_rect`, because `content_rect` now
+        takes the width as an argument and it is the CALLER that has to take only one
+        reading."""
+        c, _seen = _component(events=("click",))
+        d = events.Dispatcher(c, stream=self.tty.stream)
+        d.open()
+        self.addCleanup(d.close)
+        self.tty.sent()
+        with mock.patch("charter.frame.pane.size",
+                        return_value=os.terminal_size((40, 8))) as size:
+            self.tty.deliver(b"\x1b[<0;5;5M")
+            d.poll(1.0)
+        self.assertEqual(size.call_count, 1)
 
 
 class AResizeIsTheRectangleMovingAndNotTheSignal(unittest.TestCase):
@@ -1120,11 +1526,19 @@ class APanelBuildsNoDispatcherForAComponentThatDeclaredNothing(unittest.TestCase
         self.assertIsNone(panel._dispatcher(self._Reg(c), c.id))
 
     def test_a_component_declaring_only_undelivered_kinds_gets_none(self):
-        c, _seen = _component(events=("click", "scroll"))
+        c, _seen = _component(events=("key",))
         self.assertIsNone(panel._dispatcher(self._Reg(c), c.id))
 
     def test_a_component_declaring_focus_gets_one(self):
         c, _seen = _component(events=("focus",))
+        self.assertIsInstance(panel._dispatcher(self._Reg(c), c.id),
+                              events.Dispatcher)
+
+    def test_a_component_declaring_only_the_pointer_gets_one(self):
+        """The other half of the same promise, and the half this change adds: a component
+        that declared `click` and nothing else now has an event path, where before it had
+        none and its pane's terminal was left untouched."""
+        c, _seen = _component(events=("click",))
         self.assertIsInstance(panel._dispatcher(self._Reg(c), c.id),
                               events.Dispatcher)
 

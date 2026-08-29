@@ -225,6 +225,51 @@ _MARK = ("> ", "  ")
 #: cannot make this scan without end.
 _SGR = re.compile(rb"^\x1b\[<(\d{1,5});(\d{1,5});(\d{1,5})([Mm])")
 
+#: The button numbers this contract has names for, and nothing else gets one.
+#:
+#: **xterm spreads one button NUMBER across three bit positions**, and reading only the
+#: low two is how a decoder invents a button it was never sent: the number is
+#: ``(b & 3)``, plus **4** if bit 6 is set (which is what makes 64–67 the wheel), plus
+#: **8** if bit 7 is set (buttons 8–11, the thumb buttons on an ordinary mouse).
+#: :func:`decode` puts the three back together before it looks anything up here, so every
+#: number this does not name — ``3``, the horizontal wheel at 6/7, the extra buttons at
+#: 8–11, and anything past them — is dropped rather than folded onto a button that means
+#: something else.
+#:
+#: **Measured rather than assumed to be unreachable**, tmux 3.7c and 3.2, injected into a
+#: real client over a real pty, against a non-active pane that asked for 1000+1006::
+#:
+#:     right-click  over panel  ->  panel READ b'\\x1b[<2;20;5M\\x1b[<2;20;5m'
+#:     middle-click over panel  ->  panel READ b'\\x1b[<1;20;5M\\x1b[<1;20;5m'
+#:     shift+click  over panel  ->  panel READ b'\\x1b[<4;20;5M\\x1b[<4;20;5m'
+#:     button 128   over panel  ->  panel READ b'\\x1b[<128;20;5M\\x1b[<128;20;5m'
+#:     button 131   over panel  ->  panel READ b'\\x1b[<131;20;5M\\x1b[<131;20;5m'
+#:
+#: tmux forwards all of them verbatim. The last two are why bit 7 is read: taken as
+#: ``b & 3`` alone, a thumb-button press is `left` and a component that acts on a left
+#: click acts on it — `EVENT_KINDS`'s "fires wrongly", from the one place that can still
+#: tell the difference. They are dropped instead, because §4f named no kind for them and
+#: a button charter cannot name is a button charter should not report.
+#:
+#: The modifier bits (4 shift, 8 meta, 16 ctrl) are deliberately NOT named, which is
+#: :data:`_CSI`'s rule for a modified arrow said here: the low bits name the gesture, the
+#: high ones name the keyboard, and this contract has no use for the keyboard. So
+#: `shift+click` above is a `left` click, which is what the operator who pressed it meant.
+#:
+#: ``3`` is absent and its absence is the guard: in the SGR encoding a release names the
+#: button that was released and the trailing `m` is what makes it a release, so `3` is the
+#: X10 encoding's "no button" in a report that should not be carrying it. Measured, an
+#: actual X10 report (`ESC [ M` and three bytes) is forwarded to a 1006-requesting pane
+#: **still in X10 form** rather than translated — so dropping ``3`` here costs no release
+#: on any terminal, and an X10-only terminal degrades to nothing reaching a component at
+#: all (see :func:`decode`).
+_SGR_BUTTONS = {0: "left", 1: "middle", 2: "right"}
+
+#: The wheel, in the same numbering: 4 and 5 once bit 6 has been folded in. 6 and 7 are
+#: the horizontal wheel a trackpad swipe reports, and are absent for the reason they were
+#: always dropped — this contract has one axis.
+_SGR_WHEEL = {4: "up", 5: "down"}
+
 #: The prefix of an SGR report that has not all arrived yet. Kept whole rather than
 #: decoded as `ESC`, `[`, `<`, `0`, `;` — five keypresses out of half a mouse click.
 _SGR_PARTIAL = re.compile(rb"^\x1b\[<[\d;]*$")
@@ -326,10 +371,37 @@ class Row(NamedTuple):
 class Event(NamedTuple):
     """One decoded input event.
 
-    *row* is the pane row a pointer event landed on, **0-based**, already converted from
-    the 1-based coordinate tmux hands over. tmux subtracts `pane_left` and any
-    `pane-border-status` row itself — measured — so this module never does that
-    arithmetic and must not start.
+    *name* is the sub-kind: which arrow or named key a ``key`` is, which way a ``scroll``
+    went, and which button a ``click`` used (:data:`_SGR_BUTTONS`). Empty for the kinds
+    that have only one form.
+
+    *row* and *col* are **0-based**, converted here from the 1-based pair tmux hands over,
+    and they are the coordinates of **the rectangle the receiver draws in** — which is the
+    pane for :class:`Surface`, because a surface owns its whole pane, and the component's
+    own canvas for a panel, because a component does not.
+
+    **Two subtractions stand between a terminal's column and a component's, and exactly
+    one of them is charter's.** Keeping them apart is the whole of this docstring:
+
+    * **tmux's.** `pane_left`, and any `pane-border-status` row, are already gone before
+      the bytes reach this process. Measured on 3.7c and 3.2, two panes split `-h -l 40`
+      in a 120-column window, injected into a real client over a real pty::
+
+          click window col 100  ->  panel READ b'\\x1b[<0;20;5M'    (100 - 80)
+          click window col 81   ->  panel READ b'\\x1b[<0;1;5M'
+          with pane-border-status top, window row 5  ->  arrives as row 4
+
+      So **this module never does that arithmetic and must not start.**
+    * **charter's.** The pad an operator asks for with `[frame] pad` is drawn by charter
+      and tmux knows nothing about it — `slots.inset_rows` puts it in front of every row
+      after the component has composed, and `slots.content_width` is the narrower canvas
+      the component was told it had. tmux therefore reports a column in the PANE, and a
+      component reasons in cells of its own rectangle. `events.Dispatcher` subtracts that
+      one, once, on delivery, and drops what lands in the margin — see its `_on_canvas`.
+
+    A decoder that did tmux's subtraction would double it; a dispatcher that skipped
+    charter's would hand a padded component a column it never drew in. Both are the same
+    error and only one of them looks like one.
     """
 
     kind: str
@@ -367,6 +439,27 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
     them and wrong once `frame/events.py` could. Decoding is one question for every caller
     — WHICH kinds a given surface acts on is the caller's, and this surface acts on
     neither.
+
+    **An SGR button number is not one number, and taking it for one is a mistake with
+    four faces.** Bit 5 says the pointer MOVED and is answered first, on its own, because
+    §4f closed the kinds without `drag`. What is left is a button NUMBER that xterm keeps
+    in three places — the low two bits, plus 4 for bit 6, plus 8 for bit 7 — and
+    :data:`_SGR_BUTTONS` and :data:`_SGR_WHEEL` name the six of those this contract has
+    names for. Everything else is dropped. The modifier bits (4 shift, 8 meta, 16 ctrl)
+    are not part of the number and go with the rest, exactly as :data:`_CSI`'s modifiers do.
+
+    The four faces, all of them real reports a terminal sends: a shifted wheel scrolling
+    the way the operator did not (`68`); a drag arriving as a click at every cell it
+    crosses (`32`); a right-click indistinguishable from a left (`2`); and a thumb button
+    arriving as a left click (`128`). #621's predecessor had fixed only the first.
+
+    **An X10 report is not decoded here and reaches nobody, which is a limit rather than
+    a bug.** A terminal too old to speak SGR sends `ESC [ M` and three bytes, and tmux
+    forwards that form verbatim to a pane that asked for 1006 rather than translating it
+    (measured). :data:`_CSI` consumes the `ESC [ M` and the three payload bytes fall to
+    the single-byte path as stray keys — which `frame/events.py` never delivers, because
+    `key` is not a kind charter carries. So on such a terminal the pointer degrades to
+    "never fires", which is the direction `component.EVENT_KINDS` asks for.
     """
     evs: list[Event] = []
     while buf:
@@ -374,25 +467,40 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
         if m:
             button, col, row_, kind = int(m[1]), int(m[2]), int(m[3]), m[4]
             buf = buf[m.end():]
-            if button & 64:
-                # Wheel, and it is reported as a press with no release — which is the
-                # second reason this module keeps no press state.
+            if button & 32:
+                # **Motion, and it is dropped before anything else is asked.** §4f closed
+                # the event kinds without `drag`, and bit 5 is the only thing telling a
+                # pointer that MOVED from one that was pressed — folded into the number
+                # below it would announce a drag as a click at every cell it crossed, and
+                # `96` (wheel + motion) as a scroll nobody performed.
                 #
-                # **The direction is the low bit, never the whole number.** An SGR
-                # button number is a bitfield: bit 6 (64) says "wheel", the low two bits
-                # say which one (0 up, 1 down, 2 and 3 the horizontal wheel a trackpad
-                # swipe reports), and bits 2–4 are shift/meta/ctrl. So shift with the
-                # wheel is 68, not 64, and reading it as "not 64, therefore down"
-                # scrolls the list the way the operator did not.
-                if button & 2:
-                    continue           # the horizontal wheel; this list has one axis
-                evs.append(Event(SCROLL, "down" if button & 1 else "up",
-                                 row=row_ - 1, col=col - 1))
-            else:
+                # Measured, tmux 3.7c and 3.2, `\x1b[<32;100;5M` and `\x1b[<96;100;5M`
+                # injected into a real client with tmux's own `mouse` both off and ON (so
+                # the outer terminal carried `1002h`): the pane that asked for 1000
+                # received NOTHING, either version, either flag. tmux filters motion to
+                # what the pane's own mode admits, so this arm is charter refusing to
+                # depend on that filtering for its contract — the bit is in the protocol,
+                # and what a component is handed should be decided by what the bit says
+                # rather than by another program's tidiness.
+                continue
+            # **One button NUMBER, reassembled from the three places xterm keeps it**:
+            # the low two bits, plus 4 for bit 6, plus 8 for bit 7. That is what makes
+            # 64–67 the wheel and 128–131 the thumb buttons, and doing it here rather
+            # than testing each bit in turn is what leaves no order to get wrong. The
+            # modifier bits (4, 8, 16) are not part of it and are dropped with it.
+            number = (button & 3) + (4 if button & 64 else 0) + (8 if button & 128 else 0)
+            if number in _SGR_WHEEL:
+                # Reported as a press with no release — the second reason this module
+                # keeps no press state.
+                evs.append(Event(SCROLL, _SGR_WHEEL[number], row=row_ - 1, col=col - 1))
+            elif number in _SGR_BUTTONS:
                 # A release with no press is a click. See the module docstring: it is
                 # measured, not hypothetical.
-                evs.append(Event(CLICK, row=row_ - 1, col=col - 1,
+                evs.append(Event(CLICK, _SGR_BUTTONS[number], row=row_ - 1, col=col - 1,
                                  pressed=(kind == b"M")))
+            # and every other number — 3, the horizontal wheel, the extra buttons, and
+            # whatever a terminal invents past them — is dropped, which is the whole point
+            # of naming them in one place instead of testing bits.
             continue
         if not final and (_SGR_PARTIAL.match(buf) or _CSI_PARTIAL.match(buf)):
             return evs, buf

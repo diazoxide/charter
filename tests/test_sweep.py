@@ -564,6 +564,168 @@ class TheStringShape(unittest.TestCase):
         self.assertEqual(_afters(muts, "retune-string"), ["b'\\x03r'"])
 
 
+class TheUnevaluatedPosition(unittest.TestCase):
+    """#632: a position the interpreter never evaluates is not a read position.
+
+    `sweep(...) -> tuple[list[Result], list["Pair"]]` came back a SURVIVOR on #630's own
+    gate, and it is a survivor **no test can ever kill**: every module in this tree begins
+    `from __future__ import annotations`, so that annotation is the string
+    `"tuple[list[Result], list['Pair']]"` and nothing reads it. There is deliberately no
+    suppression list to put such a thing on, so the operator must not offer it — an
+    unkillable finding is the false positive the spec names as what gets a gate switched
+    off.
+
+    The rule is the PROPERTY and not the line: `"Pair"` is a `Subscript` slice, which is
+    a read position for `d["components"]` and is not one for `list["Pair"]`. Every case
+    below asserts one half — either that a deferred position really is skipped, or that
+    something next door to it really is not.
+    """
+
+    def test_a_forward_reference_in_a_return_annotation_is_not_offered(self):
+        """#632's own line, and the whole point: PEP 563 stores the annotation as source
+        text, so retuning `"Pair"` changes the contents of a string nothing evaluates."""
+        muts = _mutations("""
+            from __future__ import annotations
+
+            def sweep(root) -> tuple[list[Result], list["Pair"]]:
+                return ([], [])
+        """)
+        self.assertEqual(_by(muts, "retune-string"), [])
+
+    def test_an_argument_annotation_is_deferred_too_and_so_is_a_variable_one(self):
+        """`returns` is one of three annotation positions and skipping only that one
+        would leave `def _second_order(boxes: list["Sandbox"])` — a real line of this
+        file — reporting a survivor nothing can kill."""
+        muts = _mutations("""
+            from __future__ import annotations
+
+            def f(box: "Sandbox", xs: list["Pair"]) -> None:
+                seen: dict[str, "Pair"] = {}
+                return None
+        """)
+        self.assertEqual(_by(muts, "retune-string"), [])
+
+    def test_the_value_beside_a_deferred_annotation_is_still_read(self):
+        """An `AnnAssign`'s VALUE is evaluated exactly as any other assignment's is. Only
+        the annotation is deferred, so `"Pair"` goes and `"left"` stays."""
+        muts = _mutations("""
+            from __future__ import annotations
+
+            SLOT: dict[str, "Pair"] = {"left": 1}
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["'mfgu'"])
+
+    def test_a_subscript_that_really_is_a_lookup_is_untouched(self):
+        """The narrowness that keeps this a scoping fix rather than a deletion. Dropping
+        the `Subscript` arm of `read_positions` would silence the phantom AND `d["k"]`
+        with it, which is the operator's single most common real position."""
+        muts = _mutations("""
+            from __future__ import annotations
+
+            def f(d):
+                return d["components"]
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["'dpnqpofout'"])
+
+    def test_without_the_future_import_the_annotation_is_an_evaluated_expression(self):
+        """The narrow rule, and the reason it is narrow. Without PEP 563 the annotation
+        IS evaluated where it is written, and what happens to a string inside it depends
+        on what evaluates it — `typing.List["Pair"]` compiles the text into a `ForwardRef`
+        right there at import. So here the string is live: a test that exercises whatever
+        resolves the hint goes red without it, and the author of a branch the gate stopped
+        has the ordinary move available. That is the whole line the predicate is drawn on
+        — under `--enforce`, "unpinnable" means "blocked with nothing to do about it"."""
+        muts = _mutations("""
+            def sweep(root) -> tuple[list[Result], list["Pair"]]:
+                return ([], [])
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["'Qbjs'"])
+
+    def test_only_the_annotations_future_defers_anything(self):
+        """`from __future__ import division` is a `__future__` import and is not this
+        one. A predicate that matched the module and not the name would silence a real
+        read position in any file that imports a different future."""
+        self.assertIs(sweep.defers_annotations(
+            ast.parse("from __future__ import annotations\n")), True)
+        self.assertIs(sweep.defers_annotations(
+            ast.parse("from __future__ import division\n")), False)
+        self.assertIs(sweep.defers_annotations(ast.parse("import __future__\n")), False)
+        self.assertIs(sweep.defers_annotations(ast.parse("x = 1\n")), False)
+        # One of several names on the one line still defers.
+        self.assertIs(sweep.defers_annotations(
+            ast.parse("from __future__ import division, annotations\n")), True)
+
+    def test_the_neighbours_a_forward_reference_hides_among_are_checked_one_by_one(self):
+        """The cases next door, each answered on whether the interpreter evaluates it.
+
+        * `typing.cast("Pair", v)` — evaluated as an ordinary argument and then *thrown
+          away*; `cast` returns its second argument and never reads the first.
+        * `TypeVar(bound="Pair")` — the same, one keyword along.
+        * a `NamedTuple` / `TypedDict` field written as a class annotation — deferred.
+        * a `dataclasses.field` line — the annotation is deferred, the `field(...)` call
+          beside it is not, and `"factory"` below is there to prove the difference.
+        * `Literal["a", "b"]` — deferred, while the `== "a"` that reads the value is not.
+
+        Asserted as one exact set rather than five absences, so that a rule which stopped
+        deferring annotations fails here by producing MORE than this list.
+        """
+        muts = _mutations('''
+            from __future__ import annotations
+
+            import dataclasses
+            import typing
+
+            T = typing.TypeVar("T", bound="Pair")
+
+            class Row(typing.NamedTuple):
+                kids: list["Row"]
+
+            class Cfg(typing.TypedDict):
+                slot: "Slot"
+
+            @dataclasses.dataclass
+            class Held:
+                pairs: list["Pair"] = dataclasses.field(default_factory=dict)
+                mode: typing.Literal["a", "b"] = "a"
+
+            def f(v, mode):
+                return typing.cast("Pair", v), mode == "a", {"factory": 1}
+        ''')
+        self.assertEqual(_afters(muts, "retune-string"), ["'b'", "'gbdupsz'"])
+
+    def test_a_typed_dict_spelled_as_a_call_keeps_its_field_names(self):
+        """The boundary the rule is drawn on is EVALUATION and not "looks like typing".
+        `TypedDict("Cfg", {"slot": str})` is an ordinary call in an ordinary expression:
+        `"slot"` becomes a field name at runtime, so it is read and stays mutable."""
+        muts = _mutations("""
+            from __future__ import annotations
+
+            import typing
+
+            Cfg = typing.TypedDict("Cfg", {"slot": str})
+        """)
+        self.assertEqual(_afters(muts, "retune-string"), ["'tmpu'"])
+
+    def test_the_deferred_ids_are_the_annotation_and_nothing_around_it(self):
+        """`unevaluated` walks the annotation subtree only. Widened by one step it would
+        swallow the `AnnAssign`'s value, the argument's default and the function body."""
+        tree = ast.parse(textwrap.dedent("""
+            from __future__ import annotations
+
+            def f(x: list["A"] = ["B"]) -> "C":
+                y: "D" = "E"
+                return y
+        """))
+        deferred = sweep.unevaluated(tree)
+        inside = sorted(n.value for n in ast.walk(tree)
+                        if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                        and id(n) in deferred)
+        self.assertEqual(inside, ["A", "C", "D"])
+
+    def test_a_module_that_defers_nothing_defers_nothing(self):
+        self.assertEqual(sweep.unevaluated(ast.parse('def f() -> "C": return 1\n')), set())
+
+
 class TheBoundaryShape(unittest.TestCase):
     """`shift-boundary` (#569): `<` against `<=`, and nothing else moved.
 
@@ -3198,13 +3360,50 @@ class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
 
 
 class TheGateNeverChargesTheWholeTree(unittest.TestCase):
-    def test_gate_and_all_together_are_refused(self):
+    """The refusal, and — as of the self-sweep — the fact that it comes FIRST.
+
+    This case used to call `main(["--gate", "--all"])` and check stderr, which pins the
+    refusal only as long as the refusal is there. Delete it and `main()` does not fail:
+    it goes on and sweeps the whole tree, in the test process, for fourteen hours. The
+    sweep reported that mutation as *unresolved* rather than pinned — a hang is not a red
+    — so the line had no verdict behind it at all.
+
+    `repo_root` is the first thing `main()` reaches for after the argument check, so
+    standing a tripwire there turns "the refusal is gone" from a hang into a red in
+    milliseconds. That is the same rule the tool applies to itself: a run that wedges has
+    not passed.
+    """
+
+    def setUp(self):
+        original = sweep.repo_root
+        self.addCleanup(setattr, sweep, "repo_root", original)
+        self.reached = []
+
+        def tripwire(start):
+            self.reached.append(start)
+            raise RuntimeError("main() got past the argument check and started working")
+
+        sweep.repo_root = tripwire
+
+    def test_gate_and_all_together_are_refused_before_any_work(self):
         """Stage B is a fourteen-hour job and stage C is a pull-request check. Letting the
         two be asked for at once is how the gate becomes the reason nobody runs either."""
         said = io.StringIO()
         with contextlib.redirect_stderr(said), self.assertRaises(SystemExit):
             sweep.main(["--gate", "--all"])
         self.assertIn("never sweeps the whole tree", said.getvalue())
+        self.assertEqual(self.reached, [])
+
+    def test_all_on_its_own_is_the_supported_way_to_charge_the_whole_tree(self):
+        """The other half of `args.gate and args.all`, and the half that makes it a
+        conjunction. Dropping either name from the condition refuses a flag the tool
+        documents — `--all` is stage B, and it is how the number in `docs` was measured —
+        and nothing in the suite ran `--all` at all."""
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said), self.assertRaises(RuntimeError):
+            sweep.main(["--all"])
+        self.assertEqual(said.getvalue(), "")
+        self.assertEqual(len(self.reached), 1)
 
 
 # ======================================================================================
@@ -3573,6 +3772,416 @@ class TheScopeReaderHoldsItsOwnEdges(unittest.TestCase):
         (self.tmp / "charter" / "fresh.txt").write_text("not python\n")
         dirty = sweep.dirty_files(self.tmp, ("charter",))
         self.assertEqual(set(dirty), {"charter/fresh.py"})
+
+
+# ======================================================================================
+# The report renderer's own guards — #569's thin row, measured again
+# ======================================================================================
+#
+# Stage A's self-sweep put "report renderer + CLI" at roughly 0 of 49 pinned, and the
+# reason it was allowed to stay thin was that the renderer decides no verdict. #630 took
+# that argument away: the gate's answer is now carried by the check's NAME and by the page
+# a reviewer reads, so a renderer that prints the wrong count is a gate that says the wrong
+# thing. Re-measured on this branch over the 274 mutations from `report()` to the end of
+# the file: 99 survived. The cases below are the ones whose survival changes what an
+# operator is told, and `docs/news` says plainly what was left.
+
+def _outcome(green=True, ran=10, detail="OK"):
+    return sweep.Outcome(green, ran, detail)
+
+
+def _survivor(line=291, symbol="_placed_here", evidence=None, full=None, subset=None,
+              operator="drop-conjunct", before="isinstance(n, str) and n not in SLOTS"):
+    m = sweep.Mutation(path="charter/frame/layout.py", line=line, end_line=line,
+                       operator=operator, question="is the half pinned?", before=before,
+                       after="isinstance(n, str)", symbol=symbol)
+    return sweep.Result(m, "survived", subset, full, ["tests.test_a"], evidence)
+
+
+class TheReportCountsWhatItFound(unittest.TestCase):
+    """The header of the terminal report: five numbers, and nothing asserted them.
+
+    Every one is computed by a comprehension filtering on `r.verdict`, and forcing any of
+    those filters to `True` — which is what `drop-comprehension-if` does — left the whole
+    suite green. A report that calls four pinned mutations four survivors is worse than no
+    report: it is the tool making the finding it exists to find.
+    """
+
+    def _mixed(self):
+        return [_result("pinned"), _result("pinned"), _result("survived", line=1),
+                _result("survived", line=9), _result("survived", line=17),
+                _result("unresolved"), _result("unapplied")]
+
+    def test_each_count_in_the_header_is_its_own_verdict(self):
+        text = sweep.report(self._mixed(), Path("."), "a" * 12, "b" * 12, None, 60.0)
+        self.assertIn("mutations applied : 7", text)
+        self.assertIn("pinned            : 2", text)
+        self.assertIn("SURVIVED          : 3", text)
+        self.assertIn("UNRESOLVED        : 1", text)
+        self.assertIn("NOT APPLIED       : 1", text)
+
+    def test_a_sweep_with_nothing_unapplied_does_not_print_that_row_at_all(self):
+        """The row is the loudest thing the report can say — "every number above is
+        suspect" — so it appears only when it is true."""
+        text = sweep.report([_result("pinned")], Path("."), "a" * 12, "b" * 12, None, 1.0)
+        self.assertNotIn("NOT APPLIED", text)
+
+    def test_the_baseline_line_carries_ok_or_carries_what_went_wrong(self):
+        """A tree that was red before any mutation makes every mutation look pinned, so
+        the baseline is the first thing the reader has to be able to check. Both arms
+        matter: collapsing the conditional to `'OK'` reports a red baseline as a green
+        one, which is the sweep's second way of lying with a straight face."""
+        green = sweep.report([], Path("."), "a" * 12, "b" * 12,
+                             _outcome(True, 7909, "OK"), 1.0)
+        self.assertIn("baseline          : Ran 7909 tests — OK", green)
+        red = sweep.report([], Path("."), "a" * 12, "b" * 12,
+                           _outcome(False, 7909, "tests.test_a.T.test_x"), 1.0)
+        self.assertIn("baseline          : Ran 7909 tests — tests.test_a.T.test_x", red)
+        # `--no-baseline` measured nothing, and silence is the honest rendering of that.
+        self.assertNotIn("baseline  ", sweep.report([], Path("."), "a" * 12, "b" * 12,
+                                                    None, 1.0))
+
+    def test_the_wall_clock_is_minutes_to_one_decimal(self):
+        """1236 s is 20.6 minutes and `.2g` calls it 21. A run that took twenty minutes
+        forty and reports "21 min" is a number nobody can check against a job's own
+        clock."""
+        text = sweep.report([], Path("."), "a" * 12, "b" * 12, None, 1236.0)
+        self.assertIn("wall clock        : 20.6 min", text)
+
+    def test_a_shape_this_interpreter_cannot_reach_is_named_on_both_pages(self):
+        """`reach()` is empty on 3.12 and later, so on a modern interpreter both of these
+        lines are dead and deleting either changed nothing — which is exactly how the
+        sweep reported them. The claim is not about this machine's version: it is that
+        when there IS something out of reach, both pages say so. A sweep that asks fewer
+        questions and does not mention it reads precisely like a clean one.
+        """
+        original = sweep.reach
+        sweep.reach = lambda: "f-string literals"
+        self.addCleanup(setattr, sweep, "reach", original)
+        text = sweep.report([], Path("."), "a" * 12, "b" * 12, None, 1.0)
+        self.assertIn("NOT ASKED ABOUT  : f-string literals", text)
+        page = sweep.gate_summary(sweep.classify([_result("pinned")]),
+                                  "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("| not asked about | — | f-string literals |", page)
+        sweep.reach = lambda: ""
+        self.assertNotIn("NOT ASKED ABOUT",
+                         sweep.report([], Path("."), "a" * 12, "b" * 12, None, 1.0))
+        self.assertNotIn("not asked about", sweep.gate_summary(
+            sweep.classify([_result("pinned")]), "a" * 40, "b" * 40, 60.0, enforce=False))
+
+    def test_a_survivor_carries_the_full_run_that_measured_it(self):
+        """"Survived" means the WHOLE suite stayed green, and the count of tests that ran
+        is how a reader tells that from a subset that never covered the file."""
+        text = sweep.report([_survivor(full=_outcome(True, 7909, "OK"))],
+                            Path("."), "a" * 12, "b" * 12, None, 1.0)
+        self.assertIn("full    : Ran 7909 tests — OK, with the line gone", text)
+
+
+class TheReportTellsThreeKindsOfSilenceApart(unittest.TestCase):
+    """The `covered:` field — the one that made 82 survivors triageable.
+
+    Its three shapes are three different claims and the suite asserted none of them, so
+    forcing either branch of the chain in either direction left everything green. "Nothing
+    measured executes this file", "eleven modules execute it and not one names the
+    symbol", and "two tests name it, here is what they assert" are the difference between
+    a survivor a reviewer can act on and a line number.
+    """
+
+    def _rendered(self, evidence):
+        return sweep.report([_survivor(evidence=evidence)], Path("."), "a" * 12,
+                            "b" * 12, None, 1.0)
+
+    def test_no_evidence_at_all_prints_no_claim_about_coverage(self):
+        """`evidence=None` is the shard-merge shape (#617): the evidence pass never ran,
+        which is not the same as running and finding nothing. Dropping the guard that
+        says so reaches for `.modules` on `None`."""
+        text = self._rendered(None)
+        self.assertIn("charter/frame/layout.py:291", text)
+        self.assertNotIn("covered :", text)
+
+    def test_nothing_executing_the_file_is_said_in_those_words(self):
+        self.assertIn("covered : nothing measured executes this file at all",
+                      self._rendered(sweep.Evidence([], [])))
+
+    def test_modules_that_execute_it_and_never_name_it_are_counted(self):
+        text = self._rendered(sweep.Evidence(["tests.test_a", "tests.test_b"], []))
+        self.assertIn("covered : 2 module(s) execute this file and NOT ONE", text)
+        self.assertIn("names `_placed_here` — tests.test_a, tests.test_b", text)
+
+    def test_tests_that_do_name_it_arrive_with_their_assertions(self):
+        text = self._rendered(sweep.Evidence(
+            ["tests.test_a"],
+            [("tests.test_a", "test_window", ["assertEqual(_window(8), (0, 6))"])]))
+        self.assertIn("covered : 1 test(s) name `_placed_here`; what they assert:", text)
+        self.assertIn("test_a.test_window", text)
+        self.assertIn("assertEqual(_window(8), (0, 6))", text)
+
+    def test_a_list_longer_than_three_says_how_many_it_did_not_show(self):
+        """Silent truncation, in the tool that exists to refuse it. Three are printed and
+        the rest were simply absent — and "three tests name this" reads as the whole
+        answer. The boundary is asserted at three and at four, because `> 3` and `>= 3`
+        both passed while the only case was a list of one."""
+        naming = [("tests.test_a", f"test_{n}", ["assertTrue(x)"]) for n in range(5)]
+        text = self._rendered(sweep.Evidence(["tests.test_a"], naming))
+        self.assertIn("… and 2 more", text)
+        exactly_three = self._rendered(sweep.Evidence(["tests.test_a"], naming[:3]))
+        self.assertNotIn("… and", exactly_three)
+
+
+class TheArtifactAShardWritesIsReadBackWhole(unittest.TestCase):
+    """`as_json` and `results_from_json` are one contract across two machines (#617).
+
+    Everything `classify` and `gate_summary` read has to survive the trip, not merely the
+    verdict string — and the outcomes did not: re-spelling `"green"`, `"ran"` or
+    `"detail"` on the writing side, or collapsing either outcome to `null`, left the suite
+    green because nothing ever round-tripped one.
+    """
+
+    def test_every_field_the_merge_reads_survives_the_file(self):
+        written = sweep.as_json([_survivor(
+            subset=_outcome(True, 12, "OK"),
+            full=_outcome(False, 7909, "tests.test_a.T.test_x"),
+            evidence=sweep.Evidence(["tests.test_a"],
+                                    [("tests.test_a", "test_x", ["assertTrue(x)"])]))])
+        row = json.loads(written)[0]
+        self.assertEqual(row["subset"], {"green": True, "ran": 12, "detail": "OK"})
+        self.assertEqual(row["full"], {"green": False, "ran": 7909,
+                                       "detail": "tests.test_a.T.test_x"})
+        back = sweep.results_from_json(written)[0]
+        self.assertEqual((back.subset.green, back.subset.ran, back.subset.detail),
+                         (True, 12, "OK"))
+        self.assertEqual((back.full.green, back.full.ran, back.full.detail),
+                         (False, 7909, "tests.test_a.T.test_x"))
+
+    def test_an_outcome_that_was_never_measured_arrives_as_nothing(self):
+        row = json.loads(sweep.as_json([_survivor()]))[0]
+        self.assertIsNone(row["subset"])
+        self.assertIsNone(row["full"])
+        self.assertIsNone(sweep.results_from_json(sweep.as_json([_survivor()]))[0].full)
+
+    def test_the_row_carries_the_platform_it_was_measured_on(self):
+        """Named keys and not a shape: the merge recomputes `platform_caveat` from the
+        operator rather than trusting the file, and the field is still written so that a
+        person reading the artifact can see which machine said what."""
+        row = json.loads(sweep.as_json([_survivor(operator="narrow-except",
+                                                  before="OSError")]))[0]
+        self.assertEqual(row["platform"], sys.platform)
+        self.assertEqual(row["platform_caveat"], "OSError")
+
+
+class TheGatePageSaysWhatItWouldDoAndWhatItCouldNotSee(unittest.TestCase):
+    def test_the_page_says_whether_this_branch_would_fail_under_enforce(self):
+        """The one sentence on a reporting-only page that tells a reviewer whether the
+        gate is about to start blocking them. Both arms survived: the page could have said
+        "would fail" on every branch, or "would pass" on every branch, and nothing in the
+        suite would have noticed."""
+        survivors = sweep.gate_summary(sweep.classify([_result("survived")]),
+                                       "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("it **would fail** with `--enforce`", survivors)
+        clean = sweep.gate_summary(sweep.classify([_result("pinned")]),
+                                   "a" * 40, "b" * 40, 60.0, enforce=False)
+        self.assertIn("it **would pass** with `--enforce`", clean)
+
+    def test_a_lost_shard_and_a_sweep_that_never_sized_itself_read_differently(self):
+        """#617's own distinction, in the paragraph that explains the row. "1 of 3 did not
+        report" is a number; "the plan job died before it sized anything" is the absence
+        of one, and rendering the second as `1 of 0` would describe a sweep that was never
+        planned as a sweep that was planned and lost."""
+        gate = sweep.classify([_result("pinned")])
+        many = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                  missing=1, shards=3)
+        self.assertIn("1 of 3 shard(s) wrote no result", many)
+        # `shards >= 1` and not `> 1`: the one-shard plan whose only shard vanished is the
+        # ordinary shape for a small diff, and it is the case the boundary turns on.
+        lone = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                  missing=1, shards=1)
+        self.assertIn("1 of 1 shard(s) wrote no result", lone)
+        unsized = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False,
+                                     missing=1, shards=0)
+        self.assertIn("never said how many shards it needed", unsized)
+        self.assertNotIn("wrote no result", unsized)
+
+
+class TheMergeStepHoldsItsOwnEdges(unittest.TestCase):
+    """`merge`, `_merge_step` and `_append` — the last thing that runs on a sharded gate.
+
+    Nothing in the suite ran `main --verdict` at all, so every rule inside `_merge_step`
+    was a rule no mutation could be caught by. That is #572's structural lesson again: a
+    rule reachable only from a `main()` nobody calls is a guard the harness cannot hold
+    itself to.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sweep-merge-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp,
+                                                            ignore_errors=True))
+        self.shards = self.tmp / "shards"
+        self.shards.mkdir()
+
+    def _shard(self, name, results):
+        (self.shards / name).write_text(sweep.as_json(results), encoding="utf-8")
+
+    def test_more_answers_than_the_plan_asked_for_is_not_a_negative_absence(self):
+        """A count of shards that did not report can only be zero or more. Without the
+        clamp, four answers against a plan of three make `missing` negative — which is
+        truthy, so the page would announce "-1 of 3 did not report" and refuse to call a
+        complete sweep complete."""
+        for n in (1, 2, 3, 4):
+            self._shard(f"s{n}.json", [_result("pinned")])
+        results, missing = sweep.merge(self.shards, 3)
+        self.assertEqual((len(results), missing), (4, 0))
+
+    def test_a_file_that_will_not_parse_is_a_shard_that_did_not_report(self):
+        """There is no third reading of a truncated upload."""
+        self._shard("good.json", [_result("pinned")])
+        (self.shards / "torn.json").write_text("[{\"path\":", encoding="utf-8")
+        results, missing = sweep.merge(self.shards, 2)
+        self.assertEqual((len(results), missing), (1, 1))
+
+    def test_the_merge_step_says_how_many_of_how_many_answered(self):
+        self._shard("s1.json", [_result("survived")])
+        out = self.tmp / "out.txt"
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            code = sweep.main(["--verdict", str(self.shards), "--shards", "3",
+                               "--gate", "--github-output", str(out)])
+        self.assertEqual(code, 0)
+        self.assertIn("merged 1 result(s) from 1 of 3 shard(s)", said.getvalue())
+        self.assertIn("gate: reporting only — nothing here blocks.", said.getvalue())
+        self.assertIn("conclusion=no-verdict", out.read_text())
+        self.assertIn("headline=no verdict: 1 survivor so far, 2 of 3 shards did not "
+                      "report", out.read_text())
+
+    def test_a_sweep_that_never_sized_itself_is_missing_a_shard_it_cannot_count(self):
+        """An empty `--shards` is the plan job failing before it sized anything, and that
+        has to travel as *no denominator* rather than as `1 of 1`. Without the guard the
+        loudest failure the workflow has arrives as the quietest kind of pass."""
+        self._shard("s1.json", [_result("pinned")])
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            sweep.main(["--verdict", str(self.shards), "--shards", "", "--gate"])
+        self.assertIn("merged 1 result(s) from an unknown number of shard(s)",
+                      said.getvalue())
+        self.assertIn("gate: no verdict: the sweep never sized itself", said.getvalue())
+
+    def test_appending_to_the_summary_adds_to_it_and_ends_it_once(self):
+        """`$GITHUB_STEP_SUMMARY` is shared by every step of a job, so this appends. The
+        trailing newline is normalised from the RIGHT: stripping the other end leaves the
+        blank lines a markdown block ends with and pushes the next step's heading down
+        the page."""
+        page = self.tmp / "summary.md"
+        sweep._append(str(page), "## one\n\n")
+        sweep._append(str(page), "## two")
+        self.assertEqual(page.read_text(), "## one\n## two\n")
+
+
+class TheCLIsOwnArithmeticIsReachable(unittest.TestCase):
+    """The rules `main()` used to hold in-line, pulled out so a mutation can reach them."""
+
+    def test_the_exit_code_reads_every_result_and_not_only_one(self):
+        """`any` against `all`: every existing case passed a single-element list, where
+        the two are the same function. A real sweep is one survivor among forty pins."""
+        pinned, survived = _result("pinned"), _result("survived")
+        unresolved, unapplied = _result("unresolved"), _result("unapplied")
+        self.assertEqual(sweep.exit_code([pinned, survived]), 1)
+        self.assertEqual(sweep.exit_code([pinned, unresolved]), 3)
+        self.assertEqual(sweep.exit_code([pinned, survived, unapplied]), 4)
+        self.assertEqual(sweep.exit_code([pinned, pinned]), 0)
+
+    def test_the_default_job_count_is_half_the_machine_and_never_zero(self):
+        """`(os.cpu_count() or 4) // 2` is zero on a one-core runner, and zero sandboxes
+        is a sweep that measures nothing while reporting that it ran. The clamp was
+        written inside `main()`'s argument list, where no mutation could reach it."""
+        original = os.cpu_count
+        self.addCleanup(setattr, os, "cpu_count", original)
+        os.cpu_count = lambda: 1
+        self.assertEqual(sweep.default_jobs(), 1)
+        os.cpu_count = lambda: 8
+        self.assertEqual(sweep.default_jobs(), 4)
+        # `os.cpu_count()` is documented to be able to return None.
+        os.cpu_count = lambda: None
+        self.assertEqual(sweep.default_jobs(), 2)
+
+    def test_a_shard_argument_is_read_exactly_or_refused(self):
+        """A shard argument that parses loosely does not fail: it sweeps one slice twice
+        and another never, and the merge reports a complete sweep of an incomplete plan.
+        Both ends of `1 <= index <= count` are asserted, because shard 1 of 3 and shard 3
+        of 3 are the two the boundary drops."""
+        self.assertEqual(sweep.parse_shard("1/3"), (1, 3))
+        self.assertEqual(sweep.parse_shard("3/3"), (3, 3))
+        self.assertEqual(sweep.parse_shard("2/3"), (2, 3))
+        # Whitespace either side of either number — a workflow's `$SHARD/$SHARDS` is a
+        # shell expansion, and both ends of both numbers get the same treatment.
+        self.assertEqual(sweep.parse_shard(" 2 / 3 "), (2, 3))
+        for bad in ("2", "2/", "/2", "0/3", "4/3", "a/3", "2/b", ""):
+            with self.assertRaises(ValueError, msg=bad):
+                sweep.parse_shard(bad)
+        # `+2` is what the refusal itself catches and nothing else does: `int()` accepts a
+        # signed number happily, so without the `isdigit()` check `"+2/3"` parses to shard
+        # 2 of 3 and the guard is a line every remaining case would redden anyway.
+        for signed in ("+2/3", "2/+3"):
+            with self.assertRaises(ValueError, msg=signed):
+                sweep.parse_shard(signed)
+
+
+class TheBranchIsChargedAgainstItsUpstream(unittest.TestCase):
+    """`base_for`'s two spellings of upstream, told apart by a repo that has each."""
+
+    def _repo(self, name):
+        tmp = Path(tempfile.mkdtemp(prefix=f"sweep-base-{name}-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                   GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=tmp, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        (tmp / "charter").mkdir()
+        (tmp / "charter" / "m.py").write_text("a = 1\n")
+        run("add", "-A")
+        run("commit", "-qm", "one")
+        return tmp, run
+
+    def test_with_no_remote_the_local_main_is_the_upstream(self):
+        tmp, run = self._repo("local")
+        first = sweep.git("rev-parse", "HEAD", cwd=tmp).strip()
+        run("checkout", "-q", "-b", "side")
+        (tmp / "charter" / "m.py").write_text("a = 1\nb = 2\n")
+        run("add", "-A")
+        run("commit", "-qm", "two")
+        side = sweep.git("rev-parse", "HEAD", cwd=tmp).strip()
+        self.assertEqual(sweep.base_for(tmp, side, None), first)
+
+    def test_when_origin_main_exists_it_is_the_one_that_counts(self):
+        """A fresh clone, a linked worktree and CI disagree about which of the two names
+        is there, and picking the wrong one does not fail — it is a different merge-base,
+        so the branch is charged for lines it did not add.
+
+        The two are made to disagree on purpose: `origin/main` is left at the first commit
+        while local `main` moves on, and the branch is cut from the LATER one. Reading
+        `main` gives the second commit and reading `origin/main` gives the first, so the
+        answer says which name was consulted rather than passing either way.
+        """
+        tmp, run = self._repo("remote")
+        first = sweep.git("rev-parse", "HEAD", cwd=tmp).strip()
+        run("update-ref", "refs/remotes/origin/main", first)
+        (tmp / "charter" / "other.py").write_text("z = 9\n")
+        run("add", "-A")
+        run("commit", "-qm", "main moved on, the remote did not")
+        second = sweep.git("rev-parse", "HEAD", cwd=tmp).strip()
+        run("checkout", "-q", "-b", "side")
+        (tmp / "charter" / "m.py").write_text("a = 1\nb = 2\n")
+        run("add", "-A")
+        run("commit", "-qm", "two")
+        side = sweep.git("rev-parse", "HEAD", cwd=tmp).strip()
+        self.assertNotEqual(first, second)
+        self.assertEqual(sweep.base_for(tmp, side, None), first)
 
 
 if __name__ == "__main__":      # pragma: no cover

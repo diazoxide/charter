@@ -542,10 +542,19 @@ class TheLauncherActuallyAsksForEachPanesColour(PersonaIso, unittest.TestCase):
         return seen
 
     def _styles(self, issued: list[list[str]]) -> dict[str, list[str]]:
-        """`{pane id: [style values]}` out of the recorded `set-option -p` calls."""
+        """`{pane id: [style values]}` out of the recorded `set-option -p` calls.
+
+        **Filtered to the options this class is about, by the family tmux itself names
+        them with** — an option whose name ends `style` — rather than by every `-p` the
+        funnel happens to issue. `test_frame_launcher._is_chrome` makes the same call for
+        the same reason: `_split_panels` is a shared funnel, and a helper here that
+        collected whatever it issued would turn every future pane option into a failure in
+        four tests that are not about it. #634's `@charter_panel` mark was exactly that —
+        a pane option about mouse ROUTING, landing in a list of colours as a bare `'1'`.
+        """
         out: dict[str, list[str]] = {}
         for argv in issued:
-            if "set-option" in argv and "-p" in argv:
+            if "set-option" in argv and "-p" in argv and argv[-2].endswith("style"):
                 out.setdefault(argv[argv.index("-t") + 1], []).append(argv[-1])
         return out
 
@@ -576,6 +585,14 @@ class TheLauncherActuallyAsksForEachPanesColour(PersonaIso, unittest.TestCase):
         """The control that this whole mechanism is inert until somebody writes a `bg`."""
         bare = instance.frame_of({"frame": {"chrome": "dark"}})
         styles = self._styles(self._issued(bare, ["repos", "right"]))
+        # Both panes answered for, asserted before the loop rather than left to it: this
+        # case's body is a loop over what `_styles` found, so an empty answer would pass it
+        # without running an assertion at all. That became reachable when `_styles` started
+        # filtering to the style family (#634) — before, every pane had at least one `-p`
+        # to report. The two cases above would still fail, but a control that cannot fail
+        # is not one.
+        self.assertEqual(len(styles), 2,
+                         f"both panes must have been styled, not {sorted(styles)}")
         for values in styles.values():
             self.assertEqual(values, ["bg=black", "bg=brightblack"])
 

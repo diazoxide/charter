@@ -374,6 +374,50 @@ def cmd_probe(args=None) -> int:
     return _report_probe(*frame_ready())
 
 
+#: The pane option that says "this rectangle is a panel charter split off", and the whole
+#: of what `conf_text`'s `MouseDown1Pane` bind asks before it decides whether a click may
+#: move the keyboard. Written by :func:`_panel_mark_argv` on every panel pane charter
+#: creates; never on the harness pane, never on the palette's, never on a pane the
+#: operator split themselves.
+#:
+#: **PANE-scoped, which is the narrowest thing tmux has, and that is why it is the marker
+#: rather than a window option holding the harness's own `%N`.** The issue that asked for
+#: this (#634) sketched the other shape — `set -w @charter_harness_pane <harness id>` plus
+#: `#{==:#{pane_id},#{@charter_harness_pane}}` in the bind — and then asked whether that id
+#: would be a second write free to drift from `overlay.HATCH_OPTION`'s. It would have been;
+#: this shape has no id in it at all, so there is nothing to drift. A pane option also dies
+#: with the pane, so nothing charter writes here outlives the frame on a server every other
+#: frame shares — the "last launched wins" trap this module's own docstrings keep naming.
+#:
+#: The value is charter's own constant and so is the name: both halves reach a tmux option
+#: that a `bind` line later FORMAT-EXPANDS, which is `_HOTKEY_RE`'s hazard one option over,
+#: and no operator string is anywhere near either.
+#:
+#: **A pane option is not inherited by a pane split off the one carrying it** — measured on
+#: 3.7c and at `tmuxctl.FLOOR`, `split-window -t <a marked panel>` producing a child whose
+#: `#{@charter_panel}` reads `''` on both. That is the answer to the sharpest form of "what
+#: about a pane the operator split themselves": even splitting one out of a PANEL leaves it
+#: tmux's pane rather than charter's, and a click on it selects it the way every pane in
+#: their own tmux does. Pinned by `test_frame_input_reaches_a_component.py`, because it is
+#: a fact about tmux and this comment would otherwise be the only thing asserting it.
+_PANEL_OPTION = "@charter_panel"
+
+#: What :data:`_PANEL_OPTION` is set to, and it is a DIGIT rather than a word for a
+#: measured reason. `if-shell -F` reads its condition the way tmux reads any format
+#: truth-value, which is not the way an operator reads `on`/`off` — probed on tmux 3.7c
+#: and at `tmuxctl.FLOOR`, identical on both::
+#:
+#:     '1' -> TRUE     '0'  -> FALSE     (unset/'') -> FALSE
+#:     '2' -> TRUE     'on' -> TRUE      'off'      -> TRUE
+#:
+#: So `off` would have marked every panel as a panel, and only the empty string and `0`
+#: are false. `1` is the shortest value that is true, it is charter's own literal rather
+#: than anything read off a config file, and the UNSET row is what makes "not a charter
+#: panel" the default answer for every pane charter never marked — the harness's, the
+#: palette's, and the operator's own.
+_PANEL_MARK = "1"
+
+
 def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
               toggles: dict | None = None) -> str:
     """The private tmux config for one frame's own settings. Never `~/.tmux.conf`.
@@ -391,6 +435,61 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     there being no such thing as a per-session keymap, and every frame wants the
     identical binding anyway, so nothing is lost by sharing it the same way
     `remain-on-exit` is (see `_PLACEHOLDER_CONF`).
+
+    **`MouseDown1Pane` is the second such bind, and it is what keeps `click` point-to-act
+    once `[frame] mouse = true` (#634).** tmux's own default for that key is `select-pane
+    -t = \\; send-keys -M`: with its mouse on, tmux moves the keyboard to the pane under
+    the pointer *before* forwarding the click. So the flag an operator turns on precisely
+    because they want to click panels was the flag that took the property away, and the
+    wheel — which tmux forwards without selecting — never did it. Charter rebinds the key
+    to ask **whose rectangle the pointer is over** and answer separately:
+
+    * a pane charter marked as a panel (:data:`_PANEL_OPTION`) — forward and **do not**
+      select, which is exactly what `frame/events.py` delivers and what the frame is for;
+    * anything else — the harness pane, the palette's pane, a pane the operator split
+      themselves — **tmux's own two commands, unchanged**, so clicking BACK to a pane
+      still works.
+
+    That second row is the whole reason this is a conditional and not `bind -n
+    MouseDown1Pane send -M`. Measured on tmux 3.7c and at `tmuxctl.FLOOR` (3.2)
+    identically, real server, real client on a real pty, `mouse on`, three panes — a
+    marked panel, the harness, and one more split by hand standing in for the operator's
+    — with SGR reports injected as a reporting terminal sends them::
+
+        bind              click a panel        click back to harness   click own split
+        tmux's default    delivered, MOVED     works                   works
+        blanket send -M   delivered, unchanged BROKEN (stays put)      BROKEN (stays put)
+        this one          delivered, unchanged works                   works
+
+    The blanket row is not a milder version of the same thing; it takes away clicking back
+    to any pane at all, harness included, which is worse than the focus steal it fixes.
+
+    **The marker is on the PANEL, not on the harness, and that decides the third case.**
+    The issue sketched the mirror image — a window option holding the harness pane's own
+    `%N`, compared with `#{==:#{pane_id},#{@charter_harness_pane}}` — and asked first
+    whether that format parses at the floor. It does: measured on a 3.2 built from the
+    release tarball, `#{==:}` with a nested `#{pane_id}` and a nested user option
+    evaluates to `1` on the harness and `0` on a panel, and the whole `bind` line
+    `source-file`s at rc 0 and reads back byte for byte through `list-keys`. The format
+    was available and the SHAPE is what is refused: marking the harness makes every pane
+    that is not the harness un-clickable-to, so a pane the operator split inside charter's
+    window would stop taking the keyboard on a click — tmux's documented behaviour
+    removed from a pane charter has nothing to do with. Marking the panels leaves that
+    pane exactly as tmux left it, and leaves no pane id in the binding to drift from the
+    one `overlay.HATCH_OPTION` already holds.
+
+    **Bound whatever `mouse` says, like the wheel above and for a sharper reason than
+    symmetry.** A root key table is server-wide and `source-file` can only ADD a binding —
+    omitting this line on a `mouse = false` launch would not unbind what a `mouse = true`
+    frame on the same socket already bound, so gating it would buy nothing and make the
+    root table depend on launch order. It costs a `mouse = false` frame nothing either
+    way: with tmux's own mouse off tmux runs no mouse binding at all, and the reports go
+    to whichever pane the terminal was already reporting for.
+
+    `MouseDown1Pane` and `WheelUpPane` are both in `instance.component_tables`'s set of
+    keys a component may not claim, for `HATCH_KEY`'s reason exactly — both are written
+    here BEFORE the toggles, so tmux's last-wins would leave charter's mouse handling
+    silently deleted and `list-keys` reading back one line where two were meant (#566).
 
     **`focus-events` is the THIRD genuine server option here, and it is written `-g` for
     exactly `escape-time`'s reason.** Spec §4f closes the component event kinds at six,
@@ -587,8 +686,10 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
         "set -g focus-events on",
         f"bind -n {hotkey} run-shell "
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette \"#{{client_name}}\"'",
-        "bind -n WheelUpPane if-shell -F -t = '#{mouse_any_flag}'"
+        f"bind -n {tmuxctl.WHEEL_KEY} if-shell -F -t = '#{{mouse_any_flag}}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
+        f"bind -n {tmuxctl.CLICK_KEY} if-shell -F -t = '#{{{_PANEL_OPTION}}}'"
+        " 'send-keys -M' 'select-pane -t =; send-keys -M'",
     ]
     for name, key in (toggles or {}).items():
         if not component.usable_id(name):
@@ -1805,6 +1906,47 @@ def _surface_argvs(*, socket: str, pane_id: str, chrome, bg=None,
                                                     pane_borders=pane_borders))]
 
 
+def _panel_mark_argv(*, socket: str, pane_id: str) -> list[str]:
+    """`set-option -p`: say that THIS pane is a panel charter split off, and no other.
+
+    The write half of :data:`_PANEL_OPTION`; `conf_text`'s `MouseDown1Pane` bind is the
+    read half, and between them they are the whole of why a click on a panel does not take
+    the keyboard off the harness once `[frame] mouse = true` (#634).
+
+    **Beside `_surface_argvs` and issued from the same funnel, for the same measured
+    reason** — `_split_panels` is the one place every panel pane charter creates comes out
+    of, so both launch paths and every density change mark a pane as it appears rather
+    than by a second pass that could forget one. A pane a later `_relayout` adds is marked
+    when it is created; a pane `cmd_respawn` brings back keeps the mark, because a respawn
+    reuses the same `%N` and this is a property of the rectangle rather than of the process
+    in it — the argument `_surface_argvs` already makes one option over.
+
+    **Unlike `_surface_argvs` it is NOT gated on `NO_COLOR`, and that difference is the
+    point.** A surface is something an operator can ask charter not to paint. This is
+    routing: it decides where a click goes and where the keyboard stays, and an operator
+    who set `NO_COLOR` asked for no colour, not for their clicks to start moving the
+    keyboard. Nothing here reaches a screen.
+
+    **Written on BOTH servers, and inside the operator's own tmux it marks a pane nothing
+    reads.** `conf_text` is sourced only against charter's private `SOCKET` — charter does
+    not rebind keys in a server it does not own, and `_launch_in_operator_tmux` is
+    explicit that it must not — so inside an operator's tmux this is a user option on a
+    pane charter created, carrying charter's namespace, dying with the pane, and changing
+    nothing. That is the same reach `_surface_argvs` and `_panel_remain_on_exit_argv`
+    already have there. It is written on both anyway rather than gated on which server,
+    because a mark that existed on one is a second thing for `_split_panels` to be right
+    about, and the value of getting it wrong is a focus steal that only reproduces on one
+    of two paths.
+
+    A plain `list[str]`, never ``None``: both arguments are charter's own — *pane_id* is a
+    `%N` this module just read back off `split-window` and held to `_PANE_ID_RE` before it
+    got here, and the name and value are the two constants above — so there is no value
+    this can be handed that it would have to decline.
+    """
+    return tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id,
+                               _PANEL_OPTION, _PANEL_MARK)
+
+
 def _resurface_argvs(*, socket: str, pane_id: str, chrome, bg=None,
                      pane_borders: bool = False) -> list[list[str]]:
     """:func:`_surface_argvs` for a pane that is ALREADY DRAWN — with the unsets.
@@ -2334,6 +2476,12 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     server and bare on the other, and a pane added by a later `_relayout` is surfaced when
     it is created rather than by a second pass that could forget it.
 
+    **And the PANEL MARK, for that third time and the same reason** (`_panel_mark_argv`,
+    #634). It is the pane option `conf_text`'s `MouseDown1Pane` bind asks before it lets a
+    click move the keyboard, so a panel that reached the operator's screen without it is a
+    panel that steals focus the first time it is clicked. A funnel is the only place that
+    can promise every panel has one.
+
     Reported but not fatal, like the splits themselves: a frame whose panels cannot be
     respawned is still a frame, and the harness pane's own `remain-on-exit` was armed
     separately and earlier (`_remain_on_exit_argv`), so the exit code does not ride on
@@ -2394,6 +2542,15 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
         pane_id = p.stdout.strip()
         if pane_id and _PANE_ID_RE.fullmatch(pane_id):
             panes[slot] = pane_id
+            # This pane is a PANEL, said to tmux itself where a root-table binding can ask
+            # (#634, `_panel_mark_argv`). It goes before the surface rather than after
+            # because it is the only one of the two that decides where a click goes: a
+            # panel that came up unmarked takes the keyboard off the harness the first
+            # time it is clicked, which is the whole defect. Reported but not fatal, like
+            # the splits and the surface — a panel charter could not mark still draws and
+            # is still clicked, it just costs the operator an `F12` afterwards.
+            tmuxctl.run("marking a panel so a click on it stays where it points",
+                        _panel_mark_argv(socket=socket, pane_id=pane_id), env=env)
             # The pane surface, on the pane that was just created and on no other — the
             # one place charter has a panel's `%N` in hand. The harness pane is never an
             # argument (`_surface_argvs`), which is how ADR 0018's boundary holds by
