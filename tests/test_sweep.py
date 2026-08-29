@@ -3135,6 +3135,53 @@ class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
     def test_one_shards_trouble_does_not_cancel_the_others(self):
         self.assertEqual(self.jobs["sweep"]["strategy"]["fail-fast"], "false")
 
+    def _collect_step(self, step_id):
+        for step in self.jobs["collect"]["steps"]:
+            if step.get("id") == step_id:
+                return step
+        self.fail(f"collect has no step with id {step_id!r}")
+
+    def test_a_superseded_run_says_superseded_and_never_claims_a_verdict(self):
+        """#654. `cancel-in-progress` means a second push cancels the first run, and
+        `always()` above carries that run into this job anyway — where its own empty
+        `needs.plan.outputs.shards` read as "the sweep never sized itself" and published
+        the sentence #617 built this gate to say.
+
+        The property is not that some step exists. It is that the words a superseded run
+        puts on the checks list are NOT the words an unanswered one puts there — asserted
+        against the fallback in `verdict`'s own name, so the two cannot drift together."""
+        headline = self._collect_step("superseded")["run"]
+        self.assertIn("superseded", headline)
+        self.assertNotIn("no verdict", headline)
+        self.assertNotIn(self.jobs["verdict"]["name"].split("||")[-1].strip(" '}"),
+                         headline)
+
+    def test_the_two_answers_are_exact_negations_so_neither_can_shadow_the_other(self):
+        """`headline` is `say || superseded`, which is only a choice between one value and
+        one empty string while exactly one of them can run. Two conditions that merely
+        looked different would make the `||` a precedence question, and a run could answer
+        twice — the second answer silently losing to whichever `||` saw first."""
+        self.assertEqual(self._collect_step("superseded")["if"], "cancelled()")
+        self.assertEqual(self._collect_step("say")["if"], "${{ !cancelled() }}")
+
+    def test_the_superseded_answer_needs_nothing_a_cancellation_would_have_skipped(self):
+        """The one state this step exists for is the state in which every step above it was
+        cancelled — checkout, setup-python and the artifact download included. A step that
+        reached for the tree, the interpreter or the shard files could not run there, and
+        the run would fall back to no headline at all."""
+        step = self._collect_step("superseded")
+        self.assertNotIn("uses", step)
+        for reach in ("python", "tools/sweep.py", "shards", "$GITHUB_STEP_SUMMARY"):
+            self.assertNotIn(reach, step["run"], reach)
+
+    def test_both_step_ids_reach_the_jobs_output(self):
+        """A step that answers into `$GITHUB_OUTPUT` and is not named in `outputs:` is a
+        verdict nothing collects — which is this file's own failure mode, one job over."""
+        for key in ("headline", "conclusion"):
+            out = self.jobs["collect"]["outputs"][key]
+            self.assertIn(f"steps.say.outputs.{key}", out, key)
+            self.assertIn(f"steps.superseded.outputs.{key}", out, key)
+
     def _commands(self):
         """Every line of every `run:` body that is a command rather than a comment.
 

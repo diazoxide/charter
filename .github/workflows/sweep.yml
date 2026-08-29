@@ -171,8 +171,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      headline: ${{ steps.say.outputs.headline }}
-      conclusion: ${{ steps.say.outputs.conclusion }}
+      # `say` first and `superseded` second, and the two can never both answer: their `if`
+      # conditions are exact negations, so the `||` is a choice between one value and one
+      # empty string rather than a precedence anybody has to reason about.
+      headline: ${{ steps.say.outputs.headline || steps.superseded.outputs.headline }}
+      conclusion: ${{ steps.say.outputs.conclusion || steps.superseded.outputs.conclusion }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -188,8 +191,41 @@ jobs:
           path: shards
           pattern: deletion-sweep-*
           merge-multiple: true
+      # **A superseded run is not an unanswered one, and the name has to say which (#654).**
+      #
+      # `concurrency: cancel-in-progress` means a pull request that gets three pushes pays
+      # for one sweep. The run it cancels still reaches this job — `always()` above is what
+      # #626 needs and it does not distinguish a cancellation from a shard that died — so
+      # the cancelled run read its own empty `needs.plan.outputs.shards` and published
+      # `no verdict: the sweep never sized itself`. True of that run, and indistinguishable
+      # on the checks list from the sentence #617 built this gate to say.
+      #
+      # Measured on #652 at `74ccfdab40c2`: runs 86 and 87 created in the SAME SECOND, 87
+      # cancelled 86 by concurrency group, and 86's `collect` completed and published that
+      # verdict beside 87's real one. Both rows stay, because the verdict is the check's
+      # NAME and two different names do not replace each other.
+      #
+      # `cancelled()` is the run-level fact and is exactly the distinction wanted: a shard
+      # that exceeds its own `timeout-minutes` is a cancelled JOB in a run that was never
+      # cancelled, so #626 still reports `no verdict: N of M shards did not report` and
+      # only a superseding push reaches this step.
+      #
+      # It depends on nothing a cancellation would have skipped — no checkout, no artifact,
+      # no python. `printf` into `$GITHUB_OUTPUT` and nothing else, because a step that
+      # needed the tree could not run in the one state it exists for.
+      - name: A superseded run says so rather than claiming a verdict
+        id: superseded
+        if: cancelled()
+        run: |
+          set -euo pipefail
+          printf 'headline=superseded: a newer push cancelled this sweep\n' >>"$GITHUB_OUTPUT"
+          printf 'conclusion=superseded\n' >>"$GITHUB_OUTPUT"
+      # `!cancelled()` and not the default `success()`: the download above is
+      # `continue-on-error` precisely so that "no artifacts at all" reaches this step, and
+      # a condition that stopped at the first failure would take that back.
       - name: One answer for the whole sweep
         id: say
+        if: ${{ !cancelled() }}
         env:
           # Empty when the plan job never finished — which `expected_shards` reads as "the
           # sweep never sized itself", not as "no shards were needed". Those two are the
