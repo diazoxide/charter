@@ -1071,6 +1071,34 @@ def _add_change_parser(sub) -> None:
     fg.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
     fg.set_defaults(func=commands_change.cmd_change_forget)
 
+    ph = csub.add_parser("push", help="Push every member's branch, open its request, and "
+                                      "write the cross-link block into each body.")
+    ph.add_argument("change")
+    ph.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    ph.set_defaults(func=commands_change.cmd_change_push)
+
+    # ONE member per invocation, and **there is no `--all`** — not a flag that defaults off,
+    # a flag that does not parse (ADR 0020). It would have to answer "what now?" when member
+    # 3 of 5 is rejected mid-loop, and the three available answers are each wrong in a case
+    # the others handle. The shell loop somebody writes instead is five GATED landings,
+    # because the gates live in this command; `--all` would be one ungated one.
+    ld = csub.add_parser("land", help="Land ONE member: blocker gate, check gate at the "
+                                      "head sha, merge, read back, record.")
+    ld.add_argument("change")
+    ld.add_argument("--repo", required=True,
+                    help="The single member to land. Required, and there is no --all.")
+    # `--rebase` DOES parse, and is refused with the reason — the asymmetry with `--all` is
+    # deliberate. `--all` has no legitimate reading, so argparse rejecting it is the whole
+    # answer; `--rebase` is a thing a reasonable person will try, and argparse's "unknown
+    # option" would teach them nothing about why charter cannot put a trailer on it.
+    ld.add_argument("--squash", action="store_true",
+                    help="Land as a squash instead of a merge commit.")
+    ld.add_argument("--rebase", action="store_true",
+                    help="Refused, with the reason: a rebase landing leaves charter no "
+                         "commit to carry the trailer and no single sha to revert.")
+    ld.add_argument("--workspace", "-w", help="Target workspace (default: the active one).")
+    ld.set_defaults(func=commands_change.cmd_change_land)
+
     # A revert is a NEW change, with the ordinary gates — not an undo button. There is
     # deliberately no `--force`, no `--all` and nothing that deletes a branch: a
     # force-push over three default branches leaves a world where the change happened,
