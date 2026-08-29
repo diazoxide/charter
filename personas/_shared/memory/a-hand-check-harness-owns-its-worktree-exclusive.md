@@ -1,0 +1,5 @@
+# A HAND-CHECK HARNESS OWNS ITS WORKTREE EXCLUSIVELY — no edits, no test r
+
+_2026-08-29 05:18 · persistent_
+
+A HAND-CHECK HARNESS OWNS ITS WORKTREE EXCLUSIVELY — no edits, no test runs, nothing else, start to finish. Measured 2026-08-29 on tools/sweep.py's own author: their harness captured each file at start and restored it in 'finally', which is correct in isolation and WRONG if anything else touches the tree meanwhile. Two things happened at once: it silently REVERTED their own edits (the restore put the pre-mutation file back over real work), and its verdicts ran against a moving target so the results meant nothing. Both in the same session. This is a distinct failure from the five already recorded (exit-code scoring, broken baseline, stale bytecode, a mutation that hangs, a mutation that never applied) — here the RESTORE is the thing that lies, and it lies by destroying work rather than by reporting wrongly. Corollary already in use elsewhere: run mutations in a private clone or worktree per run (tools/sweep.py gained run_dir in #615 after two concurrent sweeps of one checkout returned 486-of-489 'unapplied').

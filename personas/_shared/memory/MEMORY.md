@@ -38,3 +38,7 @@ Written by the persona as it learns; committed and shared.
 - [THE COMMONEST UNPINNED-GUARD SHAPE IS AN ASSERTION ABOUT ABSENCE STANDIN](the-commonest-unpinned-guard-shape-is-an-asserti.md)
 - [MERGE RACES: compare headRefOid before and after, and diff content after](merge-races-compare-headrefoid-before-and-after-.md)
 - [--enforce ON THE SWEEP GATE HAS EXACTLY TWO HARD BLOCKERS, and the rende](enforce-on-the-sweep-gate-has-exactly-two-hard-b.md)
+- [assertRaises(SomeError) IS AN ASSERTION ABOUT TYPE, AND TYPE IS NOT THE](assertraises-someerror-is-an-assertion-about-typ.md)
+- [A HAND-CHECK HARNESS OWNS ITS WORKTREE EXCLUSIVELY — no edits, no test r](a-hand-check-harness-owns-its-worktree-exclusive.md)
+- [A FIX FOR A CLASS OF BUG IS UNUSUALLY LIKELY TO CONTAIN THAT BUG — sweep](a-fix-for-a-class-of-bug-is-unusually-likely-to-.md)
+- [THE DELETE-THE-EQUIVALENT-MUTANT RULE NEEDS A MEASUREMENT, NOT A READING](the-delete-the-equivalent-mutant-rule-needs-a-me.md)
