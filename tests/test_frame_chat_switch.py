@@ -12,7 +12,7 @@ it is asserted as an order rather than as a set: `select-window` first, because 
 background window keeps stale geometry on tmux 3.7c and on tmux 3.2 alike and tmux
 resizes it AT the switch; then the teardown, then the split, so the new panels are born
 in a window that has already been resized. `tests/test_frame_tmux_integration
-.SwitchingBetweenChatsMovesTheClientAndThePanels` is where that is measured against a
+.SwitchingBetweenChatsMovesTheClientAndThePanes` is where that is measured against a
 real server with a real attached client, because it is the half a fake cannot make a
 claim about.
 """

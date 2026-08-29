@@ -2443,8 +2443,9 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     unconditional here rather than conditional on a width. Written as an `if`, the check
     would be a line no input can reach past the rung above it, which is precisely the
     equivalent mutant the deletion sweep asks be deleted rather than documented.
-    `TheBarNeverShowsHalfAName` pins the property directly, at 200, 80 and 40 columns and
-    at every width in between.
+    `tests/test_frame_bars.TheLadderGivesUpWholeThings
+    .test_no_name_is_ever_shown_in_part_at_any_width` pins the property directly, at every
+    width from 0 to 200.
 
     **`contain.one_line` runs before any of this arithmetic** (#472). Every name here has
     already been through a name check where it was read (`switch.workspaces`,

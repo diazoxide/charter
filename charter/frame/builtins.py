@@ -11,10 +11,16 @@ is no private table of edges beside the one a provider's component will be place
 strips are a fixed height, which one takes what its content needs — from
 :func:`build`'s registry, and nothing derives them from a list position any more.
 
-**This task changed no output, and that is the point.** Each component wraps the renderer
-`frame/slots.py` already had, unchanged; the six declarations below are a statement of
-what those renderers already do, not a new arrangement. The before/after render at 200x50
-and 80x24 is byte-identical.
+**Phase 1's own task changed no output, and that was its point.** Each of the components
+below wraps a renderer `frame/slots.py` already had, unchanged; those declarations are a
+statement of what the renderers already do, not a new arrangement, and the before/after
+render at 200x50 and 80x24 was byte-identical.
+
+**Phase 5's two bars are the first entries here that are not that**, and they change no
+output either — for a different reason. `chats` and `workspaces` are registered and NOT
+placed (see :func:`build`), so nothing draws them until a plane writes a
+`[[frame.component]]` table naming one. :func:`places` is the question that makes that
+route work at all.
 
 **The slot names survive as SHORTHAND, because they are committed** (:data:`SLOT_OF`).
 `[frame] slots = ["top", "bottom", "repos", "right"]` sits in charter.toml on every plane
@@ -69,7 +75,9 @@ that a click SELECTS and never chooses, because a pointer event can arrive unpai
 are registered in the order charter splits their panes off the harness: identity,
 attention, repos, sidebar. The two parts of the sidebar are registered between them,
 because the registry refuses a composite whose parts it has not seen — they take split
-numbers of their own and are never placed, which `Registry.on_edge` is what enforces.
+numbers of their own and are never placed, which `Registry.on_edge` is what enforces. The
+two bars are registered LAST, after everything charter places, so adding them moved no
+existing component's split number.
 """
 
 from __future__ import annotations
@@ -127,8 +135,9 @@ def places(cid, reg: Registry | None = None) -> bool:
 
     **The question `SLOT_OF` was standing in for, asked directly.** That table is the
     shorthand between two vocabularies — a committed `[frame] slots` name and a component
-    id — and three separate places had come to read "is it in `SLOT_OF`" as "is it one of
-    charter's own placeable components". Those were the same set for as long as every
+    id — and two separate places had come to read "is it in `SLOT_OF`" as "is it one of
+    charter's own placeable components" (`instance.component_tables` and
+    `slots.drawable`). Those were the same set for as long as every
     component charter placed had a slot name, and Phase 5's two bars are the first that do
     not: they have no committed spelling, because there is no `[frame] slots` word for a
     thing that did not exist when that list was frozen, and adding one would put them on
