@@ -4,7 +4,7 @@ A *news entry* is a shipped, per-item note that a version introduced something, 
 an optional probe for whether this plane has adopted it. Not a changelog: an entry exists
 to be **acted on**, and one with nothing to adopt is one line.
 
-Six properties are load-bearing.
+Seven properties are load-bearing.
 
 **One entry, two consumers, one answer.** The GitHub Release body and the offline `charter
 news` suggestion are the same entries rendered twice — `release.yml`'s announce job pipes
@@ -14,6 +14,17 @@ never at a call site. It was not, and #486 is what that cost: ORDER was left to
 `sorted(glob("*.md"))`, which for a stamped release is alphabetical by slug, so 0.52.0's
 vault-spending fix rendered eighth, under a docs correction. :func:`all` now applies the
 declared order and :func:`marker` the label, and both views come through them.
+
+**And the body FITS where it is sent.** That pipe ends at an API with a limit —
+:data:`RELEASE_BODY_MAX` — which refuses an over-long body outright rather than trimming
+it, in the `announce` job, which is `needs: publish`: *after* the PyPI upload, which cannot
+be undone, and out of reach of the documented retry, which re-enters `publish` and is
+rejected for a version PyPI already has. Rendering was never the failing step and the
+release guard was never wrong to check it; the claim nobody was making is this one.
+:func:`render_body` therefore bounds what it returns and :func:`commands.cmd_news` refuses
+what it cannot bound, so the refusal lands in `guard` — before `test`, `build` and
+`publish` — and 69 entries stay a releasable release instead of becoming a release-stopper
+nobody sees until the irreversible step is behind them.
 
 **What an entry declares is honoured or reported, never neither.** An entry is a committed
 file and the release notes are the one document nobody re-derives, so an entry that does
@@ -96,6 +107,7 @@ import argparse
 import io
 import os
 import tempfile
+import urllib.parse
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import NamedTuple
@@ -592,6 +604,127 @@ def for_version(version: str) -> list[Entry]:
     return [e for e in all() if e.version == version]
 
 
+#: The most characters GitHub's create-release API accepts in a body. **Its number, not
+#: charter's**: ``POST /repos/{owner}/{repo}/releases`` refuses a longer one with ``body is
+#: too long (maximum is 125000 characters)``, and `gh release create` forwards that refusal
+#: rather than trimming to fit — so a version whose notes render past it does not publish
+#: shorter notes, it publishes **none**.
+#:
+#: Characters, not bytes, and the distinction is load-bearing in both directions. The API
+#: counts code points and charter's entries are not ASCII — they carry ``—``, ``✗``, ``⬢``
+#: — so ``len(body.encode())`` reports a bigger number than the one GitHub applies and
+#: would refuse a release GitHub would have accepted. The 69 notes staged for 0.54.0 differ
+#: by 3,023 between the two measures.
+RELEASE_BODY_MAX = 125_000
+
+#: How much of :data:`RELEASE_BODY_MAX` :func:`render_body` will actually spend. **Charter's
+#: number, and deliberately well below GitHub's**, for three reasons that are not one
+#: reason said three ways:
+#:
+#: *The string charter measures is not quite the string GitHub counts.* `charter news --for`
+#: ``print``s this body, so the file `announce` redirects into is one character longer than
+#: what was measured here, and nothing downstream re-measures. One character is enough at a
+#: bound set exactly at the ceiling, and that is the smallest of the three.
+#:
+#: *A ceiling reached is a ceiling with nothing left for the next change.* A preamble, a
+#: footer, a wrapper someone adds to the announce step — any of them lands on a body already
+#: at the limit, and lands there **after** the PyPI upload, which is the failure this whole
+#: mechanism exists to move to the cheap end.
+#:
+#: *And "just under" is a state nobody notices.* 0.52.0 published at 111,723 characters —
+#: 3,277 short of the refusal — and nothing in the repository remarked on it, because
+#: nothing was looking. Entries accumulate one pull request at a time and each author sees
+#: only their own.
+#:
+#: 100,000 rather than a fraction of the limit, because a fraction invites re-deriving it:
+#: this is a round number a human holds, it leaves a fifth of the API's allowance unspent,
+#: and it is above every release charter has ever cut but two — so the bound below does not
+#: start eliding until a version is genuinely larger than any that has shipped.
+_BODY_BUDGET = 100_000
+
+
+def _part(e: Entry) -> str:
+    """One entry rendered whole: its headline, its label, and the body its author wrote."""
+    return f"### {marker(e)}{e.headline}\n\n{e.body}".rstrip()
+
+
+def _entry_file(e: Entry) -> str:
+    """*e*'s path in the repository — the name a reader with a checkout or a wheel opens.
+
+    The filename is the committed one (`_read` takes the slug from it), so it crosses into
+    a document with structure and is contained on the way, for #502's reason one surface
+    over: a name holding a newline would forge a heading in the release notes, which is the
+    one document nobody re-derives. The body beside it is deliberately *not* contained — an
+    entry's body IS Markdown its author wrote — but this line is charter's own sentence and
+    the filename is a field in it.
+    """
+    return f"docs/news/{contain.one_line(e.path.name)}"
+
+
+def _entry_url(e: Entry) -> str:
+    """Where *e* can be read in full, on the web.
+
+    The ref is the tag for a stamped version and the tracked branch for a staged one. A tag
+    never moves, so a link in a published release body keeps pointing at the note **as that
+    release shipped it** rather than at whatever main later made of it; ``unreleased`` has
+    no tag to point at, and its render is a preview nobody publishes.
+
+    The repository comes from :data:`update.DEV_REPO` — a constant, and it has to be one.
+    `report.upstream_repo` is the other spelling of "charter's repo" in this codebase and it
+    is overridable from the environment, which is exactly what a value interpolated into a
+    *published* release body must not be.
+
+    ``quote`` rather than containment for the href: a clipped URL is a broken link, and the
+    property needed here is that no filename can close the ``](…)`` early and start writing
+    its own Markdown after it. Percent-encoding gives that exactly, for every character.
+    """
+    ref = update.DEV_BRANCH if e.version == UNRELEASED else f"v{e.version}"
+    return (f"https://github.com/{update.DEV_REPO}/blob/{ref}/docs/news/"
+            f"{urllib.parse.quote(e.path.name)}")
+
+
+def _brief(e: Entry) -> str:
+    """One entry as its headline and a link to the note itself.
+
+    The headline is the author's own one-line summary of the entry, rendered **whole** —
+    nothing is clipped and no excerpt is invented from the body. An excerpt would be the
+    shape this function exists to refuse: a paragraph that reads like the note and is not
+    it, with no mark saying where it stopped. What a reader loses here is the body, and the
+    line under the headline says precisely where the body is.
+    """
+    return f"### {marker(e)}{e.headline}\n\nFull note: [`{_entry_file(e)}`]({_entry_url(e)})"
+
+
+def _elision(shown: int, total: int, whole: int) -> str:
+    """The section that says, in the body itself, that the body is not all of it.
+
+    Placed at the cut rather than at the top, and one copy: a banner above the notes would
+    be a second statement of one fact, free to disagree with this one. It can be one copy
+    because the elision is *also* visible at every point it applies — every elided note
+    keeps its own heading, in its own place in the order, with :func:`_brief`'s link
+    directly under it. A reader looking for a particular note therefore meets the elision
+    where they are looking, which is more than a banner at the top would give them.
+
+    It states the arithmetic — how many, how long, and the limit — because "some notes are
+    linked" is the sentence a reader has no way to check. These numbers they can.
+
+    The rule is written only when something is above it to be ruled off. Entry bodies open
+    with prose, so it never lands on nothing — except when *no* note fitted, and a body
+    that begins with ``---`` is a body some renderers read as frontmatter.
+    """
+    listed = total - shown
+    return (
+        ("---\n\n" if shown else "")
+        + f"## {listed} of these {total} notes are listed by headline only\n\n"
+        f"Rendered whole, {total} notes come to {whole:,} characters, and GitHub refuses a "
+        f"release body over {RELEASE_BODY_MAX:,}.\n\n"
+        f"**Every note this version shipped is in this list.** {shown} are above in full; "
+        f"the {listed} below are a headline and a link. No note was dropped, and no note's "
+        f"text was cut short — the text of each one below is in the note it links to, "
+        f"which ships in the wheel and in the repository as well."
+    )
+
+
 def render_body(version: str) -> str:
     """One version's entries as the body of a GitHub Release.
 
@@ -600,11 +733,59 @@ def render_body(version: str) -> str:
 
     Order comes from :func:`all`, not from this function — see its docstring, and #486.
     The label comes from :func:`marker`, which the offline view calls too.
+
+    **And the result is bounded, because the far end of it refuses a long one.** The whole
+    body is returned whenever it fits :data:`_BODY_BUDGET`, which is what every release but
+    two has done and what keeps this function's output byte-identical to what it has always
+    been. Past that, the notes that fit are rendered whole and the rest become a headline
+    and a link, with :func:`_elision` between them saying so.
+
+    Three properties decide the shape, and each of them rules out an easier one:
+
+    **Nothing is dropped and nothing is truncated.** Cutting the string at 125,000
+    characters is the obvious fix and it is the "convincing empty" this codebase refuses
+    everywhere: a release body that ends mid-sentence with a dozen notes simply absent
+    reads exactly like a release that shipped a dozen fewer things. Every entry keeps its
+    heading, in its own place in the order, and every entry's full text stays one click
+    away — so what the reader loses is a scroll, never a fact.
+
+    **The cut is one point, not a per-entry decision.** A greedy fill — skip the big ones,
+    keep packing the small ones — would give an ordinary note its body while a security
+    note above it lost one, which is #486's defect wearing a size limit. So the first *k*
+    render whole and everything after them is brief.
+
+    **And *k* is measured against the order :func:`all` already decided.** There is no
+    second rule in here that promotes security entries, for the reason `render_body` does
+    no sorting: the order that decides what leads is the order that decides what keeps its
+    body, and a rule stated twice is a rule that can be honoured in one view and not the
+    other. The consequence — a security note is never demoted while an ordinary one keeps
+    its body — is asserted rather than assumed, in
+    `tests/test_release_notes_fit_the_release.py`.
+
+    Each candidate is **built and then measured**, rather than measured by adding up part
+    lengths. Deriving the length is a second answer to "how long is this?", free to drift
+    from the string actually returned by a separator's width; the string measured here is
+    the string handed back. It costs a few joins of a document a third of a megabyte long,
+    on the release path, once.
+
+    A body that cannot be brought under the limit even with every note brief is returned
+    **as it is**, not silently cut: :func:`commands.cmd_news` refuses to print it, which is
+    the refusal `release.yml`'s `guard` job runs before `test`, `build` and `publish`.
     """
-    parts = []
-    for e in for_version(version):
-        parts.append(f"### {marker(e)}{e.headline}\n\n{e.body}".rstrip())
-    return "\n\n".join(parts)
+    entries = for_version(version)
+    whole = [_part(e) for e in entries]
+    body = "\n\n".join(whole)
+    if len(body) <= _BODY_BUDGET:
+        return body
+    brief = [_brief(e) for e in entries]
+    smallest = ""
+    for k in range(len(entries) - 1, -1, -1):
+        candidate = "\n\n".join([*whole[:k], _elision(k, len(entries), len(body)),
+                                 *brief[k:]])
+        if len(candidate) <= _BODY_BUDGET:
+            return candidate
+        smallest = candidate
+    return smallest
 
 
 def _parser():

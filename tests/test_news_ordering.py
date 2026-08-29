@@ -620,6 +620,20 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
         self.assertIn("docs/news/", self.annotation)
         self.assertIn("cannot honour", self.annotation)
 
+    def test_and_the_cause_that_is_not_about_the_entries_at_all(self):
+        """#665's shape, and the reason it needs its own clause rather than a widening of
+        "cannot honour": nothing is wrong with the entries. Each of them is well-formed,
+        declares nothing charter cannot read, and renders — and the release still cannot be
+        announced, because the body they render to is longer than GitHub's create-release
+        API accepts. An operator sent looking for a malformed entry would find none.
+
+        Coupled on "too long" for the reason every other pair in this class is coupled:
+        that is the phrase `cmd_news` prints and the phrase GitHub's own refusal uses, so a
+        reader grepping the run for the annotation's vocabulary lands on the line that
+        explains it. `tests/test_release_notes_fit_the_release.py` holds the other end.
+        """
+        self.assertIn("too long", self.annotation)
+
     def test_and_defers_to_the_command_for_which_of_them_it_was(self):
         """Rather than diagnosing. Two causes named in one line is only an improvement if
         the line also says where the answer is."""
@@ -692,7 +706,7 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
         src = inspect.getsource(commands.cmd_news)
         branch = src.split("if version:", 1)[1].split("if getattr(args, \"pending\"", 1)[0]
         self.assertEqual(
-            branch.count("return 1"), 2,
+            branch.count("return 1"), 3,
             "`charter news --for` has a number of ways to refuse that this test no "
             "longer expects. That call is release.yml's pre-publish guard, and its "
             "`::error::` annotation enumerates the causes for an operator who has only "
