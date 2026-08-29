@@ -1055,6 +1055,34 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
         self.assertTrue(verbs, "no _git call found — this test proves nothing")
         self.assertEqual(sorted(set(verbs)), sorted(self.GIT_VERBS - {"config"}))
 
+    def test_every_git_call_is_bounded_by_a_timeout(self):
+        """A clone on a stalled network mount makes git hang, and a command the operator is
+        waiting on must fail rather than sit there — `doctor.CHECK_TIMEOUT`'s reason, one
+        command out. Asked of the FUNNEL, because that is where the property lives: `_git`
+        is the single place the timeout is applied, so a call site that reached `util.run`
+        directly would be the one that could forget.
+
+        **The NUMBER is not pinned and cannot honestly be**: no observable behaviour of any
+        test changes between 20 seconds and 21, and a test asserting the constant's value
+        against itself would be the tautology this suite keeps finding. What is pinned is
+        that there IS one, and that it is the module's own constant rather than a literal
+        somebody typed twice.
+        """
+        seen = []
+        real = commands_change.util.run
+
+        def spy(cmd, *a, **kw):
+            seen.append(kw.get("timeout"))
+            return real(cmd, *a, **kw)
+
+        commands_change.util.run = spy
+        try:
+            commands_change._git(Path("."), "rev-parse", "--verify", "--quiet", "HEAD")
+        finally:
+            commands_change.util.run = real
+        self.assertEqual(seen, [commands_change.GIT_TIMEOUT])
+        self.assertIsNotNone(commands_change.GIT_TIMEOUT)
+
     def test_no_destructive_or_remote_git_flag_appears_anywhere_in_the_module(self):
         """The refusals of §3.7, as an absence in the source rather than a guard.
 

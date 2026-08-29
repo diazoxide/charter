@@ -18,9 +18,10 @@ one fired and, where a neighbour could have produced the same row, the absence o
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from charter import change, commands_change, doctor
-from tests._changerepo import ChangeRepoCase, git
+from tests._changerepo import ChangeRepoCase, git, sha
 
 SLUG = "component-api-2"
 
@@ -174,6 +175,91 @@ class TestAStrayBranchIsNamed(DivergenceCase):
         self.assertEqual(commands_change.stray_branches(self.WS), [])
 
 
+class TestTheChecksDegradeRatherThanGuess(DivergenceCase):
+    """Every place `divergences` and `stray_branches` decline to answer, driven.
+
+    **A check that cannot see is not a check that found nothing**, and every one of these
+    is that distinction: a member with no clone, a clone charter cannot resolve a default
+    branch for, a git call that failed. Each contributes NOTHING rather than a guess,
+    because a divergence invented out of a failed read is the confident wrong answer
+    ADR 0009 forbids — and because this runs at SessionStart, where a false FAIL is a red
+    row on every session of a plane whose only sin is calling its branch something else.
+    """
+
+    def test_a_member_with_no_clone_contributes_nothing(self):
+        """`charter change add` refused this repo once; a record can still name it after
+        the clone was removed. `doctor` says the record is unreadable-or-absent elsewhere;
+        this check has nothing to say about a repository that is not here."""
+        self.make_change(SLUG, [("gone", ())])
+        self.assertEqual(self.findings(), [])
+
+    def test_a_clone_with_no_resolvable_default_branch_contributes_nothing(self):
+        """Every question below is *relative to the default branch*. A repository charter
+        cannot resolve one for produces no findings rather than findings against a branch
+        nobody uses — `_plane_default_branch` answers `None` and means it."""
+        repo = self.repo("charter")
+        self.make_change(SLUG, [("charter", ())])
+        self.land_a_merge(repo, SLUG, trailer=False)
+        self.assertEqual(len(self.findings()), 1)      # the control: it does report
+        git(repo, "branch", "-m", "main", "trunk")     # now nothing names a default
+        self.assertEqual(self.findings(), [])
+
+    def test_a_git_call_that_fails_is_read_as_no_and_never_as_yes(self):
+        """The direction that matters. `_contains` and `_branch_exists` answer False for
+        anything charter could not resolve, so a failed read never manufactures a
+        containment — it only ever loses one."""
+        repo = self.repo("charter")
+        self.assertFalse(commands_change._branch_exists(repo, "no-such-branch"))
+        self.assertFalse(commands_change._contains(repo, "0" * 40, "main"))
+        self.assertFalse(commands_change._trailer_names(repo, "0" * 40, SLUG))
+
+    def test_the_trailer_check_reads_this_commit_and_not_a_range(self):
+        """`git show --no-patch --format=%B` on the sha itself. A `--grep` over a range
+        would answer about the RANGE, so a trailer anywhere in history would vouch for a
+        commit that carries none."""
+        repo = self.repo("charter")
+        with_trailer = self.land_a_merge(repo, SLUG)
+        self.assertTrue(commands_change._trailer_names(repo, with_trailer, SLUG))
+        self.assertFalse(commands_change._trailer_names(repo, with_trailer, "other-slug"))
+        # The commit BEFORE it carries no trailer, even though one exists further along.
+        parent = git(repo, "rev-parse", f"{with_trailer}^1").stdout.strip()
+        self.assertFalse(commands_change._trailer_names(repo, parent, SLUG))
+
+    def test_the_trailer_must_be_its_own_line_and_not_a_mention(self):
+        """A commit message that talks ABOUT a change is not a commit charter authored
+        for it. The comparison is against a stripped LINE, so prose containing the words
+        does not vouch for the commit."""
+        repo = self.repo("charter")
+        (repo / "x").write_text("1\n")
+        git(repo, "add", "-A")
+        git(repo, "-c", "commit.gpgsign=false", "commit", "-qm",
+            f"mentions Charter-Change: {SLUG} in the middle of a sentence here")
+        self.assertFalse(commands_change._trailer_names(repo, sha(repo), SLUG))
+
+    def test_the_branch_listing_answers_empty_for_a_repo_git_will_not_read(self):
+        """`_local_branches` is one call for N questions, so a failure there would
+        otherwise turn into N wrong answers rather than one missing one."""
+        self.assertEqual(commands_change._local_branches(self.tmp / "not-a-repo"), set())
+
+    def test_the_branch_listing_finds_every_local_branch_and_no_remote_one(self):
+        repo = self.repo("charter")
+        git(repo, "branch", "feature/x")
+        git(repo, "branch", "change/whatever")
+        self.assertEqual(commands_change._local_branches(repo),
+                         {"main", "feature/x", "change/whatever"})
+
+    def test_a_record_that_does_not_parse_contributes_no_branch_names(self):
+        """`stray_branches` builds its wanted set from records it could READ. Guessing
+        branch names from a record that did not parse is the unearned diagnosis ADR 0009
+        forbids — and `change/<slug>` by convention would report every branch anybody ever
+        named that way, which is the convention §3.4 refuses to derive membership from."""
+        stray = self.repo("charter-jira")
+        git(stray, "switch", "-q", "-c", change.default_branch(SLUG))
+        change.path_for(self.WS, SLUG).parent.mkdir(parents=True, exist_ok=True)
+        change.path_for(self.WS, SLUG).write_text('{"change": "broken"}')
+        self.assertEqual(commands_change.stray_branches(self.WS), [])
+
+
 class TestDoctorSaysItAtFail(DivergenceCase):
     """FAIL, not WARN, and the reason is mechanical: `cmd_doctor` exits non-zero only on
     FAIL, and that exit code is the only thing that makes the SessionStart wrapper print."""
@@ -269,6 +355,101 @@ class TestDoctorSaysItAtFail(DivergenceCase):
     def test_a_plane_with_no_changes_says_none_and_stays_ok(self):
         self.assertEqual(doctor.check_changes().status, doctor.OK)
         self.assertEqual(doctor.check_changes().detail, "none")
+
+
+class TestTheDoctorRowsOwnBranches(DivergenceCase):
+    """Every arm of `check_changes`, including the ones a healthy plane never takes."""
+
+    def test_a_plane_that_is_not_a_control_plane_says_so_and_reads_nothing(self):
+        from charter import config
+        config.HAS_CONTROL_PLANE = False
+        try:
+            r = doctor.check_changes()
+        finally:
+            config.HAS_CONTROL_PLANE = True
+        self.assertEqual(r.status, doctor.OK)
+        self.assertIn("no control plane", r.detail)
+
+    def test_a_check_that_could_not_run_is_WARN_and_says_its_silence_means_nothing(self):
+        """`doctor`'s own discipline: "not checked" is WARN, never OK — a check that
+        silently did nothing is worse than no check (`test_doctor_absent_is_not_health`)."""
+        from charter import workspace as _ws
+        with mock.patch.object(_ws, "list_workspaces", side_effect=OSError("nope")):
+            r = doctor.check_changes()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertIn("not checked", r.detail)
+        self.assertIn("silence means nothing", r.hint)
+
+    def test_the_catch_is_narrow_and_a_charter_bug_is_not_swallowed(self):
+        """`check_memory_indexes`' recorded failure: a broad catch once swallowed a
+        NameError and reported OK. A programming error must reach the caller."""
+        from charter import workspace as _ws
+        with mock.patch.object(_ws, "list_workspaces", side_effect=NameError("typo")):
+            with self.assertRaises(NameError):
+                doctor.check_changes()
+
+    def test_many_findings_are_bounded_and_the_row_says_how_many_it_hid(self):
+        """A row that listed forty divergences is a row nobody reads, and one that listed
+        three and stopped silently is a row that lies about the size of the problem."""
+        for i in range(5):
+            repo = self.repo(f"r{i}")
+            self.make_change(f"c-{i}", [(f"r{i}", ())])
+            self.land_a_merge(repo, f"c-{i}", trailer=False)
+        r = doctor.check_changes()
+        self.assertEqual(r.status, doctor.FAIL)
+        self.assertIn("more)", r.detail)
+        self.assertLess(len(r.detail), 2000)
+
+    def test_many_unreadable_records_are_bounded_the_same_way(self):
+        for i in range(5):
+            self.repo(f"r{i}")
+            self.make_change(f"c-{i}", [(f"r{i}", ())])
+            change.path_for(self.WS, f"c-{i}").write_text('{"change": "x"}')
+        r = doctor.check_changes()
+        self.assertEqual(r.status, doctor.FAIL)
+        self.assertIn("more)", r.detail)
+
+    def test_an_unreadable_record_outranks_a_divergence_and_says_a_different_thing(self):
+        """"Charter cannot read this file" and "git disagrees with this file" send the
+        reader to two different places. The unreadable one goes first because a change
+        nobody can read is a change nobody can land."""
+        repo = self.repo("charter")
+        self.make_change(SLUG, [("charter", ())])
+        self.land_a_merge(repo, SLUG, trailer=False)
+        self.make_change("other", [("charter", ())])
+        change.path_for(self.WS, "other").write_text('{"change": "x"}')
+        r = doctor.check_changes()
+        self.assertIn("unreadable", r.detail)
+        self.assertNotIn("charter did not land it", r.detail)
+
+    def test_every_workspace_is_looked_at_and_not_only_the_active_one(self):
+        """`check_workspace_clones`' own finding (#156): the half-landed change is rarely
+        the one you are standing in."""
+        from charter import workspace as _ws
+        _ws.ensure("other")
+        d = _ws.workspace_dir("other") / "charter"
+        d.mkdir(parents=True)
+        import subprocess
+        subprocess.run(["git", "init", "-q", "-b", "main", str(d)],
+                       check=True, capture_output=True)
+        for k, v in (("commit.gpgsign", "false"), ("user.email", "t@e"),
+                     ("user.name", "t")):
+            git(d, "config", "--local", k, v)
+        (d / "f").write_text("1\n")
+        git(d, "add", "-A")
+        git(d, "commit", "-qm", "one")
+        rec = change.new_record("elsewhere", "w", "t", "2026-08-29T00:00:00+00:00")
+        rec["members"] = [{"repo": "charter", "branch": "change/elsewhere", "needs": []}]
+        change.write("other", "elsewhere", rec)
+        git(d, "switch", "-q", "-c", "change/elsewhere")
+        (d / "g").write_text("2\n")
+        git(d, "add", "-A")
+        git(d, "commit", "-qm", "work")
+        git(d, "switch", "-q", "main")
+        git(d, "merge", "-q", "--no-ff", "-m", "landed elsewhere", "change/elsewhere")
+        r = doctor.check_changes()
+        self.assertEqual(r.status, doctor.FAIL)
+        self.assertIn("other/elsewhere", r.detail)
 
 
 class TestItReadsThisDiskAndNeverTheNetwork(DivergenceCase):

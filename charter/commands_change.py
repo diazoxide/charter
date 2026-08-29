@@ -741,11 +741,15 @@ def cmd_change_revert(args) -> int:
     if rec is None:
         return code
 
+    # **There is deliberately no `change_name_ok(new_slug)` guard here, and it was
+    # measured rather than assumed.** `_load` above succeeded, which means `change.exists`
+    # put *slug* through `change.path_for` and therefore through `instance.change_name_ok`
+    # — and `CHANGE_NAME_RE` has no length bound and no leading-character rule a
+    # `revert-` prefix could break, so `change_name_ok("revert-" + <a valid slug>)` is
+    # true for every valid slug there is. A guard nothing can reach is a comment with a
+    # runtime cost (`commands_frame.cmd_toggle` records the same deletion for the same
+    # reason). The property is pinned directly instead, on the derivation.
     new_slug = REVERT_PREFIX + slug
-    if not instance.change_name_ok(new_slug):
-        util.err(f"{contain.readable(new_slug)} is not a change name, so this change "
-                 "cannot name its own revert.")
-        return REFUSED
     if change.exists(ws, new_slug):
         util.err(f"change '{new_slug}' already exists in workspace '{ws}'.")
         util.info(f"Show it: charter change show {new_slug}  ·  or forget it first: "

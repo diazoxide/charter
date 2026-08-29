@@ -180,6 +180,47 @@ class TestTheSliceIsServedAndDeclaredTogether(SurfaceCase):
         self.assertIn("changes", gather.scan(workspace="ws"))
 
 
+class TestTheDegradedAnswersAreStillWellFormed(SurfaceCase):
+    """Every fallback on this path, asked directly. `gather` promises it never raises and
+    that a renderer never needs a `None`-check before indexing — and both of those are
+    claims about the paths a happy-path test does not walk."""
+
+    def test_the_empty_structure_carries_the_slice_as_an_empty_list(self):
+        """`_empty` is what `scan` falls back to when everything failed. A renderer reading
+        `data["changes"]` there must find a list, not a `KeyError` — which is the whole
+        reason this structure is spelled out rather than built up."""
+        self.assertEqual(gather._empty(None)["changes"], [])
+        self.assertIn("changes", gather._empty("ws"))
+
+    def test_a_scan_whose_change_read_explodes_still_returns_a_whole_structure(self):
+        """The module's "never raises" promise, on the one branch this phase added. One bad
+        record must degrade the change rows, not lose the repo table with them."""
+        with mock.patch.object(gather, "_change_rows", side_effect=RuntimeError("boom")):
+            got = gather.scan(workspace="ws")
+        self.assertEqual(got["changes"], [])
+        self.assertIn("repos", got)
+        self.assertIn("gathered_at", got)
+
+    def test_member_states_accepts_no_landing_map_at_all(self):
+        """`None` is what a caller with nothing landed passes, and `set(None)` raises. The
+        fallback is why "which members are blocked" is askable before anything has landed —
+        which is every change on the day it is created."""
+        rec = self.make_change("c-1", [("a", ()), ("b", ("a",))])
+        self.assertEqual(change.member_states(rec, None),
+                         {"a": "unknown", "b": "blocked"})
+        self.assertEqual(change.blocked_members(rec, None), {"b": ["a"]})
+
+    def test_no_change_chosen_reads_as_the_empty_string_and_not_as_none(self):
+        """`choose.current` answers `str` for all three nouns. A frame looking at no change
+        is an ordinary answer rather than a missing one, and `""` is the value that matches
+        no name — so the roster marks no row rather than comparing against `None`."""
+        self.assertEqual(choose.current(choose.CHANGE, FID), "")
+        self.assertIsInstance(choose.current(choose.CHANGE, FID), str)
+        self.make_change("a-1")
+        switch.to_change(FID, "a-1")
+        self.assertEqual(choose.current(choose.CHANGE, FID), "a-1")
+
+
 class TestNothingOnTheRepaintPathSpawns(SurfaceCase):
     def test_a_repaint_starts_no_process_at_all(self):
         """Measured, not asserted (§4g). Every `subprocess` entry point is replaced with
@@ -426,6 +467,103 @@ class TestWhatTheSectionSays(SurfaceCase):
         out = tui.strip_ansi(self.render())
         self.assertIn("changes 1", out)
         self.assertIn("a-1", out)
+
+
+class TestTheDrawingPathSurvivesAMalformedSnapshot(SurfaceCase):
+    """Every defensive read in the drawing path, driven rather than reasoned about.
+
+    **A cache written by an older charter is the ordinary case, not an edge one** —
+    `gather.cached`'s own docstring says so, and `_shaped_like_a_scan` is deliberately
+    loose about anything past `repos`/`worktrees`. So a change row missing a field, or
+    carrying `None` where a number belongs, reaches this renderer on the day somebody
+    upgrades, and every `or 0` / `or ""` / `.get(…, default)` in it is what stops that
+    being a traceback inside a pane.
+
+    Feeding well-formed fixtures leaves all of them unexercised, which is exactly what the
+    deletion sweep reported: fourteen survivors in one function, each looking equivalent
+    on its own because the fixture never took the branch.
+    """
+
+    #: One entry per way a row can be wrong, all of them reachable from a stale cache.
+    BROKEN = {
+        "no fields at all": {},
+        "every value None": {"change": None, "why": None, "state": None,
+                             "landed": None, "total": None, "members": None},
+        "counts as strings": {"landed": "2", "total": "3"},
+        "a state charter has never heard of": {"state": "shipped-it"},
+        "members missing": {"change": "a-1", "state": "landed", "landed": 1, "total": 1},
+        "a slug that is not text": {"change": 7},
+    }
+
+    def test_every_malformed_row_still_draws_and_draws_one_line_each(self):
+        for label, row in self.BROKEN.items():
+            with self.subTest(row=label):
+                self.seed([row])
+                lines = slots.changes_section(FID, 40, 6)
+                self.assertTrue(lines, f"{label}: drew nothing at all")
+                for line in lines:
+                    self.assertEqual(len(line.splitlines()), 1, repr(line))
+                    self.assertLessEqual(tui.width(line), 40, repr(line))
+
+    def test_a_row_charter_cannot_read_still_says_unknown_rather_than_nothing(self):
+        """The word is the point. A blank where the state goes reads as "fine"; `UNKNOWN`
+        reads as *charter did not look*, which is what a row it could not parse means."""
+        self.seed([{}])
+        self.assertIn("UNKNOWN", tui.strip_ansi(slots.changes_section(FID, 40, 6)[0]))
+
+    def test_a_malformed_row_never_reads_as_landed(self):
+        """The direction that matters. Over-reporting `unknown` costs a second look;
+        under-reporting it says a member is in when charter has no idea."""
+        for label, row in self.BROKEN.items():
+            with self.subTest(row=label):
+                self.seed([row])
+                head = tui.strip_ansi(slots.changes_section(FID, 40, 6)[0])
+                if label != "members missing":     # that one really IS landed
+                    self.assertNotIn("landed ", head, repr(head))
+
+    def test_a_pane_one_column_wide_still_draws_one_row_per_line(self):
+        """`max(width - cw - mw - 1, 1)` is what stops a negative slice width, and a
+        resize really does reach here — `cmd_resize` re-sizes panes without destroying
+        them, so a narrowed terminal arrives with a real pane to fill."""
+        self.seed([self.row(change="component-api-2", landed=1, total=2)])
+        for w in (1, 2, 4, 8, 12):
+            with self.subTest(width=w):
+                for line in slots.changes_section(FID, w, 4):
+                    self.assertLessEqual(tui.width(line), w, repr(line))
+                    self.assertEqual(len(line.splitlines()), 1, repr(line))
+
+    def test_the_gather_slice_survives_a_record_with_odd_shapes(self):
+        """`gather._change_rows`' own defensive reads, one layer below the renderer."""
+        self.clone("charter")
+        rec = change.new_record("a-1", "w", "t", "2026-08-29T00:00:00+00:00")
+        rec["members"] = [{"repo": "charter", "branch": "b", "needs": []}]
+        change.write("ws", "a-1", rec)
+        rows = gather._change_rows("ws")
+        self.assertEqual(rows[0]["total"], 1)
+        self.assertEqual(rows[0]["excluded"], 0)
+        self.assertEqual(rows[0]["members"][0]["state"], "unknown")
+
+    def test_a_landing_declaration_makes_that_member_read_as_landed(self):
+        """The other side of the join, so the `by_change` lookup is not satisfied by
+        always answering the empty set."""
+        self.clone("charter")
+        self.make_change("a-1", [("charter", ())])
+        change.record_landing("ws", "a-1", "charter", number=1, merge="e0c9d13",
+                              head="4b1e77a", ts="2026-08-29T00:00:00+00:00")
+        rows = gather._change_rows("ws")
+        self.assertEqual(rows[0]["members"][0]["state"], "landed")
+        self.assertEqual((rows[0]["landed"], rows[0]["total"]), (1, 1))
+
+    def test_a_declaration_for_another_change_does_not_leak_across(self):
+        """`by_change` is keyed on the slug. Without that key every change in the
+        workspace would read as landed the moment any one of them did."""
+        self.clone("charter")
+        self.make_change("a-1", [("charter", ())])
+        self.make_change("b-2", [("charter", ())])
+        change.record_landing("ws", "a-1", "charter", number=1, merge="e0c9d13",
+                              head="4b1e77a", ts="2026-08-29T00:00:00+00:00")
+        got = {r["change"]: r["state"] for r in gather._change_rows("ws")}
+        self.assertEqual(got, {"a-1": "landed", "b-2": "unknown"})
 
 
 class TestTwoKeystrokes(SurfaceCase):
