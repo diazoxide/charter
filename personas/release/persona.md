@@ -103,6 +103,17 @@ pre-publish guard runs, so a contradiction stops the tag rather than the reader.
 stamping, read `charter news --for <X.Y.Z>` and check the first entry is the one you would
 want a reader to see if they stopped after two screens.
 
+**And on a big release, some entries render as a headline and a link.** Expected, not a
+fault. GitHub refuses a release body over 125,000 characters outright rather than trimming
+it, and that refusal would land in the announce job — *after* the PyPI upload, where the
+documented retry cannot reach it (#665). So `charter news --for` bounds what it renders: the
+notes that fit come out whole, the rest become their headline and a link to the note, and a
+heading between them says how many and why. Nothing is dropped and nothing is cut short.
+This makes `lead:` matter more rather than less, because on a bounded release the order
+decides not only what a reader sees first but what they read without a click. If the command
+*refuses* instead, the headlines alone are over the limit — that arrives in `guard`, before
+anything is published.
+
 That job carries `contents: write`
 alone — the workflow's top-level grant stays `contents: read` — and it leaves an existing
 Release untouched, so a `workflow_dispatch` retry after a partial failure is safe to run —

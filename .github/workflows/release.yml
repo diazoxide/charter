@@ -226,6 +226,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Written out rather than inherited. Actions runs `run:` under `bash -e`, so this
+          # step already aborted on a failed command — but "the render refuses and the
+          # release is therefore not created" is load-bearing now (#665), and a property
+          # that holds because of a platform default is a property nobody in this file
+          # states. `guard` spells it out for the same reason. `-u` besides: every variable
+          # read below is one this workflow sets, and an empty `$tag` is a `gh release
+          # create` against whatever it decides that means.
+          set -eu
           version=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           tag="v$version"
           # `workflow_dispatch` re-runs a release that failed somewhere, and the publish

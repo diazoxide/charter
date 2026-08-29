@@ -62,7 +62,9 @@ is a refusal rather than a cut. `charter news --for` refuses, which puts the ref
 from __future__ import annotations
 
 import io
+import os
 import re
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -71,6 +73,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands, news
+from tests.test_workflows import _release
 
 #: GitHub's documented maximum for a release body, in characters — not bytes. The API
 #: counts characters, and charter's entries are not ASCII (they carry `—`, `✗`, `⬢`), so
@@ -608,6 +611,91 @@ class TheGateRefusesABodyItCannotBound(NewsDir):
         self.assertEqual(code, 0, err)
         self.assertLessEqual(len(out), news.RELEASE_BODY_MAX)
         self.assertEqual(len(self.headings(out)), 44)
+
+
+class ARefusedRenderStopsTheRelease(unittest.TestCase):
+    """The other half of moving the assertion: a refusal only counts if it stops the step.
+
+    `guard` runs `charter news --for` for its exit code, and that half is asserted where
+    the guard's other refusals are. `announce` runs the same command for its *stdout*, and
+    then hands the file it wrote to `gh release create`. If a refused render did not abort
+    that step, `announce` would create a Release from whatever ended up in the file — an
+    empty one, on the path where the PyPI upload has already happened. Which is a worse
+    outcome than the failure this whole change is about: no notes, and no error either.
+
+    Actions runs `run:` blocks under `bash -e`, so this held before the step said so. That
+    is exactly why it is written out and asserted: a property that holds because of a
+    platform default is a property nobody in the file states and nobody notices losing.
+    """
+
+    def _announce(self) -> str:
+        job = _release()["jobs"]["announce"]
+        steps = [s for s in job["steps"] if isinstance(s, dict) and "run" in s]
+        self.assertEqual(len(steps), 1, "announce no longer has exactly one script step")
+        return steps[0]["run"]
+
+    def _execute(self, news_exit: int, errexit: bool = True) -> tuple[int, list[str]]:
+        """Run the announce script with `python` and `gh` stubbed, and report what `gh`
+        was asked to do.
+
+        *errexit* is how the shell was started, and both values are exercised below.
+        ``True`` is Actions' own invocation (`bash -e {0}`); ``False`` is the shell the
+        script's own `set -eu` exists for, and is the only setting under which deleting
+        that line changes anything.
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(os.path.realpath(raw))
+            (tmp / "pyproject.toml").write_text(
+                '[project]\nname = "charter-cp"\nversion = "0.54.0"\n')
+            (tmp / "bin").mkdir()
+            log = tmp / "gh.log"
+            (tmp / "bin" / "python").write_text(
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  -c) echo 0.54.0 ;;\n"                       # the pyproject read
+                f'  -m) echo "NOTES BODY"; exit {news_exit} ;;\n'   # charter news --for
+                "esac\n")
+            (tmp / "bin" / "gh").write_text(
+                "#!/bin/sh\n"
+                f'echo "$*" >> {log}\n'
+                # No release exists yet, so the script goes on to render one.
+                'if [ "$1 $2" = "release view" ]; then exit 1; fi\n'
+                "exit 0\n")
+            for name in ("python", "gh"):
+                (tmp / "bin" / name).chmod(0o755)
+            env = {"PATH": f"{tmp / 'bin'}:/usr/bin:/bin", "RUNNER_TEMP": str(tmp),
+                   "GH_TOKEN": "stub"}
+            argv = ["bash"] + (["-e"] if errexit else []) + ["-c", self._announce()]
+            done = subprocess.run(argv, cwd=tmp, env=env, capture_output=True, text=True)
+            asked = log.read_text().splitlines() if log.exists() else []
+            return done.returncode, asked
+
+    def test_a_render_that_refuses_leaves_no_release_behind(self):
+        code, asked = self._execute(news_exit=1)
+        self.assertNotEqual(code, 0, "the step succeeded after the render refused")
+        self.assertFalse([c for c in asked if c.startswith("release create")],
+                         f"a Release was created from a body charter refused: {asked}")
+
+    def test_and_it_does_not_hold_only_because_of_the_runners_shell_flags(self):
+        """The case the script's own `set -eu` is for, and the reason the case above is not
+        enough on its own: Actions starts `run:` as `bash -e {0}`, so the property holds
+        there with the line deleted — a test that ran only that shape would pin nothing.
+        Run the same script under a shell that was handed no flags and it still refuses to
+        create a Release from a body charter would not print."""
+        code, asked = self._execute(news_exit=1, errexit=False)
+        self.assertNotEqual(code, 0, "the script relies on the runner's `-e` and says so "
+                                     "nowhere")
+        self.assertFalse([c for c in asked if c.startswith("release create")],
+                         f"a Release was created from a body charter refused: {asked}")
+
+    def test_and_a_render_that_succeeds_still_creates_one(self):
+        """The other direction, and it is not decoration: a step that failed unconditionally
+        would pass every case above and never publish a Release again."""
+        for errexit in (True, False):
+            with self.subTest(errexit=errexit):
+                code, asked = self._execute(news_exit=0, errexit=errexit)
+                self.assertEqual(code, 0)
+                self.assertTrue([c for c in asked if c.startswith("release create")], asked)
 
 
 if __name__ == "__main__":
