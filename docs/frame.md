@@ -111,8 +111,28 @@ One consequence of that first column worth knowing, because it is new: a panel w
 component declares `click` or `scroll` asks *its own* terminal to report, so if you select
 that panel's pane (with your tmux prefix, say), your terminal starts reporting and native
 selection goes for as long as it is the active pane. Selecting the harness back — or `F12`
-— ends it. Panels that declare neither ask for nothing and change nothing, which is every
-panel charter ships.
+— ends it. Panels that declare neither ask for nothing and change nothing, which is three
+of the four panels charter ships.
+
+**The repo table is the fourth: it scrolls and it selects.** Roll the wheel over it and the
+window moves down the list; click a row and that repo is selected, its row drawn in reverse
+video and its state read back in words on the right of the attention row — `▪ charter ·
+fix/x · dirty · 2 ahead · CI failed`. A click only ever *selects*; nothing charter does from
+a pointer is irreversible, because a click can reach a pane without its matching press (a
+drag begun on a pane border delivers exactly one release), and a gesture that can arrive
+half-formed is not one to hang an action on.
+
+Two things follow that are worth saying plainly rather than leaving you to find:
+
+- **The wheel does nothing when the table already fits**, which is most of the time — the
+  pane is sized to its own content. There is nothing below to scroll to, so nothing moves
+  and nothing repaints. It starts moving on a plane with more clones than the pane has rows,
+  which is the same plane that shows `…(+7 more)`.
+- **You do not need a mouse.** `F2` → `repo: select the next row` (and `previous`) moves the
+  selection with the arrow keys and Enter you already drive the palette with. That is the
+  only route on a plane with `mouse = false`, which is the default, and charter will not
+  bind a bare arrow key to change it: a `bind -n Up` is server-wide and would take the arrow
+  before your harness sees it.
 
 **Focus events are on inside a frame charter launched, and off inside your own tmux.** tmux
 ships `focus-events` off, and it is a server-wide setting; charter turns it on for its own
@@ -1068,10 +1088,12 @@ remember the flags. The workspace is the session; tmux puts you back on whicheve
 chats was last in front of you.
 
 ```
-charter · 9 to choose from
+charter · 11 to choose from
 > workspace: alpha — pick another
     persona: steward — pick another
     detach — leave the harness running
+    repo: select the next row
+    repo: select the previous row
     density: minimal
     density: normal
   * density: full

@@ -1051,7 +1051,7 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None,
     return tui.Row(*cells, gap=_GAP)
 
 
-def _pick_rows(dirs, budget: int, cur_repo, states, gl) -> list[Path]:
+def _pick_rows(dirs, budget: int, cur_repo, states, gl, *, offset: int = 0) -> list[Path]:
     """Which repos get a row when there are more repos than rows.
 
     The cap was a bare positional slice, so with the list in directory order the rows went
@@ -1067,6 +1067,20 @@ def _pick_rows(dirs, budget: int, cur_repo, states, gl) -> list[Path]:
     repo you were just in. Same reason `_repo_rows` colours by position in the FULL list
     rather than by position among the shown: a repo keeps its colour and its row whether
     or not its neighbour went dirty.
+
+    *offset* is where in that ranking the *budget* rows start, and it is what makes the
+    frame's repo table scrollable without a second answer to "which repos matter"
+    (`slots._table_lines`). **Zero is the whole of today**: every existing caller omits it
+    and gets the same list it always got, byte for byte, because ``[0:budget]`` is the
+    slice this line has always taken. A `repos` pane the operator has wheeled down asks for
+    a window further along the SAME ranking rather than a differently-chosen set — so
+    scrolling reveals the rest in priority order, and scrolling back lands on the exact
+    table that was there before the first notch.
+
+    Past the end it answers fewer rows, and eventually none, rather than clamping: the
+    caller that scrolls is the one that knows how many rows the pane has and how many repos
+    there are (`slots._viewport_limit`), and a clamp here would be a second, weaker copy of
+    that arithmetic — the shape #500 shipped twice.
     """
     order = {d: i for i, d in enumerate(dirs)}
 
@@ -1082,7 +1096,7 @@ def _pick_rows(dirs, budget: int, cur_repo, states, gl) -> list[Path]:
             order[d],                              # stable: original order breaks ties
         )
 
-    chosen = sorted(dirs, key=rank)[:budget]
+    chosen = sorted(dirs, key=rank)[offset:offset + budget]
     return sorted(chosen, key=lambda d: order[d])
 
 

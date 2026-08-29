@@ -55,6 +55,16 @@ not the same as what the slice names suggest.**
   `…(+N more)` line can say how many are hidden; a component built on the `todos` slice
   alone would report zero hidden todos with no way to know it was wrong.
 
+**One of them takes EVENTS, and it is the first thing anywhere that does.** #607 built the
+whole path — the decoder, the dispatcher, `DELIVERED` — and shipped it with no consumer:
+every one of these six declared `events = ()`, so a release went by in which a provider
+could declare `scroll`, pass validation, and be the only thing on the machine receiving
+anything. `repos` declares `scroll` and `click` and :func:`_repos_events` receives them,
+which makes charter's own panel the worked example rather than the exception — the same
+sequencing §4b asks for and the same reason charter's panels went through the component
+seam first. What that handler does and does not do is its own docstring; the short of it is
+that a click SELECTS and never chooses, because a pointer event can arrive unpaired.
+
 **Registration order is split order** (`registry.Registry`), so the four placed components
 are registered in the order charter splits their panes off the harness: identity,
 attention, repos, sidebar. The two parts of the sidebar are registered between them,
@@ -162,6 +172,75 @@ def _panel(slot: str):
     return render
 
 
+#: Which mouse button selects a row. One, and it is named rather than "whatever came":
+#: middle-click is paste on every terminal an operator has ever used and right-click opens
+#: their emulator's own menu, so acting on either would be charter taking a gesture that
+#: already means something else. `overlay._SGR_BUTTONS` is where the three get their names,
+#: and the ones §4f named no kind for never arrive here at all.
+_SELECT_BUTTON = "left"
+
+
+def _repos_events(fid: str):
+    """The `repos` table's handler: the wheel scrolls it, a click selects a row.
+
+    **Charter's own first consumer of the event path #607 built**, and the six built-ins
+    declared nothing until this one. What it demonstrates is meant to be the shape a
+    provider copies, so the two rules it keeps are the two that are easy to get wrong:
+
+    **A click only ever SELECTS.** Nothing here is irreversible, nothing here starts work,
+    and that is not caution — it follows from what `frame/overlay.py` measured. A `click`
+    release may arrive with no matching press (a drag begun on a pane border delivers
+    exactly one release), so a pointer event is a thing that can arrive unpaired, and §4i's
+    rule is that the irreversible half is never driven by one. Choosing is a keypress's job.
+    A component that wanted to *do* something to the selected repo would put that behind
+    `Enter` in a palette row, where it has a name and a confirmation.
+
+    **The PRESS is acted on and the release is dropped**, which is `component.EVENT_KINDS`'
+    "act on one of them, never wait for the pair" answered in the direction that matches
+    what the operator did: the press is where they pointed. A drag that BEGAN elsewhere and
+    happens to release over this pane delivers only a release and selects nothing, which is
+    right — they never pointed here.
+
+    **Neither branch reads the plane, and that is the contract rather than thrift.** A
+    handler is handed no ctx (§4f), so it cannot know how many repos there are or how tall
+    this pane is; both are `slots._repos`' to compute, and it hands them to
+    `slots.VIEWPORT` on every paint. So a wheel notch on a pane that already shows every
+    repo — which is the ordinary plane, because the pane is sized to its content — moves
+    nothing and answers falsy, and the frame does not repaint. The one plane read here is
+    `state.selection`, and it is read to answer *has anything changed*, not to draw.
+
+    **The click bumps the frame's version, and that is what makes the third surface work.**
+    The selected row's detail is drawn on the ATTENTION row, which is a different pane and a
+    different process (`slots._selected_detail`). Returning truthy repaints this panel and
+    only this panel; `state.bump` is how every other cross-panel fact in this frame travels,
+    and the poll it wakes is `panel._tick`'s existing one. Re-selecting the row that is
+    already selected is not news for either pane, so it does neither — which is also what
+    keeps a double-click from bumping the frame twice.
+
+    *fid* is closed over rather than resolved: this process was told which frame it is
+    drawing (`charter panel repos --session <fid>`), and a handler that read
+    `$CHARTER_SESSION_ID` back out of its own environment would be answering from a variable
+    one tmux server shares between every frame on the machine — the trap
+    `state.record_identity` measured.
+    """
+    def on_event(ev):
+        from . import overlay, state
+        from . import slots as _slots
+        if ev.kind == overlay.SCROLL:
+            return _slots.VIEWPORT.move(
+                _slots.SCROLL_ROWS if ev.name == "down" else -_slots.SCROLL_ROWS)
+        if not ev.pressed or ev.name != _SELECT_BUTTON:
+            return False
+        name = _slots.VIEWPORT.repo_at(ev.row)
+        if name is None or name == state.selection(fid):
+            return False
+        state.record_selection(fid, name)
+        state.bump(fid)
+        return True
+
+    return on_event
+
+
 def _personas(ctx) -> list[str]:
     """The sidebar's persona rows — `slots.persona_section` at this pane's size."""
     from . import slots
@@ -186,7 +265,7 @@ def _changes(ctx) -> list[str]:
     return slots.changes_section(ctx.fid, ctx.width, ctx.height)
 
 
-def build() -> Registry:
+def build(fid: str = "") -> Registry:
     """A registry holding charter's six built-in components, in split order.
 
     A fresh one per call, deliberately — `registry.Registry`'s own docstring argues it:
@@ -196,6 +275,19 @@ def build() -> Registry:
 
     Cheap enough to mean it: six frozen dataclasses and no I/O. The renderers are reached
     lazily from inside each ``render``, so building a registry imports nothing.
+
+    **`fid` is which frame the components will be DRIVEN in, and it is optional because
+    most callers never drive them.** `Component.on_event` is handed one event and nothing
+    else (§4f), so a handler that has to write down a selection for this frame can only
+    have the id by closing over it, and this is where the closing happens. `layout` builds a
+    registry at import to read edges and sizes off it, and `instance` builds one to resolve
+    a plane's arrangement; neither dispatches an event through what it built, so neither has
+    an id to give and neither needs one. `panel._run` — the one caller that DOES build a
+    dispatcher — passes it.
+
+    There is deliberately no refusal for the empty default and no guard downstream of it: a
+    handler built without an id is one nothing calls, so a check for it would be a line no
+    test could turn red, which is the second-weaker-answer shape #568 deleted.
     """
     from . import slots
 
@@ -210,9 +302,25 @@ def build() -> Registry:
     # what the plane's repos need, bounded by what the harness may not be charged
     # (`layout.HARNESS_MIN_ROWS`), which is a fact about the WINDOW rather than about the
     # component. A cap here would be a second, weaker copy of that arithmetic.
+    #
+    # **The one component that declares events, and it is the first thing in charter that
+    # ever has** (#607 built the path; nothing consumed it). `scroll` and `click` are the
+    # two `frame/events.py` can carry to a pane the pointer is over without moving the
+    # keyboard, and they are declared TOGETHER because `events.Dispatcher.open` asks the
+    # terminal for one request that serves both — a component declaring only one of them
+    # would still pay `overlay.MOUSE_ON`'s whole price.
+    #
+    # **Declaring them is not a promise they fire**, which is the rule `EVENT_KINDS`
+    # states and this is the first place charter itself is bound by it: with `[frame]
+    # mouse` off — the shipped default — the harness decides whether the terminal reports
+    # at all, so on most planes this handler is never called and the table is exactly what
+    # it always was. That is why the selection has a keyboard route as well
+    # (`builtin_actions._register_selection`), and why the pane is still readable with no
+    # selection at all.
     reg.register(Component(
         id="repos", title="repos", edge="bottom", size=Content(),
-        needs=("gather",), render=_panel("repos")))
+        needs=("gather",), render=_panel("repos"),
+        events=("scroll", "click"), on_event=_repos_events(fid)))
     # The two parts of the sidebar, registered before the composite that draws them.
     # `personas` is the `Fill()`: the pane is the persona column everywhere else charter
     # names it, so it takes what is left and the todos are capped

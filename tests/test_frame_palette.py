@@ -573,18 +573,27 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         """§4g plus the fact that the palette's pane is killed the instant it has invoked:
         `kill-pane` hands SIGHUP to that pane's process group, so a child inside it dies
         with it. Asserted on every built-in at once, because a new one added without this
-        would fail silently and only on a real frame."""
+        would fail silently and only on a real frame.
+
+        **Each action is driven with the ctx IT declared**, built by `action.build` from
+        its own `touches` — the same call `ActionRegistry._check` makes. It used to be one
+        hand-written `SimpleNamespace(fid=…)` for all of them, which was a second, weaker
+        copy of what a ctx carries: the first action to declare a slice (`repo.next`,
+        which reads the repo list to know what the next row is) raised `AttributeError` out
+        of the loop rather than failing this test's own claim.
+        """
         opened = []
 
         class _Popen:
             def __init__(self, argv, **kw):
                 opened.append(kw)
 
+        snapshot = {"repos": [{"name": "one"}, {"name": "two"}]}
         reg = builtin_actions.build(self.FID, current_density="normal",
                                     current_chrome="off")
         with mock.patch.object(builtin_actions.subprocess, "Popen", _Popen):
             for a in reg.all():
-                a.run(SimpleNamespace(fid=self.FID))
+                a.run(action.build(a.touches, fid=self.FID, snapshot=snapshot))
         self.assertTrue(opened)
         for kw in opened:
             self.assertTrue(kw.get("start_new_session"),
