@@ -38,6 +38,60 @@ credential helper and *its own host's* SSH→HTTPS rewrite; a `github.com` clone
 `gh`'s. This is what lets a mixed-forge control plane's clones each authenticate
 correctly without you telling `charter` which is which per repo.
 
+## What charter asks a forge, and what it now tells one
+
+The protocol has two disciplines and, since the cross-repo change surface, a third.
+
+**Permissive** — `open_change`, `ci_status`, and everything the status line renders from.
+Any failure answers `None`. Being wrong costs a blank column, retried at the next refresh,
+and this path must never crash a surface that draws every turn.
+
+**Strict** — `list_repos`, `repo_tree_strict`, `request_for`. A failure raises
+`ForgeError`, because collapsing "the call failed" into "the result was empty" is how a
+rate-limited lookup wipes an inventory, or reads an open pull request as one that was never
+pushed.
+
+**Loud** — `create_change`, `update_change_body`, `merge_change`. A failure raises
+`ForgeWriteError` and never returns `None`, because a swallowed write failure means a pull
+request that was never opened, or a merge that never happened, reported as a success. This
+is the second place in charter that writes to a forge; `report` was the first, and ADR 0002
+is amended rather than left quietly false about that.
+
+### `checks_at(path, sha, number=None)` — and why it is not `ci_status`
+
+`ci_status` collapses six worlds into `None`: a CLI failure, a timeout, a non-zero exit,
+malformed JSON, an auth failure, and *no check ever ran*. That is correct where it renders
+and useless as a landing gate, so `checks_at` answers a **record with two fields**:
+
+- `total is None` — the only way to say *charter could not ask*, or could not ask
+  completely. `state` is `unknown`.
+- `total == 0` — charter asked, everywhere it knows to look, and there is nothing there.
+  `state` is `not_run`, and **that is not a pass**.
+
+The other three states are `passed`, `failed` and `running`, and precedence is fixed:
+`unknown` > `failed` > `running` > `not_run` > `passed`. `unknown` is first because it is the
+only value that means charter did not look.
+
+**`gh pr checks` and `mergeStateStatus` are forbidden inputs**, by name, in the spec and in
+the test. Both report a run that never happened identically to a clean pass (#561).
+
+The requirement is a **property, not an endpoint** — *see every check the forge would show a
+human at that head* — and each backend needs more than one read to satisfy it:
+
+- **GitHub:** check runs **and** the combined commit status at that sha, summed into one
+  total. The check-runs endpoint returns Check Runs only, so a repository reporting through
+  the Commit Statuses API (Jenkins, Buildkite, CircleCI) is `total_count: 0` there at a fully
+  green head.
+- **GitLab:** the merge request's own head pipeline, which needs `number`. A merged-results
+  pipeline runs against `refs/merge-requests/:iid/merge`, whose sha is not the branch head,
+  so a bare sha filter is empty on a green merge request. Without `number` charter cannot
+  rule that out, so an empty answer is `unknown` rather than `not_run`.
+
+Where a backend cannot enumerate completely the answer is **`unknown`, never `not_run`**.
+That word asserts nothing ran, and charter may only assert it having looked everywhere it
+knows to look. The asymmetry decides it: a false `not_run` costs a re-run, a false `passed`
+merges untested code.
+
 ## The mixed-forge collision rule
 
 Repos are addressed by their **bare name** — the last path segment — everywhere:
