@@ -550,5 +550,58 @@ class ARealWheelOverAPlaneWithOneCloneAndManyPieces(_ARealFrame):
                         f"{self._table()!r} != {before!r}")
 
 
+#: Worktrees on the plane below — three, so one clone and three pieces is four rows in the
+#: four rows of table this pane has. `layout.repos_rows` sizes the real pane to its content,
+#: so this is the ORDINARY plane and the one the wheel must be inert on.
+PIECES_THAT_FIT = 3
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealWheelOverAPaneThatFitsItsPieces(_ARealFrame):
+    """**The tested nothing, on a real frame** — the same plane shape, tall enough.
+
+    The unit half asserts `slots._scroll_limit(15, 15) == 0` and one either side of it, and
+    that is the claim that matters; this is the claim that a real pane, with a real panel
+    process taking real SGR reports off its own pty, spends nothing on them either. The two
+    zeros #663 is about — *the pieces fit* and *the pieces were never counted* — look the
+    same from outside, and the class above is what tells them apart.
+    """
+
+    def _seed(self) -> dict:
+        return {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+                "repos": [_row("solo", worktree_count=PIECES_THAT_FIT)],
+                "worktrees": [_row(f"piece{i}", repo="solo")
+                              for i in range(PIECES_THAT_FIT)]}
+
+    def test_every_row_of_the_plane_is_on_screen_and_nothing_admits_otherwise(self):
+        """Four rows of content in four rows of table: no `…(+N more)` and no `⑂N`, because
+        there is nothing this pane is not showing. The badge is the half that would go
+        wrong in the other direction — counted from the pieces DRAWN, it must vanish here."""
+        rows = self._table()
+        self.assertEqual(len(rows), 1 + PIECES_THAT_FIT, rows)
+        self.assertNotIn("more)", "\n".join(rows))
+        self.assertNotIn("⑂", "\n".join(rows))
+
+    def test_the_wheel_moves_nothing_on_a_pane_that_fits(self):
+        """**A negative measured against a panel proved to be awake.** A pane that never
+        repaints would pass "nothing changed" for the wrong reason, which is the whole
+        failure mode #663 is: a green measurement of an empty room. So a click is landed
+        first and its highlight waited for — that IS this panel repainting on this pty —
+        and only then is the wheel asserted to cost nothing."""
+        before = self._table()
+        self._point(self.repos_pane, row=1)
+        self.assertTrue(_await(lambda: state.selection(self.fid) == "solo"),
+                        "the panel never took the click, so a wheel that changed nothing "
+                        "would prove nothing")
+        self.assertTrue(
+            _await(lambda: "\x1b[7m" in self._painted(self.repos_pane).split("\n")[1]),
+            "the panel never repainted, so it is not awake to be measured")
+        for _ in range(3):
+            self._wheel(self.repos_pane, down=True)
+        time.sleep(1.0)
+        self.assertEqual(self._table(), before,
+                         "a pane tall enough for its content scrolled")
+
+
 if __name__ == "__main__":
     unittest.main()

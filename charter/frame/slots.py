@@ -581,8 +581,15 @@ def _piece_rows(data: dict) -> list[dict]:
     included a row the composer would not draw leaves an offset that scrolls onto nothing,
     and one that excluded a drawn row leaves the bottom of the plane permanently out of
     reach. #663 is what the second of those looks like when it ships.
+
+    **`data["repos"]` and `data["worktrees"]`, with no `or []` under either**, which is the
+    reason :func:`_selected_detail` already gives for the same subscript: `gather.cached`
+    answers ``None`` for anything whose `repos` or `worktrees` is not a LIST
+    (`gather._shaped_like_a_scan` checks both), so a fallback here could only ever stand in
+    for an empty list with an empty list. The sweep found both surviving, correctly — a
+    line that cannot change an outcome is not documentation of an intent.
     """
-    return list(data.get("worktrees") or []) if len(data.get("repos") or []) == 1 else []
+    return list(data["worktrees"]) if len(data["repos"]) == 1 else []
 
 
 def _content_rows(data: dict) -> int:
@@ -596,8 +603,12 @@ def _content_rows(data: dict) -> int:
     control plane, and the state of the one #658 shipped from — it answered 0 for every
     pane height, so the wheel was inert and the pieces past the pane's last row were
     dropped with nothing on screen saying so.
+
+    Subscripted rather than `.get`-with-a-fallback for the reason :func:`_piece_rows`
+    states: `gather.cached` is what refuses a scan whose `repos` is not a list, so a
+    fallback here stands in for an empty list with an empty list.
     """
-    return len(data.get("repos") or []) + len(_piece_rows(data))
+    return len(data["repos"]) + len(_piece_rows(data))
 
 
 def _scroll_limit(rows: int, budget: int) -> int:
@@ -812,8 +823,16 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
     # therefore spends it on the note, which is the honest half of the pair: "there is
     # more here than fits" outranks "here is an arbitrary one of them".
     room = budget - (1 if capped else 0)
-    show = (sl._pick_rows(keys, room, cur_repo, by_key, by_key, offset=offset)
-            if capped else keys)
+    # **Ranked unconditionally, and the `if capped else keys` that used to be here is
+    # gone.** The sweep found the two arms indistinguishable and it is right: an UNCAPPED
+    # table has `room >= len(keys)` by definition and its offset is 0 (`_scroll_limit`
+    # answers 0 and `_Viewport.settle` holds it there), and `_pick_rows` re-sorts its pick
+    # back into cache order — so `[0:room]` of the ranking IS `keys`, element for element.
+    # The branch was an optimisation over two sorts of at most `statusline._MAX_REPO_LINES`
+    # rows on a pane that repaints on a version bump, and what it cost was a second shape
+    # for this line to have: with it, an offset over a table that fits moved the pieces and
+    # not the repos. One window over one list, at every offset, capped or not.
+    show = sl._pick_rows(keys, room, cur_repo, by_key, by_key, offset=offset)
 
     # **The window is one window over one list, and the list is repo rows THEN piece rows.**
     # That is the order this function already spent its budget in (`statusline._repo_rows`'
