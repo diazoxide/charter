@@ -2456,19 +2456,27 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     "add chat" affordance, and nothing else today. Dropped first, before any name, because
     it is a reminder and the names are the readout.
     """
-    head = contain.one_line(head)
-    names = [contain.one_line(n) for n in names]
     if not names:
         return []
-    marked = [f"{_BAR_MARK[0] if n == here else _BAR_MARK[1]}{n}" for n in names]
-    lead = _inset() + head + " " * _BAR_GAP
+    # **Which row is yours is decided on the RAW names; only the drawing uses the
+    # contained ones.** `choose.Roster` makes the same split one surface over and for the
+    # same reason: `contain.one_line` is a repair, so two names that differ only in what
+    # it repairs are one string after it, and a mark matched on the drawn text would
+    # follow the repair rather than the identity. Neither caller can reach that today
+    # (`chats.ID_RE` and `workspace.valid_name` both refuse the characters `one_line`
+    # touches), which is exactly why it is written as an index now rather than found as a
+    # bug by whichever caller stops.
+    at = names.index(here) if here in names else -1
+    shown = [contain.one_line(n) for n in names]
+    marked = [f"{_BAR_MARK[0] if i == at else _BAR_MARK[1]}{n}"
+              for i, n in enumerate(shown)]
+    lead = _inset() + contain.one_line(head) + " " * _BAR_GAP
     room = width - tui.width(lead)
     joined = (" " * _BAR_GAP).join(marked)
     if note and tui.width(joined) + _BAR_GAP + tui.width(note) <= room:
         return [lead + joined + " " * _BAR_GAP + contain.one_line(note)]
     if tui.width(joined) <= room:
         return [lead + joined]
-    at = names.index(here) if here in names else -1
     if at >= 0:
         rest = f"{' ' * _BAR_GAP}+{len(names) - 1}" if len(names) > 1 else ""
         if tui.width(marked[at]) + tui.width(rest) <= room:

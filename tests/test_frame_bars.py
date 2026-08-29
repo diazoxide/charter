@@ -143,6 +143,21 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         row = self._row(20, names=["averylongchatname.1"], here="averylongchatname.1")
         self.assertNotIn("+0", row)
 
+    def test_the_mark_follows_the_raw_name_and_not_the_repaired_one(self):
+        """`contain.one_line` is a REPAIR, so two names differing only in what it repairs
+        are one string after it — and a mark matched on the drawn text would follow the
+        repair rather than the identity. Neither caller can produce such a pair today
+        (`chats.ID_RE` and `workspace.valid_name` both refuse those characters), which is
+        why the index is taken before containment rather than left to be found later."""
+        names = ["api x", "apix"]
+        row = slots._bar("chats", list(names), "apix", 200)[0]
+        marks = [f for f in row.split(" " * slots._BAR_GAP)
+                 if f.strip().startswith(slots._BAR_MARK[0])]
+        self.assertEqual(len(marks), 1,
+                         f"two names were repaired into one marked row: {row!r}")
+        self.assertTrue(row.rstrip().endswith(f"{slots._BAR_MARK[0]}apix"),
+                        f"the mark landed on the repaired name: {row!r}")
+
     def test_a_hostile_name_is_contained_before_the_width_arithmetic(self):
         """#472, at the position it was filed about: a row that sized itself from a raw
         name. `tui.width` — never `len` — measures what `contain.one_line` already made
