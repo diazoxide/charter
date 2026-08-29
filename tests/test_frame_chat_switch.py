@@ -645,6 +645,25 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         self.assertNotIn("kill-pane", self.fake.verbs())
         self.assertEqual(state.panes("api.1"), {"top": "%3", "bottom": "%4"})
 
+    def test_outside_a_frame_it_touches_no_tmux_at_all(self):
+        """**Found by hand against the real server, not by a test.** `_say_on_screen`'s
+        `-t <fid>` with an empty target resolves to whichever session on the SHARED
+        `-L charter` server was attached most recently — so `charter frame-chat api.2`
+        typed in an ordinary shell drew charter's refusal across another operator's frame.
+
+        Unlike `cmd_toggle`'s deleted `if not fid`, this refusal is not free: that command
+        emits nothing with an empty id and its guard was an equivalent mutant, and this
+        one issues a real tmux command aimed at a session it has no business naming.
+        """
+        said = []
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": ""}, clear=False), \
+             mock.patch.object(commands_frame, "_say_on_screen",
+                               lambda fid, msg, *a, **k: said.append(msg)):
+            self.assertEqual(
+                commands_frame.cmd_chat(mock.Mock(chat_id="api.2", chat="")), 0)
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(said, [], "a refusal was aimed at a frame this is not in")
+
     def test_a_refused_name_never_reaches_tmux_at_all(self):
         said = []
         with mock.patch.object(commands_frame, "_say_on_screen",

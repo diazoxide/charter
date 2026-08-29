@@ -4917,6 +4917,16 @@ def cmd_chat(args) -> int:
     :func:`_say_on_screen` instead.
     """
     fid = _pressers_chat(args)
+    if not fid:
+        # **Not fired from inside a frame at all, and unlike `cmd_toggle` this refusal is
+        # not free.** That command emits nothing by construction with an empty id, which
+        # is why the deletion sweep found its own `if not fid` equivalent and it was
+        # deleted. This one reaches :func:`_say_on_screen`, whose `-t <fid>` with an empty
+        # target resolves to whichever session on the SHARED server was attached most
+        # recently — so `charter frame-chat api.2` typed in an ordinary shell drew
+        # charter's refusal across somebody else's frame. Measured by hand against the
+        # real server, which is how it was found. `cmd_switch`'s guard, for its reason.
+        return 0
     target = (getattr(args, "chat_id", None) or "").strip()
     # Asked again rather than trusted from the palette that spawned this: the same
     # command is typeable by hand on a name nobody drew, and `chats.check` is the one
