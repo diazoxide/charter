@@ -22,6 +22,28 @@ charter is pre-1.0 and moves quickly. Fixes land on the latest release; there ar
 maintained backport branches. Upgrade with `uv tool upgrade charter-cp` (and
 `claude plugin update charter@charter`, which is a separate artifact with its own version).
 
+## What a security release note will and will not tell you
+
+No backport branches has a consequence for how a fix gets announced, and it is worth stating
+rather than leaving for you to notice. A reader on the previous release is **permanently
+unpatched at the moment they learn the hole exists** — there is no patched 0.53.x to move
+sideways onto, only forward. So a note that shipped a working bypass alongside "we fixed it"
+would arm the people who have not upgraded yet against themselves, and the people it arms
+are the ones with the least ability to do anything about it.
+
+The rule those notes are written to is therefore: **describe the class, never the recipe.**
+Every security entry states the affected versions, the shape of the weakness, what it could
+reach, and the fix — enough to answer *am I exposed, and what do I do*. None of them prints
+an assembled command line that walks past a guard, or a table of working spellings. That is
+a deliberate narrowing of a note, not an omission, and it is not a claim that the underlying
+technique is secret: charter's guard tables ship in the source, and this page describes the
+guard's ceiling in detail on purpose. What the notes withhold is the assembled, runnable
+form, because that is the part whose only use is running it.
+
+Being vague is the other way to fail, so it is not the trade being made here. If a note
+leaves you unable to tell whether it matters to your plane, that is a defect in the note —
+report it the same way you would report anything else on this page.
+
 ## What charter's vault does and does not protect
 
 This is the part most worth reading before you trust charter with anything real, and the

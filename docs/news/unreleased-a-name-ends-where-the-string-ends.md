@@ -4,6 +4,9 @@ headline: A name ends where the string ends — a trailing newline is no longer 
 security: true
 ---
 
+**Affected: 0.53.0 and earlier. Fixed here.** No name charter has ever minted is affected;
+see *Who this refuses that it used to accept* below before assuming this reached you.
+
 `persona.valid_name("evil\n")` returned **True**, and a directory `personas/evil<LF>/`
 holding an ordinary `persona.md` resolved, loaded, and was rendered by
 `charter persona sync-agents` into a generated sub-agent whose YAML frontmatter carried a

@@ -4,6 +4,11 @@ headline: A report that tells you to fix a persona now names it — three rows r
 security: true
 ---
 
+**Affected: 0.53.0 and earlier. Fixed here.** Exposure needs a persona directory committed
+to your plane whose name renders as nothing — which no `charter persona create` can mint,
+so it arrives by commit or by hand. The consequence is concealment: the reports whose job
+is to name the thing you must fix named nothing at all.
+
 `charter persona lint` printed `✗ : no role` for a persona whose directory name is three
 U+3164 HANGUL FILLERs. The sentence beside it read `persona '' does not load`. And the brief
 a dispatched sub-agent reads listed `` `personas/<name>/bin/` `` — a path with no filename

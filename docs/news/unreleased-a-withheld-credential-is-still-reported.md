@@ -4,6 +4,10 @@ headline: `persona lint` and `doctor` report a persona running without the crede
 security: true
 ---
 
+**Affected: 0.53.0 and earlier. Fixed here.** The failure direction is **fail-closed** — a
+credential is withheld and stays withheld. Nothing leaks and nothing escalates; what was
+lost was the operator's view of a gate that worked.
+
 When `charter persona sync-agents` withholds a vault from an MCP server, it says so, and it
 names the command that would restore it. That warning is correct and it was the **only**
 place it was ever said ([#489](https://github.com/diazoxide/charter/issues/489)).
@@ -75,3 +79,7 @@ separately and correctly calling the same persona one that names no vault. One s
 two readings, and the consent record was on the wrong side of it. The render and the consent
 list now normalise it in one place, because those two disagreeing is an operator asked about
 a server the file does not wrap.
+
+Nothing to adopt: upgrading is the whole of it. If a persona of yours has been running an
+MCP server that will not authenticate, `charter persona lint` is now where that is said, and
+it names both ways out.

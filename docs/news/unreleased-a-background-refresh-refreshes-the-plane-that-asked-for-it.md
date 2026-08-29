@@ -96,9 +96,12 @@ does not ask: a shell's `-c` string, Python source, a script file, and an interp
 resolved to what it really is rather than what the symlink is called. A structural test
 fails if the tables drift apart again.
 
-Doing that turned up a real defect in the production guard, filed as #547 rather than
-patched around here: `env -Sfoo=1 cat .charter/vaults/x.json` is currently ALLOWED by the
-Bash tool-gate, because the packed command is split at the wrong `=`.
+Doing that turned up a real defect in the production guard, filed as
+[#547](https://github.com/diazoxide/charter/issues/547) rather than patched around here: a
+wrapper prefix that packs a whole command into one token was split at the wrong `=`, so the
+Bash tool-gate never saw the reader inside it and allowed the read. **That is fixed in this
+same release** — see "A value glued to a short flag is read as one value again", which is
+also why the command itself is not written out here.
 
 This reaches you as a correctness fix in `charter gl-refresh`; the rest only ever mattered
 if you run charter's own test suite. Nothing to adopt — upgrading is the whole of it.

@@ -4,6 +4,11 @@ headline: the files under `.charter/` are 0600 because charter says so — a sta
 security: true
 ---
 
+**Affected: 0.53.0 and earlier. Fixed here.** Exposure needs a second account on the same
+machine, or a backup or disk image somebody else can read — and one of the files at stake
+is world-*writable* under a permissive umask, which makes this an integrity question and
+not only a disclosure one.
+
 0.53.0 settled the mode of every **directory** charter creates under `.charter/`: whichever
 writer gets there first, each level comes out 0700, and the umask does not get a say
 ([#470](https://github.com/diazoxide/charter/issues/470)). The **files** inside them were

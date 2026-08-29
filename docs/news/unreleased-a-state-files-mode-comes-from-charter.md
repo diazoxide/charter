@@ -4,6 +4,9 @@ headline: the persona pointers and every frame state file are 0600 because chart
 security: true
 ---
 
+**Affected: 0.53.x and earlier. Fixed here.** Exposure needs a second account on the same
+machine, or a backup or disk image somebody else can read.
+
 0.53.x settled the mode of the files under `.charter/`: they are written through
 `config.write_for` / `open_for` / `touch_for`, which settle the mode on the descriptor
 before any content lands ([#505](https://github.com/diazoxide/charter/issues/505)).
