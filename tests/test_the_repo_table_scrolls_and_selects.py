@@ -16,8 +16,15 @@ compared against the sentence it should read rather than against "contains the n
 
 **The scroll that does NOTHING is tested as hard as the one that does.** The `repos` pane
 is sized to its own content (`layout.repos_rows`), so the ordinary plane is one where every
-repo already fits and the wheel must move nothing, repaint nothing and cost nothing — an
+row already fits and the wheel must move nothing, repaint nothing and cost nothing — an
 accident that happened to cancel would be indistinguishable from a design that refuses.
+
+**And the nothing is tested on both plane shapes, which is #663.** Every case here was
+originally written over a many-clones plane, where a scroll limit computed from the repo
+count is right by coincidence. On the one-clone-many-worktrees plane — a control plane's
+ordinary state — that same limit is 0 at every pane height, so the feature was a no-op and
+the suite could not tell. `TheTableCountsTheRowsItWillDraw` and
+`TheWindowMovesOverPieceRowsToo` are the shape that was missing.
 """
 
 from __future__ import annotations
@@ -61,6 +68,50 @@ def _names(lines) -> list[str | None]:
     return [ln.repo for ln in lines]
 
 
+class TheTableCountsTheRowsItWillDraw(unittest.TestCase):
+    """`slots._content_rows` and `slots._piece_rows` — the quantity #663 turned on.
+
+    **This is the unit the whole feature is in.** The bound, the overflow reservation and
+    the click map are all rows of a pane; counting repos agreed with counting rows only on
+    a plane where no repo had pieces, and the plane #658 shipped from was not one.
+    """
+
+    def test_a_plane_with_no_pieces_counts_its_repos(self):
+        self.assertEqual(slots._content_rows(_data([_row(f"r{i}") for i in range(6)])), 6)
+
+    def test_one_clone_with_worktrees_counts_every_worktree_as_a_row(self):
+        """The number #663 is about: a table of one repo and fourteen pieces draws fifteen
+        rows, so fifteen is what the pane has to be measured against. Asserted as 15 and
+        not as "more than one" — `len(repos)` is also an int and also renders something."""
+        data = _data([_row("solo")],
+                     worktrees=[_row(f"w{i}", repo="solo") for i in range(14)])
+        self.assertEqual(slots._content_rows(data), 15)
+
+    def test_two_clones_draw_no_piece_rows_however_many_the_cache_holds(self):
+        """`statusline._detail_worktrees`' rule: at two repos or more a repo must never
+        lose its row to another repo's pieces, so the pieces are a `⑂N` badge instead.
+        `gather.scan` already writes `worktrees` on that condition alone — this asks the
+        question again, so a cache written by another version cannot put a piece row under
+        each of six repos and give the viewport a bound for rows nothing draws."""
+        data = _data([_row("a"), _row("b")],
+                     worktrees=[_row(f"w{i}", repo="a") for i in range(9)])
+        self.assertEqual(slots._piece_rows(data), [])
+        self.assertEqual(slots._content_rows(data), 2)
+
+    def test_the_counter_and_the_composer_agree_on_every_shape(self):
+        """**The two must not drift**, and this is that stated as an equality rather than
+        as a comment. A count above what is composed leaves an offset that scrolls onto
+        nothing; a count below it leaves the bottom of the plane permanently out of reach,
+        which is the half #663 shipped. Compared against a budget big enough to draw the
+        whole table, where the composed line count IS the content count."""
+        for repos, pieces in ((1, 0), (1, 1), (1, 9), (2, 4), (6, 0), (14, 3)):
+            with self.subTest(repos=repos, pieces=pieces):
+                data = _data([_row(f"r{i}") for i in range(repos)],
+                             worktrees=[_row(f"w{j}", repo="r0") for j in range(pieces)])
+                want = slots._content_rows(data)
+                self.assertEqual(len(slots._table_lines(data, WIDE, want)), want)
+
+
 class TheOffsetIsBoundedByTheDataAndThePane(unittest.TestCase):
     """`slots._scroll_limit` — how far the window may move, and when it may not at all.
 
@@ -69,15 +120,22 @@ class TheOffsetIsBoundedByTheDataAndThePane(unittest.TestCase):
     to that question is `True` for both `20 - 13` and `20`.
     """
 
-    def test_a_pane_tall_enough_for_its_repos_does_not_scroll_at_all(self):
+    def test_a_pane_tall_enough_for_its_rows_does_not_scroll_at_all(self):
         """**The tested nothing.** `layout.repos_rows` sizes this pane to its content, so
-        the ordinary plane has exactly as many rows as repos and the wheel must be inert.
+        the ordinary plane has exactly as many rows as content and the wheel must be inert.
         Asserted at the boundary and one either side of it, because the guard that makes it
         true is a comparison and an off-by-one there is a table that slides by one row on
-        every plane charter ships."""
+        every plane charter ships.
+
+        The last pair is the one-clone plane at its own natural height — one repo and
+        fourteen worktrees in the fifteen rows `slots.repos_rows_wanted` asks for. It still
+        answers 0, and now it answers 0 because the pieces FIT rather than because they
+        were never counted."""
         self.assertEqual(slots._scroll_limit(6, 6), 0)
         self.assertEqual(slots._scroll_limit(5, 6), 0)
         self.assertEqual(slots._scroll_limit(1, 14), 0)
+        self.assertEqual(slots._scroll_limit(15, 15), 0)
+        self.assertEqual(slots._scroll_limit(14, 15), 0)
 
     def test_the_limit_leaves_the_overflow_line_its_row(self):
         """`_table_lines` reserves `…(+N more)` OUT of the budget rather than trimming it
@@ -87,6 +145,15 @@ class TheOffsetIsBoundedByTheDataAndThePane(unittest.TestCase):
         reach."""
         self.assertEqual(slots._scroll_limit(20, 14), 7)
         self.assertEqual(slots._scroll_limit(7, 6), 2)
+
+    def test_a_clone_with_more_worktrees_than_the_pane_can_hold_scrolls(self):
+        """**#663 as a number.** One clone and fourteen worktrees is fifteen rows, and in
+        a six-row pane five of them are drawn beside the note — so the window's last
+        position is 10, and at 10 the fourteenth worktree is on screen. Every one of these
+        answered 0 while the argument was the repo count, on every pane height there is."""
+        self.assertEqual(slots._scroll_limit(15, 6), 10)
+        self.assertEqual(slots._scroll_limit(15, 17), 0)
+        self.assertEqual(slots._scroll_limit(15, 3), 13)
 
     def test_a_one_row_pane_is_all_overflow_line_and_does_not_scroll(self):
         """A budget of exactly one is spent on `…(+N more)` — "there is more here than
@@ -249,6 +316,124 @@ class TheWindowMovesAlongTheRanking(PersonaIso, unittest.TestCase):
                       worktrees=[_row("bit", branch="fix/x", repo="solo")])
         self.assertNotIn("bit  ", tui.strip_ansi(self._lines(same, 6)[1].text).strip())
         self.assertIn("fix/x", tui.strip_ansi(self._lines(other, 6)[1].text))
+
+
+class TheWindowMovesOverPieceRowsToo(PersonaIso, unittest.TestCase):
+    """#663: one clone, nine worktrees, four rows of table.
+
+    **The shape the feature shipped switched off on.** Ten rows of content into four is
+    over-full by six, so every expectation here is worked out from "repo rows first, then
+    the pieces, with one row reserved for the note" — the order `_table_lines` states — and
+    never from a second call to it.
+    """
+
+    def _lines(self, budget=4, offset=0, pieces=9, **kw):
+        data = _data([_row("solo", worktree_count=pieces)],
+                     worktrees=[_row(f"w{i}", repo="solo") for i in range(pieces)])
+        return slots._table_lines(data, WIDE, budget, offset=offset, **kw)
+
+    def _drawn(self, **kw):
+        """The names drawn, the overflow line dropped — read as *the token after the tree
+        glyph*, because a piece row carries one glyph more than a repo row and a fixed
+        column index would read the wrong word on one of the two shapes."""
+        glyphs = (statusline._TREE_MID.strip(), statusline._TREE_WT.strip(),
+                  statusline._TREE_END.strip())
+        out = []
+        for ln in self._lines(**kw):
+            parts = tui.strip_ansi(ln.text).split()
+            for i, tok in enumerate(parts[:-1]):
+                if tok in glyphs:
+                    out.append(parts[i + 1])
+                    break
+        return out
+
+    def test_offset_zero_keeps_the_clone_at_the_top(self):
+        """Three of ten rows and the note: the repo row first, because a repo row outranks
+        its own pieces for the same reason it outranks another repo's."""
+        self.assertEqual(self._drawn(), ["solo", "w0", "w1"])
+
+    def test_one_notch_walks_the_clone_off_the_top_and_a_piece_on_at_the_bottom(self):
+        """The window is over ROWS, so the first notch spends its move on the repo row —
+        the only row above the pieces — and the pieces slide up into the space."""
+        self.assertEqual(self._drawn(offset=1), ["w0", "w1", "w2"])
+        self.assertEqual(self._drawn(offset=2), ["w1", "w2", "w3"])
+
+    def test_the_last_window_reaches_the_last_worktree(self):
+        """The point of the reserved overflow row, on this shape: at the limit the bottom
+        of the plane is on screen. Computed from `_scroll_limit` over `_content_rows` and
+        then asserted as the three names it must be, so a limit that is merely *nonzero*
+        does not pass."""
+        limit = slots._scroll_limit(10, 4)
+        self.assertEqual(limit, 7)
+        self.assertEqual(self._drawn(offset=limit), ["w6", "w7", "w8"])
+
+    def test_the_note_counts_the_pieces_it_is_not_showing(self):
+        """Ten rows, three drawn, seven hidden — at the top and at the bottom alike. A
+        count over repos alone would say `(+0 more)` and there would be no note at all,
+        which is the half of #663 that reads as "the worktrees are simply dropped"."""
+        for offset in (0, 1, 7):
+            note = tui.strip_ansi(self._lines(offset=offset)[-1].text)
+            self.assertIn("(+7 more", note)
+
+    def test_a_dirty_worktree_off_screen_stops_the_note_saying_all_clean(self):
+        """`_needs_attention` is asked of the hidden PIECES too. A table admitting seven
+        hidden rows and calling them clean while one of them is dirty is the false-clean
+        reading this module refuses everywhere — and it is the reading a note that only
+        looked at repos would give on every one-clone plane."""
+        data = _data([_row("solo", worktree_count=9)],
+                     worktrees=[_row(f"w{i}", repo="solo", dirty=(i == 8))
+                                for i in range(9)])
+        note = tui.strip_ansi(slots._table_lines(data, WIDE, 4)[-1].text)
+        self.assertIn("(+7 more)", note)
+        self.assertNotIn("all clean", note)
+
+    def test_a_pane_that_fits_every_piece_draws_no_note_and_ends_its_tree(self):
+        """The uncapped half, unchanged: ten rows into ten is every row drawn, no reserved
+        row, and the last piece closes the tree with `╰─`. This is also the boundary of the
+        case above — one row less and the note appears."""
+        drawn = self._lines(budget=10)
+        plain = [tui.strip_ansi(ln.text) for ln in drawn]
+        self.assertEqual(len(drawn), 10)
+        self.assertNotIn("…(+", plain[-1])
+        # **Exactly one, and on the last row.** `╰─` on every piece row would satisfy "the
+        # tree ends here" on the row it is asked about and say it eight more times above.
+        self.assertEqual([i for i, ln in enumerate(plain)
+                          if statusline._TREE_WT.strip() in ln], [9])
+
+    def test_a_capped_table_never_closes_its_tree_above_the_note(self):
+        """`╰─` means *this is where the tree ends*, and on a capped table it does not:
+        `…(+N more)` is the next line. The glyph and the line under it would be saying
+        opposite things, which is the one thing `_TREE_WT` exists to prevent."""
+        drawn = self._lines()
+        self.assertNotIn(statusline._TREE_WT.strip(),
+                         tui.strip_ansi("".join(ln.text for ln in drawn)))
+
+    def test_the_note_is_the_last_row_and_not_the_middle_one(self):
+        """It says there is more BELOW. Composed before the piece rows it would land in
+        the middle of the table with three drawn rows under it, which could not happen
+        while a capped table had no piece rows and now can."""
+        drawn = self._lines()
+        self.assertIn("…(+7 more", tui.strip_ansi(drawn[-1].text))
+        self.assertIsNone(drawn[-1].repo)
+
+    def test_every_drawn_piece_row_still_answers_its_clone(self):
+        """**No drawn row is a dead row**, at every offset — including the offsets where
+        the clone has no row of its own on screen and a piece row is the only thing that
+        can answer. `gather` writes `repo` on every worktree entry and `_Line` carries it."""
+        for offset in (0, 1, 4, 7):
+            names = _names(self._lines(offset=offset))
+            self.assertEqual([n for n in names if n is None], [None],
+                             f"offset {offset} drew a row that selects nothing besides "
+                             f"the overflow line: {names}")
+            self.assertEqual(names[:-1], ["solo"] * 3)
+
+    def test_the_badge_counts_what_is_on_screen_rather_than_what_is_cached(self):
+        """`⑂N` means "there is more you cannot see here", so it is dropped only when every
+        piece has a row ON THIS SCREEN. Counted from the cache it disappeared exactly when
+        it was needed most — a starved pane showing two of nine worktrees and no sign of
+        the other seven."""
+        self.assertIn("⑂9", tui.strip_ansi(self._lines()[0].text))
+        self.assertNotIn("⑂", tui.strip_ansi(self._lines(budget=10)[0].text))
 
 
 class TheSelectedRowIsDrawnAsSelected(PersonaIso, unittest.TestCase):
@@ -453,6 +638,37 @@ class ThePaneWiresItAllTogether(PersonaIso, unittest.TestCase):
         self._paint(rows=5)
         self.assertEqual(slots.VIEWPORT.limit, 17)
 
+    def test_the_bound_a_paint_leaves_counts_worktrees_as_rows(self):
+        """**#663 at the seam it was wrong at.** The pane reads its own bound here and
+        nowhere else, and it used to read `len(repos)` — so this exact paint, on the exact
+        cache the control plane this ships from carries, left the handler a bound of 0 and
+        every wheel notch was refused before it reached the renderer.
+
+        One clone and nine worktrees into four rows of table: ten rows, three drawn beside
+        the note, so 7. Asserted as 7 rather than as "greater than zero", because the
+        second is also true of a bound that forgot the note's reserved row and would leave
+        the last worktree permanently out of reach."""
+        gather.save(FID, _data([_row("solo", worktree_count=9)],
+                               worktrees=[_row(f"w{i}", repo="solo")
+                                          for i in range(9)]))
+        self._paint(rows=5)
+        self.assertEqual(slots.VIEWPORT.limit, 7)
+
+    def test_a_clone_whose_worktrees_all_fit_still_leaves_nothing_to_scroll(self):
+        """The other side of the same boundary, and the ordinary state of a control plane:
+        `layout.repos_rows` sizes this pane to its content, so the pieces fit and the wheel
+        is inert. It answers 0 here for a different REASON than it used to — because ten
+        rows fit in ten, not because nine of them were never counted — and the two are told
+        apart by the case above."""
+        gather.save(FID, _data([_row("solo", worktree_count=9)],
+                               worktrees=[_row(f"w{i}", repo="solo")
+                                          for i in range(9)]))
+        self._paint(rows=11)
+        self.assertEqual(slots.VIEWPORT.limit, 0)
+        self.assertEqual(slots.VIEWPORT.repo_at(10), "solo",
+                         "the tenth row of the table is the ninth worktree and it must "
+                         "be drawn, not dropped")
+
     def test_a_pane_with_no_table_in_it_is_clicked_on_nobody(self):
         """The three one-line answers this pane draws instead of a table — not gathered
         yet, gathered and empty, too narrow — publish no map at all, so a click on the
@@ -480,6 +696,27 @@ class ThePaneWiresItAllTogether(PersonaIso, unittest.TestCase):
         self.assertGreater(slots.VIEWPORT.limit, 0)
         self._paint(rows=1)
         self.assertEqual(slots.VIEWPORT.limit, 0)
+
+    def test_a_worktree_removed_under_a_scrolled_table_clamps_it_on_the_next_paint(self):
+        """The stale-offset clamp, in the unit that changed. `charter worktree remove`
+        takes rows off the bottom of this table without touching the repo list, so a bound
+        that only moved when a REPO went would leave the window parked over rows that are
+        no longer there. The operator scrolls to the bottom, four worktrees go, and the
+        next paint puts the window on the last one this table actually has.
+
+        Asserted as the value 3, not as "it changed": an unclamped offset is still an
+        integer and still renders something."""
+        wts = [_row(f"w{i}", repo="solo") for i in range(9)]
+        gather.save(FID, _data([_row("solo", worktree_count=9)], worktrees=wts))
+        self._paint(rows=5)
+        self.assertTrue(slots.VIEWPORT.move(99))
+        self.assertEqual(slots.VIEWPORT.offset, 7)
+        gather.save(FID, _data([_row("solo", worktree_count=5)], worktrees=wts[:5]))
+        self._paint(rows=5)
+        self.assertEqual(slots.VIEWPORT.limit, 3)
+        self.assertEqual(slots.VIEWPORT.offset, 3)
+        self.assertEqual(slots.VIEWPORT.repo_at(1), "solo",
+                         "the window was left over a table that is no longer there")
 
     def test_the_pane_draws_the_selection_the_frame_recorded(self):
         gather.save(FID, _data([_row("alpha"), _row("beta")]))

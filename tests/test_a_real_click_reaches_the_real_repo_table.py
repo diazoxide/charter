@@ -29,6 +29,13 @@ tmux asks the terminal to report from the ACTIVE pane's own request alone, and t
 pane here is a `cat` — so nothing would be sent, nothing would arrive, and a green test
 would be measuring an empty room. `docs/frame.md` states that half to the operator; this
 states the other half.
+
+**And it is run over TWO plane shapes, which is #663.** The first version of this file was
+built on a many-clones plane and went green while the wheel was a complete no-op on the
+plane charter itself runs on — one clone with fourteen worktrees, where the bound was
+computed from a repo count that is always 1. A harness that can only be pointed at one
+shape is a harness that reports on the shape somebody happened to pick, so the frame is
+built once in `_ARealFrame` and the CACHE is what a subclass supplies.
 """
 
 from __future__ import annotations
@@ -44,7 +51,7 @@ import time
 import unittest
 from pathlib import Path
 
-from charter import commands_frame, config, tui
+from charter import commands_frame, config, statusline, tui
 from charter.frame import gather, layout, slots, state, tmuxctl
 
 from tests import _tmuxreap
@@ -69,17 +76,23 @@ _TERM_CANDIDATES = tuple(dict.fromkeys(
 #: that refusal instead.
 COLS = 120
 
-#: Rows the `repos` pane is split with: one heading and four rows of table. Six repos into
-#: four rows is the SCROLLABLE shape — three repo rows and `…(+3 more)` — which is the shape
-#: the report was about. A pane sized to its content would have nothing to scroll, which is
-#: the case the unit half pins and this one cannot reach without a second frame.
+#: Rows the `repos` pane is split with: one heading and four rows of table. Four rows is
+#: the STARVED shape for both plane shapes below — three rows of content and `…(+N more)` —
+#: which is the shape both reports were about. A pane sized to its content would have
+#: nothing to scroll, which is the case the unit half pins and this one cannot reach
+#: without a second frame.
 REPOS_ROWS = 5
 
 
-def _row(name) -> dict:
-    return {"name": name, "branch": "main", "dirty": False, "tracked_dirty": False,
-            "ahead": 0, "behind": 0, "ci": None, "change": None, "sigil": "",
-            "current": False, "worktree_count": 0}
+def _row(name, *, repo=None, worktree_count=0) -> dict:
+    d = {"name": name, "branch": "main", "dirty": False, "tracked_dirty": False,
+         "ahead": 0, "behind": 0, "ci": None, "change": None, "sigil": "",
+         "current": False, "worktree_count": worktree_count}
+    if repo is not None:
+        # A piece row's parent clone — `gather.scan` writes it on every `worktrees` entry,
+        # and it is what makes a nested row resolve to a repo when it is clicked.
+        d["repo"] = repo
+    return d
 
 
 def _tmux(*args: str, env=None) -> subprocess.CompletedProcess:
@@ -115,9 +128,24 @@ def _fork_pty(rows: int, cols: int) -> tuple[int, int]:
     return pid, master
 
 
-@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
-class ARealPointerOnTheRealRepoTable(PersonaIso):
-    """One frame with charter's OWN `repos` and `attention` panels, and a real pointer."""
+class _ARealFrame(PersonaIso):
+    """One frame with charter's OWN `repos` and `attention` panels, and a real pointer.
+
+    **A base, and the two shapes below are what it exists for.** #663 is the measurement
+    that the shape a case is built on decides whether the feature is even switched on: a
+    scroll harness built only on many-clones planes went green while the plane it shipped
+    to — one clone, many worktrees — could not move a row. So the frame is built once here
+    and the CACHE is what a subclass supplies (:meth:`_seed`), which makes "a different
+    plane shape" a two-line subclass rather than a reason not to test the other one.
+    """
+
+    #: Rows the `repos` pane is split with, heading included. A subclass overrides it to
+    #: starve the table by however much its own shape needs.
+    ROWS = REPOS_ROWS
+
+    def _seed(self) -> dict:
+        """The gather cache this frame's `repos` pane draws from."""
+        raise NotImplementedError
 
     def setUp(self) -> None:
         super().setUp()
@@ -130,14 +158,12 @@ class ARealPointerOnTheRealRepoTable(PersonaIso):
 
         self.fid = state.frame_id("repo-point", os.getpid())
         state.frame_dir(self.fid, create=True)
-        # Six repos into four rows of table, so there is somewhere to scroll TO. Written
-        # through `gather.save` — the cache a real scan writes and `slots._repos` reads —
-        # rather than by running a scan, which would need six real clones to say the same
-        # thing about tmux.
-        self.repos = [f"repo{i}" for i in range(6)]
-        gather.save(self.fid, {"gathered_at": 0.0, "workspace": "w",
-                               "current_repo": None,
-                               "repos": [_row(n) for n in self.repos], "worktrees": []})
+        # Written through `gather.save` — the cache a real scan writes and `slots._repos`
+        # reads — rather than by running a scan, which would need real clones on disk to
+        # say the same thing about tmux.
+        self.cache = self._seed()
+        self.repos = [r["name"] for r in self.cache["repos"]]
+        gather.save(self.fid, self.cache)
 
         existing = os.environ.get("PYTHONPATH", "")
         parts = [str(_REPO_ROOT)] + ([existing] if existing else [])
@@ -167,7 +193,7 @@ class ARealPointerOnTheRealRepoTable(PersonaIso):
         self.assertEqual(sourced.returncode, 0, sourced.stderr)
 
         self.attention = self._split("bottom", rows=1)
-        self.repos_pane = self._split("repos", rows=REPOS_ROWS)
+        self.repos_pane = self._split("repos", rows=self.ROWS)
         # **The harness is put back in front, and that is the regime, not tidiness.**
         # `split-window` selects the pane it made, and a frame whose repo table was the
         # ACTIVE pane would be reporting the mouse because THAT pane asked — which is the
@@ -185,7 +211,8 @@ class ARealPointerOnTheRealRepoTable(PersonaIso):
                         "attaching the client resized the window, so every panel took a "
                         "SIGWINCH the cases below would read as an event")
 
-        self.assertTrue(_await(lambda: "▪ repos 6" in self._shown(self.repos_pane)),
+        head = f"▪ repos {len(self.repos)}"
+        self.assertTrue(_await(lambda: head in self._shown(self.repos_pane)),
                         f"the table never painted: {self._shown(self.repos_pane)!r}")
         self.assertTrue(_await(lambda: self._shown(self.attention).strip() != ""),
                         "the attention row never painted")
@@ -312,7 +339,19 @@ class ARealPointerOnTheRealRepoTable(PersonaIso):
         self._inject(b"\x1b[<%d;%d;%dM" % (64 + (1 if down else 0),
                                            left + col + 1, top + row + 1))
 
-    # -- the cases ---------------------------------------------------------- #
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealPointerOnTheRealRepoTable(_ARealFrame):
+    """**Many clones, no pieces** — the shape #658 was built and measured on.
+
+    Six repos into four rows of table: three repo rows and `…(+3 more)`, so there is
+    somewhere below to scroll TO. A pane sized to its content would have nothing to
+    scroll, which is the case the unit half pins and this one cannot reach.
+    """
+
+    def _seed(self) -> dict:
+        return {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+                "repos": [_row(f"repo{i}") for i in range(6)], "worktrees": []}
 
     def test_a_click_on_a_row_selects_that_repo_and_highlights_it(self):
         """The report, answered end to end. Nothing here bumps the frame's version by
@@ -413,6 +452,155 @@ class ARealPointerOnTheRealRepoTable(PersonaIso):
                                  f"a row was shifted right — the pane is in raw mode, "
                                  f"not cbreak: {ln!r}")
         self.assertTrue(rows[0].startswith("▪ repos"), rows[0])
+
+
+#: Pieces on the one-clone plane. Nine into three rows of content is the shape #663
+#: reported and the shape the control plane this ships from actually has — and the number
+#: is over `statusline._MAX_REPO_LINES`-shaped starvation rather than under it, so nothing
+#: here is measuring a pane that happens to fit.
+PIECES = 9
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealWheelOverAPlaneWithOneCloneAndManyPieces(_ARealFrame):
+    """**One clone, many worktrees** — the plane #658 shipped to and could not scroll.
+
+    Every case above is on a many-clones plane, which is why #658 went green while the
+    feature was a no-op for its own operator: `_scroll_limit` counted REPOS, and one repo
+    always fits. This class is the same real frame with the same real pointer over the
+    other shape, and it is deliberately the shape with no second clone in it — a case that
+    passed because there were two repos to move between would say nothing about #663.
+
+    Ten rows of content (one clone plus nine pieces) into four rows of table, so seven
+    rows of the plane are off screen at the top of the scroll.
+    """
+
+    def _seed(self) -> dict:
+        return {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+                "repos": [_row("solo", worktree_count=PIECES)],
+                "worktrees": [_row(f"piece{i}", repo="solo") for i in range(PIECES)]}
+
+    def _shown_names(self) -> list[str]:
+        """The names on the table's rows, the overflow line dropped.
+
+        Read as *the token after the tree glyph*, because a piece row carries one more
+        glyph than a repo row (`│  ├─` against `├─`) and a fixed column index therefore
+        reads the wrong word on one of the two shapes — which is exactly the kind of
+        near-miss that would let a case go green on a table that never moved. The
+        overflow line has no glyph and drops out on its own.
+        """
+        glyphs = (statusline._TREE_MID.strip(), statusline._TREE_WT.strip(),
+                  statusline._TREE_END.strip())
+        out = []
+        for ln in self._table():
+            parts = ln.split()
+            for i, tok in enumerate(parts[:-1]):
+                if tok in glyphs:
+                    out.append(parts[i + 1])
+                    break
+        return out
+
+    def test_the_wheel_moves_the_window_over_the_worktrees(self):
+        """**#663, literally.** A wheel notch into this pane's own pty used to move
+        nothing at all: the pane renders ROWS and the bound was computed from the repo
+        count, so a plane with one clone answered 0 however many pieces hung off it."""
+        before = self._table()
+        self._wheel(self.repos_pane, down=True)
+        self.assertTrue(_await(lambda: self._table() != before),
+                        f"a wheel notch changed nothing: {before!r}")
+
+    def test_the_last_worktree_is_reachable(self):
+        """Not merely "something moved": the row at the BOTTOM of the plane has to come
+        into view, which is what the overflow line's reserved row costs and what a limit
+        that forgot to subtract it would leave permanently one notch out of reach."""
+        last = f"piece{PIECES - 1}"
+        self.assertNotIn(last, self._shown_names(), "the fixture already fits")
+        for _ in range(PIECES + 2):
+            self._wheel(self.repos_pane, down=True)
+        self.assertTrue(_await(lambda: last in self._shown_names()),
+                        f"the bottom of the plane never came into view: "
+                        f"{self._table()!r}")
+
+    def test_the_pieces_that_do_not_fit_are_admitted_rather_than_dropped(self):
+        """The other half of the report — "the worktrees past the pane's height are
+        simply dropped". A table that shows three of ten rows and says nothing is the
+        false-clean reading this module refuses everywhere else, so the count on the
+        overflow line has to be a count of ROWS and include the pieces."""
+        self.assertIn("(+7 more", "\n".join(self._table()), self._table())
+
+    def test_a_click_on_a_worktree_row_selects_its_clone(self):
+        """**No drawn row answers nobody.** Asserted with the table SCROLLED, so the only
+        row that could answer `solo` is a piece row — at offset zero the clone has a row
+        of its own and a click that silently resolved to it would pass either way."""
+        self._wheel(self.repos_pane, down=True)
+        self.assertTrue(_await(lambda: "solo" not in self._shown_names()),
+                        f"the clone's own row is still on screen: {self._table()!r}")
+        self._point(self.repos_pane, row=1)
+        self.assertTrue(_await(lambda: state.selection(self.fid) == "solo"),
+                        f"a piece row selected nothing: {state.selection(self.fid)!r}")
+
+    def test_the_wheel_comes_back_to_the_table_it_started_on(self):
+        """Offset zero is where scrolling back lands, on this shape too."""
+        before = self._table()
+        self._wheel(self.repos_pane, down=True)
+        self.assertTrue(_await(lambda: self._table() != before))
+        self._wheel(self.repos_pane, down=False)
+        self.assertTrue(_await(lambda: self._table() == before),
+                        f"scrolling back did not land on the table it left: "
+                        f"{self._table()!r} != {before!r}")
+
+
+#: Worktrees on the plane below — three, so one clone and three pieces is four rows in the
+#: four rows of table this pane has. `layout.repos_rows` sizes the real pane to its content,
+#: so this is the ORDINARY plane and the one the wheel must be inert on.
+PIECES_THAT_FIT = 3
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealWheelOverAPaneThatFitsItsPieces(_ARealFrame):
+    """**The tested nothing, on a real frame** — the same plane shape, tall enough.
+
+    The unit half asserts `slots._scroll_limit(15, 15) == 0` and one either side of it, and
+    that is the claim that matters; this is the claim that a real pane, with a real panel
+    process taking real SGR reports off its own pty, spends nothing on them either. The two
+    zeros #663 is about — *the pieces fit* and *the pieces were never counted* — look the
+    same from outside, and the class above is what tells them apart.
+    """
+
+    def _seed(self) -> dict:
+        return {"gathered_at": 0.0, "workspace": "w", "current_repo": None,
+                "repos": [_row("solo", worktree_count=PIECES_THAT_FIT)],
+                "worktrees": [_row(f"piece{i}", repo="solo")
+                              for i in range(PIECES_THAT_FIT)]}
+
+    def test_every_row_of_the_plane_is_on_screen_and_nothing_admits_otherwise(self):
+        """Four rows of content in four rows of table: no `…(+N more)` and no `⑂N`, because
+        there is nothing this pane is not showing. The badge is the half that would go
+        wrong in the other direction — counted from the pieces DRAWN, it must vanish here."""
+        rows = self._table()
+        self.assertEqual(len(rows), 1 + PIECES_THAT_FIT, rows)
+        self.assertNotIn("more)", "\n".join(rows))
+        self.assertNotIn("⑂", "\n".join(rows))
+
+    def test_the_wheel_moves_nothing_on_a_pane_that_fits(self):
+        """**A negative measured against a panel proved to be awake.** A pane that never
+        repaints would pass "nothing changed" for the wrong reason, which is the whole
+        failure mode #663 is: a green measurement of an empty room. So a click is landed
+        first and its highlight waited for — that IS this panel repainting on this pty —
+        and only then is the wheel asserted to cost nothing."""
+        before = self._table()
+        self._point(self.repos_pane, row=1)
+        self.assertTrue(_await(lambda: state.selection(self.fid) == "solo"),
+                        "the panel never took the click, so a wheel that changed nothing "
+                        "would prove nothing")
+        self.assertTrue(
+            _await(lambda: "\x1b[7m" in self._painted(self.repos_pane).split("\n")[1]),
+            "the panel never repainted, so it is not awake to be measured")
+        for _ in range(3):
+            self._wheel(self.repos_pane, down=True)
+        time.sleep(1.0)
+        self.assertEqual(self._table(), before,
+                         "a pane tall enough for its content scrolled")
 
 
 if __name__ == "__main__":

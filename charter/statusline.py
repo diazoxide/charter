@@ -1077,10 +1077,15 @@ def _pick_rows(dirs, budget: int, cur_repo, states, gl, *, offset: int = 0) -> l
     scrolling reveals the rest in priority order, and scrolling back lands on the exact
     table that was there before the first notch.
 
-    Past the end it answers fewer rows, and eventually none, rather than clamping: the
-    caller that scrolls is the one that knows how many rows the pane has and how many repos
-    there are (`slots._viewport_limit`), and a clamp here would be a second, weaker copy of
-    that arithmetic — the shape #500 shipped twice.
+    **Past the end it answers fewer rows, and eventually none, rather than clamping**, and
+    since #663 that is load-bearing rather than merely tidy: the frame's window is over the
+    table's ROWS — repo rows first, then the piece rows nested under them — so an offset
+    that has walked off the end of the repos is exactly how "every repo row is above the
+    window now" reaches this function, and a clamp would pin a repo row to the top of a
+    scrolled table for ever. The caller that scrolls is the one that knows how many rows the
+    pane has and how many the table wants (`slots._scroll_limit` over `slots._content_rows`),
+    and a clamp here would be a second, weaker copy of that arithmetic — the shape #500
+    shipped twice.
     """
     order = {d: i for i, d in enumerate(dirs)}
 
