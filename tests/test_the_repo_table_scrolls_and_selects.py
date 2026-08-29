@@ -531,6 +531,27 @@ class TheAttentionRowSaysWhatWasPicked(PersonaIso, unittest.TestCase):
                                side_effect=AssertionError("the panel swept")):
             self.assertEqual(slots._selected_detail(FID), "")
 
+    def test_a_frame_with_nothing_selected_does_not_read_the_gather_for_it(self):
+        """**The cost claim, counted rather than timed** — a wall-clock assertion on a
+        shared box measures the box, which is `test_frame_slots`' own rule one budget
+        over. `bottom` is the frame's ANIMATED slot: it repaints at `panel.TICK` for the
+        whole length of every dispatch, so a `gather.cached` added unconditionally here
+        would be a JSON read five times a second on every plane, forever, for a field
+        that is empty on almost all of them.
+
+        What it pays instead is one `read_text` of a file that is usually not there, and
+        the gather read only when a row has actually been picked."""
+        gather.save(FID, _data([_row("alpha")]))
+        with mock.patch.object(gather, "cached",
+                               side_effect=AssertionError("read the gather")) as never:
+            self.assertEqual(slots._selected_detail(FID), "")
+            self.assertEqual(never.call_count, 0)
+        state.record_selection(FID, "alpha")
+        with mock.patch.object(gather, "cached",
+                               wraps=gather.cached) as once:
+            self.assertNotEqual(slots._selected_detail(FID), "")
+            self.assertEqual(once.call_count, 1, "the detail read the gather twice")
+
     def test_the_detail_is_the_last_field_on_the_attention_row(self):
         """"The right side" of a row composed left to right and joined with ` · ` is the
         last field, and last is where it goes."""
