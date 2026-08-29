@@ -432,9 +432,31 @@ class TestWhatTheSectionSays(SurfaceCase):
 
     def test_no_room_means_no_rows_and_no_file_opened(self):
         """The budget is checked BEFORE the cache is reached: a pane with no room must not
-        open a file it is about to discard."""
+        open a file it is about to discard — `todo_section` keeps the same ordering for the
+        same reason.
+
+        **The read is what this asserts, not the rows**, and the first version of this test
+        got that wrong: it checked `== []` alone, which is satisfied either way because
+        `_change_rows` refuses a zero budget too. So `budget <= 0` could become `budget < 0`
+        with every assertion still green and the file opened on every repaint of a pane
+        with no room — the deletion sweep reported exactly that, as a boundary nothing
+        pinned. A test whose NAME claims more than its body checks is the shape this suite
+        keeps finding.
+        """
         self.seed([self.row()])
-        self.assertEqual(slots.changes_section(FID, 22, 0), [])
+        with mock.patch.object(gather, "read",
+                               side_effect=AssertionError("opened the cache")) as read:
+            self.assertEqual(slots.changes_section(FID, 22, 0), [])
+            self.assertEqual(slots.changes_section(FID, 22, -1), [])
+        self.assertEqual(read.call_count, 0)
+
+    def test_one_row_of_room_does_reach_the_cache(self):
+        """The other side of the boundary. Without it, "does not read at zero" is
+        satisfied by a function that never reads at all."""
+        self.seed([self.row()])
+        with mock.patch.object(gather, "read", wraps=gather.read) as read:
+            self.assertTrue(slots.changes_section(FID, 22, 1))
+        self.assertEqual(read.call_count, 1)
 
     def test_the_section_draws_the_age_of_what_it_is_showing(self):
         """A refresh is an action, not a tick, so between two of them the rows are as old
