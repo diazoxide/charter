@@ -1,0 +1,5 @@
+# THE COMMONEST UNPINNED-GUARD SHAPE IS AN ASSERTION ABOUT ABSENCE STANDIN
+
+_2026-08-29 03:33 · persistent_
+
+THE COMMONEST UNPINNED-GUARD SHAPE IS AN ASSERTION ABOUT ABSENCE STANDING IN FOR ONE ABOUT VALUE. Eight unpinned lines were found in tools/sweep.py's own new code (2026-08-28/29) and SEVEN of the eight were this: the test asserted something was not there, or that a section was empty, or that no error was raised — where the property was what the value should BE. Examples: results_from_json's outcome() could be collapsed to always-None, dropping every subset/full outcome a shard reports, and every rendered page still matched, because a subset's detail prints in exactly one place the fixture had no result for. Also: a test wrote its files out of order and trusted the filesystem to return them that way — it does not, it returns them sorted, so the test agreed with sorted() and with list() equally. And a determinism test had a single unresolved row, and one of a kind cannot be put in the wrong order. Rule: when a test passes because nothing disagreed with it, it is asserting absence. Give it two rows of each kind and a deliberately hostile ordering.

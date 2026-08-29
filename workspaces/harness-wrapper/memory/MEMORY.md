@@ -28,3 +28,5 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [pane-border-style gained pane scope in tmux 3.7 exactly: options-table.c](20260829-011455-pane-border-style-gained-pane-scope-in-tmux-3-7-.md)
 - [tmux forwards SGR mouse buttons 128-131 (a mouse's thumb buttons) to a p](20260829-023058-tmux-forwards-sgr-mouse-buttons-128-131-a-mouse-.md)
 - [Never leave a daemon thread blocked in os.read(fd) when something else c](20260829-023106-never-leave-a-daemon-thread-blocked-in-os-read-f.md)
+- [charter frame sizing supports exactly ONE variable-height pane (layout.V](20260829-023911-charter-frame-sizing-supports-exactly-one-variab.md)
+- [charter change revert runs 'git revert', which inherits the operator's c](20260829-023919-charter-change-revert-runs-git-revert-which-inhe.md)
