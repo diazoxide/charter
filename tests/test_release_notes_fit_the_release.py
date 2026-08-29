@@ -183,6 +183,31 @@ class ReleaseBodyFits(unittest.TestCase):
             f"same as safe: the next entry to land is not re-measured by anything.",
         )
 
+    def test_the_bound_is_an_exception_rather_than_the_normal_path(self):
+        """`_BODY_BUDGET`'s value, pinned from below. The headroom case pins it from above.
+
+        Between them the number is in a window rather than free, and each side says
+        something different. Too high and a release is refused after the upload, which is
+        the whole finding. **Too low and every release becomes a table of contents** —
+        every length assertion in this file still passes, and the notes stop being notes.
+        Nothing else in the suite would notice: a smaller budget is *safer* in the only
+        direction the other cases measure.
+
+        So the claim the number actually makes is asserted here, and it is the one
+        `_BODY_BUDGET`'s own docstring makes: the bound reaches for at most one stamped
+        version. If a second crosses, the number wants re-examining and the docstring is
+        stale — which is a conversation worth having on the pull request that causes it,
+        rather than at a tag.
+        """
+        elided = [v for v in sorted(_versions())
+                  if news.render_body(v) != "\n\n".join(
+                      news._part(e) for e in news.for_version(v))]
+        self.assertLessEqual(
+            len(elided), 1,
+            f"charter's own budget now reshapes {len(elided)} stamped releases "
+            f"({', '.join(elided)}). The bound is meant to be the exception — either "
+            f"_BODY_BUDGET is too small, or its docstring's claim has gone stale.")
+
     def test_every_note_the_staged_release_carries_is_in_the_body(self):
         """The half that makes the case above worth passing.
 
@@ -285,6 +310,22 @@ class ABodyThatFitsIsUntouched(NewsDir):
             self.assertIn(f"BODY-{slug}", body)
         self.assertNotIn("listed by headline only", body)
         self.assertNotIn("Full note:", body)
+
+    def test_an_entry_with_no_body_does_not_open_a_gap_in_the_notes(self):
+        """The one shape `_part`'s `rstrip` is for, and the only one it can change.
+
+        `persona.parse` hands back a stripped body, so for every entry that HAS one the
+        strip is a no-op — which makes an entry with a headline and nothing under it the
+        whole of what that call does. Without it the heading keeps the two newlines meant
+        to separate it from a body that is not there, and the notes carry a blank gap that
+        reads like a note whose text failed to render.
+
+        Asserted as an equality for the reason the case below is: the claim is about the
+        exact separation between entries, and `assertIn` cannot see a doubled blank line.
+        """
+        self.write(f"{_V}-a-one.md", _entry(_V, "one", body=""))
+        self.write(f"{_V}-b-two.md", _entry(_V, "two", body="BODY-b-two"))
+        self.assertEqual(news.render_body(_V), "### one\n\n### two\n\nBODY-b-two")
 
     def test_and_is_exactly_what_joining_the_entries_gives(self):
         """Stated as an equality rather than as three `assertIn`s, because "unchanged" is
@@ -404,6 +445,20 @@ class TheBodySaysSoItself(NewsDir):
                          "a linked note appears above the notice that announces linking")
         self.assertNotIn("BODY-", body[cut:],
                          "a whole note appears below the notice")
+
+    def test_the_notice_is_ruled_off_from_the_notes_above_it(self):
+        """The other half of that conditional. A heading immediately after the last whole
+        note reads as that note's own subheading — entry bodies write `##` headings of
+        their own, 122 of them across `docs/news` — so the rule is what makes the break a
+        break. Asserting only the case where it is absent would leave "always absent"
+        passing, which is the same document with the seam rubbed out.
+        """
+        self.oversized()
+        body = news.render_body(_V)
+        cut = self.NOTICE.search(body).start()
+        self.assertTrue(body[:cut].endswith("---\n\n"),
+                        f"the notice follows the last whole note with no rule between "
+                        f"them: {body[cut - 30:cut]!r}")
 
     def test_a_version_where_no_note_fits_whole_does_not_open_with_a_rule(self):
         """Not a hypothetical shape: one note longer than the budget produces it. The rule
@@ -628,6 +683,29 @@ class TheGateRefusesABodyItCannotBound(NewsDir):
             code, out, err = self._run(_V)
         self.assertEqual(code, 0, err)
         self.assertEqual(len(out), news.RELEASE_BODY_MAX)
+
+    def test_a_body_of_exactly_the_budget_is_spent_rather_than_cut_further(self):
+        """The boundary, not just the direction. `<` instead of `<=` would elide one more
+        note than the budget calls for — a note's whole text traded for a link to buy a
+        character nobody needed.
+
+        Reached by moving the budget to the length of a real candidate rather than by
+        sizing a fixture to the character: the number is charter's own policy dial and the
+        claim under test is what the comparison means by it, so the dial is what moves.
+        """
+        self.oversized()
+        body = news.render_body(_V)
+        exact = len(body)
+        with mock.patch.object(news, "_BODY_BUDGET", exact):
+            self.assertEqual(
+                news.render_body(_V), body,
+                "a body of exactly the budget was cut one note further, so the budget is "
+                "being read as exclusive")
+        with mock.patch.object(news, "_BODY_BUDGET", exact - 1):
+            self.assertLess(
+                len(news.render_body(_V)), exact,
+                "one character under the budget changed nothing, so the case above is "
+                "not measuring the boundary it claims to")
 
     def test_a_release_whose_notes_are_merely_long_still_publishes(self):
         """The refusal is for what cannot be bounded, not for what is big. 69 entries is a
