@@ -697,6 +697,27 @@ class ThePaneWiresItAllTogether(PersonaIso, unittest.TestCase):
         self._paint(rows=1)
         self.assertEqual(slots.VIEWPORT.limit, 0)
 
+    def test_a_worktree_removed_under_a_scrolled_table_clamps_it_on_the_next_paint(self):
+        """The stale-offset clamp, in the unit that changed. `charter worktree remove`
+        takes rows off the bottom of this table without touching the repo list, so a bound
+        that only moved when a REPO went would leave the window parked over rows that are
+        no longer there. The operator scrolls to the bottom, four worktrees go, and the
+        next paint puts the window on the last one this table actually has.
+
+        Asserted as the value 3, not as "it changed": an unclamped offset is still an
+        integer and still renders something."""
+        wts = [_row(f"w{i}", repo="solo") for i in range(9)]
+        gather.save(FID, _data([_row("solo", worktree_count=9)], worktrees=wts))
+        self._paint(rows=5)
+        self.assertTrue(slots.VIEWPORT.move(99))
+        self.assertEqual(slots.VIEWPORT.offset, 7)
+        gather.save(FID, _data([_row("solo", worktree_count=5)], worktrees=wts[:5]))
+        self._paint(rows=5)
+        self.assertEqual(slots.VIEWPORT.limit, 3)
+        self.assertEqual(slots.VIEWPORT.offset, 3)
+        self.assertEqual(slots.VIEWPORT.repo_at(1), "solo",
+                         "the window was left over a table that is no longer there")
+
     def test_the_pane_draws_the_selection_the_frame_recorded(self):
         gather.save(FID, _data([_row("alpha"), _row("beta")]))
         state.record_selection(FID, "beta")
