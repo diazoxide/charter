@@ -106,7 +106,7 @@ from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
 from tests import _tmuxreap
-from tests._isolation import PersonaIso, child_plane_env, run_hook
+from tests._isolation import PersonaIso, make_plane, run_hook
 from tests._planeguard import allow_background_children
 # Imported rather than re-declared: a second copy of the stub that keeps a launch's
 # detached `frame-gather` child off the developer's real plane is a copy that can drift
@@ -5306,6 +5306,25 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
     BIG = (200, 50)
     SMALL = (100, 30)
 
+    def setUp(self) -> None:
+        super().setUp()
+        # **The panels this class's switch splits are REAL `charter panel` children**, and
+        # `layout.panel_command` builds their argv with `-P` (#390) — so this checkout has
+        # to reach them on `$PYTHONPATH`, exactly as `PanelIntegration` and
+        # `FourEdgeIntegration` already arrange for their own.
+        #
+        # Set into `os.environ` and set HERE, before this class's first tmux command, and
+        # both halves matter. A live re-layout hands `tmuxctl.run` no client environment
+        # at all (`_relayout`'s `env=None`), so there is nowhere to pass one; and the
+        # first tmux command is what STARTS this class's server, whose environment is what
+        # every pane it later creates inherits. Set afterwards it would reach the test
+        # process and no pane, and the panels would die with `No module named charter` —
+        # which is what `test_a_placed_chat_bar_…` caught, because it is the only test
+        # here that asserts on what a panel actually PAINTED rather than on its geometry.
+        self.enterContext(mock.patch.dict(
+            os.environ, {"PYTHONPATH": _importable_env(os.environ)["PYTHONPATH"]},
+            clear=False))
+
     def _resize(self, fd: int, cols: int, rows: int) -> None:
         """Change the pty's size the way a terminal emulator does — `TIOCSWINSZ`, which
         is what makes tmux resize the client and, at the switch, the window."""
@@ -5460,6 +5479,75 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
                                      "#{pane_id}").stdout.split(),
                       "killing the chat's panel took its harness with it")
 
+    def test_a_placed_chat_bar_is_split_by_the_switch_and_paints_both_chats(self):
+        """**The end-to-end nobody else in this branch makes**, and the one a unit test
+        cannot: a plane that places `chats` with a `[[frame.component]]` table gets a real
+        pane split for it by the switch, running a real `charter panel chats` process, and
+        that process paints both chats with the active one marked.
+
+        Every link in that chain was a separate gate before this branch —
+        `instance.component_tables` refused the id for not being in `builtins.SLOT_OF`,
+        `slots.drawable` refused the name for the same reason, and `panel._run` would then
+        have held the pane open painting `unknown slot`. Asserting on what is ON THE PANE
+        is what says all three opened; asserting that a pane exists would pass with
+        `unknown slot` drawn in it.
+        """
+        # **The panel has to read the plane the frames are IN**, which is this case's own
+        # throwaway root — not a second one. `child_plane_env` hands out a fresh empty
+        # plane, and a `charter panel chats` pointed at that one scans an empty
+        # `.charter/frame/`, finds no sibling, and draws a perfectly correct one-chat bar
+        # for a workspace that has two. (It did exactly that, which is the second thing
+        # this test caught.) `make_plane` puts a `charter.toml` at `PersonaIso`'s own
+        # root, which is what makes a CHILD resolve the same plane this process has —
+        # `PersonaIso` alone only redirects `config` in memory.
+        plane = make_plane(self)
+        one, two, fd = self._two_chats_and_a_client()
+        frame = dict(config.FRAME)
+        frame["components"] = instance.frame_components(
+            {"frame": {"component": [{"use": "chats", "edge": "top", "size": 1},
+                                     {"use": "identity"}]}})
+        frame["slots"] = [p["use"] for p in frame["components"]]
+        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+             mock.patch.object(config, "FRAME", frame), \
+             mock.patch.dict(os.environ,
+                             {"CHARTER_SESSION_ID": f"{self.WS}.1",
+                              "CHARTER_WORKSPACE": self.WS,
+                              "CHARTER_ROOT": str(plane)}, clear=False):
+            for chat in (f"{self.WS}.1", f"{self.WS}.2"):
+                state.record_workspace(chat, self.WS)
+                state.record_identity(chat, {"CHARTER_SESSION_ID": chat,
+                                             "CHARTER_ROOT": str(plane),
+                                             "CHARTER_WORKSPACE": self.WS})
+            self.assertEqual(
+                commands_frame.cmd_chat(
+                    SimpleNamespace(chat_id=f"{self.WS}.2", chat=f"{self.WS}.1")), 0)
+            pane = state.panes(f"{self.WS}.2").get("chats")
+            self.assertIsNotNone(
+                pane, "the switch split no pane for a placed `chats` — it split "
+                      f"{sorted(state.panes(f'{self.WS}.2'))}")
+            drew = self._wait_for_text(pane, f"{self.WS}.1")
+        self.assertIn(f"{self.WS}.1", drew, f"the chat bar painted {drew!r}")
+        self.assertIn(f"*{self.WS}.2", drew,
+                      f"the chat bar did not mark the chat switched to: {drew!r}")
+        self.assertNotIn("unknown slot", drew)
+
+    def _wait_for_text(self, pane: str, needle: str) -> str:
+        """What *pane* is showing once *needle* is on it, or whatever it ends up showing.
+
+        A panel is a real process that starts, imports `charter.frame` and paints —
+        `--once` is not what production runs — so this polls rather than sleeps, and
+        returns the last capture either way, so a failure says what WAS drawn rather than
+        only that something was not.
+        """
+        seen = ""
+        deadline = time.monotonic() + _DEADLINE
+        while time.monotonic() < deadline:
+            seen = self._srv("capture-pane", "-p", "-t", pane).stdout
+            if needle in seen:
+                return seen
+            time.sleep(0.1)
+        return seen
+
     def test_each_chat_keeps_its_own_escape_hatch_across_a_switch(self):
         """Stage 5b's exit criterion: `F12` returns to the harness from any chat.
 
@@ -5521,16 +5609,20 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
             self._wait_until(lambda: self._size_of(self._window_of(one))[0]
                              == self.SMALL[0]))
 
-        # The panels this splits are REAL `charter panel` children, so they are handed a
-        # throwaway plane — `tests._planeguard` refuses the spawn otherwise, and it is
-        # right to: a panel resolving the developer's own plane would rewrite its caches.
+        # The panels this splits are REAL `charter panel` children, so they are pointed
+        # at THIS case's own throwaway plane — `tests._planeguard` refuses the spawn
+        # otherwise, and it is right to: a panel resolving the developer's own plane
+        # would rewrite its caches. `make_plane` rather than `child_plane_env` for the
+        # reason `test_a_placed_chat_bar_…` records: a panel must read the plane the
+        # frames are IN, and a second empty plane is one it can read nothing out of.
+        #
         # BOTH halves are needed and they are two different things. The `-e` is what the
         # PANE's process gets, and `_relayout_pane_env` builds it out of `state.identity`
         # — which is why the root is recorded there. `$CHARTER_ROOT` in this process is
         # what the tmux CLIENT inherits, because a live re-layout hands `tmuxctl.run` no
         # client environment at all (`_relayout`'s `env=None`), and that is what the
         # guard resolves a spawn's plane from.
-        plane, _child = child_plane_env(self)
+        plane = make_plane(self)
         with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
              mock.patch.dict(os.environ,
                              {"CHARTER_SESSION_ID": f"{self.WS}.1",
