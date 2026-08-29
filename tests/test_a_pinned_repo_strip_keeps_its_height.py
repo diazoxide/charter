@@ -384,10 +384,11 @@ class TheCommittedFileIsReadAtABoundaryAndNotInTheArithmetic(unittest.TestCase):
         """The reproduction from #661, run against the real file rather than a fixture.
 
         `charter.toml` is tracked here, and an operator adding `size = 15` to its `repos`
-        table is doing what `docs/frame.md` tells them to do. The three lines are added to
-        what is actually on disk — so a plane that later commits them for real is running
-        the case this test already ran, and the day charter's own frame gains a pin this
-        stays green rather than needing to be rewritten.
+        table is doing what `docs/frame.md` tells them to do. The key is added to the
+        table that is actually on disk rather than to a written-out copy of it — so a
+        plane that later commits the same key for real is running the case this test
+        already ran, and the day charter's own frame gains a pin this stays green rather
+        than needing to be rewritten.
         """
         cfg = tomllib.loads(_COMMITTED.read_text(encoding="utf-8"))
         tables = cfg["frame"]["component"]
