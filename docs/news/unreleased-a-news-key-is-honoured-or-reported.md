@@ -4,6 +4,11 @@ headline: A news entry is read the way its author wrote it, or charter says so â
 security: true
 ---
 
+**Affected: 0.53.0 and earlier. Fixed here.** Nothing on your plane is exposed by this;
+what was at risk is charter's own disclosure process â€” a security entry could sink out of
+the release notes in silence, and a committed filename could write a line of charter's own
+report in charter's voice.
+
 Two defects in the same subsystem, and the same shape twice: **a value crossing from a
 committed file into something somebody reads, where the code handled one spelling and not
 its neighbours.**

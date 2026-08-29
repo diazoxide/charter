@@ -4,6 +4,11 @@ headline: a reference vault reports the directory it is listed in, the mode of i
 security: true
 ---
 
+**Affected: 0.53.0 and earlier. Fixed here.** Nothing here narrows an exposure; it makes an
+existing one *sayable*. A reference vault sat in a directory another account could list and
+reported nothing about it, and a committed non-string entry could crash the reporting
+command outright — including `charter doctor`, which runs from the SessionStart hook.
+
 `charter vault list` and `charter doctor` name a state directory another account on the
 machine can list, and print the `chmod` — charter will not tighten a directory it did not
 create, so saying it is the remedy

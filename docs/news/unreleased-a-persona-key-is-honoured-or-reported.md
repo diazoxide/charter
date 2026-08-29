@@ -4,6 +4,11 @@ headline: A persona frontmatter key is honoured or reported — and a miscased `
 security: true
 ---
 
+**Affected: 0.53.0 and earlier. Fixed here.** This is the one entry in this release that
+narrows a **live tool grant**: if a persona on your plane has a miscased key, tools are
+being auto-approved today that its author wrote the line to give up. No attacker is
+needed — a shift key is enough. The last section is how to check.
+
 Two defects in the persona parser, and one property between them: **a key the author
 declared is honoured or reported, never silently resolved.** One is "the key was not
 recognised", the other is "the key was recognised twice", and both used to end in a value

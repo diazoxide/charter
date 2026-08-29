@@ -4,20 +4,20 @@ headline: A repository that names its own work tree cannot use it to reach the p
 security: true
 ---
 
+**Affected: 0.53.0, and earlier releases carrying the plane-root guards. Fixed here.**
+
 `--work-tree` and `GIT_WORK_TREE` are tokens. `core.worktree` is not: it is a key in a
 repository's own `.git/config`, and a repository carrying it has the named directory as its
 working tree for **every** command it runs. So the plane-root guards, which read a
 command's argv and environment, saw a plain `git checkout feature` typed inside a workspace
 clone — and git wrote that branch's content into the plane root.
 
-Reproduced end to end on git 2.50.1, with the plane's file changing:
-
-```
-git clone <plane> /tmp/cfgclone
-git -C /tmp/cfgclone config core.worktree <plane>
-git -C /tmp/cfgclone rev-parse --show-toplevel      # -> <plane>
-git -C /tmp/cfgclone checkout feature               # -> <plane>/f.txt is the branch's now
-```
+Reproduced end to end on git 2.50.1, with the plane's own file changing: give a clone's
+`.git/config` that key pointing at the plane root, and `git rev-parse --show-toplevel` inside
+the clone answers the plane root — after which an ordinary branch checkout, typed with no
+unusual argument on it at all, writes the branch's content over the plane's files. The
+command line is not printed here; it is three lines of `git config`, and this note reaches
+readers who have no backport branch to move to.
 
 `_plane_root_branch_reason` and `_plane_root_reset_reason` both answered `None`, because
 every subject `_git_target` reported was inside the clone.
@@ -71,6 +71,21 @@ to already say this, so it is not the ordinary mistake the plane-root guards exi
 it is closed because a workspace clone's config is exactly the kind of thing a repo's own
 tooling writes.
 
-Nothing to adopt: upgrading is the whole of it.
+## Are you exposed, and what do you do
+
+**Yes, if** you are on 0.53.0 or earlier *and* a repository a workspace clones carries this
+key in its committed or local git config. That is the narrow part and it is why this sits
+below the guard-parse fixes: a repository's own config has to already say it, so this is not
+the ordinary mistake the plane-root guards exist to catch. It is closed because a workspace
+clone's config is exactly the kind of thing a repo's own tooling writes without anyone
+reading it.
+
+**Checking a clone costs one command**, and it is a read: `git config --get core.worktree`
+inside each clone a plane owns. Empty is the answer you want. If one names your plane root,
+that clone could move the plane root's files on any checkout or reset, and it could have
+already — `git -C <plane> status` and `git -C <plane> reflog` are where that would show.
+
+**The fix is the upgrade**, and there are no backport branches. Nothing to adopt beyond
+moving.
 
 [#504](https://github.com/diazoxide/charter/issues/504).
