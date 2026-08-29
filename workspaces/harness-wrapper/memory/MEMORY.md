@@ -35,3 +35,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [tmux draws each pane-border cell from exactly ONE pane's options: screen](20260829-193943-tmux-draws-each-pane-border-cell-from-exactly-on.md)
 - [A parent agent's stated diagnosis is a hypothesis, not a premise. On cha](20260829-193954-a-parent-agent-s-stated-diagnosis-is-a-hypothesi.md)
 - [charter's CI already runs tools/sweep.py as a gate on every PR — 'Size t](20260829-200245-charter-s-ci-already-runs-tools-sweep-py-as-a-ga.md)
+- [A frame feature can ship switched off for its own operator: #658's repo-](20260830-004030-a-frame-feature-can-ship-switched-off-for-its-ow.md)
