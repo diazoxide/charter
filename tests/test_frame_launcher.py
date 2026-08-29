@@ -1437,7 +1437,8 @@ class _FakeTmux:
                 panel_pane_ids=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
-                kill_rc=0, arm_rc=0, hatch_rc=0, chrome_rc=0, resize_hook_rc=0,
+                kill_rc=0, arm_rc=0, hatch_rc=0, mark_rc=0, chrome_rc=0,
+                resize_hook_rc=0,
                 capture_rc=0,
                 respawn_hook_rc=0,
                 resize_hook_stderr="bad resize hook target"):
@@ -1465,6 +1466,9 @@ class _FakeTmux:
         self.kill_rc = kill_rc
         self.arm_rc = arm_rc
         self.hatch_rc = hatch_rc
+        # `set-option -p @charter_panel` — #634's pane mark, its own knob for
+        # `hatch_rc`'s reason: a test needs to fail it without failing the chrome.
+        self.mark_rc = mark_rc
         self.chrome_rc = chrome_rc
         self.resize_hook_rc = resize_hook_rc
         self.capture_rc = capture_rc
@@ -1505,6 +1509,13 @@ class _FakeTmux:
             # element would otherwise be answered by the wrong fake.
             return subprocess.CompletedProcess(cmd, self.hatch_rc, stdout="",
                                                stderr="" if self.hatch_rc == 0
+                                               else "cannot set")
+        if commands_frame._PANEL_OPTION in cmd:
+            # The panel mark (#634). Matched on the PRODUCTION constant, like the hatch
+            # option above, so a rename is answered here rather than raising "unexpected
+            # tmux command" in every test that draws a panel.
+            return subprocess.CompletedProcess(cmd, self.mark_rc, stdout="",
+                                               stderr="" if self.mark_rc == 0
                                                else "cannot set")
         if _is_chrome(cmd):
             return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
@@ -2397,6 +2408,65 @@ class Launch(PersonaIso, unittest.TestCase):
         by_pane = {c[c.index("-t") + 1]: c[-1] for c in hooks}
         self.assertIn("top", by_pane["%11"])
         self.assertIn("bottom", by_pane["%12"])
+
+    def test_every_drawn_panel_is_marked_as_one(self):
+        """#634 at the launcher. `conf_text`'s `MouseDown1Pane` bind lets a click through
+        without moving the keyboard only for panes carrying `@charter_panel`, so a panel
+        that reached the operator's screen unmarked is a panel that steals focus the first
+        time it is clicked — with `[frame] mouse = true`, which is the setting an operator
+        turns on in order to click panels.
+
+        Why `tests/test_a_click_on_a_panel_stays_where_it_points.py` does not cover this:
+        every case there either builds the argv directly or sets the option by hand before
+        clicking. They prove the bind's half — that tmux does the right thing once a pane
+        carries the option — and never charter's half, that anything ever writes it. A
+        test that arms the mechanism it is verifying proves the other party's half.
+
+        One mark per drawn panel, each naming the pane tmux actually reported for that
+        slot, and never the harness pane: `-p` on the harness would make a click on it
+        stop selecting it, which is the one pane the whole feature exists to protect.
+        """
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11", "bottom": "%12"})
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        marks = [c for c in fake.calls if "@charter_panel" in c]
+        self.assertEqual(sorted(c[c.index("-t") + 1] for c in marks), ["%11", "%12"],
+                         f"every drawn panel is marked, and only panels: {fake.calls}")
+        for cmd in marks:
+            self.assertIn("set-option", cmd)
+            self.assertIn("-p", cmd)
+            self.assertNotIn("-g", cmd)
+            self.assertEqual(cmd[-1], "1")
+            self.assertNotEqual(cmd[cmd.index("-t") + 1], fake.pane_id,
+                                "the harness pane was marked as a panel")
+
+    def test_a_mark_tmux_refuses_is_reported_but_not_fatal(self):
+        """The same treatment every other decorative-adjacent tmux command in this
+        launcher gets. A panel charter could not mark still draws, still repaints and
+        still receives its clicks — what it costs the operator is an `F12` after clicking
+        it, which is exactly where they were before #634. Taking down a harness pane that
+        is already running would be a far larger failure than the one being avoided."""
+        fake = _FakeTmux(exit_code=0, panel_pane_ids={"top": "%11"}, mark_rc=1)
+        buf = []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+            rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        self.assertTrue(any("cannot set" in m for m in buf),
+                        f"the refusal was never surfaced: {buf}")
+        self.assertTrue(any("attach" in c for c in fake.calls),
+                        "a panel that could not be marked cancelled the attach")
+
+    def test_a_panel_whose_pane_id_was_never_learned_is_not_marked(self):
+        """Same guard the respawn and resize hooks already have, reached through the same
+        `_PANE_ID_RE` check in the same loop: without a valid `%<digits>` there is no pane
+        to name, and an option written against a guessed one would land somewhere charter
+        did not choose."""
+        fake = _FakeTmux(exit_code=0,
+                         panel_pane_ids={"top": "not-a-pane-id", "bottom": "%12"})
+        rc = _launch(fake)
+        self.assertEqual(rc, 0)
+        marks = [c for c in fake.calls if "@charter_panel" in c]
+        self.assertEqual([c[c.index("-t") + 1] for c in marks], ["%12"])
 
     def test_a_panel_whose_pane_id_was_never_learned_is_not_armed(self):
         """Same guard the resize hook already has, for the same reason: without a valid
@@ -4034,6 +4104,8 @@ class _FakeOperatorTmux:
         if "remain-on-exit" in cmd:
             return subprocess.CompletedProcess(cmd, self.arm_rc, stdout="",
                                                stderr="" if self.arm_rc == 0 else "cannot set")
+        if commands_frame._PANEL_OPTION in cmd:
+            return self._ok(cmd)
         if _is_chrome(cmd):
             return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
                                                stderr="" if self.chrome_rc == 0

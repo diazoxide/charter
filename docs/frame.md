@@ -84,19 +84,28 @@ in that panel's own cells, and never selects the pane — the frame exists to ke
 harness the thing you type into, and a click that quietly moved the keyboard somewhere
 else would be the opposite of that. Measured on tmux 3.7c and 3.2 alike.
 
-**With `mouse = true`, tmux itself moves the keyboard on a click, and charter cannot stop
-it.** That is tmux's own behaviour for the setting: with its mouse on, tmux selects the
-pane under the pointer before handing the click on. So turning this on buys you clicks
-that always work, and costs you a keyboard that follows them — press `F12` to get back to
-the harness. The wheel never moves it, either way. Both measured on 3.7c and 3.2:
+**If you already set `mouse = true`, this release stops your clicks moving the keyboard —
+you no longer need `F12` after clicking a panel.** Until now, tmux's own default binding
+selected the pane under the pointer before handing the click on, so `mouse = true` bought
+you clicks that always work and cost you a keyboard that followed them. Charter now
+rebinds that one key inside its own private tmux server, and only for the panes it created
+itself: **a click on a panel acts where you pointed and leaves your keyboard on the
+harness, while a click on the harness — or on any pane you split yourself inside the frame
+— still selects it, exactly as tmux documents.** The wheel never moved the keyboard and
+still does not. Both measured on 3.7c and 3.2:
 
 | | `mouse = false` (default) | `mouse = true` |
 |---|---|---|
 | does a click reach the panel? | only while the active pane is asking your terminal to report — your harness decides | always, from the moment you attach |
-| does a click move your keyboard? | **no** | **yes**, to the panel you clicked |
+| does a click on a panel move your keyboard? | **no** | **no** |
+| does a click on the harness, or a pane you split, move your keyboard? | no — with its mouse off tmux runs no mouse binding at all | yes — tmux's own behaviour, untouched |
 | does the wheel move your keyboard? | no | no |
 | do you keep native drag-select? | while no mouse-requesting pane is active | no |
 | a click on a pane border | reaches nobody — a border is a cell in neither pane | reaches nobody |
+
+The drag-select row is the trade `mouse = true` makes, and it has not changed and will not:
+it is how tmux works, not a default charter chose. What went away was a second cost that was
+never part of that trade — one key's default behaviour, in a server charter owns.
 
 One consequence of that first column worth knowing, because it is new: a panel whose
 component declares `click` or `scroll` asks *its own* terminal to report, so if you select

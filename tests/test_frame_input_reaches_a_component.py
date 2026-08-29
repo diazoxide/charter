@@ -13,7 +13,9 @@ branches make that could be wrong is a claim about tmux:
 * that a `resize-window` reaches every pane, focused or not;
 * that tmux routes a POINTER to the pane under it by position, pane-relative, **without
   making that pane active** — which is the entire premise of delivering `click` and
-  `scroll` at all, and the one this file exists to keep true.
+  `scroll` at all, and the one this file exists to keep true;
+* that the same holds with tmux's OWN mouse on, where it does not hold by default and
+  charter's `MouseDown1Pane` bind is what makes it (`APointerWithTmuxsOwnMouseOn`, #634).
 
 The measurements this file is the standing form of, taken against **tmux 3.7c** and
 re-taken at the **3.2 floor**, both identical::
@@ -27,8 +29,11 @@ re-taken at the **3.2 floor**, both identical::
       click window col 100 (pane left=80) -> panel READ b'\\x1b[<0;20;5M'   active: harness
       click the border between them       -> nobody                       active: harness
       wheel over the panel                -> panel READ b'\\x1b[<64;20;5M'  active: harness
-    mouse ON
-      click over the panel                -> panel receives it            active: PANEL
+    mouse ON, charter's own `MouseDown1Pane` bind in place (#634)
+      click over the panel                -> panel receives it            active: harness
+      click over the HARNESS              -> harness receives it          active: harness
+      click a pane the operator split     -> that pane receives it        active: THAT pane
+      wheel over the panel                -> panel receives it            active: harness
 
 and, for the tty mode, one pane per mode painting three ``\\n``-joined rows::
 
@@ -262,12 +267,26 @@ class _AFrameWithProviderPanels(PersonaIso):
         return site
 
     def _split(self, cid: str) -> str:
-        """One panel pane running the argv charter's own launcher would run."""
+        """One panel pane running the argv charter's own launcher would run, marked the
+        way charter's own launcher marks it.
+
+        The mark is `commands_frame._panel_mark_argv`, called rather than re-spelled, for
+        the reason `conf_text` is sourced above rather than hand-written (#547): this
+        fixture must not carry its own copy of charter's answer. `_split_panels` is what
+        issues it in production and `tests/test_frame_launcher.py` is what pins that it
+        does; here it is fixture, so that the pointer cases below are asking about tmux
+        rather than about whether a pane got set up.
+        """
         argv = layout.panel_command(slot=cid, session=self.fid)
         r = _tmux("split-window", "-t", self.harness, "-v", "-l", "3",
                   "-P", "-F", "#{pane_id}", "--", *argv, env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout.strip()
+        pane = r.stdout.strip()
+        marked = subprocess.run(
+            commands_frame._panel_mark_argv(socket=SOCKET, pane_id=pane),
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(marked.returncode, 0, marked.stderr)
+        return pane
 
     def _attach(self) -> int:
         refusals = []
@@ -577,6 +596,132 @@ class APointerReachesTheComponentItLandedOn(_AFrameWithProviderPanels):
         self._point(self.pane[POINT_CID], row=0, col=0)
         self.assertTrue(_await(lambda: "POINT-click:left:0,0:up" in self._pointed()),
                         f"the release was not the last event seen: {self._pointed()!r}")
+
+
+class APointerWithTmuxsOwnMouseOn(_AFrameWithProviderPanels):
+    """The same frame with `[frame] mouse = true`, which is the regime #634 is about.
+
+    Everything above runs at charter's default, `mouse = false`, where tmux processes no
+    mouse binding at all and the pointer reaching a panel is entirely the harness's doing.
+    This class is the other regime — the one an operator opts into *because* they want to
+    click panels — and it is where tmux's own default `MouseDown1Pane` binding used to
+    select the pane under the pointer before forwarding, so every click took the keyboard
+    off the harness until they pressed `F12`.
+
+    `conf_text` now rebinds that key, conditionally on the pane under the pointer carrying
+    `_PANEL_OPTION`. **The whole point of the conditional is the last two cases**: a
+    blanket `bind -n MouseDown1Pane send -M` passes the first two and breaks both of
+    those, measured on 3.7c and at the 3.2 floor — it takes away clicking back to any pane
+    at all, the harness included, which is worse than the focus steal it fixes.
+
+    Nothing here is stubbed and nothing is set up by the test that the launcher does not
+    set up: the config is `conf_text`'s own text and the mark is `_panel_mark_argv`'s own
+    argv.
+    """
+
+    #: The only difference from the fixture above, and the setting the whole class is about.
+    MOUSE = True
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A pane the OPERATOR split, standing for what they would get by typing their own
+        # prefix-split inside charter's window. Not a charter panel: no `panel_command`,
+        # no mark, nothing charter would ever do to it. Two rows, so it fits beside four
+        # panels in a 24-row window.
+        r = _tmux("split-window", "-t", self.harness, "-v", "-l", "2",
+                  "-P", "-F", "#{pane_id}", "--", "cat", env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.operator_pane = r.stdout.strip()
+        self._select(self.harness)
+
+    def _pointed(self) -> str:
+        return self._shown(POINT_CID)
+
+    def test_tmuxs_own_mouse_really_is_on(self):
+        """Without this every case below could be passing because tmux is ignoring the
+        mouse entirely — which is the fixture above's regime and proves nothing about this
+        one. Read off tmux rather than off `self.MOUSE`, so a `conf_text` that stopped
+        writing the line fails here instead of quietly making the rest vacuous."""
+        said = _tmux("show-options", "-t", self.fid, "-v", "mouse")
+        self.assertEqual(said.stdout.strip(), "on", said.stderr)
+
+    def test_a_click_still_reaches_the_component_whose_pane_it_landed_on(self):
+        """Delivery first, because every focus assertion below is worth nothing if the
+        click never arrived — a keyboard that did not move because nothing happened is not
+        the property being claimed."""
+        self._select(self.harness)
+        self._point(self.pane[POINT_CID], row=0, col=2)
+        self.assertTrue(_await(lambda: "POINT-click" in self._pointed()),
+                        f"a click never reached it: {self._pointed()!r}")
+
+    def test_the_keyboard_does_not_follow_the_pointer(self):
+        """#634 itself. This assertion was `active pane: THE PANEL` before the rebind, on
+        3.7c and at the 3.2 floor identically, and it is the reason `[frame] mouse = true`
+        was documented as hostile rather than recommended."""
+        self._select(self.harness)
+        self._point(self.pane[POINT_CID], row=0, col=2)
+        self.assertTrue(_await(lambda: "POINT-click" in self._pointed()),
+                        "the click never arrived, so this proves nothing about focus")
+        self.assertEqual(self._active(), self.harness,
+                         "a click on a panel took the keyboard off the harness")
+
+    def test_clicking_the_harness_still_selects_it(self):
+        """Half of what the conditional buys, and the half a blanket rebind destroys. The
+        keyboard starts on a PANEL here — put there by `select-pane`, not by a click —
+        so the assertion is that the click moved it back, not that it never moved."""
+        self._select(self.pane[POINT_CID])
+        self.assertEqual(self._active(), self.pane[POINT_CID])
+        self._point(self.harness, row=0, col=1)
+        self.assertTrue(_await(lambda: self._active() == self.harness, 5.0),
+                        "a click on the harness no longer brings the keyboard back — "
+                        "which is worse than the focus steal this rebind fixes")
+
+    def test_clicking_a_pane_the_operator_split_still_selects_it(self):
+        """The other half, and the question the issue asked third: what happens to a click
+        on a pane that is neither the harness nor a charter panel. It is not charter's, so
+        charter changes nothing about it — tmux's documented `select-pane -t = \\;
+        send-keys -M` is what runs, and the operator's own pane behaves the way every pane
+        in their own tmux does."""
+        self._select(self.harness)
+        self._point(self.operator_pane, row=0, col=1)
+        self.assertTrue(_await(lambda: self._active() == self.operator_pane, 5.0),
+                        "a pane the operator split themselves stopped taking the keyboard "
+                        "on a click — tmux's own behaviour, removed from a pane charter "
+                        "has nothing to do with")
+
+    def test_a_pane_split_out_of_a_PANEL_is_not_one(self):
+        """The sharpest form of the same question, and it rests on a fact about tmux
+        rather than about charter: a pane option is not inherited by a pane split off the
+        one carrying it. So even a pane the operator carved out of a panel is theirs, and
+        clicking it selects it.
+
+        If tmux ever started copying pane options across a split, this is the case that
+        notices — and the consequence would be an operator's own pane silently refusing
+        the keyboard, which nothing else here would catch."""
+        r = _tmux("split-window", "-t", self.pane[POINT_CID], "-v", "-l", "1",
+                  "-P", "-F", "#{pane_id}", "--", "cat", env=self.env)
+        if r.returncode != 0:
+            self.skipTest(f"no room to split a child out of a panel: {r.stderr.strip()}")
+        child = r.stdout.strip()
+        said = _tmux("display-message", "-p", "-t", child, "#{@charter_panel}")
+        self.assertEqual(said.stdout.strip(), "",
+                         "a pane split out of a panel inherited the panel's mark")
+        self._select(self.harness)
+        self._point(child, row=0, col=0)
+        self.assertTrue(_await(lambda: self._active() == child, 5.0),
+                        "a pane the operator carved out of a panel stopped taking the "
+                        "keyboard on a click")
+
+    def test_the_wheel_still_does_not_move_the_keyboard(self):
+        """The control that has always held, on both settings and both tmux versions. A
+        rebind that routed the wheel through the click's branch would break it."""
+        self._select(self.harness)
+        left, top, _w, _h = self._rect(self.pane[POINT_CID])
+        self._inject(b"\x1b[<64;%d;%dM" % (left + 1, top + 1))
+        self.assertTrue(_await(lambda: "POINT-scroll" in self._pointed()),
+                        f"the wheel never reached it: {self._pointed()!r}")
+        self.assertEqual(self._active(), self.harness,
+                         "the wheel moved the keyboard")
 
 
 if __name__ == "__main__":
