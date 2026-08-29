@@ -170,12 +170,27 @@ class AnArrangementCharterCannotDrawIsRefusedWhole(unittest.TestCase):
         self._fallback([{"use": "repos", "edge": "top"}], slots=["top", "repos"])
 
     def test_a_size_charter_cannot_give_the_component(self):
+        """`sidebar` is `Fixed(22)`, and `layout` turns that declaration into
+        `SLOT_SIZE["right"]` once, at import. Nothing between `charter.toml` and
+        `split-window` carries a per-plane override for it, so a different number could
+        only be read, validated, stored and ignored.
+
+        The repo table is the one built-in this is not true of — its height is recomputed
+        from the resolved arrangement on every launch and every resize — and
+        `tests/test_a_pinned_repo_strip_keeps_its_height.py` is where that asymmetry is
+        pinned from both sides."""
         self._fallback([{"use": "sidebar", "size": 30}])
 
-    def test_a_size_on_a_component_whose_height_is_its_content(self):
-        """`repos` is `Content()`: its height is the plane's repo count bounded by what
-        the harness may not be charged, so there is no number to accept here at all."""
-        self._fallback([{"use": "repos", "size": 4}])
+    def test_a_size_the_repo_table_could_not_be_given(self):
+        """The table's height IS committable (see the module named above), which makes
+        the numbers it will not take the interesting half. Zero and below are a pane tmux
+        refuses to split; `true` is the `isinstance(True, int)` trap; a string and a float
+        are not cells at all. `component.Fixed` is what refuses each of them, and this
+        asserts that its refusal reaches the arrangement rather than escaping as a
+        `ComponentError` out of a committed file being resolved."""
+        for size in (0, -1, True, "4", 4.0, [4]):
+            with self.subTest(size=size):
+                self._fallback([{"use": "repos", "size": size}])
 
     def test_the_same_component_claimed_twice(self):
         """One pane draws it, and two claims have no answer — the registry's own rule

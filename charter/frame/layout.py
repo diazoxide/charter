@@ -298,6 +298,38 @@ def _policy_cells(size) -> int:
     return size.n if isinstance(size, Fixed) else 1
 
 
+def _pinned_rows() -> int | None:
+    """The height this plane PINNED the repo strip to, or ``None`` for the shipped policy.
+
+    **The one per-plane override charter's own geometry has, and the reason it is the only
+    one.** Every other placed built-in is `Fixed` in its own declaration, so
+    :data:`SLOT_SIZE` — derived once, at import — is the whole answer for it and a
+    committed number could only be read and ignored (`instance._built_in_size` argues that
+    half). `repos` is `Content()`: its height never enters that table, it is computed by
+    :func:`repos_rows` from the resolved arrangement at every launch and again on every
+    `window-resized`, and this is what makes a number there mean something.
+
+    Read from the resolved config rather than threaded through five signatures, for
+    :func:`_placed_here`'s reason word for word — and this function is on exactly the path
+    that docstring names. :func:`repos_rows` already reaches `config.FRAME` transitively
+    through :func:`_is_fixed_row`, so nothing about when this module talks to the config
+    boundary changes.
+
+    ``isinstance(placed["size"], Fixed)`` asks which POLICY the arrangement resolved to,
+    which is the property and not a stand-in for it: a plane that writes its arrangement
+    out and puts no ``size`` on the table holds `Content()` there — the shipped policy
+    spelled longhand — and reading that as a pin would hand such a plane a one-row strip.
+    The name is tested too, because a placement's ``size`` says nothing about which
+    component it belongs to; without it the first placement in file order would decide the
+    table's height, and on charter's own plane that is `identity`, `Fixed(1)`.
+    """
+    from .. import config
+    for placed in config.FRAME.get("components") or ():
+        if placed.get("slot") == "repos" and isinstance(placed["size"], Fixed):
+            return placed["size"].n
+    return None
+
+
 def _edge_of(name):
     """Which side of the harness *name* attaches to, or ``None`` for a name nothing placed.
 
@@ -479,9 +511,23 @@ def repos_rows(*, content_rows: int, window_rows: int,
       costs columns, not rows, so it is not counted here — asking for the whole slot list
       rather than a pre-computed number is what keeps that decision in one place instead
       of at each call site.
-    * **Between the two, the content wins.** *content_rows* is what `slots._repos` would
-      actually fill (`slots.repos_rows_wanted`), so a two-repo plane gets a two-row strip
-      rather than a fourteen-row one padded with blanks.
+    * **Between the two, the content wins — unless the plane pinned a height.**
+      *content_rows* is what `slots._repos` would actually fill
+      (`slots.repos_rows_wanted`), so a two-repo plane gets a two-row strip rather than a
+      fourteen-row one padded with blanks. That is the DEFAULT and it is the answer for
+      every plane that does not say otherwise; a ``size`` on the table's own
+      `[[frame.component]]` table replaces it with a constant (:func:`_pinned_rows`),
+      which is the operator asking for a strip that does not move when a clone is added
+      or removed.
+
+    **A pin replaces the content, not the floor and not the cap**, and the cap is why.
+    tmux does not refuse an over-large height, it grants it out of the neighbour: measured
+    on 3.7c, `resize-pane -t <the table pane> -y 40` in a 20-row window left the HARNESS
+    pane one row tall. A committed ``size = 40`` is that command with a config file in
+    front of it, and a plane's frame is committed and shared — so a pin degrades in a
+    short terminal exactly as a fourteen-repo plane's table already does, and the operator
+    keeps :data:`HARNESS_MIN_ROWS` of the session the frame is drawn around. The floor
+    holds for the same reason it always did: `panel_argvs` cannot split a zero-row pane.
 
     The cap can come out below the floor — a 16-row window has no rows to spare at all —
     and the floor wins then, because `panel_argvs` has to be able to split the pane at
@@ -489,9 +535,11 @@ def repos_rows(*, content_rows: int, window_rows: int,
     every slot below half the size floors.
     """
     floor = SLOT_SIZE["repos"]
+    pinned = _pinned_rows()
+    wanted = content_rows if pinned is None else pinned
     other = sum(_size_of(s) + _BORDER_ROWS for s in slots if _is_fixed_row(s))
     cap = window_rows - other - _BORDER_ROWS - HARNESS_MIN_ROWS
-    return max(floor, min(content_rows, cap))
+    return max(floor, min(wanted, cap))
 
 
 def column_sizes(slots: list[str] | tuple[str, ...]) -> dict[str, int]:

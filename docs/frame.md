@@ -381,8 +381,10 @@ be followed by another one.
 the attention strip — one alert and the command that fixes it — which is the whole reason
 a cramped terminal is worth framing at all. It is one row at every size.
 
-`repos` is the one whose height moves. It is its content's: one row per repo (and per
-worktree, in a single-repo workspace), plus its own `▪ repos N` heading, capped so the
+`repos` is the one whose height moves — unless you pin it, which is a `size` on its
+`[[frame.component]]` table and is described under [The arrangement, written
+out](#the-arrangement-written-out). By default it is its content's: one row per repo (and
+per worktree, in a single-repo workspace), plus its own `▪ repos N` heading, capped so the
 harness always keeps at least 12 rows. "Its content" means *what the panel will actually
 draw*, not how many clones there are: the launcher and the resize hook ask the same
 function the panel asks, at the same density and — the part that is easy to get wrong — at
@@ -922,13 +924,46 @@ If your plane is spelled with `slots`, write the arrangement out first — the l
 above says exactly the same thing, and the `[[frame.component]]` tables for any `slots`
 list are one per name, in the same order.
 
-For one of charter's own four, `edge` and `size` may be written down and may only say what
-the component already declares — `edge = "right"` and `size = 22` on the sidebar, `edge =
-"top"` on identity. Charter derives the built-in geometry from those declarations, and
-nothing between `charter.toml` and tmux carries a per-plane override for them, so a value
-charter cannot honour is not quietly accepted and ignored: it takes the arrangement out of
-play. Writing them is still worth it if you like your config explicit — and it is what
-makes the two forms round-trip.
+For one of charter's own four, `edge` may be written down and may only say what the
+component already declares — `edge = "right"` on the sidebar, `edge = "top"` on identity.
+Charter derives the built-in geometry from those declarations, and nothing between
+`charter.toml` and tmux carries a per-plane override for them, so a value charter cannot
+honour is not quietly accepted and ignored: it takes the arrangement out of play. Writing
+it is still worth it if you like your config explicit — and it is what makes the two forms
+round-trip.
+
+`size` is the same for three of the four: `size = 1` on identity, `size = 1` on the
+attention strip, `size = 22` on the sidebar, and any other number takes the arrangement
+out of play for the reason above.
+
+**`size` on the repo table is the one exception, and it pins the strip's height.**
+
+```toml
+[[frame.component]]
+use  = "repos"
+size = 15
+```
+
+The table is the one panel charter sizes to its content — one row per repo, so a plane
+with two clones gets a two-row strip and a plane with fourteen gets a fourteen-row one.
+That is the default and it does not change. What `size` says is *stop doing that*: the
+strip is 15 rows whether you have one clone or thirty, which is what you want if your
+clone count moves and you would rather your session did not shuffle under it every time.
+Charter can honour it here because this height is not derived once at import like the
+other three — it is recomputed from your arrangement at every launch and on every terminal
+resize, so there is somewhere for your number to be read.
+
+It is a number of cells: a whole number, at least 1. Anything else — `0`, a negative, a
+`true`, a string, a float — takes the arrangement out of play like every other value
+charter cannot honour.
+
+**Your pin is still capped so your session keeps its 12 rows.** tmux does not refuse an
+over-large pane height, it grants it out of the neighbour, and the neighbour is your agent
+session — `size = 40` in a 20-row window would leave it one row tall. So a pin is what the
+strip *wants*, and what the window can spare is decided afterwards, exactly as it already
+is for a fourteen-repo plane on a short terminal. On a terminal with room, you get your
+number; on one without, you get what is left, and the strip is dropped entirely below the
+95 columns its table needs.
 
 `bg` and `pad` are the two keys that have no `slots` equivalent at all: they say how a pane
 *looks*, not where it sits, so they only exist in the long form.
@@ -1035,7 +1070,9 @@ frame your `slots` (or `density`, or the default) describes. You see your whole 
 not take effect, which is something you can act on, rather than one pane's worth of quiet
 fiction. A `key` charter will not bind, a key two components both claim, and a key equal to
 your frame's own `hotkey` are on that list too — and so are a `bg` that is not one of the
-seventeen words and a `pad` outside `0`–`8`.
+seventeen words, a `pad` outside `0`–`8`, and a `size` charter cannot give the component
+(any number but its own on the three whose height is fixed, and anything that is not a
+whole number of cells on the repo table).
 
 Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then
 `density`, then the shipped default.
