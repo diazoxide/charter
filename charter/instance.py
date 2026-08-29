@@ -1693,7 +1693,13 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
             # height is recomputed from this resolved arrangement on every launch and
             # every resize, so a number there is read. `None` is refused the way every
             # other unusable value in this loop is — whole arrangement, #535.
-            size = c.size
+            #
+            # `None` rather than `c.size` for a table that names no size, and that is this
+            # function's own #547 rule kept: `_built_in_placement` already declares what a
+            # built-in's rectangle is, and a second copy of it here is the masked default
+            # the sweep is written to catch — mutate the one in `_built_in_placement` and
+            # nothing would move, because every call arriving through here carried its own.
+            size = None
             if "size" in table:
                 size = _built_in_size(c, table["size"])
                 if size is None:
