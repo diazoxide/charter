@@ -150,8 +150,18 @@ def _register_detach(reg: actions.ActionRegistry) -> None:
 NO_REPOS = ("this workspace has no clones for the repo table to select from — "
             "charter clone <repo>")
 
-#: Which way each row walks the table, in the order the palette lists them.
-_SELECT_STEPS = (("next", 1), ("previous", -1))
+#: Which way each row walks the table, in the order the palette lists them, and where a
+#: walk with no selection under it STARTS — the row before the first for `next`, the row
+#: after the last for `previous`, so that `(start + step) % len` lands on the end the
+#: direction is coming from.
+#:
+#: **Spelled per direction rather than derived from the step's sign**, and the deletion
+#: sweep is why. `-1 if step > 0 else 0` reads fine and cannot be tested: a step here is
+#: only ever `+1` or `-1`, so `step > 0` and `step >= 0` answer identically for every value
+#: that reaches them, and a comparison no test can distinguish is a line this repository
+#: deletes rather than documents. Written down, the two starts are data and the arithmetic
+#: below has no branch left in it.
+_SELECT_STEPS = (("next", 1, -1), ("previous", -1, 0))
 
 
 def _register_selection(reg: actions.ActionRegistry) -> None:
@@ -197,29 +207,30 @@ def _register_selection(reg: actions.ActionRegistry) -> None:
     the pane (`_ACTION_START_GRACE`), so a subprocess would buy nothing and cost a whole
     interpreter start.
     """
-    for word, step in _SELECT_STEPS:
+    for word, step, start in _SELECT_STEPS:
         reg.register(action.Action(
             id=f"repo.{word}", title=f"repo: select the {word} row",
             touches=("repos",),
-            run=(lambda ctx, st=step: _select(ctx, st)),
+            run=(lambda ctx, st=step, sr=start: _select(ctx, st, sr)),
             available=lambda ctx: bool(ctx.repos),
             reason_unavailable=lambda ctx: NO_REPOS))
 
 
-def _select(ctx, step: int):
+def _select(ctx, step: int, start: int):
     """Move this frame's repo selection *step* rows through the table's display order.
 
     Split out of the row above so the walk can be exercised against a list of names
     without a palette, a tmux server or a frame directory — the same reason
     `slots._fit_fields` is not inside `slots._bottom`.
 
-    The modulo is what wraps. **Where a walk with no selection under it STARTS depends on
-    the direction, and one starting point for both was the first version and was wrong**:
-    `next` has to land on the first row and `previous` on the last, and a single sentinel
-    can only be right for one of them — `-1` gives `next` its 0 and gives `previous` the
-    row second from the bottom, which is a cursor appearing in the middle of a list nobody
-    had put one in. So the sentinel is the end the direction is coming FROM, and the same
-    arithmetic then serves both.
+    The modulo is what wraps. *start* is where a walk with no selection under it begins,
+    and it is :data:`_SELECT_STEPS`' third column rather than something worked out here —
+    **one starting point for both directions was the first version and was wrong**: `next`
+    has to land on the first row and `previous` on the last, and a single sentinel can only
+    be right for one of them (`-1` gives `next` its 0 and gives `previous` the row second
+    from the bottom, a cursor appearing in the middle of a list nobody had put one in).
+    Deriving it from the step's SIGN was the second version and could not be tested; see
+    that constant for why.
 
     `ctx.repos` is never empty here: `available` refuses the row on a plane with no clones,
     and `ActionRegistry._check` builds ONE ctx and hands that same one to `run` — so the
@@ -228,7 +239,7 @@ def _select(ctx, step: int):
     """
     names = [r.get("name") for r in ctx.repos]
     chosen = state.selection(ctx.fid)
-    here = names.index(chosen) if chosen in names else (-1 if step > 0 else 0)
+    here = names.index(chosen) if chosen in names else start
     name = names[(here + step) % len(names)]
     state.record_selection(ctx.fid, name)
     # The `repos` pane redraws its highlight and the `attention` pane redraws the detail,

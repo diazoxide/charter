@@ -1805,7 +1805,12 @@ def _selected_detail(fid: str) -> str:
     data = gather.cached(fid)
     if data is None:
         return ""
-    row = next((r for r in data.get("repos") or [] if r.get("name") == name), None)
+    # `data["repos"]`, with no `or []` under it: `gather.cached` answers `None` for
+    # anything whose `repos` is not a LIST (`gather._shaped_like_a_scan`), so a fallback
+    # here could only ever stand in for an empty list with an empty list. The sweep found
+    # it surviving, correctly — a line that cannot change an outcome is not documentation
+    # of an intent.
+    row = next((r for r in data["repos"] if r.get("name") == name), None)
     if row is None:
         # A selection pointing at a repo this plane no longer has. The table drew no
         # highlight for it either (`_table_lines` matches on the same name), so both

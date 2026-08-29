@@ -826,7 +826,7 @@ def _run(slot: str, fid: str, *, once: bool = False) -> int:
             # plus the failure message a raw slot render cannot say for itself.
             slot = _builtins.SLOT_OF[cid]
             evs = _dispatcher(_builtins.build(fid), cid)
-            painter = _slot_painter(evs) if evs is not None else None
+            painter = _slot_painter(evs)
         else:
             reg = _builtins.build(fid)
             # The one production caller `Registry.place` was written for. It does not

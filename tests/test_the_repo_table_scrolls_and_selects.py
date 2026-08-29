@@ -157,6 +157,16 @@ class TheViewportRemembersOneThingAndClampsIt(unittest.TestCase):
         self.assertIsNone(self.v.repo_at(3))
         self.assertIsNone(self.v.repo_at(-1))
 
+    def test_row_zero_is_a_row_like_any_other_when_something_is_drawn_on_it(self):
+        """**The BOUNDARY, not the direction.** The map `_repos` publishes starts with the
+        heading, so every case above asks about a row 0 that is `None` anyway — and against
+        that map `0 <= row` and `0 < row` answer identically, which the deletion sweep
+        found. A map whose first entry is a repo is what tells them apart, and it is not
+        hypothetical: `publish` takes whatever the caller drew, and nothing in the contract
+        says row 0 must be chrome."""
+        self.v.publish(("a", "b"))
+        self.assertEqual(self.v.repo_at(0), "a")
+
 
 class TheWindowMovesAlongTheRanking(PersonaIso, unittest.TestCase):
     """What the table actually draws at each offset.
@@ -225,6 +235,20 @@ class TheWindowMovesAlongTheRanking(PersonaIso, unittest.TestCase):
         data = _data([_row("solo")],
                      worktrees=[_row("bit", repo="solo"), _row("other", repo="solo")])
         self.assertEqual(_names(self._lines(data, 6)), ["solo", "solo", "solo"])
+
+    def test_a_piece_on_the_branch_named_after_it_shows_no_branch_at_all(self):
+        """`charter worktree add <repo> <piece>` names the branch after the piece, so by
+        default the two columns print the same word twice. Emptying the cell is what makes
+        it mean *this piece is NOT on the branch you would assume* — and the OTHER arm of
+        that choice is what the sibling case above exercises, so both are here. The markers
+        still render either way: dirty and ahead/behind are true of the tree whatever its
+        branch."""
+        same = _data([_row("solo")],
+                     worktrees=[_row("bit", branch="bit", repo="solo")])
+        other = _data([_row("solo")],
+                      worktrees=[_row("bit", branch="fix/x", repo="solo")])
+        self.assertNotIn("bit  ", tui.strip_ansi(self._lines(same, 6)[1].text).strip())
+        self.assertIn("fix/x", tui.strip_ansi(self._lines(other, 6)[1].text))
 
 
 class TheSelectedRowIsDrawnAsSelected(PersonaIso, unittest.TestCase):
@@ -506,6 +530,17 @@ class TheAttentionRowSaysWhatWasPicked(PersonaIso, unittest.TestCase):
 
     def test_a_repo_with_no_branch_says_so_rather_than_leaving_the_cell_empty(self):
         self.assertIn("· ? ·", tui.strip_ansi(slots._detail_text(_row("x", branch=""))))
+
+    def test_a_change_with_no_sigil_still_gets_one(self):
+        """`gather` writes the forge's own word for a change — `!` on GitLab, `#` on
+        GitHub — and writes nothing when it does not know. The row must not then read
+        `123`, which is a number with no noun on it. The busy-repo case above hands a
+        sigil, so this is the one that tells the fallback from the field."""
+        self.assertIn("· !123",
+                      tui.strip_ansi(slots._detail_text(_row("x", change=123, sigil=""))))
+        self.assertIn("· #123",
+                      tui.strip_ansi(slots._detail_text(_row("x", change=123,
+                                                             sigil="#"))))
 
     def test_nothing_selected_is_nothing_on_the_row(self):
         """What every plane that has never clicked anything gets: `_fit_fields` drops an
