@@ -297,6 +297,104 @@ class TestTheRefusals(RevertCase):
         self.assertEqual(sha(repo, "refs/heads/main"), before)
 
 
+class TestEveryWayASeedCanFailIsNamed(RevertCase):
+    """`_seed_revert`'s refusals, one at a time and each by its own words.
+
+    Six things can stop a member being seeded and every one of them is a sentence the
+    operator can act on. They sit in sequence, which is exactly the shape that masks:
+    an exit-code assertion cannot tell them apart, and neither can a test that only ever
+    reaches the first.
+    """
+
+    def test_a_branch_that_already_exists_is_refused_by_name(self):
+        """Not overwritten and not reused: the branch may carry somebody's work, and
+        `git switch -c` onto an existing name is a refusal charter passes through rather
+        than a `--force` it supplies."""
+        repo, _ = self.one_landed_member()
+        git(repo, "branch", change.default_branch(REVERTED))
+        code, _, err = self.revert()
+        self.assertEqual(code, 1)
+        self.assertIn("already exists", err)
+        self.assertNotIn("uncommitted", err)          # and not its neighbour
+
+    def test_a_commit_git_does_not_have_is_named_rather_than_reverted(self):
+        """A sha that is well-formed and absent — an older charter's log, or a clone that
+        was re-created. `_parents` answers `None`, and `None` is not 1."""
+        self.repo("charter")
+        self.make_change(SLUG, [("charter", ())])
+        self.declare(SLUG, "charter", "0" * 40)
+        code, _, err = self.revert()
+        self.assertEqual(code, 1)
+        self.assertIn("does not know the commit", err)
+
+    def test_a_default_branch_charter_cannot_resolve_stops_the_seed(self):
+        """It will not guess what to branch from. Every other answer here is relative to
+        the default branch, and branching a revert off the wrong one is a change nobody
+        asked for."""
+        repo, _ = self.one_landed_member()
+        git(repo, "branch", "-m", "main", "trunk")
+        code, _, err = self.revert()
+        self.assertEqual(code, 1)
+        self.assertIn("default", err)
+        self.assertIn("will not guess", err)
+
+    def test_a_conflicted_revert_is_aborted_and_the_branch_is_left_to_finish(self):
+        """`--abort` restores the checkout the revert started from, so the operator gets
+        the branch and the conflict rather than a half-applied tree. Charter has no
+        business guessing which side of a conflict a rollback wanted."""
+        repo, _ = self.one_landed_member()
+        marker = change.default_branch(SLUG).replace("/", "_")
+        (repo / marker).write_text("somebody changed this after the landing\n")
+        git(repo, "add", "-A")
+        git(repo, *__import__("tests._changerepo", fromlist=["IDENT"]).IDENT,
+            "commit", "-qm", "later work on the same file")
+        git(repo, "rm", "-q", marker)
+        git(repo, *__import__("tests._changerepo", fromlist=["IDENT"]).IDENT,
+            "commit", "-qm", "and delete it")
+        code, _, err = self.revert()
+        # Either it applied cleanly or it was aborted and said so — never half-applied.
+        self.assertEqual(git(repo, "status", "--porcelain").stdout.strip(), "")
+        if code:
+            self.assertIn("finish it by hand", err)
+
+    def test_the_working_tree_is_read_before_anything_is_created(self):
+        """The order is the point: a refusal that had already made a branch would leave
+        litter behind for a condition it then declined to act on."""
+        repo, _ = self.one_landed_member()
+        (repo / "f").write_text("dirty\n")
+        self.revert()
+        self.assertFalse(commands_change._branch_exists(
+            repo, change.default_branch(REVERTED)))
+
+    def test_the_new_record_is_still_written_when_a_seed_fails(self):
+        """The record is the statement of intent — these repositories are the ones to
+        revert — and a branch that did not get created is a thing to fix, not a member to
+        drop silently. The exit code is what says something is unfinished."""
+        repo, _ = self.one_landed_member()
+        (repo / "f").write_text("dirty\n")
+        code, _, _ = self.revert()
+        self.assertEqual(code, 1)
+        self.assertEqual([m["repo"] for m in change.read("ws", REVERTED)["members"]],
+                         ["charter"])
+
+    def test_a_reverts_slug_is_always_a_change_name(self):
+        """Pinned on the DERIVATION rather than on a refusal, because the refusal is
+        unreachable and was deleted for it: `CHANGE_NAME_RE` has no length bound and no
+        leading-character rule that a `revert-` prefix could break, so prefixing a slug
+        that already passed can never produce one that does not.
+
+        Measured across the alphabet's own edges rather than asserted — that is what
+        would go red if the rule ever grew a length cap or a prefix restriction, which is
+        the change that would put the deleted guard back."""
+        from charter import instance
+        for slug in ("a", "9", "Z", "a.b_c-d", "x" * 200, "x" * 2000):
+            with self.subTest(slug=slug[:20]):
+                self.assertTrue(instance.change_name_ok(slug))
+                self.assertTrue(
+                    instance.change_name_ok(commands_change.REVERT_PREFIX + slug),
+                    "a valid slug produced an invalid revert name — the deleted guard in "
+                    "cmd_change_revert is reachable again and has to come back")
+
 class TestALandingCharterDidNotRecordIsNamed(RevertCase):
     def test_a_member_with_no_log_line_is_handed_to_a_human(self):
         """No merge sha, so no revert. Charter says so rather than picking the merge
@@ -349,6 +447,123 @@ class TestTheLogIsUntrustedToo(RevertCase):
         this — a newline on its way into a git argv out of a file anybody can edit."""
         self.assertIsNone(commands_change._SHA_RE.fullmatch("e0c9d13\n"))
         self.assertIsNotNone(commands_change._SHA_RE.fullmatch("e0c9d13"))
+
+    def write_log(self, text: str) -> None:
+        """Put *text* in this host's log verbatim — the only way to reach the reader's
+        defensive half, because `record_landing` can only ever write well-formed lines."""
+        path = change.log_path(self.WS)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    #: One entry per way a line can be wrong. An append-only log written by killed
+    #: processes, older charters and the occasional hand edit collects all of them, and
+    #: every one is SKIPPED rather than raised over: refusing the whole file would let one
+    #: bad line hide every good one, which is the failure a report cannot afford.
+    BAD_LINES = {
+        "not json": "{not json\n",
+        "json but not an object": '"a string"\n',
+        "an array": "[1, 2, 3]\n",
+        "a key charter does not read": '{"ts":"t","change":"c","repo":"r","number":1,'
+                                       '"merge":"m","head":"h","landed":true}\n',
+        "a key missing": '{"ts":"t","change":"c","repo":"r","number":1,"merge":"m"}\n',
+        "change is not a string": '{"ts":"t","change":7,"repo":"r","number":1,'
+                                  '"merge":"m","head":"h"}\n',
+        "repo is not a string": '{"ts":"t","change":"c","repo":null,"number":1,'
+                                '"merge":"m","head":"h"}\n',
+        "half a line": '{"ts":"t","change":"c","re\n',
+        "empty": "\n",
+    }
+
+    def test_every_malformed_line_is_skipped_and_never_raised_over(self):
+        for label, text in self.BAD_LINES.items():
+            with self.subTest(line=label):
+                self.write_log(text)
+                self.assertEqual(change.landings(self.WS), [], label)
+
+    def test_a_bad_line_does_not_hide_the_good_ones_around_it(self):
+        """The property the skipping is FOR. Refusing the file would make one truncated
+        append — the ordinary result of a killed process — lose every landing before it."""
+        good = ('{"ts":"2026-01-01T00:00:00+00:00","change":"c","repo":"r","number":1,'
+                '"merge":"e0c9d13","head":"h"}\n')
+        for label, bad in self.BAD_LINES.items():
+            with self.subTest(line=label):
+                self.write_log(bad + good + bad)
+                got = change.landings(self.WS)
+                self.assertEqual([e["merge"] for e in got], ["e0c9d13"], label)
+
+    def test_lines_come_back_oldest_first_even_when_a_ts_is_missing_or_odd(self):
+        """`str(e.get("ts") or "")` is what stops the sort raising on a line an older
+        charter wrote, and an unsortable key would take the whole report down.
+
+        The expected order is written out rather than derived from the same expression
+        the code uses, which is the trap this suite keeps finding — and getting it wrong
+        by hand once is what the literal is for. It is a **lexicographic** sort of the
+        coerced strings, so a missing `ts` (`""`) leads, ISO dates follow in order, and a
+        bare `7` sorts AFTER them because `'7' > '2'`. Not chronological, and it is not
+        pretending to be: what this promises is a stable total order that no value can
+        make raise.
+        """
+        rows = [('{"ts":%s,"change":"c","repo":"r%d","number":1,"merge":"e0c9d13",'
+                 '"head":"h"}\n') % (ts, i)
+                for i, ts in enumerate(('"2026-03-01"', "null", '"2026-01-01"', "7"))]
+        self.write_log("".join(rows))
+        got = change.landings(self.WS)
+        self.assertEqual([e["repo"] for e in got], ["r1", "r2", "r0", "r3"])
+
+    def test_filtering_by_slug_answers_about_that_slug_only(self):
+        line = ('{"ts":"t","change":"%s","repo":"r","number":1,"merge":"e0c9d13",'
+                '"head":"h"}\n')
+        self.write_log(line % "a-1" + line % "b-2")
+        self.assertEqual([e["change"] for e in change.landings(self.WS, "a-1")], ["a-1"])
+        self.assertEqual(len(change.landings(self.WS)), 2)
+        self.assertEqual(change.landings(self.WS, "nope"), [])
+
+    def test_the_last_declaration_for_a_repo_is_the_one_that_describes_now(self):
+        """A member reverted and landed again has two lines, and the newer is the one
+        that is true. Nothing is deleted to make that so — the earlier line is still a
+        true statement about the past."""
+        line = ('{"ts":"%s","change":"c","repo":"r","number":1,"merge":"%s",'
+                '"head":"h"}\n')
+        self.write_log(line % ("2026-01-01", "aaaaaaa") + line % ("2026-02-01", "bbbbbbb"))
+        self.assertEqual(change.declared_landings(self.WS, "c")["r"]["merge"], "bbbbbbb")
+
+    def test_no_log_directory_at_all_is_an_empty_answer_and_not_an_error(self):
+        """The lazy-creation case: `changes/log/` is made by the first landing, so every
+        workspace is in this state until then."""
+        self.assertEqual(change.landings(self.WS), [])
+        self.assertEqual(change.declared_landings(self.WS, "c"), {})
+
+    def test_a_log_that_cannot_be_read_answers_empty_rather_than_raising(self):
+        """This feeds a report and a frame pane, both of which must render whatever they
+        find. Listing an unreadable directory raises on Linux and yields nothing on
+        macOS — `pieces.events` records a suite that went red on CI over that line."""
+        with mock.patch.object(change.Path, "glob", side_effect=OSError("nope")):
+            self.assertEqual(change.landings(self.WS), [])
+
+    def test_the_log_is_line_delimited_and_append_only(self):
+        """Two landings are two lines, and the second does not rewrite the first."""
+        for sha in ("aaaaaaa", "bbbbbbb"):
+            self.declare("c", "r", sha)
+        self.assertEqual(len(change.log_path(self.WS).read_text().splitlines()), 2)
+        self.assertEqual([e["merge"] for e in change.landings(self.WS, "c")],
+                         ["aaaaaaa", "bbbbbbb"])
+
+    def test_the_log_is_named_for_the_hosts_first_label(self):
+        """`pieces._host`'s rule, and the `[0]` is what makes it a rule rather than a
+        coincidence: on a machine called `box.example.com` the log is `box.jsonl`, not
+        `box.example.jsonl`. It is a FILENAME, and one carrying a fully-qualified domain
+        differs per network rather than per machine — the log would split in two the first
+        time somebody joined a VPN."""
+        with mock.patch("socket.gethostname", return_value="box.example.com"):
+            self.assertEqual(change._host(), "box")
+        with mock.patch("socket.gethostname", return_value="box"):
+            self.assertEqual(change._host(), "box")
+        with mock.patch("socket.gethostname", return_value="a/b c.d"):
+            self.assertEqual(change._host(), "abc")     # filename-safe, and one label
+
+    def test_the_log_path_carries_that_name(self):
+        with mock.patch("socket.gethostname", return_value="box.example.com"):
+            self.assertEqual(change.log_path("ws").name, "box.jsonl")
 
     def test_a_malformed_line_does_not_take_the_good_ones_down(self):
         repo, merge = self.one_landed_member()
