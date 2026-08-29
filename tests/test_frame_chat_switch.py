@@ -107,6 +107,25 @@ class TheRosterIsTheDirectory(PersonaIso, unittest.TestCase):
         _plant("api.notanumber", workspace="api")
         self.assertEqual(chats.of_workspace("api"), ["api.2", "api.notanumber"])
 
+    def test_an_ordinal_too_long_to_convert_sorts_last_rather_than_raising(self):
+        """`int("9" * 5000)` raises `ValueError` on CPython — the int-str conversion
+        limit, not an overflow — and unbounded that exception comes out of `sorted`, in a
+        panel's render path.
+
+        **Not through the directory**, which cannot hold a name that long (`NAME_MAX` is
+        255 on every filesystem this runs on, so `mkdir` answers `ENAMETOOLONG` first).
+        Through the fid `roster` folds in, which is `$CHARTER_SESSION_ID` — a value from
+        the environment, not from a directory listing, and the one input to this sort with
+        no length bound in front of it.
+        """
+        _plant("api.2", workspace="api")
+        huge = "api." + "9" * 5000
+        self.assertTrue(chats.is_chat(huge),
+                        "if this stopped being a chat the sort would never see it and "
+                        "this test would be measuring the wrong guard")
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "api"}, clear=False):
+            self.assertEqual([c.id for c in chats.roster(huge)], ["api.2", huge])
+
     def test_the_roster_marks_the_chat_asking_and_carries_each_ones_harness(self):
         _plant("api.1", workspace="api", harness="Claude Code")
         _plant("api.2", workspace="api", harness="Codex")

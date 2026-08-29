@@ -144,6 +144,25 @@ def of_workspace(workspace: str) -> list[str]:
                   key=_order)
 
 
+#: How many digits an ordinal `state.new_chat_id` can mint has, derived from its own
+#: ceiling rather than written down twice.
+#:
+#: **It is a bound on `int()`, not on taste.** CPython refuses to convert a string of more
+#: than 4,300 digits to an integer — `int("9" * 5000)` raises `ValueError`, not
+#: `OverflowError` — and a name off `os.scandir` is whatever is on disk. Without this, a
+#: directory called `api.<5000 nines>` under `.charter/frame/` would raise out of
+#: `sorted`, in a panel's render path, and take the bar down with it. The state directory
+#: is 0700 and `SECURITY.md:43-46` is honest about what that is worth; this is a guard
+#: against a mistake, and the mistake is a crash where a sort was wanted.
+#:
+#: Bounded HERE and not in :func:`is_chat`, deliberately: that function is Stage 5a's
+#: version discriminator, and teaching it about ordinal size would make `api.100000` —
+#: perfectly parseable, merely above the allocator's ceiling — stop being a chat and
+#: start being reaped by the wrong rule. A name this cannot read the ordinal of is still
+#: a chat; it just sorts with the others it cannot read.
+_MAX_ORDINAL_DIGITS = len(str(state._CHAT_ORDINAL_MAX))
+
+
 def _order(fid: str) -> tuple[int, int, str]:
     """Sort key for :func:`of_workspace` — ordinal first, unparsable names last.
 
@@ -158,7 +177,7 @@ def _order(fid: str) -> tuple[int, int, str]:
     That is the shape `state.frame_workspace` names for its own `valid_name`.
     """
     _head, sep, tail = fid.rpartition(state._CHAT_SEP)
-    if sep and tail.isdigit():
+    if sep and tail.isdigit() and len(tail) <= _MAX_ORDINAL_DIGITS:
         return (0, int(tail), fid)
     return (1, 0, fid)
 
