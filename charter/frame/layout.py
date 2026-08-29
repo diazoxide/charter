@@ -264,10 +264,10 @@ def _arrangement():
 
     **One line, because there are two callers and the fallback in it is unpinned.**
     :func:`_placed_here` reads the arrangement for a component charter did not write and
-    :func:`_pinned_rows` reads it for the one built-in whose height a plane may commit; the
-    `or ()` is the same defence for both, and a second copy of it is a second line nothing
-    can fail without. `tools/sweep.py` reported exactly that copy the day it appeared and
-    `docs/news/unreleased-the-deletion-sweep-is-a-thing-the-repo-runs.md` records the
+    :func:`pinned_repo_rows` reads it for the one built-in whose height a plane may
+    commit; the `or ()` is the same defence for both, and a second copy of it is a second
+    line nothing can fail without. `tools/sweep.py` reported that copy the day it appeared
+    and `docs/news/unreleased-the-deletion-sweep-is-a-thing-the-repo-runs.md` records the
     original at this module's line 289 as a survivor it examined — so the answer to a
     second one is to have one, not to accept two.
 
@@ -275,7 +275,7 @@ def _arrangement():
     ``components`` before its own early return, deliberately ("a key present on one path
     and absent on another is two shapes for one answer"), so nothing in production reaches
     here without it — but `config.FRAME` is module state that a caller may replace whole,
-    and a `KeyError` out of :func:`repos_rows` costs a launch its entire frame. Pinning it
+    and a `KeyError` out of either reader costs a launch its entire frame. Pinning it
     would mean a test constructing a `config.FRAME` that `frame_of` cannot produce, which
     is a test of the line rather than of any property.
 
@@ -311,7 +311,14 @@ def _placed_here() -> dict[str, tuple[str, int]]:
     at import, because a value read, validated and then ignored is the convincing empty
     this phase was written against. The repo table is the exception both of those rules now
     have (`instance._built_in_size`), and it is still not read HERE: its height is
-    :func:`repos_rows`', and :func:`_pinned_rows` is what reads the number for it.
+    :func:`repos_rows`', and :func:`pinned_repo_rows` is what reads the number for it.
+
+    **The signature count above is THIS function's measurement and does not transfer.**
+    It is what the five named functions would each have to carry to answer one question
+    for a name none of them knows in advance: where a placed component sits and how many
+    cells it costs. The repo strip's pin is one number for one slot with one consumer, and
+    #661 is what came of borrowing the count anyway — measured, that path is two
+    signatures and three call sites. See :func:`pinned_repo_rows`.
     """
     out: dict[str, tuple[str, int]] = {}
     for placed in _arrangement():
@@ -326,7 +333,7 @@ def _policy_cells(size) -> int:
     return size.n if isinstance(size, Fixed) else 1
 
 
-def _pinned_rows() -> int | None:
+def pinned_repo_rows() -> int | None:
     """The height this plane PINNED the repo strip to, or ``None`` for the shipped policy.
 
     **The one per-plane override charter's own geometry has, and the reason it is the only
@@ -334,15 +341,27 @@ def _pinned_rows() -> int | None:
     :data:`SLOT_SIZE` — derived once, at import — is the whole answer for it and a
     committed number could only be read and ignored (`instance._built_in_size` argues that
     half). `repos` is `Content()`: its height never enters that table, it is computed by
-    :func:`repos_rows` from the resolved arrangement at every launch and again on every
+    :func:`repos_rows` from the arrangement it is HANDED at every launch and again on every
     `window-resized`, and this is what makes a number there mean something.
 
-    Read from the resolved config rather than threaded through five signatures, for
-    :func:`_placed_here`'s reason word for word — and this function is on exactly the path
-    that docstring names. :func:`repos_rows` already reaches `config.FRAME` transitively
-    through :func:`_is_fixed_row`, so nothing about when this module talks to the config
-    boundary changes. Through :func:`_arrangement`, which both readers share so that the
-    fallback in it is one line rather than two.
+    **The one function in this module that reads a committed file, and it is public so
+    that its callers can be counted.** It used to be called from inside
+    :func:`repos_rows`, borrowing :func:`_placed_here`'s "rather than threaded through
+    five signatures" word for word — and that cost was mispriced (#661). `repos_rows` was
+    this module's one provably pure function and its tests were written to that property,
+    so a `size` in the plane's own `charter.toml` answered a caller that had passed
+    `content_rows=4` with `15`: `layout.repos_rows(content_rows=4, window_rows=50,
+    slots=["top","bottom","repos"])` returned the committed number. On this repo, whose
+    `charter.toml` is tracked, that turned six tests red for everyone the moment an
+    operator did what the feature's own news entry told them to do.
+
+    The measurement the borrowed reason skipped: the pin is ONE number for ONE slot with
+    ONE consumer, so the path is `repos_rows` ← `slot_sizes` ← the three sites in
+    `commands_frame` that already build `content_rows` the same way. Two signatures, and
+    the three sites share `commands_frame._slot_sizes`, which is where this is called from
+    and the only place it is. `_placed_here`'s five is real for `_placed_here` — an edge
+    and a cell count for a name `panel_argvs`, `repos_cols` and `harness_rows` each have
+    to ask about — and it does not transfer to this.
 
     ``isinstance(placed["size"], Fixed)`` asks which POLICY the arrangement resolved to,
     which is the property and not a stand-in for it: a plane that writes its arrangement
@@ -521,13 +540,24 @@ def visible_slots(slots: list[str], cols: int, rows: int,
 
 
 def repos_rows(*, content_rows: int, window_rows: int,
-               slots: list[str] | tuple[str, ...] = ()) -> int:
+               slots: list[str] | tuple[str, ...] = (),
+               pinned_rows: int | None = None) -> int:
     """How many rows the `repos` pane gets: what its content wants, floored and capped.
 
     Pure arithmetic, deliberately — this is the whole of #488's "how tall is the table?"
     and it is decided here, with no tmux and no filesystem, so both callers that need an
     answer (a launch, and the `window-resized` hook's own recompute) necessarily get the
     same one.
+
+    **Every term is an argument, and *pinned_rows* is one of them for a measured reason.**
+    #660 reached `config.FRAME` from inside this function instead, and #661 is what that
+    cost: a `size` committed to the plane's own `charter.toml` made this answer `15` to a
+    caller that had passed `content_rows=4`, `window_rows=50` and neither bound binding —
+    a number out of a file the caller never named, from the module's one function whose
+    tests assert it is arithmetic. `None` is "this plane pinned nothing", which is every
+    plane that does not say otherwise and every test that is asking about the arithmetic;
+    `layout.pinned_repo_rows` is the read, and `commands_frame._slot_sizes` is the one
+    caller that makes it.
 
     * **The floor is `SLOT_SIZE["repos"]`.** A workspace with no clones still has one
       line to draw — that it has none, and the command that gets it one
@@ -544,9 +574,9 @@ def repos_rows(*, content_rows: int, window_rows: int,
       (`slots.repos_rows_wanted`), so a two-repo plane gets a two-row strip rather than a
       fourteen-row one padded with blanks. That is the DEFAULT and it is the answer for
       every plane that does not say otherwise; a ``size`` on the table's own
-      `[[frame.component]]` table replaces it with a constant (:func:`_pinned_rows`),
-      which is the operator asking for a strip that does not move when a clone is added
-      or removed.
+      `[[frame.component]]` table replaces it with a constant, which arrives here as
+      *pinned_rows* and is the operator asking for a strip that does not move when a
+      clone is added or removed.
 
     **A pin replaces the content, not the floor and not the cap**, and the cap is why.
     tmux does not refuse an over-large height, it grants it out of the neighbour: measured
@@ -563,8 +593,7 @@ def repos_rows(*, content_rows: int, window_rows: int,
     every slot below half the size floors.
     """
     floor = SLOT_SIZE["repos"]
-    pinned = _pinned_rows()
-    wanted = content_rows if pinned is None else pinned
+    wanted = content_rows if pinned_rows is None else pinned_rows
     other = sum(_size_of(s) + _BORDER_ROWS for s in slots if _is_fixed_row(s))
     cap = window_rows - other - _BORDER_ROWS - HARNESS_MIN_ROWS
     return max(floor, min(wanted, cap))
@@ -599,7 +628,8 @@ def column_sizes(slots: list[str] | tuple[str, ...]) -> dict[str, int]:
     return out
 
 
-def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int) -> dict[str, int]:
+def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int,
+               pinned_rows: int | None = None) -> dict[str, int]:
     """Every slot in *slots* mapped to the size it should be given — rows for the
     horizontal strips, columns for the side.
 
@@ -609,6 +639,12 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int) -> dict
     recompute calls it again with the window's NEW row count — which is the whole reason
     it takes *window_rows* rather than closing over a launch-time value.
 
+    *pinned_rows* is :func:`repos_rows`' and is carried rather than read, for that
+    function's reason: this is the last hop of a value the plane committed, not a second
+    place to look it up. `None` — the default, and what every caller asking about the
+    arithmetic passes — is a plane that pinned nothing, which is charter's own and very
+    nearly everyone's.
+
     Unknown slot names are dropped rather than raised on, matching `visible_slots`'
     filter-don't-refuse discipline: `[frame] slots` is committed, untrusted input, and by
     the time a list reaches here it has already been through `instance.FRAME_SLOTS`.
@@ -616,7 +652,7 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int) -> dict
     out: dict[str, int] = {}
     for slot in slots:
         if _key(slot) in VARIABLE_ROW_SLOTS:
-            out[slot] = repos_rows(content_rows=content_rows,
+            out[slot] = repos_rows(content_rows=content_rows, pinned_rows=pinned_rows,
                                    window_rows=window_rows, slots=slots)
             continue
         cells = _size_of(slot)
