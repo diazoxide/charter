@@ -126,6 +126,23 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
     def test_no_names_at_all_is_no_row(self):
         self.assertEqual(slots._bar("chats", [], "api.1", 200), [])
 
+    def test_a_row_you_are_not_on_still_lists_and_still_counts(self):
+        """`here` naming nothing in the list is a real state — the workspace bar draws it
+        for a frame whose recorded workspace has been deleted — and it must not become an
+        unmarked row that silently claims you are somewhere. Nothing is marked, and the
+        narrow rungs say how many there are without claiming a position."""
+        wide = self._row(200, here="nowhere")
+        self.assertNotIn(slots._BAR_MARK[0], wide)
+        for name in self.NAMES:
+            self.assertIn(name, wide)
+        self.assertEqual(self._row(16, here="nowhere").strip(), "chats  3")
+
+    def test_the_only_chat_is_never_counted_as_plus_zero(self):
+        """The count is of the OTHERS, so one name has none. `+0` would be a field that
+        is always false and always drawn."""
+        row = self._row(20, names=["averylongchatname.1"], here="averylongchatname.1")
+        self.assertNotIn("+0", row)
+
     def test_a_hostile_name_is_contained_before_the_width_arithmetic(self):
         """#472, at the position it was filed about: a row that sized itself from a raw
         name. `tui.width` — never `len` — measures what `contain.one_line` already made
@@ -241,6 +258,14 @@ class ABarIsPlaceableByConfig(unittest.TestCase):
         self.assertTrue(slots.drawable("chats"))
         self.assertTrue(slots.drawable("workspaces"))
         self.assertFalse(slots.drawable("changes"))
+
+    def test_places_refuses_anything_that_is_not_a_name(self):
+        """It is asked of a value read out of a committed `charter.toml`, on the import
+        path of every charter command — so a TOML array or a table reaching
+        `Registry.on_edge`'s comparison must be a `False` here rather than a traceback
+        that takes `charter --version` down with it."""
+        for junk in (None, 3, True, ["chats"], {"use": "chats"}):
+            self.assertFalse(builtins.places(junk), repr(junk))
 
     def test_a_provider_cannot_answer_for_a_bars_name(self):
         """`drawable`'s own rule, extended to the bars: a distribution declaring `chats`

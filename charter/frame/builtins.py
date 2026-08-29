@@ -121,7 +121,7 @@ def component_id(name):
     return COMPONENT_OF.get(name, name) if isinstance(name, str) else name
 
 
-def places(cid) -> bool:
+def places(cid, reg: Registry | None = None) -> bool:
     """Whether charter's OWN registry puts *cid* on an edge — a component a plane may
     place, whether or not it has a committed slot-name spelling.
 
@@ -142,10 +142,21 @@ def places(cid) -> bool:
     `Registry.on_edge` is what answers, so a composite's PARTS are excluded for free —
     `personas`, `todos` and `changes` are drawn inside the sidebar's pane, and a part that
     could be placed as well would be drawn twice.
+
+    *reg* is a registry the caller already has. `instance.component_tables` builds one to
+    resolve the arrangement and then asks this once per table, so without it a committed
+    `[[frame.component]]` list would rebuild the registry per row — on the path of every
+    charter command, `charter --version` included, since `config.derive` resolves `FRAME`
+    at import. ``None`` builds one, which is what the callers that have none do
+    (`slots.drawable`, and every test). It is a parameter and not a module-level cache for
+    `supplies`' reason: a registry kept from the first ask answers for the ``sys.path``
+    charter had then, which is wrong for a long-lived process and wrong in the direction
+    that is hard to see.
     """
     if not isinstance(cid, str):
         return False
-    reg = build()
+    if reg is None:
+        reg = build()
     return any(c.id == cid for edge in EDGES for c in reg.on_edge(edge))
 
 

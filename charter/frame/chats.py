@@ -124,28 +124,24 @@ def of_workspace(workspace: str) -> list[str]:
     The scan is `os.scandir` over ~30 entries and it is asked when a palette opens and
     when a bar repaints, not on a tick. `state.reap` is what bounds it.
     """
-    root = state._root()
-    out: list[str] = []
     try:
-        entries = list(os.scandir(root))
+        # `is_dir()` inside the same `try` as the scan, deliberately, and it is one guard
+        # rather than two. A `DirEntry.is_dir()` can raise `OSError` of its own — a
+        # `stat` on an entry that went away between the scan and the question, or one the
+        # process may not stat — and a second `try` around it would be a line that only a
+        # race could turn red, which is a line no test can pin. Answered the same way for
+        # the same reason the outer one is: a bar that could not read the directory draws
+        # nothing.
+        names = [e.name for e in os.scandir(state._root()) if e.is_dir()]
     except OSError:
-        # No frame root at all is an ordinary answer on a plane that has never launched
+        # No frame root at all is the ordinary answer on a plane that has never launched
         # one, and an unreadable one is the same answer for the caller: no chats to
-        # offer. Never a raise — a bar that could not scan draws nothing, and a picker
-        # that could not scan refuses with its own sentence one layer up.
+        # offer. Never a raise — a picker that could not scan refuses with its own
+        # sentence one layer up.
         return []
-    for entry in entries:
-        try:
-            if not entry.is_dir():
-                continue
-        except OSError:
-            continue
-        if not is_chat(entry.name):
-            continue
-        if state.frame_workspace(entry.name) != workspace:
-            continue
-        out.append(entry.name)
-    return sorted(out, key=_order)
+    return sorted((n for n in names
+                   if is_chat(n) and state.frame_workspace(n) == workspace),
+                  key=_order)
 
 
 def _order(fid: str) -> tuple[int, int, str]:
@@ -154,9 +150,15 @@ def _order(fid: str) -> tuple[int, int, str]:
     Split out so the ordering is a thing a test can hand a list of names to without a
     plane underneath it, and so the two halves of "unparsable sorts last" are one
     expression rather than a branch in the loop above.
+
+    **`sep` and not `head`.** `rpartition` answers `("", "", name)` for a name with no
+    separator in it, so the empty separator already refuses `api5` — a truthiness test on
+    the head would be a second guard for the case the first one caught, and the only name
+    it could tell apart is `.5`, whose ordinal is as good an answer as sorting it last.
+    That is the shape `state.frame_workspace` names for its own `valid_name`.
     """
-    head, sep, tail = fid.rpartition(state._CHAT_SEP)
-    if sep and head and tail.isdigit():
+    _head, sep, tail = fid.rpartition(state._CHAT_SEP)
+    if sep and tail.isdigit():
         return (0, int(tail), fid)
     return (1, 0, fid)
 

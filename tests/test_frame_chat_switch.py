@@ -134,6 +134,42 @@ class TheRosterIsTheDirectory(PersonaIso, unittest.TestCase):
             self.assertEqual(chats.others("api.1"), ["api.2"])
             self.assertEqual(chats.others("api.2"), ["api.1"])
 
+    def test_a_loose_file_under_the_frame_root_is_not_a_chat(self):
+        """The directory is the list, and a file in it is not a directory. `exit`, a
+        temp file a write was interrupted mid-`os.replace`, anything — none of them has a
+        frame directory's shape and none may become a row."""
+        _plant("api.1", workspace="api")
+        (state._root() / "api.2").write_text("not a chat\n")
+        self.assertEqual(chats.of_workspace("api"), ["api.1"])
+
+    def test_a_chat_with_no_recorded_workspace_belongs_to_none(self):
+        """`frame_workspace` answers `None` for the migration case and the corrupt one,
+        and `None` is not a workspace name — so the chat is in nobody's list rather than
+        in everybody's."""
+        _plant("api.1", workspace="api")
+        state.frame_dir("api.2", create=True)
+        self.assertEqual(chats.of_workspace("api"), ["api.1"])
+
+    def test_the_roster_invents_nothing_for_a_frame_that_is_not_a_chat(self):
+        """`roster` folds the asking frame in so a chat whose record is unreadable is
+        still on its own bar — but only when it IS a chat. An old `{workspace}-{pid}`
+        frame, or no frame at all, must not become a row that `select-window` would be
+        aimed at."""
+        _plant("api.1", workspace="api")
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "api"}, clear=False):
+            self.assertEqual([c.id for c in chats.roster("")], ["api.1"])
+            self.assertEqual([c.id for c in chats.roster("api-4242")], ["api.1"])
+            # And it is not folded in twice when the scan already found it.
+            self.assertEqual([c.id for c in chats.roster("api.1")], ["api.1"])
+
+    def test_a_harness_recorded_as_whitespace_is_no_harness(self):
+        """`state.identity` does not strip — it hands back what the file holds — so a
+        note of three spaces would be a column of blank that reads as a harness charter
+        could not name. Empty says the honest thing."""
+        _plant("api.1", workspace="api")
+        state.record_identity("api.1", {"CHARTER_HARNESS": "   "})
+        self.assertEqual(chats.harness_of("api.1"), "")
+
     def test_a_frame_root_that_cannot_be_scanned_offers_no_chats_and_does_not_raise(self):
         """A bar that could not scan draws nothing; it does not take the panel down with
         it. `os.scandir` on a plane that has never launched a frame is the ordinary form
@@ -172,8 +208,14 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         self.assertFalse(out.ok)
         self.assertIn("cannot name a chat", out.message)
 
-    def test_an_empty_name_is_refused_as_a_name_rather_than_as_unknown(self):
-        self.assertIn("cannot name a chat", chats.check("api.1", "").message)
+    def test_an_absent_name_is_refused_as_a_name_rather_than_as_unknown(self):
+        """Both spellings of absent, and `None` is the one that would be a `TypeError`
+        out of `re.fullmatch` rather than a refusal. `charter frame-chat` cannot produce
+        it — argparse gives a string — but this is the one rule two callers share, and a
+        rule that raises for one of the ways of being asked nothing is not one."""
+        for absent in ("", None):
+            self.assertIn("cannot name a chat",
+                          chats.check("api.1", absent).message, repr(absent))
 
     def test_an_unknown_chat_is_refused_with_the_ones_this_workspace_has(self):
         out = chats.check("api.1", "api.7")
@@ -596,6 +638,31 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         state.record_hidden("api.2", [n for n in arrangement if n != "top"])
         self._switch()
         self.assertEqual(sorted(state.panes("api.2")), ["top"])
+
+    def test_a_chat_charter_cannot_relayout_still_gets_the_client_moved(self):
+        """The two re-layouts are attempted independently, and the client's move is not
+        conditional on either. A chat charter has no usable pane record for cannot have
+        its panels moved — but abandoning the switch over it would leave the operator on
+        the window they asked to leave, which is the worse of the two failures."""
+        state.record_harness_pane("api.1", "not-a-pane")
+        self._switch()
+        verbs = self.fake.verbs()
+        self.assertIn("select-window", verbs)
+        self.assertNotIn("kill-pane", verbs)
+        self.assertTrue(state.panes("api.2"),
+                        "the target lost its panels because the chat being left could "
+                        "not be tidied")
+
+    def test_a_tmux_whose_version_charter_cannot_read_moves_the_client_and_no_panes(self):
+        """`_relayout_target` refuses on an unreadable version because every builder
+        below it takes one. The switch itself needs none — `select-window` has been in
+        tmux forever — so the client still moves and nothing is split blind."""
+        with mock.patch.object(tmuxctl, "version", lambda: None), \
+             mock.patch.object(commands_frame.tmuxctl, "version", lambda: None):
+            self._switch()
+        verbs = self.fake.verbs()
+        self.assertEqual(verbs, ["select-window"])
+        self.assertEqual(state.panes("api.1"), {"top": "%3", "bottom": "%4"})
 
     def test_the_presser_chat_is_the_one_left_not_the_session_variable(self):
         """One bind text is shared by every frame on the socket, so `$CHARTER_SESSION_ID`

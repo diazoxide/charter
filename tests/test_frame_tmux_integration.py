@@ -101,7 +101,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, hooks, instance, statusline, todos
-from charter.frame import gather, layout, notify
+from charter.frame import gather, layout, notify, overlay
 from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
@@ -5459,6 +5459,44 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
         self.assertIn(one, self._srv("list-panes", "-a", "-F",
                                      "#{pane_id}").stdout.split(),
                       "killing the chat's panel took its harness with it")
+
+    def test_each_chat_keeps_its_own_escape_hatch_across_a_switch(self):
+        """Stage 5b's exit criterion: `F12` returns to the harness from any chat.
+
+        The hatch is a WINDOW option (`overlay.arm_hatch_argv`: `set-option -w -t <pane>`,
+        which resolves to that pane's own window), so one chat per window is one hatch per
+        chat for free — and the switch must not disturb either. The case that could have
+        broken it is `_close_palette`, which re-arms the option on the chat being LEFT
+        while the client is already on the chat being entered: window-scoped, that touches
+        the old chat's window and nothing else. A global write would have handed one
+        chat's hatch the other's harness pane, which is the "last launched wins" trap
+        `conf_text` names for `mouse` and `history-limit`.
+        """
+        one, two, _fd = self._two_chats_and_a_client()
+        for pane in (one, two):
+            armed = overlay.arm_hatch_argv(self.SOCKET_NAME, harness=pane)
+            self.assertIsNotNone(armed)
+            self.assertEqual(_run(armed).returncode, 0)
+        self.assertEqual(self._srv("select-window", "-t", two).returncode, 0)
+        # And the palette's own close, aimed at the chat that was left.
+        commands_frame._close_palette(self.SOCKET_NAME, harness=one,
+                                      overlay_pane=self._spare_pane(one))
+        for pane in (one, two):
+            hatch = self._srv("display-message", "-p", "-t", pane,
+                              f"#{{{overlay.HATCH_OPTION}}}").stdout.strip()
+            self.assertIn(pane, hatch,
+                          f"chat window for {pane} lost its own hatch: {hatch!r}")
+
+    def _spare_pane(self, near: str) -> str:
+        """A throwaway pane in *near*'s window, for `_close_palette` to kill.
+
+        It needs a real overlay pane id or `overlay.close_argvs` refuses outright and the
+        test would measure a command that was never sent.
+        """
+        made = self._srv("split-window", "-d", "-t", near, "-l", "3",
+                         "-P", "-F", "#{pane_id}", "sleep", "600")
+        self.assertEqual(made.returncode, 0, made.stderr)
+        return made.stdout.strip()
 
     def test_the_whole_command_moves_the_client_and_re_lays_out_the_target(self):
         """`commands_frame.cmd_chat` end to end on a real server with a real client.
