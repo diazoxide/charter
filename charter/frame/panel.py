@@ -53,9 +53,18 @@ construction rather than by a budget: the ticking stops when the records do.
 below is otherwise unchanged: `_wait` replaces the tick's `time.sleep` with a `select` of
 the same length when — and only when — the placed component declared an event kind charter
 delivers, so an event wakes the panel the instant it arrives instead of at the next tick
-boundary, and a panel that declared nothing pays and changes nothing at all. Charter's own
-four are in that second group, so the frame an operator has today is byte-identical and
-syscall-identical to the one they had before the dispatcher existed.
+boundary, and a panel that declared nothing pays and changes nothing at all.
+
+**Three of charter's own four are in that second group and `repos` is not, which is the
+one thing that changed about this module since.** #607 shipped with no consumer at all, so
+the sentence here used to be that charter's four panels were byte-identical and
+syscall-identical to the release before the dispatcher existed. `repos` declares `scroll`
+and `click` now (`frame/builtins.py`), so ITS pane goes to cbreak and asks its terminal for
+mouse reports, and `_run` asks the registry what a built-in declared instead of assuming
+nothing. `top`, `bottom` and `right` still declare nothing, still get `None` from
+`_dispatcher`, still sleep rather than `select`, and their panes' terminals are still left
+exactly as they were found — which is the property `_dispatcher`'s "``None`` is the whole
+cost promise" is about, and it is narrower now rather than gone.
 
 The event itself never draws. A handler answers "repaint me" and `_tick` treats that as a
 fourth reason to run the paint it already had — the rows are still `render`'s, still
@@ -268,6 +277,61 @@ def _paint(slot: str, fid: str) -> None:
     _write(_unmeasured() or slots.render(slot, fid))
 
 
+def _slot_painter(evs):
+    """:func:`_paint`, plus the one thing a raw slot render cannot say for itself.
+
+    **Charter's own panels are drawn by `slots.SLOTS` and not through the registry**, which
+    was fine while none of them took events and is not fine now that one does (`repos`,
+    #607's first consumer). `Registry.draw` is what turns a component's failure into a
+    message in its own pane, and a built-in never goes near it — so a handler that raised
+    would have `events.Dispatcher` retire the input path, correctly, and leave the pane
+    drawing a perfectly good table that had silently stopped being clickable. That is the
+    convincing-empty §4b refuses and #512 measured the cost of: a component that quietly
+    stops being interactive is indistinguishable from one nobody has clicked yet.
+
+    So the failure is painted here, ahead of the renderer, exactly as
+    :func:`_component_text` paints it for a provider's component — same wrap, same width,
+    same containment, same trade (a working ``render`` loses its pane because its HANDLER
+    broke, which `frame/events.py` argues is the smaller of the two wrongs).
+
+    **Only built for a panel that has a dispatcher at all.** The other three built-ins
+    declare no events, `_run` hands them ``paint=None``, and `_watch` calls :func:`_paint`
+    exactly as it did before this function existed — so their panes are byte-identical and
+    syscall-identical to the release before, which is the promise `_dispatcher`'s own
+    docstring makes and this must not spend.
+    """
+    def paint(slot: str, fid: str) -> None:
+        _write(_unmeasured() or _failure_text(evs, slot) or slots.render(slot, fid))
+    return paint
+
+
+def _failure_text(evs, name: str) -> str:
+    """Why *name* stopped taking events, wrapped to its own rectangle — or ``""``.
+
+    ``""`` for a component still taking them, which is every tick but the ones after a
+    handler raised, and it is falsy so both painters read it as "nothing to say here".
+
+    One composition, two callers, because the message and the rectangle it is measured
+    against must not come to disagree: `_component_text` draws it for a provider's
+    component and :func:`_slot_painter` for charter's own, and a second spelling would be a
+    second answer to how wide the pane is. WRAPPED and never truncated to one line —
+    `_wrap`'s own docstring says why that is not cosmetic: " charter: repos stopped taking
+    events — " is 41 characters before the exception has said anything, so a single
+    `tui.truncate` clips the only part naming what broke.
+
+    `contain.one_line` BEFORE the width arithmetic (#472): the text quotes a stranger's
+    exception — or charter's own, here — and `tui.width` on an unescaped escape sequence
+    measures something the terminal is not about to draw.
+    """
+    from .registry import _fit, _wrap
+    if evs is None or not evs.failure:
+        return ""
+    width = slots.content_width(name)
+    return slots.inset_rows(
+        "\n".join(_fit(_wrap(f"charter: {contain.one_line(evs.failure)}", width),
+                       width=width, height=_rows(), escape=True)), name)
+
+
 def _component_painter(reg, cid: str, evs=None):
     """A paint function for *cid*, drawn out of *reg* — `_paint`'s shape for a component.
 
@@ -344,26 +408,17 @@ def _component_text(reg, cid: str, fid: str, *, evs=None) -> str:
     #512 is what it costs to ship.
     """
     from . import ctx as _ctx, gather
-    from .registry import _fit, _wrap
     try:
-        if evs is not None and evs.failure:
-            # WRAPPED across the pane's rows, exactly as `Registry.draw` wraps the same
-            # class of message, and never truncated to one line. `_wrap`'s own docstring
-            # says why that is not cosmetic: "the tail of a refusal is the half that says
-            # what to do about it". Measured against this message in a 30-column `right`
-            # panel — " charter: acme.metrics stopped taking events — " is 45 characters
-            # on its own, so a single `tui.truncate` clips the exception text ALWAYS,
-            # which is the only part naming what broke.
-            #
-            # `content_width`/`inset_rows`, not `slots._width()`, so the reason sits in
-            # the same rectangle the component's own rows do and the operator's `pad`
-            # reaches it. `contain.one_line` BEFORE the width arithmetic (#472): the text
-            # quotes a stranger's exception, and `tui.width` on an unescaped escape
-            # sequence measures something the terminal is not about to draw.
-            width = slots.content_width(cid)
-            return slots.inset_rows(
-                "\n".join(_fit(_wrap(f"charter: {contain.one_line(evs.failure)}", width),
-                               width=width, height=_rows(), escape=True)), cid)
+        # WRAPPED across the pane's rows, exactly as `Registry.draw` wraps the same class
+        # of message, and never truncated to one line; `content_width`/`inset_rows`, not
+        # `slots._width()`, so the reason sits in the same rectangle the component's own
+        # rows do and the operator's `pad` reaches it. All of that lives in
+        # :func:`_failure_text` now, because charter's OWN panels take events too since
+        # #607's first consumer and a second spelling of this message would be a second
+        # answer to how wide their pane is.
+        failed = _failure_text(evs, cid)
+        if failed:
+            return failed
         c = reg.get(cid)
         snapshot = gather.read(fid) if c.needs else {}
         drew = reg.draw(cid, _ctx.build(c.needs, width=slots.content_width(cid),
@@ -385,9 +440,16 @@ def _dispatcher(reg, cid: str):
     **``None`` is the whole cost promise** (#607). A panel whose component declared no
     event kind charter fires builds no dispatcher, so `_watch` sleeps as it always has, the
     pane's tty keeps whatever mode it was in, and nothing asks the terminal to report
-    anything. Charter's own four panels never reach this function at all — they are drawn
-    by `slots.SLOTS` off the branch above — so the frame an operator has today is
-    byte-identical and syscall-identical to the one they had before this existed.
+    anything.
+
+    **Charter's own panels reach this function now, and three of the four still answer
+    ``None``.** They used to skip it entirely — `slots.SLOTS` drew them off the branch
+    above and no registry was built — which was correct while none of them declared
+    anything and became the one way a built-in could declare `events` and never be
+    delivered them. `repos` declares two, so `_run` asks here for every name; `identity`,
+    `attention` and `sidebar` declare nothing, so `wanted` answers `()` and their panes'
+    terminals are left exactly as they were found, which is the cost promise kept at the
+    grain it was always about.
 
     Built from the REGISTERED component rather than from the id, so a provider that failed
     to load gets no event path either: `Registry._stand_in` declares no events, which is
@@ -750,9 +812,22 @@ def _run(slot: str, fid: str, *, once: bool = False) -> int:
         if cid in _builtins.SLOT_OF:
             # One of charter's own, under either spelling: `slots.SLOTS` draws it,
             # exactly as it has since there were four names and nothing else.
+            #
+            # **It still asks the registry what that component DECLARED**, and until #607's
+            # first consumer it did not have to. Charter's own panels are drawn off
+            # `slots.SLOTS` rather than through `Registry.draw`, so this branch built no
+            # registry at all — which meant a built-in could declare `events` and be the one
+            # kind of component charter would never deliver them to. `repos` declares two,
+            # so the declaration has to be read here as well, and `_dispatcher` answers
+            # `None` for the other three exactly as it does for a provider that declared
+            # nothing. Their panes keep the paint they always had (`paint` stays `None`);
+            # a built-in WITH a dispatcher gets `_slot_painter`, which is the same paint
+            # plus the failure message a raw slot render cannot say for itself.
             slot = _builtins.SLOT_OF[cid]
+            evs = _dispatcher(_builtins.build(fid), cid)
+            painter = _slot_painter(evs) if evs is not None else None
         else:
-            reg = _builtins.build()
+            reg = _builtins.build(fid)
             # The one production caller `Registry.place` was written for. It does not
             # propagate a provider's failure: one that cannot be loaded becomes a standin
             # component holding this pane and drawing the reason, which is what makes a

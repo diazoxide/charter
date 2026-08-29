@@ -31,6 +31,30 @@ default = "steward"
 # more — it drew a 22-column copy of the rows `repos` now draws at full width.
 slots = ["top", "bottom", "repos", "right"]
 
+# This plane opts into the pointer. `false` is the shipped default and stays that way for
+# the reason `docs/frame.md` gives an operator: turning it on makes tmux ask the terminal
+# to report the mouse from attach, and from that moment the terminal's OWN drag-select
+# stops working inside this window — you get tmux's copy-mode selection instead. That is a
+# real cost and it is not charter's to impose on a stranger's plane.
+#
+# It is this plane's own file, and this plane's operator asked for the repo table to be
+# scrollable and clickable — which is what the flag buys. With it off, tmux asks the
+# terminal to report from the ACTIVE pane's request alone, so with the harness active
+# nothing has asked, no bytes are sent, and a click on the `repos` pane is not an event
+# charter drops but an event that never happens (`frame/events.py` measures both regimes).
+# The panel's own declaration is not enough on its own and was never meant to be.
+#
+# What it does NOT cost, since #634: the keyboard. tmux's default `MouseDown1Pane` selects
+# the pane under the pointer before forwarding, so `mouse = true` used to move the harness
+# focus onto whatever you clicked; charter rebinds that key to forward without selecting
+# for panes it marked as panels, and to leave tmux's own two commands alone for everything
+# else. Measured on 3.7c and at the 3.2 floor. So clicking a repo row selects the row and
+# leaves you typing where you were.
+#
+# The selection has a keyboard route as well and always will: `F2` → `repo: select the
+# next row`. A pointer affordance with no key is a feature most planes cannot reach.
+mouse = true
+
 # This plane opts into the pane surface. `off` is the shipped default and stays that way:
 # charter cannot detect a terminal's theme (OSC 11 through tmux answers nothing, and
 # `$COLORTERM` inside a pane describes the terminal that started the SERVER, not the one

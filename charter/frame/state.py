@@ -792,6 +792,67 @@ def frame_change(fid: str) -> str | None:
         return None
 
 
+def record_selection(fid: str, name: str) -> None:
+    """Write down which repo row THIS RUNNING FRAME has selected.
+
+    :func:`record_change`'s twin, and it is here for the reason that module cannot be:
+    **the pane that takes the click and the pane that shows the detail are two
+    processes.** A click lands in the `repos` panel, which owns that rectangle and nothing
+    else; the attention row is `bottom`'s pane, a separate `charter panel` with its own
+    tty and its own loop. There is no shared memory between them and deliberately none —
+    `panel.py`'s "liveness is a poll, not a push" is the whole shape of this frame — so a
+    selection one panel makes and another draws is a file, and the repaint that follows is
+    the `state.bump` every other cross-panel fact already travels on.
+
+    No committed setting behind it, exactly as :func:`record_change` has none, and for the
+    same reason said one noun over: which row you last pointed at is a fact about the
+    minute you are in, and a `[frame]` key for it would be config that is stale before the
+    frame is.
+
+    **The value is a repo NAME and it is never drawn as itself.** `slots._table_lines`
+    compares it against the ``name`` of each row it is already drawing and highlights the
+    one that matches; a name matching nothing highlights nothing. That is what makes a
+    hand-edited or truncated file cost a highlight rather than a line — the same
+    degrade-to-nothing :func:`density` gets by leaving validation at the point of use, with
+    the sharper edge that here there is no point of use to validate at: the only thing
+    charter does with this string is an equality test against names it read out of its own
+    gather. What `slots._selected_detail` puts on the attention row is composed from the
+    matched GATHER ROW, not from this file.
+
+    Same must-not-raise, atomic-write shape as :func:`record_density`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "selection.tmp"
+    try:
+        config.write_for(tmp, f"{name}\n")
+        os.replace(tmp, d / "selection")
+    except OSError:
+        return
+
+
+def selection(fid: str) -> str | None:
+    """The repo row this frame has selected, or ``None`` for "nothing selected".
+
+    ``None`` is the ordinary case and is not a failure: a frame comes up with no row
+    selected, the table draws no highlight and the attention row spends its columns on the
+    fields it always had. That is the state every plane with `[frame] mouse` off stays in
+    unless the operator moves the selection from the palette, and it is the state
+    `frame/component.py` asks a pointer affordance to degrade to.
+
+    Read on every `bottom` repaint, which is the one place this costs anything, so it is
+    one `read_text` of a file that usually is not there. See `slots._bottom` for the bill.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / "selection").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def record_hidden(fid: str, names) -> None:
     """Write down which components THIS RUNNING FRAME is not drawing.
 
@@ -893,12 +954,19 @@ def clear_shape(fid: str) -> None:
       reading zero is worse than no gauge; a gauge reading somebody else's 78% is worse
       than either.
 
+    * ``selection`` is the same keypress or the same click said about a ROW
+      (:func:`record_selection`), and it inherits with the mildest of these consequences
+      and the same shape: a brand-new frame comes up with one repo highlighted and its
+      detail on the attention row, because somebody pointed at it in a session that is
+      over. Nothing on screen explains it and nothing the new operator does explains it
+      either — the highlight is a claim about an action they did not take.
+
     Never raises, and never creates, like everything else here.
     """
     d = frame_dir(fid)
     if d is None:
         return
-    for name in ("density", "hidden", "panes", "session"):
+    for name in ("density", "hidden", "panes", "session", "selection"):
         try:
             (d / name).unlink(missing_ok=True)
         except OSError:

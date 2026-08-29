@@ -142,6 +142,102 @@ def _register_detach(reg: actions.ActionRegistry) -> None:
             "with your own prefix key")))
 
 
+#: What a plane with nothing to select is told instead of a row that does nothing.
+#: Its own sentence rather than :data:`NO_LAYOUT`'s or :data:`NO_PANES`': those are about
+#: records charter lost, and this is about a workspace that has no clones in it yet — a
+#: state that is ordinary and fixable, so the row carries the fix the way `_empty_lines`
+#: does in the pane it is about.
+NO_REPOS = ("this workspace has no clones for the repo table to select from — "
+            "charter clone <repo>")
+
+#: Which way each row walks the table, in the order the palette lists them.
+_SELECT_STEPS = (("next", 1), ("previous", -1))
+
+
+def _register_selection(reg: actions.ActionRegistry) -> None:
+    """Two rows that move the `repos` table's selected row — **the keyboard's half.**
+
+    **`[frame] mouse` is off on most planes and charter does not own the harness**, so a
+    component whose only route to a piece of state is a click has no route to it there —
+    `component.EVENT_KINDS` states that to a provider and then asks for the one thing that
+    fixes it: *give every pointer affordance a key as well.* The `repos` table's selection
+    is charter's own first pointer affordance, so this is charter keeping its own rule. On
+    a plane with the flag off these rows are the ONLY way to move it, and on a plane with
+    it on they are still the way to move it without reaching for the mouse.
+
+    **The palette is the keyboard, and arrow keys are how it is driven.** `F2` opens it,
+    `overlay.Surface` moves its selection on `up`/`down`, and `Enter` chooses — which is
+    the vocabulary the pointer half is deliberately held to as well (a click SELECTS, only
+    a keypress chooses). Charter cannot put a bare arrow key in front of the repo table
+    itself: a `bind -n Up` is server-wide and would intercept the arrow BEFORE the harness
+    the frame exists to protect, and `frame/events.py` does not deliver `key` to a panel
+    for the matching reason — tmux routes typing to the ACTIVE pane, which is the harness's.
+
+    **They walk the table's DISPLAY order, which is the gather's**, not the ranking the
+    pane's window is cut from (`statusline._pick_rows` re-sorts its pick back into cache
+    order for exactly this reason: a row that moves as its state changes stops being a
+    place you can look). So "next" is the row under the one that is highlighted, as read.
+
+    **It wraps, and no-wrap was the alternative.** Stepping off the end and stopping makes
+    a palette row that visibly does nothing, which reads as broken and costs the operator
+    a whole `F2` to find out; wrapping makes every press move something. Nothing here is
+    irreversible, so there is no half of this a wrap could do damage with.
+
+    **Nothing is selected yet is not a failure**, and it is the common case the first time
+    this is pressed: the walk starts at the top of the table for `next` and at the bottom
+    for `previous`, which is what an operator who pressed a direction key on a list with no
+    cursor in it means. A selection naming a repo this plane no longer has is the same
+    case — it is not in the list, so the walk starts from the end the direction came from
+    rather than from a position that does not exist.
+
+    Both `state.record_selection` and `state.bump` run HERE, in the palette's own process,
+    rather than through :func:`_spawn` like the density and surface rows. Those two have to
+    outlive the pane because they re-lay-out a frame through several tmux calls; this is one
+    atomic file write and one more, and `cmd_palette` joins the invocation before it closes
+    the pane (`_ACTION_START_GRACE`), so a subprocess would buy nothing and cost a whole
+    interpreter start.
+    """
+    for word, step in _SELECT_STEPS:
+        reg.register(action.Action(
+            id=f"repo.{word}", title=f"repo: select the {word} row",
+            touches=("repos",),
+            run=(lambda ctx, st=step: _select(ctx, st)),
+            available=lambda ctx: bool(ctx.repos),
+            reason_unavailable=lambda ctx: NO_REPOS))
+
+
+def _select(ctx, step: int):
+    """Move this frame's repo selection *step* rows through the table's display order.
+
+    Split out of the row above so the walk can be exercised against a list of names
+    without a palette, a tmux server or a frame directory — the same reason
+    `slots._fit_fields` is not inside `slots._bottom`.
+
+    The modulo is what wraps. **Where a walk with no selection under it STARTS depends on
+    the direction, and one starting point for both was the first version and was wrong**:
+    `next` has to land on the first row and `previous` on the last, and a single sentinel
+    can only be right for one of them — `-1` gives `next` its 0 and gives `previous` the
+    row second from the bottom, which is a cursor appearing in the middle of a list nobody
+    had put one in. So the sentinel is the end the direction is coming FROM, and the same
+    arithmetic then serves both.
+
+    `ctx.repos` is never empty here: `available` refuses the row on a plane with no clones,
+    and `ActionRegistry._check` builds ONE ctx and hands that same one to `run` — so the
+    list this indexes is the list that was asked about, and a guard for an empty one would
+    be a line nothing could turn red.
+    """
+    names = [r.get("name") for r in ctx.repos]
+    chosen = state.selection(ctx.fid)
+    here = names.index(chosen) if chosen in names else (-1 if step > 0 else 0)
+    name = names[(here + step) % len(names)]
+    state.record_selection(ctx.fid, name)
+    # The `repos` pane redraws its highlight and the `attention` pane redraws the detail,
+    # and neither is this process — see `frame/builtins._repos_events` for the same two
+    # lines said from the pointer's side.
+    state.bump(ctx.fid)
+    return f"selected {name}"
+
+
 def _register_density(reg: actions.ActionRegistry, *, current: str) -> None:
     """One row per density level, with the level in effect marked rather than dropped.
 
@@ -247,6 +343,7 @@ def build(fid: str, *, current_density: str,
     """
     reg = actions.ActionRegistry()
     _register_detach(reg)
+    _register_selection(reg)
     _register_density(reg, current=current_density)
     _register_chrome(reg, current=current_chrome)
     for aid in reg.providers.ids():

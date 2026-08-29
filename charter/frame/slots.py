@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import time
+from typing import NamedTuple
 
 from .. import contain, tui
 from . import pane
@@ -423,6 +424,183 @@ def _needs_attention(r: dict) -> bool:
                or r.get("ci") in ("failed", "running") or r.get("change"))
 
 
+class _Line(NamedTuple):
+    """One composed row of the repo table, and **which repo it is a row about**.
+
+    The second field is the whole reason this is a pair rather than a string. A click
+    arrives as a row NUMBER (`frame/events.py`), and the only thing that knows what is on
+    that row is the pass that composed it: the table's rows are a ranked window over the
+    repos, with piece rows nested under them and an overflow line that is about no repo at
+    all, so nothing downstream can work back from an index to a name without redoing the
+    picking — which would be a second answer to "which repos are on screen", and the two
+    would disagree the moment a repaint landed between the paint and the click.
+
+    *repo* is the repo the line BELONGS to, not the row's own subject: a piece row carries
+    its parent repo's name (`gather`'s ``worktrees`` rows carry ``repo``), so every row of
+    the tree resolves to a repo and a click anywhere in it selects something. The one line
+    that answers ``None`` is `…(+N more)`, which stands for rows that are not on screen —
+    there is nothing there to select, and saying so is better than picking one of them.
+    """
+
+    repo: str | None
+    text: str
+
+
+class _Viewport:
+    """Where the `repos` table is scrolled to, and what it drew last — for ONE pane.
+
+    **A panel process holds one pane, so this is one object at module scope rather than a
+    map keyed by anything.** `panel.run` resolves a component name once and then draws that
+    one component for the life of the process (`panel._component_painter` closes over the
+    same decision), so "which pane is this" has exactly one answer here and a key for it
+    would be a second, weaker one. Tests reach the same object and :meth:`forget` is what
+    puts it back — the reset is the price of the singleton and is not hidden.
+
+    **It holds an intent, and the renderer is what settles it against the data.** The
+    handler moves an offset knowing nothing about how many repos there are or how tall the
+    pane is — `Component.on_event` is handed no ctx by contract (§4f), and it must not grow
+    a second reading of a plane the repaint is about to read anyway. So :meth:`settle` is
+    called by `_repos` with the bound it just computed, and that is also the answer to *what
+    happens when the offset outlives a repo list that shrank under it*: the next paint
+    clamps it down and the pane draws the last window there is, rather than an empty table
+    the operator has to guess their way back out of.
+
+    :attr:`limit` is that bound REMEMBERED, which is what lets the handler refuse a scroll
+    that would change nothing. Zero until the first paint, and the first paint always
+    happens before the first event can: `panel._watch` seeds its resize flag ``True`` and
+    calls `_tick` before it ever reaches `_wait`. So a pane exactly tall enough for its
+    content answers every wheel notch with "nothing moved" from the very first one.
+    """
+
+    __slots__ = ("offset", "limit", "_rows")
+
+    def __init__(self) -> None:
+        self.offset = 0
+        self.limit = 0
+        self._rows: tuple[str | None, ...] = ()
+
+    def forget(self) -> None:
+        """Back to a pane nobody has scrolled or drawn — for a test, and only a test.
+
+        Production never calls it: a panel process is born here and the object dies with
+        the process. It exists because the alternative for a test is reaching into
+        ``__slots__`` by name, which is a test that keeps working after the attribute it
+        pokes has stopped being the one that matters.
+        """
+        self.offset = 0
+        self.limit = 0
+        self._rows = ()
+
+    def settle(self, limit: int) -> int:
+        """Record how far this table may scroll, and answer where it actually is.
+
+        The clamp is here and nowhere else. `_scroll_limit` computes the bound from the
+        repo count and the pane's rows; this is what applies it, so an offset left over
+        from a longer list — the operator scrolled to the bottom, then a repo was removed —
+        comes back as the largest offset the CURRENT list has, on the very next paint.
+
+        Never below zero, and that half is not symmetry: :meth:`move` already refuses to go
+        under, so what this guards is a *limit* that has gone negative, which
+        `_scroll_limit` cannot produce — and a `max` here would be a second answer to a
+        question that one already answers. It is spelled `min` alone for that reason.
+        """
+        self.limit = limit
+        self.offset = min(self.offset, limit)
+        return self.offset
+
+    def move(self, rows: int) -> bool:
+        """Scroll by *rows*, and answer whether anything actually moved.
+
+        **The answer IS the repaint decision** (§4f: a handler answers truthy for "repaint
+        me"), and answering it here rather than in the handler is what makes "a pane tall
+        enough for its content does not scroll" a property of one object with one test
+        rather than an accident of two. A wheel notch on such a pane finds ``limit`` zero,
+        moves nothing, and costs the frame no paint at all.
+        """
+        moved = min(max(self.offset + rows, 0), self.limit)
+        if moved == self.offset:
+            return False
+        self.offset = moved
+        return True
+
+    def publish(self, rows) -> None:
+        """Record which repo each row of the pane is about, the paint that just happened.
+
+        Indexed by the PANE's row, not the table's: `_repos` puts a heading on row 0 and
+        the table under it, and the three one-line answers it draws instead of a table
+        (`_unknown_lines`, `_empty_lines`, `_too_narrow_lines`) publish nothing at all. So
+        a click on the heading, on a message, or below the last row lands on ``None`` and
+        is not a selection — which is the same rule `events.Dispatcher._on_canvas` applies
+        to the pad, one axis over: cells the component did not draw a row into are not
+        cells it was clicked in.
+        """
+        self._rows = tuple(rows)
+
+    def repo_at(self, row: int):
+        """The repo on pane row *row*, or ``None`` — the paint the operator was looking at.
+
+        Out of range answers ``None`` rather than raising, and a negative index answers
+        ``None`` rather than counting from the end — which is what Python's own indexing
+        would have done and is the one wrong answer available here: `overlay.Event` rows
+        are already 0-based and non-negative, so a negative one would mean charter's
+        arithmetic was wrong, and reporting the LAST row for it would hide that.
+        """
+        return self._rows[row] if 0 <= row < len(self._rows) else None
+
+
+#: The one viewport this process's `repos` pane scrolls. See :class:`_Viewport` for why
+#: there is exactly one; `frame/builtins.py` is the other half, and it holds no state of
+#: its own so that the handler and the renderer cannot come to disagree about where the
+#: table is scrolled to.
+VIEWPORT = _Viewport()
+
+#: Rows one wheel notch moves the table. One, deliberately: a terminal sends one report
+#: per notch and tmux forwards each, so a larger step multiplies whatever the operator's
+#: mouse or trackpad already decided — and the pane is at most `statusline._MAX_REPO_LINES`
+#: rows, where a three-row step would put the whole table past you in two flicks.
+SCROLL_ROWS = 1
+
+
+def _scroll_limit(repos: int, budget: int) -> int:
+    """The largest offset a table of *repos* repos may hold in a *budget*-row pane.
+
+    **Zero whenever every repo already fits, and that is the tested nothing.** The `repos`
+    pane is sized to its content (`layout.repos_rows`), so on an ordinary plane the pane is
+    exactly tall enough and this answers 0 — every wheel notch then moves nothing, repaints
+    nothing and costs nothing, because :meth:`_Viewport.move` reads this bound before it
+    changes anything. A scroll that quietly did nothing *because the arithmetic happened to
+    cancel* would be indistinguishable from a scroll that was dropped, which is the class of
+    convincing-empty this module refuses everywhere else.
+
+    The row the overflow line takes is subtracted here for the same reason
+    :func:`_table_lines` reserves it out of the budget rather than trimming it off the end:
+    it is a row of the pane and a row the repos do not get. Reserved on exactly the same
+    condition — more repos than rows — so the two cannot disagree about whether that row
+    exists, which would leave the last repo permanently one notch out of reach.
+
+    **The window moves over REPOS and not over PIECES, and that is a stated limit rather
+    than an oversight.** Piece rows appear only in the one-repo shape (`_table_lines`, from
+    `gather`'s ``worktrees``), where one repo always fits and this answers 0; pieces past
+    the pane's remaining rows are dropped by that function as they always were. Scrolling
+    them would need a second kind of offset — an index into a nested list rather than into
+    the ranking — and one mechanism that answers for half the cases honestly is worth more
+    than two that overlap.
+
+    **A pane with room for one row is a pane with room for the overflow line and nothing
+    else**, and it answers 0 too. :func:`_table_lines` spends a one-row budget on
+    `…(+N more)` rather than on an arbitrary repo — "there is more here than fits" outranks
+    "here is one of them" — so every offset over such a table draws the identical line. A
+    limit taken from the repo count alone would let the wheel repaint that line forty times,
+    each repaint byte-identical to the last: motion the operator can see is not happening,
+    charged to their terminal.
+    """
+    if repos <= budget:
+        return 0
+    if budget <= 1:
+        return 0
+    return repos - (budget - 1)
+
+
 def _table_row(lead: str, name_markup: str, r: dict, width: int,
                branch_override: str | None = None) -> str:
     """One row of the WIDE repo table — the same four columns
@@ -476,8 +654,14 @@ def _table_row(lead: str, name_markup: str, r: dict, width: int,
     return row.render(width)[0]
 
 
-def _table_lines(data: dict, width: int, budget: int) -> list[str]:
+def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
+                 selected: str | None = None) -> list[_Line]:
     """The repo table the `repos` pane draws under its heading, at most *budget* lines.
+
+    **Each line comes back with the repo it is about** (:class:`_Line`), because a click
+    arrives as a row number and this is the only pass that knows what is on a row. See that
+    class for why the alternative — resolving an index back to a name afterwards — is a
+    second answer rather than a lookup.
 
     **This is #488's actual answer**: the frame used to show LESS of the plane's repo
     state than the status line it suppresses (#386), because the only slot drawing repos
@@ -513,8 +697,26 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     verbatim. Every OTHER repo's pieces get a `⑂N` badge on the repo's own row instead,
     from `worktree_count`; the badge means "there is more you cannot see here", so it is
     dropped whenever every piece already has its own row.
+
+    *offset* is how far down the RANKING the window has been scrolled, and it changes
+    nothing at all at zero — which is the whole of how this stayed compatible.
+    `statusline._pick_rows` already sliced `[:budget]` off a ranked list, so `[offset:]` of
+    the same list is the same table one window further along: the repos come back in
+    priority order, the display order is still the cache's (a row that moved as it was
+    scrolled past would be the thing that function's own docstring refuses), and scrolling
+    back to zero lands on the exact bytes that were there before the first notch. The
+    `…(+N more)` line needs no arithmetic of its own for the same reason: what is HIDDEN is
+    still "every key that is not in *show*", which is true at every offset.
+
+    *selected* is the repo `state.selection` says this frame has picked, and the row for it
+    is drawn in reverse video by `frame/chrome.reverse` — the same call `persona_section`
+    already makes for the persona a frame is on, at the same place in the pipeline (a
+    FINISHED row, at the width the renderer measured), so there is one answer to what a
+    chosen row looks like in this frame. A name matching no row highlights nothing, which
+    is what a selection left over from a repo that has since gone degrades to.
     """
     from .. import statusline as sl
+    from . import chrome
 
     repos = data.get("repos") or []
     if not repos or budget <= 0:
@@ -555,7 +757,7 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     # the false-clean reading this module refuses everywhere else. A budget of exactly one
     # therefore spends it on the note, which is the honest half of the pair: "there is
     # more here than fits" outranks "here is an arbitrary one of them".
-    show = (sl._pick_rows(keys, budget - 1, cur_repo, by_key, by_key)
+    show = (sl._pick_rows(keys, budget - 1, cur_repo, by_key, by_key, offset=offset)
             if capped else keys)
 
     pieces = list(data.get("worktrees") or [])
@@ -570,7 +772,7 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
     room = budget - len(show) - (1 if capped else 0)
     kids = pieces[:max(0, room)] if len(show) == 1 else []
 
-    lines: list[str] = []
+    lines: list[_Line] = []
     for i, k in enumerate(show):
         r = by_key[k]
         total = r.get("worktree_count") or 0
@@ -581,16 +783,26 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
         # `├─` — `statusline._repo_rows`' own rule, and the reason `_TREE_WT` exists.
         is_last = (not capped) and i == len(show) - 1 and not kids
         tree = sl._TREE_END if is_last else sl._TREE_MID
-        lines.append(_table_row(f"  {sl._DIM}{tree}{sl._R}",
-                                f"{emph}{palette[r['name']]}{r['name']}{sl._R}{badge}",
-                                r, width))
+        row = _table_row(f"  {sl._DIM}{tree}{sl._R}",
+                         f"{emph}{palette[r['name']]}{r['name']}{sl._R}{badge}",
+                         r, width)
+        # **The highlight goes on LAST and re-asserts itself through the row's own resets**
+        # — `chrome.reverse`'s whole reason, measured on this exact shape of row: every
+        # coloured span here ends in `sl._R`, and a `\x1b[7m` wrapped naively around the
+        # outside dies at the first one. Applied to the finished row rather than composed
+        # into it so that the branch, CI and change cells keep their own colours inside it.
+        lines.append(_Line(r["name"],
+                           chrome.reverse(row, width) if r["name"] == selected else row))
 
     if capped:
         hidden = [k for k in keys if k not in set(show)]
         quiet = not any(_needs_attention(by_key[k]) for k in hidden)
         note = ", all clean" if quiet else ""
-        lines.append(tui.truncate(
-            f"  {sl._DIM}…(+{len(hidden)} more{note}){sl._R}", width))
+        # **About no repo, so a click here selects nothing.** It stands for the rows that
+        # are NOT on screen, and picking one of them because the operator clicked the line
+        # that says they exist would be charter answering a question nobody asked.
+        lines.append(_Line(None, tui.truncate(
+            f"  {sl._DIM}…(+{len(hidden)} more{note}){sl._R}", width)))
 
     for j, p in enumerate(kids):
         mark = sl._TREE_WT if j == len(kids) - 1 else sl._TREE_MID
@@ -601,9 +813,16 @@ def _table_lines(data: dict, width: int, budget: int) -> list[str]:
         # to mean "this piece is NOT on the branch you would assume". The markers still
         # render: dirty and ahead/behind are true of the tree whatever its branch.
         wb = p.get("branch") or "?"
-        lines.append(_table_row(f"  {sl._DIM}{sl._TREE_PIPE}{mark}{sl._R}",
-                                f"{emph}{sl._DIM}{p['name']}{sl._R}", p, width,
-                                branch_override="" if wb == p.get("name") else None))
+        # **A piece row belongs to its parent REPO**, which is what keeps one namespace
+        # rather than two. `gather` writes `repo` on every worktree row, so a click on a
+        # nested row selects the clone it is a piece of — and a repo name and a piece name
+        # can never come to mean the same selection, which they could if pieces were
+        # selectable in their own right (a piece is named after a branch, and nothing stops
+        # one being named after a sibling clone).
+        lines.append(_Line(p.get("repo"), _table_row(
+            f"  {sl._DIM}{sl._TREE_PIPE}{mark}{sl._R}",
+            f"{emph}{sl._DIM}{p['name']}{sl._R}", p, width,
+            branch_override="" if wb == p.get("name") else None)))
     return lines[:budget]
 
 
@@ -1544,6 +1763,90 @@ def _fit_fields(priority: list[tuple[str, str]], width: int,
     return keep
 
 
+def _selected_detail(fid: str) -> str:
+    """The selected repo said in WORDS — the attention row's right-hand field, or ``""``.
+
+    **The `repos` table shows glyphs because it has four columns to fit forty repos into;
+    this has one row and one repo, so it spends it on words.** `!` and a number, a coloured
+    branch cell and a CI mark are a table's vocabulary and they are learned; `dirty`,
+    `2 ahead` and `CI failed` are what somebody who has just pointed at a row wants read
+    back to them. Nothing here is a second SOURCE — every field comes out of the same
+    gather row `_table_row` drew, so the two surfaces cannot disagree about a repo, only
+    about how much space they have to say it in.
+
+    **`clean` is `_needs_attention`'s answer and not a separate reading of the same
+    fields.** A detail that listed the problems and said nothing when there were none would
+    be an absence standing in for a claim — the reader cannot tell "nothing is wrong" from
+    "this field was cut". The predicate is the one the `…(+N more), all clean` note already
+    asks, so the row and the note cannot come to disagree about what clean means.
+
+    **Empty for every plane that has never selected anything**, which is what keeps this
+    field free: `_fit_fields` drops an empty field whole, so the attention row of a frame
+    nobody has clicked is byte-identical to the one before this existed.
+
+    **What a repaint pays.** One `state.selection` read — a `read_text` of a file that is
+    usually not there — and, only when it IS, one `gather.cached`. That second read is the
+    one worth stating, because `bottom` is the frame's ANIMATED slot and repaints at
+    `panel.TICK` for the whole length of a dispatch: with a row selected, that is one small
+    JSON read five times a second, against the `_inflight_field` record scan the same tick
+    already pays. It is charged only to a frame whose operator has selected something, and
+    it is the same cache the `repos` pane beside it reads on every one of its own paints.
+
+    **`gather.cached` and never `gather.read`, for `_repos`' reason exactly**: `read` falls
+    back to a live `scan()`, and a panel must not sweep. A frame whose gather has not landed
+    yet has nothing to say about the selected repo and says nothing, rather than walking
+    every clone on the plane five times a second to find out.
+    """
+    from . import gather, state
+
+    name = state.selection(fid)
+    if not name:
+        return ""
+    data = gather.cached(fid)
+    if data is None:
+        return ""
+    row = next((r for r in data.get("repos") or [] if r.get("name") == name), None)
+    if row is None:
+        # A selection pointing at a repo this plane no longer has. The table drew no
+        # highlight for it either (`_table_lines` matches on the same name), so both
+        # surfaces go quiet together — which is the honest pair. Saying "gone" here would
+        # be the only thing on screen claiming a repo ever existed.
+        return ""
+    return _detail_text(row)
+
+
+def _detail_text(row: dict) -> str:
+    """*row*'s state as the words :func:`_selected_detail` puts on the attention row.
+
+    Split out so the composition can be tested against a row without a plane, a frame
+    directory or a gather cache underneath it — the same reason `_fit_fields` is not inside
+    `_bottom`. It is also the whole of what a reader has to check against `_table_row`: two
+    surfaces, one set of fields, and this is the list.
+
+    Every part is dropped when it is not true, so a clean repo on its own branch reads
+    `▪ charter · main · clean` and a busy one reads
+    `▪ charter · fix/x · dirty · 2 ahead · CI failed · !123 · ⑂3`.
+    """
+    from .. import statusline as sl
+
+    parts = [f"{sl._BOLD}{row.get('name')}{sl._R}", row.get("branch") or "?"]
+    if row.get("dirty"):
+        parts.append("dirty")
+    if row.get("ahead"):
+        parts.append(f"{row['ahead']} ahead")
+    if row.get("behind"):
+        parts.append(f"{row['behind']} behind")
+    if row.get("ci"):
+        parts.append(f"CI {row['ci']}")
+    if row.get("change"):
+        parts.append(f"{row.get('sigil') or '!'}{row['change']}")
+    if row.get("worktree_count"):
+        parts.append(f"⑂{row['worktree_count']}")
+    if not _needs_attention(row):
+        parts.append("clean")
+    return f"{sl._DIM}▪{sl._R} " + f"{sl._DIM} · {sl._R}".join(parts)
+
+
 def _bottom(fid: str) -> str:
     """What still wants attention, and how to act on it — the frame's last row.
 
@@ -1647,20 +1950,23 @@ def _bottom(fid: str) -> str:
                    else f"{config.FRAME['hotkey']} palette")
 
     inflight_text = _inflight_field()
+    repo_text = _selected_detail(fid)
 
     # Decide who survives, highest priority first (see this function's own docstring
     # above for why); `_fit_fields` does the actual budgeting so it can be tested in
     # isolation.
     keep = _fit_fields(
-        [("alert", alert_text), ("inflight", inflight_text), ("news", news_text),
-         ("todo", todo_text), ("hotkey", hotkey_text)], w,
+        [("alert", alert_text), ("inflight", inflight_text), ("repo", repo_text),
+         ("news", news_text), ("todo", todo_text), ("hotkey", hotkey_text)], w,
         limit=1 if verbosity(fid) == "terse" else None)
 
     # Re-assembled in the original reading order, not priority order — priority decided
-    # only who was cut.
+    # only who was cut. `repo` is LAST, which is the "right side" the selected row's
+    # detail was asked for: this row is composed left to right and joined with ` · `, so
+    # last is as far right as a field gets without a second layout rule for one field.
     fields = {"alert": alert_text, "inflight": inflight_text, "news": news_text,
-              "todo": todo_text, "hotkey": hotkey_text}
-    parts = [fields[n] for n in ("todo", "alert", "inflight", "news", "hotkey")
+              "todo": todo_text, "hotkey": hotkey_text, "repo": repo_text}
+    parts = [fields[n] for n in ("todo", "alert", "inflight", "news", "hotkey", "repo")
              if n in keep]
     return tui.truncate(" · ".join(parts), w)
 
@@ -1728,7 +2034,28 @@ def _repos(fid: str) -> str:
     that walked a directory per row would cost fourteen walks per repaint. Everything the
     table draws comes out of the cache; see :func:`_table_row` for the one column that
     costs (presence) and is therefore absent.
+
+    **This is also the pane that can be SCROLLED and CLICKED, and both halves are settled
+    here rather than in the handler** (#607's first consumer). `frame/builtins.py` declares
+    `scroll` and `click` and moves :data:`VIEWPORT`; a handler is handed no ctx by contract
+    (§4f), so it knows neither how many repos there are nor how tall this pane is. Both
+    numbers are read on this line and nowhere else:
+
+    * :func:`_scroll_limit` is how far the window may move, handed to
+      :meth:`_Viewport.settle`, which clamps an offset left over from a longer list and
+      leaves the handler a bound it can refuse a pointless scroll against. On the ordinary
+      plane — a pane sized to its own content — it is 0 and the wheel does nothing at all.
+    * :meth:`_Viewport.publish` records which repo each PANE ROW is about, so a click that
+      arrives as a row number resolves against the paint the operator was looking at. The
+      three one-line answers below publish nothing, which is what makes a click on
+      `gathering this workspace's repos…` not a selection.
+
+    `state.selection` is read here and handed to :func:`_table_lines`, which is what draws
+    the chosen row in reverse video. One extra file read per repaint of a pane that is not
+    animated — it repaints on a version bump or a resize, and a click is a version bump
+    (`frame/builtins.py` bumps so the ATTENTION pane, a different process, redraws too).
     """
+    from . import state
     w = content_width("repos")
     # `_table_cap` is the SAME call `repos_rows_wanted` made to size this pane, with the
     # pane's own measured width instead of the window's.
@@ -1746,6 +2073,7 @@ def _repos(fid: str) -> str:
         # needs rather than what the table needs — see :func:`_too_narrow_lines`. Asked of
         # :func:`pad_of` and not subtracted back out of `w`, because `pad_of` is the one
         # that knows whether the pad was afforded at all.
+        VIEWPORT.publish(())
         return "\n".join(_too_narrow_lines(w, pad_of("repos")))
     from . import gather
     # `gather.cached`, never `gather.read` (#512). The two differ by exactly one thing:
@@ -1771,12 +2099,14 @@ def _repos(fid: str) -> str:
     # hook refreshes it after that (`notify.plane_changed`).
     data = gather.cached(fid)
     if data is None:
+        VIEWPORT.publish(())
         return "\n".join(_unknown_lines(w))
     repos = data.get("repos") or []
     if not repos:
         # Gathered, and there is nothing in it. Said out loud rather than left as an
         # empty bordered rectangle — see :func:`_empty_lines`. No heading: `▪ repos 0`
         # above "no clones in demo" is the same fact twice in a two-row pane.
+        VIEWPORT.publish(())
         return "\n".join(_empty_lines(_frame_workspace(fid), w))
     # The heading takes the first row and the table spends what is left. Asked for fewer
     # ROWS rather than sliced afterwards, so what survives at `terse` (or in a pane a
@@ -1784,8 +2114,20 @@ def _repos(fid: str) -> str:
     # in, the ones with something on them — rather than whichever happened to come
     # first, the same discipline the `terse` chip list in `_right` keeps.
     budget = min(_height() - 1, cap)
+    # **`settle` is unconditional, and the `if budget > 0` that used to guard the call
+    # below went with it.** `_table_lines` already answers `[]` for a non-positive budget
+    # (its first line), so the conditional could not change an outcome — the sweep's own
+    # definition of a line that should not be there — and it could change one HERE, in the
+    # direction that matters: a pane starved to no rows by a resize would have kept
+    # whatever bound the last taller paint recorded, and the wheel would go on moving an
+    # offset over a table that is not on screen. `_scroll_limit` answers 0 for that pane.
+    offset = VIEWPORT.settle(_scroll_limit(len(repos), budget))
+    lines = _table_lines(data, w, budget, offset=offset, selected=state.selection(fid))
+    # The heading is row 0 of the PANE and belongs to no repo, so the map the handler
+    # resolves a click against starts with it — see :meth:`_Viewport.publish`.
+    VIEWPORT.publish((None, *(ln.repo for ln in lines)))
     return "\n".join([_sidebar_head("repos", len(repos), w),
-                      *(_table_lines(data, w, budget) if budget > 0 else [])])
+                      *(ln.text for ln in lines)])
 
 
 #: How a member's derived state is spelled on a row. `change.MEMBER_STATES`' own words,
