@@ -638,8 +638,9 @@ RELEASE_BODY_MAX = 125_000
 #:
 #: 100,000 rather than a fraction of the limit, because a fraction invites re-deriving it:
 #: this is a round number a human holds, it leaves a fifth of the API's allowance unspent,
-#: and it is above every release charter has ever cut but two — so the bound below does not
-#: start eliding until a version is genuinely larger than any that has shipped.
+#: and it is above every release charter has ever cut but one — 0.52.0, at 111,723, is the
+#: only stamped version it reaches for, so the bound does not begin eliding until a version
+#: is genuinely larger than any that has shipped.
 _BODY_BUDGET = 100_000
 
 
@@ -740,9 +741,9 @@ def render_body(version: str) -> str:
     The label comes from :func:`marker`, which the offline view calls too.
 
     **And the result is bounded, because the far end of it refuses a long one.** The whole
-    body is returned whenever it fits :data:`_BODY_BUDGET`, which is what every release but
-    two has done and what keeps this function's output byte-identical to what it has always
-    been. Past that, the notes that fit are rendered whole and the rest become a headline
+    body is returned whenever it fits :data:`_BODY_BUDGET`, which is what sixteen of the
+    seventeen stamped versions do, and what keeps this function's output byte-identical to
+    what it has always been for them. Past that, the notes that fit are rendered whole and the rest become a headline
     and a link, with :func:`_elision` between them saying so.
 
     Three properties decide the shape, and each of them rules out an easier one:

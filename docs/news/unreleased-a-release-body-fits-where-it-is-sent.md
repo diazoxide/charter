@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: A release stops being able to publish to PyPI and then lose its notes — the body is bounded to what GitHub accepts, and no note is dropped to make it fit
+headline: A release stops publishing to PyPI and then losing its notes — the body is bounded to what GitHub accepts, and no note is dropped to make it fit
 ---
 
 `release.yml`'s announce job pipes `charter news --for <version>` straight into
@@ -19,10 +19,10 @@ the Release body by hand, which forks the published notes from the shipped entry
 supposed to be their single source.
 
 The 69 entries staged for this release rendered to 333,917 characters. 0.52.0 published at
-111,723 — 3,277 short of the refusal — and nothing in the repository remarked on it, because
-nothing was looking. Entries accumulate one pull request at a time, each author sees their
-own and no other, and the total crosses on an ordinary afternoon with no pull request to
-blame.
+111,723 — 3,277 short of the refusal — and nothing in the repository remarked on it,
+because nothing was looking. Entries accumulate one pull request at a time, each author
+sees their own and no other, and the total crosses on an ordinary afternoon with no pull
+request to blame.
 
 **The guard was not wrong, and rendering was never the failing step.** `guard` already
 refuses a version whose notes cannot be *rendered*, and it asks `charter news --for` — the
@@ -34,18 +34,19 @@ where it is about to be sent**.
 ## What changed
 
 `news.render_body` is bounded. Whenever the notes fit, they render exactly as they always
-have, byte for byte — which is every release but two. Past that, the notes that fit render
-whole and the rest become their headline and a link to the note itself, with a heading
-between them that says how many, how long, and what the limit is.
+have, byte for byte — which is sixteen of the seventeen versions stamped so far. Past that,
+the notes that fit render whole and the rest become their headline and a link to the note
+itself, with a heading between them saying how many, how long, and what the limit is. This
+is what the staged set produces today:
 
 ```
-## 34 of these 69 notes are listed by headline only
+## 56 of these 70 notes are listed by headline only
 
-Rendered whole, 69 notes come to 333,917 characters, and GitHub refuses a release body
+Rendered whole, 70 notes come to 338,123 characters, and GitHub refuses a release body
 over 125,000.
 
-**Every note this version shipped is in this list.** 35 are above in full; the 34 below
-are a headline and a link. …
+**Every note this version shipped is in this list.** 14 are above in full; the 56 below
+are a headline and a link. No note was dropped, and no note's text was cut short — …
 ```
 
 **Nothing is dropped and nothing is truncated**, and that is the half worth checking rather
