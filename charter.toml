@@ -112,8 +112,9 @@ pad = 1
 key = "F6"
 
 [[frame.component]]
-use = "repos"
-bg  = "brightblack"
+use  = "repos"
+size = 15
+bg   = "brightblack"
 pad = 2
 key = "F8"
 

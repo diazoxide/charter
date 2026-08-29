@@ -30,3 +30,8 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [Never leave a daemon thread blocked in os.read(fd) when something else c](20260829-023106-never-leave-a-daemon-thread-blocked-in-os-read-f.md)
 - [charter frame sizing supports exactly ONE variable-height pane (layout.V](20260829-023911-charter-frame-sizing-supports-exactly-one-variab.md)
 - [charter change revert runs 'git revert', which inherits the operator's c](20260829-023919-charter-change-revert-runs-git-revert-which-inhe.md)
+- [Running charter's test suite or tools/sweep.py from this harness: PYTHON](20260829-190718-running-charter-s-test-suite-or-tools-sweep-py-f.md)
+- [Parallel charter agents collide on process patterns, not just scratch fi](20260829-190836-parallel-charter-agents-collide-on-process-patte.md)
+- [tmux draws each pane-border cell from exactly ONE pane's options: screen](20260829-193943-tmux-draws-each-pane-border-cell-from-exactly-on.md)
+- [A parent agent's stated diagnosis is a hypothesis, not a premise. On cha](20260829-193954-a-parent-agent-s-stated-diagnosis-is-a-hypothesi.md)
+- [charter's CI already runs tools/sweep.py as a gate on every PR — 'Size t](20260829-200245-charter-s-ci-already-runs-tools-sweep-py-as-a-ga.md)
