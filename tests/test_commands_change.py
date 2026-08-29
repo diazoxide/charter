@@ -970,9 +970,30 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
         return out
 
     def test_nothing_here_enumerates_repos(self):
-        for name in ("list_repos", "repos", "glob", "rglob", "iterdir", "walk", "scandir"):
+        for name in ("list_repos", "repos", "rglob", "iterdir", "walk", "scandir"):
             self.assertNotIn(name, self._called(),
                              f"{name}() would let a change enumerate rather than be typed")
+
+    def test_the_only_directory_this_module_enumerates_is_the_landing_log(self):
+        """`glob` left the ban list when `land` gained a log to read, and this is what
+        replaces it rather than a hole.
+
+        The property was never "no enumeration"; it is that **membership** is enumerated by
+        hand. Reading `changes/log/*.jsonl` is not that — it is charter's own past-tense
+        declarations, keyed per host — so the ban becomes an exact one: every `glob` in this
+        module takes the literal `"*.jsonl"`, and a call that grew a repo pattern goes red
+        here whatever it is spelled.
+        """
+        patterns = [ast.literal_eval(n.args[0])
+                    for n in ast.walk(self._tree())
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "glob" and n.args
+                    and isinstance(n.args[0], ast.Constant)]
+        globs = [n for n in ast.walk(self._tree())
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and n.func.attr == "glob"]
+        self.assertEqual(len(globs), len(patterns), "a glob() with a computed pattern")
+        self.assertEqual(set(patterns), {"*.jsonl"})
 
     def test_the_inventory_is_not_even_imported(self):
         self.assertNotIn("inventory", self._imports())
@@ -986,20 +1007,30 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
                     self.assertNotIn(opt, ("--all", "--all-repos", "--pattern", "--glob",
                                            "--match", "--every"), f"change {name} {opt}")
 
-    def test_no_forge_module_and_no_network_module_is_imported(self):
-        """No forge. `revert` and the divergence report run **git in a clone the operator
-        already has**, which is a local read of this disk — but nothing here asks anybody's
-        API, and keeping the two separable is what makes "what did the operator declare,
-        and what does this disk say happened" answerable without a token.
+    def test_the_forge_is_reached_only_through_the_protocol(self):
+        """`push` and `land` made this module talk to a forge, and the list it was pinned
+        against became false. What replaces it is the property that still holds and is
+        worth more: the forge is reached through `charter.forge` and **nothing else**.
 
-        `subprocess` stays on the list even though this module now spawns: everything goes
-        through `util.run`, which is where the timeout, the credential-helper neutering and
-        the stdin discipline live. A direct `subprocess` call would be a second answer to
-        "how does charter run git".
-        """
-        for name in ("forge", "gitpolicy", "planegit", "glstate", "report", "inventory",
+        No `report` (whose seam is its own), no `glstate` (keyed on the clone's
+        *checked-out* branch, which is frequently not the member's, and caching the
+        permissive `ci_status` the change surface may not read), no `urllib`, no `socket`,
+        no `http`, no `ssl`, no `subprocess`. One seam per forge is what makes both halves
+        testable without a network."""
+        for name in ("gitpolicy", "planegit", "glstate", "report", "inventory",
                      "socket", "urllib", "http", "ssl", "subprocess"):
             self.assertNotIn(name, self._imports())
+        self.assertIn("forge", self._imports())
+
+    def test_no_forge_cli_is_ever_spelled_here(self):
+        """`gh` and `glab` appear in `charter/forge/` and nowhere else in this module — not
+        in an argv, not in a string. A change surface that shelled out to `gh` directly
+        would be a second seam with none of the protocol's disciplines: no per-clone forge
+        resolution, no `-f`-never-`-F`, and no loud write path."""
+        source = Path(__import__("charter.commands_change", fromlist=["x"]).__file__)
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                self.assertNotIn(node.value.strip(), ("gh", "glab"))
 
     def test_every_child_process_this_module_can_start_is_git(self):
         """`util.run` is a general subprocess runner, so "no network" is a claim about the
@@ -1027,13 +1058,25 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
             progs.append(head.value)
         self.assertEqual(progs, ["git", "git"])
 
-    #: Every git subcommand `charter/commands_change.py` can reach, in full. Not one of
-    #: them touches a remote — no `fetch`, no `pull`, no `push`, no `ls-remote` — which is
-    #: what "no network" means for a module that spawns git. And not one of them is
-    #: destructive: no `push --force`, no `branch -D`, no `reset`, no `clean`. §3.7's
-    #: refusals are the argv never being CONSTRUCTED, and this is where that is checked.
+    #: Every git subcommand `charter/commands_change.py` can reach, in full.
+    #:
+    #: **`push` is on this list and the rest of the remote verbs are not**, which is the
+    #: line Task 7 moved and it is worth stating rather than quietly widening. `charter
+    #: change push` sends a member's branch to the clone's own `origin`; that is the one
+    #: outbound git operation this module performs, and it is additive — it creates a
+    #: remote branch and can advance one. `fetch`, `pull` and `ls-remote` stay off, so the
+    #: module still never READS a remote through git.
+    #:
+    #: `remote` is on the list and is not an exception to that: its only use here is
+    #: `remote get-url origin`, which reads `.git/config` on this disk. It is how the change
+    #: surface resolves WHICH forge governs a clone — per clone, from the clone's own
+    #: origin, never from the plane's first `[[forge]]` block.
+    #:
+    #: Nothing here is destructive: no `branch -D`, no `reset`, no `clean`, and no force of
+    #: any spelling — the push's whole argv is pinned below. §3.7's refusals are the argv
+    #: never being CONSTRUCTED, and this is where that is checked.
     GIT_VERBS = {"config", "for-each-ref", "merge-base", "rev-parse", "show", "rev-list",
-                 "status", "switch", "revert"}
+                 "status", "switch", "revert", "push", "remote"}
 
     def test_the_git_subcommands_it_can_reach_are_listed_in_full(self):
         """Read statically off every `_git(clone, "<verb>", …)` call site.
@@ -1095,12 +1138,55 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
         `tests/test_change_revert.py` records every git invocation a real revert makes.
         This is the half that also covers the paths that test does not happen to walk.
         """
+        # `push` left this list when Task 7 added `charter change push`, and what replaces
+        # it is `test_the_only_push_this_module_builds_is_pinned_whole` below — a stronger
+        # pin than the ban was, because it fixes the entire argv rather than one word.
+        # Every FORCE spelling stays: a push that can only fast-forward is not the thing
+        # §3.7 refuses, and a `--force` is.
         banned = ("--force", "-f", "--force-with-lease", "--delete", "-D", "--hard",
-                  "reset", "clean", "push", "fetch", "pull", "ls-remote")
+                  "reset", "clean", "fetch", "pull", "ls-remote")
         for node in ast.walk(self._tree()):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 self.assertNotIn(node.value, banned,
                                  f"{node.value!r} is a destructive or remote git argument")
+
+    def test_the_only_push_this_module_builds_is_pinned_whole(self):
+        """The whole argv, read off the call site — this is what replaces `push` in the ban.
+
+        Read STATICALLY rather than by calling a helper, for the reason the verb test above
+        gives: what matters is the argv the module actually hands git, and a helper's return
+        value is one indirection away from that. It is also what makes the "exactly one"
+        below meaningful.
+
+        Three properties, each with a bug behind it. A plain fast-forward push — no force of
+        any spelling, so it can never overwrite what is on the remote. `origin` and nothing
+        else, because a remote out of a committed record would be a destination in a
+        committed file (§6.1). And the branch after `--`, because `git check-ref-format`
+        **accepts** `refs/heads/-b`: ref grammar is not argv safety.
+        """
+        pushes = []
+        for node in ast.walk(self._tree()):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "_git" and len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value == "push"):
+                pushes.append([a.value if isinstance(a, ast.Constant) else "<var>"
+                               for a in node.args[1:]])
+        self.assertEqual(pushes, [["push", "--set-upstream", "origin", "--", "<var>"]])
+
+    def test_the_only_remote_subcommand_is_a_local_config_read(self):
+        """`remote` joined the verb set for `remote get-url origin`. Pinned whole, because
+        the same verb spells `remote add` and `remote set-url` — writes to the clone's
+        config, and a way to point a member at a destination the operator did not choose."""
+        calls = []
+        for node in ast.walk(self._tree()):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "_git" and len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value == "remote"):
+                calls.append([a.value if isinstance(a, ast.Constant) else "<var>"
+                              for a in node.args[1:]])
+        self.assertEqual(calls, [["remote", "get-url", "origin"]])
 
 
 if __name__ == "__main__":
