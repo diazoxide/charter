@@ -46,17 +46,25 @@ sends one at all* — the `[frame] mouse` question, which charter does not contr
 documentation and to `frame/events.py`'s own measurements. A case that needed a physical
 mouse could assert neither.
 
+**The client is attached on a pty born the size the session already is**, and that is
+load-bearing rather than tidiness: a client that arrives disagreeing makes tmux resize the
+window to fit it, every pane takes a SIGWINCH, and `acme.sized` — which counts resize
+events — reads the fixture's own attach as one. `_fork_pty` carries the measurement and
+#648 is what it cost before it was one.
+
 `tests/test_a_component_event_reaches_its_handler.py` is the unit half; it can say what
 the dispatcher does with a byte, and cannot say whether the byte ever arrives.
 """
 
 from __future__ import annotations
 
+import fcntl
 import os
-import pty
 import shutil
+import struct
 import subprocess
 import sys
+import termios
 import textwrap
 import time
 import unittest
@@ -99,6 +107,13 @@ _TERM_CANDIDATES = tuple(dict.fromkeys(
 #: not carry, or it stops being one.
 FOCUS_CID, DEAF_CID, SIZE_CID = "acme.focus", "acme.deaf", "acme.sized"
 POINT_CID = "acme.pointed"
+
+#: What each pane says when it has painted once and nothing has reached it — the fixture's
+#: settled state, and the baseline every "…only the pane it is about" case below is a
+#: departure from. Named once because `setUp` reads it twice, for two different reasons
+#: that are both spelled out there.
+_FIRST_PAINT = ((FOCUS_CID, "FOCUS-off"), (DEAF_CID, "DEAF-quiet"),
+                (SIZE_CID, "SIZE-0"), (POINT_CID, "POINT-quiet"))
 
 _PROVIDER = textwrap.dedent("""\
     from charter.frame import component
@@ -175,6 +190,44 @@ def _await(predicate, timeout: float = _DEADLINE) -> bool:
     return predicate()
 
 
+def _fork_pty(rows: int, cols: int) -> tuple[int, int]:
+    """`pty.fork`, except the pty is the size it should be BEFORE the child execs.
+
+    `pty.fork` — and `os.forkpty` under it — takes no window size, so the pty it hands
+    back comes up at the kernel's default. **Measured**, on this machine and on
+    `ubuntu-latest`, that default is ``80x24``, and the session below is created at
+    ``100x24``. So attaching the client made tmux resize the window 100 -> 80, and a
+    resize reaches every pane in it (`test_resizing_the_window_reaches_a_component_that
+    _asked_for_it` is the case that says so). `acme.sized` counts resize events, so the
+    ATTACH was arriving as one:
+
+        stock pty.fork   before attach window=100x24 SIZE-0 -> after 80x24 SIZE-1
+        this            before attach window=100x24 SIZE-0 -> after 100x24 SIZE-0
+
+    That is #648. It flaked rather than failing outright because the fixture attaches
+    immediately after the four splits, so the panels are normally still importing when
+    the SIGWINCH goes out and never see it — on a loaded box a panel finishes booting
+    first and does, which is why the same sha passed and failed in two CI runs, why it
+    moved between cases run to run, and why it went away in isolation.
+
+    Setting the size on the slave before the fork means tmux reads it at startup rather
+    than being corrected by a SIGWINCH afterwards. **The correction is the event, so
+    there must not be one** — a pty resized after the exec would deliver exactly the
+    signal this exists to avoid.
+    """
+    master, slave = os.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+    pid = os.fork()
+    if pid == 0:
+        os.close(master)
+        # setsid, controlling terminal, and dup onto 0/1/2 — the three things `pty.fork`
+        # does that this must keep doing. Available since 3.11, which is `requires-python`.
+        os.login_tty(slave)
+        return 0, -1
+    os.close(slave)
+    return pid, master
+
+
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
 class _AFrameWithProviderPanels(PersonaIso):
     """One frame, one attached client, four provider panels.
@@ -233,13 +286,42 @@ class _AFrameWithProviderPanels(PersonaIso):
         self.pane = {}
         for cid in (FOCUS_CID, DEAF_CID, SIZE_CID, POINT_CID):
             self.pane[cid] = self._split(cid)
-        self.fd = self._attach()
+
+        # The window's size, ASKED of tmux rather than re-spelled from the `new-session`
+        # above — `_rect`'s rule (#514) one method over, and here it is load-bearing: the
+        # client is given exactly this size, so attaching it is not a geometry change and
+        # no pane takes a SIGWINCH for it. `_fork_pty` has the measurement.
+        size = self._window_size()
+        # Refused here rather than carried into `_fork_pty`, where an unreadable size is
+        # a `struct.error` out of `struct.pack` — a traceback about packing an unsigned
+        # short, three frames from anything that would tell a reader the session had gone.
+        self.assertNotEqual(size, (-1, -1),
+                            "tmux would not say how big its own window is, so the client "
+                            "below cannot be born the size that window already is")
+        self.fd = self._attach(size)
+        # And CHECKED, rather than assumed, because everything below that reads `SIZE-N`
+        # is reading a count of resize events: a window that moved while the client
+        # arrived would add one, and the cases would report it as a stray focus or click.
+        self.assertTrue(_await(lambda: self._window_size() == size),
+                        f"attaching the client resized the window from {size} to "
+                        f"{self._window_size()}, so every panel took a SIGWINCH that the "
+                        f"cases below would read as an event that reached it")
+
         # Every panel has painted its first frame before any case touches focus, so a
         # later change can only be the event.
-        for cid, expect in ((FOCUS_CID, "FOCUS-off"), (DEAF_CID, "DEAF-quiet"),
-                            (SIZE_CID, "SIZE-0"), (POINT_CID, "POINT-quiet")):
+        for cid, expect in _FIRST_PAINT:
             self.assertTrue(_await(lambda c=cid, e=expect: e in self._shown(c)),
                             f"{cid} never painted {expect}: {self._shown(cid)!r}")
+        # Read a SECOND time, now that all four have painted. The loop above returns on
+        # the first poll that matches, so on its own it says "this pane showed X at some
+        # instant", never "X is what it shows" — a panel that painted the expected row and
+        # then took an event satisfies it and is still wrong for every case below. That is
+        # the shape #648 arrived as, and this is the cheap check that names it here, in
+        # the fixture, instead of somewhere downstream as a stray `SIZE-1`.
+        for cid, expect in _FIRST_PAINT:
+            self.assertIn(expect, self._shown(cid),
+                          f"{cid} painted {expect} and then left it before the first "
+                          f"case ran, so something reached it that the fixture did not do")
 
     # -- the frame ---------------------------------------------------------- #
 
@@ -288,10 +370,17 @@ class _AFrameWithProviderPanels(PersonaIso):
         self.assertEqual(marked.returncode, 0, marked.stderr)
         return pane
 
-    def _attach(self) -> int:
+    def _attach(self, size: tuple[int, int]) -> int:
+        """Attach a real client on a real pty, *size* being the size that pty is born.
+
+        *size* is what tmux says the window ALREADY is, passed in rather than spelled
+        again here, so the client cannot arrive disagreeing with the session and make
+        tmux resize the window to settle it. `_fork_pty` is where that matters and why.
+        """
+        cols, rows = size
         refusals = []
         for term in _TERM_CANDIDATES:
-            pid, fd = pty.fork()
+            pid, fd = _fork_pty(rows=rows, cols=cols)
             if pid == 0:
                 try:
                     os.environ["TERM"] = term
@@ -353,6 +442,20 @@ class _AFrameWithProviderPanels(PersonaIso):
 
     def _active(self) -> str:
         return _tmux("display-message", "-p", "#{pane_id}").stdout.strip()
+
+    def _window_size(self) -> tuple[int, int]:
+        """The WINDOW's columns and rows, asked of tmux for `_rect`'s reason (#514).
+
+        Returned as a pair so `setUp` can compare one reading with another; a request
+        that fails returns a pair no window has, which fails that comparison rather than
+        raising something a caller would have to unpack.
+        """
+        r = _tmux("display-message", "-p", "-t", self.fid,
+                  "#{window_width} #{window_height}")
+        said = r.stdout.split()
+        if r.returncode != 0 or len(said) != 2:
+            return (-1, -1)
+        return int(said[0]), int(said[1])
 
     def _rect(self, pane: str) -> tuple[int, int, int, int]:
         """*pane*'s place in the WINDOW: left, top, width, height — asked of tmux rather
@@ -439,8 +542,20 @@ class AFocusChangeReachesTheComponentThatOwnsThePane(_AFrameWithProviderPanels):
     def test_resizing_the_window_reaches_a_component_that_asked_for_it(self):
         """A resize does not bump the frame's version — `panel.py`'s SIGWINCH section is
         the same fact for charter's own renderers. It reaches every pane, focused or not,
-        which is why this case never selects the pane it asserts about."""
+        which is why this case never selects the pane it asserts about.
+
+        **The count before the resize is asserted, and that is not scene-setting.** This
+        case reads a running total, so "it says SIZE-1" only means "this resize reached
+        it" if it said SIZE-0 first — otherwise the row it is waiting for is one some
+        earlier resize already put there, and the case passes without the `resize-window`
+        below having done anything. Under #648 that is exactly what happened: the client
+        attach resized the window, the panel was at SIZE-1 before this case began, and
+        this assertion was satisfied by that.
+        """
         self._select(self.harness)
+        self.assertIn("SIZE-0", self._shown(SIZE_CID),
+                      "something resized this pane before the case did, so waiting for "
+                      "SIZE-1 would prove nothing about the `resize-window` below")
         r = _tmux("resize-window", "-t", self.fid, "-x", "120", "-y", "26")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(_await(lambda: "SIZE-1" in self._shown(SIZE_CID)),
