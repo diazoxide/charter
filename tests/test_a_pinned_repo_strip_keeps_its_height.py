@@ -9,7 +9,7 @@ it is, and the `size` key that would have said so was accepted-but-inert — it 
 echo a number charter had already declared, and since `repos` declares no number at all,
 **any** `size` on it took the whole arrangement down to `slots` with nothing said.
 
-Three claims are pinned here, and they are separable on purpose:
+Four claims are pinned here, and they are separable on purpose:
 
 * **the config boundary** decides which built-ins may carry a `size` that means
   something, and `repos` is the only one — every other placed built-in is `Fixed` in its
@@ -22,16 +22,32 @@ Three claims are pinned here, and they are separable on purpose:
 * **the mechanism does not move.** `repos` stays the one variable-row slot and stays out
   of `commands_frame._RESIZE_FLAG`, so it is still the stack's dependent pane and tmux is
   still asked to move exactly N-1 boundaries in an N-pane stack. A pin changes the number
-  the other panes are sized around, and nothing about how they are asserted.
+  the other panes are sized around, and nothing about how they are asserted;
+* **the plane is read at a boundary and the arithmetic is handed the answer** (#661).
+  `layout.repos_rows` is charter's one provably pure geometry function and its tests are
+  written to that property; the first cut of this feature read `config.FRAME` from inside
+  it, so `repos_rows(content_rows=4, window_rows=50, slots=[...])` answered `15` with
+  neither bound binding, out of a file the caller never named. On this repository
+  `charter.toml` is tracked, so an operator following this feature's own news entry
+  turned six tests red for everyone. `commands_frame._slot_sizes` is the boundary now and
+  `layout.pinned_repo_rows` is the read.
 """
 
 from __future__ import annotations
 
+import pathlib
+import subprocess
+import tomllib
 import unittest
 from unittest import mock
 
 from charter import commands_frame, config, instance
 from charter.frame import builtins, component, layout
+
+#: This repository's own committed plane file. Read rather than described, for
+#: `test_component_id_is_the_currency.CharterOwnConfigIsUnchanged`'s reason and for one
+#: more of its own: #661 was a defect an operator triggered by editing exactly this file.
+_COMMITTED = pathlib.Path(__file__).resolve().parents[1] / "charter.toml"
 
 
 def _arrangement(**repos) -> dict:
@@ -44,6 +60,20 @@ def _arrangement(**repos) -> dict:
     tables = [{"use": "identity"}, {"use": "attention"},
               {"use": "repos", **repos}, {"use": "sidebar"}]
     return instance.frame_of({"frame": {"component": tables}})
+
+
+def _pin(**repos) -> int | None:
+    """What `layout.pinned_repo_rows` reads out of the arrangement *repos* describes.
+
+    **The seam, called as the launcher calls it, and never a literal.** The number the
+    arithmetic is handed below is this function's answer and not a `15` written twice, so
+    a boundary that stopped resolving `size`, or a reader that stopped finding it, is red
+    in every case that depends on the pin rather than only in the one that asserts the
+    read. `config.FRAME` is patched HERE and only here, which is the whole shape #661
+    asked for: the plane is read at a boundary and its answer is passed down.
+    """
+    with mock.patch.dict(config.FRAME, _arrangement(**repos)):
+        return layout.pinned_repo_rows()
 
 
 #: The split order every case below uses — charter's own, and the one whose arithmetic
@@ -59,8 +89,8 @@ class TheConfigBoundaryDecidesWhichBuiltInsMayCarryASize(unittest.TestCase):
     size into `SLOT_SIZE` once, at import, and `_size_of` answers `top`, `bottom` and
     `right` out of that table forever after — so a number on those three has nowhere to be
     read. `repos` is `Content()`, which never enters that table: `slot_sizes` routes it to
-    `repos_rows`, recomputed from the resolved arrangement at every launch and again on
-    every `window-resized`.
+    `repos_rows`, which is handed the resolved arrangement's number at every launch and
+    again on every `window-resized` (`commands_frame._slot_sizes`).
     """
 
     def test_the_repo_table_resolves_a_committed_size_to_a_fixed_policy(self):
@@ -150,13 +180,12 @@ class ThePinnedStripIsTheHeightTheOperatorCommitted(unittest.TestCase):
         Every one of these content counts is a real answer `slots.repos_rows_wanted` gives
         on some plane — none, one, a couple, a full table, more than the window has — and
         the pinned strip is the same height for all of them."""
-        with mock.patch.dict(config.FRAME, _arrangement(size=15)):
-            for content in (0, 1, 2, 14, 30):
-                with self.subTest(content=content):
-                    self.assertEqual(
-                        layout.repos_rows(content_rows=content, window_rows=50,
-                                          slots=SLOTS),
-                        15)
+        for content in (0, 1, 2, 14, 30):
+            with self.subTest(content=content):
+                self.assertEqual(
+                    layout.repos_rows(content_rows=content, window_rows=50,
+                                      slots=SLOTS, pinned_rows=_pin(size=15)),
+                    15)
 
     def test_a_plane_that_pins_nothing_is_sized_by_its_content_exactly_as_before(self):
         """The default, asserted against a written-out arrangement rather than against a
@@ -164,22 +193,22 @@ class ThePinnedStripIsTheHeightTheOperatorCommitted(unittest.TestCase):
         exists to be misread, and charter's own plane commits one. Two counts, so a pin
         read off the wrong placement (`identity` is `Fixed(1)` and comes first in file
         order) cannot pass by coincidence."""
-        with mock.patch.dict(config.FRAME, _arrangement()):
-            for content in (4, 7):
-                with self.subTest(content=content):
-                    self.assertEqual(
-                        layout.repos_rows(content_rows=content, window_rows=50,
-                                          slots=SLOTS),
-                        content)
+        self.assertIsNone(_pin(), "a written-out arrangement with no size is not a pin")
+        for content in (4, 7):
+            with self.subTest(content=content):
+                self.assertEqual(
+                    layout.repos_rows(content_rows=content, window_rows=50,
+                                      slots=SLOTS, pinned_rows=_pin()),
+                    content)
 
     def test_the_pin_reaches_tmux_as_the_length_the_pane_is_split_to(self):
         """The seam that makes any of this visible: `slot_sizes` into `panel_argvs` into
         `-l`. Asserted as the literal string tmux would see, so a number computed
         correctly and then dropped on the way out is red."""
-        with mock.patch.dict(config.FRAME, _arrangement(size=15)):
-            sizes = layout.slot_sizes(SLOTS, window_rows=50, content_rows=2)
-            cmds = layout.panel_argvs(slots=SLOTS, sizes=sizes, session="f-1",
-                                      socket="charter", harness_pane="%0")
+        sizes = layout.slot_sizes(SLOTS, window_rows=50, content_rows=2,
+                                  pinned_rows=_pin(size=15))
+        cmds = layout.panel_argvs(slots=SLOTS, sizes=sizes, session="f-1",
+                                  socket="charter", harness_pane="%0")
         self.assertEqual(sizes, {"top": 1, "bottom": 1, "repos": 15, "right": 22})
         repos = cmds[SLOTS.index("repos")]
         self.assertEqual(repos[repos.index("-l") + 1], "15")
@@ -202,9 +231,9 @@ class ThePinnedStripIsTheHeightTheOperatorCommitted(unittest.TestCase):
         harness. A pin the harness arithmetic did not know about would show up here as
         rows that belong to nobody."""
         rows = 50
-        with mock.patch.dict(config.FRAME, _arrangement(size=15)):
-            sizes = layout.slot_sizes(SLOTS, window_rows=rows, content_rows=2)
-            harness = layout.harness_rows(sizes, window_rows=rows)
+        sizes = layout.slot_sizes(SLOTS, window_rows=rows, content_rows=2,
+                                  pinned_rows=_pin(size=15))
+        harness = layout.harness_rows(sizes, window_rows=rows)
         strips = sum(n + layout._BORDER_ROWS for slot, n in sizes.items()
                      if slot != "right")
         self.assertEqual(strips + harness, rows)
@@ -268,8 +297,8 @@ class APinIsStillCappedSoTheSessionKeepsItsFloor(unittest.TestCase):
         the arithmetic is checked rather than restated — the shape
         `tests/test_frame_layout.py` already uses for the content-sized cap."""
         rows = 24
-        with mock.patch.dict(config.FRAME, _arrangement(size=15)):
-            got = layout.repos_rows(content_rows=2, window_rows=rows, slots=SLOTS)
+        got = layout.repos_rows(content_rows=2, window_rows=rows, slots=SLOTS,
+                                pinned_rows=_pin(size=15))
         harness = (rows - got - layout.SLOT_SIZE["top"] - layout.SLOT_SIZE["bottom"]
                    - 3 * layout._BORDER_ROWS)
         self.assertGreaterEqual(harness, layout.HARNESS_MIN_ROWS)
@@ -281,12 +310,10 @@ class APinIsStillCappedSoTheSessionKeepsItsFloor(unittest.TestCase):
         copy of `HARNESS_MIN_ROWS` growing behind the new key."""
         for rows in (18, 20, 24, 30, 50):
             with self.subTest(rows=rows):
-                with mock.patch.dict(config.FRAME, _arrangement(size=99)):
-                    pinned = layout.repos_rows(content_rows=0, window_rows=rows,
-                                               slots=SLOTS)
-                with mock.patch.dict(config.FRAME, _arrangement()):
-                    grown = layout.repos_rows(content_rows=99, window_rows=rows,
-                                              slots=SLOTS)
+                pinned = layout.repos_rows(content_rows=0, window_rows=rows,
+                                           slots=SLOTS, pinned_rows=_pin(size=99))
+                grown = layout.repos_rows(content_rows=99, window_rows=rows,
+                                          slots=SLOTS, pinned_rows=_pin())
                 self.assertEqual(pinned, grown)
 
     def test_the_floor_holds_when_the_window_has_no_rows_to_spare_at_all(self):
@@ -294,7 +321,162 @@ class APinIsStillCappedSoTheSessionKeepsItsFloor(unittest.TestCase):
         frame would come up with no strip at all in exactly the terminal least able to
         afford a missing panel. What protects the harness there is `visible_slots`, which
         drops the slot rather than shrinking it."""
+        self.assertEqual(
+            layout.repos_rows(content_rows=0, window_rows=6, slots=SLOTS,
+                              pinned_rows=_pin(size=15)),
+            layout.SLOT_SIZE["repos"])
+
+
+class TheCommittedFileIsReadAtABoundaryAndNotInTheArithmetic(unittest.TestCase):
+    """#661: `layout` answers the same thing whatever this plane committed.
+
+    **The defect this class exists for was not environmental.** Nine earlier instances of
+    "the suite reads or spends the machine" read something that merely *differs* between
+    machines — the clock, the cwd, `$COLUMNS`, a real vault, a real tmux. This one read
+    `charter.toml`, a file tracked IN this repository, from inside `layout.repos_rows` —
+    so the failure was deterministic and was triggered by following the documentation.
+    Writing the three lines this feature's own news entry gives an operator turned six
+    tests red, and committing them would have turned CI red for everyone.
+
+    So the property is not "`repos_rows` happens to be right today". It is that no
+    arrangement a plane can commit changes what these two functions answer, which is what
+    `ReposIsSizedToItsContent`'s "pure arithmetic, so it is pinned here with no tmux and
+    no cache" has always claimed and could not enforce.
+    """
+
+    def arrangements(self) -> dict:
+        """Every shape a plane's `[[frame.component]]` tables can take on the repo table —
+        no arrangement at all, one written out with no pin, and pins on either side of
+        both bounds. If any of them reaches the arithmetic, one of the answers below is
+        not the content the caller named."""
+        return {"no arrangement": {},
+                "written out, no size": _arrangement(),
+                "pinned small": _arrangement(size=2),
+                "pinned large": _arrangement(size=15),
+                "pinned past the cap": _arrangement(size=99)}
+
+    def test_no_arrangement_a_plane_can_commit_changes_what_repos_rows_answers(self):
+        """The issue's own measurement, as a property: 4 rows of content in a 50-row
+        window with neither bound binding can only be answered `4`. Asserted as the
+        content and not as "the same for all five", because equal-and-wrong is exactly
+        what a `repos_rows` that read the file would give five identical planes."""
+        for name, frame in self.arrangements().items():
+            with self.subTest(arrangement=name):
+                with mock.patch.dict(config.FRAME, frame):
+                    self.assertEqual(
+                        layout.repos_rows(content_rows=4, window_rows=50,
+                                          slots=["top", "bottom", "repos"]),
+                        4)
+
+    def test_no_arrangement_a_plane_can_commit_changes_what_slot_sizes_answers(self):
+        """`slot_sizes` is the one callers actually reach, and three of #661's six red
+        tests were its — so pinning only the leaf would have left the defect in the
+        function above it. The whole map, so a `repos` answered from the file cannot hide
+        behind the fixed strips being right."""
+        for name, frame in self.arrangements().items():
+            with self.subTest(arrangement=name):
+                with mock.patch.dict(config.FRAME, frame):
+                    self.assertEqual(
+                        layout.slot_sizes(SLOTS, window_rows=50, content_rows=4),
+                        {"top": 1, "bottom": 1, "repos": 4, "right": 22})
+
+    def test_this_repositorys_own_committed_file_with_a_pin_in_it_is_not_read_here(self):
+        """The reproduction from #661, run against the real file rather than a fixture.
+
+        `charter.toml` is tracked here, and an operator adding `size = 15` to its `repos`
+        table is doing what `docs/frame.md` tells them to do. The three lines are added to
+        what is actually on disk — so a plane that later commits them for real is running
+        the case this test already ran, and the day charter's own frame gains a pin this
+        stays green rather than needing to be rewritten.
+        """
+        cfg = tomllib.loads(_COMMITTED.read_text(encoding="utf-8"))
+        tables = cfg["frame"]["component"]
+        repos, = [t for t in tables if t["use"] == "repos"]
+        repos["size"] = 15
+        resolved = instance.frame_of(cfg)
+        self.assertEqual(
+            [p["size"] for p in resolved["components"] if p["slot"] == "repos"],
+            [component.Fixed(15)],
+            "the pin did not survive the boundary, so nothing below could have read it "
+            "even if the arithmetic still did")
+        with mock.patch.dict(config.FRAME, resolved):
+            self.assertEqual(
+                layout.repos_rows(content_rows=4, window_rows=50,
+                                  slots=["top", "bottom", "repos"]),
+                4)
+            self.assertEqual(
+                layout.slot_sizes(resolved["slots"], window_rows=50, content_rows=6),
+                {"top": 1, "bottom": 1, "repos": 6, "right": 22})
+
+    def test_the_number_the_arithmetic_was_handed_is_the_number_it_used(self):
+        """The other half, and it is what stops the two tests above being satisfied by a
+        `repos_rows` that ignores pins altogether. Passed explicitly, with `config.FRAME`
+        holding an arrangement that pins something ELSE — so an argument quietly dropped
+        in favour of a re-read would answer 15 here, and a pin never read at all would
+        answer 4."""
         with mock.patch.dict(config.FRAME, _arrangement(size=15)):
             self.assertEqual(
-                layout.repos_rows(content_rows=0, window_rows=6, slots=SLOTS),
-                layout.SLOT_SIZE["repos"])
+                layout.repos_rows(content_rows=4, window_rows=50,
+                                  slots=["top", "bottom", "repos"], pinned_rows=7),
+                7)
+
+
+class TheBoundaryIsWhereThePlaneIsRead(unittest.TestCase):
+    """`commands_frame._slot_sizes` — the one place a committed arrangement becomes a
+    pane height, and the three callers that go through it.
+
+    They differ only in how the table pane's width is arrived at (a launch derives it, a
+    re-layout derives it from the panes that survived, a resize measures it), so the read
+    is one line rather than three — which is also the answer to #660's "five signatures":
+    the pin's path is `slot_sizes` and `repos_rows`, two, and this is the third place a
+    line changed.
+    """
+
+    def test_the_boundary_reads_the_plane_and_hands_the_arithmetic_the_number(self):
+        """`repos_rows_wanted` is stubbed to a number nothing else here could produce, so
+        the assertion is about which of the two terms won rather than about whether the
+        answer is plausible."""
+        with mock.patch.dict(config.FRAME, _arrangement(size=15)), \
+                mock.patch("charter.frame.slots.repos_rows_wanted", return_value=3):
+            got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200)
+        self.assertEqual(got["repos"], 15)
+
+    def test_a_plane_that_pins_nothing_still_gets_its_clone_count_through(self):
+        """The default path, through the same boundary. Without this, a `_slot_sizes` that
+        passed `pinned_rows` and dropped `content_rows` would pass the case above."""
+        with mock.patch.dict(config.FRAME, _arrangement()), \
+                mock.patch("charter.frame.slots.repos_rows_wanted", return_value=3):
+            got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200)
+        self.assertEqual(got["repos"], 3)
+
+    def test_the_resize_hook_sizes_the_strip_from_the_pin_and_not_the_clone_count(self):
+        """`_reassert_sizes` runs on every `window-resized`, which is the path a frame
+        spends its life on — and it is a SECOND call site, so a pin read only at launch
+        would give the operator a strip that snapped back to its clone count the first
+        time they dragged the divider.
+
+        The strip is the pane tmux is never told the height of, so it is read back the way
+        `test_frame_density` reads it: the window's rows, minus every height asserted,
+        minus one border per horizontal split. `test_frame_tmux_integration` asks real
+        tmux the same question; this asks charter's arithmetic, on a box with no tmux.
+        """
+        calls: list[list[str]] = []
+
+        def fake(action, argv, *, env=None, timeout=None, report=True):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        panes = {"top": "%1", "bottom": "%2", "repos": "%3"}
+        with mock.patch.dict(config.FRAME, _arrangement(size=15)), \
+                mock.patch("charter.frame.slots.repos_rows_wanted", return_value=3), \
+                mock.patch("charter.frame.tmuxctl.run", side_effect=fake):
+            commands_frame._reassert_sizes("sock", fid="f-1", panes=panes,
+                                           harness_pane="%0", window_cols=200,
+                                           window_rows=50)
+        heights = {c[c.index("-t") + 1]: int(c[c.index("-y") + 1])
+                   for c in calls if "resize-pane" in c and "-y" in c}
+        self.assertNotIn(panes["repos"], heights,
+                         "the strip is the dependent pane and must stay unasserted — "
+                         "asserting N heights in an N-pane stack is what swapped the "
+                         "table's and the attention strip's sizes on 3.7c")
+        self.assertEqual(50 - sum(heights.values()) - len(heights), 15)

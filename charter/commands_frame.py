@@ -1568,6 +1568,46 @@ def _spawn_gather(fid: str, ws: str) -> None:
         return
 
 
+def _slot_sizes(fid: str, slots: list[str], *,
+                window_rows: int, pane_cols: int) -> dict[str, int]:
+    """`layout.slot_sizes` for a frame that has a plane behind it — the only place in
+    charter where a committed arrangement becomes a pane height.
+
+    **This function is the boundary, and it is one function because the boundary is one
+    line.** `layout` is arithmetic: hand it a row count and a slot list and it answers the
+    same thing on every machine, which is what makes `layout.repos_rows` testable with no
+    tmux, no cache and no plane. The two facts it cannot derive are what the table's
+    content wants (`frame_slots.repos_rows_wanted`, which reads this frame's gather) and
+    whether the operator pinned the strip to a height (`layout.pinned_repo_rows`, which
+    reads this plane's `charter.toml`). Both are read HERE, once, and passed down.
+
+    #660 put the second read inside `layout.repos_rows` instead, borrowing
+    `layout._placed_here`'s "rather than threaded through five signatures". #661 is the
+    bill: `repos_rows(content_rows=4, window_rows=50, slots=["top","bottom","repos"])`
+    answered `15` on a plane whose `charter.toml` carried `size = 15`, from a file the
+    caller never named, in the module's one provably pure function. On this repository
+    `charter.toml` is tracked, so committing the line the feature's own news entry tells
+    an operator to write turned six tests red for everybody.
+
+    And the five was not this path's number. `_placed_here`'s five is real for
+    `_placed_here` — an edge and a cell count for a name `slot_sizes`, `panel_argvs`,
+    `repos_cols`, `repos_rows` and `harness_rows` each have to ask about, none of which
+    knows it in advance. The pin is one number for one slot with one consumer, so its
+    path is two signatures (`slot_sizes`, `repos_rows`) and the three call sites below —
+    which were already building `content_rows` the same way three times over, and now do
+    not.
+
+    The three are `_launch_sizes` (both launch paths), `_relayout`'s splits for a density
+    the frame did not have, and `_reassert_sizes` on every `window-resized`. They differ
+    only in how the table pane's width is arrived at, which is why that arrives here as
+    *pane_cols* already measured rather than as a window to measure.
+    """
+    return layout.slot_sizes(
+        slots, window_rows=window_rows,
+        content_rows=frame_slots.repos_rows_wanted(fid, pane_cols=pane_cols),
+        pinned_rows=layout.pinned_repo_rows())
+
+
 def _launch_sizes(fid: str, slots: list[str], *,
                   window_cols: int, window_rows: int) -> dict[str, int]:
     """How big each of *slots* is split, in a *window_cols* x *window_rows* window —
@@ -1604,11 +1644,12 @@ def _launch_sizes(fid: str, slots: list[str], *,
     `gather.discard(fid)` before it draws anything, so this reaches `gather.row_count`
     with no cache and gets the directory-listing answer — an `iterdir`, never the git
     sweep `gather.scan` would run. See `gather.row_count`'s own docstring for both paths.
+
+    Through :func:`_slot_sizes`, which is where the plane's own pinned height is read and
+    why this is not a call to `layout.slot_sizes` directly.
     """
-    return layout.slot_sizes(
-        slots, window_rows=window_rows,
-        content_rows=frame_slots.repos_rows_wanted(
-            fid, pane_cols=layout.repos_cols(slots, window_cols=window_cols)))
+    return _slot_sizes(fid, slots, window_rows=window_rows,
+                       pane_cols=layout.repos_cols(slots, window_cols=window_cols))
 
 
 def _drawable_slots(cols: int, rows: int, configured: list[str] | None = None) -> list[str]:
@@ -4034,11 +4075,10 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
         keep.update(_split_panels(
             socket, slots=missing, fid=fid, harness_pane=harness_pane, env=None,
             pane_env=pane_env, v=v,
-            sizes=layout.slot_sizes(
-                want, window_rows=window_rows,
-                content_rows=frame_slots.repos_rows_wanted(
-                    fid, pane_cols=layout.repos_cols(list(keep) + missing,
-                                                      window_cols=window_cols)))))
+            sizes=_slot_sizes(
+                fid, want, window_rows=window_rows,
+                pane_cols=layout.repos_cols(list(keep) + missing,
+                                            window_cols=window_cols))))
         _arm_panel_respawn(socket, fid=fid,
                            panes={s: keep[s] for s in missing if s in keep}, env=None)
 
@@ -4238,11 +4278,9 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
     # here, and it has to land before anything is measured — see :func:`_variable_pane_cols`
     # for the tmux measurement that makes this an order rather than a preference.
     _apply_sizes(socket, panes=panes, sizes=layout.column_sizes(order), flag="-x")
-    sizes = layout.slot_sizes(
-        order, window_rows=window_rows,
-        content_rows=frame_slots.repos_rows_wanted(
-            fid, pane_cols=_variable_pane_cols(socket, panes=panes,
-                                               window_cols=window_cols)))
+    sizes = _slot_sizes(
+        fid, order, window_rows=window_rows,
+        pane_cols=_variable_pane_cols(socket, panes=panes, window_cols=window_cols))
     # Pass two: the ROWS, and the harness below them.
     _apply_sizes(socket, panes=panes, sizes=sizes, flag="-y")
     if _PANE_ID_RE.fullmatch(harness_pane or ""):
