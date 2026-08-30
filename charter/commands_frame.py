@@ -148,8 +148,8 @@ import sys
 import time
 
 from . import config, contain, harness, instance, tui, util, workspace
-from .frame import (builtin_actions, choose, component, gather, layout, overlay, pane,
-                    palette, picker, state, switch, tmuxctl)
+from .frame import (builtin_actions, chats, choose, component, gather, layout, overlay,
+                    pane, palette, picker, state, switch, tmuxctl)
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -4858,6 +4858,125 @@ def cmd_toggle(args) -> int:
 #: action still inside one after two seconds has broken the contract — at which point the
 #: palette closes anyway rather than holding a pane open on a hung action, which is the
 #: escape hatch's own argument applied one layer up.
+def cmd_chat(args) -> int:
+    """`charter frame-chat <chat id>` — put this client on another chat of this workspace.
+
+    Started DETACHED by a palette row (:func:`_draw_palette`), and typeable by hand from
+    inside a frame. The chat the keypress came from is :func:`_pressers_chat`'s, for its
+    reason: one bind text is shared by every frame on `SOCKET`, and a session now holds
+    several chats.
+
+    **Four steps, and every one of them is an existing path** (spec §3.7):
+
+    1. `select-window` at the target chat's own harness PANE. A pane id resolves to that
+       pane's window — measured on tmux 3.7c and on tmux 3.2 — which is why charter needs
+       no window-id record beside the pane record it already keeps
+       (`state.record_harness_pane`), and why there is no second thing to keep in step.
+    2. :func:`_apply_arrangement` with ``want=[]`` on the chat being left, which tears its
+       panels down. Not a saving — a correctness rule. A background window keeps STALE
+       geometry (§7.4, measured identically on 3.7c and 3.2), so panels left running there
+       are not idle, they are rendering at a width that is no longer their window's, which
+       is the exact defect `panel._component_text`'s `width=slots._width()` guard exists
+       for.
+    3. :func:`_apply_arrangement` on the chat being entered, which splits its panels into
+       the window **tmux has just resized**. Measured here on 3.7c and 3.2: the very next
+       tmux invocation after `select-window` already reports the target window at the
+       client's size (200x50 → 100x29 with no sleep at all). So the panels are born at the
+       true width and there is nothing stale to repair —
+    4. **which is why the switch never asks for a `window-resized` hook, and must not.**
+       On tmux 3.2 — `tmuxctl.FLOOR` — `set-hook -w window-resized` answers `invalid
+       option`, rc=1: the hook does not exist. A switch that relied on it would be correct
+       on the author's tmux and silently wrong on the floor charter promises to run on.
+       `_apply_arrangement` measures and re-asserts the layout itself, which is the same
+       thing a density change already does and not a second path.
+
+    The bump is step 3's own last line (`_apply_arrangement`), so the new chat's panels
+    repaint into the shape that has already settled — #411/#412's rule, and the reason
+    this does not write a pointer of its own for anything to read.
+
+    **Both re-layouts are attempted independently, and a failure of the first does not
+    cancel the second.** They are two different frames' panes; the one the operator is now
+    looking at is the one that matters, and abandoning it because the window they just
+    left could not be tidied would leave them on a bare harness pane. The reverse — the
+    old chat keeping its panels because the new one could not be laid out — is a frame
+    that is merely untidy in a window nobody is looking at.
+
+    **`select-pane` is deliberately not issued here and neither is anything to undo the
+    palette's own close.** Measured on 3.7c and on 3.2: `select-pane -t %N` where `%N` is
+    in another window of the same session sets that window's active pane and does **not**
+    move the client — current window `@0` before and `@0` after. So `_close_palette`,
+    which runs in the palette's own process after this one has been started and aims
+    `select-pane` at the chat being LEFT, cannot drag the client back off the chat this
+    just switched to. That measurement is what makes the switch safe to detach at all;
+    without it the two processes would be racing for which window the operator ends on.
+
+    **Always 0**, like every other `frame-*` command: this runs detached with its streams
+    on `/dev/null` (`builtin_actions._spawn`), so a non-zero exit is read by nothing —
+    and inside a `run-shell` it is what makes tmux print into the harness pane, the one
+    rectangle ADR 0018 says charter never draws in. Every refusal goes to
+    :func:`_say_on_screen` instead.
+    """
+    fid = _pressers_chat(args)
+    if not fid:
+        # **Not fired from inside a frame at all, and unlike `cmd_toggle` this refusal is
+        # not free.** That command emits nothing by construction with an empty id, which
+        # is why the deletion sweep found its own `if not fid` equivalent and it was
+        # deleted. This one reaches :func:`_say_on_screen`, whose `-t <fid>` with an empty
+        # target resolves to whichever session on the SHARED server was attached most
+        # recently — so `charter frame-chat api.2` typed in an ordinary shell drew
+        # charter's refusal across somebody else's frame. Measured by hand against the
+        # real server, which is how it was found. `cmd_switch`'s guard, for its reason.
+        return 0
+    target = (getattr(args, "chat_id", None) or "").strip()
+    # Asked again rather than trusted from the palette that spawned this: the same
+    # command is typeable by hand on a name nobody drew, and `chats.check` is the one
+    # rule both askers get (see `choose.switch_to`). It is also a second reading of a
+    # plane that has moved since the palette opened — a chat reaped between the keypress
+    # and here is refused with its own sentence rather than aimed at.
+    out = chats.check(fid, target)
+    if not out.ok:
+        _say_on_screen(fid, out.message)
+        return 0
+    socket = state.frame_server(fid) or SOCKET
+    # `chats.pane_of` and never a bare `state.harness_pane`: the read is the same one
+    # `chats.check` made a moment ago, so this is a SECOND reading of a record that can
+    # have moved — a reap, a relaunch — and the fallback the sweep found here turned that
+    # into `select-window -t ""`. An empty tmux target resolves to the CURRENT window, so
+    # charter would have reported a switch that did not happen and then torn this chat's
+    # panels down around it. Its own sentence rather than the check's, because it is a
+    # different fact: the check answered about a record, and this is about that record
+    # going away underneath the answer.
+    pane = chats.pane_of(target)
+    if pane is None:
+        _say_on_screen(fid, f"cannot switch: chat '{target}' stopped being one while "
+                            "charter was switching to it")
+        return 0
+    selected = tmuxctl.run("switching to the chat",
+                           tmuxctl.server_argv(socket, "select-window", "-t", pane))
+    if selected.returncode != 0:
+        # The one refusal `chats.check` deliberately does not guess at, and the reason it
+        # does not: liveness is a question only tmux can answer, and answering it in the
+        # check would be answering it at the instant the palette opened rather than at the
+        # instant it matters. Nothing has been torn down at this point — the teardown is
+        # below this line on purpose, so a chat whose window is gone costs the operator
+        # nothing but a sentence.
+        # No `contain.one_line` on *target*: `chats.check` has already held it to
+        # `chats.ID_RE`, whose alphabet holds nothing `one_line` touches, so the call
+        # would be one whose result is provably its argument — the sweep found it as a
+        # survivor for that reason. `_say_on_screen`'s own `inert_format` is what makes
+        # this a tmux format's business rather than this line's.
+        _say_on_screen(fid, f"cannot switch: chat '{target}' has no window any more")
+        return 0
+    here = _relayout_target(fid)
+    if here is not None:
+        _apply_arrangement(fid, where=here, want=[])
+    there = _relayout_target(target)
+    if there is not None:
+        _apply_arrangement(target, where=there,
+                           want=_visible_now(target, config.FRAME))
+    return 0
+
+
 def _pressers_chat(args) -> str:
     """Which chat the keypress that started this process was fired in.
 
@@ -5057,6 +5176,8 @@ def _draw_palette(args) -> int:
         if picked is not None:
             noun, name = picked
             out = choose.switch_to(noun, fid, name)
+            if out.ok and noun == choose.CHAT:
+                _start_chat_switch(fid, name)
             _say_on_screen(fid, out.message, client)
             return 0
         if choose.noun_of(chosen) is not None:
@@ -5072,6 +5193,35 @@ def _draw_palette(args) -> int:
         _close_palette(socket, harness=harness,
                        overlay_pane=os.environ.get("TMUX_PANE", ""))
     return 0
+
+
+def _start_chat_switch(fid: str, chat: str) -> None:
+    """Start :func:`cmd_chat` for *chat*, detached, and return having started it.
+
+    **Fire-and-report, and this is the one place the chat switch could have failed to
+    be** (§4g). Every other row the palette runs is a detached process for a measured
+    reason `builtin_actions._spawn` records: the palette closes the instant it has
+    invoked, `kill-pane` hands SIGHUP to that pane's process group, and a switch that ran
+    in this process would be racing its own teardown for the last three of its four tmux
+    calls. Detaching also keeps the palette's promise that a row returns immediately: the
+    switch is ~20 tmux round trips, and a palette that sat through them would be a pane
+    the operator is watching do nothing.
+
+    **What makes detaching SAFE is a measurement, not an assumption.** On 3.7c and on
+    3.2, `select-pane -t %N` on a pane in another window of the same session does not
+    move the client (current window `@0` before and after) — so `_close_palette`, which
+    runs from the `finally` below and aims `select-pane` at the chat being LEFT, cannot
+    pull the client back off the window `cmd_chat` is switching to. The two processes are
+    not racing for the operator's screen; only one of them moves it.
+
+    `builtin_actions._spawn` and not a `Popen` here, because *which* frame the child acts
+    on must be stated rather than inherited: this process is a `run-shell` child of a tmux
+    server shared between every frame on the machine, and its own `$CHARTER_SESSION_ID`
+    may be another chat's (`state.record_identity` measures exactly that). The child is
+    handed the PRESSER's chat as its own id and the target on its argv, which is the same
+    split `frame-toggle`'s `--chat` already makes.
+    """
+    builtin_actions._spawn(util.self_relaunch_argv("frame-chat", chat), fid=fid)
 
 
 def _picker(row, fid: str, opened: list) -> "palette.Palette | None":

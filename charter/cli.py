@@ -724,7 +724,7 @@ def _add_frame_parsers(sub) -> None:
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-palette",
                                          "frame-probe", "frame-respawn", "frame-density",
                                          "frame-resize", "frame-gather", "frame-switch",
-                                         "frame-toggle", "frame-chrome"}
+                                         "frame-toggle", "frame-chrome", "frame-chat"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -924,6 +924,30 @@ def _add_frame_parsers(sub) -> None:
     # (`#{@charter_chat}` in this component's own `bind -n`), same reason it is optional.
     tg.add_argument("--chat", dest="chat", default="")
     tg.set_defaults(func=commands_frame.cmd_toggle)
+
+    # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
+    # ones above. Started DETACHED by a palette row whose argv is exactly
+    # `util.self_relaunch_argv("frame-chat", <chat id>)`
+    # (`commands_frame._start_chat_switch`), and typeable by hand from inside a frame. It
+    # moves the tmux CLIENT to another chat of this workspace and re-lays-out the panels
+    # into the window tmux resized on the way (Phase 5 §3.7); charter.toml is not touched
+    # and neither is any frame's recorded identity, for `frame-density`'s reason.
+    #
+    # **Two chat ids, and they are two different questions.** The POSITIONAL is where to
+    # go — a name off a picker, or one typed. `--chat` is where the keypress came FROM,
+    # `frame-toggle`'s twin and from the same source (`#{@charter_chat}` expanded in the
+    # presser's own window), because one bind text is shared by every frame on the socket
+    # and `$CHARTER_SESSION_ID` cannot tell two chats of one workspace apart.
+    #
+    # Deliberately NOT `choices=`, and for a stronger version of `frame-toggle`'s
+    # argument: which chats exist is a property of the plane's frame directory at the
+    # moment the key fires, so there is no set for argparse to hold at parser-build time.
+    # `frame/chats.check` is the one gate, asked by this command and by the palette row
+    # that starts it.
+    ch = sub.add_parser("frame-chat")
+    ch.add_argument("chat_id")
+    ch.add_argument("--chat", dest="chat", default="")
+    ch.set_defaults(func=commands_frame.cmd_chat)
 
     # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-palette` above:
     # that one exists because `_split_frame_argv` eats everything

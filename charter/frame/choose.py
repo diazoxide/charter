@@ -72,18 +72,27 @@ from __future__ import annotations
 from typing import NamedTuple
 
 from .. import contain
-from . import overlay, switch
+from . import chats, overlay, switch
 
 #: The three nouns a picker offers. Values rather than an enum for the reason the rest of
 #: this package uses strings — they appear in a test's failure message as themselves —
 #: and the first two are also what `charter frame-switch` already spells its flags with,
 #: so the one word travels from the row to the command without a table in between.
-WORKSPACE, PERSONA, CHANGE = "workspace", "persona", "change"
+WORKSPACE, PERSONA, CHANGE, CHAT = "workspace", "persona", "change", "chat"
 
-#: All three, in the order the palette offers them. Workspace first: it is the plane a
+#: All four, in the order the palette offers them. Workspace first: it is the plane a
 #: frame is looking at, a persona is who is looking, and a change is what they are in the
-#: middle of — which is the narrowest of the three and so goes last.
-NOUNS = (WORKSPACE, PERSONA, CHANGE)
+#: middle of — which is the narrowest of those three and so goes third.
+#:
+#: **`chat` is last, and not because it is narrower still — it is a different KIND of
+#: thing, which is why it does not slot into that ordering at all.** The first three move
+#: what THIS frame is looking at, by writing a file the frame's own panels then read
+#: (`frame/switch.py`). A chat is a sibling frame: choosing one moves the tmux client to
+#: another window and leaves this frame exactly as it was, still running, still burning
+#: whatever it was burning. Putting it at the end keeps the three that share a mechanism
+#: together and puts the one that does not beside them rather than among them;
+#: :func:`switch_to` says the same thing in code.
+NOUNS = (WORKSPACE, PERSONA, CHANGE, CHAT)
 
 #: Which launch pin outranks a switch of each noun — the rung nothing charter writes can
 #: reach, because it is already in every panel pane's environment (`switch.py`'s module
@@ -96,6 +105,12 @@ NOUNS = (WORKSPACE, PERSONA, CHANGE)
 #: variable nothing sets would make `pin_reason` answer "" through a lookup rather than
 #: through a decision, and the reason a change doorway carries is a different one
 #: entirely — see :func:`pin_reason`.
+#:
+#: **`chat` is absent for a stronger version of the same reason.** `$CHARTER_SESSION_ID`
+#: IS a chat's identity and is set on every frame, so an entry here would name a variable
+#: that is always set and make `pin_reason` refuse the chat doorway on every frame there
+#: has ever been. A launch pin is a thing that stops a frame MOVING; a chat's id is what
+#: the frame is, and moving to another chat does not move it.
 PIN = {WORKSPACE: "CHARTER_WORKSPACE", PERSONA: "CHARTER_PERSONA"}
 
 #: What a doorway says when this workspace has no changes at all. Its own sentence rather
@@ -169,6 +184,8 @@ def names_of(noun: str, fid: str = "") -> list[str]:
         return switch.workspaces()
     if noun == PERSONA:
         return switch.personas()
+    if noun == CHAT:
+        return [c.id for c in chats.roster(fid)]
     return switch.changes(fid)
 
 
@@ -183,6 +200,12 @@ def current(noun: str, fid: str) -> str:
         return switch.current_workspace(fid)
     if noun == PERSONA:
         return switch.current_persona(fid) or ""
+    if noun == CHAT:
+        # The frame IS the chat (ADR 0019), so this is the one noun whose "which am I
+        # on" needs no resolution at all — and it is asked here rather than spelled
+        # `fid` at the call site so that the mark on a row and the refusal
+        # `chats.check` gives for pressing it come from one answer.
+        return fid
     return switch.current_change(fid) or ""
 
 
@@ -208,6 +231,12 @@ def pin_reason(noun: str, fid: str) -> str:
     """
     if noun == CHANGE:
         return "" if names_of(CHANGE, fid) else NO_CHANGES
+    if noun == CHAT:
+        # `others`, not `names_of` — a chat picker always has at least one row (the chat
+        # asking), so "has any names" is the question that would answer yes on every
+        # frame ever launched. What makes the picker worth opening is a chat that is not
+        # this one, which is exactly what `chats.check` refuses to switch to.
+        return "" if chats.others(fid) else chats.ONLY_CHAT
     pinned = switch._pin(fid, PIN[noun])
     if not pinned:
         return ""
@@ -222,18 +251,43 @@ def roster(noun: str, fid: str) -> Roster:
     operator types and never reorders it, so the row under the cursor stays under the
     cursor between keystrokes.
 
-    The note column is left empty. The one refusal a picker could carry per row is the
-    launch pin, and that is reported by the row that OPENS the picker (:func:`open_rows`)
-    — where it stops the pane being drawn at all, one keypress earlier. A reason repeated
-    on every row of a picker that cannot be reached while it is true is a line nothing
-    could go red without.
+    The note column is left empty for three of the four nouns. The one refusal a picker
+    could carry per row is the launch pin, and that is reported by the row that OPENS the
+    picker (:func:`open_rows`) — where it stops the pane being drawn at all, one keypress
+    earlier. A reason repeated on every row of a picker that cannot be reached while it is
+    true is a line nothing could go red without.
+
+    **A chat's note is not a reason and that objection does not reach it.** It is which
+    harness that chat is running (:func:`_note`) — a fact that differs per ROW, which is
+    the whole point of the column, and the one the operator is choosing between when two
+    tabs are two agents. The objection above is about a sentence that is the same on
+    forty rows.
     """
     names = tuple(names_of(noun, fid))
     now = current(noun, fid)
     rows = tuple(overlay.Row(id=NAME_ID.format(noun, i),
-                             title=f"{MARK[0] if n == now else MARK[1]}{n}")
+                             title=f"{MARK[0] if n == now else MARK[1]}{n}",
+                             note=_note(noun, n))
                  for i, n in enumerate(names))
     return Roster(noun=noun, rows=rows, names=names)
+
+
+def _note(noun: str, name: str) -> str:
+    """What *name*'s row carries in its note column, or ``""``.
+
+    One function rather than a branch inside :func:`roster`'s comprehension, so that
+    "which nouns have a per-row note" is a thing a test can ask directly and so the
+    default is stated once: nothing. A noun with nothing per-row to say says nothing —
+    it does not borrow the kind label, which is :func:`labelled`'s job on the TOP-LEVEL
+    list and is a different question (there the note tells `zeb` the persona from
+    `zeb-api` the workspace; inside a picker every row is the same noun and the heading
+    already says which).
+
+    Not contained here. `overlay.Surface.render` runs `contain.one_line` over every note
+    before `tui.width` sees it (#472), and a second call would be the masked line
+    `builtin_actions._register_names` shipped and this module's docstring records.
+    """
+    return chats.harness_of(name) if noun == CHAT else ""
 
 
 def labelled(roster: Roster, reason: str = "") -> tuple[overlay.Row, ...]:
@@ -308,15 +362,32 @@ def noun_of(row: overlay.Row) -> str | None:
 def switch_to(noun: str, fid: str, name: str) -> switch.Outcome:
     """Move frame *fid* to *name*, and answer with what happened and what to say.
 
-    One call into `frame/switch.py` and nothing else, which is what makes "the switch
-    moves the frame's own identity and bumps it" (#411/#412) a property of one function
-    rather than of every surface that switches. The pointer under the frame's id, the
-    frame's recorded workspace, the gather cache and the bump are all that function's, in
-    that order, and a picker that wrote any of them itself would be the second answer #411
-    is about.
+    One call into `frame/switch.py` and nothing else for the first three, which is what
+    makes "the switch moves the frame's own identity and bumps it" (#411/#412) a property
+    of one function rather than of every surface that switches. The pointer under the
+    frame's id, the frame's recorded workspace, the gather cache and the bump are all that
+    function's, in that order, and a picker that wrote any of them itself would be the
+    second answer #411 is about.
+
+    **`chat` is the one noun this function does not perform, and saying so is the point
+    of it having a branch here at all.** A chat switch is not a file write: it is
+    `select-window` plus a re-layout of the panels into the window tmux has just resized
+    (spec §3.7), and no tmux call may be made from this module or from `frame/switch.py`
+    — both are asked on a panel's repaint path and on the palette's open, and both are
+    testable without a server precisely because they never call one. So this returns
+    `chats.check`, which is the same rule `charter frame-chat` applies to a name nobody
+    drew, and `commands_frame._draw_palette` starts the switch when it says yes.
+
+    **That split is not a hole**: the check is the whole of the decision, and the command
+    asks it again rather than trusting it — one rule, two askers, exactly as
+    `switch.to_workspace` is asked by a picker row and by a hand-typed `charter
+    frame-switch`. What the command adds is the one refusal only tmux can give (the
+    chat's window is gone), which the check deliberately does not guess at.
     """
     if noun == WORKSPACE:
         return switch.to_workspace(fid, name)
     if noun == PERSONA:
         return switch.to_persona(fid, name)
+    if noun == CHAT:
+        return chats.check(fid, name)
     return switch.to_change(fid, name)

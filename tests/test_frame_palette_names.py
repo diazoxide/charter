@@ -325,9 +325,10 @@ class TheRosterIsNeverReadUntilSomethingIsTyped(_Frame, unittest.TestCase):
                        if choose.noun_of(r) == choose.WORKSPACE)
         commands_frame._picker(doorway, self.FID, opened)
         self.assertEqual((self.ws.call_count, self.pe.call_count), (1, 1))
-        # One roster per noun, in `choose.NOUNS` order — `change` is the third and last.
+        # One roster per noun, in `choose.NOUNS` order — `chat` is the fourth and last.
         self.assertEqual([r.noun for r in opened],
-                         [choose.WORKSPACE, choose.PERSONA, choose.CHANGE])
+                         [choose.WORKSPACE, choose.PERSONA, choose.CHANGE,
+                          choose.CHAT])
 
 
 class FindingNothingIsAnANSWERAndNotAMissingOne(unittest.TestCase):

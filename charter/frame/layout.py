@@ -59,7 +59,36 @@ from .. import util
 #: 22-column pane; `repos` now draws the same rows as the full-width table the status
 #: line draws, so the sidebar's only remaining job was a lesser copy of its neighbour's.
 #: Retiring it hands those 22 columns back to the harness at every density.
-_DROP_ORDER = ("right", "repos", "top")
+#:
+#: **Phase 5's two bars go above `top`, and they are here even though charter does not
+#: place either of them** (`frame/builtins.py` says why). This list is a filter over
+#: whatever a plane's arrangement holds, so an entry for a component nobody placed costs
+#: nothing and is not dead: the day a plane writes `[[frame.component]] use = "chats"`,
+#: the bar degrades in the order §3.6 decided rather than in whatever order it happened
+#: to be listed in. They go first because they are readouts and the palette reaches every
+#: chat and every workspace in two keystrokes at every width — so a short terminal loses
+#: the reminder and nothing else, which is exactly what `top` cannot say for itself.
+_DROP_ORDER = ("right", "repos", "chats", "workspaces", "top")
+
+#: The entries of :data:`_DROP_ORDER` that go when ROWS are the tight dimension — its
+#: tail, after the two that answer to columns and have thresholds of their own.
+#:
+#: **This is what makes :data:`_DROP_ORDER` a constant rather than a comment.** Until
+#: Phase 5 nothing read that list: `visible_slots` spelled `s != "right"` and `s != "top"`
+#: by hand, so the order was documented in one place and implemented in another, and an
+#: entry added to it changed nothing at all. Derived, deleting an entry changes what a
+#: short terminal draws — which is the property the deletion sweep can see.
+#:
+#: `right` and `repos` are named as the exceptions rather than the members being listed,
+#: so a component added to `_DROP_ORDER` joins the row drops by default. That is the safe
+#: direction: a new readout that a short terminal keeps is a frame with less harness in
+#: it, and a new one it drops is a reminder the palette already replaces.
+#:
+#: All at once and not one per threshold, because `visible_slots` has two thresholds and
+#: not five. The ORDER still decides which of them survives a future third — it is not
+#: decoration — but inventing one now to space these out would be arithmetic no
+#: measurement asked for.
+_ROW_DROPS = tuple(s for s in _DROP_ORDER if s not in ("right", "repos"))
 
 #: The frame charter itself draws, as components — `frame/builtins.py`, asked ONCE at
 #: import for the edges and sizes every constant below is derived from.
@@ -526,12 +555,21 @@ def visible_slots(slots: list[str], cols: int, rows: int,
     `bottom` never goes here, and it is the only slot that never does: it is the one
     alert and the command that fixes it, which is why a frame is worth drawing on a
     terminal with room for nothing else.
+
+    **The row-edge drops read :data:`_ROW_DROPS`, which is derived from
+    :data:`_DROP_ORDER` — and until Phase 5 that constant was read by nothing at all.** It
+    documented an order this function then spelled out by hand, so §3.6's instruction to
+    "join `_DROP_ORDER` above `top`" would have changed no behaviour whatever: the two
+    bars would have survived a shortage that took `top`, which is the wrong way round for
+    a readout the palette makes redundant. Derived, the list is load-bearing — an entry
+    deleted from it changes what a short terminal draws — and that is the difference
+    between a constant and a comment with a name.
     """
     keep = list(slots)
     if cols < min_cols or rows < min_rows:
         keep = [s for s in keep if s != "right"]
     if rows < min_rows:
-        keep = [s for s in keep if s != "top"]
+        keep = [s for s in keep if s not in _ROW_DROPS]
     if "repos" in keep and not repos_fits(keep, window_cols=cols):
         keep = [s for s in keep if s != "repos"]
     if cols < min_cols // 2 or rows < min_rows // 2:

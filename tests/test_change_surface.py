@@ -605,7 +605,11 @@ class TestTwoKeystrokes(SurfaceCase):
         every test in that contract and describe nothing that happens."""
         ids = [r.id for r in choose.open_rows(FID)]
         self.assertIn("pick:change", ids)
-        self.assertEqual(choose.noun_of(choose.open_rows(FID)[-1]), choose.CHANGE)
+        # Found by id rather than by position: `chat` joined `choose.NOUNS` after
+        # `change`, and a test pinned to "the last row" goes on passing while measuring
+        # a different doorway. Which noun this id stands for is the claim.
+        row = next(r for r in choose.open_rows(FID) if r.id == "pick:change")
+        self.assertEqual(choose.noun_of(row), choose.CHANGE)
 
     def test_an_unavailable_picker_says_why_before_the_keypress(self):
         """#512: an operator cannot ask about an option they cannot see. A pane of no

@@ -11,10 +11,16 @@ is no private table of edges beside the one a provider's component will be place
 strips are a fixed height, which one takes what its content needs — from
 :func:`build`'s registry, and nothing derives them from a list position any more.
 
-**This task changed no output, and that is the point.** Each component wraps the renderer
-`frame/slots.py` already had, unchanged; the six declarations below are a statement of
-what those renderers already do, not a new arrangement. The before/after render at 200x50
-and 80x24 is byte-identical.
+**Phase 1's own task changed no output, and that was its point.** Each of the components
+below wraps a renderer `frame/slots.py` already had, unchanged; those declarations are a
+statement of what the renderers already do, not a new arrangement, and the before/after
+render at 200x50 and 80x24 was byte-identical.
+
+**Phase 5's two bars are the first entries here that are not that**, and they change no
+output either — for a different reason. `chats` and `workspaces` are registered and NOT
+placed (see :func:`build`), so nothing draws them until a plane writes a
+`[[frame.component]]` table naming one. :func:`places` is the question that makes that
+route work at all.
 
 **The slot names survive as SHORTHAND, because they are committed** (:data:`SLOT_OF`).
 `[frame] slots = ["top", "bottom", "repos", "right"]` sits in charter.toml on every plane
@@ -69,12 +75,14 @@ that a click SELECTS and never chooses, because a pointer event can arrive unpai
 are registered in the order charter splits their panes off the harness: identity,
 attention, repos, sidebar. The two parts of the sidebar are registered between them,
 because the registry refuses a composite whose parts it has not seen — they take split
-numbers of their own and are never placed, which `Registry.on_edge` is what enforces.
+numbers of their own and are never placed, which `Registry.on_edge` is what enforces. The
+two bars are registered LAST, after everything charter places, so adding them moved no
+existing component's split number.
 """
 
 from __future__ import annotations
 
-from .component import Component, Content, Fill, Fixed
+from .component import EDGES, Component, Content, Fill, Fixed
 from .registry import Registry
 
 #: Component id → the `[frame] slots` name it is spelled with in a committed charter.toml
@@ -119,6 +127,52 @@ def component_id(name):
     away from the line that was wrong.
     """
     return COMPONENT_OF.get(name, name) if isinstance(name, str) else name
+
+
+def places(cid, reg: Registry | None = None) -> bool:
+    """Whether charter's OWN registry puts *cid* on an edge — a component a plane may
+    place, whether or not it has a committed slot-name spelling.
+
+    **The question `SLOT_OF` was standing in for, asked directly.** That table is the
+    shorthand between two vocabularies — a committed `[frame] slots` name and a component
+    id — and two separate places had come to read "is it in `SLOT_OF`" as "is it one of
+    charter's own placeable components" (`instance.component_tables` and
+    `slots.drawable`). Those were the same set for as long as every
+    component charter placed had a slot name, and Phase 5's two bars are the first that do
+    not: they have no committed spelling, because there is no `[frame] slots` word for a
+    thing that did not exist when that list was frozen, and adding one would put them on
+    every operator's frame (`build`'s own comment measures what that costs).
+
+    Without this the bars would be registered and unplaceable — a component charter can
+    draw that no configuration can ask for, which is dead code wearing a feature's name.
+    With it they are exactly as placeable as a provider's component, through the one form
+    that can place one: a `[[frame.component]]` table.
+
+    `Registry.on_edge` is what answers, so a composite's PARTS are excluded for free —
+    `personas`, `todos` and `changes` are drawn inside the sidebar's pane, and a part that
+    could be placed as well would be drawn twice.
+
+    *reg* is a registry the caller already has. `instance.component_tables` builds one to
+    resolve the arrangement and then asks this once per table, so without it a committed
+    `[[frame.component]]` list would rebuild the registry per row — on the path of every
+    charter command, `charter --version` included, since `config.derive` resolves `FRAME`
+    at import. ``None`` builds one, which is what the callers that have none do
+    (`slots.drawable`, and every test). It is a parameter and not a module-level cache for
+    `supplies`' reason: a registry kept from the first ask answers for the ``sys.path``
+    charter had then, which is wrong for a long-lived process and wrong in the direction
+    that is hard to see.
+    """
+    # **No `isinstance` refusal, and the deletion sweep is why.** This is asked of a value
+    # read out of a committed `charter.toml`, so a TOML array or table can reach it — and
+    # `Registry.on_edge` answers with components whose `id` is always a string, so
+    # `c.id == cid` is already False for every one of them. A guard in front of that is a
+    # line no input can make observable, which the sweep found as a survivor. The property
+    # it was protecting is structural rather than guarded, and
+    # `ABarIsPlaceableByConfig.test_places_refuses_anything_that_is_not_a_name` keeps
+    # asking for it.
+    if reg is None:
+        reg = build()
+    return any(c.id == cid for edge in EDGES for c in reg.on_edge(edge))
 
 
 def supplies(cid) -> bool:
@@ -239,6 +293,23 @@ def _repos_events(fid: str):
         return True
 
     return on_event
+
+
+def _chats(ctx) -> list[str]:
+    """The chat bar — `slots.chats_bar` at this pane's OWN width.
+
+    `ctx.width`, unlike the four wrapped whole-pane renderers (:func:`_panel`), which
+    measure their own tty and ignore it. A bar written for the contract can read the
+    geometry the contract carries, and this is the first charter component that does.
+    """
+    from . import slots
+    return slots.chats_bar(ctx.fid, ctx.width)
+
+
+def _workspaces(ctx) -> list[str]:
+    """The workspace bar — `slots.workspaces_bar` at this pane's own width."""
+    from . import slots
+    return slots.workspaces_bar(ctx.fid, ctx.width)
 
 
 def _personas(ctx) -> list[str]:
@@ -371,4 +442,31 @@ def build(fid: str = "") -> Registry:
         id="sidebar", title="sidebar", edge="right", size=Fixed(22),
         needs=("gather", "changes"), render=_panel("right"),
         children=("personas", "todos", "changes")))
+    # **Phase 5's two bars, and they are REGISTERED but not PLACED** — the same shape
+    # `changes` takes above, and for a stronger version of its argument.
+    #
+    # `changes` is not in `SLOT_OF` because a plane with no cross-repo change is the
+    # ordinary, permanent state and a pane saying so on every frame is a pane earning
+    # nothing. A plane with ONE chat is that state too, and the numbers are worse rather
+    # than better: measured on this tree, a chat switch is 41 tmux invocations and ~360 ms
+    # (3.7c) / ~395 ms (3.2) with four panels, and each placed pane is ~7 of those
+    # invocations on the way out and back — so a bar placed by default makes every switch
+    # slower for every operator, permanently, to draw a name most of them already know
+    # from `top`. The palette reaches every chat in two keystrokes at every width (§3.6:
+    # the bar is a readout, not the mechanism), so nothing is unreachable without them.
+    #
+    # A plane that wants a bar writes a `[[frame.component]]` table — which is also the
+    # only way any component gets a toggle key, built-in or not, and a key on the chat bar
+    # is exactly what an operator who wants it occasionally should have.
+    #
+    # Both declare nothing in `needs`: neither renderer goes near `gather`.
+    # `slots.chats_bar` reads `.charter/frame/` and `slots.workspaces_bar` reads
+    # `workspaces/`, and a declaration naming a slice `ctx` carries would make the frame's
+    # cost budget describe a cost that is not there — `identity`'s own reasoning, above.
+    reg.register(Component(
+        id="chats", title="chats", edge="top", size=Fixed(1),
+        needs=(), render=_chats))
+    reg.register(Component(
+        id="workspaces", title="workspaces", edge="top", size=Fixed(1),
+        needs=(), render=_workspaces))
     return reg

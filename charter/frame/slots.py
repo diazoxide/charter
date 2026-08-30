@@ -2394,6 +2394,151 @@ def changes_section(fid: str, width: int, budget: int) -> list[str]:
 SLOTS = {"top": _top, "bottom": _bottom, "repos": _repos, "right": _right}
 
 
+#: What marks the chat (or workspace) a bar's row says you are IN, and what marks the
+#: others. Two entries of the same width by construction, so the mark moving does not move
+#: the names beside it.
+#:
+#: **ASCII, deliberately** — `overlay._MARK`'s own rule and `_persona_chips`' measurement
+#: behind it: `●`, `◆` and the pointing triangles are East-Asian *Ambiguous* and have
+#: broken this layout twice. `choose.MARK` is the same decision one surface over and is
+#: deliberately NOT reused: that one is `("* ", "  ")`, two cells, because a picker draws
+#: one name per row and the mark owns a column of its own; a bar draws several names on
+#: one row, so a two-cell blank in front of every inactive name would spend exactly the
+#: columns the names are competing for.
+_BAR_MARK = ("*", " ")
+
+#: Columns a bar spends between two names. Two, so a name reads as one name — a single
+#: space runs `api.1 api.2` together at the widths where this matters most.
+_BAR_GAP = 2
+
+
+def _bar(head: str, names: list[str], here: str, width: int, *,
+         note: str = "") -> list[str]:
+    """One bar row: *head*, then *names* with *here* marked, inside *width* columns.
+
+    **One function for both bars, so the two cannot degrade differently.** That is why it
+    exists rather than each renderer composing its own: `workspaces` and `chats` sit on
+    adjacent rows of the same frame, and two ladders would have them give up their names
+    at two different widths — which reads as a bug in whichever gave up first.
+
+    **The ladder, and every rung drops a whole thing rather than truncating one.**
+
+    1. **Every name in full**, *here* marked. What a wide row shows.
+    2. **The one you are in, in full, plus a count of the rest** (`+2`). The others go
+       WHOLE, which is `_fit_fields`' own discipline one row over: a list cut off
+       mid-name is a list where `api-staging` and `api-standby` are the same string, and
+       half a name is worse than an honest count.
+    3. **`n/N` alone** — which position you are in and how many there are. This is the
+       rung §3.6 calls "marks only", and a count IS what a mark per chat degenerates to
+       once there is no room to draw one per chat. It says strictly more: `2/3` tells you
+       where you are, three dots do not.
+    4. **Nothing at all.** A bar with no room for rung 3 draws no row rather than a
+       fragment of one.
+
+    **There is no :data:`_NAME_MIN_W` check here, and its absence is the ladder working
+    rather than a rule dropped.** §3.6 asks that the bar "never truncates a name below
+    `slots._NAME_MIN_W` (12 cells) — below that it shows marks only", which is a floor
+    against a TRUNCATION. This renderer never truncates: every rung drops whole names, so
+    the property the floor exists to guarantee — that no name is ever shown in part — is
+    unconditional here rather than conditional on a width. Written as an `if`, the check
+    would be a line no input can reach past the rung above it, which is precisely the
+    equivalent mutant the deletion sweep asks be deleted rather than documented.
+    `tests/test_frame_bars.TheLadderGivesUpWholeThings
+    .test_no_name_is_ever_shown_in_part_at_any_width` pins the property directly, at every
+    width from 0 to 200.
+
+    **`contain.one_line` runs before any of this arithmetic** (#472). Every name here has
+    already been through a name check where it was read (`switch.workspaces`,
+    `chats.of_workspace`), so this is a floor rather than the whole guard — but the
+    arithmetic below is exactly the position #472 was filed about, where a table sized its
+    columns from a raw name and one separator made the row wider than the pane.
+
+    *note* is an extra field drawn after the names when there is room for it whole — the
+    "add chat" affordance, and nothing else today. Dropped first, before any name, because
+    it is a reminder and the names are the readout.
+    """
+    if not names:
+        return []
+    # **Which row is yours is decided on the RAW names; only the drawing uses the
+    # contained ones.** `choose.Roster` makes the same split one surface over and for the
+    # same reason: `contain.one_line` is a repair, so two names that differ only in what
+    # it repairs are one string after it, and a mark matched on the drawn text would
+    # follow the repair rather than the identity. Neither caller can reach that today
+    # (`chats.ID_RE` and `workspace.valid_name` both refuse the characters `one_line`
+    # touches), which is exactly why it is written as an index now rather than found as a
+    # bug by whichever caller stops.
+    at = names.index(here) if here in names else -1
+    shown = [contain.one_line(n) for n in names]
+    marked = [f"{_BAR_MARK[0] if i == at else _BAR_MARK[1]}{n}"
+              for i, n in enumerate(shown)]
+    # **`head` and `note` are NOT contained, and the deletion sweep is what settled it.**
+    # Both are charter's own literals — `"chats"`, `"workspaces"`, :data:`ADD_CHAT` — and
+    # no caller can hand this an open-alphabet one, so a `contain.one_line` on either is a
+    # call whose result is provably its argument. The sweep found both as survivors for
+    # exactly that reason: no input could make the mutation differ. The NAMES are
+    # contained, one line up, which is where the open alphabet actually is.
+    lead = _inset() + head + " " * _BAR_GAP
+    room = width - tui.width(lead)
+    joined = (" " * _BAR_GAP).join(marked)
+    if note and tui.width(joined) + _BAR_GAP + tui.width(note) <= room:
+        return [lead + joined + " " * _BAR_GAP + note]
+    if tui.width(joined) <= room:
+        return [lead + joined]
+    if at >= 0:
+        # **No `if len(names) > 1` on the count, and it is unreachable rather than merely
+        # untested.** With ONE name `joined` IS `marked[at]` and the count is empty, so
+        # the rung above asks exactly what this one asks and always answers first: a `+0`
+        # can be built here and can never be returned. The sweep found the conditional as
+        # a survivor for that reason.
+        rest = f"{' ' * _BAR_GAP}+{len(names) - 1}"
+        if tui.width(marked[at]) + tui.width(rest) <= room:
+            return [lead + marked[at] + rest]
+    counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
+    if tui.width(counted) <= room:
+        return [lead + counted]
+    return []
+
+
+#: What the chat bar says instead of a second name when this workspace has one chat.
+#:
+#: §3.6: the bar "hides itself when there is one chat, showing only the add-chat
+#: affordance". It names the command that opens a second one TODAY — `charter <harness>`
+#: in this workspace joins the session as a second window, which is what Stage 5a shipped
+#: — rather than a palette row this stage does not have. A reminder naming something that
+#: does not work is worse than no reminder.
+ADD_CHAT = "+ charter <harness> opens another"
+
+
+def chats_bar(fid: str, width: int) -> list[str]:
+    """Which chats this workspace holds and which one you are typing in.
+
+    **A readout, never the mechanism** (§3.6). The palette reaches every chat in two
+    keystrokes at every width, including widths where this row cannot be drawn at all —
+    which is why the row may degrade to a count and then to nothing, and why
+    `layout._DROP_ORDER` gives it up before `top`.
+
+    Never raises for a plane it cannot read: `chats.roster` already answers with the chat
+    asking and nothing else for a frame root it could not scan, and `_bar` answers `[]`
+    for an empty list.
+    """
+    from . import chats as chats_mod
+    names = [c.id for c in chats_mod.roster(fid)]
+    return _bar("chats", names, fid, width,
+                note=ADD_CHAT if len(names) < 2 else "")
+
+
+def workspaces_bar(fid: str, width: int) -> list[str]:
+    """Which workspaces this plane has and which one this frame is drawing.
+
+    :func:`chats_bar`'s rules and its ladder, one noun over. The name is the FRAME's
+    (`switch.current_workspace` → `state.workspace_for`), never one this pane resolved for
+    itself — #512, and the same rung order `_top` reads two rows up.
+    """
+    from . import switch as switch_mod
+    return _bar("workspaces", switch_mod.workspaces(),
+                switch_mod.current_workspace(fid), width)
+
+
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no
 #: resize behind it. Exactly the renderers that reach :func:`spinner_frame`, which today
 #: is `_bottom` and only `_bottom` (through :func:`_inflight_field`).
@@ -2475,6 +2620,14 @@ def drawable(name) -> bool:
         # through to the providers: a distribution declaring `sidebar` must not become
         # the answer to a question about charter's own component.
         return _builtins.SLOT_OF[cid] in SLOTS
+    if _builtins.places(cid):
+        # One of charter's own with no committed slot-name spelling — Phase 5's two bars.
+        # It is drawn through the component contract (`panel._component_painter`) rather
+        # than out of :data:`SLOTS`, so the `SLOT_OF` question above cannot answer for it,
+        # and it does not fall through to the providers for that question's own reason: a
+        # distribution declaring `chats` must not become the answer to a question about
+        # charter's own component.
+        return True
     return _builtins.supplies(cid)
 
 
