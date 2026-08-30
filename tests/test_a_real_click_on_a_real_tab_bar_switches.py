@@ -469,13 +469,30 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCas
 
     def test_the_click_leaves_the_keyboard_on_a_harness(self):
         """A chat switch moves the WINDOW, and the pane the operator types in afterwards
-        is the new chat's harness — never the bar they clicked."""
+        is the new chat's harness — never the bar they clicked, and never a panel.
+
+        **Asked once the switch has SETTLED, and the first version asked too early.** The
+        client moving is step 1 of four; step 3 splits the entered chat's own panels, and
+        `split-window` selects the pane it makes — `commands_frame._split_panels` re-selects
+        the harness at the end, for the same reason this case exists. Between those two
+        moments the active pane really is a panel, for a few hundred milliseconds. Measured
+        rather than reasoned: this file was green on the machine it was written on and
+        failed on CI's 3.13 runner with `'%4' != '%1'`, which is that window. So the case
+        waits for `state.panes` — the record step 3 writes last — before it asks.
+        """
         self._click(self.bar, col=self._column_of(self.bar, f" {self.there}"))
         self.assertTrue(
             _await(lambda: self._current_window(self.WS)
-                   == self._window_of(self.other_harness)))
-        self.assertEqual(self._active(), self.other_harness,
-                         "clicking the chat bar left the keyboard on a panel")
+                   == self._window_of(self.other_harness)),
+            "the click never moved the client to the other chat's window")
+        self.assertTrue(
+            _await(lambda: bool(state.panes(self.there))),
+            "the switch never finished laying the entered chat out, so the pane it "
+            "leaves selected is not the one this case is about")
+        self.assertTrue(
+            _await(lambda: self._active() == self.other_harness),
+            f"clicking the chat bar left the keyboard on {self._active()} rather than "
+            f"the entered chat's harness {self.other_harness}")
 
     def test_the_switch_runs_to_the_end_after_killing_the_pane_it_started_from(self):
         """**The whole switch, from a click on a pane the switch then destroys.**
