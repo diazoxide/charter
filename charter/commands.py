@@ -2571,6 +2571,38 @@ def cmd_news(args) -> int:
         if not body:
             util.err(f"no news entry for {version}.")
             return 1
+        # The claim nobody was making (#665). Everything above answers "do these entries
+        # render?", which was never the failing question — this command exits 0 on a
+        # 300,000-character body, because producing the string is exactly what it was asked
+        # to do. What `announce` then does with the string is POST it to an API that
+        # refuses a body over `news.RELEASE_BODY_MAX` outright rather than trimming it, and
+        # `announce` is `needs: publish`: the refusal lands after an upload PyPI will not
+        # take back, and the documented `workflow_dispatch` retry cannot reach `announce`
+        # again because `publish` is rejected for a version PyPI already has.
+        #
+        # Asked here rather than in a step of its own in `release.yml`, because `guard` and
+        # `announce` run this exact command against this exact tree: one answer, delivered
+        # at the cheap end of the workflow — before `test`, `build` and `publish` — with no
+        # second copy of the limit in a shell script to drift from this one.
+        #
+        # `+ 1` is the newline `print` adds below. It is a character in the file `announce`
+        # redirects into and a character GitHub counts, and measuring the string rather than
+        # the file is the off-by-one that would show up only at the ceiling — which is the
+        # one place nobody gets a second try.
+        sent = len(body) + 1
+        if sent > news.RELEASE_BODY_MAX:
+            util.err(
+                f"the release notes for {version} come to {sent:,} characters and GitHub "
+                f"refuses a release body over {news.RELEASE_BODY_MAX:,} — `gh release "
+                f"create` fails with `body is too long`, and in release.yml that happens "
+                f"in `announce`, after the PyPI upload.")
+            # Said because the reader's obvious next move — "link more of them" — is the
+            # one that cannot work here. `render_body` already links every note it can, so
+            # reaching this means the HEADLINES alone are over the limit.
+            util.info(f"  charter already lists every note for {version} by headline and a "
+                      f"link, and the headlines alone do not fit. Shorten them, or split "
+                      f"the release.")
+            return 1
         print(body)
         return 0
 

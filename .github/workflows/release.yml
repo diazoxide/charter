@@ -110,7 +110,7 @@ jobs:
             echo "::error::this run names $claimed ($said) but pyproject.toml says $pkg — refusing to publish"
             exit 1
           fi
-      - name: Refuse to publish a version whose news entries cannot be rendered
+      - name: Refuse to publish a version whose notes cannot be rendered, or would be refused
         run: |
           # The version comes from pyproject, not the tag: it is defined on BOTH trigger
           # paths (a workflow_dispatch retry has no tag to read), and the step above has
@@ -125,15 +125,33 @@ jobs:
           # It exits non-zero for MORE than that now: an ordering field charter cannot
           # read, or two entries both claiming `lead: true` (#486); a frontmatter key
           # charter does not know, which is where `Security: true` lands (#503); or a file
-          # in docs/news that is not an entry at all. So the annotation names the two
-          # SHAPES — no entry, or something the entries declare that charter cannot honour
-          # — and defers to the command's own stderr for which, since that stderr is
-          # already one sentence per finding. `>/dev/null` keeps it, dropping only stdout.
-          # Prescribing `news stamp` for any of the second shape would be prescribing a
-          # no-op for a failure stamping cannot fix.
+          # in docs/news that is not an entry at all.
+          #
+          # And for a third shape, which is why this step is worth more than it was (#665).
+          # Rendering was never the failing step: this command exits 0 on a 300,000-
+          # character body, because producing the string is what it was asked to do. The
+          # claim nobody was making is that the string FITS where announce sends it —
+          # GitHub refuses a release body over 125,000 characters outright rather than
+          # trimming it, and the announce job below waits on publish — so that refusal
+          # would land after an upload PyPI will not take back, on a path the documented
+          # workflow_dispatch retry cannot re-reach. charter now bounds the body it renders and
+          # refuses one it cannot bound, so the failure arrives HERE — ahead of test, build
+          # and publish — instead of at the one point in this workflow with no way back.
+          #
+          # The assertion lives in the command rather than in a step of its own precisely
+          # because this step and announce run the same command against the same tree: a
+          # second copy of the limit in shell would be a second answer to one question, and
+          # it is the announce-side answer that decides whether the release exists.
+          #
+          # So the annotation names the three SHAPES — no entry; something the entries
+          # declare that charter cannot honour; or a body GitHub would refuse — and defers
+          # to the command's own stderr for which, since that stderr is already one
+          # sentence per finding. `>/dev/null` keeps it, dropping only stdout. Prescribing
+          # `news stamp` for any shape but the first would be prescribing a no-op for a
+          # failure stamping cannot fix.
           version=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           if ! python -m charter news --for "$version" >/dev/null; then
-            echo "::error::cannot render the release notes for $version: either no docs/news/$version-<slug>.md (every published version ships an entry, including a patch — run: charter news stamp $version), or something those entries declare that charter cannot honour — an ordering, a frontmatter key, or a file in docs/news that is not an entry. See the error above for which."
+            echo "::error::the release notes for $version are not publishable: either no docs/news/$version-<slug>.md (every published version ships an entry, including a patch — run: charter news stamp $version), or something those entries declare that charter cannot honour — an ordering, a frontmatter key, or a file in docs/news that is not an entry — or a body GitHub would refuse as too long, which is a failure this step exists to catch before the upload rather than after it. See the error above for which."
             exit 1
           fi
 
@@ -208,6 +226,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Written out rather than inherited. Actions runs `run:` under `bash -e`, so this
+          # step already aborted on a failed command — but "the render refuses and the
+          # release is therefore not created" is load-bearing now (#665), and a property
+          # that holds because of a platform default is a property nobody in this file
+          # states. `guard` spells it out for the same reason. `-u` besides: every variable
+          # read below is one this workflow sets, and an empty `$tag` is a `gh release
+          # create` against whatever it decides that means.
+          set -eu
           version=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           tag="v$version"
           # `workflow_dispatch` re-runs a release that failed somewhere, and the publish
