@@ -91,7 +91,28 @@ dead one and drew both the same. That was wrong, and the correction is richer th
 never-started, exited-cleanly, and died-with-code-N are all distinguishable and already
 recorded.**
 
-**2.10 `.charter/` is already per-machine.** `/.charter/` is gitignored wholesale and holds
+**2.10 tmux has no per-client current window inside one session, on either version.**
+Measured with real ptys on 3.7c and 3.2: a client on `chat1`, then `new-window -d` +
+`select-window`, lands that client on `chat2` — identically at the floor. **The only mechanism
+that does not drag is a session group** (`new-session -t ws -s ws2`), also measured on both:
+the attached client stays put while the grouped session moves. But adopting groups redefines
+"a workspace is a tmux session", which §4b calls the foundation everything since #488 rests on.
+**So §2.3's defect has no small fix, and §4k is the cheap correct answer to it instead.**
+
+**2.11 `F2 → charter: detach` already exists and is already correct.** `builtin_actions.py:112`
+defines `_detach`/`_detachable`, and `build()` registers it **first** (`:356`). It survived
+Stage 5a's move of the session identity: measured on both versions, `detach-client -s api.1`
+detaches the client of session `api` and leaves a client on `zeta` alone; a target naming
+nothing is a silent rc-0 no-op. **An earlier draft of this spec specified a feature that
+ships.** One residual worth stating: `-s` detaches *every* client of the session, which under a
+deliberately-multi-client design is a choice rather than an accident.
+
+**2.12 CI never runs a real tmux.** `.github/workflows/test.yml` installs none, so the 95
+real-tmux tests skip there. **Every tmux claim in this spec has to be hand-verified on this
+machine, on both versions**, and a green gate says nothing about any of them. The 3.2 floor
+binary is preserved at `~/.local/share/charter-testing/tmux-3.2`.
+
+**2.13 `.charter/` is already per-machine.** `/.charter/` is gitignored wholesale and holds
 zero tracked files. The per-machine state this design needs has a home already.
 
 ## 3. The two reversals
@@ -120,6 +141,16 @@ requirement is "never fork the state", and attaching already satisfies it.**
 `charter` with no subcommand launches the frame. The harness comes from a `[harness] default`
 key in `charter.toml`; a plane that sets none keeps today's usage output rather than guessing.
 
+**One hazard, and it is the #687/#690 shape.** `cmd_launch` returns `bypass(argv)` when stdout
+is not a tty. Today bare `charter` is argparse's own usage error — exit 2, no side effect.
+Afterwards, on a plane that sets a default, **`charter 2>&1 | head` would exec the harness**.
+Correct against every config anyone tested, wrong the first time a script probes for charter.
+The non-tty path must keep printing usage.
+
+Note also that "three touch points in `cmd_launch`" (§2.8) measures how a *chosen* harness
+threads through, not the feature: there is no `[harness]` section in `instance.py` at all, so
+this is a new config section plus a new CLI dispatch mode.
+
 **The default when a plane does set one should be `claude`**, and the reason is §2.8: it is the
 only harness that writes the session id, so it is the only one with a context gauge and — see
 §4e — the only one charter can resume. A bare command that silently loses both would be
@@ -136,9 +167,26 @@ Switching is `switch-client`, plus **#686's treatment one scope out**: a backgro
 keeps stale geometry (§7.4 of the Phase 5 spec, measured on both versions), so a workspace
 switched back into must be re-dressed unconditionally, exactly as #686 now does for chats.
 
-**The `workspaces` bar joins the shipped default when this lands, and not before.** Its cost —
-a permanent row, a process, ~7 of every switch's 41 tmux calls — is only worth paying once it
-is a project switcher rather than a label naming the one workspace you have.
+**The two bars are not one proposition, and only one of them is useful today.**
+
+* **`chats` is correct now.** `slots.chats_bar` reads `.charter/frame/` and marks the active
+  chat; this plane already has two. It stays correct after the redesign in §6 with only a dead
+  mark added.
+* **`workspaces` is not.** `slots.workspaces_bar` is `switch.workspaces()` — **every directory
+  under `workspaces/`**, which on this plane is fifteen. Until open and live are real states
+  (§4c) it draws a directory listing, not a project switcher, and a project switcher is the
+  only thing that justifies its row.
+
+So `chats` may be placed at any time; **`workspaces` joins the shipped default only once §4c
+lands**, together with §4g and §4h as one change.
+
+**Neither bar handles a click.** Both are registered `needs=()` with no `events=`/`on_event=`,
+and `Component.__post_init__` refuses an `on_event` without `events`. Click-to-switch is two
+fields plus a handler, and fires only on `mouse = true` planes.
+
+**Cost of placing one:** a row and a border off the harness, one ~24 MB panel process, and ~7
+tmux calls on each half of a switch. The 41-call / ~360 ms figure in Phase 5's §7.10 was
+measured with *four* panels, so a fifth makes it roughly 48.
 
 ### 4c. Open, live, and the difference between them
 
@@ -292,8 +340,13 @@ means one thing whether or not the workspace happens to be running.
 ### 4l. What draws first
 
 Panels first, harness second. **The bar is what tells the operator the restore worked**, and
-drawing it first makes a slow harness launch legible instead of looking like a hang. Charter
-already separates panel launch from harness launch, so this is ordering rather than machinery.
+drawing it first makes a slow harness launch legible instead of looking like a hang.
+
+**This is machinery, not ordering, and an earlier draft said otherwise.** Charter separates
+panel launch from harness launch only on the operator-tmux path, which uses a placeholder plus
+`respawn_argv`. On the private path `layout.session_argv` and `chat_window_argv` start the
+harness *inside* the `new-session`/`new-window`, so panels cannot precede it without adopting
+the placeholder machinery there too. Cost it as such.
 
 ### 4m. `charter status` learns about open and live
 
@@ -315,19 +368,67 @@ plane is the kind of thing found six months later.
 * **Notify outside the frame.** §4g marks a tab that wants you; it does not ring a bell, raise
   a desktop notification, or reach an operator who is not looking at charter at all.
 
-## 6. Delivery, in an order that can be stopped between stages
+## 6. Delivery
 
-1. **The client-drag defect (§2.3).** Smallest, and it is a live bug rather than a feature. A
-   new chat must not move a client that did not ask to move.
-2. **Split the session id from the gauge (§4e).** One file, two purposes, no behaviour change
-   yet — but it is the prerequisite for everything in §4e and it stands alone.
-3. **Open vs live, and the persisted pointer (§4c, §4d).** Includes the reap rule change, which
-   is the riskiest single edit here: it inverts a rule three PRs this week depended on.
-4. **Reopen into an existing directory (§4e).** Phase 5's Task 9, with the plane-level framing.
-5. **Detach, quit, and the warning (§4i, §4j).**
-6. **Bare `charter` and `[harness] default` (§4a).**
-7. **Place the `workspaces` bar by default (§4b), and `charter status` (§4j).** Last, because
-   both are only correct once the states beneath them are real.
+**A cost analysis re-ordered this section and corrected three of its claims.** What follows is
+the corrected order; the corrections are named where they land, because a delivery plan that
+quietly changed is one nobody can audit.
+
+### Ready now — independent of each other and of everything below
+
+1. **Place the `chats` bar on this plane** (§4b). *Config only, zero code.* #702 removed the
+   last blocker. **Not free of verification**: this plane pins `repos size = 15`, and the row
+   budget cannot be computed from `layout.slot_sizes` before the table is committed — `_size_of`
+   falls back to `_placed_here()`, which reads `config.FRAME["components"]`. That is #687's
+   exact shape, so the check is a real frame at a real height, not a Python call.
+
+2. **The durable session id (§4e), in its reduced form.** `record_harness_session` also writes a
+   sibling `clear_shape` does not list; `clear_shape` and the gauge are untouched. ~20 lines,
+   two files, **zero behaviour change**, and it is the prerequisite for stage 6.
+
+   **The full §4e is not a refactor and an earlier draft said it was.** "Make the gauge refuse
+   unless the id is live" needs a liveness signal a panel process can afford on its repaint
+   path — an open design question, not a settled one. The reduced form sidesteps it entirely.
+
+3. **Open-or-focus (§4k).** *This replaces "fix the client-drag defect" as the first stage.*
+   §2.10 shows §2.3 has no small fix — tmux has no per-client current window, and the only
+   non-dragging mechanism redefines the foundation. **Open-or-focus removes the reason to drag
+   instead of fixing the drag**: a live workspace whose session already has an attached client
+   gets attached to, not added to. One `list-clients -t` and a branch in `cmd_launch` — and it
+   is ask 4 as the operator wrote it.
+
+   **Ten lines and a tmux semantics claim is not cheap.** #664, #687 and #690 all came from
+   exactly that combination. Two-version verification by hand (§2.12).
+
+### Not a stage — a redesign
+
+**Stage 4 changes what a chat directory *is***: a liveness marker today, reaped when no window
+holds it; durable state afterwards, reaped only when the operator closes the chat. #685, #691
+and #696 all rest on the current rule — #685 exists *because* a directory was deleted by the
+next launch.
+
+It is also **three features, not one**. `reap` carries four keep-rules and only `if d.name in
+live` inverts; the other three (server scope, exit-code protection, the claim window) are about
+other races and survive untouched. What makes it expensive is that **~60 tests across 10 files
+assert the current rule**, four by name in their titles, and that **`chat: close` does not
+exist anywhere in `charter/`** while `max_chats` is a comment nothing reads. Ship the inversion
+without close and the cap and `.charter/frame/` grows forever — which `reap`'s own docstring
+names as the failure it exists to prevent.
+
+4. **A chat directory becomes durable (§4c, §4d), with `chat: close` and the `max_chats` cap.**
+   Verify against #685's own reproduction before anything lands on top.
+5. **Reopen into an existing directory, and resume (§4e).** Phase 5's Task 9, plane-scoped.
+6. **Quit, the warning, and the scrollback capture (§4i, §4f, §4j).** Quit is what makes the
+   capture necessary; they ship together or the capture has no trigger.
+7. **Bare `charter` and `[harness] default` (§4a)**, including the non-tty hazard.
+8. **Place the `workspaces` bar with activity and stale marks (§4b, §4g, §4h), and
+   `charter status` (§4m).** One change, not three — splitting them means touching the same
+   render, width arithmetic and plumbing three times.
+
+### Already shipped, specified in error
+
+**`F2 → charter: detach` exists** (§2.11) and is already correct after Stage 5a. An earlier
+draft listed it as work. It needs none.
 
 ## 7. How this gets verified
 
