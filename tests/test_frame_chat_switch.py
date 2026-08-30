@@ -561,7 +561,14 @@ class AHostileChatRendersAsOneRowAndRunsNothing(PersonaIso, unittest.TestCase):
                 self.assertIn(word, ("#{pane_id}",
                                      "#{window_width}:#{window_height}",
                                      "#{session_id}\t#{window_id}",
-                                     "#{window_id}"),
+                                     "#{window_id}",
+                                     # #714's reconciliation asks the window which panes
+                                     # it holds and which components they draw. Named by
+                                     # the PRODUCTION constant rather than re-spelled, so
+                                     # this allow-list cannot be widened by a rename it
+                                     # never saw — the same reason `test_frame_launcher`'s
+                                     # fake matches the two pane options on theirs.
+                                     commands_frame._PANEL_LIST_FORMAT),
                               f"an unexpected tmux format reached the switch: {word!r}")
 
     def test_every_chat_is_still_reachable_at_200_80_and_40_columns(self):
