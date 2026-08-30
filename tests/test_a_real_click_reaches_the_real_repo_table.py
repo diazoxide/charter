@@ -404,7 +404,7 @@ class ARealPointerOnTheRealRepoTable(_ARealFrame):
         """The literal report. Six repos into four rows: three rows and `…(3 below)`, so
         there is somewhere below to go, and one notch must change WHICH repos are drawn."""
         before = self._table()
-        self.assertIn("(+3 more", "\n".join(before), before)
+        self.assertIn("(3 below", "\n".join(before), before)
         self._wheel(self.repos_pane, down=True)
         self.assertTrue(_await(lambda: self._table() != before),
                         f"a wheel notch changed nothing: {before!r}")
@@ -526,7 +526,7 @@ class ARealWheelOverAPlaneWithOneCloneAndManyPieces(_ARealFrame):
         simply dropped". A table that shows three of ten rows and says nothing is the
         false-clean reading this module refuses everywhere else, so the count on the
         overflow line has to be a count of ROWS and include the pieces."""
-        self.assertIn("(+7 more", "\n".join(self._table()), self._table())
+        self.assertIn("(7 below", "\n".join(self._table()), self._table())
 
     def test_a_click_on_a_worktree_row_selects_its_clone(self):
         """**No drawn row answers nobody.** Asserted with the table SCROLLED, so the only
