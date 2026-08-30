@@ -1150,9 +1150,6 @@ class TheRankingStillAnswersEveryOtherCaller(unittest.TestCase):
         self.assertEqual(statusline._pick_rows(dirs, 3, None, st, {}, offset=9), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TheOverflowLineSaysWhichSideTheHiddenRowsAreOn(unittest.TestCase):
     """`…(4 above, 4 below, all clean)` — #741, and it is a sentence bug, not a sum bug.
@@ -1238,3 +1235,7 @@ class TheOverflowLineSaysWhichSideTheHiddenRowsAreOn(unittest.TestCase):
             lines = slots._table_lines(data, 100, budget, offset=offset)
             if lines and "…(" in tui.strip_ansi(lines[-1].text):
                 self.assertIsNone(lines[-1].repo)
+
+
+if __name__ == "__main__":
+    unittest.main()
