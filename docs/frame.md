@@ -262,8 +262,9 @@ Charter never touches `~/.tmux.conf` — the frame's settings go into a private 
 charter's own (`tmux -L charter`), one server shared by every frame on the machine. On it,
 a **workspace is a session** and a **chat is a window** in that session: `charter claude`
 in a workspace that already has one open adds a second chat beside it rather than starting
-a second session, and the two run side by side with their own harnesses, their own personas
-and their own tool ceilings. A chat's id is `<workspace>.<n>` — allocated, so two of them
+a second session (unless somebody is attached to it — see below), and the two run side by
+side with their own harnesses, their own personas and their own tool ceilings. A chat's id
+is `<workspace>.<n>` — allocated, so two of them
 can never land on the same state — and it is what `$CHARTER_SESSION_ID` holds inside that
 chat.
 
@@ -271,10 +272,29 @@ One chat's harness dying ends **that chat's window** and nothing else; the other
 the workspace keep running. When the last chat's window goes, so does the session, which is
 what returns `charter claude` to your shell.
 
-The cost of one session, said plainly: a tmux session has one current window, so two
-terminals attached to the same workspace look at the same chat. Opening a second chat from
-a second terminal moves both. That is what "one workspace, several chats" means — the
-chats are independent, the *view* is the session's.
+**Opening a workspace you already have open puts you in it rather than beside it.** A tmux
+session has one current window, so two terminals attached to one workspace look at the same
+chat — and a second launch that added a chat and selected it therefore pulled whoever was
+already there off what they were reading. So it does not. `charter -w foo` from a second
+terminal, while somebody is attached to `foo`, **attaches you to what they are looking at**;
+nothing is started and nothing moves. Where nobody is attached — you closed the terminal, or
+never had one — the same command opens a chat exactly as before. It is `code <path>`'s
+behaviour: the flag means one thing whether or not the workspace happens to be running.
+
+To open a *second* chat in a workspace you are already in, run `charter <harness>` from
+inside the frame — that is the add-chat affordance the chat bar names, and it is unchanged.
+
+**A launch that names something to run still runs it.** Attaching answers "put me in
+`foo`"; it cannot answer "run *this* in `foo`", so `charter frame -- <cmd>` and
+`charter claude --resume <id>` open a chat and run what you typed, attached client or not.
+Only a launch that asked for nothing but the workspace is answered by focusing one.
+
+Which workspace is yours is decided on **this plane's own chat directories, never on a
+session name**. One tmux server serves every plane on the machine and session names are bare
+workspace names, so `default` — a name every plane has — names one session that any of them
+might have opened. Charter matches on the pane id its own launcher wrote down for a chat in
+`.charter/frame/`, which the server minted and only one plane holds. A workspace this plane
+has never opened is never focused, whatever another plane happens to be calling its own.
 
 ### Switching between them
 

@@ -763,6 +763,11 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "to be put on a real client's terminal for tmux to route it — so neither "
             "`focus`/`blur` nor `click`/`scroll` can be exercised without a real one. "
             "`os._exit`s in its `finally`.",
+        "tests/test_a_second_launch_focuses_instead_of_dragging.py:execvp":
+            "The same `tmux attach` inside a `pty.fork` child, for the reason open-or-"
+            "focus is ABOUT: the decision it takes is 'is a client attached to this "
+            "workspace', and only a real client on a real terminal makes that true. "
+            "`os._exit`s in its `finally`.",
         "tests/test_a_real_click_reaches_the_real_repo_table.py:execvp":
             "The same `tmux attach` inside a `pty.fork` child, for the sibling reason: "
             "that file exercises the pointer against charter's OWN `repos` panel rather "
