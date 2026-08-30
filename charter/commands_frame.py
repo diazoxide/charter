@@ -1159,32 +1159,6 @@ def _panel_died_hook_argv(*, socket: str, panel_pane: str, slot: str,
                                action)
 
 
-#: Which `resize-pane` flag re-asserts a slot's dimension, **for every slot
-#: :func:`_reassert_sizes` asserts one for**: `-y` (rows) for the horizontal strips, `-x`
-#: (columns) for the side column — the same axis `layout.py`'s own `-v`/`-h` split
-#: direction already encodes for the same slots, read here rather than re-derived a third
-#: way. The SIZE that goes with it is `layout.slot_sizes`', not `SLOT_SIZE`'s, since
-#: `repos`' is a function of its content and of the window (#488).
-#:
-#: **`repos` is deliberately absent, and #515 is the whole of it.** The issue asked for
-#: the second bottom pane to be in this map and that would be wrong — not because its
-#: axis is in doubt (it is rows; its width is whatever the harness column leaves it, and
-#: no `resize-pane -x` ever set that), but because tmux's `resize-pane` moves exactly ONE
-#: boundary. In a vertical stack of N panes only N-1 heights can be asserted; assert them
-#: all and the outcome depends on the order they are asserted in. Measured on tmux 3.7c
-#: at 200x50, asserting `top`, `bottom` and `repos` in split order: the table came back
-#: **1** row tall and the attention strip **6** — the two sizes swapped panes, and the
-#: harness kept whatever tmux's own proportional redistribution had left it.
-#:
-#: So the pane left out is the one whose height is already a function of all the others
-#: (`layout.VARIABLE_ROW_SLOTS`), the HARNESS is told its height explicitly
-#: (`layout.harness_rows`), and the table lands on exactly `layout.repos_rows`' answer
-#: without anything naming it. Putting `repos` back in this map is a mutation
-#: `tests/test_frame_density.py::ResizeRecomputesForBothDimensions
-#: ::test_the_fixed_strips_are_re_asserted_at_their_own_constant_height` turns red — it
-#: asserts the whole set of `-y`s issued, not merely that each one present is right.
-_RESIZE_FLAG = {"top": "-y", "bottom": "-y", "right": "-x"}
-
 #: Every real pane id tmux ever reports, held in `tmuxctl` because a SECOND module
 #: now interpolates one into text tmux re-parses (`frame/overlay.py`'s escape
 #: hatch), and two copies of one guard is the drift this repo keeps paying for.
@@ -4097,16 +4071,27 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
 def _apply_sizes(socket: str, *, panes: dict[str, str], sizes: dict[str, int],
                  flag: str) -> None:
     """`resize-pane <flag>` every slot in *panes* that *sizes* has a number for and
-    :data:`_RESIZE_FLAG` gives exactly *flag*.
+    `layout.resize_flag` answers exactly *flag* about.
 
     One loop, called twice by :func:`_reassert_sizes` — once for the columns and once for
     the rows — rather than one loop over both, because the two are separated by a
     MEASUREMENT that only the first one makes truthful (:func:`_variable_pane_cols`).
 
-    `layout.VARIABLE_ROW_SLOTS` is not in :data:`_RESIZE_FLAG` at all, which is what leaves
-    the table pane as the stack's dependent one — see that constant's own comment for the
-    tmux measurement, and note that a second check for it here would be a guard no mutation
-    could turn red, because this one already catches it.
+    **The axis is asked of `layout`, not read out of a map here, and that map was the last
+    hand-written table of per-slot facts charter had.** `layout` derives every other one
+    (`SLOT_EDGE`, `SLOT_SIZE`, `_COLUMN_SLOTS`, `_FIXED_ROW_SLOTS`, `VARIABLE_ROW_SLOTS`)
+    from what each component declares, exactly so a component charter did not write is
+    answered rather than missing — and this module's `{"top": "-y", "bottom": "-y",
+    "right": "-x"}` was the one that was not. Once Phase 5 made a `[[frame.component]]`
+    table reachable, a placed component travelling under its own id was SIZED by
+    `layout.slot_sizes`, CHARGED to the harness by `layout.harness_rows`, and then never
+    re-asserted here at all: the harness's own `-y` took those rows out of a neighbour and
+    the variable row slot absorbed the error. See `layout.resize_flag` for the measurement.
+
+    `layout.VARIABLE_ROW_SLOTS` gets no flag from that function at all, which is what
+    leaves the table pane as the stack's dependent one — see its docstring for the tmux
+    measurement, and note that a second check for it here would be a guard no mutation
+    could turn red, because that one already catches it.
 
     Every pane id is checked before it is used, even though both callers of
     :func:`_reassert_sizes` already checked theirs. `_panel_died_hook_argv`'s own rule
@@ -4119,7 +4104,7 @@ def _apply_sizes(socket: str, *, panes: dict[str, str], sizes: dict[str, int],
     an integration failure worth printing over the agent's own screen.
     """
     for slot, pane_id in panes.items():
-        if _RESIZE_FLAG.get(slot) != flag or slot not in sizes:
+        if layout.resize_flag(slot) != flag or slot not in sizes:
             continue
         if not _PANE_ID_RE.fullmatch(pane_id):
             continue
@@ -4253,12 +4238,13 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
     order left the table 1 row tall and the attention strip 6 — the two sizes swapped
     panes, and the harness kept whatever tmux's own redistribution had given it.
 
-    So this asserts every slot :data:`_RESIZE_FLAG` names — which is every slot whose size
-    is a CONSTANT, and deliberately not `layout.VARIABLE_ROW_SLOTS` — plus
-    `layout.harness_rows` on the harness itself. The table's size is already a function of
-    all the others, so it lands on exactly `repos_rows`' answer without being asserted. In
-    a stack of N panes only N-1 heights are free; asserting all N is what made the result
-    depend on the order.
+    So this asserts every slot `layout.resize_flag` gives an axis — which is every slot
+    whose size is a CONSTANT, **including one this plane placed under its own id**, and
+    deliberately not `layout.VARIABLE_ROW_SLOTS` — plus `layout.harness_rows` on the
+    harness itself. The table's size is already a function of all the others, so it lands
+    on exactly `repos_rows`' answer without being asserted. In a stack of N panes only N-1
+    heights are free; asserting all N is what made the result depend on the order, and
+    asserting N-2 is what left a placed bar holding the table's rows.
 
     *harness_pane* is checked like every other id here and for the same reason: it is read
     off disk (`state.harness_pane`) by `cmd_resize`, which is exactly the shape #475 was.

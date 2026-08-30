@@ -1618,10 +1618,10 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
         is asked of tmux.
 
         Which is also why the obvious alternative is not what shipped. Calling a pinned
-        table a FIXED row and adding it to `_RESIZE_FLAG` would assert all N heights, and
-        that is the measured failure `_reassert_sizes`' own docstring carries: at 200x50,
-        asserting `top`, `bottom` and `repos` in split order left the table 1 row and the
-        attention strip 6, the two sizes having swapped panes.
+        table a FIXED row and giving it a `layout.resize_flag` axis would assert all N
+        heights, and that is the measured failure `_reassert_sizes`' own docstring
+        carries: at 200x50, asserting `top`, `bottom` and `repos` in split order left the
+        table 1 row and the attention strip 6, the two sizes having swapped panes.
 
         `repos_rows_wanted` is stubbed to a number the pin must beat and one it must not
         lose to — 2 clones and 30 — because a pin that were quietly still content-sized
@@ -1672,6 +1672,67 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
                                  f"the harness has {harness} rows, so the rows the pin "
                                  f"took came from somewhere the arithmetic does not "
                                  f"describe")
+
+    def test_a_bar_this_plane_placed_does_not_take_the_tables_rows(self):
+        """A `[[frame.component]]` table placing `chats`, driven against real tmux — the
+        case the hand-written `{"top": "-y", "bottom": "-y", "right": "-x"}` in
+        `commands_frame` could not have, because a placed component travels under its own
+        id and was in no such literal.
+
+        `layout.slot_sizes` sized the bar and `layout.harness_rows` charged the harness
+        for its rows; `_apply_sizes` then issued no `resize-pane` for it at all, so the
+        harness's explicit `-y` took those rows out of a neighbour and the one pane
+        nothing asserts absorbed the whole error. That remainder is tmux's arithmetic and
+        not charter's, which is why it is asked of tmux here rather than of the argv.
+
+        The window is GROWN first, so every pane arrives proportionally scaled — which is
+        the state a `window-resized` hook actually fires in and the state in which the
+        defect was measured (200x40 -> 200x90 left the bar 7 rows and the six-repo table
+        1). Both numbers are asserted, because a bar re-asserted at the wrong height and a
+        bar not re-asserted at all are different defects with the same symptom.
+        """
+        fid = state.frame_id("placed-bar", os.getpid())
+        r = _tmux("new-session", "-d", "-s", "placed-bar", "-x", "120", "-y", "40",
+                  "-P", "-F", "#{pane_id}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness_pane = r.stdout.strip()
+        panes = {}
+        for slot, args in (("top", ("-v", "-b", "-l", "1")),
+                           ("chats", ("-v", "-b", "-l", "1")),
+                           ("bottom", ("-v", "-l", "1")),
+                           ("repos", ("-v", "-l", "6"))):
+            out = _tmux("split-window", "-t", harness_pane, *args,
+                        "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+            self.assertEqual(out.returncode, 0, out.stderr)
+            panes[slot] = out.stdout.strip()
+
+        placed = instance.frame_of({"frame": {"component": [
+            {"use": "identity"}, {"use": "chats", "edge": "top", "size": 1},
+            {"use": "attention"}, {"use": "repos"}, {"use": "sidebar"}]}})
+        self.assertIn("chats", placed["slots"],
+                      "the arrangement did not place the bar, so nothing below is about "
+                      "a placed component")
+
+        self.assertEqual(_tmux("resize-window", "-t", "placed-bar",
+                               "-x", "120", "-y", "90").returncode, 0)
+        with mock.patch.dict(config.FRAME, placed), \
+                mock.patch("charter.frame.slots.repos_rows_wanted", return_value=6):
+            commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
+                                           harness_pane=harness_pane,
+                                           window_cols=120, window_rows=90)
+
+        bar = _tmux("display-message", "-p", "-t", panes["chats"],
+                    "#{pane_height}").stdout.strip()
+        self.assertEqual(bar, "1",
+                         f"the placed bar is {bar} rows where it committed 1 — tmux was "
+                         f"never told its height, so it kept whatever the window resize "
+                         f"scaled it to")
+        table = _tmux("display-message", "-p", "-t", panes["repos"],
+                      "#{pane_height}").stdout.strip()
+        self.assertEqual(table, "6",
+                         f"the table pane is {table} rows on a six-clone plane — it is "
+                         f"the stack's dependent pane, so it is where the rows nothing "
+                         f"put back are taken from")
 
     def test_the_table_panes_width_is_tmuxs_answer_and_not_the_recorded_order(self):
         """#510, against the one authority there is.

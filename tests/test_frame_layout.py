@@ -17,8 +17,9 @@ import sys
 import unittest
 from unittest import mock
 
-from charter import util
+from charter import config, util
 from charter.frame import layout
+from charter.frame.component import Fixed
 from tests._tmuxsocket import OPERATOR_SOCKET
 
 
@@ -506,7 +507,8 @@ class ColumnSizesIsTheHalfThatCanBeAppliedFirst(unittest.TestCase):
 
     Pinned here rather than only through that caller, and `tools/sweep.py` is why: deleting
     the edge filter left the whole suite green, because `_apply_sizes` filters again by
-    `_RESIZE_FLAG` on its way to the `-x` and swallowed every extra entry. Two guards in
+    `layout.resize_flag` on its way to the `-x` and swallowed every extra entry. Two
+    guards in
     sequence, the second hiding the first. This asks the function its own question.
     """
 
@@ -536,6 +538,71 @@ class ColumnSizesIsTheHalfThatCanBeAppliedFirst(unittest.TestCase):
         degrades rather than refusing for exactly that reason."""
         self.assertEqual(layout.column_sizes(["sideways", "right"]),
                          {"right": layout.SLOT_SIZE["right"]})
+
+
+class ResizeFlagIsDerivedLikeEveryOtherPerSlotFact(unittest.TestCase):
+    """`resize_flag` — which axis re-asserts a slot's size after a window resize.
+
+    **`commands_frame` kept this as a literal, and it was the last per-slot table charter
+    had not derived.** Every other one here (`SLOT_EDGE`, `SLOT_SIZE`, `_COLUMN_SLOTS`,
+    `_FIXED_ROW_SLOTS`, `VARIABLE_ROW_SLOTS`) is `_derive`'s, built at import from what
+    each component declares, so a component charter did not write is ANSWERED rather than
+    missing. `{"top": "-y", "bottom": "-y", "right": "-x"}` was not — and once a
+    `[[frame.component]]` table could place a component under its own id, that component
+    was sized by `slot_sizes`, charged to the harness by `harness_rows`, and then never
+    re-asserted at all, so the harness's own `-y` took its rows out of a neighbour and the
+    variable row slot absorbed the whole error.
+
+    Asked of the function on names it can only answer by deriving, which is the property.
+    `tests/test_frame_density` asserts the same fact through the caller that issues the
+    `resize-pane`, and `tests/test_frame_tmux_integration` against a real server.
+    """
+
+    def test_the_shipped_slots_get_the_axis_their_split_already_uses(self):
+        """One fact, two consumers: `panel_argvs` splits `-v`/`-h` off the same edge this
+        reads. A `-x` on a horizontal strip would assert a WIDTH on a full-width pane."""
+        self.assertEqual([layout.resize_flag(s) for s in ("top", "bottom", "right")],
+                         ["-y", "-y", "-x"])
+
+    def test_the_variable_row_slot_gets_no_axis_at_all(self):
+        """In a stack of N panes only N-1 heights are free (#515), so the pane left out is
+        the one whose height is already a function of every other. Asserted as `None` and
+        not as "not -y": an axis of any kind here is the measured failure."""
+        self.assertIsNone(layout.resize_flag("repos"))
+
+    def test_a_component_this_plane_placed_is_answered_from_its_own_edge(self):
+        """The case the literal could not have. `chats` is in no shipped table, so the
+        answer comes from the placement — and a component on `left` or `right` gets the
+        columns axis by the same route, which is what stops a provider's side panel being
+        the same defect one axis over."""
+        arrangement = {"components": [
+            {"slot": "chats", "edge": "top", "size": Fixed(1)},
+            {"slot": "acme.metrics", "edge": "right", "size": Fixed(30)}]}
+        with mock.patch.dict(config.FRAME, arrangement):
+            self.assertEqual(layout.resize_flag("chats"), "-y")
+            self.assertEqual(layout.resize_flag("acme.metrics"), "-x")
+
+    def test_a_name_nothing_placed_gets_no_axis_rather_than_a_default(self):
+        """`_edge_of`'s own contract read one step on: a name charter knows nothing about
+        falls out of both edge tests instead of being assigned a side, which is the same
+        filter-don't-refuse degrade `slot_sizes` and `column_sizes` already make."""
+        self.assertIsNone(layout.resize_flag("sideways"))
+
+    def test_every_slot_the_harness_is_charged_rows_for_is_one_tmux_is_told_about(self):
+        """**The invariant the defect broke, stated as the relation rather than as a
+        list.** `harness_rows` subtracts a row for every horizontal strip in the map, so
+        each of those has to be a strip something re-asserts — or the harness's explicit
+        height takes rows nothing puts back. The one exception is the variable row slot,
+        which is the remainder by construction."""
+        arrangement = {"components": [
+            {"slot": "chats", "edge": "top", "size": Fixed(1)}]}
+        placed = ["top", "chats", "bottom", "repos", "right"]
+        with mock.patch.dict(config.FRAME, arrangement):
+            sizes = layout.slot_sizes(placed, window_rows=50, content_rows=6)
+            charged = [s for s in sizes if layout._edge_of(s) not in layout._COLUMN_EDGES]
+            self.assertEqual(charged, ["top", "chats", "bottom", "repos"])
+            self.assertEqual([s for s in charged if layout.resize_flag(s) is None],
+                             list(layout.VARIABLE_ROW_SLOTS))
 
 
 class SlotSizesAnswersEverySlotAtOnce(unittest.TestCase):

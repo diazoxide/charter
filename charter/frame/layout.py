@@ -666,6 +666,58 @@ def column_sizes(slots: list[str] | tuple[str, ...]) -> dict[str, int]:
     return out
 
 
+def resize_flag(slot) -> str | None:
+    """Which ``resize-pane`` axis re-asserts *slot*'s size, or ``None`` for a pane tmux is
+    never told the size of — `commands_frame._apply_sizes`' filter.
+
+    **Derived, because a hand-written table of per-slot facts is what this module stopped
+    keeping.** :data:`SLOT_EDGE`, :data:`SLOT_SIZE`, :data:`_COLUMN_SLOTS`,
+    :data:`_FIXED_ROW_SLOTS` and :data:`VARIABLE_ROW_SLOTS` are all `_derive`'s, built once
+    at import from what each component declares, precisely so that a component charter did
+    not write answers the same questions through the same two readers (:func:`_edge_of`,
+    :func:`_size_of`) rather than being missing from a literal. `commands_frame` kept a
+    sixth such table in its own module — ``{"top": "-y", "bottom": "-y", "right": "-x"}`` —
+    and it was the one nothing derived.
+
+    **What that cost, once Phase 5 made a `[[frame.component]]` table reachable.** A placed
+    component travels under its own id (`chats`, `workspaces`, a provider's), which is in
+    no literal here; :func:`slot_sizes` sizes it, :func:`harness_rows` CHARGES the harness
+    for its rows, and `_apply_sizes` then issued no `resize-pane` for it at all. So the
+    harness's explicit ``-y`` took those rows out of a neighbour and the one pane nothing
+    asserts — the variable row slot — absorbed the whole error. Measured on tmux 3.7c, a
+    frame with `chats` placed at `size = 1`, grown from 200x40 to 200x90 and put through
+    the real `window-resized` handler::
+
+        want   top 1   chats 1   harness 76   repos 7   bottom 1
+        got    top 1   chats 7   harness 76   repos 1   bottom 1
+
+    which is #515's own failure — two sizes swapping panes — in the one place #515 did not
+    reach. It is stable rather than transient: three further resizes with no window change
+    reproduced it exactly.
+
+    **``None`` for the variable row slot, and that is the same decision it always was.**
+    tmux's `resize-pane` moves exactly ONE boundary, so in a stack of N panes only N-1
+    heights are free; assert all N and the outcome depends on the order. The pane left out
+    is the one whose height is already a function of every other (:data:`VARIABLE_ROW_SLOTS`),
+    the harness is told its height explicitly (:func:`harness_rows`), and the table lands on
+    exactly :func:`repos_rows`' answer without anything naming it. Measured on tmux 3.7c at
+    200x50, asserting `top`, `bottom` and `repos` in split order: the table came back **1**
+    row tall and the attention strip **6**.
+
+    **``None`` for a name nothing placed**, which is :func:`_edge_of`'s own contract read
+    one step on: a slot charter knows nothing about falls out of both edge tests rather
+    than being assigned an axis, and `_apply_sizes` skips it exactly as the literal's
+    ``.get`` used to. The axis for the two it does know is the same one `panel_argvs`
+    already encodes as `-v`/`-h` at split time, asked of the same :func:`_edge_of`.
+    """
+    if _key(slot) in VARIABLE_ROW_SLOTS:
+        return None
+    edge = _edge_of(slot)
+    if edge in _COLUMN_EDGES:
+        return "-x"
+    return "-y" if edge in _ROW_EDGES else None
+
+
 def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int,
                pinned_rows: int | None = None) -> dict[str, int]:
     """Every slot in *slots* mapped to the size it should be given — rows for the
