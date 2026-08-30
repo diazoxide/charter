@@ -252,6 +252,38 @@ _WINDOW_SIZE_FORMAT = "#{window_width}:#{window_height}"
 #: the pane after the side panels have been put back where they belong.
 _PANE_WIDTH_FORMAT = "#{pane_width}"
 
+#: The format that says WHERE a pane is — the session and the window it belongs to, as
+#: tmux's own ids rather than as names (#684).
+#:
+#: Both halves, in one ask, because both are needed at the same instant and by the same
+#: caller: `cmd_chat` has to know the target is in the session it is switching WITHIN
+#: before it selects anything, and has to know which window to expect the client on
+#: afterwards. Ids and never `#{session_name}`/`#{window_name}`: a name is not an
+#: identity (`_CHAT_OPTION` records the measurement — `allow-rename on` let a pane's own
+#: output rename its window), the ids are what tmux hands back for its own targets, and
+#: `#{session_id}` is about to be one.
+#:
+#: `:` is the separator because neither id can contain it: tmux spells them `$<digits>`
+#: and `@<digits>`, which is exactly what :data:`_SESSION_ID_RE` and :data:`_WINDOW_ID_RE`
+#: hold them to on the way back.
+_PANE_PLACE_FORMAT = "#{session_id}:#{window_id}"
+
+#: The format that says which window a SESSION is on right now — what a switch has to
+#: read back before it may believe the client moved. Measured on tmux 3.7c and 3.2:
+#: `display-message -p -t $N` resolves to that session's CURRENT window, so this is the
+#: reading `select-window`'s return code is not.
+_WINDOW_ID_FORMAT = "#{window_id}"
+
+#: tmux's own shapes for a session and a window, held to for :data:`_PANE_ID_RE`'s reason
+#: and at its boundary: both come back through text tmux re-parsed, and the session id
+#: goes straight back out as a `-t` target. A format that expanded to nothing — which is
+#: what tmux answers for a target it cannot resolve, with rc **0** and no stderr (measured
+#: on 3.7c) — fails these rather than becoming an empty target, and an empty `-t` resolves
+#: to the CURRENT window, which is the exact shape #668's own last commit closed for
+#: `select-window`.
+_SESSION_ID_RE = re.compile(r"\$[0-9]+")
+_WINDOW_ID_RE = re.compile(r"@[0-9]+")
+
 #: How long `_wait_for_harness` leaves between asks. There is no `attach` to block on
 #: inside an operator's tmux — the operator is already attached, to their own server —
 #: so the launcher watches the pane instead, and this is the cost of that: one local
@@ -4831,6 +4863,75 @@ def cmd_toggle(args) -> int:
     return 0
 
 
+def _pane_place(socket: str, pane: str | None) -> tuple[str, str] | None:
+    """Which tmux SESSION and WINDOW *pane* is in, as ids — or ``None`` (#684).
+
+    **The question `chats.py` cannot ask and `select-window`'s return code does not
+    answer.** `chats.of_workspace` decides membership from a FILE — `state.frame_workspace`,
+    which `charter workspace use` rewrites and `switch.to_workspace` rewrites again — so
+    two chats can share a roster while their windows are in two different tmux sessions.
+    The session is where a chat actually lives (`cmd_launch` makes the workspace the
+    session), it is not written down anywhere charter can read, and it moves at runtime.
+    So it is asked of tmux, at the moment it matters.
+
+    ``None`` for every way that can fail to answer, because the caller does the same thing
+    with each: refuse, and touch nothing. A *pane* is required rather than a name, and
+    checked here rather than at the call site, for the reason `_relayout_target` checks the
+    same record: the value arrives off disk, and `display-message -p -t ""` does not fail —
+    **measured on tmux 3.7c: an unresolvable target answers rc 0, empty stdout and no
+    stderr**, and an EMPTY target resolves to the current window, which would have this
+    function report the asker's own place as the target's and agree that a switch may
+    proceed.
+
+    That measurement is also why the return code alone is not the guard: it is the same
+    rc-0-on-the-wrong-thing shape as `select-window -t %N` succeeding against another
+    session's pane, which is #684 itself.
+    """
+    if not _PANE_ID_RE.fullmatch(pane or ""):
+        return None
+    p = tmuxctl.run("asking which window a chat is in",
+                    tmuxctl.server_argv(socket, "display-message", "-p", "-t", pane,
+                                        _PANE_PLACE_FORMAT))
+    # **The SHAPE of what came back, and deliberately not the return code.** A status of
+    # 0 is what an unresolvable target answers with here, so branching on it would be the
+    # same mistake one noun over from the one this whole function exists to correct. Both
+    # halves are held: the session id is about to be a `-t` target (#475's rule at #475's
+    # boundary), and a window id that came back empty beside a session id that did not is
+    # an answer charter has no reading of — treated as "no window", which is the sentence
+    # it would get anyway one line later, said for the right reason.
+    sid, _, wid = p.stdout.strip().partition(":")
+    if not _SESSION_ID_RE.fullmatch(sid) or not _WINDOW_ID_RE.fullmatch(wid):
+        return None
+    return sid, wid
+
+
+def _session_window(socket: str, session: str) -> str:
+    """The window *session* is on right now, as tmux reported it.
+
+    What "did the client actually move" is asked as. `select-window` sets the SESSION's
+    current window and the clients attached to it follow, so this is the reading that says
+    whether the switch happened — and it is a different fact from `select-window`'s exit
+    status, which is 0 for a window of a session the asker is not in (measured on tmux
+    3.7c: `select-window -t %N` against another session returned 0 and moved THAT session,
+    while the asking client stayed exactly where it was).
+
+    *session* is `#{session_id}`, held to :data:`_SESSION_ID_RE` by the only thing that
+    produces one here (:func:`_pane_place`) before it ever reaches this. A session NAME
+    would be the wrong currency twice over: it is renameable, and `-t api.1` is parsed by
+    tmux as ``window.pane`` rather than as a name with a dot in it.
+    """
+    # Whatever came back, unexamined, and that is the honest shape rather than a missing
+    # guard. The one caller compares this against a window id `_pane_place` has ALREADY
+    # held to `_WINDOW_ID_RE`, so equality already implies this is one — and an answer
+    # tmux could not resolve (rc 0, empty stdout, measured on 3.7c) compares unequal and
+    # is read as "the client did not move", which is the safe direction because what
+    # follows a move is a teardown. A regex here would be a second guard for what the
+    # comparison already decides, and the deletion sweep is where that shows up.
+    return tmuxctl.run("asking which chat this client is on now",
+                       tmuxctl.server_argv(socket, "display-message", "-p", "-t",
+                                           session, _WINDOW_ID_FORMAT)).stdout.strip()
+
+
 #: How long the palette waits, at SHUTDOWN, for an action's ``run`` to have returned.
 #:
 #: **Not a wait for the work — a wait for the START.** §4g's fire-and-report says ``run``
@@ -4854,10 +4955,24 @@ def cmd_chat(args) -> int:
 
     **Four steps, and every one of them is an existing path** (spec §3.7):
 
+    0. **Where both chats are, asked of tmux, before anything is aimed anywhere** (#684,
+       :func:`_pane_place`). Not one of the four, and it is here because every one of them
+       assumes something no record on disk can promise: that the target's window is a
+       window this client can be moved to. `chats.of_workspace` matches a workspace FILE,
+       which `charter workspace use` and `switch.to_workspace` both rewrite, so two chats
+       can share a roster with their windows in two different tmux sessions — and
+       `select-window` at another session's pane returns **0**, moves that session, and
+       leaves this client exactly where it was. Steps 1 and 2 then reported a switch that
+       had not happened and tore down the panels of the chat still on screen.
     1. `select-window` at the target chat's own harness PANE. A pane id resolves to that
        pane's window — measured on tmux 3.7c and on tmux 3.2 — which is why charter needs
        no window-id record beside the pane record it already keeps
        (`state.record_harness_pane`), and why there is no second thing to keep in step.
+       Its status is checked and is **not** what says the switch worked: step 0's reading,
+       taken again afterwards, is (:func:`_session_window`). A command that exits 0 having
+       acted on the wrong target is indistinguishable from one that acted on the right
+       one, so the teardown below is gated on the client having moved rather than on a
+       return code.
     2. :func:`_apply_arrangement` with ``want=[]`` on the chat being left, which tears its
        panels down. Not a saving — a correctness rule. A background window keeps STALE
        geometry (§7.4, measured identically on 3.7c and 3.2), so panels left running there
@@ -4937,6 +5052,47 @@ def cmd_chat(args) -> int:
         _say_on_screen(fid, f"cannot switch: chat '{target}' stopped being one while "
                             "charter was switching to it")
         return 0
+    # **Where the two chats actually are, asked of tmux before anything is aimed at
+    # anything** (#684). `chats.check` has established that both are chats of one
+    # workspace and — since this issue — that both are on one tmux SERVER, and neither of
+    # those is "in one tmux session". `cmd_launch` makes the workspace the session, but
+    # the record membership is read from is a FILE that moves: `charter workspace use
+    # beta` typed inside chat `api.1` repoints it, `switch.to_workspace` repoints it
+    # again, and after one of those `of_workspace("beta")` returns `api.1` — a window of
+    # session `api` — beside `beta.1`, in one roster.
+    here_place = _pane_place(socket, chats.pane_of(fid))
+    there_place = _pane_place(socket, pane)
+    if there_place is None:
+        # The window is gone, learnt BEFORE anything is selected rather than from
+        # `select-window`'s status afterwards. Same sentence it used to be said with, one
+        # step earlier, and the step is what makes it honest: `display-message` answers rc
+        # 0 with nothing for a target it cannot resolve, so this is the reading that says
+        # the window is absent rather than the one that says a command exited.
+        _say_on_screen(fid, f"cannot switch: chat '{target}' has no window any more")
+        return 0
+    if here_place is None:
+        # The asker's own window cannot be found, so there is no session to compare
+        # against and no way to tell afterwards whether the client moved. Refused rather
+        # than guessed at, because the guess costs the panels of the chat the operator is
+        # still looking at — `_relayout_target(fid)` is about to be handed the same
+        # record, and a switch that cannot establish where it is standing must not tear
+        # anything down.
+        _say_on_screen(fid, "cannot switch: charter cannot find this chat's own window, "
+                            "so it cannot tell whether a switch would move this client")
+        return 0
+    if here_place[0] != there_place[0]:
+        # **The refusal #684 is about, and it is about an identity rather than a name.**
+        # Measured on tmux 3.7c, own socket: `select-window -t %N` where `%N` is a window
+        # of ANOTHER session returns **0** and moves that session's current window, while
+        # the asking client does not move at all. So the status check below could never
+        # have caught this, and what followed it was `_apply_arrangement(fid, want=[])` —
+        # charter tearing down the panels of the chat still on screen, having reported a
+        # switch that did not happen. That is verbatim the failure #668's own last commit
+        # says it closed, closed there for the `select-window -t ""` spelling only.
+        _say_on_screen(fid, f"cannot switch: chat '{target}' is a window of another tmux "
+                            "session, so selecting it would move that session and leave "
+                            "this client here")
+        return 0
     selected = tmuxctl.run("switching to the chat",
                            tmuxctl.server_argv(socket, "select-window", "-t", pane))
     if selected.returncode != 0:
@@ -4952,6 +5108,17 @@ def cmd_chat(args) -> int:
         # survivor for that reason. `_say_on_screen`'s own `inert_format` is what makes
         # this a tmux format's business rather than this line's.
         _say_on_screen(fid, f"cannot switch: chat '{target}' has no window any more")
+        return 0
+    if _session_window(socket, here_place[0]) != there_place[1]:
+        # **The teardown is gated on the client having MOVED, not on a command having
+        # exited 0** (#684). The session check above is what stops charter selecting
+        # somebody else's window; this is what stops it acting as though a selection
+        # worked. They are two different properties and the second is the one the panels
+        # ride on: everything below this line assumes the window the operator is looking
+        # at is the target's, and `want=[]` on that assumption is the defect rather than a
+        # tidy-up. A refusal here leaves both chats exactly as they were.
+        _say_on_screen(fid, f"cannot switch: tmux selected chat '{target}' but this "
+                            "client did not move, so this chat keeps its panels")
         return 0
     here = _relayout_target(fid)
     if here is not None:

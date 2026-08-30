@@ -279,6 +279,19 @@ def check(fid: str, chat: str) -> Outcome:
       which is a re-layout an operator did not ask for and ~90 ms of blank panes; and the
       row is drawn with `choose.MARK` beside it, so the operator can see they are already
       there before they press it.
+    * **not on this frame's tmux server** — and this one is about an IDENTITY where every
+      rule above it is about a name (#684). A workspace's chats are the directories whose
+      `workspace` file names it, and that file says nothing about where the chat is
+      RUNNING: charter has two servers (its own `-L charter` and, inside an operator's
+      tmux, theirs), a chat can be open on each, and `state.frame_server` is the record
+      that tells them apart. Pane ids are per-server — `%3` on one is somebody else's pane
+      on the other — so a switch that crossed servers would aim a `select-window` at a
+      real, live, unrelated pane and be told it worked. Compared as recorded, with no
+      default filled in for a missing marker: every chat this charter launches records one
+      on both paths, so an absent value is a truncated record rather than a migration
+      (`of_workspace` already keeps old `{workspace}-{pid}` frames out of the roster
+      entirely), and "charter cannot tell" is the same answer as "somewhere else" for a
+      switch that is about to move a client.
     * **no usable harness pane** — the target's window cannot be named. `select-window`
       is aimed at the chat's own harness pane (measured on tmux 3.7c and 3.2: a pane id
       resolves to that pane's window), and `state.harness_pane` is the record that holds
@@ -294,6 +307,13 @@ def check(fid: str, chat: str) -> Outcome:
     for the row and once for the switch — would be two answers to it. `cmd_chat` selects
     the window and reports what tmux said, which is the reading that is true at the
     instant it matters rather than the instant the palette opened.
+
+    **Nor is the tmux SESSION, for the same reason and with a sharper edge** (#684). The
+    server above is a record and belongs here; which session a chat's window is in is a
+    fact only tmux holds, it moves while the palette is open, and `cmd_launch` makes the
+    workspace the session while membership here is read from a file `charter workspace
+    use` can repoint. `cmd_chat` asks it (`commands_frame._pane_place`) at the one moment
+    it decides anything, and refuses there.
     """
     shown = contain.one_line(chat)
     if not ID_RE.fullmatch(chat or ""):
@@ -303,6 +323,9 @@ def check(fid: str, chat: str) -> Outcome:
         return Outcome(False, f"no chat '{shown}' here — have: {_some(names)}")
     if chat == fid:
         return Outcome(False, f"already in chat '{shown}'")
+    if state.frame_server(chat) != state.frame_server(fid):
+        return Outcome(False, f"chat '{shown}' is not on this frame's tmux server, so "
+                              "charter cannot move this client to its window")
     if pane_of(chat) is None:
         return Outcome(False, f"charter has no usable record of chat {shown}'s harness "
                               "pane, so it cannot find its window — relaunch that chat")
