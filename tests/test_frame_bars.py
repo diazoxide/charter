@@ -92,6 +92,47 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         self.assertEqual(names[int(left[1:])], drawn[0],
                          f"the leading count does not name where the page starts: {row!r}")
 
+    def test_a_page_is_cut_inside_the_room_its_own_leading_count_has_left(self):
+        """**The leading `+N` is paid for before a name is, and this is where that shows.**
+
+        A page after the first is cut inside `room` MINUS that count, so the row it goes on
+        to compose fits the pane. Cut inside the whole room instead and the row comes out
+        one name too wide — the ladder measures it, gives the entire rung up, and a name
+        with a perfectly good page is drawn as `3/15`, with nothing on the bar to click.
+        The deletion sweep found that reserve unpinned and this is the case it asked for.
+
+        Asked as the property that failure breaks, which is **widening the pane never takes
+        a name away**. The reserve is what keeps the ladder monotone: without it a wider
+        room cuts a page one name longer, the leading count that page has to carry was
+        never budgeted for, the row overflows and the whole rung is given up. Measured on
+        the mutant — with these fifteen names the row is drawn at 31 columns, gone at 42
+        through 45, and back at 46. A bar that loses its names when the pane gets bigger is
+        a bug an operator reports as a flicker.
+
+        Every name of the list, at every width from 0 to 200, plus the narrowest row for
+        three of them written out — one near the start, one in the middle, one at the end,
+        because the leading count is two cells wide for some and three for others.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for here in names:
+            drawn = [w for w in range(201)
+                     if here in self._row(w, names=names, here=here)]
+            self.assertTrue(drawn, f"{here} is drawn at no width at all")
+            missing = [w for w in range(min(drawn), 201) if w not in drawn]
+            self.assertEqual(missing, [],
+                             f"{here} was drawn at {min(drawn)} columns and gone at "
+                             f"{missing[:3]} — the pane got wider and lost a name")
+        for here, expected in (("workspace-02", "chats  +2  *workspace-02  +12"),
+                               ("workspace-07", "chats  +7  *workspace-07  +7"),
+                               ("workspace-13", "chats  +13  *workspace-13  +1")):
+            narrowest = min(w for w in range(201)
+                            if here in self._row(w, names=names, here=here))
+            row = self._row(narrowest, names=names, here=here)
+            self.assertEqual(row.strip(), expected)
+            self.assertEqual(tui.width(row), narrowest,
+                             "the row does not fill the width it is first drawn at, so "
+                             "this measures no boundary")
+
     def test_the_page_is_the_same_page_for_every_name_on_it(self):
         """**Why it is a page and not a window centred on the marked name.** The cut is a
         function of the names and the width alone, so switching to a tab that is ON the row
