@@ -312,6 +312,16 @@ order is split order, so the bar named last is split off last.
 Both are the first things a short terminal gives up — before the identity row, because the
 palette reaches everything they show and nothing is lost but the reminder.
 
+**You can edit the arrangement while the frame is running**, which is when you can see what
+you are arranging. The file is re-read at the next re-layout — a density row or a
+component's own key, `F2` back into the chat, or a terminal resize that changes the frame's
+shape — and the running frame is made to match it: a component you added gets a pane, one
+you removed loses its pane, and one that already has a pane keeps the pane it has. Charter
+works that out by asking tmux which panes this window holds and which components they draw,
+not by consulting its own notes, so a frame that has been rearranged several times in one
+session still ends up with exactly one panel per component. Panes you split yourself are
+not part of that reckoning and are never touched.
+
 ## Inside a tmux you already have
 
 **Run from inside an existing tmux session, the frame does not nest.** Charter reads

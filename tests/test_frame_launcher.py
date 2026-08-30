@@ -1459,7 +1459,7 @@ class _FakeTmux:
     def __init__(self, *, pane_id="%7", exit_code=None, race_death_status=None,
                 still_live=False, pre_existing_sessions=frozenset(),
                 pre_existing_chats=frozenset(), current_chat=None, list_windows_rc=0,
-                panel_pane_ids=None, pane_capture="",
+                panel_pane_ids=None, window_panes=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
                 kill_rc=0, arm_rc=0, hatch_rc=0, mark_rc=0, chrome_rc=0,
@@ -1490,6 +1490,17 @@ class _FakeTmux:
         # `split-window`'s own handler below for why that matters for every other test
         # in this class).
         self.panel_pane_ids = panel_pane_ids or {}
+        #: `{harness pane: {panel pane id: component}}` — which panes each WINDOW already
+        #: holds, which is the question #714's reconciliation asks tmux before it splits
+        #: or kills anything (`_window_panels`). A window this fake knows nothing about
+        #: answers with its harness pane alone, which is what a window a launch has just
+        #: created really contains; a test that plants a chat's panels with
+        #: `state.record_panes` states them here too, or it is describing a server where
+        #: the record names panes the window does not have.
+        #:
+        #: Grown as `split-window` hands ids out, so the panes a launch creates are in the
+        #: answer to a later `list-panes` without any test having to say so twice.
+        self.window_panes = {h: dict(p) for h, p in (window_panes or {}).items()}
         self.session_rc = session_rc
         self.source_rc = source_rc
         self.env_set_rc = env_set_rc
@@ -1569,13 +1580,28 @@ class _FakeTmux:
             return subprocess.CompletedProcess(cmd, self.hatch_rc, stdout="",
                                                stderr="" if self.hatch_rc == 0
                                                else "cannot set")
-        if commands_frame._PANEL_OPTION in cmd:
-            # The panel mark (#634). Matched on the PRODUCTION constant, like the hatch
-            # option above, so a rename is answered here rather than raising "unexpected
-            # tmux command" in every test that draws a panel.
+        if (commands_frame._PANEL_OPTION in cmd
+                or commands_frame._PANEL_SLOT_OPTION in cmd):
+            # The panel mark (#634) and, beside it, which component that panel draws
+            # (#714). Matched on the PRODUCTION constants, like the hatch option above,
+            # so a rename is answered here rather than raising "unexpected tmux command"
+            # in every test that draws a panel. One knob for the pair: both are `-p`
+            # writes on a pane charter has just created, both are reported and neither is
+            # fatal, so a test that wants to fail one wants the same consequence from the
+            # other.
             return subprocess.CompletedProcess(cmd, self.mark_rc, stdout="",
                                                stderr="" if self.mark_rc == 0
                                                else "cannot set")
+        if "list-panes" in cmd:
+            # #714's reconciliation asking the window what it holds. The target is always
+            # in its own answer — tmux lists the window CONTAINING it — and it is a pane
+            # charter never marked, so it comes back with both options empty. Everything
+            # else in the window is a panel charter split, carrying the mark and its
+            # component (`self.window_panes`). A window this fake knows nothing about is
+            # therefore a window holding only its harness, which is what a launch's brand
+            # new one really contains.
+            return subprocess.CompletedProcess(cmd, 0, stderr="", stdout=self._panes(
+                cmd[cmd.index("-t") + 1]))
         if _is_chrome(cmd):
             return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
                                                stderr="" if self.chrome_rc == 0
@@ -1612,6 +1638,13 @@ class _FakeTmux:
             # order, so a test can name exactly which slot(s) it wants a real id for.
             slot = cmd[cmd.index("panel") + 1] if "panel" in cmd else None
             pane_id = self.panel_pane_ids.get(slot, "") if self.panel_rc == 0 else ""
+            if pane_id:
+                # A pane split off the harness joins that harness's WINDOW, which is what
+                # a later `list-panes` has to report (#714). Recorded here rather than
+                # restated by each test, so the fake cannot answer that a window lacks a
+                # pane this same fake just created in it.
+                self.window_panes.setdefault(cmd[cmd.index("-t") + 1],
+                                             {})[pane_id] = slot
             return subprocess.CompletedProcess(cmd, self.panel_rc,
                                                stdout=f"{pane_id}\n" if pane_id else "",
                                                stderr="" if self.panel_rc == 0 else "no space for a new pane")
@@ -1671,6 +1704,16 @@ class _FakeTmux:
                 live.add(self.fid)
             return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
         raise AssertionError(f"unexpected tmux command in test: {cmd}")
+
+    def _panes(self, harness: str) -> str:
+        """`list-panes -F` output for *harness*'s window, in `_PANEL_LIST_FORMAT`'s three
+        fields — built from the production constants rather than typed, so a rename of
+        either pane option is answered here instead of silently producing a reply
+        `_window_panels` reads as "not charter's pane"."""
+        rows = [f"{harness}  "]
+        rows += [f"{pane} {commands_frame._PANEL_MARK} {slot}"
+                 for pane, slot in self.window_panes.get(harness, {}).items()]
+        return "\n".join(rows) + "\n"
 
     def _seats(self) -> str:
         """One row per window of this session, in `_WINDOW_SEAT_FORMAT`'s three fields.
@@ -2306,8 +2349,13 @@ class ALaunchTakesThePanelsOfTheChatItLeaves(PersonaIso, unittest.TestCase):
         state.record_server("demo.1", commands_frame.SOCKET)
         state.record_harness_pane("demo.1", "%1")
         state.record_panes("demo.1", panels={"top": "%3", "bottom": "%4"})
+        # And the same two panes on the SERVER, because that is where #714's
+        # reconciliation looks for them: a record naming panes the window does not hold
+        # describes a chat whose panels are already gone, which is a different fixture and
+        # not this one.
         return _FakeTmux(exit_code=0, pre_existing_sessions={"demo"},
-                         pre_existing_chats={"demo.1"}, current_chat="demo.1", **kw)
+                         pre_existing_chats={"demo.1"}, current_chat="demo.1",
+                         window_panes={"%1": {"%3": "top", "%4": "bottom"}}, **kw)
 
     @staticmethod
     def _killed(fake) -> list[str]:
@@ -4796,7 +4844,8 @@ class _FakeOperatorTmux:
                  pane_vanishes=False, window_size=(200, 50),
                  pre_existing_windows=("zsh",), current_chat="", list_windows_rc=0,
                  new_window_rc=0, arm_rc=0, chrome_rc=0, respawn_rc=0, panel_rc=0,
-                 panel_pane_ids=None, resize_hook_rc=0, select_rc=0, kill_rc=0,
+                 panel_pane_ids=None, window_panes=None, resize_hook_rc=0,
+                 select_rc=0, kill_rc=0,
                  pane_capture="", capture_rc=0, chat_option_rc=0, chat_list_rc=0):
         self.window_id = window_id
         self.pane_id = pane_id
@@ -4822,6 +4871,10 @@ class _FakeOperatorTmux:
         self.respawn_rc = respawn_rc
         self.panel_rc = panel_rc
         self.panel_pane_ids = panel_pane_ids or {}
+        #: `{harness pane: {panel pane id: component}}` — what each WINDOW holds, which is
+        #: what #714's reconciliation asks the server before it splits or kills anything.
+        #: `_FakeTmux` carries the identical knob for the identical reason; see there.
+        self.window_panes = {h: dict(v) for h, v in (window_panes or {}).items()}
         self.resize_hook_rc = resize_hook_rc
         self.select_rc = select_rc
         self.kill_rc = kill_rc
@@ -4887,8 +4940,21 @@ class _FakeOperatorTmux:
         if "remain-on-exit" in cmd:
             return subprocess.CompletedProcess(cmd, self.arm_rc, stdout="",
                                                stderr="" if self.arm_rc == 0 else "cannot set")
-        if commands_frame._PANEL_OPTION in cmd:
+        if (commands_frame._PANEL_OPTION in cmd
+                or commands_frame._PANEL_SLOT_OPTION in cmd):
+            # The panel mark and, beside it, which component that panel draws (#714).
             return self._ok(cmd)
+        if "list-panes" in cmd:
+            # #714's reconciliation asking a window what it holds. The target is always in
+            # its own answer (tmux lists the window CONTAINING it) and is a pane charter
+            # never marked; everything else is a panel charter split, carrying the mark
+            # and its component. A window this fake knows nothing about therefore holds
+            # only its harness, which is what a window this launch just opened contains.
+            harness = cmd[cmd.index("-t") + 1]
+            rows = [f"{harness}  "] + [
+                f"{pane} {commands_frame._PANEL_MARK} {slot}"
+                for pane, slot in self.window_panes.get(harness, {}).items()]
+            return self._ok(cmd, stdout="\n".join(rows) + "\n")
         if _is_chrome(cmd):
             return subprocess.CompletedProcess(cmd, self.chrome_rc, stdout="",
                                                stderr="" if self.chrome_rc == 0
@@ -4933,6 +4999,10 @@ class _FakeOperatorTmux:
         if "split-window" in cmd:
             slot = cmd[cmd.index("panel") + 1] if "panel" in cmd else None
             pane = self.panel_pane_ids.get(slot, "") if self.panel_rc == 0 else ""
+            if pane:
+                # A pane split off the harness joins that harness's window, and a later
+                # `list-panes` has to say so (#714).
+                self.window_panes.setdefault(cmd[cmd.index("-t") + 1], {})[pane] = slot
             return subprocess.CompletedProcess(cmd, self.panel_rc,
                                                stdout=f"{pane}\n" if pane else "",
                                                stderr="" if self.panel_rc == 0 else "no space")
@@ -5295,7 +5365,10 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         state.record_server("op.1", OPERATOR_SOCKET)
         state.record_harness_pane("op.1", "%1")
         state.record_panes("op.1", panels={"top": "%3"})
-        fake = _FakeOperatorTmux(exit_code=0, current_chat="op.1")
+        # And on the SERVER, where #714's reconciliation looks for it: a record naming a
+        # pane the window does not hold is a chat whose panel has already gone.
+        fake = _FakeOperatorTmux(exit_code=0, current_chat="op.1",
+                                 window_panes={"%1": {"%3": "top"}})
         self.assertEqual(_launch_inside(fake), 0)
         self.assertIn(["tmux", "-S", OPERATOR_SOCKET, "kill-pane", "-t", "%3"],
                       fake.calls,
