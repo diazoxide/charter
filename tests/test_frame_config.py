@@ -175,20 +175,51 @@ class CharterOwnPlaneDrawsEveryEdgeItShips(unittest.TestCase):
     has is filtered to nothing here, which reads on screen the same way as a list missing
     one. And the whole set is required rather than a membership check on today's newest
     name — the next slot has the same problem and should not need a new test.
+
+    **A SUPERSET, and never an equality (#701).** The class name is the claim: *this
+    plane draws every edge charter ships*. `assertEqual` said something stronger and
+    different — *this plane draws these and nothing else* — which is not a property
+    charter wants, and it made a shipped FEATURE unusable on the plane that ships it.
+    Adding the two bars `docs/frame.md` documents (`chats`, `workspaces` — components
+    with no `[frame] slots` word at all, #687) turned these red, so charter's own
+    operator and CI on every branch were pinned to the shipped default forever. That is
+    #661 one file over: a config read that turned an operator's legal choice into a
+    failure, and #662 fixed it by asking the question the code was actually about.
+
+    What the superset keeps that a bare *"extras are allowed"* would have given away:
+    both cases below still go RED when this plane stops drawing an edge charter ships —
+    the case the class exists for — and the second still pins the split order, because
+    the order is the geometry. Neither is a membership check on a name written out here:
+    the expectation comes off `instance.FRAME_SLOTS`, so the slot charter ships next is
+    already covered.
     """
 
     def test_the_committed_slots_line_names_every_slot_charter_can_draw(self):
+        """Every shipped slot appears. The missing ones are computed and asserted empty
+        rather than written `assertLessEqual(set(…), set(…))`, so a failure NAMES the
+        edge that went dark instead of printing two sets to diff by eye."""
         got = instance.frame_of(tomllib.loads(_COMMITTED.read_text()))["slots"]
-        self.assertEqual(sorted(got), sorted(instance.FRAME_SLOTS), got)
+        self.assertEqual([s for s in instance.FRAME_SLOTS if s not in got], [],
+                         f"this plane draws {got}, and charter ships "
+                         f"{list(instance.FRAME_SLOTS)}")
 
     def test_the_committed_order_is_the_one_the_geometry_wants(self):
         """The list is the SPLIT order, so it is the geometry (#488/#500): a slot listed
         later sits higher, and a `repos` listed after `right` is inset by the sidebar's
         23 columns and needs a 118-column terminal before it draws a table at all. The
         shipped default is the order charter measured; this file having the same set in a
-        different order would be a frame nobody chose."""
+        different order would be a frame nobody chose.
+
+        A SUBSEQUENCE, not an equality: the shipped slots, in the shipped order, with the
+        plane's own components allowed to sit between them. Written as *drop what the
+        shipped frame does not name, then compare* — one assertion that carries both the
+        order and the membership, and that still reddens on the reversal it was written
+        for (`repos` after `right` filters to `[… 'right', 'repos']`, which is not the
+        shipped list). What it deliberately no longer says is *and nothing else*, which
+        is what a plane placing `chats` between `top` and `bottom` breaks and should."""
         got = instance.frame_of(tomllib.loads(_COMMITTED.read_text()))["slots"]
-        self.assertEqual(got, instance.frame_of({})["slots"])
+        shipped = instance.frame_of({})["slots"]
+        self.assertEqual([s for s in got if s in shipped], shipped, got)
 
 
 class HotkeyIsNotAFreeString(unittest.TestCase):

@@ -457,6 +457,19 @@ class TheRespawnHookStillOnlyArmsNamesCharterCanDraw(unittest.TestCase):
                 self.assertIsNone(self._armed(hostile))
 
 
+#: The slots charter SHIPS, written out — the literal `CharterOwnConfigIsUnchanged` keeps
+#: on purpose, and the one every case in it filters this plane's answer down to.
+#:
+#: A LITERAL here and not `instance.FRAME_SLOTS`, unlike
+#: `test_frame_config.CharterOwnPlaneDrawsEveryEdgeItShips`, and the two want different
+#: things. That class asks *does this plane still draw every edge charter ships* — a
+#: question about a set that MOVES, so it has to read the set. This class asks *does the
+#: frame still resolve to what it resolved to* across a refactor, so a change to the
+#: shipped four SHOULD come and update this line by hand. Both reds are wanted; only the
+#: red an operator's own `[[frame.component]]` used to cause was not (#701).
+_SHIPPED_SLOTS = ["top", "bottom", "repos", "right"]
+
+
 class CharterOwnConfigIsUnchanged(unittest.TestCase):
     """charter's own committed `charter.toml` resolves to the frame it always drew.
 
@@ -464,14 +477,32 @@ class CharterOwnConfigIsUnchanged(unittest.TestCase):
     test. This reads the file off disk and pins the whole resolved arrangement — the slot
     list, the component ids behind it, and every rectangle — so a refactor that speaks a
     new vocabulary has to keep answering in the old one.
+
+    **Pins what charter ships, over the plane's answer — never the plane's answer whole
+    (#701).** Every case below drops what `_SHIPPED_SLOTS` does not name and compares
+    what is left, so charter's four keep their ids, their edges, their sizes and their
+    split order, and this plane may also place a component of its own between them.
+    Asserted whole, these four were a claim that charter's own operator may not use
+    `[[frame.component]]` for anything charter did not ship — which is the feature this
+    class's own file exists to place. Adding either bar `docs/frame.md` documents turned
+    all four red, and #661 is the same defect one layer down: a read of the committed
+    file that turned a legal arrangement into a failure.
+
+    What survives the filter is the whole property: a refactor that loses `repos`, moves
+    it off `bottom`, hides it, re-keys it or splits it after the sidebar still reddens
+    every case it used to.
     """
 
     def setUp(self):
         self.cfg = tomllib.loads(_COMMITTED.read_text(encoding="utf-8"))
 
     def test_the_slot_list_is_the_one_that_is_committed(self):
-        self.assertEqual(instance.frame_of(self.cfg)["slots"],
-                         ["top", "bottom", "repos", "right"])
+        """The shipped four, in the shipped order, as a SUBSEQUENCE of what this plane
+        resolves — *drop what charter does not ship, then compare*, which carries the
+        membership and the order in one assertion and still names the whole list on a
+        failure."""
+        got = instance.frame_of(self.cfg)["slots"]
+        self.assertEqual([s for s in got if s in _SHIPPED_SLOTS], _SHIPPED_SLOTS, got)
 
     def test_the_arrangement_it_declares_resolves_to_the_frame_it_always_drew(self):
         """This plane writes its arrangement out, and the tables must still answer the
@@ -487,42 +518,72 @@ class CharterOwnConfigIsUnchanged(unittest.TestCase):
         the geometry (#488/#500): `repos` before `right` draws the table at the full
         window width from 95 columns up; reversed, it is split off a harness the sidebar
         has already narrowed and needs 118. That reversal is exactly what this class
-        caught when the tables were first written."""
+        caught when the tables were first written.
+
+        `assertIsNotNone` is the load-bearing line and is not a formality: an arrangement
+        is refused WHOLE (#535), and this plane's `slots` list resolves to the same four
+        panels its tables do — so a file whose arrangement charter can no longer read
+        falls back to `slots` and every other assertion in this class goes on passing.
+        That silent fallback is how #690 shipped a documented snippet that turned the
+        frame off.
+
+        The edge and visibility are asked of the shipped four only. A component with no
+        committed slot name is in no derived table at all — `SLOT_EDGE` would `KeyError`
+        on `chats` — because its rectangle is read back off this arrangement instead
+        (`layout._placed_here`, #687); and whether the plane's OWN component starts
+        hidden is the operator's line to write, not charter's to pin."""
         got = instance.component_tables(self.cfg.get("frame"))
         self.assertIsNotNone(got, "this plane declares its arrangement")
-        self.assertEqual([c["slot"] for c in got], ["top", "bottom", "repos", "right"])
-        for c in got:
+        shipped = [c for c in got if c["slot"] in _SHIPPED_SLOTS]
+        self.assertEqual([c["slot"] for c in shipped], _SHIPPED_SLOTS,
+                         [c["slot"] for c in got])
+        for c in shipped:
             with self.subTest(use=c["use"]):
                 self.assertEqual(c["edge"], layout.SLOT_EDGE[c["slot"]])
                 self.assertEqual(c["visible"], True)
 
     def test_every_placement_is_the_built_in_it_always_was(self):
-        got = instance.frame_components(self.cfg)
-        self.assertEqual([(p["use"], p["slot"], p["edge"], p["visible"]) for p in got],
-                         [("identity", "top", "top", True),
-                          ("attention", "bottom", "bottom", True),
-                          ("repos", "repos", "bottom", True),
-                          ("sidebar", "right", "right", True)])
+        """Filtered by the component ID rather than by the whole tuple: a `repos` this
+        plane moved, hid or re-keyed stays in the filtered list and reddens the
+        comparison naming itself, instead of being dropped as *not one of ours* and
+        reported as a length that does not match."""
+        want = [("identity", "top", "top", True),
+                ("attention", "bottom", "bottom", True),
+                ("repos", "repos", "bottom", True),
+                ("sidebar", "right", "right", True)]
+        shipped = {use for use, _, _, _ in want}
+        got = [(p["use"], p["slot"], p["edge"], p["visible"])
+               for p in instance.frame_components(self.cfg)]
+        self.assertEqual([t for t in got if t[0] in shipped], want, got)
 
     def test_the_frame_it_splits_is_byte_for_byte_the_frame_it_split(self):
         """The whole launch argv, not a summary of it. `slot_sizes` and `panel_argvs`
         are where a re-keyed table would show up first, and they are asserted against
-        literals rather than against the tables under test."""
+        literals rather than against the tables under test.
+
+        `panel_argvs` is one `split-window` per slot in the order it was handed, which is
+        what `zip(…, strict=True)` says out loud — so pairing each argv with its slot and
+        then keeping the shipped ones asserts the argv AND its position, and a length
+        that stopped matching is a `ValueError` here rather than four argvs silently
+        compared against the wrong four slots."""
         f = instance.frame_of(self.cfg)
         with mock.patch.dict(config.FRAME, f):
             sizes = layout.slot_sizes(f["slots"], window_rows=50, content_rows=6)
-            self.assertEqual(sizes, {"top": 1, "bottom": 1, "repos": 6, "right": 22})
+            self.assertEqual({s: n for s, n in sizes.items() if s in _SHIPPED_SLOTS},
+                             {"top": 1, "bottom": 1, "repos": 6, "right": 22}, sizes)
             argvs = layout.panel_argvs(slots=f["slots"], session="f-1", socket="/sock",
                                        harness_pane="%0", sizes=sizes)
-        self.assertEqual([a[a.index("split-window") + 1:] for a in argvs], [
-            ["-t", "%0", "-v", "-b", "-l", "1", "-P", "-F", "#{pane_id}", "--",
-             *layout.panel_command(slot="top", session="f-1")],
-            ["-t", "%0", "-v", "-l", "1", "-P", "-F", "#{pane_id}", "--",
-             *layout.panel_command(slot="bottom", session="f-1")],
-            ["-t", "%0", "-v", "-l", "6", "-P", "-F", "#{pane_id}", "--",
-             *layout.panel_command(slot="repos", session="f-1")],
-            ["-t", "%0", "-h", "-l", "22", "-P", "-F", "#{pane_id}", "--",
-             *layout.panel_command(slot="right", session="f-1")],
+        split = [(slot, a[a.index("split-window") + 1:])
+                 for slot, a in zip(f["slots"], argvs, strict=True)]
+        self.assertEqual([p for p in split if p[0] in _SHIPPED_SLOTS], [
+            ("top", ["-t", "%0", "-v", "-b", "-l", "1", "-P", "-F", "#{pane_id}", "--",
+                     *layout.panel_command(slot="top", session="f-1")]),
+            ("bottom", ["-t", "%0", "-v", "-l", "1", "-P", "-F", "#{pane_id}", "--",
+                        *layout.panel_command(slot="bottom", session="f-1")]),
+            ("repos", ["-t", "%0", "-v", "-l", "6", "-P", "-F", "#{pane_id}", "--",
+                       *layout.panel_command(slot="repos", session="f-1")]),
+            ("right", ["-t", "%0", "-h", "-l", "22", "-P", "-F", "#{pane_id}", "--",
+                       *layout.panel_command(slot="right", session="f-1")]),
         ])
 
 
