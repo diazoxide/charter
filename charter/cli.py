@@ -1723,8 +1723,13 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     from . import config
 
     declared = config.HARNESS
+    # Truthiness, not `is not None`, and the same test `doctor` makes of the same key.
+    # `contain.readable` never returns a blank string, so on anything `harness_of` produced
+    # the two are the same question — but `config.HARNESS` is a module attribute anything
+    # in-process can assign, and a planted `{"refused": ""}` would otherwise print a
+    # refusal naming nothing at all instead of falling through to the usage message.
     refused = declared.get("refused")
-    if refused is not None:
+    if refused:
         util.err(f'charter: [harness] default = "{refused}" in '
                  f'{util.short_path(config.ROOT / "charter.toml")} is not a harness '
                  f'charter can launch — one of: '
