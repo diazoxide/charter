@@ -432,6 +432,30 @@ class TestTreeOfIsTheNarrowQuestion(WorktreeCase):
     def test_a_start_that_does_not_exist_answers_none(self):
         self.assertIsNone(root.tree_of(self.plane, self.tmp / "gone" / "deeper"))
 
+    def test_a_plane_reached_through_a_symlink_is_the_same_plane(self):
+        """Both sides are canonicalised before they are compared, and neither `.resolve()`
+        is decoration.
+
+        `main_worktree_of` answers with a path it resolved itself, so a caller holding an
+        unresolved spelling of the very same plane — one symlinked directory anywhere in it —
+        compares unequal, `tree_of` answers None, and the write silently goes back to the
+        main clone: #678, restored, on exactly the machines where it was reported. macOS
+        makes it the default, since `/var` is a symlink to `/private/var` and every temp path
+        goes through it; a symlink states the case on any platform.
+        """
+        link = self.tmp / "plane-link"
+        link.symlink_to(self.plane, target_is_directory=True)
+        self.assertEqual(root.tree_of(link, self.worktree), self.worktree.resolve())
+
+    def test_the_answer_is_canonical_whichever_spelling_the_caller_stood_in(self):
+        """The other `.resolve()`. `sync-agents` writes to `<answer>/.claude/agents`, and an
+        answer echoed back in the caller's own spelling is a second name for one directory —
+        which is how the report claiming the plane was untouched would stop being checkable.
+        """
+        link = self.tmp / "wt-link"
+        link.symlink_to(self.worktree, target_is_directory=True)
+        self.assertEqual(root.tree_of(self.plane, link), self.worktree.resolve())
+
     def test_a_working_directory_that_no_longer_exists_answers_none(self):
         """It sits on a command path and must never raise — and this is the way that
         actually happens, which no non-existent *argument* reaches: with no `start`, the
