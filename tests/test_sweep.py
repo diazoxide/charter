@@ -1928,6 +1928,242 @@ class TwoGuardsCanHideBehindEachOther(unittest.TestCase):
 # Evidence, caching, and the report
 # ======================================================================================
 
+class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
+    """#721, asserted on the whole operator table rather than on the two that cost money.
+
+    `Mutation.before` is the mutated NODE, so **ambiguity appears exactly where the node
+    is larger than the thing being varied**: every `drop-conjunct` mutant of
+    `if A and B:` prints the same line, and the two mean opposite things. Dropping the
+    cheap prefilter is genuinely equivalent and correctly dismissed; dropping the test
+    that decides is a fail-open hole. Two of those, in a security guard, were read as the
+    first across two full sweep runs and only caught on a third — 150,585 and 119,278
+    distinguishing inputs, both verified against a real `bash`. A report line satisfied by
+    two mutants meaning different things discriminates neither, and that is worse than
+    printing nothing, because it supplies a wrong reading.
+
+    So the property is the table's and not one operator's: **an operator yielding more
+    than one mutant for one node must give them distinct questions, distinct tags and
+    distinct report lines.** That is what would have caught `unclamp` — whose two mutants
+    printed identically AND carried one question, while asking whether the floor is pinned
+    and whether the value is — before anybody was bitten by it, and `drop-term`, which had
+    the same shape and was in nobody's table.
+    """
+
+    #: One instance of every shape the table can recognise, so that the property below is
+    #: measured over all of them and not over the ones somebody remembered. The seven
+    #: shapes that yield siblings for one node are all here; the rest are here so that an
+    #: operator added to `_iter_operators` without a line here fails the coverage test.
+    FIXTURE = """
+        LIMIT = 28
+        MODE = 0o600
+        SPAN = ROWS + COLS
+
+
+        def render(rows, name, d, path, text, x, y, ch, i, n, in_class):
+            if not isinstance(name, str):
+                return []
+            if name and name not in d:
+                return []
+            if in_class and i + 2 < n and text[i + 1] == "-" and text[i + 2] != "]":
+                return []
+            if text.startswith("focus:"):
+                return []
+            if x == 1:
+                head = 1
+            else:
+                head = 2
+            width = max(1, LIMIT - head)
+            if 0 <= x < width:
+                return []
+            if " " <= ch <= "~":
+                return []
+            kept = [r for r in rows if r]
+            label = contain.one_line(text)
+            slot = d.get(name) or ()
+            other = d.get(name, "-")
+            tail = "left" if y else "right"
+            try:
+                value = int(text)
+            except ValueError:
+                return []
+            return [label.lower(), path.resolve(), kept, slot, other, tail, value, width]
+    """
+
+    def siblings(self) -> dict[tuple, list]:
+        """Every group of mutants sharing one node and one operator.
+
+        Keyed on the byte span, which is the node — not on the line, because two nodes on
+        one line are two questions and are entitled to read alike.
+        """
+        groups: dict[tuple, list] = {}
+        for m in _mutations(self.FIXTURE):
+            groups.setdefault((m.span, m.operator), []).append(m)
+        return {k: v for k, v in groups.items() if len(v) > 1}
+
+    def test_no_sibling_pair_shares_a_question_a_tag_or_a_report_line(self):
+        """The whole issue, in one assertion, over every shape that has siblings.
+
+        Three fields and not one: `question` is what the gate summary prints, `__str__` is
+        what the per-mutation progress line prints — the stream that is all a reclaimed
+        shard leaves behind, and the stream that hid the two holes — and `tag` is what the
+        not-applied and no-verdict lists render.
+        """
+        self.assertTrue(self.siblings(), "the fixture offers no sibling group at all")
+        for (_, operator), ms in sorted(self.siblings().items()):
+            for field, read in (("question", lambda m: m.question),
+                                ("tag", lambda m: m.tag),
+                                ("report line", str)):
+                with self.subTest(operator=operator, line=ms[0].line, field=field):
+                    seen = {read(m) for m in ms}
+                    self.assertEqual(
+                        len(seen), len(ms),
+                        f"{operator} yields {len(ms)} mutants for one node and only "
+                        f"{len(seen)} distinct {field}s, so a survivor reported this way "
+                        f"is satisfied by mutants meaning different things: "
+                        + "  ||  ".join(sorted(seen)))
+
+    def test_every_shape_that_yields_siblings_is_in_the_fixture(self):
+        """A guard on the guard. The assertion above is only as general as this list, and
+        a fixture that quietly stopped covering `unclamp` would still pass it.
+
+        `retune-constant` is here because a module-level constant written in a base other
+        than ten is offered twice — once by the module-constant rule as `n + 1` in decimal,
+        once by the non-decimal rule re-spelled in its own base. Those two are the same
+        VALUE, so it is a question asked twice rather than an ambiguity, and it is left
+        alone here: this test pins that the two are told apart, not that both exist.
+        """
+        self.assertEqual(
+            sorted({operator for _, operator in self.siblings()}),
+            ["collapse-ifexp", "disable-branch", "drop-conjunct", "drop-term",
+             "retune-constant", "shift-boundary", "unclamp"])
+
+    def test_the_fixture_exercises_every_operator_the_table_names(self):
+        """An operator added to `_iter_operators` and not to the fixture is a shape this
+        property was never asserted over — which is how `unclamp` and `drop-term` came to
+        be live instances of #721 that nothing had tripped over. The table names its
+        operators as literals in the yielded tuple, so it can be read without running a
+        sweep."""
+        table = set()
+        tree = ast.parse(Path(sweep.__file__).read_text(encoding="utf-8"))
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "_iter_operators")
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Yield) and isinstance(node.value, ast.Tuple):
+                name = node.value.elts[2]
+                self.assertIsInstance(name, ast.Constant)
+                table.add(name.value)
+        self.assertGreater(len(table), 10)
+        self.assertEqual(sorted(table - {m.operator for m in _mutations(self.FIXTURE)}),
+                         [])
+
+    def test_the_clamp_question_names_the_operand_the_mutant_keeps(self):
+        """`unclamp` was the worst instance and the one no field could disambiguate:
+        `max(a, b) -> a` asks whether anything requires the value to clear the floor,
+        `-> b` whether anything requires the floor at all, and both used to read "is the
+        clamp pinned, or only its inner value?"."""
+        self.assertEqual(
+            sorted(m.question for m in _by(_mutations("""
+                def f(h):
+                    return max(1, h - 3)
+            """), "unclamp")),
+            ["is the clamp pinned, or is `1` always the answer?",
+             "is the clamp pinned, or is `h - 3` always the answer?"])
+
+    def test_a_branch_question_locates_itself_without_the_operator_table_open(self):
+        """"is this branch pinned?" against "is the other branch pinned?" are two
+        different strings and still not a legible reason: which is which is knowable only
+        with `_iter_operators` open, and the reviewer holding the report does not have it.
+        The spec asks that a survivor's reason be legible, so each one now names the branch
+        it is about — by keyword for the conditional expression, by the direction the
+        condition was forced for the statement."""
+        self.assertEqual(
+            sorted(m.question for m in _by(_mutations("""
+                def f(y):
+                    return "left" if y else "right"
+            """), "collapse-ifexp")),
+            ['is the `else` branch pinned, or is `"left"` always the answer?',
+             'is the `if` branch pinned, or is `"right"` always the answer?'])
+        forced = sorted(m.question for m in _by(_mutations("""
+            def f(y):
+                if y:
+                    return 1
+                else:
+                    return 2
+        """), "disable-branch"))
+        self.assertEqual(forced, [
+            "is the rest of the chain pinned, or does nothing change when this condition "
+            "always holds?",
+            "is this branch pinned, or does nothing change when its condition never "
+            "holds?"])
+
+    def test_the_tag_keeps_its_prefix_and_adds_what_tells_siblings_apart(self):
+        """`tag` is rendered into the not-applied and no-verdict lists and into the
+        `NotApplied` message, and `path:line:operator` is what a reader greps for — so the
+        edit is appended rather than substituted for it."""
+        m = sweep.Mutation(path="charter/hooks.py", line=3658, end_line=3658,
+                           operator="drop-conjunct",
+                           question='is the `c == "$"` half pinned?',
+                           before='c == "$" and text.startswith("$(", i)',
+                           after='text.startswith("$(", i)', symbol="_scan")
+        self.assertTrue(m.tag.startswith("charter/hooks.py:3658:drop-conjunct"))
+        self.assertIn('text.startswith("$(", i)', m.tag)
+        gone = dataclasses.replace(m, after="")
+        self.assertTrue(gone.tag.endswith("(deleted)"),
+                        "a deletion has no `after` to name, and an empty discriminator "
+                        "would put every deletion on one line back")
+        # Both survivors this branch's own self-sweep found, pinned. A `drop-conjunct`
+        # replacement is short far more often than not — p90 is 25 characters — and a
+        # digest on one of those is noise the reader has to decode for nothing.
+        short = dataclasses.replace(m, after="a and b")
+        self.assertTrue(short.tag.endswith(" -> a and b"), short.tag)
+        edge = dataclasses.replace(m, after="x" * 48)
+        self.assertTrue(edge.tag.endswith(" -> " + "x" * 48),
+                        "48 characters is short ENOUGH, and a boundary one notch in "
+                        "digests an edit that would have fitted: " + edge.tag)
+        over = dataclasses.replace(m, after="x" * 49)
+        self.assertRegex(over.tag, r"…#[0-9a-f]{6}$")
+        self.assertEqual(len(over.tag.split(" -> ", 1)[1]), 48)
+
+    def test_a_long_edit_is_shortened_without_becoming_its_siblings_tag(self):
+        """The first fix for #721 contained #721, and this fixture line is why it was
+        caught. `after` is everything the mutant KEEPS, so `drop-conjunct` siblings share
+        a long PREFIX — `_regex_shape`'s four-conjunct guard in `tools/sweep.py` has two
+        whose replacements agree for their first 48 characters — and a plain truncation
+        merged them back onto one line. Not truncating is not the answer either:
+        replacements reach 7,149 characters in this tree. So the shortening stays and
+        carries a digest of the whole replacement."""
+        four = [ms for (_, operator), ms in self.siblings().items()
+                if operator == "drop-conjunct" and len(ms) == 4]
+        self.assertEqual(len(four), 1, "the fixture's four-conjunct guard is gone, and "
+                                       "with it the only case that catches this")
+        ms = four[0]
+        edits = [m.tag.split(" -> ", 1)[1] for m in ms]
+        self.assertLess(
+            len({e[:40] for e in edits}), len(ms),
+            "no two of these tags share their visible prefix any more, so this no longer "
+            "measures what a plain truncation did to them: " + " | ".join(sorted(edits)))
+        self.assertEqual(len(set(edits)), 4,
+                         "two mutants of one line render as one tag again")
+        for m in ms:
+            with self.subTest(after=m.after):
+                self.assertLessEqual(
+                    len(m.tag.split(" -> ", 1)[1]), 48,
+                    "the discriminator is bounded, or a 7,149-character replacement "
+                    "puts a bullet list past anything a reader will read")
+
+    def test_the_progress_line_says_what_the_gate_summary_says(self):
+        """The asymmetry that hid the two holes: the gate summary printed `question` and
+        the per-mutation log did not, so a shard reclaimed before it could emit a summary
+        left behind the one stream that could not be read."""
+        m = sweep.Mutation(path="charter/hooks.py", line=3658, end_line=3658,
+                           operator="drop-conjunct",
+                           question='is the `c == "$"` half pinned?',
+                           before='c == "$" and text.startswith("$(", i)',
+                           after='text.startswith("$(", i)', symbol="_scan")
+        self.assertIn('is the `c == "$"` half pinned?', str(m))
+        self.assertIn("charter/hooks.py:3658 [drop-conjunct]", str(m))
+
+
 class TheReportSaysWhatTheTestsAsserted(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-ev-"))
