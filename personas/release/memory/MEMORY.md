@@ -40,3 +40,7 @@ Written by the persona as it learns; committed and shared.
 - [In this plane a release cut cannot land itself: 'gh pr merge' is refused](in-this-plane-a-release-cut-cannot-land-itself-g.md)
 - [ASSET-FRESHNESS GATE IS PATCH-EXEMPT BY CONSTRUCTION. tests/test_asset_f](asset-freshness-gate-is-patch-exempt-by-construc.md)
 - [0.50.1 SHIPPED (2026-08-23), patch for #390/PR #391 self-relaunch cwd sh](0-50-1-shipped-2026-08-23-patch-for-390-pr-391-s.md)
+- [A GitHub Release body is capped at 125,000 characters and gh forwards th](a-github-release-body-is-capped-at-125-000-chara.md)
+- [release.yml's publish passes skip-existing ONLY on workflow_dispatch (#6](release-yml-s-publish-passes-skip-existing-only-.md)
+- [A release retry cannot be validated by comparing built artifacts against](a-release-retry-cannot-be-validated-by-comparing.md)
+- [The retry ref is a real choice: --ref v<X.Y.Z> retries the exact publish](the-retry-ref-is-a-real-choice-ref-v-x-y-z-retri.md)

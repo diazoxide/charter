@@ -11,3 +11,7 @@ Written by the persona as it learns; committed and shared.
 - [glstate's spawn lock carries TWO facts: its content is the pid of an in-](glstate-s-spawn-lock-carries-two-facts-its-conte.md)
 - [diazoxide/charter has GitHub private vulnerability reporting DISABLED (g](diazoxide-charter-has-github-private-vulnerabili.md)
 - [registry.resolve_host fails closed on host-confusion URLs (user@github.c](registry-resolve-host-fails-closed-on-host-confu.md)
+- [GitHub branch protection: enforce_admins=false lets an admin's DIRECT PU](github-branch-protection-enforce-admins-false-le.md)
+- [GitHub required status checks: a required check whose conclusion is 'ski](github-required-status-checks-a-required-check-w.md)
+- [GraphQL PullRequest.viewerCanMergeAsAdmin answers 'can this viewer overr](graphql-pullrequest-viewercanmergeasadmin-answer.md)
+- [GitHub branch protection: enforce_admins=false does NOT cover force-push](github-branch-protection-enforce-admins-false-do.md)
