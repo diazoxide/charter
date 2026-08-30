@@ -68,6 +68,19 @@ name: release
 # you want for a transient failure and what stays available afterwards. Re-pushing a
 # deleted tag is NOT a retry: it arrives here as `push`, gets the strict path, and is
 # refused at the upload — deliberately, see `publish`.
+#
+# What makes `--ref main` safe is a sentence, and `guard` now holds it (the rest of #558).
+# "The dispatch retry is not there to publish, it is there to FINISH a publish that may
+# already have happened" is true of every run it was written for and of no run that has to
+# be refused — because if PyPI does NOT already hold the version, that run is not
+# finishing anything, it IS the publish, and `--ref main` makes it the publish of whatever
+# main holds at that moment: the tagged tree plus everything merged since, or a version
+# with no tag cut at all. It passes every version check by agreeing with the pyproject
+# beside it, and `skip-existing` skips nothing, because there is nothing there to skip.
+# So the run that is not standing on `v<X.Y.Z>` has to show that it cannot be the first
+# upload of that version, and the check asks PyPI rather than assuming. A run standing on
+# the tag asks nobody: the tree it publishes is the one the tag names, which is the whole
+# property, and it holds without the network.
 on:
   push:
     tags: ["v*"]
@@ -96,7 +109,7 @@ jobs:
       # a run and an irreversible upload to report success without ever having run. That
       # is #558 exactly, and `tests/test_workflows.py` fails if an `if:` reappears in this
       # job. Whatever a new trigger needs, it is not a condition on the refusal.
-      - name: Compare the version this run names against pyproject.toml
+      - name: Compare the version this run names against pyproject.toml, and refuse a run that would be its first upload from off the tag
         id: version-check
         env:
           # Empty on the tag path, set on the dispatch path. Which one is authoritative is
@@ -140,6 +153,53 @@ jobs:
           if [ "$claimed" != "$pkg" ]; then
             echo "::error::this run names $claimed ($said) but pyproject.toml says $pkg — refusing to publish"
             exit 1
+          fi
+          # Everything above compares one version STRING against another, and PyPI is handed
+          # a COMMIT. Which commit is a question none of it asks (#558).
+          #
+          # On the tag path the two questions are one: `github.ref` IS `refs/tags/v$pkg`, so
+          # every job checks out the tree that tag names and nothing else can be built. Below
+          # is the same statement for the other path, where they came apart.
+          #
+          # `workflow_dispatch` takes any ref, and the retry this file documents may legitimately
+          # be `--ref main`, because the #665 shape is a release whose `announce` fails for a
+          # reason still true of the tagged tree — you cannot repair that from the tag. #673
+          # made that retry work by passing `skip-existing` on this trigger, resting on one
+          # sentence: the dispatch retry is not there to publish, it is there to FINISH a
+          # publish that may already have happened. True of every run it was written for. But
+          # nothing made it true: if PyPI does not already hold $pkg then that run is not
+          # finishing anything, `skip-existing` skips nothing because there is nothing there to
+          # skip, and main's tree becomes what $pkg means on PyPI, forever, with no tag naming
+          # it. That is #558's opening scenario — the window between a bump merging and the tag
+          # being pushed — surviving both of its fixes: #560 made the run STATE a version, and a
+          # stated version is not a tagged tree.
+          #
+          # So a run standing on `v$pkg` is asked nothing further: what it uploads is the tree
+          # that tag names, which is the property, and it holds offline. A run standing anywhere
+          # else must show it CANNOT be the first upload of $pkg — and that is asked of PyPI,
+          # which is the only place the answer lives. Refusing on an unclear answer rather than
+          # assuming one: this is the last step before an act with no way back, and re-running
+          # `guard` is free.
+          project=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["name"])')
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ "${GITHUB_REF_NAME:-}" = "v$pkg" ]; then
+            echo "standing on v$pkg — what this run uploads is the tree that tag names, and no other check is needed"
+          else
+            standing="${GITHUB_REF_TYPE:-<no ref type>} ${GITHUB_REF_NAME:-<none>}"
+            echo "not standing on v$pkg (this run is on $standing) — so it may only finish a release, never begin one; asking PyPI whether $project $pkg is already there"
+            status=$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 --max-time 30 "https://pypi.org/pypi/$project/$pkg/json") || status="000"
+            case "$status" in
+              200)
+                echo "PyPI already has $project $pkg, so this run cannot be its first upload — publish will skip the files PyPI holds and announce can finish the release"
+                ;;
+              404)
+                echo "::error::this run would be the FIRST upload of $project $pkg and it is not standing on v$pkg — what it would upload is whatever $standing holds right now, which no tag names and PyPI will never let go of — dispatch on the tag instead: gh workflow run release.yml --ref v$pkg -f version=$pkg — refusing to publish"
+                exit 1
+                ;;
+              *)
+                echo "::error::could not ask PyPI whether it already has $project $pkg (HTTP $status), and this run is not standing on v$pkg, so whether it would be that version's first upload is unknown — re-run this job, or dispatch on the tag: gh workflow run release.yml --ref v$pkg -f version=$pkg — refusing to publish on a guess"
+                exit 1
+                ;;
+            esac
           fi
       - name: Refuse to publish a version whose notes cannot be rendered, or would be refused
         run: |
