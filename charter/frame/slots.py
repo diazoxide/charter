@@ -2543,6 +2543,12 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
 #: in this workspace joins the session as a second window, which is what Stage 5a shipped
 #: — rather than a palette row this stage does not have. A reminder naming something that
 #: does not work is worse than no reminder.
+#:
+#: **Read from INSIDE the frame, which is what keeps it true.** A charter started in a
+#: frame's own pane has `$TMUX` set, so it takes `commands_frame._launch_in_operator_tmux`
+#: and adds a window to the session it is already in. From a terminal OUTSIDE the frame
+#: the same command now focuses that workspace instead of adding to it (§4k, open-or-
+#: focus) — a different question, asked somewhere this row is not on screen.
 ADD_CHAT = "+ charter <harness> opens another"
 
 

@@ -1547,6 +1547,119 @@ def _chat_being_left(socket: str, *, beside: str) -> str:
     return chat if chat != beside and _FRAME_ID_RE.fullmatch(chat) else ""
 
 
+#: What :func:`_workspace_to_focus` asks of every pane on a server, in one call.
+#:
+#: Two fields, both of them tmux's OWN ids and neither of them a name —
+#: :data:`_WINDOW_SEAT_FORMAT`'s rule one noun over, and here it is the whole correctness
+#: argument rather than a target-grammar convenience. One tmux server serves every plane
+#: on this machine (:data:`SOCKET`), session names are bare workspace names, and `default`
+#: is a name EVERY plane has, so `#{session_name}` cannot say whose session it is.
+#: `#{pane_id}` can: a pane id is minted by the server, and the only plane holding one is
+#: the plane whose launcher wrote it down (`state.record_harness_pane`).
+#:
+#: `\t` because neither can contain one: `#{session_id}` is `$<digits>` and `#{pane_id}`
+#: is `%<digits>`, both tmux's own and neither settable by anyone.
+_PANE_SEAT_FORMAT = "#{session_id}\t#{pane_id}"
+
+
+def _workspace_to_focus(socket: str, *, ws: str) -> tuple[str, str] | None:
+    """``(tmux session id, chat id)`` for THIS PLANE's live *ws* when somebody is looking
+    at it — otherwise ``None``, meaning "open a chat as you always did".
+
+    **§4k, and §3.3 is why it is spelled this way.** `charter -w foo` used to mean "add a
+    chat to `foo`" unconditionally, and §2.3 measured what that does to a workspace
+    somebody already has open: both clients of a tmux session share one current window, so
+    the `select-window` that puts THIS launch on its new chat drags the other client off
+    the chat they were reading, and `_drop_panels` then tears that chat's panels down.
+    §2.10 measured the alternative and there is not one — tmux has no per-client current
+    window inside a session on 3.7c or at the 3.2 floor, and the only mechanism that does
+    not drag is a session GROUP, which would stop a workspace being a tmux session.
+    So the drag is not fixed; the reason to drag is removed. A workspace somebody is
+    already in is FOCUSED — one more client on the session they are on, looking at the
+    window they are on — and a workspace nobody is in opens a chat exactly as before.
+
+    **Matched on this plane's own chat directories, never on a live session name, and
+    that inversion is §3.3's.** `cmd_launch` already asks `if session in live_sessions:`
+    and that question is unanswerable across planes: `_live_sessions` returns every
+    session on the machine, `default` is `DEFAULT_WORKSPACE_FALLBACK` and therefore a name
+    every plane has, and `config.STATE_DIR` is the only thing that is per-plane. Reading
+    the answer off a name would make an existing collision into the ADVERTISED behaviour —
+    `charter -w default` in one plane attaching to another plane's frame. So the question
+    starts on disk: `chats.of_workspace` is `.charter/frame/` under THIS plane's state
+    directory, and `state.harness_pane` is a `%N` this plane's own launcher wrote down.
+
+    **The residual, stated rather than hidden, and it is narrower than it first looks.**
+    A pane id is unique on a running server but restarts at `%0` when that server does, so
+    a `%3` recorded for a chat that is over can later name a different live pane. Within
+    ONE plane that is already closed by the caller: `cmd_launch` reaps immediately above
+    this, and a chat directory whose id tmux no longer reports live is removed — so the
+    only directories reaching here are ones the server still lists. Across two planes it
+    is not, because that liveness list is by CHAT ID and chat ids collide exactly as
+    session names do: `new_chat_id` counts from 1 on each plane's own disk, so `shared.1`
+    is the id both planes mint first. What it costs is one focus of a frame that is not
+    yours, on a machine running two planes, across a tmux server restart, for a workspace
+    both planes have, on a pane id that came back round. Closing it needs a plane marker
+    on the window — a second option written at launch and a schema both halves agree on —
+    which is a stage, not a line. What is closed today is the case §3.3 names: a plane
+    that has never opened `ws` has no directory for it, reaches no tmux call at all, and
+    can never focus anybody.
+
+    **Three answers, and the two tmux calls are asked in the order that makes most
+    launches pay for neither.** No chat directory for *ws* on this plane — the ordinary
+    first launch — returns before `list-panes`. No live pane among the ones this plane
+    recorded — every chat of *ws* is cold — returns before `list-clients`. And a live
+    session nobody is attached to returns ``None`` as well, deliberately: with no client
+    on it there is nobody to drag, so a launch there SHOULD add its chat and select it,
+    which is the behaviour that shipped and the one an operator reopening a detached
+    workspace wants.
+
+    Measured on tmux 3.7c and at the 3.2 floor, identically on both: `list-panes -a` lists
+    every pane on the server with its own session id; `list-clients -t $N` takes a session
+    ID as its target, prints one line per attached client, and exits 0 with nothing on
+    stdout when none is attached (rc 1 only for a session id the server does not have).
+
+    **Nothing off tmux is re-checked on the way out and that is deliberate**, unlike
+    `_chat_being_left`, which holds its answer to `_FRAME_ID_RE` because `@charter_chat`
+    is a user OPTION and its value is whatever somebody set. Both fields here are tmux's
+    own built-in ids; a shape check over them would be a guard no input can reach, which
+    is the shape this repository's deletion sweep exists to delete rather than document.
+    The chat id returned is this plane's own directory name and never came from tmux at
+    all. The recorded pane ids are not held to `tmuxctl.PANE_ID_RE` for the mirror-image
+    reason: they are only ever COMPARED against what tmux just said, never sent to it, so
+    a value that is not a pane id matches nothing and is refused by the comparison itself.
+    """
+    mine: dict[str, str] = {}
+    for chat in chats.of_workspace(ws):
+        pane = state.harness_pane(chat)
+        if pane is not None:
+            mine[pane] = chat
+    if not mine:
+        return None
+    out = tmuxctl.run("finding this plane's live chats in this workspace",
+                      tmuxctl.server_argv(socket, "list-panes", "-a", "-F",
+                                          _PANE_SEAT_FORMAT),
+                      timeout=5, report=False)
+    # No branch on the return code, for `_chat_being_left`'s reason: a listing that failed
+    # has an empty stdout and falls out below as "no seats and therefore no answer", which
+    # is the same sentence said once. Exactly two fields per row, so a server that answers
+    # something other than this format cannot have half a row read as a pane id.
+    seats = [line.split("\t") for line in out.stdout.splitlines()]
+    seat = next((s for s in seats if len(s) == 2 and s[1] in mine), None)
+    if seat is None:
+        return None
+    clients = tmuxctl.run("asking whether anybody is looking at that workspace",
+                          tmuxctl.server_argv(socket, "list-clients", "-t", seat[0],
+                                              "-F", "#{client_name}"),
+                          timeout=5, report=False)
+    # Both halves, and they are two different facts: a non-zero return is a server that
+    # would not answer (or a session it no longer has, between the two calls), and an
+    # empty answer is a session with no client on it. Either way nobody is being dragged,
+    # so either way this launch opens its own chat.
+    if clients.returncode != 0 or not clients.stdout.strip():
+        return None
+    return seat[0], mine[seat[1]]
+
+
 def _frame_is_live(socket: str, fid: str) -> bool:
     """Is the frame *fid* still running on *socket*? One question, one place — #408.
 
@@ -3514,6 +3627,56 @@ def _pin_workspace(ws: str, fid: str, picked: bool) -> None:
               f"releases it.")
 
 
+def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> int:
+    """Attach to a workspace this plane already has open, and start nothing — §4k.
+
+    The other half of :func:`_workspace_to_focus`, and everything it does NOT do is the
+    point: no `new_chat_id`, no directory, no `new-window`, no `select-window` and no
+    `_drop_panels`. Somebody is reading a chat in this workspace; this launch joins them
+    on it. §2.4's geometry race between two clients of one session is untouched and §5
+    says so out loud — this removes the reason to have two clients on different windows,
+    not the cost of having two.
+
+    **`-t <session id>`, never the workspace's name.** Measured on tmux 3.7c and at the
+    3.2 floor: `attach -t $N` attaches to that session, and a second client attaching to a
+    session does not move its current window — so a focus is guaranteed not to be the drag
+    it exists to avoid. The id came from the pane THIS plane recorded
+    (:func:`_workspace_to_focus`); a name would have come from a namespace every plane on
+    the machine shares.
+
+    **The pointer is still written, and #518 is why.** `_pin_workspace` is what tells the
+    launching terminal which workspace it answered for, so an operator who picked one at
+    the prompt and was focused into it is not asked again next launch. It is written under
+    the chat being focused rather than under a new id, because that chat is the frame
+    session the pointer is about — and it names the same workspace that chat is already
+    in, so the write is the same value it already held.
+
+    **No `env=` on the attach, and that is the difference from `cmd_launch`'s own.** That
+    one carries `_frame_env(fid, h)` because it is the launch that MADE the frame and the
+    client it attaches is that frame's. This launch made nothing: the session already
+    carries its own `CHARTER_SESSION_ID` (`_session_id_env_argv`) and each window its own
+    `-e` overlay, and handing this client a frame identity charter invented for a chat it
+    did not open would put a second answer next to the right one.
+
+    Returns 0 for a clean detach — the workspace is still running and that is not a
+    failure — and `attach`'s own code for a refusal, reported rather than folded away, the
+    same way `cmd_launch`'s own attach is.
+    """
+    _pin_workspace(ws, chat, picked)
+    attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", session_id)
+    attached = tmuxctl.interact(attach_cmd)
+    if attached.returncode != 0:
+        tmuxctl.report_failure("attaching to the frame", attach_cmd, attached)
+        return attached.returncode
+    # The same sentence a launch that detached prints, and true for the same reason: this
+    # client left, the session did not. Named by the WORKSPACE, because that is what an
+    # operator types — the `$id` above is charter's own way of being sure which one.
+    util.info(f"charter frame: detached — the harness is still running.\n"
+              f"  reattach with: tmux -L {SOCKET} attach -t "
+              f"{state.workspace_prefix(ws)}")
+    return 0
+
+
 def cmd_launch(args) -> int:
     """One launcher, shared by every registered harness and by `charter frame --`."""
     if getattr(args, "probe", False):
@@ -3637,6 +3800,32 @@ def cmd_launch(args) -> int:
                     tmuxctl.server_argv(SOCKET, "set", "-g", "remain-on-exit", "on"))
     if can_reap:
         state.reap(live_before, server=SOCKET)
+
+    # **Open or focus** (§4k), and it is asked HERE — after the reap, before the
+    # allocation — for both of its neighbours' reasons. After the reap, so the chat
+    # directories `_workspace_to_focus` reads are the ones that survived it rather than
+    # ones about to be deleted; before `new_chat_id`, so a launch that focuses claims no
+    # ordinal, makes no directory and writes no state at all. A focus is a READ and an
+    # `attach`, and nothing else.
+    #
+    # **Only for a launch that asked for nothing but the workspace, and that gate is not
+    # a nicety.** Attaching answers "put me in `foo`". It cannot answer "run THIS in
+    # `foo`", and a focus taken over one would silently discard an argv the operator
+    # typed: `charter frame -- <cmd>` is the escape hatch for a command charter has never
+    # met, and `charter claude --resume <id>` carries the operator's own flags through
+    # `rest` into `launch_argv`. Both must still open a chat and run what they named — a
+    # launcher that swallowed a command and attached instead would be wrong in the one
+    # direction this module refuses everywhere else, silently.
+    #
+    # **`rest` alone, and an `h is not None` beside it would be a guard nothing can
+    # reach.** An unregistered harness means `argv = rest`, and `if not argv:` above has
+    # already ended the launch with "nothing to run" — so by here a launch with no `h` is
+    # a launch with a non-empty `rest`, and the second half of that condition could never
+    # decide anything. The deletion sweep found it as a survivor for exactly that reason.
+    if not rest:
+        focus = _workspace_to_focus(SOCKET, ws=ws)
+        if focus is not None:
+            return _focus_workspace(*focus, ws=ws, picked=picked)
 
     # AFTER the reap, for the reason the paragraph above gives about the directory: the
     # allocation IS a `mkdir`, so an id claimed before the reap would be a directory the

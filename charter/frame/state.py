@@ -536,6 +536,13 @@ def record_harness_session(fid: str, sid: str) -> bool:
     Same atomic-write, never-raise shape as :func:`record_harness_pane`, and for the same
     reason: a frame whose harness session could not be recorded simply draws no gauge,
     which is the safe direction — no gauge rather than a wrong one.
+
+    **Two files, because one file was serving two purposes.** See
+    :data:`_KEPT_SESSION_FILE`: `session` is the GAUGE's mapping and :func:`clear_shape`
+    deletes it; the sibling is the same id kept as this chat's own durable state, and
+    `clear_shape` does not list it. Written on the same branch and from the same value, so
+    the two can only ever disagree by the sibling being ABSENT — never by holding a
+    different id.
     """
     sid = (sid or "").strip()
     if not sid or harness_session(fid) == sid:
@@ -549,6 +556,7 @@ def record_harness_session(fid: str, sid: str) -> bool:
         os.replace(tmp, d / "session")
     except OSError:
         return False
+    _record_kept_session(d, sid)
     return True
 
 
@@ -570,6 +578,83 @@ def harness_session(fid: str) -> str | None:
         return None
     try:
         return (d / "session").read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+#: The DURABLE half of :func:`record_harness_session` — the harness's own session id,
+#: kept as this chat's state rather than as the gauge's mapping.
+#:
+#: **One file was answering two questions, and only one of them is over when a frame is.**
+#: :func:`clear_shape` deletes `session` for a reason that is still right and is written
+#: out at that line: the token-usage history the gauge reads is keyed by the HARNESS's
+#: session id and lives outside the frame directory, so a `session` inherited by the next
+#: frame to claim this id draws the previous session's `ctx 78%` as its own, forever —
+#: *"a gauge reading somebody else's 78% is worse than either"*. That argument is about a
+#: READING. It is not an argument about the identifier, which is exactly what resuming
+#: that harness needs and the only thing charter records that can ask for the conversation
+#: back (`docs/superpowers/specs/2026-08-30-charter-opens-like-an-ide.md` §4e).
+#:
+#: So the id is written twice and deleted once. Nothing reads this file yet, and that is
+#: the whole of the stage: reopen (§6 stage 5) is what reads it, and it cannot be written
+#: retroactively for a chat that has already been cleared — which is why this ships first
+#: and alone.
+#:
+#: **The ordering hazard §4e states, restated where it can be acted on.** Keeping the id
+#: is only "no behaviour change" while nothing relaunches into an existing chat directory.
+#: The moment a reopen does, `session` comes back from this file and the gauge starts
+#: reading a stale history again — so the gauge's own gate (`exit_code(fid) is None`)
+#: must ship BEFORE reopen, not with it.
+#:
+#: **`.durable` and not a dotfile**, like `server`, `workspace` and `claim` beside it:
+#: everything in a frame's directory is charter's own bookkeeping and none of it hides
+#: from `ls`. The stem is shared with `session` on purpose — the two are one fact with
+#: two lifetimes, and a name that did not say so would be a second concept.
+_KEPT_SESSION_FILE = "session.durable"
+
+
+def _record_kept_session(d: Path, sid: str) -> None:
+    """Write :data:`_KEPT_SESSION_FILE` into the frame directory *d*.
+
+    *d* rather than a *fid*, because the only caller has already resolved it — asking
+    `frame_dir` a second time would be a second chance to get a different answer for a
+    file whose whole contract is that it holds the same id as the one just written.
+
+    Never raises, like everything else here, and its failure is quieter than
+    :func:`record_harness_session`'s: the gauge's own mapping has already landed, so a
+    chat that could not keep the durable copy still draws its context reading and simply
+    cannot be resumed later. Returning nothing rather than a bool is the same statement —
+    there is no caller that could do anything with the answer.
+    """
+    tmp = d / "session.durable.tmp"
+    try:
+        config.write_for(tmp, f"{sid}\n")
+        os.replace(tmp, d / _KEPT_SESSION_FILE)
+    except OSError:
+        return
+
+
+def kept_harness_session(fid: str) -> str | None:
+    """The DURABLE harness session id for *fid*, or ``None`` when there is not one.
+
+    :func:`harness_session`'s twin over :data:`_KEPT_SESSION_FILE`, and the difference
+    between them is only ever visible after a :func:`clear_shape`: before one they hold
+    the same id, after one this is the one still standing.
+
+    ``None`` for every reason :func:`harness_session` answers ``None``, plus one that is
+    this file's own and worth naming rather than discovering: **a chat whose harness was
+    already running when this charter was installed.** Its `session` was written by the
+    previous version, so the no-op guard in :func:`record_harness_session` returns before
+    the sibling is ever written, and the sibling first appears when that harness's own
+    session id next changes. There is no back-fill and there should not be — reading
+    `session` as a stand-in would be reading exactly the file whose deletion this pair
+    exists to survive.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / _KEPT_SESSION_FILE).read_text().strip() or None
     except (OSError, ValueError):
         return None
 
@@ -1061,6 +1146,14 @@ def clear_shape(fid: str) -> None:
       new one — which it never will, because it is over. `slots.py`'s rule is that a gauge
       reading zero is worse than no gauge; a gauge reading somebody else's 78% is worse
       than either.
+
+      **The ID survives this and the READING does not**, and the two used to be one file.
+      :data:`_KEPT_SESSION_FILE` is the same value written beside `session` and is
+      deliberately not in the list below: the paragraph above is an argument about a
+      *number drawn on screen*, and it says nothing against keeping the identifier a
+      resume needs. Adding that file to this list is the one edit that would silently
+      take resume away, which is why it is named here rather than only where it is
+      written.
 
     * ``selection`` is the same keypress or the same click said about a ROW
       (:func:`record_selection`), and it inherits with the mildest of these consequences
