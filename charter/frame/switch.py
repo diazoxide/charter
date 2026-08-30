@@ -46,12 +46,16 @@ typed.
 
 Every name that reaches a message goes through `contain.one_line` first — a workspace or
 persona name is a committed value, and a message is a line of charter's own output that a
-newline in a name could forge a second line of (`contain.py`, #453). The tmux side of the
-same rule lives in `frame/tmuxctl.inert_format`, which makes a line inert before it reaches
-tmux's own format parser.
+newline in a name could forge a second line of (`contain.py`, #453).
+
+There is no longer a tmux side to that rule. Until #729 the outcome went out as a
+`display-message`, whose argument tmux parses as a FORMAT, and `frame/tmuxctl.inert_format`
+was what made the line inert before it got there. The outcome is now written to the frame's
+own state and drawn by its attention panel into a pane charter owns, so nothing on this
+path reaches a tmux parser and `contain.one_line` is the whole of the containment.
 
 No tmux call is made from here at all. That keeps this module testable without a server —
-`commands_frame` owns the one `display-message` that puts a refusal on screen.
+`commands_frame` owns the one call that puts a refusal on screen.
 """
 
 from __future__ import annotations

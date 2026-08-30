@@ -5320,8 +5320,10 @@ def cmd_chat(args) -> int:
         # No `contain.one_line` on *target*: `chats.check` has already held it to
         # `chats.ID_RE`, whose alphabet holds nothing `one_line` touches, so the call
         # would be one whose result is provably its argument — the sweep found it as a
-        # survivor for that reason. `_say_on_screen`'s own `inert_format` is what makes
-        # this a tmux format's business rather than this line's.
+        # survivor for that reason. Since #729 there is no tmux format on this path at
+        # all: `_say_on_screen` writes the line into this frame's own state and its
+        # attention panel draws it, so the containment this line does not need is
+        # `contain.one_line`'s, applied once in `state.say`.
         _say_on_screen(fid, f"cannot switch: chat '{target}' has no window any more")
         return 0
     if _session_window(socket, here_place[0]) != there_place[1]:

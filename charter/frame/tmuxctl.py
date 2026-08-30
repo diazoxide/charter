@@ -333,11 +333,29 @@ def inert_format(text: str) -> str:
        the style-reset sequence tmux appends after it, rendering as literal
        `trailing#[default]` garbage. A trailing space breaks the adjacency.
 
-    Lives here, in the module that owns every tmux argv charter builds, rather than beside
-    one of the two callers: `commands_frame._say_on_screen` puts a switch outcome on a
-    status line and `frame/palette.py` puts an action's refusal on the same one, and a
-    second copy of this would be a second answer to "what may reach tmux's parser" — which
-    is #547's shape, and which this repo has already paid for once.
+    **Nothing in charter calls this today, and that is a statement of fact rather than a
+    reservation** (#729). It had one caller, `commands_frame._say_on_screen`, which put a
+    switch outcome on the client's status line; that outcome now goes into the frame's own
+    state and is drawn by its attention panel into a pane charter owns, where no tmux
+    parser is in the path. (This docstring also named `frame/palette.py` as a second
+    caller. That was never true on this branch — `palette.py` does not import `tmuxctl` at
+    all — and it is corrected here rather than left to be believed.)
+
+    Every remaining place charter puts a derived value into a tmux grammar is closed by a
+    narrower, construction-specific guard instead, which is stronger than doubling `#`: a
+    pane id by `PANE_ID_RE`, a frame or chat id by `commands_frame._FRAME_ID_RE`, a session
+    name by `state.workspace_prefix`'s alphabet, a hotkey by `instance._HOTKEY_RE`, a
+    chrome or background value by a lookup table that answers `()` for anything it does not
+    know. charter sets no `status-left`, `status-right`, `pane-border-format` or
+    `window-status-format`, and has no `display-menu` or `display-popup` at all, so there
+    is no format today whose text is not a module constant.
+
+    It is kept rather than deleted because the measurements above are the reason those
+    guards are shaped the way they are, and because the next surface that hands tmux a
+    string built from a name will need exactly this. **A caller that appears must use it
+    rather than re-spell it** — a second copy would be a second answer to "what may reach
+    tmux's parser", which is #547's shape and which this repo has already paid for once.
+    If no such surface arrives, this and its tests are a clean deletion.
     """
     text = text.replace("#", "##")
     if text.startswith("-"):
