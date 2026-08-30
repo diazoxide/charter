@@ -383,14 +383,12 @@ class TheChatDoorwaySaysWhyBeforeTheKeypress(PersonaIso, unittest.TestCase):
         _plant("api.1", workspace="api")
         _plant("api.2", workspace="api")
         rows = choose.roster(choose.CHAT, "api.2").rows
-        marked = [r.title for r in rows if r.title.startswith(choose.MARK[0])]
-        self.assertEqual(marked, [f"{choose.MARK[0]}api.2"])
+        self.assertEqual([r.title for r in rows if r.mark], ["api.2"])
 
     def test_a_chats_row_carries_its_harness_and_the_other_nouns_carry_nothing(self):
         _plant("api.1", workspace="api", harness="Claude Code")
         _plant("api.2", workspace="api", harness="Codex")
-        notes = {r.title[len(choose.MARK[0]):]: r.note
-                 for r in choose.roster(choose.CHAT, "api.1").rows}
+        notes = {r.title: r.note for r in choose.roster(choose.CHAT, "api.1").rows}
         self.assertEqual(notes, {"api.1": "Claude Code", "api.2": "Codex"})
         self.assertEqual(choose._note(choose.WORKSPACE, "api"), "")
 

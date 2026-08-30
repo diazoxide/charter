@@ -261,18 +261,36 @@ class FilteringIsPinnedInBothDirections(unittest.TestCase):
         p = self._p("one", "two", "three")
         self.assertEqual(len(p.rows), 3)
 
-    def test_the_order_is_never_disturbed_by_filtering(self):
-        """No ranking: a palette that reordered itself as the operator typed would move the
-        row under the cursor out from under it between keystrokes."""
+    def test_a_partial_match_never_disturbs_the_order(self):
+        """The bound on #732's ordering: only a name typed in FULL moves.
+
+        This used to be "no ranking at all", argued from a property the class does not
+        have — that reordering "would move the row under the cursor out from under it
+        between keystrokes", when `_refilter` puts the selection back at the top on every
+        edit and always has. What reordering really costs is that the LIST reads
+        differently, so the sort is two buckets rather than a score: none of these three
+        is `match`, so all three keep the catalogue's order and the screen is unchanged.
+        """
         p = self._p("zzz match", "aaa match", "mmm match", query="match")
         p._refilter()
         self.assertEqual([r.title for r in p.rows],
                          ["zzz match", "aaa match", "mmm match"])
 
+    def test_the_row_whose_whole_title_was_typed_goes_first(self):
+        """The other side of the same bound, here rather than only in the file about
+        #732, so the two cases sit together and neither can be deleted as the odd one."""
+        p = self._p("zzz match", "match", "mmm match", query="match")
+        p._refilter()
+        self.assertEqual([r.title for r in p.rows],
+                         ["match", "zzz match", "mmm match"])
+
     def test_a_hundred_rows_are_a_hundred_rows(self):
         """The cap mutation, from the top: `rows` may not clip, and neither may `narrow`."""
-        offers = [SimpleNamespace(id=f"a.a{i:03d}", title=f"row {i:03d}",
-                                  available=True, reason="") for i in range(100)]
+        # A real `Offer` and not a stand-in: `rows` reads every field of one, and a
+        # namespace holding the four this test happened to think of would go green over a
+        # field added to the contract and never carried across.
+        offers = [actions.Offer(id=f"a.a{i:03d}", title=f"row {i:03d}",
+                                available=True, reason="") for i in range(100)]
         self.assertEqual(len(palette.rows(offers)), 100)
         self.assertEqual(len(palette.narrow(palette.rows(offers), "row")), 100)
 

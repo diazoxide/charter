@@ -630,8 +630,8 @@ class TestTwoKeystrokes(SurfaceCase):
         switch.to_change(FID, "b-2")
         roster = choose.roster(choose.CHANGE, FID)
         self.assertEqual(list(roster.names), ["a-1", "b-2"])
-        self.assertTrue(roster.rows[1].title.startswith(choose.MARK[0]))
-        self.assertTrue(roster.rows[0].title.startswith(choose.MARK[1]))
+        self.assertEqual([(r.title, r.mark) for r in roster.rows],
+                         [("a-1", False), ("b-2", True)])
 
     def test_choosing_one_records_it_and_bumps_the_frame(self):
         self.make_change("a-1")

@@ -27,7 +27,7 @@ process — but the doorway it left cost the operator a keypress on the thing th
 browsing does not, gathered the first time something is typed and never while the query is
 empty. Still rows, still no `Action`, and still nothing spawned until Enter.
 
-**Three rules the plan states and a first implementation loses.**
+**Four rules the plan states and a first implementation loses.**
 
 *An unavailable action is listed WITH ITS REASON.* `frame/actions.py` already refuses to
 produce a reasonless unavailable offer; this module refuses to drop the row. The session
@@ -42,6 +42,10 @@ tmux 3.1c drew 20 rows fine). The overlay scrolls, so a cap would only hide rows
 sides are `casefold`ed rather than `lower`ed, because `lower` gets Turkish dotless-i and
 German sharp-s wrong and a palette that cannot find a row is indistinguishable from one
 that does not have it.
+
+*The name you typed in FULL is the row Enter runs* (#732). Everything else keeps the
+position the catalogue gave it — see :func:`narrow`, which states the whole ordering rule
+and why the two things it does not do (score, cap) are still not done.
 
 **The query never reaches a parser.** It is built one keypress at a time out of
 `overlay.decode`'s printable single-character events, so no newline and no escape
@@ -96,10 +100,18 @@ def rows(offers: Iterable) -> tuple[overlay.Row, ...]:
     unavailable, so "listed with its reason" and "listed at all" are the same decision
     here rather than two.
 
+    **`available` and not `reason` is what becomes `Row.refused`**, even though
+    `frame/actions.py` guarantees the two agree. The offer holds both because they are two
+    facts, and a row that re-derived one from the other would be the surface where they
+    could come apart: an offer available with a reason on it, or refused with an empty
+    one, would draw as its opposite here rather than as the defect it is one module down.
+
     A `tuple`, so what a `Palette` was built with cannot be edited underneath it by
     whoever passed it in.
     """
-    return tuple(overlay.Row(id=o.id, title=o.title, note=o.reason) for o in offers)
+    return tuple(overlay.Row(id=o.id, title=o.title, note=o.reason,
+                             mark=o.mark, refused=not o.available)
+                 for o in offers)
 
 
 def matches(query: str, row: overlay.Row) -> bool:
@@ -130,15 +142,75 @@ def matches(query: str, row: overlay.Row) -> bool:
     return component.usable_id(row.id) and q in row.id.casefold()
 
 
-def narrow(catalogue: Iterable[overlay.Row], query: str) -> tuple[overlay.Row, ...]:
-    """*catalogue*, keeping the rows :func:`matches` keeps. Order is never disturbed.
+def exact(query: str, row: overlay.Row) -> bool:
+    """Whether *query* IS this row's name, rather than a piece of it.
 
-    No ranking, no fuzzy scoring, no cap. A palette that reordered itself as the operator
-    typed would move the row under the cursor out from under it between keystrokes, which
-    is the same "rows that move around depending on state" the old menu deliberately
-    refused for its density entries.
+    The same two strings :func:`matches` looks at and the same `casefold` on both sides,
+    so a row can never be exact without also being a match — the ordering below is a
+    refinement of the filter and not a second, disagreeing opinion about what the operator
+    typed.
+
+    **The title is the name now**, which is what makes this askable at all. Until #749 a
+    picker's row arrived here as `"* alpha"` — two characters of mark composed into the
+    title by whoever built the row — so "is this the name they typed" would have been a
+    prefix-strip against a constant, in a function that would then have to know which row
+    sources mark and which do not. The mark is `overlay.Row.mark` and the title is `alpha`.
+
+    **An empty query is not a name**, and the guard is here rather than in :func:`narrow`
+    because that is where it is true: nobody has typed anything, so nothing can be what
+    they typed. Without it a row with an empty title would be "exact" for `F2` with
+    nothing typed and would sort to the top of the unfiltered palette — which is the one
+    thing the two-bucket sort promises cannot happen.
     """
-    return tuple(r for r in catalogue if matches(query, r))
+    q = contain.one_line(query).casefold()
+    if not q:
+        return False
+    if q == row.title.casefold():
+        return True
+    return component.usable_id(row.id) and q == row.id.casefold()
+
+
+def narrow(catalogue: Iterable[overlay.Row], query: str) -> tuple[overlay.Row, ...]:
+    """*catalogue*, keeping the rows :func:`matches` keeps, **exact names first**.
+
+    No fuzzy scoring and no cap, and the order is disturbed in exactly one way, stated as
+    a rule:
+
+        **An exact match comes first, an actionable one ahead of a refused one, and
+        everything else keeps the position it already had.**
+
+    Two buckets, and a stable sort, so *within* each the catalogue's own order is
+    untouched: the doorways in `choose.NOUNS` order, then every action in registration
+    order, then the names (`Palette._reachable` decides that much). A plane with forty
+    workspaces still cannot bury `detach` under the ones whose names contain a `d`,
+    because none of those forty is `detach`.
+
+    **What this fixes is #732, and it was a real two-keystroke route failing on the most
+    obvious input there is.** `docs/frame.md` sells `F2` + the name + Enter as the way to
+    switch when you know where you are going. A chat id is `<workspace>.<n>`, so on a
+    plane with a workspace `alpha` the row `chat: alpha.1 — pick another` holds `alpha` as
+    a substring of its TITLE, and it sorted above the `alpha` workspace row because a
+    doorway is in the catalogue and a name is not. Worse, that doorway was refused — one
+    chat, nothing to pick — so Enter opened nothing, switched nothing, and put a sentence
+    about chats on the screen of an operator who had typed a workspace's name.
+
+    **A refused row is still listed, and it is still listed with its reason.** That is
+    #512's rule and this does not touch it: an operator cannot ask about an option they
+    cannot see, and hiding the pinned workspace or the doorway that cannot open would be
+    the defect that rule exists to prevent. What moves is only which row Enter lands on
+    first, and only among rows the operator has typed the *whole* name of.
+
+    **The "no ranking" this replaces defended itself with a property this class does not
+    have.** It argued that reordering "would move the row under the cursor out from under
+    it between keystrokes" — but `Palette._refilter` sets the selection back to the top on
+    every single edit, deliberately and with its own docstring saying so. There was no row
+    under the cursor to move. The real cost of reordering is that the LIST reads
+    differently, which is why the sort is two buckets rather than a score: with nothing
+    typed, no row is an exact match for `""`, so `F2` draws exactly the list it drew
+    before this function learned to sort.
+    """
+    kept = [r for r in catalogue if matches(query, r)]
+    return tuple(sorted(kept, key=lambda r: (0, r.refused) if exact(query, r) else (1, 0)))
 
 
 @dataclass
@@ -182,6 +254,13 @@ class Palette(overlay.Surface):
     #: what makes that distinguishable from a plane that genuinely has no names.
     _found: tuple[overlay.Row, ...] | None = field(default=None, init=False)
 
+    #: What the last repeated row ANSWERED, appended to the heading until the next
+    #: keystroke — see :meth:`report`. Held apart from :attr:`heading` because the heading
+    #: is derived and is rebuilt from scratch on every edit; a sentence written straight
+    #: into it would either be lost at the next keystroke or, worse, kept and appended to
+    #: again, growing by one clause per Enter.
+    said: str = ""
+
     def __post_init__(self) -> None:
         self._refilter()
 
@@ -201,10 +280,12 @@ class Palette(overlay.Surface):
         has — `commands_frame._roster` hands both paths the one roster — and a palette
         lives for as long as somebody is looking at it.
 
-        **After the catalogue, never before.** `narrow` does not reorder, so this is the
-        only place the order of the two groups is decided: every action and both doorways
+        **After the catalogue, never before.** `narrow` reorders only exact matches, so this
+        is where the order of the two GROUPS is decided: every action and both doorways
         keep the position they had before names existed, and a plane with forty workspaces
-        cannot bury `detach` under the ones whose names happen to contain a `d`.
+        cannot bury `detach` under the ones whose names happen to contain a `d`. A name
+        the operator has typed in full goes first wherever it was gathered — that is
+        #732, and it is a decision about one row rather than about these two blocks.
         """
         if not self.query or self.query_only is None:
             return self.catalogue
@@ -224,7 +305,40 @@ class Palette(overlay.Surface):
         self.rows = narrow(self._reachable(), self.query)
         self._sel = 0
         self._top = 0
-        self.heading = self.label + (PROMPT + self.query if self.query else "")
+        self.said = ""
+        self._headline()
+
+    def _headline(self) -> None:
+        """Compose :attr:`heading` from the three things that make it up.
+
+        One place, called by :meth:`_refilter` and by :meth:`report`, so that "what the
+        header says" cannot be assembled two ways — a second spelling is how a repeated
+        action's sentence would come to be appended to a heading that already had one.
+        """
+        self.heading = (self.label + (PROMPT + self.query if self.query else "")
+                        + (f" · {contain.one_line(self.said)}" if self.said else ""))
+
+    def report(self, said: str) -> None:
+        """Say *said* in the header, leaving the query and the cursor exactly as they are.
+
+        **What a repeatable row answers with, and the only surface it can answer on**
+        (#746). `frame/overlay.modal_argvs` zooms this pane over the whole window, and its
+        own measurement is that a zoomed pane's siblings are not drawn — so an action that
+        moves the repo table's selection while the palette is up moves a highlight that is
+        not on screen. The header is what the operator is looking at.
+
+        **Not `_refilter`**, which is the whole reason this is a method rather than a
+        caller writing `heading`. That function resets the selection to the top by design,
+        and a repeat that reset it would move the cursor off the row the operator is
+        pressing Enter on — one repeat, and then a re-filter and a re-aim for the next.
+        Nothing here touches :attr:`rows`, :attr:`_sel`, :attr:`_top` or :attr:`query`.
+
+        An empty *said* clears rather than keeps: an action that answered nothing has
+        nothing to report, and leaving the previous sentence up would attribute it to the
+        keypress that just happened.
+        """
+        self.said = said
+        self._headline()
 
     def handle(self, ev: overlay.Event, height: int) -> str | None:
         """One event: text edits the query, everything else is the overlay's.

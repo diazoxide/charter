@@ -2888,10 +2888,10 @@ class Launch(PersonaIso, unittest.TestCase):
                     self.assertEqual(started,
                                      [util.self_relaunch_argv("frame-density", level)])
                     self.assertIn(f"density: {level}", a.title)
-        titles = [a.title for a in reg.all() if a.id.startswith("density.")]
-        marked = [t for t in titles if t.startswith(builtin_actions.MARK[0])]
-        self.assertEqual(marked, [f"{builtin_actions.MARK[0]}density: "
-                                  f"{config.FRAME['density']}"], titles)
+        density = [a for a in reg.all() if a.id.startswith("density.")]
+        self.assertEqual([a.title for a in density if a.mark],
+                         [f"density: {config.FRAME['density']}"],
+                         [(a.title, a.mark) for a in density])
 
     def test_the_write_hook_is_installed_before_the_teardown_hook(self):
         """Load-bearing, not incidental — see `_pane_died_teardown_hook_argv`'s own
@@ -4784,8 +4784,25 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
         self._frame()
         calls = self._open()
         verbs = [c[3] for c in calls]
-        self.assertEqual(verbs, ["split-window", "set-option", "select-pane",
-                                 "resize-pane"], calls)
+        # `list-panes` first is #739's sweep: charter asks tmux which panes on this
+        # window carry the overlay mark and closes them before splitting another, so a
+        # second `F2` reopens the palette rather than stacking an invisible one behind
+        # it. The mark itself is not a verb here — it rides on the `split-window`
+        # invocation as one chained command list, so that no instant exists in which an
+        # overlay pane is open and not findable.
+        self.assertEqual(verbs, ["list-panes", "split-window", "set-option",
+                                 "select-pane", "resize-pane"], calls)
+        self.assertIn(overlay.OVERLAY_OPTION, self._split(calls),
+                      "the split does not mark the pane it just made")
+
+    def _split(self, calls) -> list[str]:
+        """The `split-window` invocation, found by its verb and not by its position.
+
+        The list gained a `list-panes` in front of it (#739's sweep) and could gain more;
+        a test that indexed would then be asserting about whichever command happened to be
+        first, which is how an assertion comes to sit on a path it was never about.
+        """
+        return next(c for c in calls if "split-window" in c)
 
     def test_the_pane_runs_charters_own_palette_and_carries_no_client(self):
         """The client name stopped being threaded to the palette's pane with #729: its one
@@ -4793,7 +4810,7 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
         `/dev/ttys7` is what this opener was handed, so asserting its ABSENCE is what pins
         that the value is dropped here rather than merely unused two hops later."""
         self._frame()
-        split = self._open()[0]
+        split = self._split(self._open())
         self.assertIn("--pane", split)
         self.assertNotIn("/dev/ttys7", split)
         self.assertIn("frame-palette", split)
@@ -4807,7 +4824,7 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
         `$CHARTER_WORKSPACE` may be another frame's. A palette built from those would offer
         to switch to another plane's workspaces."""
         self._frame()
-        split = self._open()[0]
+        split = self._split(self._open())
         self.assertIn(f"CHARTER_SESSION_ID={self.FID}", split)
 
     def test_a_frame_with_no_recorded_harness_pane_opens_nothing_at_all(self):

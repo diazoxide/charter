@@ -128,6 +128,34 @@ class Action:
     #: What this action reaches, drawn from :data:`TOUCHES`. The ctx is built from it, so
     #: an action gets what it declared and not one field more.
     touches: tuple[str, ...] = ()
+    #: Whether this row is the state the frame is already IN — `density: full` on a frame
+    #: at `full`, `chrome: off` on a frame with no surface. Drawn as
+    #: `frame/overlay.ROW_MARK` in a column every row reserves.
+    #:
+    #: **A flag and not two characters in the title**, which is #749: `_register_density`
+    #: and `_register_chrome` used to compose `"* "` into the title themselves, and every
+    #: other action — every doorway, every provider's — composed nothing, so the palette
+    #: had two left edges. A bool cannot be spelled a third way by the next row source.
+    #:
+    #: Static rather than a callable, unlike :attr:`available`: the mark is resolved when
+    #: the registry is BUILT (`builtin_actions.build` is handed the density and chrome in
+    #: effect), because it describes the moment the palette opened rather than a plane
+    #: other processes are moving underneath it.
+    mark: bool = False
+    #: Whether running this leaves the palette OPEN, with the query and the cursor where
+    #: the operator left them, so the next Enter runs it again — #746.
+    #:
+    #: **For an action whose natural use is repeated, and for nothing else.** `repo:
+    #: select the next row` moves a selection by one; with `[frame] mouse = false`
+    #: shipped as the default it is the only route the repo table has, and it cost a full
+    #: palette open, filter and close per row — three rows measured at three ~3-second
+    #: pane cycles. Everything else the palette runs is a thing you do once.
+    #:
+    #: **What it does NOT relax is fire-and-report.** A repeatable action still starts its
+    #: work and returns; what changes is only whether the surface that ran it is torn
+    #: down. `commands_frame._draw_palette` still joins on the same grace and still says a
+    #: refusal on the operator's own screen.
+    repeat: bool = False
 
     def __post_init__(self) -> None:
         # The id first: every message below names the action it is about, and an action

@@ -148,8 +148,9 @@ import sys
 import time
 
 from . import config, contain, harness, instance, tui, util, workspace
-from .frame import (builtin_actions, chats, choose, component, gather, layout, overlay,
-                    pane, palette, picker, state, switch, tmuxctl)
+from .frame import (actions as frame_actions, builtin_actions, chats, choose, component,
+                    gather, layout, overlay, pane, palette, picker, state, switch,
+                    tmuxctl)
 # Aliased: `cmd_launch` already has a local variable named `slots` (the VISIBLE slot
 # list `layout.visible_slots` returns) — importing the renderer registry under its own
 # name would be shadowed by that local the moment it's assigned, and a `slots.SLOTS`
@@ -6266,16 +6267,20 @@ def cmd_palette(args) -> int:
     0018 says it never draws — so every refusal here is a quiet no-op, exactly like
     `cmd_density`'s.
 
-    **Pressing the hotkey while the palette is already open opens a second one.** A
+    **Pressing the hotkey while the palette is already open REOPENS it** (#739). A
     `bind -n` is the ROOT key table, so tmux matches `F2` before any byte reaches the
     palette's pane — which is measured only for a key tmux's own table claims, and is the
-    same property that makes the escape hatch work against a wedged overlay. The second
-    palette is the modal one and Escape closes it; the first is left as an ordinary
-    pane, closable by selecting it and pressing Escape, or by the hatch. Not guarded
-    here on purpose: every cheap test for "is one
-    already open" is a stale-state problem of its own (the hatch deliberately leaves the
-    window option naming a pane that is gone), and a guard that refuses the palette after
-    an escape-hatch press would be worse than the state it is preventing.
+    same property that makes the escape hatch work against a wedged overlay. So the second
+    press runs this function again, and :func:`_close_open_overlays` is what stops it
+    leaving the first palette standing as an invisible pane holding a live process.
+
+    This used to be left unguarded on purpose, and the reason was right about the guard it
+    was imagining: "every cheap test for 'is one already open' is a stale-state problem of
+    its own", and a guard that REFUSED after an escape-hatch press would be worse than the
+    state it prevented. Neither objection reaches the sweep. The mark is a tmux **pane**
+    option, so it is tmux's state and dies with the pane — there is nothing charter can
+    believe that is out of date — and nothing is ever refused: every press answers with a
+    palette.
 
     **``--pane`` is this process being handed a rectangle, so it is where the pane is
     claimed** (`frame/pane.py`, #606/#611) — and the claim is HERE rather than inside
@@ -6334,6 +6339,7 @@ def _open_palette(args) -> int:
     v = tmuxctl.version()
     if v is None:
         return 0
+    _close_open_overlays(socket, harness=harness)
     argv = overlay.open_argv(
         socket, harness=harness,
         command=util.self_relaunch_argv("frame-palette",
@@ -6346,6 +6352,57 @@ def _open_palette(args) -> int:
                                    overlay_pane=opened.stdout.strip()):
         tmuxctl.run("making the palette the surface", cmd)
     return 0
+
+
+def _close_open_overlays(socket: str, *, harness: str) -> None:
+    """Close any palette already open on this frame's window, before opening another.
+
+    **`F2` while a palette is up means REOPEN**, and #739 is what it meant before. A
+    `bind -n` is the root key table, so tmux matches the key before any byte reaches the
+    overlay's pane — that is not a defect to be fixed at the bind, it is the same property
+    that makes the escape hatch work against a wedged surface. So the second press really
+    does run this command, and what it must not do is leave the first palette standing:
+    Escape closes the one holding the keyboard, and the other stayed as a blank five-row
+    pane holding a live Python process, six rows off the harness, for the life of the
+    frame — invisible, since a blank gap above the repo table's rule reads as empty
+    terminal. `F12` is `select-pane` and does not clear it; a resize does not; no palette
+    row does. Only tmux's own prefix + `x` did, which `charter frame` neither binds nor
+    documents.
+
+    **Reopen rather than no-op or toggle, and the reason is the double press itself.**
+    Both of those require charter to BELIEVE a palette is open, and being wrong makes the
+    key do nothing — the worst possible answer for a key whose response takes a visible
+    moment to appear (#728 measures ~1.8 s of blank terminal on a launch; #729 measures a
+    four-second freeze on the switch path). An operator who presses `F2` twice is
+    precisely an operator who thinks the first press did not register; answering them with
+    no palette at all is the complaint they already had, made permanent. This answers
+    every press with a palette. It is also the *fresher* one: the catalogue resolves the
+    density, the surface, the workspace and the persona at the moment it opens, so a
+    reopen re-reads a plane that may have moved under the first.
+
+    **Nothing here is charter's own record of what is open**, which is what the old
+    refusal to guard was right about: `cmd_palette`'s docstring argued that "every cheap
+    test for 'is one already open' is a stale-state problem of its own", and a value
+    charter writes down can outlive the pane it describes — the hatch option deliberately
+    does. `overlay.OVERLAY_OPTION` is a **pane** option, so the answer is tmux's and dies
+    with the pane. There is no state to be stale, and this never refuses anything: a
+    listing that comes back empty, unparseable, or naming panes that have since gone costs
+    one no-op and the palette opens regardless.
+
+    **Every overlay on the window, not only the last one.** The reachable route is a
+    double `F2`, but it is not the only one — any second open against a live palette does
+    it, including a `charter frame-palette` typed in the harness and a second client
+    attached to the same session pressing the key — and a frame that has been running
+    since before this fix can already be carrying orphans. Sweeping what tmux says is
+    there heals those too, rather than making one route safe and calling the class closed.
+    """
+    listing = overlay.live_argv(socket, harness=harness)
+    if listing is None:
+        return
+    found = overlay.live_panes(tmuxctl.run("finding an open palette", listing).stdout)
+    argv = overlay.sweep_argv(socket, found)
+    if argv is not None:
+        tmuxctl.run("closing the palette already open", argv)
 
 
 def _draw_palette(args) -> int:
@@ -6401,8 +6458,18 @@ def _draw_palette(args) -> int:
                        + palette.rows(reg.offers(fid=fid, snapshot=snapshot))),
             query_only=lambda: _name_rows(fid, opened),
             mouse=True)
-        chosen = palette.own_the_tty(
-            surface, then=lambda row: _picker(row, fid, opened))
+        def _then(row):
+            # Two ways a chosen row does NOT end the palette, asked in the order they
+            # cost: a doorway replaces the surface, and a repeatable action runs and
+            # leaves this one standing. Explicit rather than `_picker(...) or _again(...)`
+            # — both answer a `Surface`, and a surface's truthiness is not a thing this
+            # file gets to assume on `own_the_tty`'s behalf.
+            nxt = _picker(row, fid, opened)
+            if nxt is not None:
+                return nxt
+            return _again(row, surface, reg, fid=fid, snapshot=snapshot)
+
+        chosen = palette.own_the_tty(surface, then=_then)
         if chosen is None:
             return 0
         picked = _chosen_name(chosen, opened)
@@ -6489,6 +6556,52 @@ def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
         return None
     return palette.Palette(catalogue=_roster(noun, fid, opened).rows,
                            label=noun, mouse=True)
+
+
+def _again(row, surface, reg, *, fid: str, snapshot) -> "palette.Palette | None":
+    """Run *row* and hand *surface* back to be drawn again — or ``None`` for every row
+    that is not repeatable, which ends the palette exactly as before. **#746.**
+
+    **One palette opening, not one per row.** `repo: select the next row` and its
+    `previous` twin are the only actions charter offers whose natural use is *repeated*,
+    and with `[frame] mouse = false` shipped as the default they are the repo table's only
+    interaction model. Measured by the report: moving the selection three rows down a
+    fourteen-row table cost fourteen keystrokes and three ~3-second cycles, because each
+    Enter closed the pane, killed the process and re-split, re-imported and re-drew the
+    whole surface for the next one. Everything about that cost is the palette OPENING; the
+    action itself is `state.record_selection` plus `state.bump`, two file writes, done in
+    this process (`builtin_actions._select` says why it does not spawn).
+
+    **The query and the cursor are deliberately left alone.** `Palette._refilter` resets
+    the selection to the top on every edit, and calling it here would move the cursor off
+    the row the operator is holding Enter on — turning a repeat into "type the filter
+    again". So this writes `heading` directly and touches nothing else on the surface:
+    what comes back is the same list, the same filter, the same row under the cursor.
+
+    **The heading is where the outcome goes, and that is forced rather than chosen.** The
+    overlay pane is `resize-pane -Z`'d over the whole window (`overlay.modal_argvs`, whose
+    own measurement is that a zoomed pane's siblings are not drawn) — so the repo table
+    the selection is moving through is NOT on screen behind the palette. A repeat whose
+    only feedback was the table would be moving a highlight nobody can see. `Invocation`
+    already carries the sentence the action answered with (`selected auth`), so the
+    surface the operator IS looking at says what just happened, and the next Enter says
+    the next one.
+
+    A refusal lands in the same place for the same reason, and the palette stays up: the
+    row is still listed, still says why in its note, and an operator who pressed it has
+    been told without losing the pane. That is `_say_on_screen`'s job for a palette that
+    is CLOSING and this one's for a palette that is not.
+    """
+    try:
+        act = reg.get(row.id)
+    except frame_actions.ActionError:
+        return None           # a picker row, or an id no provider on this machine has
+    if not act.repeat:
+        return None
+    inv = reg.invoke(row.id, fid=fid, snapshot=snapshot)
+    inv.join(timeout=_ACTION_START_GRACE)
+    surface.report(inv.reason if not inv.started else (inv.note or inv.error))
+    return surface
 
 
 def _name_rows(fid: str, opened: list) -> "tuple[overlay.Row, ...]":
