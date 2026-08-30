@@ -26,6 +26,7 @@ from unittest import mock
 from charter import commands_frame, config, contain, instance
 from charter.frame import chats, choose, slots, state, tmuxctl
 from tests._isolation import PersonaIso
+from tests._tmuxsocket import OPERATOR_SOCKET
 # The one list of hostile display strings this suite has, imported rather than retyped:
 # a second copy is one that stops growing when somebody finds a ninth shape.
 from tests.test_frame_pickers import HOSTILE
@@ -312,6 +313,32 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         self.assertIn("no usable record", out.message)
         self.assertIn("relaunch that chat", out.message)
 
+    def test_a_chat_on_the_other_tmux_server_is_refused(self):
+        """#684, the half that is a record rather than a reading of tmux.
+
+        Charter runs frames on two servers — its own `-L charter` and, inside an
+        operator's tmux, theirs — and a workspace can hold a chat on each, because
+        membership here is the `workspace` FILE and says nothing about where a chat runs.
+        Pane ids are per-server, so `%3` recorded by a chat on one server names a real,
+        live, unrelated pane on the other, and the `select-window` charter would send
+        would be told it worked."""
+        state.record_server("api.1", commands_frame.SOCKET)
+        state.record_server("api.2", OPERATOR_SOCKET)
+        out = chats.check("api.1", "api.2")
+        self.assertFalse(out.ok)
+        self.assertIn("not on this frame's tmux server", out.message)
+
+    def test_a_chat_whose_server_charter_never_recorded_is_refused_too(self):
+        """No default is filled in for a missing marker. Every chat this charter launches
+        records one on both paths, and `of_workspace` keeps pre-chat `{workspace}-{pid}`
+        frames out of the roster entirely — so an absent value is a truncated record, and
+        "charter cannot tell" is the same answer as "somewhere else" for something about
+        to move a client."""
+        state.record_server("api.1", commands_frame.SOCKET)
+        out = chats.check("api.1", "api.2")
+        self.assertFalse(out.ok)
+        self.assertIn("not on this frame's tmux server", out.message)
+
     def test_a_switch_that_may_go_ahead_names_where_it_is_going(self):
         out = chats.check("api.1", "api.2")
         self.assertTrue(out.ok)
@@ -532,7 +559,9 @@ class AHostileChatRendersAsOneRowAndRunsNothing(PersonaIso, unittest.TestCase):
                     self.assertNotIn(bad, word,
                                      f"{bad!r} is inside the tmux format {word!r}")
                 self.assertIn(word, ("#{pane_id}",
-                                     "#{window_width}:#{window_height}"),
+                                     "#{window_width}:#{window_height}",
+                                     "#{session_id}\t#{window_id}",
+                                     "#{window_id}"),
                               f"an unexpected tmux format reached the switch: {word!r}")
 
     def test_every_chat_is_still_reachable_at_200_80_and_40_columns(self):
@@ -592,11 +621,27 @@ class _FakeServer:
     Everything `cmd_chat` sends goes through `tmuxctl.run`, so one patch is the whole
     server. `_relayout` and `_split_panels` go through it too, which is what makes the
     ORDER of the four steps assertable in one list.
+
+    **It carries a placement, and since #684 that is not decoration.** A pane belongs to a
+    window and a window to a session, `select-window` sets the SESSION's current window,
+    and a fake that answered one format for every `display-message` could not tell the
+    switch that worked from the one that moved somebody else's session — which is the
+    whole defect. So: :attr:`place` says where each pane is, :attr:`current` says which
+    window each session is on, and `select-window` moves the target pane's session rather
+    than a boolean. A test that wants the broken shape states it by putting the target in
+    another session, the way the real server put it there.
     """
 
     def __init__(self, *, select_rc: int = 0):
         self.calls: list[list[str]] = []
         self.select_rc = select_rc
+        #: ``{pane id: (session id, window id)}`` — what `#{session_id}:#{window_id}`
+        #: reports for a pane. A pane that is not here is one tmux cannot resolve, and
+        #: tmux answers that with rc 0 and empty output (measured on 3.7c), which is why
+        #: this fake answers it the same way rather than with a non-zero status.
+        self.place = {"%1": ("$0", "@0"), "%2": ("$0", "@1")}
+        #: ``{session id: window id}`` — the window each session is currently on.
+        self.current = {"$0": "@0"}
 
     def __call__(self, what, argv, **kw):
         import subprocess
@@ -605,11 +650,37 @@ class _FakeServer:
         verb = self._verb(argv)
         if verb == "select-window":
             rc = self.select_rc
+            if rc == 0:
+                seat = self.place.get(self._target(argv))
+                if seat is not None:
+                    self.current[seat[0]] = seat[1]
         elif verb == "split-window":
             out = "%9"
         elif verb == "display-message":
-            out = "80:24"
+            out = self._display(argv)
         return subprocess.CompletedProcess(argv, rc, out, "")
+
+    def _display(self, argv) -> str:
+        """What tmux would print for the format charter actually sent.
+
+        Told apart by the FORMAT, never by the order the calls arrive in: the switch asks
+        three different questions of `display-message` and a fake that answered them all
+        with one string would let any of them stand in for the others.
+        """
+        fmt, target = argv[-1], self._target(argv)
+        if fmt == commands_frame._PANE_PLACE_FORMAT:
+            seat = self.place.get(target)
+            return f"{seat[0]}\t{seat[1]}" if seat else ""
+        if fmt == commands_frame._WINDOW_ID_FORMAT:
+            return self.current.get(target, "")
+        if fmt == commands_frame._PANE_WIDTH_FORMAT:
+            return "80"
+        return "80:24"
+
+    @staticmethod
+    def _target(argv) -> str:
+        """The `-t` argument, or ``""`` — what tmux would be aiming at."""
+        return argv[argv.index("-t") + 1] if "-t" in argv else ""
 
     @staticmethod
     def _verb(argv) -> str:
@@ -861,29 +932,49 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         self._switch()
         self.assertEqual(sorted(state.panes("api.2")), ["top"])
 
-    def test_a_chat_charter_cannot_relayout_still_gets_the_client_moved(self):
-        """The two re-layouts are attempted independently, and the client's move is not
-        conditional on either. A chat charter has no usable pane record for cannot have
-        its panels moved — but abandoning the switch over it would leave the operator on
-        the window they asked to leave, which is the worse of the two failures."""
+    def test_a_chat_whose_own_pane_record_is_broken_switches_nothing(self):
+        """**This test's property changed with #684, and the change is the finding.**
+
+        It used to say the client moves even when the chat being LEFT cannot be tidied,
+        on the argument that leaving the operator where they asked not to be is the worse
+        of two failures. That argument held while the only cost of not knowing where you
+        are standing was an untidy background window. It does not hold now: the record
+        that says where to tear down (`state.harness_pane(fid)`) is the same record that
+        says which tmux SESSION this client is in, and without it charter can neither
+        check that the target is a window this client can be moved to nor tell afterwards
+        whether it moved. Selecting anyway would aim `select-window` at a pane that may
+        belong to another session — which returns 0 and moves that session's screen.
+
+        So one broken record now refuses the whole switch, with a sentence, and touches
+        no tmux beyond the two readings that failed."""
         state.record_harness_pane("api.1", "not-a-pane")
-        self._switch()
-        verbs = self.fake.verbs()
-        self.assertIn("select-window", verbs)
-        self.assertNotIn("kill-pane", verbs)
-        self.assertTrue(state.panes("api.2"),
-                        "the target lost its panels because the chat being left could "
-                        "not be tidied")
+        said = []
+        with mock.patch.object(commands_frame, "_say_on_screen",
+                               lambda fid, msg, *a, **k: said.append(msg)):
+            self._switch()
+        self.assertEqual(len(said), 1)
+        self.assertIn("cannot find this chat's own window", said[0])
+        self.assertNotIn("select-window", self.fake.verbs())
+        self.assertEqual(state.panes("api.1"), {"top": "%3", "bottom": "%4"})
 
     def test_a_tmux_whose_version_charter_cannot_read_moves_the_client_and_no_panes(self):
         """`_relayout_target` refuses on an unreadable version because every builder
         below it takes one. The switch itself needs none — `select-window` has been in
-        tmux forever — so the client still moves and nothing is split blind."""
+        tmux forever, and the placement readings around it are `display-message` — so the
+        client still moves and nothing is split blind.
+
+        This is what keeps "the two re-layouts are attempted independently, and the
+        client's move is not conditional on either" pinned: both re-layouts are refused
+        here and the switch still happens."""
         with mock.patch.object(tmuxctl, "version", lambda: None), \
              mock.patch.object(commands_frame.tmuxctl, "version", lambda: None):
             self._switch()
         verbs = self.fake.verbs()
-        self.assertEqual(verbs, ["select-window"])
+        self.assertIn("select-window", verbs)
+        self.assertEqual([v for v in verbs if v not in ("display-message",
+                                                        "select-window")], [],
+                         "something was split or killed on a tmux charter could not "
+                         "read the version of")
         self.assertEqual(state.panes("api.1"), {"top": "%3", "bottom": "%4"})
 
     def test_the_presser_chat_is_the_one_left_not_the_session_variable(self):
@@ -896,6 +987,217 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         killed = [a[-1] for a in self.fake.calls
                   if _FakeServer._verb(a) == "kill-pane"]
         self.assertEqual(killed, ["%7"])
+
+
+class TheSwitchEstablishesTheWindowItIsMovingTo(PersonaIso, unittest.TestCase):
+    """#684: `select-window` at another session's pane returns **0**.
+
+    Measured on real tmux 3.7c, own socket: two sessions A and B, the client in A,
+    `select-window -t %N` where `%N` is a window of B — rc **0**, B's current window
+    changed, A's did not, the client did not move. So the status check that follows it
+    could never have told a switch from a no-op, and what came next was
+    `_apply_arrangement(fid, want=[])`: charter tearing down the panels of the chat still
+    on screen, having reported a switch that did not happen.
+
+    Reachable because membership is a FILE. `chats.of_workspace` matches
+    `state.frame_workspace`, which `charter workspace use <other>` typed at the agent
+    rewrites ("it moves the panels too" is a documented promise) and which
+    `switch.to_workspace` rewrites again — so after one `F2 → workspace → beta` inside
+    chat `api.1`, `of_workspace("beta")` returns `api.1` (a window of tmux session `api`)
+    beside `beta.1`, in one roster, and `chats.check` says ok.
+
+    The fixture is that plane: both chats say workspace `beta`, both are on charter's own
+    server, and their windows are in two different tmux sessions — which is the one fact
+    only tmux holds.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _plant("api.1", workspace="beta", pane="%1")
+        _plant("beta.1", workspace="beta", pane="%2")
+        for fid in ("api.1", "beta.1"):
+            state.record_server(fid, commands_frame.SOCKET)
+        state.record_panes("api.1", panels={"top": "%3", "bottom": "%4"})
+        self.fake = _FakeServer()
+        # `api.1`'s window is in session `$0`; `beta.1`'s is in session `$1` — which is
+        # what `cmd_launch` builds, one tmux session per workspace, and what no record on
+        # disk can say.
+        self.fake.place = {"%1": ("$0", "@0"), "%2": ("$1", "@7")}
+        self.fake.current = {"$0": "@0", "$1": "@7"}
+        for p in (mock.patch.object(tmuxctl, "run", self.fake),
+                  mock.patch.object(commands_frame.tmuxctl, "run", self.fake),
+                  mock.patch.object(tmuxctl, "version", lambda: (3, 7)),
+                  mock.patch.object(commands_frame.tmuxctl, "version", lambda: (3, 7)),
+                  mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "api.1",
+                                               "CHARTER_WORKSPACE": "beta"},
+                                  clear=False)):
+            p.start()
+            self.addCleanup(p.stop)
+        # Every refusal in `cmd_chat` goes to the screen and nowhere else, so this is
+        # where a test reads one.
+        self.said: list[str] = []
+        said = mock.patch.object(commands_frame, "_say_on_screen",
+                                 lambda fid, msg, *a, **k: self.said.append(msg))
+        said.start()
+        self.addCleanup(said.stop)
+
+    def test_the_roster_really_does_offer_the_other_sessions_chat(self):
+        """The premise, asserted rather than assumed: without this the tests below would
+        be measuring a switch nothing would ever have attempted."""
+        self.assertEqual(chats.of_workspace("beta"), ["api.1", "beta.1"])
+        self.assertTrue(chats.check("api.1", "beta.1").ok,
+                        "the reading half already refuses this, so the tmux half is not "
+                        "what this class is about any more")
+
+    def test_a_cross_session_switch_selects_nothing_and_says_why(self):
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertNotIn("select-window", self.fake.verbs(),
+                         "charter aimed a select-window at another session's window, "
+                         "which returns 0 and moves that session")
+        self.assertEqual(len(self.said), 1)
+        self.assertIn("another tmux session", self.said[0])
+
+    def test_it_does_not_tear_down_the_panels_of_the_chat_on_screen(self):
+        """The cost the refusal exists to stop. `want=[]` on `api.1` is what used to
+        follow the rc-0 reading."""
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertNotIn("kill-pane", self.fake.verbs())
+        self.assertEqual(state.panes("api.1"), {"top": "%3", "bottom": "%4"})
+
+    def test_the_other_sessions_current_window_is_left_where_it_was(self):
+        """Not only "this client did not move" — the OTHER session's screen is also
+        untouched, which is what a `select-window` sent anyway would have changed."""
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertEqual(self.fake.current, {"$0": "@0", "$1": "@7"})
+
+    def test_the_same_two_chats_in_one_session_switch_normally(self):
+        """The control. Nothing about the workspace record changed — only which tmux
+        session the target's window is in — so a refusal that fired here would be
+        refusing the ordinary case."""
+        self.fake.place["%2"] = ("$0", "@1")
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertEqual(self.said, [])
+        self.assertIn("select-window", self.fake.verbs())
+        self.assertEqual(state.panes("api.1"), {})
+
+    def test_a_target_whose_window_is_gone_is_learnt_before_anything_is_selected(self):
+        """`display-message -p` against a target tmux cannot resolve answers rc **0**,
+        empty stdout and no stderr (measured on 3.7c) — so the reading, not the status,
+        is what says the window is absent. Learnt one step earlier than it used to be,
+        which is what makes it a fact about the window rather than about a command."""
+        self.fake.place["%2"] = ("$0", "@1")
+        del self.fake.place["%2"]
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertNotIn("select-window", self.fake.verbs())
+        self.assertEqual(len(self.said), 1)
+        self.assertIn("has no window any more", self.said[0])
+
+    def test_an_answer_missing_its_session_is_read_as_no_window(self):
+        """Both halves of the placement are held, and each says a different thing when it
+        is missing. Asserted on the SENTENCE rather than on "it refused": with the session
+        half unchecked an empty string would go on to be compared against this chat's real
+        session id, refuse for looking like another session, and pass a test that only
+        asked whether something was refused."""
+        self.fake.place["%2"] = ("", "@1")
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertNotIn("select-window", self.fake.verbs())
+        self.assertIn("has no window any more", self.said[0])
+
+    def test_an_answer_missing_its_window_is_read_as_no_window_too(self):
+        """The other half. Unchecked, an empty window id reaches the reading taken after
+        the select — where it would refuse for "this client did not move", which is a
+        different fact said about a switch that should never have been attempted."""
+        self.fake.place["%2"] = ("$0", "")
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertNotIn("select-window", self.fake.verbs())
+        self.assertIn("has no window any more", self.said[0])
+
+    def test_a_session_id_that_is_not_tmuxs_own_never_becomes_a_target(self):
+        """#475\'s rule, on the one value of the placement that goes back OUT to tmux.
+
+        `_pane_place`\'s session id is what `_session_window` sends as `-t` afterwards, so
+        its ALPHABET is load-bearing and not decoration — `$0;kill-server` in that position
+        is the shape that already cost this project a `kill-server` armed on every window
+        resize. The window id beside it is only ever compared, which is why its own
+        strictness is not asserted here and its docstring says so.
+
+        Driven through a whole switch as well as through the reader, because the property
+        is "it never reaches tmux", not "the function returned None".
+        """
+        self.fake.place["%2"] = ("$0;kill-server", "@1")
+        self.assertIsNone(commands_frame._pane_place("sock", "%2"))
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        for argv in self.fake.calls:
+            self.assertNotIn("$0;kill-server", argv,
+                             "a session id charter did not recognise reached a tmux "
+                             "command line")
+        self.assertIn("has no window any more", self.said[0])
+
+    def test_a_placement_that_is_not_two_fields_answers_nothing(self):
+        """The reading is `split("\\t")` and a field COUNT rather than a `partition`, and
+        that is the deletion sweep's doing: with exactly one separator by construction,
+        `partition` and `rpartition` are the same program and no test could ever tell them
+        apart. A count says the same thing and is a guard a test can redden — which is
+        also how `_chat_being_left` asks it (#688).
+
+        Asked of the reader directly, because a real tmux cannot be made to answer with
+        the wrong number of fields."""
+        for answer in ("$0", "", "$0\t@1\textra"):
+            with self.subTest(answer=answer):
+                with mock.patch.object(
+                        tmuxctl, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            [], 0, answer, "")), \
+                     mock.patch.object(
+                        commands_frame.tmuxctl, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            [], 0, answer, "")):
+                    self.assertIsNone(commands_frame._pane_place("sock", "%1"))
+
+    def test_the_placement_reading_never_makes_a_target_of_a_non_pane(self):
+        """#475's rule at the boundary the placement reading adds, asserted of the reader
+        itself.
+
+        Asked of `_pane_place` directly and not through a switch, because every route into
+        it from `cmd_chat` goes past a guard that would refuse first (`chats.check`'s pane
+        record, `chats.pane_of`'s own `PANE_ID_RE`) — a test driven from the top would
+        pass on THOSE and say nothing about this one, which is exactly the "a guard that
+        passes because a different guard caught it" shape.
+
+        The value matters because `display-message -p` does not fail on a bad target: an
+        empty `-t` resolves to the CURRENT window, so `""` would have this function report
+        the asker's own place as the target's and agree that the switch may go ahead. And
+        `None` — what `chats.pane_of` answers for an unusable record — is not even a
+        string `subprocess` can put in an argv."""
+        for bad in (None, "", "not-a-pane", "%1;kill-server", " %1"):
+            with self.subTest(bad=bad):
+                self.fake.calls.clear()
+                self.assertIsNone(commands_frame._pane_place("sock", bad))
+                self.assertEqual(self.fake.calls, [],
+                                 "a value that is not a pane id reached tmux as a target")
+
+    def test_a_select_that_reports_success_without_moving_tears_nothing_down(self):
+        """The gate is on the client having MOVED, not on a command having exited 0 —
+        the two are different facts and this is the one the panels ride on. Driven by a
+        server that accepts the `select-window` and leaves the session where it was,
+        which is what tmux itself does whenever the target is not this session's."""
+        self.fake.place["%2"] = ("$0", "@1")
+        real_call = self.fake.__call__
+
+        def deaf(what, argv, **kw):
+            before = dict(self.fake.current)
+            out = real_call(what, argv, **kw)
+            self.fake.current = before          # the select "worked" and moved nothing
+            return out
+
+        with mock.patch.object(tmuxctl, "run", deaf), \
+             mock.patch.object(commands_frame.tmuxctl, "run", deaf):
+            commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        self.assertIn("select-window", self.fake.verbs())
+        self.assertNotIn("kill-pane", self.fake.verbs())
+        self.assertEqual(state.panes("api.1"), {"top": "%3", "bottom": "%4"})
+        self.assertEqual(len(self.said), 1)
+        self.assertIn("did not move", self.said[0])
 
 
 class ThePaletteStartsTheSwitchRatherThanPerformingIt(PersonaIso, unittest.TestCase):

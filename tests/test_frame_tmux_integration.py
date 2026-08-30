@@ -101,7 +101,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, hooks, instance, statusline, todos
-from charter.frame import gather, layout, notify, overlay
+from charter.frame import chats, gather, layout, notify, overlay
 from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
@@ -5948,6 +5948,129 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
             self.assertLessEqual(width, self.SMALL[0],
                                  "a panel was born at the background window's stale "
                                  "width")
+
+
+class ASwitchAcrossSessionsIsRefusedRatherThanReported(_TmuxServerFixture, PersonaIso,
+                                                       unittest.TestCase):
+    """#684, against a real server: `select-window` at another session's pane returns 0.
+
+    **A mock cannot make this claim.** Every other guard in `cmd_chat` is about a value
+    charter read; this one is about what tmux DOES with a target it accepts, and the whole
+    defect is that accepting it and acting on it look identical from charter's side.
+    Measured here rather than quoted: the return code, both sessions' current windows, and
+    whether the panels of the chat still on screen are alive afterwards.
+
+    **Re-run against tmux 3.2 — `tmuxctl.FLOOR` — as well as 3.7c**, by putting a 3.2
+    built from the release tarball first on `$PATH`. Identical on both, so nothing here
+    carries a version gate.
+
+    The plane is the one `charter workspace use beta` typed inside chat `api.1` produces:
+    two chats whose `workspace` files both say `beta`, on one server, in two different
+    tmux sessions. `chats.of_workspace` reads the file, so both land in one roster and
+    `chats.check` says ok — which is what makes this reachable rather than hypothetical.
+    """
+
+    WS = "beta"
+
+    def _chat_in_its_own_session(self, session: str, chat: str) -> str:
+        """One chat as `cmd_launch` builds the FIRST chat of a workspace: its own tmux
+        session, its window named for the chat, the production records beside it."""
+        conf = os.path.join(self._gate_dir, f"{chat}.conf")
+        Path(conf).write_text(commands_frame._PLACEHOLDER_CONF)
+        gate = os.path.join(self._gate_dir, f"gate-{chat}")
+        r = _run(layout.session_argv(session=session, conf=conf, chat=chat,
+                                     socket=self.SOCKET_NAME, cols=80, rows=24,
+                                     harness_argv=_gate_argv(gate, "exit 0"),
+                                     env={"CHARTER_SESSION_ID": chat}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pane = r.stdout.strip()
+        self.addCleanup(_kill_pid, self._srv("display-message", "-p", "-t", pane,
+                                             "#{pane_pid}").stdout.strip())
+        state.record_server(chat, self.SOCKET_NAME)
+        state.record_harness_pane(chat, pane)
+        state.record_workspace(chat, self.WS)
+        state.bump(chat)
+        return pane
+
+    def _current_window(self, session: str) -> str:
+        return self._srv("display-message", "-p", "-t", f"{session}:",
+                         "#{window_id}").stdout.strip()
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.one = self._chat_in_its_own_session("api", "api.1")
+        self.two = self._chat_in_its_own_session("beta", "beta.1")
+        # Two real panels on the chat the operator is looking at — what a wrongful
+        # teardown kills, and the only way to tell "charter refused" from "charter had
+        # nothing to tear down".
+        panels = {}
+        for slot in ("top", "bottom"):
+            p = self._srv("split-window", "-d", "-t", self.one, "-P", "-F",
+                          "#{pane_id}", "--", *_gate_argv(
+                              os.path.join(self._gate_dir, f"gate-{slot}"), "exit 0"))
+            self.assertEqual(p.returncode, 0, p.stderr)
+            panels[slot] = p.stdout.strip()
+        state.record_panes("api.1", panels=panels)
+        self.panels = panels
+
+    def _switch(self) -> list[str]:
+        said: list[str] = []
+        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+             mock.patch.object(commands_frame, "_say_on_screen",
+                               lambda fid, msg, *a, **k: said.append(msg)), \
+             mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "api.1",
+                                          "CHARTER_WORKSPACE": self.WS}, clear=False):
+            self.assertEqual(
+                commands_frame.cmd_chat(SimpleNamespace(chat_id="beta.1",
+                                                        chat="api.1")), 0)
+        return said
+
+    def test_tmux_really_does_accept_the_wrong_target(self):
+        """The control this whole class rests on, measured on THIS tmux rather than
+        quoted from the report. If `select-window` ever starts refusing a pane of another
+        session, the guard above it is guarding nothing and the decision should be
+        re-argued."""
+        before = self._current_window("api")
+        r = self._srv("select-window", "-t", self.two)
+        self.assertEqual(r.returncode, 0,
+                         "select-window refused another session's pane on this tmux")
+        self.assertEqual(self._current_window("api"), before,
+                         "the asking session moved after all, which would make that "
+                         "return code an honest answer")
+
+    def test_the_two_chats_share_a_roster_and_not_a_session(self):
+        """The premise. Both files say `beta`, so both are in one roster; their windows
+        are in two sessions, which is the fact no file holds."""
+        self.assertEqual(chats.of_workspace(self.WS), ["api.1", "beta.1"])
+        self.assertNotEqual(
+            self._srv("display-message", "-p", "-t", self.one,
+                      "#{session_id}").stdout.strip(),
+            self._srv("display-message", "-p", "-t", self.two,
+                      "#{session_id}").stdout.strip())
+
+    def test_the_switch_is_refused_and_both_sessions_stay_where_they_were(self):
+        api_before, beta_before = (self._current_window("api"),
+                                   self._current_window("beta"))
+        said = self._switch()
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("another tmux session", said[0])
+        self.assertEqual(self._current_window("api"), api_before)
+        self.assertEqual(self._current_window("beta"), beta_before,
+                         "charter moved a session it is not in")
+
+    def test_the_panels_of_the_chat_on_screen_are_still_running(self):
+        """The cost. Before this refusal the rc-0 reading was followed by
+        `_apply_arrangement(fid, want=[])`, which killed these panes — the panels of the
+        chat the operator was still looking at, torn down over a switch that never
+        happened."""
+        self._switch()
+        alive = self._srv("list-panes", "-t", self.one, "-F",
+                          "#{pane_id}").stdout.split()
+        for slot, pane in self.panels.items():
+            self.assertIn(pane, alive, f"the {slot} panel of the chat on screen was "
+                                       f"killed by a switch that did not happen")
+        self.assertEqual(state.panes("api.1"), self.panels,
+                         "charter rewrote the pane map of a chat it did not leave")
 
 
 if __name__ == "__main__":
