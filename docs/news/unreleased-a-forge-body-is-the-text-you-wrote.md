@@ -64,10 +64,10 @@ Three limits, stated rather than left to be discovered:
   issue body: a body is replaced in one call, while a pushed commit needs a history rewrite,
   and a rewrite reaches neither forks nor existing clones nor the forge's caches. It is out
   because the commit surface has not been verified the way the `gh`/`glab` verbs were, and
-  because it is dense with the character the guard keys on — 25 of the last 30 commit
-  messages on charter's own `main` contain a backtick, and inside `-m "…"` every one is
-  live. A guard that fires constantly on legitimate work gets switched off, and then it
-  covers nothing. Filed separately as
+  because it is dense with the character the guard keys on: most commit messages on
+  charter's own `main` carry a backtick — 26 of 30 consecutive ones when this was
+  measured — and inside `-m "…"` every one of those is live. A guard that fires constantly
+  on legitimate work gets switched off, and then it covers nothing. Filed separately as
   [#711](https://github.com/diazoxide/charter/issues/711) so it is a decision and not an
   omission;
 * the check is scoped to the **whole Bash call**, not to the body argument, so
@@ -89,9 +89,9 @@ plane**. What it refuses is a fact about the shell, not a policy this plane hold
 
 A fix for a class of bug is unusually likely to contain that bug, and a shell parser
 written to guard shell expansion is the worst case of it. So the part that is new
-reasoning — *would this substitution actually run* — is a **differential test**: twenty-four
-spellings are executed by `bash` with a sentinel file as the oracle for whether the
-substitution ran, and charter's answer has to match on every one.
+reasoning — *would this substitution actually run* — is a **differential test**:
+twenty-eight spellings are executed by `bash` with a sentinel file as the oracle for
+whether the substitution ran, and charter's answer has to match on every one.
 
 It earned its keep before the branch was pushed. A here-string, `<<<"… `x` …"`, was being
 re-read as a heredoc whose delimiter was the quoted word — classifying a live substitution

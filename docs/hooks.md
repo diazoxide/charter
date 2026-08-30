@@ -213,9 +213,10 @@ rule while one who reads a bare refusal files an issue.
   call, while a pushed commit needs a history rewrite, and a rewrite reaches neither forks
   nor existing clones nor the forge's caches. Visibility is not reversibility. It is out of
   scope because the commit surface has not been verified the way the `gh`/`glab` verbs
-  were, and because it is dense with the character the guard keys on: **25 of the last 30
-  commit messages on charter's own `main` contain a backtick**, ten of them around text that
-  reads as a command, and inside `-m "…"` every one of those is live. A guard that fires
+  were, and because it is dense with the character the guard keys on: **most commit
+  messages on charter's own `main` carry a backtick** — 26 of 30 consecutive ones when
+  this was measured, nineteen of them around text that reads as a command — and inside
+  `-m "…"` every one of those is live. A guard that fires
   constantly on legitimate work is one that gets switched off, and then it covers nothing.
 
   Unlike the four guards above it, this one is **not gated on there being a control

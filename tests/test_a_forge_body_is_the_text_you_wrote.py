@@ -397,8 +397,8 @@ class WhatItDoesNotClaim(ForgeGuardCase):
         It is out of scope because of **calibration on an unverified surface**. The nineteen
         `(tool, noun, verb)` rows were each checked against `gh`/`glab` `--help`; nothing
         equivalent has been done for the commit surface. And that surface is dense with the
-        exact character this guard keys on — measured on this repository, **25 of the last
-        30 commit messages on `main` contain a backtick**, 10 of them around text that reads
+        exact character this guard keys on — measured on this repository, **26 of 30
+        consecutive commit messages on `main` contained a backtick**, 10 of them around text that reads
         as a runnable command. Inside `-m "…"` every one of those is live. A security guard
         that fires constantly on legitimate work is how a guard gets switched off, and then
         it protects nothing (`_BRANCH_MOVERS` and #371 both make this argument).
