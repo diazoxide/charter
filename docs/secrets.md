@@ -270,6 +270,19 @@ shell history**, while still letting an agent *use* the credential:
   mistakes, and the property that does not depend on a name is that *charter* never prints
   the value.
 
+  *And a leak need not come from a vault at all.* Everything above is about a credential
+  charter is holding. The environment your shell exports is not, and one expansion can
+  carry all of it at once: ``gh issue create --body "… `env` …"`` published sixty-four
+  variables — vault tokens included — into a public issue, because inside double quotes a
+  backtick is command substitution and a body is where an agent writes markdown code spans
+  ([#703](https://github.com/diazoxide/charter/issues/703)). A separate guard refuses that
+  shape now, and its limits are its own: it sees the command line, never the value; a
+  `--body-file` whose file already holds the text is outside it; and so is
+  `git commit -m` ([#711](https://github.com/diazoxide/charter/issues/711)).
+  The rule that covers what no guard can see is to write bodies with `--body-file -` and a
+  **quoted** heredoc (`<<'BODY'`), never `--body "…"` with backticks in it. See
+  [hooks.md](hooks.md) for the full scope.
+
 ## Setting one up
 
 ```

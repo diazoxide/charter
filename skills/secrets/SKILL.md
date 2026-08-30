@@ -135,6 +135,25 @@ vaults' own lines — never a line from a value you supplied.
   route the keyed fingerprint does *not* close.
 - Never put a secret in memory, a persona charter, a workspace charter, or a commit
   message. The vault is the only place for one.
+- **Never write a forge body with `--body "…"` when the text contains a backtick or `$(`.**
+  Inside double quotes those are command substitution, not markdown: the shell runs them
+  and publishes the *output*. That is how sixty-four environment variables — vault tokens
+  among them — reached a public issue body, from an agent that meant a code span
+  ([#703](https://github.com/diazoxide/charter/issues/703)). Write the text to a file and
+  pass `--body-file <path>`, or pipe it with `--body-file -` and a **quoted** heredoc:
+
+  ```bash
+  gh issue comment 703 --body-file - <<'BODY'
+  The command is `env -u PYTHONSAFEPATH python3 -m unittest`.
+  BODY
+  ```
+
+  The quotes on `<<'BODY'` are the whole rule — an unquoted `<<BODY` expands the body
+  exactly as double quotes do. charter refuses both shapes on a forge command that
+  publishes prose, but the refusal is a backstop: it reads the command line, so the same
+  text sitting in a file it never expands is yours to get right. A published body cannot be
+  withdrawn — a forge keeps public edit history — so rotation, not redaction, is the
+  remedy, and that is the operator's work rather than yours.
 - If the vault or key does not exist, say so and ask for it to be added — do not work
   around it with a value pasted into the conversation.
 

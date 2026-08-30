@@ -170,6 +170,59 @@ rule while one who reads a bare refusal files an issue.
   untouched in every mode. See [changes.md](changes.md) and
   [ADR 0020](adr/0020-there-is-no-cross-repo-merge-loop.md).
 
+- **Forge body substitution.** A `gh`/`glab` command that publishes prose — `issue
+  create|comment|edit`, `pr create|comment|edit|review`, `release create|edit`, `gist
+  create|edit`, and glab's `issue`/`mr` `create|note|update`, `release create`,
+  `snippet create` — may not carry a command substitution the shell would **run**.
+
+  ```bash
+  gh issue create --body "run `env` first"     # DENIED — the shell runs env, gh gets the output
+  gh issue create --body 'run `env` first'     # allowed — one character, and it publishes the text
+  ```
+
+  Inside double quotes a backtick is command substitution, and a body is the one argument
+  where that collides with markdown: writing a code span and writing a shell command are
+  the same character. An agent filing an issue hit this and published sixty-four
+  environment variables — vault tokens included — into a public body
+  ([#703](https://github.com/diazoxide/charter/issues/703)). Nineteen other issues filed
+  the same night used the same shape and were harmless, because the backticked text was not
+  a runnable command; the pattern was wrong in all twenty.
+
+  **The remedy the denial names is `--body-file`** — a path, or `-` with a **quoted**
+  heredoc (`<<'BODY'`). An *unquoted* `<<BODY` expands exactly the same way and is denied
+  too, which matters more than the `--body` case now: that is the spelling an agent
+  following the rule and forgetting the quotes will write.
+
+  **What it claims is the shape of the line, and nothing else.** The value is out of its
+  reach in both directions: at `PreToolUse` the substitution has not run, and by
+  `PostToolUse` the issue is already public. So this is a refusal of a shape, not a promise
+  that a credential stays off a forge. Three limits follow from that
+  and are stated rather than left to be found: a **`--body-file` whose file already holds
+  the text** is not covered (nothing expands on that path, so there is no shape to see);
+  **`git commit -m "… `x` …"`** is out of scope
+  ([#711](https://github.com/diazoxide/charter/issues/711)); and the check is scoped to the
+  **whole Bash call**, not to the
+  body argument, so `cd "$(git rev-parse --show-toplevel)" && gh pr create --body-file b.md`
+  is refused as well. Narrowing that means deciding which argument a substitution lands in,
+  which means putting a shell inside the guard — the failure the leak guard already
+  documents. Run the substitution in a **separate** Bash call instead; each is judged alone.
+
+  The commit-message limit is worth one more sentence, because the obvious reason for it is
+  wrong. It is **not** that a commit matters less. On the axis #703 turns on — *can this be
+  undone* — a commit message is **worse** than an issue body: a body is replaced in one
+  call, while a pushed commit needs a history rewrite, and a rewrite reaches neither forks
+  nor existing clones nor the forge's caches. Visibility is not reversibility. It is out of
+  scope because the commit surface has not been verified the way the `gh`/`glab` verbs
+  were, and because it is dense with the character the guard keys on: **25 of the last 30
+  commit messages on charter's own `main` contain a backtick**, ten of them around text that
+  reads as a command, and inside `-m "…"` every one of those is live. A guard that fires
+  constantly on legitimate work is one that gets switched off, and then it covers nothing.
+
+  Unlike the four guards above it, this one is **not gated on there being a control
+  plane**. What it refuses is a fact about the shell rather than a policy this plane holds,
+  and its remedy is plain `gh`/`glab` usage — the same reason the secret-leak guard is
+  ungated.
+
 A seventh path is not a guard but an allowance: a program the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the
 **program**, so every argument rides along — which is why seven things are not smoothed
@@ -312,7 +365,13 @@ fd digit. That pattern is the finding. Deciding what a shell will execute, witho
 it, is not winnable in a Python tokeniser, so the honest move is to say what is open:
 
 - **a quoted command substitution** — the example above, and `` "`cat <vault>`" ``,
-  `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`;
+  `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`. One command family is the
+  exception, and it is an exception for a different reason rather than a fix for this one:
+  a `gh`/`glab` command that publishes prose is refused whenever a live substitution stands
+  on its line, so `gh issue create --body "$(cat <vault>)"` stops — see *Forge body
+  substitution* above. That guard never looks inside the substitution and knows nothing
+  about vaults; it refuses the shape. Everywhere else on this page, a quoted substitution
+  is still open;
 - **any expansion between the guard and `open()`** — globs (`.charter/vault?/x.json`,
   `.charter/*/x.json`), brace expansion (`.charter/{vaults,}/x.json`), `$'\x73'` quoting,
   and a path that arrives in a variable (`V=<vault>; cat $V`). The path check matches text,
@@ -349,8 +408,11 @@ the harness's tools — they govern what an agent does with your authority insid
 Your own shell is on the other side of that boundary and always was. Open a terminal and run
 it. Nothing is being worked around: the rule never applied to you.
 
-Three guards name a narrower move first, and it is usually the one you want:
+Four guards name a narrower move first, and it is usually the one you want:
 
+- **Forge body substitution** — `--body-file <path>`, or `--body-file -` with a quoted
+  heredoc. This one is rarely wrong about the shape and often wrong about the intent: the
+  body you meant is exactly the body you get, and it is the shorter line to type anyway.
 - **Release floor** — re-run the step **attended**. This is a mode, and it is yours to set.
 - **One credential** — `charter git-policy --apply` configures every clone for the token
   transport, which is what most denials of it are actually asking for.
