@@ -769,6 +769,12 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "than a fixture provider's, and a mouse report still has to be put on a real "
             "client's terminal for tmux to route it anywhere. `os._exit`s in its "
             "`finally`.",
+        "tests/test_a_real_click_on_a_real_tab_bar_switches.py:execvp":
+            "The same `tmux attach` inside a `pty.fork` child, for the sibling reason "
+            "again: that file exercises the pointer against the two BARS, whose click "
+            "starts a real detached charter, and a mouse report still has to be put on a "
+            "real client's terminal for tmux to route it anywhere. `os._exit`s in its "
+            "`finally`.",
     }
 
     _WATCHED = ("execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp",

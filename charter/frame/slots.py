@@ -2449,6 +2449,149 @@ _BAR_MARK = ("*", " ")
 _BAR_GAP = 2
 
 
+class _Tabs:
+    """Which name each COLUMN of a bar's row is about, and which of them you are on.
+
+    :class:`_Viewport` one axis over, and it exists for the reason that class states for
+    the repo table: a pointer event arrives as a NUMBER (`frame/events.py`), and the only
+    thing that knows what is at that number is the pass that composed the row. For a
+    table the number is a row; a bar is horizontal, so here it is a column.
+
+    **A bar needs it MORE than the table does, because the ladder is not invertible.**
+    :func:`_bar` has four rungs and three of them draw a different set of names — every
+    name, or the one you are on plus a count of the rest, or `2/3`, or nothing at all —
+    so "which name is at column 40" is not a question anything downstream can work back
+    to from the names and the width. It would have to re-walk the ladder, which is a
+    second answer to what is on the row, and the two disagree the moment a repaint lands
+    between the paint and the click.
+
+    **One object at module scope rather than one per bar.** `panel.run` resolves a
+    component name once and draws that one component for the life of the process, so a
+    process drawing the chat bar never draws the workspace bar and "which bar is this"
+    has exactly one answer here — :class:`_Viewport`'s own argument, and a key for it
+    would be the same second, weaker one. Tests reach the same object and :meth:`forget`
+    is what puts it back.
+
+    **The map and the mark are written by ONE call**, which is what `_Viewport.blank`
+    exists to enforce for the pair that class holds. A bar that published its columns and
+    left a stale *here* behind would answer "you are already there" for a tab the
+    operator can see is not marked, and the reverse would switch to a tab that has since
+    stopped being drawn. There is no way to write down one half here, so there is nothing
+    for a second method to keep in step.
+
+    **Columns are a mapping and not a tuple, and that is where the bounds check went.**
+    `_Viewport.repo_at` spells `0 <= row < len(...)` and argues it, because a tuple
+    indexed with a negative number answers the LAST row — a wrong answer that hides a
+    wrong reading. A mapping has no such answer to give: a column nothing drew into is
+    absent whether it is `-1`, `4096` or the two cells of a :data:`_BAR_GAP`, so the
+    property is structural rather than guarded. That is `builtins.places`' finding in a
+    different shape — a guard no input can make observable is a line the deletion sweep
+    reports and this repository deletes.
+    """
+
+    __slots__ = ("_cols", "_here")
+
+    def __init__(self) -> None:
+        self._cols: dict[int, str] = {}
+        self._here = ""
+
+    def forget(self) -> None:
+        """Back to a bar nobody has drawn — for a test, and only a test.
+
+        `_Viewport.forget`'s reason exactly: production never calls it, because a panel
+        process is born here and the object dies with the process, and the alternative
+        for a test is reaching into ``__slots__`` by name.
+        """
+        self.publish({}, "")
+
+    def publish(self, columns: dict, here: str) -> None:
+        """Record what the paint that just happened put on each column, and where you are.
+
+        *columns* maps a column of the component's OWN canvas — the rectangle `ctx.width`
+        describes, which is what `events.Dispatcher._on_canvas` delivers a click in — to
+        the name of the tab drawn there. Absent means the operator clicked a cell this
+        bar drew no tab into: the heading, the gap between two tabs, the `+14`, the
+        `n/N`, the empty space past the last name. `events.Dispatcher._on_canvas` applies
+        the identical rule one axis over for the pad, and `_Viewport.publish` applies it
+        for the table's heading row.
+
+        *here* is the name this frame is ON, taken from the same paint that drew the
+        mark. Not re-resolved when a click arrives: `switch.current_workspace` reads the
+        plane, and a handler is handed no ctx by contract (§4f) precisely so it does not
+        grow a second reading of a plane the repaint is about to read anyway. It is also
+        the only reading that can agree with the `*` the operator was looking at.
+
+        **RAW names, never the drawn ones.** :func:`_bar` runs `contain.one_line` over
+        every name before it measures one (#472), and that is a REPAIR — what comes out
+        is display text and what goes into `switch.to_workspace` or `charter frame-chat`
+        has to be the name on disk. The mark is matched on the raw name for the same
+        reason one function down; this is that decision arriving at the other end.
+        """
+        self._cols = dict(columns)
+        self._here = here
+
+    def switch_to(self, col: int):
+        """The tab a click at canvas column *col* should switch this frame to, or ``None``.
+
+        **The rule lives here rather than in the handler**, which is `_Viewport.move`'s
+        choice for its own answer: "a click on the tab you are already on does nothing"
+        becomes a property of one object with one test instead of an agreement between a
+        renderer and a handler that could stop holding. Re-selecting what is already
+        selected is not news — the same sentence `frame/builtins._repos_events` keeps for
+        the table — and here it is worth more, because re-switching is not free: a chat
+        switch is 41 tmux invocations and ~360 ms of panes being torn down and split
+        again, all of it to arrive where you already were.
+
+        **One comparison, and there is deliberately no `name is None` beside it.** A
+        column nothing drew into is absent from the mapping, so ``get`` answers ``None``,
+        and ``None`` is never a name any caller publishes — so the expression below
+        already answers ``None`` for it. A guard in front of that is a line no input can
+        make observable, which is exactly what the deletion sweep reports as a survivor.
+        """
+        name = self._cols.get(col)
+        return None if name == self._here else name
+
+
+#: The one tab strip this process's bar draws into. See :class:`_Tabs` for why there is
+#: exactly one; `frame/builtins._bar_events` is the other half, and it holds no state of
+#: its own so that the handler and the renderer cannot come to disagree about which tab is
+#: where.
+TABS = _Tabs()
+
+
+def _tab_columns(start: int, drawn) -> dict:
+    """Which canvas column each drawn tab owns — the map :meth:`_Tabs.publish` takes.
+
+    *drawn* is the ``(name, field)`` pairs the rung actually put on the row, in the order
+    it put them: the raw name a click switches to, and the text that was drawn for it.
+    *start* is the column the first field begins in. So this walks the composition once
+    more rather than guessing at it, and the two things that could have been guessed wrong
+    are settled here in one place: **the mark belongs to the tab it marks** (it is drawn
+    against that name and there is nothing else it could be a click on), and **the
+    :data:`_BAR_GAP` between two tabs belongs to neither** — those cells are separator,
+    the operator can see they are empty, and picking the nearer name for them would be the
+    clamp `events.Dispatcher._on_canvas` refuses one rectangle out.
+
+    ``tui.width`` and never ``len``, for the reason every other measurement in this module
+    gives: a field is display text that has already been through `contain.one_line`, and
+    the column a name ENDS in is a question about cells.
+
+    The walk starts one gap behind *start* and pays the gap at the top of every iteration,
+    so there is no "first field is different" branch to get wrong or to test — the same
+    trade `builtin_actions._SELECT_STEPS` makes when it writes its two starting points
+    down as data rather than deriving them from a sign.
+    """
+    cols: dict[int, str] = {}
+    at = start - _BAR_GAP
+    for name, field in drawn:
+        at += _BAR_GAP
+        width = tui.width(field)
+        for col in range(at, at + width):
+            cols[col] = name
+        at += width
+    return cols
+
+
 def _bar(head: str, names: list[str], here: str, width: int, *,
          note: str = "") -> list[str]:
     """One bar row: *head*, then *names* with *here* marked, inside *width* columns.
@@ -2493,9 +2636,42 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     *note* is an extra field drawn after the names when there is room for it whole — the
     "add chat" affordance, and nothing else today. Dropped first, before any name, because
     it is a reminder and the names are the readout.
+
+    **Every rung publishes its own column map** (:data:`TABS`), which is what makes the
+    bar clickable at all and is the same discipline `_repos` keeps for the table's rows:
+    the handler resolves a click against WHAT WAS DRAWN rather than against what it
+    thinks would have been. Only the names actually on the row get columns — the heading,
+    the gaps, the `+N`, the `n/N` and the affordance are cells this bar drew no tab into
+    and a click on one of them switches nothing. **The rungs that draw NOTHING publish
+    too**, and that is the half `_Viewport.blank` exists for one axis over: a bar that
+    kept its last map through a resize down to `2/3`, or down to no row at all, would
+    switch to a tab the operator can see is not on screen.
     """
+    # **`head` and `note` are NOT contained, and the deletion sweep is what settled it.**
+    # Both are charter's own literals — `"chats"`, `"workspaces"`, :data:`ADD_CHAT` — and
+    # no caller can hand this an open-alphabet one, so a `contain.one_line` on either is a
+    # call whose result is provably its argument. The sweep found both as survivors for
+    # exactly that reason: no input could make the mutation differ. The NAMES are
+    # contained, below, which is where the open alphabet actually is.
+    lead = _inset() + head + " " * _BAR_GAP
+
+    def row(body: str = "", drawn=()) -> list[str]:
+        """This rung's row, and the column map for the tabs it actually drew.
+
+        **Every way out of the ladder goes through here**, which is what keeps "the map
+        describes the row" a property of one line rather than an agreement between six
+        returns. `_repos` learnt that the expensive way: three of its four exits cleared
+        the click map and none of them cleared the scroll bound, and `_Viewport.blank` is
+        the method that finding produced.
+
+        An empty *body* is the rung that draws nothing — rung 4, and a bar with no names.
+        It still publishes, for the reason the docstring above gives.
+        """
+        TABS.publish(_tab_columns(tui.width(lead), drawn), here)
+        return [lead + body] if body else []
+
     if not names:
-        return []
+        return row()
     # **Which row is yours is decided on the RAW names; only the drawing uses the
     # contained ones.** `choose.Roster` makes the same split one surface over and for the
     # same reason: `contain.one_line` is a repair, so two names that differ only in what
@@ -2503,24 +2679,18 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     # follow the repair rather than the identity. Neither caller can reach that today
     # (`chats.ID_RE` and `workspace.valid_name` both refuse the characters `one_line`
     # touches), which is exactly why it is written as an index now rather than found as a
-    # bug by whichever caller stops.
+    # bug by whichever caller stops. The same split reaches :data:`TABS`, which is handed
+    # the raw name beside the drawn field: a click has to switch to what is on disk.
     at = names.index(here) if here in names else -1
     shown = [contain.one_line(n) for n in names]
     marked = [f"{_BAR_MARK[0] if i == at else _BAR_MARK[1]}{n}"
               for i, n in enumerate(shown)]
-    # **`head` and `note` are NOT contained, and the deletion sweep is what settled it.**
-    # Both are charter's own literals — `"chats"`, `"workspaces"`, :data:`ADD_CHAT` — and
-    # no caller can hand this an open-alphabet one, so a `contain.one_line` on either is a
-    # call whose result is provably its argument. The sweep found both as survivors for
-    # exactly that reason: no input could make the mutation differ. The NAMES are
-    # contained, one line up, which is where the open alphabet actually is.
-    lead = _inset() + head + " " * _BAR_GAP
     room = width - tui.width(lead)
     joined = (" " * _BAR_GAP).join(marked)
     if note and tui.width(joined) + _BAR_GAP + tui.width(note) <= room:
-        return [lead + joined + " " * _BAR_GAP + note]
+        return row(joined + " " * _BAR_GAP + note, zip(names, marked))
     if tui.width(joined) <= room:
-        return [lead + joined]
+        return row(joined, zip(names, marked))
     if at >= 0:
         # **No `if len(names) > 1` on the count, and it is unreachable rather than merely
         # untested.** With ONE name `joined` IS `marked[at]` and the count is empty, so
@@ -2529,11 +2699,17 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         # a survivor for that reason.
         rest = f"{' ' * _BAR_GAP}+{len(names) - 1}"
         if tui.width(marked[at]) + tui.width(rest) <= room:
-            return [lead + marked[at] + rest]
+            # The count is NOT a tab. `+2` stands for names that are not on the row, so
+            # there is nothing there to switch to and saying so is better than picking one
+            # of them — `_Viewport.publish`'s rule for `…(+N more)`, one axis over. The
+            # one name this rung draws is the one you are already on, so this rung is
+            # inert by construction, which is honest rather than a gap: the palette is
+            # what reaches the other names at a width that cannot draw them.
+            return row(marked[at] + rest, [(names[at], marked[at])])
     counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
     if tui.width(counted) <= room:
-        return [lead + counted]
-    return []
+        return row(counted)
+    return row()
 
 
 #: What the chat bar says instead of a second name when this workspace has one chat.

@@ -16,11 +16,12 @@ below wraps a renderer `frame/slots.py` already had, unchanged; those declaratio
 statement of what the renderers already do, not a new arrangement, and the before/after
 render at 200x50 and 80x24 was byte-identical.
 
-**Phase 5's two bars are the first entries here that are not that**, and they change no
+**Phase 5's two bars are the first entries here that are not that**, and they changed no
 output either — for a different reason. `chats` and `workspaces` are registered and NOT
 placed (see :func:`build`), so nothing draws them until a plane writes a
 `[[frame.component]]` table naming one. :func:`places` is the question that makes that
-route work at all.
+route work at all. A plane that has placed one gets a clickable bar; every other plane's
+frame is byte-identical to what it was, because there is no such pane on it.
 
 **The slot names survive as SHORTHAND, because they are committed** (:data:`SLOT_OF`).
 `[frame] slots = ["top", "bottom", "repos", "right"]` sits in charter.toml on every plane
@@ -61,15 +62,25 @@ not the same as what the slice names suggest.**
   `…(+N more)` line can say how many are hidden; a component built on the `todos` slice
   alone would report zero hidden todos with no way to know it was wrong.
 
-**One of them takes EVENTS, and it is the first thing anywhere that does.** #607 built the
-whole path — the decoder, the dispatcher, `DELIVERED` — and shipped it with no consumer:
-every one of these six declared `events = ()`, so a release went by in which a provider
-could declare `scroll`, pass validation, and be the only thing on the machine receiving
-anything. `repos` declares `scroll` and `click` and :func:`_repos_events` receives them,
-which makes charter's own panel the worked example rather than the exception — the same
-sequencing §4b asks for and the same reason charter's panels went through the component
-seam first. What that handler does and does not do is its own docstring; the short of it is
-that a click SELECTS and never chooses, because a pointer event can arrive unpaired.
+**Three of them take EVENTS, and `repos` was the first thing anywhere that did.** #607
+built the whole path — the decoder, the dispatcher, `DELIVERED` — and shipped it with no
+consumer: every one of these components declared `events = ()`, so a release went by in
+which a provider could declare `scroll`, pass validation, and be the only thing on the
+machine receiving anything. `repos` declares `scroll` and `click` and :func:`_repos_events`
+receives them, which makes charter's own panel the worked example rather than the exception
+— the same sequencing §4b asks for and the same reason charter's panels went through the
+component seam first. What that handler does and does not do is its own docstring; the
+short of it is that a click SELECTS and never chooses, because a pointer event can arrive
+unpaired.
+
+**The two bars are the second and third, and a click on one of them SWITCHES.** They
+shipped with the same empty declaration and the same consequence one surface over: an
+operator placed both, clicked a tab, and nothing happened, because a bar with no
+`on_event` is a caption that happens to list names. :func:`_bar_events` is what receives
+them now. The difference from the table is argued at that function rather than here, and
+it turns on the two things a bar does not have: an intermediate "selected" state to
+confirm, and a keyboard to confirm it with (`key` is a kind `events.DELIVERED` does not
+carry, because the harness owns the keyboard).
 
 **Registration order is split order** (`registry.Registry`), so the four placed components
 are registered in the order charter splits their panes off the harness: identity,
@@ -226,12 +237,17 @@ def _panel(slot: str):
     return render
 
 
-#: Which mouse button selects a row. One, and it is named rather than "whatever came":
+#: Which mouse button charter acts on. One, and it is named rather than "whatever came":
 #: middle-click is paste on every terminal an operator has ever used and right-click opens
 #: their emulator's own menu, so acting on either would be charter taking a gesture that
 #: already means something else. `overlay._SGR_BUTTONS` is where the three get their names,
 #: and the ones §4f named no kind for never arrive here at all.
-_SELECT_BUTTON = "left"
+#:
+#: **One constant for the table and for both bars**, because "which button did the operator
+#: mean" is one question — a second answer to it would be a frame where the same gesture
+#: works on one pane and does nothing on the next, which is the thing an operator reports
+#: as a bug and is right to.
+_ACT_BUTTON = "left"
 
 
 def _repos_events(fid: str):
@@ -283,7 +299,7 @@ def _repos_events(fid: str):
         if ev.kind == overlay.SCROLL:
             return _slots.VIEWPORT.move(
                 _slots.SCROLL_ROWS if ev.name == "down" else -_slots.SCROLL_ROWS)
-        if not ev.pressed or ev.name != _SELECT_BUTTON:
+        if not ev.pressed or ev.name != _ACT_BUTTON:
             return False
         name = _slots.VIEWPORT.repo_at(ev.row)
         if name is None or name == state.selection(fid):
@@ -291,6 +307,117 @@ def _repos_events(fid: str):
         state.record_selection(fid, name)
         state.bump(fid)
         return True
+
+    return on_event
+
+
+#: What a click on the `chats` bar starts, and what a click on `workspaces` starts — the
+#: arguments in front of the name, which goes LAST on both commands (`cli._wire`).
+#:
+#: **The existing front door for each noun, and neither is a shortcut past it.** A chat
+#: switch is `commands_frame.cmd_chat` — `chats.check`'s five refusals, `_pane_place`'s
+#: cross-session reading (#684), `select-window`, and the two re-layouts — and a workspace
+#: switch is `cmd_switch` over `switch.to_workspace`'s three. Every one of those refusals
+#: reaches the operator through `_say_on_screen`, which is a `display-message` on the
+#: frame's own client; a panel process has no such surface, and a click that silently did
+#: nothing is exactly the report this feature answers.
+#:
+#: Spelled as the argv rather than called in-process for a second reason: what these start
+#: is slow and is not this loop's to wait on. A chat switch is 41 tmux invocations and
+#: ~360 ms measured; a workspace switch re-gathers the plane. `panel._watch` is a paint
+#: loop, and a handler that blocked it would freeze the pane it was clicked on.
+_CHAT_SWITCH = ("frame-chat",)
+_WORKSPACE_SWITCH = ("frame-switch", "--workspace")
+
+
+def _bar_events(fid: str, command: tuple[str, ...]):
+    """A tab bar's handler: a left click on a tab switches this frame to it.
+
+    **A click here SWITCHES, where a click on the repo table only ever SELECTS, and that
+    difference is a decision rather than a drift.** §4i's rule is that the irreversible
+    half of an interaction is never driven by a pointer event, because one can arrive
+    unpaired — a drag begun on a pane border delivers exactly one release. Three things
+    put a tab bar on the other side of that rule:
+
+    * **The unpaired event is the RELEASE, and this acts on the PRESS.** That is
+      :func:`_repos_events`' own reading of §4i, kept here word for word: a press is
+      delivered because the pointer was over this pane when the button went down, which
+      is the operator pointing at this tab. A drag that began elsewhere and happens to
+      release over the bar delivers only a release and switches nothing, which is right —
+      they never pointed here.
+    * **A switch is reversible by the same gesture that made it.** The tab you left is
+      still on the bar, one click away; nothing is created, nothing is destroyed, and no
+      work is started. `switch.to_workspace` moves a lock and says so, and clicking back
+      moves it back. That is the property §4i is actually about, and it holds.
+    * **There is no chooser for a select-then-confirm bar to be confirmed with.** On the
+      table, selecting is a real intermediate state (a highlighted row, a detail on the
+      attention strip) and `Enter` in the palette is the chooser. A bar has no such
+      state — the tab you are on IS the selection, drawn with `slots._BAR_MARK` — and
+      `key` is in `component.EVENT_KINDS` but deliberately NOT in `events.DELIVERED`,
+      because the harness owns the keyboard and tmux routes typing to the active pane. So
+      a bar that "selected" would draw a second mark nothing on the machine could act on:
+      a feature that cannot be finished, which is the dead code `places` refuses to ship
+      under a feature's name.
+
+    **A click on the tab you are already on does nothing**, and that rule lives in
+    `slots._Tabs.switch_to` rather than here — see it for why, and for the two other
+    things that answer nothing: the `+14` overflow, which stands for names that are not
+    on the row, and every cell this bar drew no tab into.
+
+    **It answers falsy even when it started a switch**, which is the one place this reads
+    differently from the table's handler. Truthy means *repaint me* (§4f), and nothing
+    this process can see has changed: the switch happens in another process and ends in a
+    `state.bump` of its own — `switch.to_workspace`'s last line, `_apply_arrangement`'s —
+    which is the version this panel's poll is already watching. Answering truthy would
+    buy one immediate repaint of a byte-identical row, which is the cost
+    `slots._Viewport.move` refuses in as many words.
+
+    **No `ev.kind` test**, unlike the table's handler: `chats` and `workspaces` declare
+    `click` and nothing else, and `events.Dispatcher._deliver` drops a kind the component
+    did not declare before it ever reaches here. A branch on a kind that cannot arrive is
+    a line no input could turn red.
+
+    **`scroll` is not declared, and that is not an omission.** A bar is one row with
+    nothing to scroll; a handler for it could only ever answer False, and the wheel is not
+    a gesture to hang a switch on. `events.Dispatcher.open` charges the same
+    `overlay.MOUSE_ON` for one pointer kind as for two, so declaring it would cost nothing
+    and mean nothing — which is precisely what makes it wrong to declare.
+
+    *command* is which of the two switches this bar starts (:data:`_CHAT_SWITCH`,
+    :data:`_WORKSPACE_SWITCH`). One handler and two lines of data rather than two
+    handlers, because everything above is true of both bars and a second copy would be
+    two places for it to stop being true.
+
+    *fid* is closed over for :func:`_repos_events`' reason and is handed to
+    `builtin_actions._spawn` as the child's own `$CHARTER_SESSION_ID`: this process was
+    TOLD which frame it draws (`charter panel chats --session <fid>`), and one tmux server
+    is shared by every frame on the machine, so a child left to read that variable out of
+    an inherited environment could act on another operator's frame.
+
+    **No `--chat` on the chat switch, unlike the palette's row.** `_pressers_chat` prefers
+    that option because a palette's `bind` text is shared by every frame on the socket and
+    `#{@charter_chat}` is the only thing that can tell two chats of one session apart. A
+    panel has no such ambiguity and `_spawn` states the id outright, so the option would be
+    a second spelling of a value the environment already carries — provably equal, which
+    the deletion sweep reports and this repository deletes.
+    """
+    def on_event(ev):
+        from .. import util
+        from . import slots as _slots
+        from .builtin_actions import _spawn
+        if not ev.pressed or ev.name != _ACT_BUTTON:
+            return False
+        name = _slots.TABS.switch_to(ev.col)
+        if name is None:
+            return False
+        # `builtin_actions._spawn` and not a `Popen` of this module's own — one answer to
+        # "how does a frame surface start work that must outlive it", shared with every
+        # palette row and with `commands_frame._start_chat_switch`, which starts this
+        # exact argv for the exact same switch. Its `start_new_session=True` and its three
+        # `DEVNULL` streams are its own docstring's argument and are not re-argued here:
+        # what a second copy would buy is a second place for them to stop agreeing.
+        _spawn(util.self_relaunch_argv(*command, name), fid=fid)
+        return False
 
     return on_event
 
@@ -463,10 +590,26 @@ def build(fid: str = "") -> Registry:
     # `slots.chats_bar` reads `.charter/frame/` and `slots.workspaces_bar` reads
     # `workspaces/`, and a declaration naming a slice `ctx` carries would make the frame's
     # cost budget describe a cost that is not there — `identity`'s own reasoning, above.
+    #
+    # **Both declare `click`, and that is what makes them tab bars rather than captions.**
+    # They shipped registered `needs=()` with no `events`/`on_event` at all, so a click
+    # reached the pane, was decoded, and landed on no consumer — the report this closes was
+    # "I clicked a tab and nothing happened", which is what a readout with no handler looks
+    # like from the outside. `_bar_events` is what receives them and why a click here
+    # SWITCHES where a click on the table only selects.
+    #
+    # `click` alone rather than `("scroll", "click")` like `repos`: a bar is one row and
+    # there is nothing to scroll it to, so a `scroll` declaration could only reach a
+    # handler that always answered False. `repos` declares both because it moves a
+    # viewport; the shared reason that constant's comment gives — one `MOUSE_ON` serves
+    # both — is why declaring the second one costs nothing, never a reason to declare one
+    # that does nothing.
     reg.register(Component(
         id="chats", title="chats", edge="top", size=Fixed(1),
-        needs=(), render=_chats))
+        needs=(), render=_chats,
+        events=("click",), on_event=_bar_events(fid, _CHAT_SWITCH)))
     reg.register(Component(
         id="workspaces", title="workspaces", edge="top", size=Fixed(1),
-        needs=(), render=_workspaces))
+        needs=(), render=_workspaces,
+        events=("click",), on_event=_bar_events(fid, _WORKSPACE_SWITCH)))
     return reg
