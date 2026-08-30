@@ -63,6 +63,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 from .. import contain, tui
+from . import chrome
 from .component import (API_VERSION, EDGES, Component, ComponentError, Content,
                         Fill)
 
@@ -182,15 +183,22 @@ def _fit(lines, *, width: int, height: int, escape: bool) -> tuple[str, ...]:
 
     ``escape`` is provenance and not a preference — see :meth:`Registry.draw`.
 
-    `contain.one_line` runs BEFORE the width arithmetic, which is the order the rest of
+    The containment runs BEFORE the width arithmetic, which is the order the rest of
     charter uses for the same reason: an escape sequence is a zero-width instruction to
     the terminal, so measuring first would measure a string that is not what the terminal
     is about to do, and clipping first would cut an escape in half.
+
+    `chrome.contain_row` rather than `contain.one_line`, and the difference is exactly
+    the seven roles `chrome.recipes` hands the component that drew these lines: an SGR
+    out of charter's own published vocabulary comes through, everything else — a cursor
+    move, an OSC title string, a cube index, a newline — comes out as the characters of
+    its own escape, which is what the whole row used to get. #707 is what the stricter
+    form cost: charter served a colour channel and then stripped it.
     """
     out = []
     for line in lines[:max(height, 0)]:
         if escape:
-            line = contain.one_line(line, limit=LINE_LIMIT)
+            line = chrome.contain_row(line, limit=LINE_LIMIT)
         out.append(tui.truncate(line, width))
     return tuple(out)
 
@@ -631,14 +639,34 @@ class Registry:
         otherwise — a provider's module is ordinary Python.
 
         **Escaping is decided by who wrote the line, not by the caller.** A provider's
-        rows are escaped: they carry committed plane values — repo names, branch names,
+        rows are contained: they carry committed plane values — repo names, branch names,
         todo text — and they reach a terminal, where an escape sequence is an instruction
         and not a character, so a row of one could move the cursor out of its own
         rectangle and draw over the pane beside it. Charter's own renderers already
         contain their committed values at the point they interpolate them and then add
-        charter's own colour markup on top, so escaping their output here would corrupt
+        charter's own colour markup on top, so containing their output here would corrupt
         charter's markup while protecting nothing. The width and the row count are
         applied to both: the rectangle is the frame's, whoever drew inside it.
+
+        **What a provider's row keeps is the vocabulary charter served it, and nothing
+        else** (`chrome.contain_row`, #707). Containment was `contain.one_line` over the
+        whole row, which escaped every SGR — including the seven `ctx.chrome` recipes
+        charter had handed that same component one call earlier, so `docs/frame.md`'s own
+        worked example reached the pane as the literal text ``\\x1b[1mMetrics\\x1b[0m``.
+        The two halves each had a test and the round trip had none, which is the defect
+        underneath the defect.
+
+        The channel opens no further than that vocabulary, and the argument is what the
+        escaping was FOR: an SGR from `chrome.served_params` costs zero columns, says
+        nothing about position, and names only a plain attribute or one of the sixteen
+        slots in the operator's own palette. It cannot reach the pane beside it and it
+        cannot pick a colour charter did not pick. Everything a row can do that is not
+        that — a cursor move, an erase, an OSC title string, a 24-bit triple, a newline —
+        is still escaped into the characters of its own escape. **And it is asked as a
+        property of the SGR parameters rather than by matching the recipe's text**: a
+        string carries no provenance, so "did charter serve this" is unanswerable, while
+        "is this inside charter's vocabulary" is the question that was actually worth
+        asking (`chrome.is_recipe`).
         """
         c = self.get(cid)
         try:

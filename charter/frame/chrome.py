@@ -1,4 +1,15 @@
-"""The frame's paint: filling a row to the pane's edge, and highlighting one.
+"""The frame's paint: filling a row to the pane's edge, highlighting one, and deciding
+what a stranger's row may keep of it.
+
+**The vocabulary and the containment of that vocabulary are one module, deliberately.**
+:func:`recipes` is what a provider is handed so it can match the rest of the frame;
+:func:`contain_row` is what `registry.Registry.draw` runs over what the provider hands
+back. Written apart, the two were each asserted and disagreed from the day the recipes
+landed (#604) against an escaping that had shipped two days before them (#550): charter
+served ``ctx.chrome['heading']`` and then escaped it into the literal text
+``\\x1b[1mMetrics\\x1b[0m`` on the way to the pane (#707). :func:`served_params` is the one
+list both read, so a role added to :func:`_role_values` is served and admitted on the same
+commit or on neither.
 
 **Everything here takes a FINISHED row** — a string some `tui` node has already
 composed and clamped — and hands back a string that must not go back through `tui`.
@@ -37,7 +48,7 @@ import os
 import re
 from types import MappingProxyType
 
-from .. import tui
+from .. import contain, tui
 from . import pane
 
 #: Reverse video on, and everything off. `_OFF` is a FULL reset rather than SGR 27
@@ -237,6 +248,190 @@ def recipes() -> MappingProxyType:
     out = {role: (sgr if live else "") for role, sgr in _role_values().items()}
     out["inset"] = slots._inset()
     return MappingProxyType(out)
+
+
+def served_params() -> frozenset[int]:
+    """Every SGR parameter charter's own recipes are made of, read as NUMBERS.
+
+    **Derived from :func:`_role_values`, never spelled beside it.** A second list of the
+    numbers is exactly how a role comes to be *served and not admitted* — a provider
+    handed a colour that is escaped on the way out, which is #707 — or *admitted and not
+    served*, which is a vocabulary charter enforces and nobody documents. One source, and
+    a role added above widens this on the same commit.
+    """
+    out: set[int] = set()
+    for value in _role_values().values():
+        for m in _SGR.finditer(value):
+            out.update(int(p or "0") for p in m.group(1).split(";"))
+    return frozenset(out)
+
+
+def is_recipe(params: str, served: frozenset[int]) -> bool:
+    """True when every parameter in the SGR list *params* is one of *served*.
+
+    **The vocabulary is a parameter and not a call, because this is on the repaint
+    path.** Every escape in every row of every foreign pane asks this, and
+    :func:`served_params` builds a set out of a function-level import — measured at 4.2µs,
+    which is 1.2ms per repaint of one 24-row pane carrying a dozen escapes a row, against
+    `render`'s own measured 4 816µs. So :func:`contain_row` asks once and hands the answer
+    down. Required rather than defaulted: a second way of getting the vocabulary is how
+    one caller comes to be asking about a different one.
+
+    **This is not "did charter hand this exact string over", and that distinction is the
+    whole design of :func:`contain_row`.** A string carries no provenance: the row a
+    provider returns is text, and ``ctx.chrome["heading"]`` and a hard-coded
+    ``"\\x1b[1m"`` are the same six characters by the time charter sees them. Asking
+    which one it was is unanswerable, and answering it by matching the recipe's spelling
+    would be this repo's own recurring defect (#547, #558, #537, #498, #577, #594) in the
+    file that is about that defect.
+
+    So the question asked is what the escape DOES, and it is asked of the parameters as
+    numbers the way :func:`resets_everything` asks its own. Measured, the spellings that
+    a substring match against `_role_values()` gets wrong::
+
+        spelling         params    equals a served recipe   every parameter served
+        '\\x1b[1m'        '1'       True                     True
+        '\\x1b[01m'       '01'      False   <- MISSED         True
+        '\\x1b[1;32m'     '1;32'    False   <- MISSED         True
+        '\\x1b[m'         ''        False   <- MISSED         True   (empty is 0)
+        '\\x1b[38;5;236m' '38;5;2…' False                     False
+        '\\x1b[41m'       '41'      False                     False
+
+    The two ``MISSED`` rows are a provider composing charter's own vocabulary in a legal
+    spelling charter does not happen to write, and there is no argument for escaping
+    those and keeping ``\\x1b[1m``: bold is bold. The two false rows are the property
+    doing its job — a cube index and a background colour are colours charter did not get
+    from the operator's palette, which is `instance.FRAME_CHROME`'s rule reaching the one
+    place a stranger's code would otherwise sit outside it.
+    """
+    return all(int(p or "0") in served for p in params.split(";"))
+
+
+def _pieces(row: str, served: frozenset[int]):
+    """*row* as ``(text, keep)`` pairs: what charter passes through, and what it escapes.
+
+    A non-recipe SGR yields no pair of its own — it stays inside the surrounding text and
+    is escaped with it, which is what makes ``\\x1b[38;5;236m`` come out as the six
+    visible characters of its own escape rather than as a colour with a hole in it.
+
+    **A row with no recipe in it yields exactly one pair, the whole row**, which is what
+    makes :func:`contain_row` answer such a row with `contain.one_line`'s own string,
+    character for character. The containment did not change for anything outside the
+    vocabulary; it grew a hole exactly the size of it.
+    """
+    pos = 0
+    for m in _SGR.finditer(row):
+        if is_recipe(m.group(1), served):
+            yield row[pos:m.start()], False
+            yield m.group(0), True
+            pos = m.end()
+    yield row[pos:], False
+
+
+def _escaped(piece: str, budget: int) -> str:
+    """*piece* with nothing in it that can forge a row — `contain.one_line`, or its answer.
+
+    `str.isprintable()` is a C-level scan, and it is false for a SUPERSET of what
+    `contain.one_line` rewrites: every *Other* and *Separator* category, against
+    `one_line`'s `_INVISIBLE` five (``Cc``, ``Cf``, ``Cs``, ``Zl``, ``Zp``) plus whitespace
+    that is not an ASCII space. Superset is the direction that makes this safe — printable
+    implies `one_line` would change nothing, so such a piece inside its budget IS its own
+    containment, and a `Co` or a `Zs` merely falls through to the slow path and gets the
+    same answer a character at a time. `tui.sanitize` takes the same shortcut against the
+    same question, and this is on the same repaint path.
+    `TheBudgetNeedsNoSecondGuard` puts one of each through both.
+    """
+    # **The deletion sweep reports this line, twice, and it is right to.** A shortcut
+    # cannot change an OUTPUT — that is what makes it a shortcut — so `collapse-ifexp`
+    # and `shift-boundary` on it are equivalent mutants by construction and no test can
+    # ever pin them. What it changes is cost, and the numbers are why it stays. One
+    # 24-row foreign pane, `registry._fit` end to end, with the shortcut and without::
+    #
+    #     24 rows of 300 plain characters   340 us   without: 750 us   (was 512 us)
+    #     24 rows, 4 escapes each           323 us   without: 397 us   (was  73 us)
+    #     24 rows, no escape at all         205 us   without: 268 us   (was  65 us)
+    #
+    # The first row is the one that decides it: without the shortcut a long plain row
+    # costs MORE than the `contain.one_line` this whole function replaces, so #707 would
+    # have bought a provider its colour by making every text-heavy pane slower than it
+    # was. `tui.sanitize` and `tui.width` carry the same shortcut against the same kind
+    # of scan and for the same reason.
+    return (piece if len(piece) <= budget and piece.isprintable()
+            else contain.one_line(piece, limit=budget))
+
+
+def contain_row(row: str, *, limit: int) -> str:
+    """*row* from a foreign component, contained: charter's own vocabulary and nothing else.
+
+    **The containment stays and the channel opens, and those are not in tension.** What
+    `registry.Registry.draw` has to prevent is a stranger's row moving the cursor out of
+    its own rectangle, erasing a pane it does not own, or naming a colour the operator's
+    palette never chose. None of those is an SGR from :func:`served_params` — an SGR
+    costs zero columns and says nothing about position, and charter's seven roles are
+    plain attributes and the sixteen palette names. Everything else in the row goes
+    through `contain.one_line` exactly as the whole row used to: a cursor move, an OSC
+    title string, a bare BEL and a newline all come out as their own visible escape.
+
+    So this is the same guarantee with one hole cut in it, and the hole is the size of
+    the vocabulary charter already publishes. Before it, `docs/frame.md`'s own worked
+    example — a provider writing ``ctx.chrome['heading']`` — reached the pane as the
+    literal text ``\\x1b[1mMetrics\\x1b[0m`` (#707): charter served a colour channel and
+    then stripped it, and the two halves each had a test while the round trip had none.
+
+    **Under `NO_COLOR`, or a pane that is not a terminal, every escape is escaped again.**
+    :func:`recipes` already serves the empty string there, so a component built on the
+    recipes emits no SGR at all and this line changes nothing for it. What it catches is
+    the component that hard-coded ``\\x1b[1m``: §3.2's rule is that charter emits no SGR
+    from the frame, and passing one through on a provider's behalf is charter asking
+    somebody else to paint — the half of that promise `no_colour`'s own docstring is
+    about.
+
+    *limit* is `registry.LINE_LIMIT`, and it bounds the CHARACTERS, which
+    `tui.truncate`'s visible-width clamp cannot: a line of a million combining marks
+    measures zero cells. **A kept escape spends that budget like anything else**, and the
+    one break below is what that costs: an SGR's parameter list is unbounded, so
+    ``\\x1b[`` + ``1;`` four hundred times + ``m`` is every parameter in the vocabulary
+    and is no colour any operator will ever see. It is taken whole or not at all, because
+    half of ``\\x1b[1m`` is a bare ESC and manufacturing one is the single thing an
+    escape-aware containment must never do.
+
+    **What it costs, measured, because this is the repaint path.** One 24-row foreign
+    pane, `registry._fit` end to end, against the `contain.one_line`-over-the-whole-row it
+    replaces::
+
+        24 rows, 4 escapes each (the docs' own example)   323 us   was   73 us
+        24 rows, 12 escapes each (deliberately dense)     914 us   was  457 us
+        24 rows, no escape at all                         205 us   was   65 us
+        24 rows of 300 plain characters                   340 us   was  510 us
+
+    The last row is not a typo: :func:`_escaped`'s `isprintable()` scan is faster than
+    `one_line`'s per-character loop, so a long plain row now costs less than it did. The
+    worst case is half a millisecond against `render`'s own measured 4 816 us — a tenth of
+    what the pane already spends to have rows at all — and it is paid only by a pane
+    charter did not write. The hoist that made it that rather than four times that is
+    :func:`is_recipe`'s: the vocabulary is built once here and not once per escape.
+
+    **An ``if used >= limit: break`` above that line was written first and then deleted**,
+    and the reason is the sweep's rather than tidiness: it was there to stop
+    `contain.one_line` being handed a negative limit — which slices from the END of the
+    string rather than refusing — and it could not, because :func:`_pieces` strictly
+    alternates and a kept piece is appended only when it FITS. So an escaped piece is
+    always preceded either by nothing or by a kept piece that left ``used <= limit``, and
+    the subtraction is never negative. `TheBudgetNeedsNoSecondGuard` pins that property
+    without the guard, over every row a fuzz could build.
+    """
+    if not colour_ok():
+        return contain.one_line(row, limit=limit)
+    served = served_params()
+    out: list[str] = []
+    used = 0
+    for piece, keep in _pieces(row, served):
+        text = piece if keep else _escaped(piece, limit - used)
+        if keep and used + len(text) > limit:
+            break
+        out.append(text)
+        used += len(text)
+    return "".join(out)
 
 
 def plain(row: str) -> str:
