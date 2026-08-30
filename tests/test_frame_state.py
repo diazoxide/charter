@@ -28,6 +28,23 @@ def _a_dead_pid() -> int:
     return p.pid
 
 
+def _claimed_by_a_departed_launcher(workspace: str) -> str:
+    """A chat claimed exactly as a launcher claims one, by a launcher that has exited.
+
+    `state.new_chat_id` — the production allocator, marker and all — with the one fact
+    these tests are about stated rather than inherited: **which process made the claim.**
+    Since #685 the claim carries its launcher's pid, so a chat this test process claims
+    for itself is one this test process keeps alive; that is the fix, and it is exactly
+    what makes an unstated pid the wrong fixture for "the launcher is gone".
+
+    `_a_dead_pid`'s own argument, one layer along: a real pid that has exited, never a
+    large made-up number that could name somebody else's live process and quietly change
+    what a test proves.
+    """
+    with mock.patch.object(os, "getpid", _a_dead_pid):
+        return state.new_chat_id(workspace)
+
+
 class FrameId(unittest.TestCase):
     def test_the_id_carries_the_workspace_and_the_pid(self):
         fid = state.frame_id("harness-wrapper", 4242)
@@ -226,17 +243,23 @@ class TheDotIsTheVersionDiscriminator(PersonaIso, unittest.TestCase):
         self.assertEqual(state.reap(set(), server="charter"), [old])
 
     def test_a_chat_is_kept_by_the_liveness_list_alone(self):
-        """The whole of a chat's bounding rule: no pid abstains in its favour, so the set
-        `reap` is handed decides. `commands_frame._live_chats` is what fills it."""
-        chat = state.new_chat_id("api")
+        """The whole of a chat's bounding rule once its launcher is gone: nothing in the
+        NAME abstains in its favour, so the set `reap` is handed decides. `_live_chats`
+        is what fills it."""
+        chat = _claimed_by_a_departed_launcher("api")
         state.bump(chat)
         self.assertEqual(state.reap({chat}, server="charter"), [])
         self.assertTrue(state.frame_dir(chat).exists())
 
     def test_a_chat_whose_window_is_gone_is_removed_with_no_launcher_process_alive(self):
         """The other half, and the one the dash would have broken: nothing in the name
-        can keep this directory, so an absent chat id really does reap."""
-        chat = state.new_chat_id("api")
+        can keep this directory, so an absent chat id really does reap.
+
+        The launcher is a departed one (#685) rather than this test process, and that is
+        the difference between measuring the dot and measuring the claim: a chat whose
+        launcher is still running is kept on purpose now, so a fixture that left the pid
+        unstated would pass this file's own fix off as a regression."""
+        chat = _claimed_by_a_departed_launcher("api")
         state.bump(chat)
         self.assertEqual(state.reap(set(), server="charter"), [chat])
         self.assertFalse(state.frame_dir(chat).exists())
@@ -276,6 +299,165 @@ class TheDotIsTheVersionDiscriminator(PersonaIso, unittest.TestCase):
         chat = state.new_chat_id("api")
         state.record_harness_pane(chat, "%4")
         self.assertFalse(state.is_live(chat, pane="%4"))
+
+
+class AClaimSurvivesASiblingsReap(PersonaIso, unittest.TestCase):
+    """#685: winning the `mkdir` is only half of "two allocators cannot both win".
+
+    The other half is that the winner's directory survives long enough to become a chat.
+    Between `new_chat_id` returning and `new-window` there are hundreds of milliseconds —
+    `_spawn_gather`, `_frame_env`, `record_identity`, the tmux.conf write — during which
+    the claim had a window in no list, no `server` marker, and (Stage 5a, on purpose) no
+    launcher pid in its name. Every one of `reap`'s rules said dead, and every launch runs
+    a reap immediately before its own claim, so the loser of the race deleted the winner's
+    directory and then claimed the same ordinal.
+    """
+
+    def test_a_sibling_launch_does_not_un_claim_an_ordinal_just_handed_out(self):
+        """The reported reproduction, kept in its reported order: claim, a sibling's
+        reap, claim again."""
+        first = state.new_chat_id("api")
+        self.assertEqual(state.reap(set(), server="charter"), [],
+                         "a sibling's reap deleted a directory this process had just "
+                         "claimed and was still launching into")
+        second = state.new_chat_id("api")
+        self.assertNotEqual(first, second,
+                            "two live chats were handed one state directory")
+
+    def test_the_two_chats_keep_two_pane_records_rather_than_one(self):
+        """What the collision COST, rather than that it happened. One directory means one
+        `panes` map, one `exit` file and one harness pane — so a switch aims at whichever
+        launcher wrote last, and the roster shows one chat where two are running."""
+        first = state.new_chat_id("api")
+        state.reap(set(), server="charter")
+        second = state.new_chat_id("api")
+        state.record_harness_pane(first, "%11")
+        state.record_harness_pane(second, "%22")
+        self.assertEqual(state.harness_pane(first), "%11")
+        self.assertEqual(state.harness_pane(second), "%22")
+
+    def test_a_chats_exit_code_survives_a_reap_that_beats_its_own_launcher(self):
+        """#383's protection, which Stage 5a's id shape had silently spent for chats.
+
+        `Reap.test_a_sibling_exit_code_survives_a_reap_that_beats_its_own_launcher` is the
+        same property for a `{workspace}-{pid}` frame, where the NAME carried the pid. A
+        chat's does not, so without the claim marker a chat whose harness had just exited
+        — absent from the live list, its launcher one line from `exit_code` — lost the
+        number it was about to read, and `cmd_launch` returned 0 for a harness that
+        failed.
+        """
+        chat = state.new_chat_id("api")
+        state.record_exit(chat, 42)
+        state.reap({"some-other-chat"}, server="charter")
+        self.assertEqual(state.exit_code(chat), 42,
+                         "reap deleted a live launcher's chat directory, and with it the "
+                         "exit code that launcher had not read yet")
+
+    def test_a_claim_with_nothing_in_it_yet_is_kept(self):
+        """The one window the marker itself cannot cover, and why the marker has to be the
+        FIRST byte written into a claimed directory rather than merely an early one.
+
+        Between `claim_private_dir`'s `mkdir` and `_record_claim`'s write there is a
+        directory `reap` can see and no pid it can read. An empty frame directory is
+        therefore a claim caught between two syscalls — never a frame, since every frame
+        that has run holds `server`, `workspace` and `version` at minimum.
+        """
+        d = state.frame_dir("api.7", create=True)
+        self.assertEqual(list(d.iterdir()), [], "the fixture is not the empty case")
+        self.assertEqual(state.reap(set(), server="charter"), [])
+        self.assertTrue(d.is_dir(), "a claim was deleted between its two syscalls")
+
+    def test_a_claim_a_launcher_no_longer_holds_is_reaped_like_any_other(self):
+        """The keep-rule is the launcher's liveness and not the marker's presence, which
+        is what stops #685's fix from making `.charter/frame/` unbounded — the failure the
+        dot in the id exists to prevent, arriving through the file instead."""
+        chat = _claimed_by_a_departed_launcher("api")
+        self.assertEqual(state.reap(set(), server="charter"), [chat])
+
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0,
+                     "root reads a mode-000 directory anyway, so there is no unlistable "
+                     "directory here to measure against")
+    def test_a_directory_that_cannot_be_listed_is_kept_rather_than_raised_over(self):
+        """`reap` runs on the launch path and may not raise there, and asking whether a
+        directory is empty is the one question in it that opens a directory rather than a
+        file. Every other reading here already answers `None` for a path it cannot read;
+        this one had to be given the same posture explicitly.
+
+        Kept rather than removed, on the side every unreadable answer in this module falls
+        on: `rmtree` would not have emptied it either, so deleting on no evidence would be
+        a report of work that did not happen."""
+        chat = _claimed_by_a_departed_launcher("api")
+        d = state.frame_dir(chat)
+        state.bump(chat)
+        d.chmod(0o000)
+        self.addCleanup(d.chmod, 0o700)
+        self.assertEqual(state.reap(set(), server="charter"), [])   # must not raise
+        self.assertTrue(d.is_dir())
+
+    def test_the_claim_is_a_plain_file_inside_the_directory_it_claimed(self):
+        """Both halves of where the marker goes, because both are load-bearing.
+
+        INSIDE the claimed directory, so `reap` removing that directory removes the marker
+        with it and there is nothing outside the frame root to keep in step — the property
+        that makes this "no new file to keep in sync" rather than one more thing to reap.
+
+        And the FIRST thing in it, which is what makes the empty-directory rule and the
+        pid rule meet with no gap between them: a frame directory holding anything at all
+        is one whose claimer has already said who it is.
+
+        Named plainly beside `server` and `workspace` rather than as a dotfile:
+        everything under a frame's directory is charter's own bookkeeping and none of it
+        hides from `ls`.
+        """
+        chat = state.new_chat_id("api")
+        d = state.frame_dir(chat)
+        self.assertEqual([p.name for p in d.iterdir()], ["launcher"],
+                         "the claim is not the only thing in a just-claimed directory, "
+                         "so `reap`'s empty-directory rule and its pid rule no longer "
+                         "meet")
+        self.assertEqual((d / "launcher").read_text().strip(), str(os.getpid()))
+
+    def test_a_launcher_that_has_finished_gives_the_claim_up(self):
+        """`state.clear_claim` — the half that keeps this fix from making
+        `.charter/frame/` unbounded. The marker is held for the LAUNCH, not for the life
+        of the process, and a launcher that has read its harness's exit code is done with
+        it: without this its own closing reap would be refused by a pid that is,
+        necessarily, still alive."""
+        chat = state.new_chat_id("api")
+        state.bump(chat)
+        self.assertEqual(state.reap(set(), server="charter"), [],
+                         "the claim did not keep the directory, so this test cannot say "
+                         "anything about giving it up")
+        state.clear_claim(chat)
+        self.assertEqual(state.reap(set(), server="charter"), [chat])
+
+    def test_giving_up_a_claim_that_was_never_made_is_a_no_op(self):
+        """Never raises and never creates, like `clear_exit` beside it: this runs on the
+        launch path, where a directory an older charter left — or one whose marker could
+        not be written — must degrade rather than take the launch down."""
+        state.bump("f-1")
+        state.clear_claim("f-1")            # no marker to remove
+        state.clear_claim("nothing.9")      # no directory at all
+        # And a name `contain.child` refuses to shape into one — `$CHARTER_SESSION_ID` is
+        # a value from the environment, so "there is no directory" and "there could not
+        # be one" are two different answers and both have to be no-ops here.
+        state.clear_claim("../../etc")
+        self.assertFalse(state.frame_dir("nothing.9").exists(),
+                         "giving up a claim created the directory it was asked about")
+        with mock.patch("charter.frame.state.Path.unlink",
+                        side_effect=OSError("read-only")):
+            state.clear_claim("f-1")        # must not raise
+
+    def test_a_marker_that_is_not_a_pid_keeps_nothing(self):
+        """A truncated write, a hand-edited file, a `0` — `kill(2)`'s "every process in my
+        group" rather than a process. Each is no claim about any process at all, and the
+        safe direction is the one the module already takes for an unreadable record: the
+        chat reaps exactly as it did before there was a marker."""
+        for junk in ("0", "-1", "notapid", "", "12 34"):
+            with self.subTest(junk=junk):
+                chat = state.new_chat_id("api")
+                (state.frame_dir(chat) / state._CLAIM_FILE).write_text(junk)
+                self.assertEqual(state.reap(set(), server="charter"), [chat])
 
 
 class TheIdIsANameAndNotAPointer(PersonaIso, unittest.TestCase):
@@ -428,6 +610,17 @@ class WriteFailureIsNotFatal(PersonaIso, unittest.TestCase):
         with mock.patch("charter.frame.state.os.replace", side_effect=OSError("disk full")):
             state.bump("f-1")  # the write fails silently (Finding 1)
         self.assertEqual(state.version("f-1"), before)
+
+    def test_a_claim_whose_marker_cannot_be_written_is_still_a_claim(self):
+        """#685's marker is written on the launch path, so it takes the same posture as
+        every other writer here: a filesystem that will not take the file costs the claim
+        its keep-rule, never the launch. The ordinal still comes back and the directory is
+        still this launcher's."""
+        with mock.patch("charter.frame.state.config.write_for",
+                        side_effect=OSError("disk full")):
+            chat = state.new_chat_id("api")   # must not raise
+        self.assertEqual(chat, "api.1")
+        self.assertTrue(state.frame_dir(chat).is_dir())
 
 
 class ExitCode(PersonaIso, unittest.TestCase):

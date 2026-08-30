@@ -2608,6 +2608,9 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     else:
         state.record_exit(fid, code)
         _close_window()
+    # Given up before this path's own closing reap, for the reason `cmd_launch` gives at
+    # its own (#685): the marker is held for the LAUNCH, and this launch is over.
+    state.clear_claim(fid)
     _reap_this_server(socket)
     return code
 
@@ -3822,6 +3825,13 @@ def cmd_launch(args) -> int:
                 # never actually reached the server despite reporting success).
                 code = _query_pane_dead_status(SOCKET, harness_pane)
 
+    # The claim is given up before the reap that exists to collect it (#685). The marker
+    # `state.new_chat_id` wrote says "a launcher is still working on this directory", and
+    # this one no longer is: `state.exit_code` has already been read above, so the #383
+    # window the marker covers is behind it. Left in place it would refuse the one thing
+    # only the CLOSING reap can do — remove this frame's own directory — by naming a
+    # process that is, necessarily, still alive.
+    state.clear_claim(fid)
     after_sessions = _live_sessions(SOCKET)
     after_chats = _live_chats(SOCKET)
     live_after = after_sessions | (after_chats or set())
