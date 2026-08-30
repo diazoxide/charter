@@ -954,6 +954,27 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
                   + pieces[:start] + pieces[start + len(kids):])
         quiet = not any(_needs_attention(r) for r in hidden)
         note = ", all clean" if quiet else ""
+        # **Which SIDE they are on, which `+N more` never said** (#741). The count was
+        # always right — `hidden` is the complement of what was drawn, true at every
+        # offset — but `more` asserts a direction the window has not earned. Driven at
+        # offsets 0, 4 and 8 over twelve repos in five rows, the old line read
+        # `…(+8 more, all clean)` all three times: eight below, four-and-four, and eight
+        # ABOVE are three different places to be standing and the row said one thing.
+        # Scrolled to the bottom it pointed under itself at nothing.
+        #
+        # The window is one window over one list — repo rows then piece rows, the order
+        # the budget above is spent in — so *offset* IS how many rows are above it and
+        # what is left of `hidden` is below. Taken from the numbers the rows were sliced
+        # with rather than re-derived: a second arithmetic for "where is the window" is a
+        # second answer, which is `_Line`'s own reason one column over.
+        above = offset
+        below = len(hidden) - above
+        # **Each count is drawn only for a side that HAS something on it** — `_bar`'s rule
+        # one axis over, where a leading `+3` beside a page starting mid-list is what stops
+        # a lone trailing count claiming the row holds the first names. `0 above` would be
+        # a field that is always false and always drawn.
+        where = ", ".join(f"{n} {side}" for n, side in
+                          ((above, "above"), (below, "below")) if n)
         # **About no repo, so a click here selects nothing.** It stands for the rows that
         # are NOT on screen, and picking one of them because the operator clicked the line
         # that says they exist would be charter answering a question nobody asked.
@@ -963,7 +984,7 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
         # exclusive — they no longer are, and a "there is more below" line with three more
         # rows below it is the note pointing at the wrong place.
         lines.append(_Line(None, tui.truncate(
-            f"  {sl._DIM}…(+{len(hidden)} more{note}){sl._R}", width)))
+            f"  {sl._DIM}…({where}{note}){sl._R}", width)))
     return lines[:budget]
 
 

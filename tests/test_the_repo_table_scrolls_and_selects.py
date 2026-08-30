@@ -235,6 +235,23 @@ class TheViewportRemembersOneThingAndClampsIt(unittest.TestCase):
         self.assertEqual(self.v.repo_at(0), "a")
 
 
+def _sides(note: str) -> tuple[int, int]:
+    """The `(above, below)` the drawn overflow line states, read off the line itself.
+
+    Off the ROW rather than off `_table_lines`' own arithmetic, for the reason
+    `tests/test_frame_bars.AClickResolvesAgainstWhatWasDrawn` gives one surface over:
+    asking the renderer what it computed and then asserting it computed that agrees with
+    itself whatever the row says. This is the sentence the operator reads.
+    """
+    body = note.strip().removeprefix("…(").rstrip(")")
+    sides = {"above": 0, "below": 0}
+    for field in body.split(", "):
+        count, _, side = field.partition(" ")
+        if side in sides:
+            sides[side] = int(count)
+    return sides["above"], sides["below"]
+
+
 class TheWindowMovesAlongTheRanking(PersonaIso, unittest.TestCase):
     """What the table actually draws at each offset.
 
@@ -282,11 +299,21 @@ class TheWindowMovesAlongTheRanking(PersonaIso, unittest.TestCase):
     def test_the_overflow_note_still_counts_every_hidden_repo(self):
         """It needs no arithmetic of its own at any offset: what is hidden is "every key
         not in *show*", which is true wherever the window is. Twenty repos, thirteen shown,
-        seven hidden — at the top and at the bottom alike."""
+        seven hidden — at the top and at the bottom alike.
+
+        **The SIDES are what change**, and this case used to assert they did not: it read
+        `(+7 more` at every offset and passed, which is #741 exactly — a right number in a
+        sentence that claimed a direction the window had not earned."""
         data = _data([_row(f"r{i}") for i in range(20)])
+        seen = []
         for offset in (0, 3, 7):
             note = tui.strip_ansi(self._lines(data, 14, offset=offset)[-1].text)
-            self.assertIn("(+7 more", note)
+            above, below = _sides(note)
+            self.assertEqual(above + below, 7, f"offset {offset}: {note!r}")
+            self.assertEqual(above, offset, f"offset {offset}: {note!r}")
+            seen.append(note)
+        self.assertEqual(len(set(seen)), len(seen),
+                         f"the note said the same thing at three offsets: {seen}")
 
     def test_the_overflow_line_is_about_no_repo(self):
         """It stands for the rows that are NOT on screen. Selecting one of them because
@@ -369,11 +396,17 @@ class TheWindowMovesOverPieceRowsToo(PersonaIso, unittest.TestCase):
 
     def test_the_note_counts_the_pieces_it_is_not_showing(self):
         """Ten rows, three drawn, seven hidden — at the top and at the bottom alike. A
-        count over repos alone would say `(+0 more)` and there would be no note at all,
-        which is the half of #663 that reads as "the worktrees are simply dropped"."""
+        count over repos alone would say nothing was hidden and there would be no note at
+        all, which is the half of #663 that reads as "the worktrees are simply dropped".
+
+        The pieces are counted on the side they are actually on, which is the same rule
+        the repo rows above get: the window is ONE window over repo rows then piece rows,
+        so *offset* is how many of that one list are above it whichever kind they are."""
         for offset in (0, 1, 7):
             note = tui.strip_ansi(self._lines(offset=offset)[-1].text)
-            self.assertIn("(+7 more", note)
+            above, below = _sides(note)
+            self.assertEqual(above + below, 7, f"offset {offset}: {note!r}")
+            self.assertEqual(above, offset, f"offset {offset}: {note!r}")
 
     def test_a_dirty_worktree_off_screen_stops_the_note_saying_all_clean(self):
         """`_needs_attention` is asked of the hidden PIECES too. A table admitting seven
@@ -384,7 +417,7 @@ class TheWindowMovesOverPieceRowsToo(PersonaIso, unittest.TestCase):
                      worktrees=[_row(f"w{i}", repo="solo", dirty=(i == 8))
                                 for i in range(9)])
         note = tui.strip_ansi(slots._table_lines(data, WIDE, 4)[-1].text)
-        self.assertIn("(+7 more)", note)
+        self.assertIn("7 below)", note)
         self.assertNotIn("all clean", note)
 
     def test_a_pane_that_fits_every_piece_draws_no_note_and_ends_its_tree(self):
@@ -413,7 +446,7 @@ class TheWindowMovesOverPieceRowsToo(PersonaIso, unittest.TestCase):
         the middle of the table with three drawn rows under it, which could not happen
         while a capped table had no piece rows and now can."""
         drawn = self._lines()
-        self.assertIn("…(+7 more", tui.strip_ansi(drawn[-1].text))
+        self.assertIn("…(7 below", tui.strip_ansi(drawn[-1].text))
         self.assertIsNone(drawn[-1].repo)
 
     def test_every_drawn_piece_row_still_answers_its_clone(self):
@@ -1119,3 +1152,89 @@ class TheRankingStillAnswersEveryOtherCaller(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheOverflowLineSaysWhichSideTheHiddenRowsAreOn(unittest.TestCase):
+    """`…(4 above, 4 below, all clean)` — #741, and it is a sentence bug, not a sum bug.
+
+    `_table_lines` computes `hidden` as the complement of what it drew, which its own
+    comment argues is "true wherever the window is" — and that is correct. What was wrong
+    was the word. `more` asserts *below*, and the row sits at the bottom of the table, so a
+    table scrolled to the end pointed underneath itself at nothing. Measured on twelve
+    repos in five rows before the fix, the line read `…(+8 more, all clean)` at offset 0,
+    at offset 4 and at offset 8 alike: eight below, four-and-four, and eight ABOVE are
+    three different places to be standing and the row said one thing at all three.
+
+    **Swept over shapes rather than asserted on the ones that came to mind.** #754's author
+    re-introduced the collision they were fixing because their fixture "was too short — I
+    wrote it from the shapes rather than from the tree", and `test_frame_bars`' own
+    346,084-row check is the shape this borrows: every repo count against every budget
+    against every legal offset, asking the drawn line rather than the arithmetic behind it.
+    """
+
+    def _shapes(self):
+        """Every (repos, pieces, budget, offset) this table can legally be asked for."""
+        for repos in range(1, 13):
+            for pieces in (0, 3, 9):
+                worktrees = [_row(f"w{i}", repo="r0") for i in range(pieces)]
+                data = _data([_row(f"r{i}") for i in range(repos)], worktrees=worktrees)
+                rows = slots._content_rows(data)
+                for budget in range(1, 16):
+                    limit = slots._scroll_limit(rows, budget)
+                    for offset in range(0, limit + 1):
+                        yield data, budget, offset
+
+    def test_every_shape_states_the_side_and_the_sides_add_up(self):
+        """Three claims at once, on the row itself. The counts add to what is hidden; the
+        leading one is exactly how far the window has been scrolled, because the window is
+        one window over one list; and a side with nothing on it is not drawn, which is
+        `_bar`'s `+0` rule one axis over."""
+        checked = capped = 0
+        for data, budget, offset in self._shapes():
+            lines = slots._table_lines(data, 100, budget, offset=offset)
+            checked += 1
+            note = tui.strip_ansi(lines[-1].text) if lines else ""
+            if "…(" not in note:
+                continue
+            capped += 1
+            above, below = _sides(note)
+            drawn = sum(1 for ln in lines if ln.repo is not None)
+            total = slots._content_rows(data)
+            self.assertEqual(above, offset,
+                             f"budget {budget} offset {offset}: {note!r}")
+            self.assertEqual(above + below, total - drawn,
+                             f"budget {budget} offset {offset}: {note!r}")
+            self.assertEqual("above" in note, above > 0,
+                             f"budget {budget} offset {offset}: {note!r}")
+            self.assertEqual("below" in note, below > 0,
+                             f"budget {budget} offset {offset}: {note!r}")
+        self.assertGreater(capped, 500,
+                           f"only {capped} of {checked} shapes overflowed, so this sweep "
+                           f"is measuring almost nothing")
+
+    def test_the_word_more_is_gone_because_it_was_the_false_half(self):
+        """It is the only word in the line that claimed a direction, and it claimed the
+        wrong one at every offset but the first."""
+        for data, budget, offset in self._shapes():
+            lines = slots._table_lines(data, 100, budget, offset=offset)
+            if lines:
+                self.assertNotIn("more", tui.strip_ansi(lines[-1].text))
+
+    def test_scrolled_to_the_bottom_the_line_says_above_and_never_below(self):
+        """The report's own case. At the scroll limit there is nothing under the row, so a
+        count that reads as "below" is pointing at empty screen."""
+        data = _data([_row(f"r{i}") for i in range(12)])
+        limit = slots._scroll_limit(slots._content_rows(data), 5)
+        note = tui.strip_ansi(slots._table_lines(data, 100, 5, offset=limit)[-1].text)
+        self.assertIn("above", note)
+        self.assertNotIn("below", note)
+        self.assertEqual(_sides(note), (limit, 0), note)
+
+    def test_the_line_is_still_about_no_repo_so_a_click_on_it_selects_nothing(self):
+        """Two counts rather than one changes what the row SAYS and not what it answers:
+        it stands for rows that are not on screen, and picking one of them because the
+        operator clicked the line saying they exist is the question nobody asked."""
+        for data, budget, offset in self._shapes():
+            lines = slots._table_lines(data, 100, budget, offset=offset)
+            if lines and "…(" in tui.strip_ansi(lines[-1].text):
+                self.assertIsNone(lines[-1].repo)

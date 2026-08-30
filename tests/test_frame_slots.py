@@ -1191,7 +1191,7 @@ class ReposTable(PersonaIso, unittest.TestCase):
         rows += [_row(f"clean-{i}") for i in range(5)]
         _seed("f-1", repos=rows)
         out = tui.strip_ansi(self._render(rows=4))
-        self.assertIn("more)", out)
+        self.assertIn("below)", out)
         self.assertNotIn("all clean", out)
 
     def test_a_one_row_budget_spends_it_on_saying_how_much_is_hidden(self):
@@ -1209,7 +1209,7 @@ class ReposTable(PersonaIso, unittest.TestCase):
         # would fold every row onto one line and make a line-count assertion meaningless.
         lines = [tui.strip_ansi(ln) for ln in self._render(rows=2).split("\n")]
         self.assertEqual(len(lines), 2, lines)
-        self.assertIn("+10 more", lines[1])
+        self.assertIn("10 below", lines[1])
         self.assertNotIn("all clean", lines[1],
                          "it is hiding a dirty repo and must not claim otherwise")
 

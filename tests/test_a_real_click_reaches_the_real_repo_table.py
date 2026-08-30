@@ -77,7 +77,7 @@ _TERM_CANDIDATES = tuple(dict.fromkeys(
 COLS = 120
 
 #: Rows the `repos` pane is split with: one heading and four rows of table. Four rows is
-#: the STARVED shape for both plane shapes below — three rows of content and `…(+N more)` —
+#: the STARVED shape for both plane shapes below — three rows of content and `…(N below)` —
 #: which is the shape both reports were about. A pane sized to its content would have
 #: nothing to scroll, which is the case the unit half pins and this one cannot reach
 #: without a second frame.
@@ -344,7 +344,7 @@ class _ARealFrame(PersonaIso):
 class ARealPointerOnTheRealRepoTable(_ARealFrame):
     """**Many clones, no pieces** — the shape #658 was built and measured on.
 
-    Six repos into four rows of table: three repo rows and `…(+3 more)`, so there is
+    Six repos into four rows of table: three repo rows and `…(3 below)`, so there is
     somewhere below to scroll TO. A pane sized to its content would have nothing to
     scroll, which is the case the unit half pins and this one cannot reach.
     """
@@ -401,7 +401,7 @@ class ARealPointerOnTheRealRepoTable(_ARealFrame):
         self.assertIsNone(state.selection(self.fid))
 
     def test_the_wheel_moves_the_window_over_the_repos(self):
-        """The literal report. Six repos into four rows: three rows and `…(+3 more)`, so
+        """The literal report. Six repos into four rows: three rows and `…(3 below)`, so
         there is somewhere below to go, and one notch must change WHICH repos are drawn."""
         before = self._table()
         self.assertIn("(+3 more", "\n".join(before), before)
@@ -574,12 +574,17 @@ class ARealWheelOverAPaneThatFitsItsPieces(_ARealFrame):
                               for i in range(PIECES_THAT_FIT)]}
 
     def test_every_row_of_the_plane_is_on_screen_and_nothing_admits_otherwise(self):
-        """Four rows of content in four rows of table: no `…(+N more)` and no `⑂N`, because
-        there is nothing this pane is not showing. The badge is the half that would go
-        wrong in the other direction — counted from the pieces DRAWN, it must vanish here."""
+        """Four rows of content in four rows of table: no overflow line and no `⑂N`,
+        because there is nothing this pane is not showing. The badge is the half that would
+        go wrong in the other direction — counted from the pieces DRAWN, it must vanish
+        here.
+
+        Asserted on `…(`, the marker every shape of that line starts with, rather than on
+        one wording of it: this case used to look for `more)` and #741 deleted that word,
+        which would have left it passing against a line it had stopped being able to see."""
         rows = self._table()
         self.assertEqual(len(rows), 1 + PIECES_THAT_FIT, rows)
-        self.assertNotIn("more)", "\n".join(rows))
+        self.assertNotIn("…(", "\n".join(rows))
         self.assertNotIn("⑂", "\n".join(rows))
 
     def test_the_wheel_moves_nothing_on_a_pane_that_fits(self):
