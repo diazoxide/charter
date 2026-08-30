@@ -1461,6 +1461,29 @@ class ResizeRecomputesForBothDimensions(PersonaIso, unittest.TestCase):
         the two below the harness trade rows with each other and never with it."""
         self.assertEqual(self._heights("200:50"), {"%1": 1, "%2": 1, "%0": 38})
 
+    def test_a_strip_this_plane_placed_is_re_asserted_like_charters_own(self):
+        """**A component travelling under its own id, which is what Phase 5 made
+        reachable.** `chats` is not one of the four committed slot names, so the
+        hand-written `{"top": "-y", "bottom": "-y", "right": "-x"}` this call site used to
+        filter on had no entry for it and `_apply_sizes` issued nothing at all — while
+        `layout.slot_sizes` sized it and `layout.harness_rows` charged the harness for its
+        rows anyway. The harness's own `-y` then took those rows out of a neighbour, and
+        the one pane nothing asserts absorbed the error: measured on tmux 3.7c, a frame
+        with `chats` placed and grown from 200x40 to 200x90 came back with the bar 7 rows
+        tall and the six-repo table 1 — #515's two-sizes-swapping-panes, in the one place
+        #515 did not reach, and stable across further resizes rather than transient.
+
+        Asserted as the whole map, like the case above, so a bar that is asserted at the
+        wrong height fails here too and not only one that is skipped. `%4` is one row and
+        the harness gives up two for it — its own row and its border."""
+        tables = [{"use": "identity"}, {"use": "chats", "edge": "top", "size": 1},
+                  {"use": "attention"}, {"use": "repos"}, {"use": "sidebar"}]
+        panels = {"top": "%1", "chats": "%4", "bottom": "%2", "repos": "%5", "right": "%3"}
+        with mock.patch.dict(config.FRAME,
+                             instance.frame_of({"frame": {"component": tables}})):
+            self.assertEqual(self._heights("200:50", panels=panels),
+                             {"%1": 1, "%4": 1, "%2": 1, "%0": 36})
+
     def test_a_table_pane_that_stays_is_shrunk_to_the_one_row_it_can_draw(self):
         """The panel draws no table below `statusline._LEFT_W`, so every row past the
         first was blank — and came out of the harness.

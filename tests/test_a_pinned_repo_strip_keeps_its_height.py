@@ -19,10 +19,10 @@ Four claims are pinned here, and they are separable on purpose:
   the harness keeps `layout.HARNESS_MIN_ROWS` however large a number was committed —
   measured on tmux 3.7c, an over-large `-y` is not refused, it is granted out of the
   neighbour;
-* **the mechanism does not move.** `repos` stays the one variable-row slot and stays out
-  of `commands_frame._RESIZE_FLAG`, so it is still the stack's dependent pane and tmux is
-  still asked to move exactly N-1 boundaries in an N-pane stack. A pin changes the number
-  the other panes are sized around, and nothing about how they are asserted;
+* **the mechanism does not move.** `repos` stays the one variable-row slot and stays the
+  one slot `layout.resize_flag` gives no axis, so it is still the stack's dependent pane
+  and tmux is still asked to move exactly N-1 boundaries in an N-pane stack. A pin changes
+  the number the other panes are sized around, and nothing about how they are asserted;
 * **the plane is read at a boundary and the arithmetic is handed the answer** (#661).
   `layout.repos_rows` is charter's one provably pure geometry function and its tests are
   written to that property; the first cut of this feature read `config.FRAME` from inside
@@ -248,10 +248,10 @@ class APinChangesTheNumberAndNotTheMechanism(unittest.TestCase):
     registry. Two things are wrong with it. `slot_sizes` would then answer `repos` from
     `_size_of`, which reads `SLOT_SIZE["repos"]` — the shipped FLOOR, `1`, not the
     committed number — so the pinned strip would come out one row tall. And it would buy
-    nothing at the tmux end: `_RESIZE_FLAG` has no `repos` entry, adding one would assert
-    N heights in an N-pane stack, and that is the measured failure (`top`, `bottom`,
-    `repos` in split order at 200x50 left the table 1 row and the strip 6 — the two sizes
-    swapped panes). The strip has to stay the dependent pane whether its height is
+    nothing at the tmux end: `layout.resize_flag` gives `repos` no axis, and giving it one
+    would assert N heights in an N-pane stack, which is the measured failure (`top`,
+    `bottom`, `repos` in split order at 200x50 left the table 1 row and the strip 6 — the
+    two sizes swapped panes). The strip has to stay the dependent pane whether its height is
     content-derived or committed.
     """
 
@@ -265,12 +265,19 @@ class APinChangesTheNumberAndNotTheMechanism(unittest.TestCase):
             self.assertIs(layout._is_fixed_row("repos"), False)
 
     def test_the_pinned_strip_is_still_the_pane_tmux_is_never_told_the_height_of(self):
-        """In a stack of N panes only N-1 heights are free. `_RESIZE_FLAG` names the
-        three whose size is a constant; the strip lands on its number because everything
-        else was asserted around it, which is the same mechanism a content-sized strip
-        already uses."""
-        self.assertNotIn("repos", commands_frame._RESIZE_FLAG)
-        self.assertEqual(sorted(commands_frame._RESIZE_FLAG), ["bottom", "right", "top"])
+        """In a stack of N panes only N-1 heights are free. `layout.resize_flag` gives an
+        axis to the slots whose size is a constant and none to the table, so the strip
+        lands on its number because everything else was asserted around it — the same
+        mechanism a content-sized strip already uses.
+
+        Asked of the function, not of a literal set of names: the axis is derived now, so
+        a test spelling out `["bottom", "right", "top"]` would go red the day a plane
+        places a component charter did not write — which is a frame this has to answer
+        for, not one it refuses."""
+        with mock.patch.dict(config.FRAME, _arrangement(size=15)):
+            self.assertIsNone(layout.resize_flag("repos"))
+            self.assertEqual([layout.resize_flag(s) for s in SLOTS],
+                             ["-y", "-y", None, "-x"])
 
     def test_a_pin_does_not_move_the_shipped_geometry_tables(self):
         """`SLOT_SIZE["repos"]` is the FLOOR and stays it: `repos_rows` reads it as the
