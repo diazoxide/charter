@@ -2111,6 +2111,18 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
         self.assertTrue(gone.tag.endswith("(deleted)"),
                         "a deletion has no `after` to name, and an empty discriminator "
                         "would put every deletion on one line back")
+        # Both survivors this branch's own self-sweep found, pinned. A `drop-conjunct`
+        # replacement is short far more often than not — p90 is 25 characters — and a
+        # digest on one of those is noise the reader has to decode for nothing.
+        short = dataclasses.replace(m, after="a and b")
+        self.assertTrue(short.tag.endswith(" -> a and b"), short.tag)
+        edge = dataclasses.replace(m, after="x" * 48)
+        self.assertTrue(edge.tag.endswith(" -> " + "x" * 48),
+                        "48 characters is short ENOUGH, and a boundary one notch in "
+                        "digests an edit that would have fitted: " + edge.tag)
+        over = dataclasses.replace(m, after="x" * 49)
+        self.assertRegex(over.tag, r"…#[0-9a-f]{6}$")
+        self.assertEqual(len(over.tag.split(" -> ", 1)[1]), 48)
 
     def test_a_long_edit_is_shortened_without_becoming_its_siblings_tag(self):
         """The first fix for #721 contained #721, and this fixture line is why it was
