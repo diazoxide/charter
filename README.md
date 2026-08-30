@@ -310,6 +310,8 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
   owns the rectangles; charter fills the edges and never draws in the agent's own pane.
   `charter frame -- <cmd>` does it for a command charter has never met, and `--no-frame`
   (or piping the output anywhere) skips the frame entirely and carries the real exit code.
+  Name the one you use — `[harness] default = "claude"` — and the command is just
+  `charter`.
   → [docs/frame.md](docs/frame.md)
 - **An unattended run that stops to ask a question.** Every git operation authenticates
   with that repo's own forge CLI token over HTTPS — never an SSH key, never signing —

@@ -5,8 +5,17 @@ middle, charter's own panels on the edges. It works on every harness, which is t
 a status line is Claude Code's own surface, and Codex and opencode have none at all.
 
     charter claude               # or codex, opencode
+    charter                      # the same thing, on a plane with [harness] default
     charter frame -- <cmd>       # anything charter has never met
     charter claude --no-frame    # bare, no frame at all
+
+`charter` on its own opens the frame once the plane says which harness it means —
+`[harness] default = "claude"` in `charter.toml`, documented in
+[control-plane.md](control-plane.md#harnessdefault--bare-charter). It is a rewrite of the
+command rather than a route of its own: `charter` becomes `charter claude` and everything
+below applies to it unchanged. A plane that names no default keeps the usage list, and so
+does `charter` with its output piped or redirected — a script asking whether charter is
+installed must not get a harness session instead of an answer.
 
 `claude`, `codex` and `opencode` are top-level commands (`charter claude`), never nested
 under `frame` (`charter frame claude`) — `charter frame` is its own, separate escape hatch

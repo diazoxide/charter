@@ -89,6 +89,13 @@ share = "local"                  # "local" | "commit" | "push". Default: "local"
 [workspace]
 default = "default"              # Default: "default".
 
+# What bare `charter` opens. Opt-in; absent, `charter` on its own prints the usage list.
+[harness]
+default = "claude"               # "claude" | "opencode" | "codex" — the word you would
+                                  # have typed after `charter`. No default: charter does
+                                  # not pick one for you. A name it does not know is
+                                  # REPORTED, not ignored — see "Bare `charter`" below.
+
 # Which charter this plane tracks. Opt-in; absent, you track published releases.
 [update]
 channel = "stable"               # "stable" | "dev". Default: "stable". A CLOSED set:
@@ -420,6 +427,50 @@ until it is resolved.
 verifies the target *before* writing the lock, so you cannot pin colleagues to a build you
 have not run; `--push` commits and pushes, and everyone conforms on their next session.
 charter only ever *shows* you that command — it never bumps on its own.
+
+## `[harness].default` — bare `charter`
+
+**Opt-in.** Absent, `charter` on its own prints the usage list, exactly as it always has.
+
+```toml
+[harness]
+default = "claude"
+```
+
+With it, `charter` is `charter claude`. Not "like" it — charter rewrites the command into
+that one and runs it, so the workspace picker, `--no-frame`, `--probe`, `--workspace` and
+everything else the launcher does are the same behaviours, not a second set of them. Every
+subcommand keeps working untouched, `charter claude` included.
+
+The value is one of the words you would type after `charter`: `claude`, `opencode`,
+`codex` — whatever `charter harness list` shows, read out of charter's own registry rather
+than a list in this page, so a harness added to charter becomes a legal default the day it
+is registered.
+
+**Charter does not pick one for you.** No default and you get the usage message, not
+"whatever is installed" (a machine with two of them has no answer, and the answer would
+change the day a colleague installed a third) and not "the one you ran last" (a
+machine-local memory deciding what a committed command does). Naming it is one line.
+
+**A name charter cannot launch is reported, not ignored.**
+
+```
+$ charter
+✗ charter: [harness] default = "clyde" in ~/plane/charter.toml is not a harness charter
+  can launch — one of: claude, opencode, codex. Nothing was started.
+```
+
+That is the whole reason this key is checked where it is read rather than where it is
+used. A refused value falls back to *no default*, and no default renders as the usage
+message — the same output a plane that declared nothing gets. Silently, you could not tell
+a typo from a key you never wrote. `charter doctor` carries the same warning on its
+`charter.toml` row, for the plane where somebody else committed the typo.
+
+**`charter | head` still prints usage.** Bare `charter` starts a harness only when stdout
+is a terminal. Piped or redirected, it prints the usage message and exits 2, which is what
+it did before this key existed — so a script that runs `charter 2>&1 | head` to find out
+whether charter is installed gets an answer instead of an agent session. `charter claude`
+into a pipe is unaffected: it runs the harness bare, as it always did.
 
 ## `[update].channel` — the dev channel
 

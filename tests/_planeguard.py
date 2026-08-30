@@ -311,9 +311,14 @@ def _guard_os(name: str, *, arg: int = 0, both: bool = False) -> None:
 
 #: The settings no test may read off the developer's own ``charter.toml``.
 #:
-#: One name, and it is a list rather than a special case for exactly one reason: the next
-#: opt-in setting to arrive has the same shape, and the day it arrives is the day it should
-#: be guarded, not the day someone re-derives this argument from a red CI run.
+#: It is a list rather than a special case for exactly one reason: the next opt-in setting
+#: to arrive has the same shape, and the day it arrives is the day it should be guarded,
+#: not the day someone re-derives this argument from a red CI run. ``HARNESS`` is that next
+#: setting, added on the day it arrived. ``[harness] default`` is opt-in and brand new, so
+#: for its whole life `config.HARNESS` is ``{"default": None, …}`` on every machine — and
+#: charter's own dogfood plane declares ``default = "claude"``, which is the ``channel =
+#: "dev"`` situation exactly: a test asserting "bare charter prints usage" would pass in CI
+#: and fail on the one machine whose file says otherwise.
 #:
 #: Not every `config.DERIVED` name belongs here, and the boundary is what the value is a
 #: fact ABOUT. ``ROOT``, ``STATE_DIR`` and the paths under them are facts about the
@@ -324,7 +329,7 @@ def _guard_os(name: str, *, arg: int = 0, both: bool = False) -> None:
 #: run it. Values that are dicts, and only dicts: the refusal works by handing back an
 #: object that will not answer, and a `str` or a `Path` cannot be made to refuse without
 #: breaking the formatting of every message that legitimately quotes it.
-_GUARDED_SETTINGS = ("UPDATE",)
+_GUARDED_SETTINGS = ("UPDATE", "HARNESS")
 
 
 class RealPlaneRead(BaseException):

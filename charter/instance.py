@@ -2015,3 +2015,123 @@ def update_of(cfg: dict) -> dict:
                 out["channel"] = known       # the constant, not the file's string
                 break
     return out
+
+
+#: Every ``[harness]`` setting, in the shape :data:`FRAME_FIELDS` documents: keyed by the
+#: name :func:`harness_of` returns it under, paired with ``(default, toml_key)``. One key
+#: today, and the shape is the point — a second one cannot be added to a defaults dict and
+#: forgotten in a spellings dict.
+#:
+#: ``default = "claude"`` is what makes bare ``charter`` launch the frame, and its shipped
+#: default is ``None`` rather than a harness name. That is the whole decision of the
+#: section: a plane that has said nothing keeps argparse's usage output, because guessing
+#: a harness for somebody who never named one is charter choosing what runs on their
+#: machine. ``[persona] default`` and ``[workspace] default`` spell the same idea with the
+#: same word, which is why this section is ``[harness]`` and this key is ``default``.
+#:
+#: **The direction of the fallback is the opposite of :data:`UPDATE_FIELDS`', and both are
+#: the conservative one.** ``update`` degrades to ``stable`` because *something* has to be
+#: installed and the safe answer exists; here the safe answer is to run NOTHING, so an
+#: unreadable value degrades to no default at all — and is reported rather than swallowed,
+#: because a plane that declared a harness and gets the usage message is indistinguishable
+#: from a plane that declared none. See :func:`harness_of`.
+HARNESS_FIELDS = {
+    "default": (None, "default"),
+}
+
+#: The plain ``{key: default}`` view of :data:`HARNESS_FIELDS`.
+HARNESS_DEFAULTS = {key: default for key, (default, _toml_key) in HARNESS_FIELDS.items()}
+
+
+def launchable_harnesses() -> tuple[str, ...]:
+    """Every word ``[harness] default`` may name, in registration order.
+
+    Each registered harness's :attr:`~charter.harness.base.Harness.cli_name` — the word an
+    operator types after ``charter`` — read from the registry rather than written down
+    here. That is the whole reason `harness/registry.py` exists: *"iterating KINDS means a
+    harness added to it is covered everywhere the day it is registered, never a hardcoded
+    literal in `init` or `doctor` that someone has to remember to update."* A tuple of
+    three strings in this module would be exactly that literal, and it would go stale
+    silently — the plane would refuse a harness charter can launch, and say the name is
+    unknown.
+
+    So this is deliberately NOT the shape :data:`FRAME_SLOTS` and :data:`UPDATE_CHANNELS`
+    use. Those are closed sets this module OWNS and nothing else can extend; these names
+    belong to another module, and copying them here would be a second registry.
+
+    ``frame`` is not on this list, even though `charter frame` is registered by the same
+    loop in `cli._add_frame_parsers`. It is the escape hatch for a command charter has
+    never met and carries no command of its own, so a plane defaulting to it would get
+    ``charter frame: nothing to run`` on every bare ``charter`` — a default that cannot
+    launch is not a default. A harness with an empty ``cli_name`` is off the list for the
+    same reason: the attribute's own docstring says empty means charter cannot launch it.
+
+    Imported inside the function, the way `config.worktrees_root_for` imports `contain`:
+    this module is imported by every command including ``charter --version``, and the
+    harness package is only needed by the one caller below.
+    """
+    from .harness import registry
+
+    return tuple(h.cli_name for h in registry.all() if h.cli_name)
+
+
+def harness_of(cfg: dict) -> dict:
+    """The ``[harness]`` section merged over :data:`HARNESS_DEFAULTS`.
+
+    Same contract as :func:`frame_of` and :func:`update_of`, for the same reason: this
+    module is imported by every command including ``charter --version``, so a hand-edited
+    charter.toml must degrade rather than raise.
+
+    ``default`` is matched against :func:`launchable_harnesses` and **the registry's own
+    string is what is stored, never the object the file supplied** — :func:`update_of`'s
+    rule, and it holds here for a sharper reason than there. This value becomes
+    ``argv[0]`` of a `charter` invocation that `cli.main` then dispatches, and charter.toml
+    is COMMITTED: it arrives from somebody else's machine (README.md's containment rule).
+    Nothing an operator can type is passed through — the value is only ever *compared*, and
+    what survives the comparison is a constant out of charter's own registry.
+
+    **The refusal is recorded, not swallowed, and that is the one place this differs from
+    the two sections above.** A misspelt ``[frame] chrome`` degrades to a shipped default
+    and the frame still draws; a misspelt ``[update] channel`` degrades to ``stable`` and
+    charter still installs. A misspelt ``[harness] default`` degrades to *no default*,
+    which renders as argparse's usage message — byte-identical to what a plane that
+    declared nothing gets. So the operator who committed ``default = "clyde"`` would see
+    charter behaving exactly as though their key were not there, which is the failure shape
+    #535 refuses an arrangement whole to avoid: a declared thing silently not in force.
+    ``refused`` carries it out to the two readers that can say so — `cli.main`, on the bare
+    launch the key is *for*, and `doctor.check_control_plane_config`, which is where
+    `config.worktrees_root_for`'s own silently-ignored key is named for the same reason.
+
+    ``refused`` is a key in the returned dict and not in :data:`HARNESS_FIELDS`, because it
+    is not a SETTING — nothing in ``[harness]`` is spelled ``refused``. That is
+    :func:`frame_of`'s own arrangement with ``components``, and it is set on every path so
+    a caller never has to ask which one it came back from.
+
+    The value is rendered through :func:`contain.readable` and never handed on raw: it is
+    an identifier a sentence is about to tell somebody to go and fix, and it comes out of a
+    committed file, where a newline forges a second line of charter's own report and an
+    invisible codepoint names nothing at all.
+    """
+    out = dict(HARNESS_DEFAULTS)
+    # Set before every early return, `frame_of`'s rule for `components`: a key present on
+    # one path and absent on another is two shapes for one answer, and the caller would be
+    # reading a `KeyError` on exactly the planes that declare no `[harness]` section.
+    out["refused"] = None
+    section = cfg.get("harness")
+    if not isinstance(section, dict):
+        return out
+    toml_key = HARNESS_FIELDS["default"][1]
+    if toml_key not in section:
+        return out
+    value = section[toml_key]
+    for known in launchable_harnesses():
+        if value == known:
+            out["default"] = known       # the registry's constant, not the file's string
+            return out
+    # `tomllib` can hand this a list, a table, an int or a bool, and every one of them
+    # reaches here rather than through a preceding `isinstance` check: a value of the wrong
+    # TYPE is as declared, and as not in force, as a misspelt string, and reporting only
+    # the strings would leave `default = ["claude"]` in the silent bucket this whole
+    # function exists to empty.
+    out["refused"] = contain.readable(value)
+    return out

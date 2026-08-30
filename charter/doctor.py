@@ -266,11 +266,15 @@ def check_control_plane_config() -> Result:
     # plane whose declared layout is not the layout it has. This is the only place that
     # can say so; the resolver itself runs inside `derive`, where there is nobody to tell.
     from . import contain, instance as _instance
+    # Parsed ONCE, for both of the silently-ignored-key rows below. `CONFIG_ERROR` is None
+    # by the branch above, so this normally cannot raise — but `doctor` is the command
+    # somebody runs when charter is already misbehaving, and a row that raises reports on
+    # nothing at all.
     try:
-        _declared = _instance.worktrees_of(_instance.load(_config.ROOT))
+        _cfg = _instance.load(_config.ROOT)
     except Exception:
-        _declared = None
-    why = contain.plane_adjacent_refusal(_config.ROOT, _declared)
+        _cfg = {}
+    why = contain.plane_adjacent_refusal(_config.ROOT, _instance.worktrees_of(_cfg))
     if why:
         return Result(
             "charter.toml",
@@ -289,6 +293,28 @@ def check_control_plane_config() -> Result:
             detail=f"{len(forge_errors)} [[forge]] block(s) failed to resolve",
             hint=f"{shown} — those hosts are NOT covered by the one-credential guard or "
                  f"git-policy until fixed (other declared/default hosts still are).",
+        )
+    # A committed `[harness] default` naming something charter cannot launch degrades to no
+    # default at all (`instance.harness_of`) — and that renders as argparse's usage message,
+    # which is exactly what a plane declaring nothing gets. So bare `charter` on a plane with
+    # a typo behaves as though the key were absent, the same silently-ignored-setting shape
+    # the `[plane] worktrees` branch above is about. `cli.main` says so on the bare launch
+    # itself; this says so to anybody who runs `doctor` instead, and to every OTHER command,
+    # where nothing else would.
+    #
+    # Read from `instance.load` rather than `config.HARNESS`, the way the worktrees branch
+    # reads `instance.worktrees_of`: this row is about the FILE, and `derive` already ran
+    # before anybody could have fixed it.
+    _refused = _instance.harness_of(_cfg).get("refused")
+    if _refused:
+        return Result(
+            "charter.toml",
+            WARN,
+            detail=f'[harness] default = "{_refused}" is not a harness charter can launch',
+            hint=f"Bare `charter` prints the usage message until it names one of: "
+                 f"{', '.join(_instance.launchable_harnesses())} — which is also what a "
+                 f"plane that declares no default gets, so the key currently reads as "
+                 f"absent. `charter <harness>` is unaffected.",
         )
     if not _config.HAS_CONTROL_PLANE:
         # NOT ok. Every check below reports green against a plane that does not exist —

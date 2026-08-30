@@ -20,6 +20,7 @@ from . import (
     contain,
     harness,
     hooks,
+    instance,
     statusline,
     toolgate,
     util,
@@ -1673,8 +1674,86 @@ def _record_crash(exc: BaseException, subcommand: str) -> None:
         pass
 
 
+def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
+    """Bare ``charter``: the plane's ``[harness] default``, or today's usage error.
+
+    Returns the argv to parse and, when charter is finished here, a return code. Expressed
+    as a REWRITE of argv rather than as a dispatch of its own — bare ``charter`` on a plane
+    that defaults to Claude Code becomes exactly `["claude"]`, and every splitter, flag and
+    branch below it then runs on the same tokens a typed `charter claude` produces. A
+    second path into `cmd_launch` would be a second set of answers about the workspace
+    picker, `$CHARTER_HARNESS`, `--probe` and the frame, all of which are already settled
+    for the typed form.
+
+    **Four things stop it, and each is reachable on its own.**
+
+    *A subcommand was typed.* Nothing here runs, `--version` included. It is a flag on the
+    root parser (`_VersionAction`), so ``charter --version`` is a non-empty argv and never
+    reaches this function at all — the version action still exits 0 from inside
+    `parse_args`, which is what `commands_update._handoff` reads back.
+
+    *The plane declared a value charter cannot launch.* Reported here, loudly, naming the
+    value and the words that would work. `instance.harness_of` recorded it at the config
+    boundary; this is the reader that can say so on the command the key is *for*. Silence
+    would be the whole defect: a refused default degrades to no default, which renders as
+    argparse's usage message — byte-identical to what a plane that declared nothing gets,
+    so the operator who committed ``default = "clyde"`` would watch charter behave exactly
+    as though their key were not there. Checked BEFORE the tty rule below, because a
+    committed file being wrong is not a fact about anybody's terminal.
+
+    *The plane declared nothing.* Today's behaviour, unchanged: argparse's own usage error
+    on exit 2. Charter does not guess a harness for somebody who never named one — not
+    "whatever is installed" (a plane with two of them has no answer, and the answer would
+    change when a colleague installed a third) and not "the one last used" (a machine-local
+    memory deciding what a committed command runs).
+
+    *Stdout is not a terminal.* Also today's behaviour, and this is the one that has to be
+    a test rather than a comment. `commands_frame.cmd_launch` returns `bypass(argv)` when
+    stdout is not a tty — it `os.execvp`s the harness in place of charter. Today bare
+    `charter` is argparse's usage error, exit 2 with no side effect, so ``charter 2>&1 |
+    head`` is a probe that costs nothing. Rewrite argv unconditionally and, on a plane that
+    sets a default, that pipeline execs Claude Code — correct against every config anyone
+    tested, wrong the first time a script asks whether charter is installed (#687, #690).
+    Stdout, and stdout alone, because that is the exact stream `cmd_launch` branches on: a
+    second, looser condition here is how the two come to disagree about what "interactive"
+    means.
+    """
+    if argv:
+        return argv, None
+    from . import config
+
+    declared = config.HARNESS
+    # Truthiness, not `is not None`, and the same test `doctor` makes of the same key.
+    # `contain.readable` never returns a blank string, so on anything `harness_of` produced
+    # the two are the same question — but `config.HARNESS` is a module attribute anything
+    # in-process can assign, and a planted `{"refused": ""}` would otherwise print a
+    # refusal naming nothing at all instead of falling through to the usage message.
+    refused = declared.get("refused")
+    if refused:
+        util.err(f'charter: [harness] default = "{refused}" in '
+                 f'{util.short_path(config.ROOT / "charter.toml")} is not a harness '
+                 f'charter can launch — one of: '
+                 f'{", ".join(instance.launchable_harnesses())}. Nothing was started.')
+        return argv, 2
+    default = declared.get("default")
+    # Two conditions, two statements, and deliberately not one `or`. They are different
+    # facts — a file that said nothing, and a terminal that is not one — with different
+    # reasons in the docstring above, and an arm two inputs can both satisfy is an arm
+    # neither of them ends up testing.
+    if not default:
+        return argv, None
+    if not sys.stdout.isatty():
+        return argv, None
+    return [default], None
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    # First, so what it returns is then hoisted, split and parsed exactly as the same
+    # tokens typed by hand would be. See `_bare_launch`.
+    argv, rc = _bare_launch(argv)
+    if rc is not None:
+        return rc
     argv = _hoist_persona_memory(argv)
     argv, exec_command = _split_exec_command(argv)
     argv, frame_rest = _split_frame_argv(argv)
