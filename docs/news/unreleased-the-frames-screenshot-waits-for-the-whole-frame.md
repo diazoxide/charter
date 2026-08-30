@@ -71,22 +71,20 @@ is a fact about the machine's load and not about the frame — halve the cadence
 starts being wrong.
 
 **Measured end to end, both worktrees run at once under one load**, three legs each,
-135 runs per worktree per binary, 14-core darwin, `python3.14`.
+14-core darwin, `python3.14`.
 
-| binary | leg | runs | failed |
+| binary | runs each | `main` failed | this branch |
 |---|---|---|---|
-| tmux 3.7c | `main` | 135 | **6** |
-| tmux 3.7c | this branch | 135 | **0** |
-| tmux 3.2 | `main` | 135 | **18** |
-| tmux 3.2 | this branch | 135 | **0** |
+| tmux 3.7c | 135 | **6** | **0** |
+| tmux 3.2 | 135 | **18** | **0** |
+| tmux 3.2, re-run against `main` once #716/#717/#718 had landed | 45 | **9** | **0** |
 
-Every one of `main`'s 24 failures is one of #719's own two:
-`test_no_shipped_design_leaves_a_seam_between_two_panes_of_one_colour` (19) and
-`test_an_unsurfaced_rule_really_does_leave_a_seam_between_painted_panes` (5) — the two
-messages the issue was filed with, and neither of them about colour. The tmux 3.2 leg
-needed #716's four deterministic floor failures patched out of the way first, or the
-surfaced screenshots never run at all; that patch is measurement scaffolding and is not in
-this branch.
+Every one of `main`'s 33 failures is one of #719's own two:
+`test_no_shipped_design_leaves_a_seam_between_two_panes_of_one_colour` (24) and
+`test_an_unsurfaced_rule_really_does_leave_a_seam_between_painted_panes` (9) — the two
+messages the issue was filed with, and neither of them about colour. The first tmux 3.2
+campaign needed #716's floor failures patched out of the way so the surfaced screenshots
+could run at all; the third needed nothing, because by then #716 had shipped.
 
 Per screenshot rather than per run, which is the more sensitive instrument: `main` stopped
 at a screen that was not the one the frame settled to on **5 of 716** shots on 3.7c and
@@ -99,8 +97,5 @@ on this tmux rather than argued from tmux's source: six rounds repaint a pane an
 mark behind the repaint, and the screen carrying each mark carries exactly one background
 and a new one — a screen caught between two paints carries both, which is the frame this
 was photographing.
-
-The module's deterministic tmux 3.2 failures are unchanged, four in this class and all of
-them #716's.
 
 Nothing to adopt — no production behaviour changed.

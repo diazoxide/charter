@@ -5017,12 +5017,12 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         frame — which this asks for first, and skips on if this machine cannot render one.
 
         **`arm=False`, and that is not laziness** — the same argument
-        `test_neither_server_this_class_uses_is_ever_rebuilt_mid_test` makes. This is
-        about the mark and the harness's own background, and neither is charter's; arming
-        would put charter's chrome argvs on the path, which at `tmuxctl.FLOOR` fail over
-        an option tmux 3.2 does not have (#716) and would make this report somebody else's
-        failure. The panels are still painted either way — `_screenshot` paints a
-        *surface* whether or not the rules are armed — so the reading is the same one.
+        `test_neither_server_this_class_uses_is_ever_rebuilt_mid_test` makes. Neither the
+        mark nor the harness's own background is charter's chrome, so arming would put
+        every one of charter's chrome argvs on the path of a test that says nothing about
+        them, and a red here would be reporting their failure rather than this one's. The
+        panels are painted either way — `_screenshot` paints a *surface* whether or not
+        the rules are armed — so the reading is the same one.
         """
         self.assertEqual(
             set(_PAINT_MARK) & (_RULE_GLYPHS | _INDICATOR_GLYPHS), set(),
