@@ -44,7 +44,7 @@ side of it:
   selected would draw a second mark nothing on the machine could act on.
 
 **What a click on the wrong cell does, which is nothing — deliberately, in four places.** The
-heading. The gap between two names. The `+14` where the names did not fit, which stands for
+heading. The gap between two names. A `+N` where the names did not fit, which stands for
 names that are not on the row at all. And the empty space past the last tab. Charter resolves
 a click against the columns the paint actually wrote, published by the same pass that drew the
 row, so a cell no tab was drawn into is not a cell a tab was clicked in — it will not pick the
@@ -52,11 +52,13 @@ nearest name for you. **Clicking the tab you are already on does nothing too**, 
 tearing four panels down and splitting them again to arrive where you were; it is also what
 stops a double-click switching twice.
 
-**One consequence to know before you place a bar on a narrow frame.** Where the row has room
-for only your own name and a count, the only tab drawn is the one you are on — so nothing on
-that bar is clickable. That is honest rather than broken: `F2` reaches every chat and every
-workspace in two keystrokes at every width, which is what "the bar is a readout" has always
-meant.
+**One consequence to know before you place a bar on a narrow frame.** Where the whole list
+does not fit, the row draws the page yours falls on and counts what is off each end — so the
+names a click can reach are the ones on that page, and on a row narrow enough to hold only
+your own name there is nothing on the bar to click at all. That is honest rather than broken:
+`F2` reaches every chat and every workspace in two keystrokes at every width, which is what
+"the bar is a readout" has always meant. *The tab bars draw the tabs that fit* in this same
+release has how the page is chosen and why it does not move under your pointer.
 
 **You need `[frame] mouse = true`, and you need to have placed a bar.** Neither is on by
 default and this entry does not change that: with mouse off, tmux asks your terminal to report

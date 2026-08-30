@@ -2510,8 +2510,8 @@ class _Tabs:
         *columns* maps a column of the component's OWN canvas — the rectangle `ctx.width`
         describes, which is what `events.Dispatcher._on_canvas` delivers a click in — to
         the name of the tab drawn there. Absent means the operator clicked a cell this
-        bar drew no tab into: the heading, the gap between two tabs, the `+14`, the
-        `n/N`, the empty space past the last name. `events.Dispatcher._on_canvas` applies
+        bar drew no tab into: the heading, the gap between two tabs, EITHER `+N` count,
+        the `n/N`, the empty space past the last name. `events.Dispatcher._on_canvas` applies
         the identical rule one axis over for the pad, and `_Viewport.publish` applies it
         for the table's heading row.
 
