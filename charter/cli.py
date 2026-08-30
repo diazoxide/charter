@@ -792,12 +792,15 @@ def _add_frame_parsers(sub) -> None:
     # `conf_text` — and, with `--pane`, by tmux's own `split-window`; never typed by an
     # operator.
     #
-    # Its `client` argument is `#{client_name}`, expanded by tmux INSIDE the bind's
-    # `run-shell` text before this process starts — never queried after the fact (see
-    # `cmd_palette`'s own docstring for why: `list-clients` cannot tell WHO pressed the
-    # key, only who is attached, and picking among several guessed wrong). `nargs="?"`
-    # because the pane half is started by charter itself with whatever the bind carried,
-    # and an empty client is a `display-message -t <session>` rather than a refusal.
+    # Its `client` positional is ACCEPTED AND IGNORED, and is kept for one reason only:
+    # a bind installed by a charter from before #729 is still sitting in a running
+    # server's key table across the upgrade, and it fires this command with a
+    # `#{client_name}` in it. Dropping the positional would make F2 on every such frame
+    # fail to parse. Nothing reads it: an outcome is now written to the frame's own state
+    # and drawn by its attention panel (`commands_frame._say_on_screen`), which every
+    # client attached to that frame sees, so there is no longer a per-client screen to
+    # choose between. `nargs="?"` is what lets the new bind, which carries no client at
+    # all, parse through the same parser.
     #
     # `--pane` says "you ARE the palette" rather than "open one". One subcommand and not
     # two, because they are two halves of one keypress and two spellings would be two

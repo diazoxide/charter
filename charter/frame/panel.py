@@ -49,6 +49,15 @@ the directory absent, or present and empty — that is one syscall per tick, alo
 one `state.version` already pays, and the panel paints nothing. It is self-limiting by
 construction rather than by a budget: the ticking stops when the records do.
 
+**And it stops by PAINTING, which is the part that was missing** (#727). Both clock-driven
+fields on that row — the spinner, and a switch outcome's dwell (`state.say`) — are true
+for a while and then false, and the loop below had no reason to repaint on the instant
+they went false: the version has not moved, nothing resized, no event arrived. So the pane
+kept whatever it last drew, which is a spinner frozen mid-animation over a count of work
+that had already finished — indistinguishable from a hung frame, and measured holding for
+over fifteen minutes across a detach/reattach. `_watch` carries the previous answer in
+`was_ticking` and spends exactly one more paint on the falling edge.
+
 **A panel can now READ its pane, and only when a component asked it to** (#607). The loop
 below is otherwise unchanged: `_wait` replaces the tick's `time.sleep` with a `select` of
 the same length when — and only when — the placed component declared an event kind charter
@@ -599,8 +608,39 @@ def _wait(evs, timeout: float = TICK) -> bool:
     return evs.poll(timeout)
 
 
+def _notice_pending(fid: str) -> bool:
+    """Is a switch outcome still inside its dwell — i.e. will this row draw it?
+
+    The second clock-driven reason to repaint, beside :func:`_running`. `state.say`
+    bumps the version when it writes, so the notice APPEARING is already an ordinary
+    version repaint; what needs this is the notice going AWAY, which no version bump,
+    resize or event announces. `_watch`'s falling edge turns "was pending, is not now"
+    into exactly one repaint, and the row loses the line the same tick it expires.
+
+    One small read per tick, and only on a slot in `slots.ANIMATED` — `_watch`'s `and`
+    short-circuits before this is called for any other, so a `top`, `left` or `right`
+    panel pays nothing at all.
+
+    **It costs about what `state.version` costs, and that is the number worth stating
+    rather than an absolute one.** Both are a containment resolve plus a small read of one
+    file in the frame's own directory, so they measure alike and they move together with
+    the machine: 136µs against 130µs here, five times a second, on ONE of the four panels
+    — where the version read is paid by every panel on every tick already. Deliberately
+    NOT cached behind `_running`'s stamp trick. The cheap version is available — a notice
+    can only appear on a version bump, because `state.say`'s caller bumps — but it buys
+    ~136µs of a 200,000µs tick in exchange for a rule that a future writer of a notice
+    must also bump the version or their notice silently never appears. A read that is
+    correct whoever writes it is worth more than 0.07% of one core.
+
+    Never raises: `state.notice_expiry` answers `0.0` for every degenerate case, and a
+    panel that threw out of its run loop would lose the pane (`run`'s `_hold` catches it,
+    but a panel that stopped repainting has already lost).
+    """
+    return time.time() < state.notice_expiry(fid)
+
+
 def _tick(resized: dict, seen: str, slot: str, fid: str, *,
-          animating: bool = False, paint=None, events=None,
+          ticking: bool = False, paint=None, events=None,
           handled: bool = False) -> str:
     """One loop iteration's decision AND its effect — split out of `run` so the
     DECISION (paint now, or wait) can be exercised without also exercising `run`'s
@@ -632,13 +672,15 @@ def _tick(resized: dict, seen: str, slot: str, fid: str, *,
     is still visible to the next comparison — pinned directly by
     `Tick.test_a_bump_landing_during_the_paint_is_not_marked_seen`.
 
-    *animating* is the third reason to repaint, and it is the same shape as *resized*: the
+    *ticking* is the third reason to repaint, and it is the same shape as *resized*: the
     frame's version has not moved and the pane's size has not changed, but what the panel
-    would draw NOW differs from what is on screen, because the spinner is on a different
-    frame (`slots.spinner_frame` reads the clock). Defaulted to `False` so the two callers
-    that mean "repaint only on news" — every test in this module that exercises the
-    decision directly — keep saying exactly that. `_watch` is what decides it, from
-    :func:`_running`.
+    would draw NOW differs from what is on screen, because the CLOCK moved. Two things on
+    this row are functions of the clock rather than of the frame's version — the spinner
+    (`slots.spinner_frame`) and a notice's expiry (`state.notice`) — and *ticking* is
+    both, which is why it is no longer spelled `animating`. Defaulted to `False` so the
+    callers that mean "repaint only on news" — every test in this module that exercises
+    the decision directly — keep saying exactly that. `_watch` is what decides it, from
+    :func:`_running` and :func:`_notice_pending`.
 
     *paint* is WHAT to draw, defaulting to :func:`_paint` — charter's own renderer for
     this slot. A panel hosting a provider's component passes :func:`_component_painter`'s
@@ -662,7 +704,7 @@ def _tick(resized: dict, seen: str, slot: str, fid: str, *,
     and the rectangle is what the event is about.
     """
     now = state.version(fid)
-    if resized["flag"] or now != seen or animating or handled:
+    if resized["flag"] or now != seen or ticking or handled:
         if events is not None:
             events.note_resize()
         resized["flag"] = False
@@ -672,14 +714,24 @@ def _tick(resized: dict, seen: str, slot: str, fid: str, *,
 
 
 def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
-    """The live loop: paint on every version bump, resize, or spinner frame, until killed.
+    """The live loop: paint on every version bump, resize, spinner frame, notice or
+    expiry, until killed.
 
     The third reason is the only one that repeats on its own, and it is bounded twice over
     rather than by a timer this module owns: by the WORK, since `_running` answers 0 the
-    moment the last in-flight record clears; and by the SLOT, since only a renderer in
-    `slots.ANIMATED` draws anything that moves. A `top`, `left` or `right` panel therefore
-    behaves exactly as it did before this feature existed — including paying no `stat`,
-    because the `and` below short-circuits before `_running` is ever called.
+    moment the last in-flight record clears and `_notice_pending` answers False the moment
+    a notice's dwell is up; and by the SLOT, since only a renderer in `slots.ANIMATED`
+    draws anything that moves. A `top`, `left` or `right` panel therefore behaves exactly
+    as it did before this feature existed — including paying no `stat` and no notice read,
+    because the `and` below short-circuits before either is ever called.
+
+    **And it paints once MORE when that reason stops being true.** The loop used to have
+    a rising edge and no falling one: it repainted for every tick a spinner was live and
+    then, on the tick after the last record cleared, had no reason left to paint — so the
+    pane kept the last thing drawn into it, a spinner frame and a count of work that had
+    finished (#727). `was_ticking` is the whole of the fix, and it is one variable rather
+    than one per field because "what I last drew was clock-driven and now is not" is the
+    same question for the spinner and for a notice's expiry.
 
     Split out of `run` so the SIGWINCH handler it arms is restored by its own `finally`
     before `run`'s failure path can hold the pane open — a handler left installed for
@@ -713,11 +765,23 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
         # that write, so a failed `open` is still fully unwound here.
         if evs is not None:
             evs.open()
-        seen, handled = "", False
+        seen, handled, was_ticking = "", False, False
         while True:
+            # `animates and ...` still short-circuits, so a `top`, `left` or `right`
+            # panel pays neither the `stat` nor the notice read — see `animates` above.
+            ticking = animates and (bool(_running(inflight_cache))
+                                    or _notice_pending(fid))
+            # `or was_ticking` is the FALLING EDGE (#727), and it is one term rather
+            # than two because both clock-driven fields need exactly the same thing.
+            # Without it, the tick after the last in-flight record cleared had no reason
+            # to repaint at all — not resized, version unmoved, nothing handled — so the
+            # screen kept the last frame drawn, which is the one with the spinner on it.
+            # Measured before this line existed: `⠏ 1 running` held for 12s with an empty
+            # tracker directory, and once for over fifteen minutes across a
+            # detach/reattach. A notice expiring is the identical edge.
             seen = _tick(resized, seen, slot, fid, paint=paint, events=evs,
-                         animating=animates and bool(_running(inflight_cache)),
-                         handled=handled)
+                         ticking=ticking or was_ticking, handled=handled)
+            was_ticking = ticking
             if once:
                 return 0
             handled = _wait(evs)

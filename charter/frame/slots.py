@@ -2024,8 +2024,25 @@ def _bottom(fid: str) -> str:
     that fixes it, and slicing into that command mid-word reads as "no problem here" — the
     exact false-clean failure this plan's Global Constraints call out by name.
 
-    Priority order, highest first: the one alert (`_alerts()`'s own top pick — an
-    actionable control-plane problem, carrying its own fix); the in-flight spinner
+    **This row is also where a switch says what it did** (#729), and that is the highest
+    priority on it while it lasts. It is the surface the outcome of an F2 choice moved
+    ONTO, off `display-message`, because a tmux client does not repaint its panes while a
+    message is up — measured at four seconds of a frozen screen on tmux 3.7c and at the
+    3.2 floor alike, spent hiding the very repaint the message announced. This row is the
+    right destination rather than merely an available one: `instance.FRAME_DENSITY` puts
+    `bottom` in every level charter ships (`minimal`, `normal`, `full`), so it is the one
+    surface besides `top` that is always there to be written on — and `docs/frame.md`'s
+    promise that this row is never dropped is exactly the promise an outcome line needs.
+    It is also per-FRAME, read by that frame's own panel off that frame's own state, which
+    is the second half of what `display-message` could not do: `-t <pane>` selects the
+    format target and not the client, so an outcome about one frame was being drawn on
+    whichever client attached most recently (measured on both versions — see
+    `state.say`).
+
+    Priority order, highest first: the switch outcome (`state.notice` — a few seconds
+    long, the direct answer to the last thing the operator CHOSE, and the only field here
+    that is about an instant rather than a state); the one alert (`_alerts()`'s own top
+    pick — an actionable control-plane problem, carrying its own fix); the in-flight spinner
     (:func:`_inflight_field` — work happening RIGHT NOW, and the only thing on this row
     that will be different in a second); the selected repo's detail
     (:func:`_selected_detail` — the direct answer to the last thing the operator DID, which
@@ -2097,22 +2114,29 @@ def _bottom(fid: str) -> str:
 
     inflight_text = _inflight_field()
     repo_text = _selected_detail(fid)
+    # The outcome of the last thing the operator CHOSE, for the few seconds it is worth
+    # saying (#729). Empty the rest of the time, and `_fit_fields` drops an empty field
+    # whole — so a frame nobody has just switched draws the row it always drew.
+    notice_text = state.notice(fid)
 
     # Decide who survives, highest priority first (see this function's own docstring
     # above for why); `_fit_fields` does the actual budgeting so it can be tested in
     # isolation.
     keep = _fit_fields(
-        [("alert", alert_text), ("inflight", inflight_text), ("repo", repo_text),
-         ("news", news_text), ("todo", todo_text), ("hotkey", hotkey_text)], w,
+        [("notice", notice_text), ("alert", alert_text), ("inflight", inflight_text),
+         ("repo", repo_text), ("news", news_text), ("todo", todo_text),
+         ("hotkey", hotkey_text)], w,
         limit=1 if verbosity(fid) == "terse" else None)
 
     # Re-assembled in the original reading order, not priority order — priority decided
     # only who was cut. `repo` is LAST, which is the "right side" the selected row's
     # detail was asked for: this row is composed left to right and joined with ` · `, so
     # last is as far right as a field gets without a second layout rule for one field.
-    fields = {"alert": alert_text, "inflight": inflight_text, "news": news_text,
-              "todo": todo_text, "hotkey": hotkey_text, "repo": repo_text}
-    parts = [fields[n] for n in ("todo", "alert", "inflight", "news", "hotkey", "repo")
+    fields = {"notice": notice_text, "alert": alert_text, "inflight": inflight_text,
+              "news": news_text, "todo": todo_text, "hotkey": hotkey_text,
+              "repo": repo_text}
+    parts = [fields[n]
+             for n in ("notice", "todo", "alert", "inflight", "news", "hotkey", "repo")
              if n in keep]
     return tui.truncate(" · ".join(parts), w)
 

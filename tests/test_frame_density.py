@@ -23,6 +23,7 @@ directory and that `cmd_density` touches no `charter.toml` at all.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -715,14 +716,14 @@ class TheLoopPaintsForTheSpinner(PersonaIso, unittest.TestCase):
     """`panel._tick` gains a third reason to repaint, and it must not gain a fourth by
     accident: an idle panel repainting every tick is the cost this whole design avoids."""
 
-    def test_animating_paints_even_with_no_version_change_and_no_resize(self):
+    def test_ticking_paints_even_with_no_version_change_and_no_resize(self):
         fid = f"an-{_a_dead_pid()}"
         seen = state.version(fid)
         with mock.patch("charter.frame.panel._paint") as paint:
-            panel._tick({"flag": False}, seen, "bottom", fid, animating=True)
+            panel._tick({"flag": False}, seen, "bottom", fid, ticking=True)
         paint.assert_called_once_with("bottom", fid)
 
-    def test_not_animating_is_the_default_and_paints_nothing(self):
+    def test_not_ticking_is_the_default_and_paints_nothing(self):
         fid = f"an-{_a_dead_pid()}"
         seen = state.version(fid)
         with mock.patch("charter.frame.panel._paint") as paint:
@@ -734,7 +735,7 @@ class TheLoopAsksBeforeItAnimates(PersonaIso, unittest.TestCase):
     """`_watch` is what connects `_running` to `_tick`, and nothing else does.
 
     Pinned separately from both because the wiring is its own failure: a loop that never
-    passes `animating` leaves a perfectly correct `_running` and a perfectly correct
+    passes `ticking` leaves a perfectly correct `_running` and a perfectly correct
     `_tick` with a spinner that never turns, and every test of either half stays green.
     """
 
@@ -747,17 +748,200 @@ class TheLoopAsksBeforeItAnimates(PersonaIso, unittest.TestCase):
             panel._watch("bottom", self.fid, once=True)
         return tick.call_args
 
-    def test_a_record_in_flight_reaches_the_tick_as_animating(self):
+    def test_a_record_in_flight_reaches_the_tick_as_ticking(self):
         d = config.STATE_DIR / "dispatch-inflight"
         d.mkdir(parents=True, exist_ok=True)
         (d / "w.1.json").write_text(json.dumps({"agent": "w", "ts": time.time()}))
-        self.assertIs(self._watch_once().kwargs["animating"], True)
+        self.assertIs(self._watch_once().kwargs["ticking"], True)
 
     def test_an_idle_loop_does_not_animate(self):
         """The half that stops the test above from passing against a loop hardcoded to
         animate — which would repaint every panel five times a second, forever, which is
         the one thing this feature may not do."""
-        self.assertIs(self._watch_once().kwargs["animating"], False)
+        self.assertIs(self._watch_once().kwargs["ticking"], False)
+
+
+class TheOutcomeGoesOnTheFramesOwnRow(PersonaIso, unittest.TestCase):
+    """`commands_frame._say_on_screen` — #729.
+
+    It was `display-message -d 4000`. Two independent measurements moved it, either
+    enough on its own:
+
+    * A tmux client suspends its PANE redraw for the whole of a message's duration. With
+      an outer terminal mirroring an inner session, the pane's content changed at 0.02s
+      and the operator's screen did not catch up until **4.03s** on tmux 3.7c and
+      **3.99s** at the 3.2 floor. The freeze tracks `-d` linearly (`-d 200` → 0.20s,
+      `-d 750` → 0.74s), so every switch bought four seconds of frozen screen to announce
+      a repaint it was itself hiding.
+    * `display-message -t <pane>` does not choose the SCREEN — `-t` is the target for
+      FORMAT evaluation and the client is `-c`. Measured on both versions with two
+      sessions on one server and a terminal on each: a message aimed at a pane of session
+      `sa` was drawn on `sb`'s terminal and not on `sa`'s at all.
+
+    So the assertions here are about a file and a version bump, and about tmux being left
+    entirely alone.
+    """
+
+    FID = "say-1"
+
+    def _say(self, message="workspace \u2192 gamma", **kw):
+        calls = []
+        with mock.patch.object(commands_frame.tmuxctl, "run",
+                               side_effect=lambda *a, **k: calls.append(a)):
+            commands_frame._say_on_screen(self.FID, message, **kw)
+        return calls
+
+    def test_the_outcome_lands_on_the_frames_attention_row(self):
+        self._say()
+        self.assertEqual(state.notice(self.FID), "charter: workspace \u2192 gamma")
+
+    def test_no_tmux_command_is_issued_at_all(self):
+        """The whole of the freeze fix. A version that kept the `display-message` beside
+        the notice would satisfy every other assertion here and still cost the operator
+        four seconds of a screen that cannot repaint."""
+        self.assertEqual(self._say(), [],
+                         "a switch outcome still reaches tmux's own message line")
+
+    def test_the_version_moves_so_the_row_repaints_promptly(self):
+        """A panel repaints on a version bump; writing the notice without moving the
+        version would leave it invisible until something unrelated bumped the frame —
+        #727's defect reached from the writing side instead of the expiring side."""
+        before = state.version(self.FID)
+        self._say()
+        self.assertNotEqual(state.version(self.FID), before)
+
+    def test_every_outcome_keeps_the_one_charter_prefix(self):
+        self._say("cannot switch: nope")
+        self.assertTrue(state.notice(self.FID).startswith("charter: "))
+
+    def test_a_refusal_is_given_longer_on_screen_than_a_success(self):
+        """`ok` decides the dwell and nothing else. A refusal is the outcome with no other
+        surface — nothing moved, so no panel repaints into the answer — where a success
+        has the frame itself confirming it a row higher up."""
+        self._say(ok=True)
+        quick = state.notice_expiry(self.FID)
+        self._say(ok=False)
+        self.assertGreater(state.notice_expiry(self.FID), quick)
+
+    def test_a_frame_this_is_not_about_never_sees_it(self):
+        """The targeting half. `-t <a well-formed pane of the right frame>` leaked to
+        whichever client attached most recently just as an empty target did; a row reads
+        its own frame's state, so there is no direction for it to leak in."""
+        self._say()
+        self.assertEqual(state.notice("some-other-frame"), "")
+
+
+class _StopWatching(Exception):
+    """Ends `_watch`'s `while True` from inside `_wait`, so a test can drive an exact
+    number of iterations. `once=True` cannot: it returns after the FIRST tick, and every
+    property below is about what the SECOND one does."""
+
+
+class TheLoopPaintsOnTheFallingEdge(PersonaIso, unittest.TestCase):
+    """#727 — the tick after the last reason to animate goes away.
+
+    Found by driving a real frame, not by a test: with a record in flight the attention
+    row drew `\u280f 1 running`; the record was removed, and the row held the SAME spinner
+    frame for 12s over an empty tracker directory, and once for over fifteen minutes
+    across a detach/reattach. It is what a hung frame looks like.
+
+    The loop had a rising edge and no falling one. While a record existed it repainted
+    every tick; on the tick after the last one cleared, `_running` answered 0, the
+    version had not moved, nothing was resized and no event was handled — so no paint
+    happened at all and the pane kept the last thing drawn into it, which is the frame
+    with the spinner on it. `docs/frame.md` promises "the moment the last of it finishes,
+    the frame goes completely still again", and it did: still showing a spinner and a
+    count of work that had already ended.
+
+    Driven through `_watch` rather than `_tick`, deliberately. `_tick` is a pure decision
+    and would happily be given `ticking=True` by a test on a falling edge no production
+    loop ever produces; the defect was that `_watch` never produced one. So these patch
+    what `_watch` READS (`_running`, `_notice_pending`) and assert on what it PASSES.
+    """
+
+    FID = "fe-1"
+
+    def _ticks(self, answers: list[bool], *, notice=None) -> list[bool]:
+        """Run `_watch` for `len(answers)` iterations, `_running` answering each in
+        turn, and report the `ticking` it passed to `_tick` on each."""
+        seen = []
+        running = iter([1 if a else 0 for a in answers])
+
+        def _tick(resized, s, slot, fid, **kw):
+            seen.append(kw["ticking"])
+            return s
+
+        def _wait(evs, timeout=panel.TICK):
+            if len(seen) >= len(answers):
+                raise _StopWatching
+            return False
+
+        with mock.patch.object(panel, "_tick", side_effect=_tick), \
+             mock.patch.object(panel, "_wait", side_effect=_wait), \
+             mock.patch.object(panel, "_running", side_effect=lambda _c: next(running)), \
+             mock.patch.object(panel, "_notice_pending",
+                               side_effect=notice or (lambda _f: False)):
+            with contextlib.suppress(_StopWatching):
+                panel._watch("bottom", self.FID, once=False)
+        return seen
+
+    def test_the_tick_after_the_last_record_clears_still_paints(self):
+        """The whole of #727. Without the falling edge this is `[True, False]` and the
+        spinner stays on screen with nothing left to take it off."""
+        self.assertEqual(self._ticks([True, False]), [True, True])
+
+    def test_it_paints_exactly_once_more_and_then_goes_still(self):
+        """The other half, and the one that stops the fix from being "repaint forever".
+        `docs/frame.md`'s promise is stillness, so a third tick with nothing running must
+        pass `ticking` False — a loop that latched on the first spinner it ever saw would
+        repaint `bottom` five times a second for the rest of the frame's life."""
+        self.assertEqual(self._ticks([True, False, False]), [True, True, False])
+
+    def test_a_loop_that_never_animated_never_paints_for_the_clock(self):
+        """An idle panel is the cost this whole design avoids, and the falling edge must
+        not become a reason to paint on the first tick of every panel ever started."""
+        self.assertEqual(self._ticks([False, False]), [False, False])
+
+    def test_a_notice_expiring_is_the_same_edge(self):
+        """Why one variable and not two: a switch outcome's dwell ends exactly the way a
+        spinner's does — the clock crosses it, and nothing bumps the version, resizes a
+        pane or delivers an event to say so. A row that kept a stale `charter: workspace
+        \u2192 gamma` would be #727 again through the surface #729 moved onto."""
+        pending = iter([True, False, False])
+        self.assertEqual(self._ticks([False, False, False],
+                                     notice=lambda _f: next(pending)),
+                         [True, True, False])
+
+    def test_a_slot_that_does_not_animate_asks_neither_question(self):
+        """`animates and (...)` short-circuits, and that is the promise a `top`, `left` or
+        `right` panel is owed: no `stat` of the tracker AND no read of the notice file,
+        because it draws neither. Asserted by making both answers explode."""
+        def _boom(*_a, **_k):
+            raise AssertionError("a non-animated slot asked a clock question")
+
+        def _tick(resized, s, slot, fid, **kw):
+            raise _StopWatching
+
+        with mock.patch.object(panel, "_tick", side_effect=_tick), \
+             mock.patch.object(panel, "_running", side_effect=_boom), \
+             mock.patch.object(panel, "_notice_pending", side_effect=_boom):
+            with contextlib.suppress(_StopWatching):
+                panel._watch("top", self.FID, once=False)
+
+
+class TheNoticeIsPendingUntilItExpires(PersonaIso, unittest.TestCase):
+    """`panel._notice_pending` — the second clock-driven reason to repaint."""
+
+    def test_a_live_notice_is_pending(self):
+        state.say("np-1", "charter: hello", seconds=30)
+        self.assertIs(panel._notice_pending("np-1"), True)
+
+    def test_an_expired_notice_is_not(self):
+        state.say("np-1", "charter: hello", seconds=-1)
+        self.assertIs(panel._notice_pending("np-1"), False)
+
+    def test_a_frame_that_never_said_anything_is_not(self):
+        self.assertIs(panel._notice_pending("np-never"), False)
 
 
 class PanesAreRememberedForTheFrame(PersonaIso, unittest.TestCase):

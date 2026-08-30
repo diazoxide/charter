@@ -333,9 +333,19 @@ class Conf(unittest.TestCase):
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
         self.assertIn('bind -n F2 run-shell \'"$CHARTER_PY" -m charter '
-                      'frame-palette "#{client_name}" --chat "#{@charter_chat}"\'',
+                      'frame-palette --chat "#{@charter_chat}"\'',
                       text)
         self.assertNotIn("frame palette", text)
+
+    def test_the_hotkey_bind_no_longer_carries_a_client_name(self):
+        """#729. `#{client_name}` was in this bind for exactly one consumer,
+        `display-message -c`, and an outcome is now drawn on the frame's own attention row
+        by a panel every attached client can see. A format still expanded into the bind
+        would be a value threaded through a tmux bind, a CLI positional and a subprocess
+        relaunch to be ignored at the end of it."""
+        text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
+                                        session="x")
+        self.assertNotIn("client_name", text)
 
     def test_the_menu_is_gone_rather_than_left_beside_the_palette(self):
         """§4h, and the plan's own exit criterion: two answers to "how do I do a thing" is
@@ -4653,9 +4663,11 @@ class MainDeliversFrameRest(unittest.TestCase):
 class PaletteCommands(PersonaIso, unittest.TestCase):
     """`cmd_palette` — the handler `charter frame-palette` dispatches to, in both halves.
 
-    Its `args.client` is `#{client_name}`, expanded by tmux INSIDE the bind's own text
-    before this process ever starts (see `conf_text`'s docstring) — never queried here, so
-    these tests supply it directly. `fid` is resolved purely from `$CHARTER_SESSION_ID`;
+    Its `args.client` is accepted and ignored (#729) — a pre-#729 bind still in a running
+    server's key table fires this command with a `#{client_name}` in it, so the parser must
+    keep taking one; nothing reads it. These tests still supply it, which is what pins that
+    such a bind is parsed rather than refused. `fid` is resolved purely from
+    `$CHARTER_SESSION_ID`;
     neither half ever takes a frame id as an argument, because one bind is shared by every
     frame on `SOCKET`.
     """
@@ -4697,11 +4709,15 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
         self.assertEqual(verbs, ["split-window", "set-option", "select-pane",
                                  "resize-pane"], calls)
 
-    def test_the_pane_runs_charters_own_palette_and_is_told_which_client_pressed(self):
+    def test_the_pane_runs_charters_own_palette_and_carries_no_client(self):
+        """The client name stopped being threaded to the palette's pane with #729: its one
+        consumer was `display-message -c`, and the outcome moved to the frame's own row.
+        `/dev/ttys7` is what this opener was handed, so asserting its ABSENCE is what pins
+        that the value is dropped here rather than merely unused two hops later."""
         self._frame()
         split = self._open()[0]
         self.assertIn("--pane", split)
-        self.assertIn("/dev/ttys7", split)
+        self.assertNotIn("/dev/ttys7", split)
         self.assertIn("frame-palette", split)
         self.assertEqual(split[split.index("--") + 1], sys.executable,
                          "the pane must run charter through this interpreter, never a "

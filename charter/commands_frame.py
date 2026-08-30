@@ -644,33 +644,35 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     a window created `-e CHARTER_SESSION_ID=chat-A` in it: the window's own PANE reported
     `chat-A` and a `run-shell` fired against that session reported `session-wide`. This
     bind's action IS a `run-shell`, so the variable would hand every chat's keypress the
-    same frame. The window option does not: like `#{client_name}` beside it, it is
-    expanded in the context of whoever's keypress is firing the bind, so `F2` in chat two
-    opens chat two's palette. `cmd_palette` falls back to `$CHARTER_SESSION_ID` when the
+    same frame. The window option does not: it is expanded in the context of whoever's
+    keypress is firing the bind — the same property `#{client_name}` was carried here for
+    until #729 removed the need for it — so `F2` in chat two opens chat two's palette. `cmd_palette` falls back to `$CHARTER_SESSION_ID` when the
     option is empty, which is what a frame launched by an older charter — its window
     carrying no such option, its bind text replaced by this one the moment a newer frame
     launches on the shared server — still resolves through.
 
-    `"#{client_name}"` is a THIRD thing this same bind carries, for a DIFFERENT
-    reason: which of possibly several clients attached to one frame should be TOLD when
-    an action refuses. Format expansion resolves `#{client_name}` in the context of
-    whoever's keypress is firing the bind — verified by hand with two real ptys attached
-    to one session, pressing the hotkey from each in turn: each press's own `run-shell`
-    resolved its OWN presser's client name, never the other one's, regardless of which
-    was attached first. `charter frame-palette` receives it as a plain argv value (`args
-    .client` in `cmd_palette`), carries it to the palette's own pane, and hands it to
-    `display-message -c`. Earlier, this module queried `list-clients` and guessed the
-    first one reported when several clients were attached — confirmed wrong, on the menu
-    this replaced: pressing the hotkey on the SECOND-attached client drew on the FIRST
-    client's screen, worse than tmux's own unscoped default single-client guess this
-    module was replacing. Carrying the presser by name removes the guess entirely rather
-    than making it a better one.
+    **This bind used to carry `"#{client_name}"` as a third value, and does not any
+    more** (#729). It named which of several clients attached to one frame should be TOLD
+    when an action refuses, and it was threaded from here through `args.client` and the
+    palette pane's own relaunch argv for exactly one consumer: `display-message -c`. That
+    consumer is gone. An outcome is now written to the frame's own state and drawn by its
+    attention panel (`_say_on_screen`), which is a PANE — so every client attached to the
+    frame sees it, and "which client pressed the key" stopped being a question that has
+    to be answered rather than being answered better. The value is not merely unused, it
+    is unnecessary: the surface it was selecting between no longer has variants.
 
-    **What the palette does NOT carry it for, and this is a real difference from the
-    menu.** A `display-menu` was drawn per client; the palette is a PANE (§4k), and a
+    `charter frame-palette` still ACCEPTS the positional (`cli.py`, `nargs="?"`), and that
+    is not vestigial — a bind installed by a charter that predates this change is still
+    sitting in a running server's key table across the upgrade and fires the command with
+    a client name in it, exactly as `--chat`'s own optionality is there for. Accepting and
+    ignoring it is what keeps `F2` working on those frames; emitting it is what stopped.
+
+    **The palette was never per-client anyway, and that is the difference from the menu it
+    replaced.** A `display-menu` was drawn per client; the palette is a PANE (§4k), and a
     pane belongs to the window, so with two clients attached to one frame both of them
     see it. That is the price of the surface being something charter draws rather than
-    something tmux draws, and it is the same price every other panel already pays.
+    something tmux draws, it is the same price every other panel already pays, and the
+    outcome line has now been moved onto the same footing as the surface that produces it.
 
     The last line is `frame/overlay.hatch_bind()` — **the escape hatch**, and it is here
     rather than beside the hotkey because it is the one bind that must keep working when
@@ -725,8 +727,9 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     Code (or codex, or whatever the operator ran) on every plane that has a charter.toml.
 
     These are frame-agnostic for the same reason the hotkey bind above is, and they carry
-    no `#{client_name}`: a toggle changes the FRAME, not what one client is looking at, so
-    unlike the palette there is nothing here to draw on a particular presser's screen.
+    no client name: a toggle changes the FRAME, not what one client is looking at, so
+    there is nothing here to draw on a particular presser's screen — which since #729 is
+    true of the palette's bind as well, and for the same reason.
     `cmd_toggle` resolves which frame from `$CHARTER_SESSION_ID` when the key fires.
 
     **Both halves of a toggle line are refused rather than escaped, and each on its own
@@ -749,7 +752,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     arrangement — `source-file` returns 0 and `list-keys -T root` reads all four binds
     back, the palette's, both toggles' and the hatch's, byte for byte::
 
-        bind-key -T root F2  run-shell "\\"\\$CHARTER_PY\\" -m charter frame-palette \\"#{client_name}\\""
+        bind-key -T root F2  run-shell "\\"\\$CHARTER_PY\\" -m charter frame-palette"
         bind-key -T root F7  run-shell "\\"\\$CHARTER_PY\\" -m charter frame-toggle repos"
         bind-key -T root F12 run-shell -C "#{@charter_hatch}"
         bind-key -T root M-s run-shell "\\"\\$CHARTER_PY\\" -m charter frame-toggle right"
@@ -780,7 +783,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
         "set -g remain-on-exit on",
         "set -g focus-events on",
         f"bind -n {hotkey} run-shell "
-        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette \"#{{client_name}}\" "
+        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette "
         f"--chat \"#{{{_CHAT_OPTION}}}\"'",
         f"bind -n {tmuxctl.WHEEL_KEY} if-shell -F -t = '#{{mouse_any_flag}}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
@@ -5467,7 +5470,7 @@ def _open_palette(args) -> int:
         return 0
     argv = overlay.open_argv(
         socket, harness=harness,
-        command=util.self_relaunch_argv("frame-palette", getattr(args, "client", "") or "",
+        command=util.self_relaunch_argv("frame-palette",
                                         "--pane"),
         env=_relayout_pane_env(fid, v))
     if argv is None:
@@ -5525,7 +5528,6 @@ def _draw_palette(args) -> int:
     reg = builtin_actions.build(fid, current_density=_current_density(fid),
                                 current_chrome=_current_chrome(fid))
     snapshot = gather.cached(fid) or {}
-    client = getattr(args, "client", "")
     opened: list[choose.Roster] = []
     try:
         surface = palette.Palette(
@@ -5543,17 +5545,24 @@ def _draw_palette(args) -> int:
             out = choose.switch_to(noun, fid, name)
             if out.ok and noun == choose.CHAT:
                 _start_chat_switch(fid, name)
-            _say_on_screen(fid, out.message, client)
+            # **Which frame's row, and it is not always this one.** The notice is drawn by
+            # a panel out of a frame's own state, so it has to be written to the frame the
+            # operator will be LOOKING at a moment from now. A chat switch that took moves
+            # the client to a sibling frame — `choose.py`'s "the frame IS the chat" — and
+            # a chat's name IS its frame id, so that is the id to write. Every other
+            # outcome, refused chat switches included, leaves the operator on this frame.
+            shown_on = name if (out.ok and noun == choose.CHAT) else fid
+            _say_on_screen(shown_on, out.message, ok=out.ok)
             return 0
         if choose.noun_of(chosen) is not None:
             # A picker row that never opened its picker: `_picker` refused it, which it
             # does for exactly one reason and always with that reason in the row's note.
-            _say_on_screen(fid, chosen.note, client)
+            _say_on_screen(fid, chosen.note)
             return 0
         inv = reg.invoke(chosen.id, fid=fid, snapshot=snapshot)
         inv.join(timeout=_ACTION_START_GRACE)
         if not inv.started:
-            _say_on_screen(fid, inv.reason, client)
+            _say_on_screen(fid, inv.reason)
     finally:
         _close_palette(socket, harness=harness,
                        overlay_pane=os.environ.get("TMUX_PANE", ""))
@@ -5760,66 +5769,68 @@ def cmd_switch(args) -> int:
         out = switch.to_persona(fid, persona_name)
     else:
         return 0
-    _say_on_screen(fid, out.message)
+    _say_on_screen(fid, out.message, ok=out.ok)
     return 0
 
 
-def _say_on_screen(fid: str, message: str, client: str | None = None) -> None:
+def _say_on_screen(fid: str, message: str, *, ok: bool = False) -> None:
     """Put one line on the frame's own screen. Best effort, never raises.
 
-    **The message is a tmux FORMAT.** `display-message`'s own docs say so, and
-    `tmuxctl.inert_format`'s measurement — a `#(...)` runs during format evaluation
-    whether or not the thing goes on to display — applies here word for word. Every
-    caller's *message* already carries contained names (`contain.one_line`, in
-    `switch.py` and in `frame/actions.py`'s own `_reason`), which closes the newline half;
-    `inert_format` closes the `#` half. Both, because they are different properties: one
-    line, and inert.
+    **On charter's own attention row, not on the tmux client's message line** (#729).
+    This was `display-message -d 4000` and it moved for two separately measured reasons,
+    either of which is on its own enough:
 
-    A leading `-` would make tmux read the message as a flag of its own and refuse the
-    whole command — the same measured failure `inert_format` guards against — so the same
-    guard is what runs here rather than a second one that "does the same thing".
+    * **It froze the screen for exactly as long as it spoke.** A tmux client does not
+      redraw its PANES while a message is up. Measured with an outer terminal mirroring an
+      inner session, on tmux 3.7c and at the 3.2 floor alike: the pane's content changed
+      at 0.02s and the operator's screen did not catch up until 4.03s. The freeze tracks
+      `-d` linearly (`-d 200` → 0.20s, `-d 750` → 0.74s), so those four seconds bought
+      nothing and hid the repaint the message existed to announce — every workspace,
+      persona and chat switch, on an operation `docs/frame.md` measures at a third of a
+      second.
+    * **It could not name the screen it drew on.** `-t` is `display-message`'s target for
+      FORMAT evaluation, not its client; the client is `-c`, and with no `-c` tmux picks
+      its own current client. Measured on both versions with two sessions on one server
+      and a terminal attached to each: a message aimed at `-t <a pane of session sa>` was
+      drawn on `sb`'s terminal and not on `sa`'s at all. `cmd_chat`'s own guard already
+      recorded this leak by hand for an EMPTY target and read it as a property of the
+      emptiness — it is not. A well-formed `%N` naming the right frame's own harness pane
+      leaks identically, because the pane was never what chose the screen. On a control
+      plane with eleven frames on one socket, that is a refusal about one frame drawn
+      across another operator's.
 
-    *client* is `#{client_name}` where a caller has one: the palette carries the presser's
-    own client from the hotkey bind, and `-c` draws on exactly that terminal where `-t`
-    draws on whichever attached most recently.
+    The row has neither problem. It is a pane charter already paints, so writing to it
+    costs no client freeze; it is read by that frame's own panel out of that frame's own
+    state directory, so it cannot be drawn on a frame it is not about; and every client
+    attached to that frame sees it, which is strictly more than the one client `-c` could
+    name and removes the "which of several clients pressed the key" question entirely.
 
-    `-d 4000`: long enough to read a sentence, short enough that it is gone before the
-    operator wants the screen back. tmux's own default comes from `display-time`, which is
-    an operator's setting for THEIR messages and typically 750ms — too short for a refusal
-    that names a workspace and says what to do about it.
+    Because the row is a surface with an owner, this takes the FRAME the notice belongs
+    to — which is not always the frame the outcome was computed for. A successful chat
+    switch moves the operator to a sibling frame (`choose.py`: "the frame IS the chat"),
+    so its caller passes the chat being switched TO; every other outcome leaves the
+    operator where they are.
+
+    *ok* picks the dwell and nothing else — `state.NOTICE_SECONDS` for an outcome that
+    happened, `state.REFUSAL_SECONDS` for one that did not, and see those constants for
+    why a refusal earns longer. There is deliberately no second visual treatment keyed off
+    it: every refusal `switch.py` produces already reads as one ("cannot switch: …",
+    "no workspace 'x' — have: …"), and the row is one line where a marker only spends
+    columns the message itself needs.
+
+    The `bump` is what makes the notice APPEAR promptly rather than at whatever the panel
+    next happened to repaint for: a panel polls `state.version`, so writing the notice
+    without moving the version would leave it invisible until something unrelated bumped
+    the frame — the exact shape of #727, reached from the writing side instead of the
+    expiring side. `state.say` writes before this returns, so the version a panel then
+    reads always has the notice already behind it.
     """
-    socket = state.frame_server(fid) or SOCKET
-    argv = tmuxctl.server_argv(socket, "display-message", "-d", "4000")
-    if client:
-        argv += ["-c", client]
-    else:
-        # **The frame's own PANE, and never its id** (#695). A chat id is
-        # `{workspace}.{ordinal}` and tmux parses a `-t` on the dot, so
-        # `-t harness-wrapper.2` is not the window of that name: measured on 3.7c it
-        # resolves to session
-        # `harness-wrapper`, its CURRENT window, and `2` as a pane index — and
-        # `-t harness-wrapper.9` answers rc 0 with pane index 0 rather than failing. The
-        # session half happens to be the right screen, which is why nothing has ever been
-        # seen to go wrong here; the target has never once meant what it was spelled to
-        # mean, and the day a workspace is called `api.2` beside one called `api` it means
-        # a different operator's frame. There is no spelling that fixes a window: tmux
-        # takes `session:window` and this side has no session in hand — so the answer is
-        # the record charter already keeps of where this frame's harness runs, which is a
-        # `%N` and cannot be parsed as anything else.
-        pane = state.harness_pane(fid) or ""
-        if not _PANE_ID_RE.fullmatch(pane):
-            # No usable record and no client: there is nothing this can be aimed at that is
-            # certainly this frame. Silence rather than `-t <fid>`, which is how a refusal
-            # came to be drawn across somebody else's frame — the same direction the empty
-            # id above is refused for, and one an operator loses only a sentence to.
-            return
-        argv += ["-t", pane]
-    # One prefix for every outcome. Every refusal `switch.py` produces already reads as
-    # one ("cannot switch: …", "no workspace 'x' — have: …"), and a second word saying so
-    # only ate columns off a status line tmux truncates without saying it did — measured
-    # against a 100-column client: `charter: refused — cannot switch: …` ran off the end.
-    tmuxctl.run("reporting on the frame's own screen",
-                argv + [tmuxctl.inert_format("charter: " + message)])
+    # One prefix for every outcome, as it always was. A second word saying "refused" only
+    # ate columns off a row that truncates — measured against a 100-column client:
+    # `charter: refused — cannot switch: …` ran off the end.
+    state.say(fid, "charter: " + message,
+              seconds=state.NOTICE_SECONDS if ok else state.REFUSAL_SECONDS)
+    state.bump(fid)
 
 
 def cmd_respawn(args) -> int:

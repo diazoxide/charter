@@ -569,5 +569,60 @@ class AHostileNameFoundByTypingIsOneRowAndRunsNothing(_Frame, unittest.TestCase)
         self.assertNotIn("\n", "".join(surface.render(*self.SIZE)))
 
 
+class TheOutcomeIsWrittenToTheFrameTheOperatorEndsUpOn(_Frame, unittest.TestCase):
+    """#729's one asymmetry. The outcome is drawn by a panel out of a FRAME's own state,
+    so it has to be written to the frame the operator will be looking at a moment from
+    now — which is not always the frame the switch was computed for.
+
+    A workspace or persona switch moves the frame in place, so that is this one. A chat
+    switch does not move anything: it moves the tmux CLIENT to a sibling frame
+    (`choose.py` — "the frame IS the chat"), and a chat's name IS its frame id. Written to
+    the wrong one, a chat switch's outcome would be filed on the frame the operator just
+    left and never read by anybody, which is exactly the class of silent refusal #517 and
+    #684 exist to prevent — reached, this time, through the fix for #729.
+
+    `display-message` had no equivalent of this bug and no equivalent of the property
+    either: it drew on a CLIENT, which follows the operator by construction, and could not
+    be aimed at a frame at all (see `state.say` for the measurement).
+    """
+
+    def _picked(self, noun, name, *, ok=True, message="did the thing"):
+        """Drive `cmd_palette` to the outcome for *noun*/*name* without needing a real
+        roster of that noun on disk: what is under test is which FID the outcome is filed
+        against, and the row that produced it is `tests/test_frame_pickers`' subject."""
+        row = SimpleNamespace(id=f"row-{noun}", note="", title=name)
+        self.enterContext(mock.patch.object(
+            palette, "own_the_tty", lambda surface, **kw: row))
+        self.enterContext(mock.patch.object(
+            commands_frame, "_chosen_name", return_value=(noun, name)))
+        self.enterContext(mock.patch.object(
+            choose, "switch_to", return_value=switch.Outcome(ok, message)))
+        self.enterContext(mock.patch.object(commands_frame, "_start_chat_switch"))
+        self.assertEqual(
+            commands_frame.cmd_palette(SimpleNamespace(client="", pane=True)), 0)
+        return self.said.call_args
+
+    def test_a_workspace_switch_is_filed_on_this_frame(self):
+        self.assertEqual(self._picked(choose.WORKSPACE, "gamma")[0][0], self.FID)
+
+    def test_a_chat_switch_that_took_is_filed_on_the_chat_being_switched_TO(self):
+        """The client ends up in front of `api.2`'s panels, so `api.2`'s row is the one
+        that has to carry the sentence."""
+        self.assertEqual(self._picked(choose.CHAT, "api.2")[0][0], "api.2")
+
+    def test_a_chat_switch_that_was_REFUSED_stays_on_this_frame(self):
+        """Nothing moved, so the operator is still looking at this frame — and the target
+        chat may be precisely the thing that does not exist."""
+        self.assertEqual(
+            self._picked(choose.CHAT, "api.9", ok=False,
+                         message="cannot switch: no such chat")[0][0], self.FID)
+
+    def test_the_outcome_carries_whether_it_happened(self):
+        """`ok` is what picks the dwell, and a caller that dropped it would give every
+        refusal a success's shorter one — silently, since both still say something."""
+        self.assertIs(self._picked(choose.WORKSPACE, "gamma", ok=True)[1]["ok"], True)
+        self.assertIs(self._picked(choose.WORKSPACE, "zzz", ok=False)[1]["ok"], False)
+
+
 if __name__ == "__main__":                          # pragma: no cover
     unittest.main()

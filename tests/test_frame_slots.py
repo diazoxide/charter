@@ -775,6 +775,61 @@ class BottomRenderer(PersonaIso, unittest.TestCase):
             out = tui.strip_ansi(slots.render("bottom", "f-1"))
         self.assertEqual(out, "5 todos · F2 palette")
 
+    def test_a_switch_outcome_is_drawn_on_this_row(self):
+        """#729. The outcome of an F2 choice was a `display-message`, which suspends the
+        client's pane redraw for its whole duration — measured at 4.03s of frozen screen
+        on tmux 3.7c and 3.99s at the 3.2 floor, spent hiding the repaint it announced.
+        It is a field of this row instead."""
+        state.say("f-1", "charter: workspace \u2192 gamma")
+        self.assertIn("charter: workspace \u2192 gamma",
+                      tui.strip_ansi(slots.render("bottom", "f-1")))
+
+    def test_an_expired_outcome_leaves_the_row_as_it_was(self):
+        """The dwell is the whole reason this may sit at the top of the priority order:
+        it gives the row back. Without an expiry it would sit on top of an `_alerts()`
+        entry — an actionable problem carrying its own fix — for the rest of the frame's
+        life, which is #727's defect wearing #729's clothes."""
+        with mock.patch("charter.statusline._alerts", return_value=[]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=5), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            state.say("f-1", "charter: long gone", seconds=-1)
+            out = tui.strip_ansi(slots.render("bottom", "f-1"))
+        self.assertEqual(out, "5 todos \u00b7 F2 palette")
+
+    def test_the_outcome_outranks_every_other_field_on_a_starved_pane(self):
+        """It is the direct answer to the last thing the operator DID, and it is the only
+        field here that is about an instant rather than a state — a row too narrow to say
+        both should say the one that will not be true in a moment. `terse` asks the same
+        question through `limit=1` and gets the same answer."""
+        state.say("f-1", "charter: NOTICED")
+        with mock.patch("charter.statusline._alerts", return_value=["AAAAA"]), \
+             mock.patch("charter.statusline._session_news", return_value=["NNNNN"]), \
+             mock.patch("charter.statusline._todo_count", return_value=3), \
+             mock.patch("os.get_terminal_size", return_value=os.terminal_size((20, 3))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = tui.strip_ansi(slots.render("bottom", "f-1"))
+        self.assertIn("NOTICED", out, "the outcome lost its columns to a lower field")
+        self.assertNotIn("AAAAA", out)
+
+    def test_a_frame_with_nothing_to_say_draws_the_row_it_always_drew(self):
+        """An empty field is dropped whole, so the notice must cost nothing at all on the
+        overwhelming majority of repaints, when no switch has just happened."""
+        with mock.patch("charter.statusline._alerts", return_value=[]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=5), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            out = tui.strip_ansi(slots.render("bottom", "f-1"))
+        self.assertEqual(out, "5 todos \u00b7 F2 palette")
+
+    def test_the_outcome_belongs_to_ITS_frame_and_no_other(self):
+        """The half `display-message` could not do at all. `-t <pane>` picks the FORMAT
+        target, not the client: measured on tmux 3.7c and 3.2 alike, a message aimed at a
+        pane of session `sa` was drawn on the terminal attached to `sb`. A row reads its
+        own frame's state, so a second frame cannot see the first one's outcome."""
+        state.say("f-1", "charter: FOR-F1-ONLY")
+        self.assertNotIn("FOR-F1-ONLY", tui.strip_ansi(slots.render("bottom", "f-2")))
+
     def test_the_todo_count_still_shows_at_zero_unlike_the_new_news_field(self):
         """`todo` predates Task 4 and keeps its own, different presence rule: `_bottom`
         showed `0 todo` even at zero before this task touched the function, unlike

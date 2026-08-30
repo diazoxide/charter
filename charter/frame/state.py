@@ -379,6 +379,143 @@ def version(fid: str) -> str:
         return "0"
 
 
+#: How long a SUCCESSFUL outcome stays on the attention row. The same four seconds
+#: `_say_on_screen` used to ask `display-message -d 4000` for, and for the same stated
+#: reason ("long enough to read a sentence") — but now it is four seconds of a row, not
+#: four seconds of a frozen client, so the number costs what it was always assumed to
+#: cost. A success is also the case that needs the row least: the frame ITSELF is the
+#: confirmation, and the top row already reads `⬢ gamma` by the time this is drawn.
+NOTICE_SECONDS = 4.0
+
+#: How long a REFUSAL stays there. Longer, because a refusal is the one outcome with no
+#: other surface — nothing moved, so no panel repaints into the answer — and because it
+#: carries the fix in its own text (`no workspace 'x' — have: a, b, c`), which is more to
+#: read than `workspace → gamma`. Bounded rather than sticky: the row's next-highest
+#: field is an `_alerts()` entry, an actionable problem the operator also needs, and a
+#: refusal that never expired would sit on top of one indefinitely.
+REFUSAL_SECONDS = 10.0
+
+
+def say(fid: str, message: str, *, seconds: float = NOTICE_SECONDS) -> None:
+    """Put one line on this frame's attention row for *seconds*, then let it expire.
+
+    **The frame's own surface, not the tmux client's message line** (#729). What this
+    replaces was `display-message -d 4000`, and it was replaced for two measured reasons
+    rather than one:
+
+    * A tmux client does not redraw its PANES while a message is up. Measured on tmux
+      3.7c and at the 3.2 floor alike, with an outer terminal mirroring an inner session:
+      the pane's own content changed at 0.02s and the operator's screen did not catch up
+      until 4.03s. The freeze is exactly the `-d` value — `-d 200` freezes for 0.20s,
+      `-d 750` for 0.74s — so the cost was the duration, spent entirely on hiding the
+      repaint the message was announcing.
+    * `display-message -t <pane>` does not choose the SCREEN. `-t` is the target for
+      FORMAT evaluation; the client is `-c`, and with no `-c` tmux picks its own current
+      client. Measured on both versions, two sessions on one server with a terminal on
+      each: a message aimed at a pane of session `sa` was drawn on the terminal attached
+      to `sb` and not on `sa`'s at all. On a socket with eleven frames on it — an
+      ordinary control plane — a refusal about one frame was being drawn across another
+      operator's, which is why this is per-frame state read by that frame's own panel and
+      not a message aimed at a server.
+
+    Best effort, never raises: the callers are switch outcomes, and one that cannot write
+    its notice must still return the exit status it owes tmux. Same atomic
+    `write_for`-then-`os.replace` shape as :func:`bump`, so a reader never sees half a
+    line, and a failed write leaves the previous notice exactly as it was.
+
+    The expiry is stored, not the duration, so a reader needs only the clock and never
+    has to know when the write happened. `time.time()` rather than `time.monotonic()`:
+    the writer and the reader are different processes, and a monotonic clock is only
+    comparable within one.
+
+    *message* goes through `contain.one_line` for the same reason every other caller of
+    it does, and for one more that is specific to this file: the notice is stored as an
+    expiry line followed by the text, so a newline in *message* would write a value that
+    reads back truncated at it. Callers in `switch.py` and `frame/actions.py` already
+    contain their own interpolated names; this contains the assembled line, which is a
+    different claim — the file format's, not the message's.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    # Stripped BEFORE the emptiness check, not after. `contain.one_line` turns a
+    # character with no glyph into a visible escape, so a message that is only
+    # whitespace stays truthy and would write a notice that draws nothing — and then
+    # hold the row's top priority over an `_alerts()` entry, and keep `panel._watch`
+    # repainting for the whole dwell, to say it. `notice()` strips on the way out too;
+    # this is what stops the file being written in the first place.
+    text = contain.one_line(message).strip()
+    if not text:
+        return
+    tmp = d / "notice.tmp"
+    try:
+        config.write_for(tmp, f"{time.time() + float(seconds)}\n{text}\n")
+        os.replace(tmp, d / "notice")
+    except (OSError, ValueError, OverflowError):
+        return
+
+
+def notice(fid: str) -> str:
+    """This frame's unexpired notice, or ``""``. A pure read, several times a second.
+
+    Answers ``""`` for every degenerate case — no frame, no file, an unparseable expiry,
+    bytes that are not UTF-8, an expiry already passed — because the caller is
+    `slots._bottom`, drawing the one row `docs/frame.md` promises is never dropped. A row
+    that raised would take that promise down with it.
+
+    **The file is not deleted on expiry, and that is deliberate.** This is a read, and
+    this module's own contract is that reads do not mutate: a panel polling five times a
+    second must not be the thing that unlinks state, or two panels would race over it and
+    a reap would fight a poll. An expired notice is a few dozen stale bytes in the
+    frame's own directory, which `reap()` removes with everything else.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return ""
+    try:
+        raw = (d / "notice").read_text()
+    except (OSError, ValueError):
+        return ""
+    expiry, _, text = raw.partition("\n")
+    try:
+        # Spelled as "the clock is still BEFORE the expiry" rather than as its negation,
+        # because the two are not the same for one value a file can hold. `float("nan")`
+        # parses, and every comparison against a NaN is False — so `now >= expiry` reads
+        # False and the notice becomes PERMANENT, which is the one outcome this whole
+        # cluster is about (#727). Asking for the live case makes NaN answer "not live",
+        # which is the direction every other degenerate case here already falls.
+        live = time.time() < float(expiry)
+    except ValueError:
+        return ""
+    return text.strip() if live else ""
+
+
+def notice_expiry(fid: str) -> float:
+    """When this frame's notice stops being drawn, as a `time.time()` value — ``0.0``
+    when there is nothing pending.
+
+    Split from :func:`notice` for `panel._watch`, which needs the DEADLINE rather than
+    the text: the panel has to repaint once when a notice expires, and the only thing
+    that changes at that instant is the clock. Nothing bumps the version, nothing
+    resizes, and no event arrives — the identical falling edge #727 records for the
+    in-flight spinner, which is why one loop change answers both.
+
+    Answers ``0.0``, not ``None``, so a caller can compare it against `time.time()`
+    without a branch: an absent notice is one whose deadline has already passed.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return 0.0
+    try:
+        raw = (d / "notice").read_text()
+    except (OSError, ValueError):
+        return 0.0
+    try:
+        return float(raw.partition("\n")[0])
+    except ValueError:
+        return 0.0
+
+
 def record_exit(fid: str, code: int) -> None:
     """Record the harness's exit code. Same atomic-write shape as :func:`bump`."""
     d = frame_dir(fid, create=True)
