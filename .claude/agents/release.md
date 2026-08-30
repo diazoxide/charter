@@ -130,6 +130,18 @@ so on the retry path it was skipped — and a skipped step reports success, whic
 retry could publish with its version cross-check never having run. Passing the version is
 what gives the guard a claim it can refuse.
 
+**`--ref main` is refused when the version is not on PyPI yet, and that is not pedantry.**
+Naming a version is a claim about a string; publishing is an act on a commit. A dispatch
+from `main` for a version PyPI has never seen is not finishing a release, it is *beginning*
+one, from a tree no tag names — `skip-existing` skips nothing, because there is nothing
+there to skip. That is the window #558 opened with: between the bump merging and the tag
+being pushed, `main` carries a version that has never been published, and the
+`pyproject.toml` sitting beside it agrees with whatever you type. So `guard` asks PyPI
+whether the version is already there, and refuses when it is not — or when PyPI does not
+answer, since the last step before an irreversible act does not guess. A run standing on
+`v<X.Y.Z>` is asked nothing: what it uploads is the tree that tag names, and an ordinary
+release cannot be stopped by pypi.org being down.
+
 **Until #673 that retry could not repair anything that failed after the upload.** `announce`
 is `needs: publish`, so the retry re-entered `publish`, PyPI rejected a version it already
 had, and `announce` was unreachable on that version forever — the only exit being the one
@@ -149,7 +161,8 @@ operator's, not the workflow's:
   forever; use it unless the fix is on main. `--ref main` works only until main's
   `pyproject.toml` bumps past the version being retried, since `guard` compares the input
   against the tree it is handed — so a deterministic failure is repaired promptly or not at
-  all.
+  all. And it works only *after* the upload landed, per the rule above: before that there is
+  no release to finish and `guard` will not let main's tree become the one PyPI keeps.
 
 Whatever the retry does, PyPI keeps the artifacts it already holds. A published version is
 one immutable thing, and a rebuild will not be the same bytes anyway: `docs/news/` ships

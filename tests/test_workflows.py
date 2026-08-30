@@ -1558,15 +1558,34 @@ class _Run(NamedTuple):
     ref: str | None = None        # GITHUB_REF_NAME, unset when None
     claimed: str | None = None    # the `version` input, unset when None
     says: str = ""                # what its refusal must name, when it refuses
+    #: GITHUB_REF_TYPE, unset when None. `branch` and `tag` are the only values GitHub
+    #: writes here, and the difference decides whether this run's commit is the one its
+    #: version's tag names or whatever that ref held when the run started.
+    ref_type: str | None = None
+    #: What PyPI answers when asked whether it already holds this version — the HTTP
+    #: status a stubbed `curl` reports. `"200"` already there, `"404"` not there, `"000"`
+    #: or a 5xx unreachable. **None means the run must never ask**, and every case that
+    #: says None has that asserted, because a release that needs the network to publish a
+    #: tagged tree is a release the network can stop.
+    pypi: str | None = None
 
 
-def _execute(script: str, run: _Run, packaged: str = "0.53.0") -> tuple[int, str]:
+class _Result(NamedTuple):
+    code: int
+    said: str
+    asked: list[str]      # the argv of every `curl` the script ran, in order
+
+
+def _execute(script: str, run: _Run, packaged: str = "0.53.0") -> _Result:
     """Actually run the check's script, in a tree whose pyproject says `packaged`.
 
     Reading the YAML proves the step has no `if:`; only running it proves the step
     refuses. `python` is a shim onto this interpreter because the step's own comment says
     why the workflow pins one: it needs `tomllib`, which is 3.11+, and the runner's
-    default `python` is a version nobody chose.
+    default `python` is a version nobody chose. `curl` is a shim for a different reason:
+    the check asks PyPI a question, this suite reaches no network, and stubbing the answer
+    is also the only way to exercise the answers that are hard to arrange for real — a
+    version PyPI has never seen, and PyPI not answering at all.
     """
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(os.path.realpath(raw))
@@ -1576,14 +1595,32 @@ def _execute(script: str, run: _Run, packaged: str = "0.53.0") -> tuple[int, str
         shim = tmp / "bin" / "python"
         shim.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
         shim.chmod(0o755)
+        log = tmp / "curl-calls"
+        answers = run.pypi and run.pypi != "000"
+        # A stub that models the two flags the script depends on rather than ignoring its
+        # argv, because a stub that answers whatever it is asked cannot fail when the
+        # question changes. Real `curl` writes the response body to stdout unless `-o`
+        # redirects it, and writes `-w`'s format after that — so a script that dropped
+        # either flag would read a status it never received, and here it reads one too.
+        curl = tmp / "bin" / "curl"
+        curl.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >> {shlex.quote(str(log))}\n'
+            'case "$*" in *" -o "*) ;; *) printf \'{"info": {}}\' ;; esac\n'
+            + (f'case "$*" in *"%{{http_code}}"*) printf "%s" {shlex.quote(run.pypi)} ;; esac\n'
+               "exit 0\n" if answers else "exit 7\n"))
+        curl.chmod(0o755)
         env = {"PATH": f"{tmp / 'bin'}:/usr/bin:/bin", "GITHUB_EVENT_NAME": run.event}
         if run.ref is not None:
             env["GITHUB_REF_NAME"] = run.ref
+        if run.ref_type is not None:
+            env["GITHUB_REF_TYPE"] = run.ref_type
         if run.claimed is not None:
             env["CLAIMED_VERSION"] = run.claimed
         done = subprocess.run(["bash", "-e", "-c", script], cwd=tmp, env=env,
                               capture_output=True, text=True)
-        return done.returncode, done.stdout + done.stderr
+        asked = log.read_text().splitlines() if log.exists() else []
+        return _Result(done.returncode, done.stdout + done.stderr, asked)
 
 
 class TheVersionCheckRunsOnEveryTriggerThatCanPublish(unittest.TestCase):
@@ -1601,43 +1638,109 @@ class TheVersionCheckRunsOnEveryTriggerThatCanPublish(unittest.TestCase):
     `publish` transitively behind it. The behaviour says the check is worth running: its
     script is executed, on both triggers, and refused when the run cannot name what it is
     publishing — no input, the wrong input, a trigger the check was never taught.
+
+    And then the rest of #558, which those halves do not reach. Naming a version is a claim
+    about a string; publishing is an act on a commit. On the tag path they are one question
+    because `github.ref` *is* the tag. On the dispatch path they came apart, and #673 leaned
+    on the gap: `skip-existing` is passed on that trigger because "the dispatch retry is not
+    there to publish, it is there to finish a publish that may already have happened". True
+    of every run it was written for — and nothing made it true. If PyPI does not already
+    hold the version, that run is not finishing anything, it IS the publish, and from
+    `--ref main` it publishes whatever the default branch holds, under a version no tag
+    names. So a run that is not standing on `v<version>` has to show it cannot be that
+    version's first upload, and the tables below are sorted by which of those two things a
+    run gets wrong.
     """
 
-    #: Runs that must be refused, and what each refusal must say. The message is asserted
-    #: because it is what makes the sweep honest: delete any one of the three refusals in
-    #: the script and the surviving ones still exit non-zero, so an exit-code-only test
-    #: would stay green while the run stopped being told what it did wrong.
+    #: Runs that must be refused for not naming what they publish, and what each refusal
+    #: must say. The message is asserted because it is what makes the sweep honest: delete
+    #: any one refusal in the script and the surviving ones still exit non-zero, so an
+    #: exit-code-only test would stay green while the run stopped being told what it did
+    #: wrong. Every case is refused before the ref is looked at, so every one carries
+    #: `pypi=None` — asserted, not assumed: a run refused for its version asks nobody.
     REFUSED = [
         _Run("a dispatch that names no version", "workflow_dispatch", "main", "",
-             says="did not say which version it publishes"),
+             says="did not say which version it publishes", ref_type="branch"),
         _Run("a dispatch with no input at all", "workflow_dispatch", "main", None,
-             says="did not say which version it publishes"),
+             says="did not say which version it publishes", ref_type="branch"),
         _Run("a dispatch naming the wrong version", "workflow_dispatch", "main", "0.52.0",
-             says="but pyproject.toml says 0.53.0"),
+             says="but pyproject.toml says 0.53.0", ref_type="branch"),
         _Run("a dispatch from a tag-shaped branch, still naming nothing",
              "workflow_dispatch", "v0.53.0", None,
-             says="did not say which version it publishes"),
+             says="did not say which version it publishes", ref_type="branch"),
+        _Run("a dispatch standing on the right tag but naming the wrong version",
+             "workflow_dispatch", "v0.53.0", "0.52.0",
+             says="but pyproject.toml says 0.53.0", ref_type="tag"),
         _Run("a tag that disagrees with the packaged version", "push", "v0.52.0", None,
-             says="but pyproject.toml says 0.53.0"),
+             says="but pyproject.toml says 0.53.0", ref_type="tag"),
         _Run("a tag push with no ref name", "push", "", None,
-             says="did not say which version it publishes"),
+             says="did not say which version it publishes", ref_type="tag"),
         _Run("a trigger nobody taught this check", "schedule", "main", "0.53.0",
-             says="does not know what that run claims to publish"),
+             says="does not know what that run claims to publish", ref_type="branch"),
         _Run("a repository_dispatch", "repository_dispatch", "main", "0.53.0",
-             says="does not know what that run claims to publish"),
+             says="does not know what that run claims to publish", ref_type="branch"),
         _Run("no event at all", "", "main", "0.53.0",
-             says="does not know what that run claims to publish"),
+             says="does not know what that run claims to publish", ref_type="branch"),
     ]
 
-    #: Runs that must be allowed: exactly the two ways to state the packaged version.
+    #: Runs that name the packaged version correctly — every refusal above is satisfied —
+    #: and would still be the FIRST upload of it while standing somewhere that is not its
+    #: tag. This is the half #560 left open and #673 built on. The first case is the
+    #: window #558 opened with: a bump merged to main, no tag pushed yet, and a dispatch
+    #: that agrees with the `pyproject.toml` sitting beside it.
+    WOULD_BE_THE_FIRST_UPLOAD = [
+        _Run("a dispatch from main in the window before the tag is pushed",
+             "workflow_dispatch", "main", "0.53.0", says="FIRST upload of charter-cp 0.53.0",
+             ref_type="branch", pypi="404"),
+        _Run("a dispatch from a branch someone named after the tag",
+             "workflow_dispatch", "v0.53.0", "0.53.0",
+             says="FIRST upload of charter-cp 0.53.0", ref_type="branch", pypi="404"),
+        _Run("a dispatch whose ref type is not set at all", "workflow_dispatch",
+             "v0.53.0", "0.53.0", says="FIRST upload of charter-cp 0.53.0", ref_type=None,
+             pypi="404"),
+        _Run("a dispatch standing on some other version's tag", "workflow_dispatch",
+             "v0.52.0", "0.53.0", says="FIRST upload of charter-cp 0.53.0",
+             ref_type="tag", pypi="404"),
+        _Run("a push that reaches here from a branch rather than a tag", "push",
+             "v0.53.0", None, says="FIRST upload of charter-cp 0.53.0", ref_type="branch",
+             pypi="404"),
+    ]
+
+    #: Same runs, except PyPI does not answer. Whether the run would be a first upload is
+    #: then unknown, and the last step before an irreversible act does not guess.
+    PYPI_DID_NOT_ANSWER = [
+        _Run("PyPI is unreachable", "workflow_dispatch", "main", "0.53.0",
+             says="could not ask PyPI", ref_type="branch", pypi="000"),
+        _Run("PyPI answers 503", "workflow_dispatch", "main", "0.53.0",
+             says="could not ask PyPI", ref_type="branch", pypi="503"),
+        _Run("PyPI answers something nobody expected", "push", "v0.53.0", None,
+             says="could not ask PyPI", ref_type="branch", pypi="418"),
+    ]
+
+    #: Off the tag and allowed, because PyPI already holds the version — so this run cannot
+    #: be its first upload and `skip-existing` has something to skip. This is #673's
+    #: `--ref main` recovery, and it must keep working: a check that closed #558 by making
+    #: a half-finished release unfinishable would have moved the defect, not fixed it.
+    FINISHING = [
+        _Run("the #665 recovery: the upload landed, announce did not", "workflow_dispatch",
+             "main", "0.53.0", ref_type="branch", pypi="200"),
+        _Run("the same recovery from a branch named after the tag", "workflow_dispatch",
+             "v0.53.0", "0.53.0", ref_type="branch", pypi="200"),
+    ]
+
+    #: Runs that must be allowed with nobody asked at all: they stand on the tag for the
+    #: version they publish, so what they upload is the tree that tag names. `pypi=None`
+    #: is asserted here, and it is a property rather than bookkeeping — the ordinary
+    #: release must not be stoppable by PyPI's API being down.
     ACCEPTED = [
-        _Run("a tag naming the packaged version", "push", "v0.53.0", None),
-        _Run("a dispatch naming the packaged version", "workflow_dispatch", "main",
-             "0.53.0"),
-        _Run("a dispatch naming it with the tag's leading v", "workflow_dispatch", "main",
-             "v0.53.0"),
+        _Run("a tag naming the packaged version", "push", "v0.53.0", None,
+             ref_type="tag"),
+        _Run("a dispatch standing on the tag it is retrying", "workflow_dispatch",
+             "v0.53.0", "0.53.0", ref_type="tag"),
+        _Run("a dispatch naming it with the tag's leading v", "workflow_dispatch",
+             "v0.53.0", "v0.53.0", ref_type="tag"),
         _Run("a tag run carrying a stale input from an earlier dispatch", "push",
-             "v0.53.0", "9.9.9"),
+             "v0.53.0", "9.9.9", ref_type="tag"),
     ]
 
     def setUp(self):
@@ -1697,11 +1800,21 @@ class TheVersionCheckRunsOnEveryTriggerThatCanPublish(unittest.TestCase):
 
     def test_the_publish_job_still_names_the_environment_pypi(self):
         """Trusted Publishing's OIDC claim carries this name, so it is load-bearing for
-        the upload — and it is also where the other half of #558 hangs: a required
-        reviewer on this environment is a repository setting, not a line in this file, so
-        no test here can assert it. What this can hold is that the name is still there for
-        the rule to attach to."""
+        the upload — and it is also where the last piece of #558 hangs: a required
+        reviewer on this environment, and a deployment-branch policy narrowing which refs
+        may deploy to it, are repository settings rather than lines in this file, so no
+        test here can assert them. What this can hold is that the name is still there for
+        the rules to attach to."""
         self.assertEqual(self.jobs["publish"]["environment"]["name"], "pypi")
+
+    def test_the_tag_the_check_reconstructs_is_the_tag_this_workflow_triggers_on(self):
+        """The check builds `v$pkg` and asks whether the run is standing on it, which is
+        the right question only while `v<version>` is what this project tags. Change the
+        convention under `on: push:` without changing the check and the tag path starts
+        sending itself down the off-tag branch — so the two are asserted together rather
+        than left to agree by habit."""
+        self.assertEqual(self.release["on"]["push"]["tags"], ["v*"])
+        self.assertIn('= "v$pkg"', self.check["run"])
 
     # ----------------------------------------------------------------- the behaviour
 
@@ -1712,42 +1825,137 @@ class TheVersionCheckRunsOnEveryTriggerThatCanPublish(unittest.TestCase):
         `build` on the strength of nobody having thought about it."""
         declared = set(self.release["on"])
         self.assertEqual(declared, {"push", "workflow_dispatch"})
-        for table in (self.ACCEPTED, self.REFUSED):
+        for table in (self.ACCEPTED, self.REFUSED, self.WOULD_BE_THE_FIRST_UPLOAD,
+                      self.PYPI_DID_NOT_ANSWER):
             for trigger in declared:
                 self.assertIn(trigger, {run.event for run in table},
                               f"{trigger} has no case in one of the tables")
 
-    def test_the_check_refuses_a_run_that_cannot_name_what_it_publishes(self):
+    def _refuses(self, table):
         script = self.check["run"]
-        for run in self.REFUSED:
+        for run in table:
             with self.subTest(run=run.name):
-                code, said = _execute(script, run)
-                self.assertNotEqual(code, 0, f"{run.name} was allowed to publish:\n{said}")
-                self.assertIn("::error::", said, "refused without annotating the log")
-                self.assertIn(run.says, said,
+                r = _execute(script, run)
+                self.assertNotEqual(r.code, 0,
+                                    f"{run.name} was allowed to publish:\n{r.said}")
+                self.assertIn("::error::", r.said, "refused without annotating the log")
+                self.assertIn(run.says, r.said,
                               f"{run.name} was refused, but for a different reason than "
                               f"the one this case exists to exercise")
 
+    def test_the_check_refuses_a_run_that_cannot_name_what_it_publishes(self):
+        self._refuses(self.REFUSED)
+
+    def test_a_run_refused_for_its_version_never_asks_anybody_anything(self):
+        """The refusals above come first, and they are the cheap ones. A run with no
+        version to check has nothing to look up, and a check that went to the network
+        before finishing the arithmetic it can do offline would fail differently when PyPI
+        is slow than when it is not."""
+        script = self.check["run"]
+        for run in self.REFUSED:
+            with self.subTest(run=run.name):
+                self.assertIsNone(run.pypi, "this table is the offline one")
+                self.assertEqual(_execute(script, run).asked, [])
+
+    def test_a_run_that_would_be_a_versions_first_upload_from_off_its_tag_is_refused(self):
+        """The rest of #558. Every run here names the packaged version correctly, so every
+        refusal above is satisfied — and PyPI has never seen this version, so the run is
+        not finishing a release, it is beginning one, from a ref no tag names."""
+        self._refuses(self.WOULD_BE_THE_FIRST_UPLOAD)
+
+    def test_a_run_that_cannot_find_out_whether_it_would_be_the_first_is_refused(self):
+        """Fail closed on the unknown. A network answer that did not arrive is not a
+        `404` and not a `200`, and the step that reads it is the last one before an act
+        with no way back — where re-running `guard` costs a minute and being wrong costs
+        a version number forever."""
+        self._refuses(self.PYPI_DID_NOT_ANSWER)
+
+    def test_a_run_finishing_a_release_pypi_already_holds_is_allowed_off_the_tag(self):
+        """#673's `--ref main` recovery, kept working. It is the reason this check asks
+        PyPI instead of simply demanding the tag: when `announce` fails for a reason still
+        true of the tagged tree, the fix is on main and the tag cannot carry it. What the
+        check refuses is that same command run when it would publish rather than finish."""
+        script = self.check["run"]
+        for run in self.FINISHING:
+            with self.subTest(run=run.name):
+                r = _execute(script, run)
+                self.assertEqual(r.code, 0, f"{run.name} was refused:\n{r.said}")
+                self.assertEqual(len(r.asked), 1, "asked PyPI more than once")
+
     def test_the_check_allows_a_run_that_names_the_packaged_version(self):
         """The other direction, and it is not decoration: a check that refused everything
-        would pass every case above and take the release path with it."""
+        would pass every case above and take the release path with it.
+
+        `asked == []` is the second half and it is a property, not bookkeeping: a run
+        standing on `v0.53.0` publishes the tree that tag names whatever PyPI says, so an
+        ordinary release must not be stoppable by pypi.org being unreachable. The network
+        is reached on exactly the path that cannot answer the question without it."""
         script = self.check["run"]
         for run in self.ACCEPTED:
             with self.subTest(run=run.name):
-                code, said = _execute(script, run)
-                self.assertEqual(code, 0, f"{run.name} was refused:\n{said}")
-                self.assertIn("pyproject=0.53.0", said)
+                r = _execute(script, run)
+                self.assertEqual(r.code, 0, f"{run.name} was refused:\n{r.said}")
+                self.assertIn("pyproject=0.53.0", r.said)
+                self.assertEqual(r.asked, [],
+                                 "a run standing on the tag asked PyPI's permission to "
+                                 "publish the tree that tag names")
+
+    def test_the_question_put_to_pypi_names_what_this_run_would_publish(self):
+        """Both halves of it read from `pyproject.toml`. A URL with the project or the
+        version written into it would answer about some other release and be impossible to
+        tell apart from this one on a green run."""
+        script = self.check["run"]
+        r = _execute(script, self.FINISHING[0])
+        self.assertEqual(len(r.asked), 1, r.asked)
+        self.assertIn("https://pypi.org/pypi/charter-cp/0.53.0/json", r.asked[0])
+        r = _execute(script, self.FINISHING[0]._replace(claimed="9.9.9"), packaged="9.9.9")
+        self.assertIn("https://pypi.org/pypi/charter-cp/9.9.9/json", r.asked[0])
+
+    def test_the_refusal_names_the_dispatch_that_would_have_been_accepted(self):
+        """A refusal that leaves an operator mid-release without the next command is a
+        refusal they will route around, and the route around this one is irreversible."""
+        script = self.check["run"]
+        for run in self.WOULD_BE_THE_FIRST_UPLOAD + self.PYPI_DID_NOT_ANSWER:
+            with self.subTest(run=run.name):
+                self.assertIn(
+                    "gh workflow run release.yml --ref v0.53.0 -f version=0.53.0",
+                    _execute(script, run).said,
+                    "the refusal does not name the dispatch that would be accepted")
+
+    def test_no_accepted_run_reaches_the_upload_without_the_tag_or_pypi_saying_so(self):
+        """The tables themselves, before they are executed. Every other test is a claim
+        about the script; this is a claim about the tables — that the cheap way back to
+        green after this change is not to add a permissive row. An allowed run either
+        stands on the tag for the version it publishes, or has been told by PyPI that the
+        version is already there."""
+        for run in self.ACCEPTED:
+            with self.subTest(run=run.name):
+                self.assertEqual((run.ref_type, run.ref), ("tag", "v0.53.0"),
+                                 "an accepted run that is not standing on the tag for the "
+                                 "version it publishes uploads a tree no tag names (#558)")
+                self.assertIsNone(run.pypi, "and it must not need PyPI's answer to do it")
+        for run in self.FINISHING:
+            with self.subTest(run=run.name):
+                self.assertEqual(run.pypi, "200",
+                                 "an off-tag run is allowed only where PyPI has already "
+                                 "made this run's upload a no-op (#558, #673)")
 
     def test_the_check_reads_the_packaged_version_from_pyproject_and_not_from_a_guess(self):
         """The comparison is against the file being published, whatever it says. Pinning
         `0.53.0` in the tables above would otherwise be indistinguishable from a script
-        that had the answer written into it."""
+        that had the answer written into it — and that goes for the tag it reconstructs as
+        much as for the version it compares."""
         script = self.check["run"]
-        code, said = _execute(script, _Run("a tag", "push", "v9.9.9"), packaged="9.9.9")
-        self.assertEqual(code, 0, said)
-        code, said = _execute(script, _Run("the same tag", "push", "v9.9.9"),
-                              packaged="0.53.0")
-        self.assertNotEqual(code, 0, said)
+        on_tag = _Run("a tag", "push", "v9.9.9", ref_type="tag")
+        self.assertEqual(_execute(script, on_tag, packaged="9.9.9").code, 0)
+        self.assertNotEqual(_execute(script, on_tag, packaged="0.53.0").code, 0)
+        # And the tag it demands is built from the version, not written down: standing on
+        # v0.53.0 while publishing 9.9.9 is off-tag, and off-tag runs are asked about PyPI.
+        r = _execute(script, _Run("a dispatch on the wrong tag", "workflow_dispatch",
+                                  "v0.53.0", "9.9.9", ref_type="tag", pypi="404"),
+                     packaged="9.9.9")
+        self.assertNotEqual(r.code, 0, r.said)
+        self.assertIn("FIRST upload of charter-cp 9.9.9", r.said)
 
 
 # ------------------------------------------------- what a pinned action then names (#473)
