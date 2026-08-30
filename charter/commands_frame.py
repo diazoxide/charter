@@ -1433,6 +1433,67 @@ def _live_chats(socket: str) -> set[str] | None:
     return {name for name in names if name}
 
 
+#: What :func:`_chat_being_left` asks of every window on a server, in one call.
+#:
+#: Three fields and all of them tmux's own: which SESSION a window is in, whether it is
+#: that session's current one, and which chat it draws. Ids and an option, never names —
+#: a window name is not an identity (`_CHAT_OPTION`), and a session NAME is worse than
+#: useless as a `-t` target here because tmux parses `api.2` as ``window.pane``, so a
+#: workspace with a dot in it would resolve to somebody else's window or to none.
+#:
+#: `\t` because none of the three can contain one: `#{session_id}` is `$<digits>`,
+#: `#{window_active}` is `0` or `1`, and a chat id is held to `_FRAME_ID_RE`'s alphabet
+#: on the way back out.
+_WINDOW_SEAT_FORMAT = f"#{{session_id}}\t#{{window_active}}\t#{{{_CHAT_OPTION}}}"
+
+
+def _chat_being_left(socket: str, *, beside: str) -> str:
+    """The chat currently on screen in the same tmux session as chat *beside* — or ``""``.
+
+    **What a launch has to know before it takes the client somewhere else** (#688).
+    `cmd_chat` tears the panels of the chat it leaves down, and #668 calls that a
+    correctness rule rather than a saving: a background window keeps STALE geometry
+    (§7.4, measured identically on tmux 3.7c and 3.2), so panels left running in one are
+    not idle, they are rendering at a width that is no longer their window's. The launch
+    path is what CREATES that situation — `layout.chat_window_argv` opens the second chat
+    with `new-window -d` and the launcher then selects it — and it kept no such rule.
+
+    One `list-windows -a`, and the whole of the reason it is not two: the new chat's own
+    window is in that answer too, so its `@charter_chat` gives the SESSION without a
+    second round trip, and nothing here ever hands tmux a name to resolve. That matters
+    beyond tidiness — see :data:`_WINDOW_SEAT_FORMAT` for what `-t <workspace>` does to a
+    workspace whose name contains a dot.
+
+    ``""`` for every way this can fail to answer, because the caller does one thing with
+    all of them: leave the other chat alone. A server that would not list its windows, a
+    *beside* whose window is not in the list, a session whose current window carries no
+    chat at all (the operator's own shell, on their own server), and *beside* itself —
+    the launch that created the session, whose only window is already current.
+
+    Held to `_FRAME_ID_RE` on the way out, at #475's boundary: this value came off a tmux
+    option, and it is about to be a state directory's name and the key `state.harness_pane`
+    is read under.
+    """
+    out = tmuxctl.run("finding the chat this launch is leaving",
+                      tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
+                                          _WINDOW_SEAT_FORMAT),
+                      timeout=5, report=False)
+    # No branch on the return code: a listing that failed has an empty stdout, so it
+    # falls out below as "no seats and therefore no answer" — the same sentence, said
+    # once. Exactly three fields per row, because `#{@charter_chat}` is an option and an
+    # option's value is whatever somebody set: one holding a tab of its own would
+    # otherwise have its first half read as a chat id.
+    seats = [line.split("\t") for line in out.stdout.splitlines()]
+    seats = [s for s in seats if len(s) == 3]
+    # `None` when *beside*'s own window is not in the listing, and it needs no branch of
+    # its own: no session id is ever `None`, so the second lookup below matches nothing
+    # and answers "". A sentinel that cannot collide is one guard rather than two.
+    session = next((s[0] for s in seats if s[2].strip() == beside), None)
+    chat = next((s[2].strip() for s in seats
+                 if s[0] == session and s[1] == "1"), "")
+    return chat if chat != beside and _FRAME_ID_RE.fullmatch(chat) else ""
+
+
 def _frame_is_live(socket: str, fid: str) -> bool:
     """Is the frame *fid* still running on *socket*? One question, one place — #408.
 
@@ -2590,10 +2651,19 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     _arm_panel_respawn(socket, fid=fid, panes=panes, env=None)
     tmuxctl.run("focusing the harness pane",
                 tmuxctl.server_argv(socket, "select-pane", "-t", harness_pane))
+    # Read before the select takes the operator off it, for the private path's reason
+    # (#688). Ordinarily nothing: the window they are on is one of THEIR windows and
+    # carries no `@charter_chat`, so this answers `""` and nothing of theirs is touched —
+    # the same promise every other line on this path makes. It is a chat only when the
+    # operator already had a charter frame open in this session, which is exactly the
+    # case the rule is about.
+    leaving = _chat_being_left(socket, beside=fid)
     # `select-window`, never `attach`: the operator has a client already, on this very
     # server. A second attach IS the nesting this path exists to remove.
-    tmuxctl.run("switching to the frame",
-                tmuxctl.server_argv(socket, "select-window", "-t", window_id))
+    selected = tmuxctl.run("switching to the frame",
+                           tmuxctl.server_argv(socket, "select-window", "-t", window_id))
+    if selected.returncode == 0:
+        _drop_panels(socket, leaving)
 
     code = _wait_for_harness(socket, harness_pane)
     if code is None:
@@ -3793,9 +3863,25 @@ def cmd_launch(args) -> int:
             # must not be dragged onto a half-built window — and this is where that is
             # paid back. A no-op for the launch that created the session, whose only
             # window is already current.
-            tmuxctl.run("selecting the chat",
-                        tmuxctl.server_argv(SOCKET, "select-window", "-t", harness_pane),
-                        env=env)
+            # Which chat the client is on right now, read BEFORE the select takes them
+            # off it (#688). `new-window -d` did not move them, so the session's current
+            # window is still the chat being left. A no-op for the launch that created
+            # the session, whose only window is the one it just built.
+            leaving = _chat_being_left(SOCKET, beside=fid)
+            selected = tmuxctl.run(
+                "selecting the chat",
+                tmuxctl.server_argv(SOCKET, "select-window", "-t", harness_pane),
+                env=env)
+            # And the chat the client has just left loses its panels — `cmd_chat` step 2's
+            # rule, applied where the situation is made rather than only where it is
+            # managed. Gated on the select having WORKED, which here is what the return
+            # code honestly says: both windows are in one session by construction (this
+            # launch created its own in `session`), so unlike #684's cross-session case
+            # there is no way for `select-window` to succeed against a window the client
+            # cannot be moved to. A teardown ahead of a failed select would kill the
+            # panels of the chat the operator is still looking at.
+            if selected.returncode == 0:
+                _drop_panels(SOCKET, leaving)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —
@@ -4590,6 +4676,38 @@ def _apply_arrangement(fid: str, *, where, want: list[str],
     # by construction — where the menu was a SNAPSHOT on disk that a switch had to rewrite
     # or it went on naming the level the frame had left.
     state.bump(fid)
+
+
+def _drop_panels(socket: str, chat: str) -> None:
+    """Tear the panels of *chat* down, because the client has just left its window.
+
+    **`cmd_chat` step 2's call, made on the path that creates the situation the switch
+    exists to manage** (#688). #668 states the rule and enforced it on the switch only: a
+    background window keeps STALE geometry, so panels left running in one are not idle,
+    they are rendering at a width that is no longer their window's — the exact defect
+    `panel._component_text`'s `width=slots._width()` guard exists for. `charter claude`
+    twice in one workspace left four panel processes doing that per abandoned chat, each
+    polling `state.version` at `panel.TICK`, until an `F2` round trip happened to tidy
+    them.
+
+    **The socket is compared rather than trusted**, and that is #684's class rather than
+    belt and braces: `_relayout_target` resolves the server from the frame's OWN record,
+    while the chat this is about was found by reading a window on *socket* — and pane ids
+    are PER-SERVER, so a record that disagreed would aim `kill-pane` at a real, live,
+    unrelated pane on the other server. A disagreement means charter cannot say where this
+    chat is, and the answer to that is to leave it alone.
+
+    Every refusal is a quiet no-op: this is a window nobody is looking at, and a launch
+    that has just built a frame must not fail over tidying one.
+    """
+    # No `if not chat` in front of this: `_relayout_target` reads the pane record through
+    # `state.frame_dir`, which resolves through `contain.child` and refuses `""` outright,
+    # so the empty answer is already the refusal below. A guard that passes only because a
+    # different guard caught it is the shape this repository deletes.
+    where = _relayout_target(chat)
+    if where is None or where[0] != socket:
+        return
+    _apply_arrangement(chat, where=where, want=[])
 
 
 def _hidden_now(fid: str, frame: dict) -> list[str]:

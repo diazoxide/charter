@@ -1458,7 +1458,7 @@ class _FakeTmux:
 
     def __init__(self, *, pane_id="%7", exit_code=None, race_death_status=None,
                 still_live=False, pre_existing_sessions=frozenset(),
-                pre_existing_chats=frozenset(), list_windows_rc=0,
+                pre_existing_chats=frozenset(), current_chat=None, list_windows_rc=0,
                 panel_pane_ids=None, pane_capture="",
                 session_rc=0, source_rc=0, env_set_rc=0, write_hook_rc=0,
                 teardown_hook_rc=0, panel_rc=0, select_rc=0, attach_rc=0, dm_rc=0,
@@ -1478,6 +1478,10 @@ class _FakeTmux:
         #: already has one chat open, which is what makes a launch into it the SECOND
         #: chat rather than the first.
         self.pre_existing_chats = frozenset(pre_existing_chats)
+        #: Which chat the client is sitting on when this launch begins — the one #688's
+        #: teardown is about. ``None`` means the launch's own, which is what a first chat
+        #: of a workspace ends up being.
+        self.current_chat = current_chat
         #: A server that answers `list-sessions` and then refuses `list-windows` — the
         #: one state in which charter cannot tell which chats are live and must not reap.
         self.list_windows_rc = list_windows_rc
@@ -1618,6 +1622,13 @@ class _FakeTmux:
             return subprocess.CompletedProcess(cmd, self.capture_rc,
                                                stdout=self.pane_capture if self.capture_rc == 0 else "",
                                                stderr="" if self.capture_rc == 0 else "no such pane")
+        if "kill-pane" in cmd or "resize-pane" in cmd:
+            # What tearing a chat's panels down issues (#688). One knob for the pair
+            # because they only ever appear together — `_relayout` with `want=[]` kills
+            # every panel and then re-asserts what is left, which is nothing.
+            return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
+                                               stderr="" if self.kill_rc == 0
+                                               else "no such pane")
         if "kill-session" in cmd:
             self.kill_session_called = True
             return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
@@ -1639,6 +1650,14 @@ class _FakeTmux:
             else:
                 live = {self.session} if self.still_live else set()
             return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
+        if commands_frame._WINDOW_SEAT_FORMAT in cmd:
+            # `_chat_being_left` (#688): every window's session, whether it is that
+            # session's current one, and which chat it draws. Told apart from
+            # `_live_chats` by the FORMAT and answered BEFORE the generic `list-windows`
+            # branch, because both carry `@charter_chat` and they are different
+            # questions — one is "what is alive", this one is "what is on screen".
+            return subprocess.CompletedProcess(cmd, self.list_windows_rc,
+                                               stdout=self._seats(), stderr="")
         if "list-windows" in cmd:
             if self.list_windows_rc != 0:
                 return subprocess.CompletedProcess(cmd, self.list_windows_rc, stdout="",
@@ -1652,6 +1671,21 @@ class _FakeTmux:
                 live.add(self.fid)
             return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
         raise AssertionError(f"unexpected tmux command in test: {cmd}")
+
+    def _seats(self) -> str:
+        """One row per window of this session, in `_WINDOW_SEAT_FORMAT`'s three fields.
+
+        `current_chat` is which chat the CLIENT is on when this launch starts, and
+        ``None`` means "this launch's own", which is the first-chat-of-a-workspace case:
+        the session it created has exactly one window. A test that wants the second-chat
+        case names the first chat, which is also what it puts in `pre_existing_chats`.
+        """
+        current = self.current_chat if self.current_chat is not None else self.fid
+        rows = [(chat, chat == current) for chat in sorted(self.pre_existing_chats)]
+        if self.fid:
+            rows.append((self.fid, self.fid == current))
+        return "\n".join(f"$0\t{'1' if active else '0'}\t{chat}"
+                          for chat, active in rows)
 
 
 def _is_chrome(cmd: list[str]) -> bool:
@@ -2226,6 +2260,163 @@ class TwoChatsAreTwoCharterSessions(PersonaIso, unittest.TestCase):
         self.assertEqual(toolgate.frozen_tools("release", "demo.1"), {"Bash"},
                          "one chat's ceiling moved when another chat froze its own")
         self.assertEqual(toolgate.frozen_tools("release", "demo.2"), {"Bash", "Read"})
+
+
+class _SeatReader:
+    """A tmux that answers `_WINDOW_SEAT_FORMAT` with exactly the text a test hands it.
+
+    Separate from `_FakeTmux`, which MODELS a server: this one is for the rows a real
+    server cannot produce — a value with a tab in it, a short line — which is the only way
+    to reach `_chat_being_left`\'s own parsing guards. Anything else raises, so a test
+    cannot pass by exercising a path it did not mean to.
+    """
+
+    def __init__(self, stdout: str, rc: int = 0):
+        self.stdout, self.rc = stdout, rc
+        self.calls: list[list[str]] = []
+
+    def __call__(self, cmd, **kwargs):
+        self.calls.append(list(cmd))
+        if commands_frame._WINDOW_SEAT_FORMAT in cmd:
+            return subprocess.CompletedProcess(cmd, self.rc, stdout=self.stdout,
+                                               stderr="")
+        raise AssertionError(f"unexpected tmux command in test: {cmd}")
+
+
+class ALaunchTakesThePanelsOfTheChatItLeaves(PersonaIso, unittest.TestCase):
+    """#688: opening a second chat left the first one's panels running.
+
+    #668 states the rule and its own text calls it a correctness rule rather than a
+    saving: a background window keeps STALE geometry (§7.4, measured identically on tmux
+    3.7c and 3.2), so four panel processes left in one are not idle — each is polling
+    `state.version` at `panel.TICK` and rendering against a width its window no longer
+    has. `cmd_chat` kept the rule and the launch path did not, which is the path that
+    CREATES the situation the switch exists to manage: `layout.chat_window_argv` opens the
+    second chat with `new-window -d` and the launcher then selects it, leaving the first
+    behind, panels and all, until an `F2` round trip happened to tidy them.
+
+    Driven through a whole `cmd_launch` rather than through a helper, because the claim is
+    about ordering inside that function — which chat is read, when, and whether the
+    teardown is gated on the select having worked.
+    """
+
+    def _first_chat_open(self, **kw) -> _FakeTmux:
+        """A workspace that already has `demo.1` open, with the client on it and two
+        panels recorded — the state a second `charter claude` finds."""
+        state.record_server("demo.1", commands_frame.SOCKET)
+        state.record_harness_pane("demo.1", "%1")
+        state.record_panes("demo.1", panels={"top": "%3", "bottom": "%4"})
+        return _FakeTmux(exit_code=0, pre_existing_sessions={"demo"},
+                         pre_existing_chats={"demo.1"}, current_chat="demo.1", **kw)
+
+    @staticmethod
+    def _killed(fake) -> list[str]:
+        return [c[-1] for c in fake.calls if "kill-pane" in c]
+
+    def test_the_chat_the_client_was_on_loses_its_panels(self):
+        fake = self._first_chat_open()
+        self.assertEqual(_launch(fake), 0)
+        self.assertEqual(sorted(self._killed(fake)), ["%3", "%4"],
+                         "the chat this launch took the client off kept its panels, "
+                         "which are now rendering at a width that is not their window\'s")
+        self.assertEqual(state.panes("demo.1"), {},
+                         "the abandoned chat\'s pane map still names panes charter killed")
+
+    def test_the_first_chat_of_a_workspace_leaves_nothing_behind(self):
+        """The control, and the one that keeps this from being a teardown of whatever
+        happens to be current. A launch that CREATED the session has one window and it is
+        its own."""
+        fake = _FakeTmux(exit_code=0)
+        self.assertEqual(_launch(fake), 0)
+        self.assertEqual(self._killed(fake), [])
+
+    def test_the_teardown_comes_after_the_select_and_not_before_it(self):
+        """`cmd_chat`\'s order, for `cmd_chat`\'s reason read the other way: the window
+        being left is stale from the moment the client moves, and a teardown ahead of the
+        select would be tearing down the chat the operator is still looking at."""
+        fake = self._first_chat_open()
+        _launch(fake)
+        selects = [i for i, c in enumerate(fake.calls) if "select-window" in c]
+        killed = [i for i, c in enumerate(fake.calls) if "kill-pane" in c]
+        self.assertTrue(selects and killed)
+        self.assertLess(selects[0], killed[0],
+                        "panels were killed before the client had been moved off them")
+
+    def test_a_select_that_failed_tears_nothing_down(self):
+        """The gate is the select having WORKED. Here the return code is an honest answer
+        — both windows are in one session by construction, this launch having created its
+        own there — so unlike #684\'s cross-session case there is no way for it to succeed
+        against a window the client cannot reach."""
+        fake = self._first_chat_open(select_rc=1)
+        _launch(fake)
+        self.assertEqual(self._killed(fake), [],
+                         "the client never moved and charter tore down the chat it is "
+                         "still sitting on")
+        self.assertEqual(state.panes("demo.1"), {"top": "%3", "bottom": "%4"})
+
+    def test_a_chat_recorded_against_the_other_server_is_left_alone(self):
+        """#684\'s class, one command over. `_relayout_target` resolves the server from
+        the frame\'s OWN record while this chat was found by reading a window on charter\'s
+        server — and pane ids are PER-SERVER, so a record that disagrees would aim
+        `kill-pane` at a real, live, unrelated pane on somebody else\'s tmux."""
+        fake = self._first_chat_open()
+        state.record_server("demo.1", OPERATOR_SOCKET)
+        _launch(fake)
+        self.assertEqual(self._killed(fake), [])
+        self.assertEqual(state.panes("demo.1"), {"top": "%3", "bottom": "%4"})
+
+    def test_a_chat_with_no_usable_pane_record_is_left_alone(self):
+        """`_relayout_target`\'s own refusal, reached from here: nothing off disk is used
+        as a pane id until it has tmux\'s own shape (#475)."""
+        fake = self._first_chat_open()
+        state.record_harness_pane("demo.1", "%1;kill-server")
+        _launch(fake)
+        for cmd in fake.calls:
+            self.assertNotIn("%1;kill-server", cmd)
+        self.assertEqual(self._killed(fake), [])
+
+    def test_a_seat_row_that_is_not_three_fields_answers_nothing(self):
+        """`@charter_chat` is an OPTION and an option\'s value is whatever somebody set.
+        A value holding a tab of its own would split into four fields, and without the
+        count filter the first half would be read as a chat id and torn down.
+
+        Asked of the reader directly, because there is no way to get a malformed row past
+        a real tmux and every route from the top would refuse for a different reason —
+        which is the "a guard that passes because a different guard caught it" shape.
+        """
+        for rows in ("$0\t1\tdemo.9\textra\n$0\t0\tdemo.1",
+                     "$0\t1\n$0\t0\tdemo.1",
+                     ""):
+            with self.subTest(rows=rows):
+                fake = _SeatReader(rows)
+                with mock.patch("charter.commands_frame.subprocess.run",
+                                side_effect=fake):
+                    self.assertEqual(
+                        commands_frame._chat_being_left("charter", beside="demo.1"), "")
+
+    def test_a_chat_id_outside_the_alphabet_answers_nothing(self):
+        """#475\'s rule where this value enters charter\'s vocabulary: it came off a tmux
+        option and it is about to be a state directory\'s name and the key
+        `state.harness_pane` is read under."""
+        for hostile in ("../../etc", "demo 9", "demo.9;kill-server", "demo\x1b[31m"):
+            with self.subTest(hostile=hostile):
+                fake = _SeatReader(f"$0\t1\t{hostile}\n$0\t0\tdemo.1")
+                with mock.patch("charter.commands_frame.subprocess.run",
+                                side_effect=fake):
+                    self.assertEqual(
+                        commands_frame._chat_being_left("charter", beside="demo.1"), "")
+
+    def test_the_chat_is_asked_for_by_id_and_never_by_a_session_name(self):
+        """The reading is `list-windows -a` over tmux\'s own ids, and nothing on this path
+        ever hands tmux a name to resolve — `-t <workspace>` parses `api.2` as
+        ``window.pane``, so a workspace with a dot in its name would aim the question at
+        somebody else\'s window or at none."""
+        fake = self._first_chat_open()
+        _launch(fake)
+        seat = [c for c in fake.calls if commands_frame._WINDOW_SEAT_FORMAT in c]
+        self.assertEqual(len(seat), 1, "the seat was read more than once, or not at all")
+        self.assertIn("-a", seat[0], "the read was scoped to a target rather than to "
+                                     "every window on the server")
 
 
 class Launch(PersonaIso, unittest.TestCase):
@@ -4579,7 +4770,7 @@ class _FakeOperatorTmux:
 
     def __init__(self, *, window_id="@3", pane_id="%7", polls_alive=1, exit_code=0,
                  pane_vanishes=False, window_size=(200, 50),
-                 pre_existing_windows=("zsh",), list_windows_rc=0,
+                 pre_existing_windows=("zsh",), current_chat="", list_windows_rc=0,
                  new_window_rc=0, arm_rc=0, chrome_rc=0, respawn_rc=0, panel_rc=0,
                  panel_pane_ids=None, resize_hook_rc=0, select_rc=0, kill_rc=0,
                  pane_capture="", capture_rc=0, chat_option_rc=0, chat_list_rc=0):
@@ -4596,6 +4787,10 @@ class _FakeOperatorTmux:
         self.capture_rc = capture_rc
         self.window_size = window_size
         self.pre_existing_windows = list(pre_existing_windows)
+        #: What the window the operator is currently on draws. ``""`` — the default — is
+        #: one of THEIR windows, which carries no `@charter_chat` at all; a test that
+        #: wants #688's case names a charter chat they already had open here.
+        self.current_chat = current_chat
         self.list_windows_rc = list_windows_rc
         self.new_window_rc = new_window_rc
         self.arm_rc = arm_rc
@@ -4621,6 +4816,13 @@ class _FakeOperatorTmux:
 
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
+        if commands_frame._WINDOW_SEAT_FORMAT in cmd:
+            # `_chat_being_left` (#688). Before the generic `list-windows` branch, for
+            # `_FakeTmux._seats`' reason: both formats carry `@charter_chat` and they are
+            # different questions. The window the operator is ON is one of THEIRS unless
+            # a test says otherwise, which is why the default row draws no chat at all.
+            return self._ok(cmd, stdout=f"$0\t1\t{self.current_chat}\n"
+                                        f"$0\t0\t{_frame_id()}")
         if "list-windows" in cmd:
             if self.list_windows_rc != 0:
                 return subprocess.CompletedProcess(
@@ -4637,7 +4839,13 @@ class _FakeOperatorTmux:
                 return subprocess.CompletedProcess(
                     cmd, self.chat_list_rc, stdout="",
                     stderr=f"error connecting to {OPERATOR_SOCKET} (No such file)")
-            live = [] if chats else list(self.pre_existing_windows)
+            # A chat the operator already has open is a LIVE chat, so it belongs in the
+            # `@charter_chat` answer as well as in the seat listing — without it the
+            # launch's own opening `state.reap` deletes that chat's directory and #688's
+            # teardown then has no record to act on, which is a fixture failing rather
+            # than the rule.
+            live = ([self.current_chat] if self.current_chat else []) if chats \
+                else list(self.pre_existing_windows)
             if self.window_killed is False and any("new-window" in c for c in self.calls):
                 live.append(_frame_id())
             return self._ok(cmd, stdout="\n".join(live))
@@ -4715,6 +4923,14 @@ class _FakeOperatorTmux:
             self.window_killed = True
             return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
                                                stderr="" if self.kill_rc == 0 else "no window")
+        if "kill-pane" in cmd or "resize-pane" in cmd:
+            # Tearing a charter chat's panels down (#688) — `_relayout` with `want=[]`
+            # kills every panel and re-asserts what is left, which is nothing. Answered
+            # rather than raised because it IS charter's own window either way: these are
+            # panes charter split, in a window charter created.
+            return subprocess.CompletedProcess(cmd, self.kill_rc, stdout="",
+                                               stderr="" if self.kill_rc == 0
+                                               else "no such pane")
         raise AssertionError(f"unexpected tmux command on the operator's server: {cmd}")
 
 
@@ -5046,6 +5262,46 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertEqual(armed[0][:3], ["tmux", "-S", OPERATOR_SOCKET])
         self.assertEqual(armed[0][armed[0].index("-t") + 1], "%9")
         self.assertIn(f"--frame {_frame_id()}", armed[0][-1])
+
+    def test_a_charter_chat_the_operator_was_on_loses_its_panels(self):
+        """#688 on this path too. The rule is about the window the client is leaving, and
+        it does not become a different rule because the server is somebody else\'s: an
+        operator with two charter frames open in one session was leaving the first one\'s
+        panels running at a width its window no longer has."""
+        state.record_server("op.1", OPERATOR_SOCKET)
+        state.record_harness_pane("op.1", "%1")
+        state.record_panes("op.1", panels={"top": "%3"})
+        fake = _FakeOperatorTmux(exit_code=0, current_chat="op.1")
+        self.assertEqual(_launch_inside(fake), 0)
+        self.assertIn(["tmux", "-S", OPERATOR_SOCKET, "kill-pane", "-t", "%3"],
+                      fake.calls,
+                      "the charter chat this launch took the operator off kept its "
+                      "panels")
+        self.assertEqual(state.panes("op.1"), {})
+
+    def test_a_select_that_failed_tears_nothing_down_here_either(self):
+        """The gate is the same on both paths and for the same reason: a teardown ahead of
+        a select that did not happen kills the panels of the frame the operator is still
+        looking at."""
+        state.record_server("op.1", OPERATOR_SOCKET)
+        state.record_harness_pane("op.1", "%1")
+        state.record_panes("op.1", panels={"top": "%3"})
+        fake = _FakeOperatorTmux(exit_code=0, current_chat="op.1", select_rc=1)
+        _launch_inside(fake)
+        self.assertEqual([c for c in fake.calls if "kill-pane" in c], [],
+                         "the operator never moved and charter tore down the frame they "
+                         "are still sitting on")
+        self.assertEqual(state.panes("op.1"), {"top": "%3"})
+
+    def test_one_of_the_operators_own_windows_is_never_touched(self):
+        """The control, and the promise this whole path is built on. Their window carries
+        no `@charter_chat`, so there is nothing here charter may act on — and the default
+        fixture is exactly that, which is why every other test in this class stayed green
+        while this rule was added."""
+        fake = _FakeOperatorTmux(exit_code=0)
+        self.assertEqual(_launch_inside(fake), 0)
+        self.assertEqual([c for c in fake.calls if "kill-pane" in c], [],
+                         "charter killed a pane in a window that is not its own")
 
     def test_a_finished_frame_leaves_no_directory_behind_on_this_path(self):
         """The CLOSING reap, and it needs a fixture the opening one cannot satisfy.
