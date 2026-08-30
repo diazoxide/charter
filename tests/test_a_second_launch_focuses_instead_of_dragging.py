@@ -216,6 +216,15 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         fake = _FakeServer(panes=[], panes_rc=1, clients=["/dev/ttys001"])
         self.assertIsNone(self._decide(fake))
 
+    def test_a_client_list_that_is_only_whitespace_is_no_client(self):
+        """A server answering a bare newline has told us about no clients, and reading it
+        as one would focus a workspace nobody is looking at — the exact launch that SHOULD
+        open a chat and select it. Pins `.split()`, which is what asks "is there a client"
+        in a form a test can go red on (see the comment at the line)."""
+        _a_chat("shared.1", ws=SHARED, pane="%0")
+        fake = _FakeServer(panes=["$3\t%0"], clients=["", "   "])
+        self.assertIsNone(self._decide(fake))
+
     def test_a_server_that_will_not_list_that_sessions_clients_focuses_nothing(self):
         """A session the server no longer has between the two calls answers rc 1 — and a
         launch that cannot tell whether anybody is there opens its own chat, which is the

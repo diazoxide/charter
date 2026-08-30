@@ -56,6 +56,25 @@ class TheIdIsWrittenTwice(PersonaIso, unittest.TestCase):
         self.assertEqual(state.harness_session(FID), SID)
         self.assertEqual(state.kept_harness_session(FID), SID)
 
+    def test_the_name_on_disk_is_the_contract_and_not_an_implementation_detail(self):
+        """**The spelling is load-bearing across VERSIONS, which is why it is asserted
+        rather than read back through the constant.** Every other test here goes through
+        `state._KEPT_SESSION_FILE`, so a rename would move writer and reader together and
+        no test would notice — the deletion sweep found exactly that and was right to.
+
+        But this file is durable state in a directory a much newer charter reopens (§5's
+        "survive a schema change across a long-lived chat directory"). Renaming it after
+        this ships silently loses the id for every chat already recorded, and the operator
+        sees a resume that quietly does not resume. So the name is pinned as bytes, and
+        changing it is a deliberate act with a red test in front of it.
+
+        The exact-set assertion is the second half: `record_harness_session` leaves the two
+        files it writes and no `.tmp` beside them, so a half-finished atomic write cannot
+        be mistaken for state either."""
+        state.record_harness_session(FID, SID)
+        self.assertEqual(sorted(p.name for p in _dir().iterdir()),
+                         ["session", "session.durable"])
+
     def test_the_two_files_can_only_disagree_by_the_sibling_being_absent(self):
         """One branch, one value, so there is no path on which the sibling holds a
         DIFFERENT id from `session` — the failure mode a second writer would have."""

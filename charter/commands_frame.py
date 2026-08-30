@@ -1655,7 +1655,16 @@ def _workspace_to_focus(socket: str, *, ws: str) -> tuple[str, str] | None:
     # would not answer (or a session it no longer has, between the two calls), and an
     # empty answer is a session with no client on it. Either way nobody is being dragged,
     # so either way this launch opens its own chat.
-    if clients.returncode != 0 or not clients.stdout.strip():
+    #
+    # **`.split()` and NOT `.strip()`, and the deletion sweep is what settled it.** The
+    # only question here is "is there a client at all", and `strip()` asked it in a form
+    # no test can pin: `s.strip()` and `s.lstrip()` are truthy for exactly the same
+    # strings, so the mutation is invisible — the equivalent mutant `_live_chats`' own
+    # docstring names. A bare `.split()` asks the real question once, on tmux's own
+    # newline-separated output: no non-whitespace token, no client. It has no half to
+    # mutate, and deleting it IS pinnable, because a server answering a bare newline then
+    # reads as one client with a blank name.
+    if clients.returncode != 0 or not clients.stdout.split():
         return None
     return seat[0], mine[seat[1]]
 
