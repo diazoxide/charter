@@ -24,6 +24,7 @@ directory and that `cmd_density` touches no `charter.toml` at all.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import subprocess
@@ -1527,16 +1528,30 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         armed = [c for c in fake.calls if "pane-died" in c and "-u" not in c]
         self.assertEqual(len(armed), 1, fake.calls)
 
-    def test_no_session_id_is_a_quiet_no_op(self):
-        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": ""}):
+    def test_no_session_id_is_not_a_quiet_no_op_any_more(self):
+        """It used to be, and that was the defect (#734). `charter frame-density minimal`
+        typed in the window you started from rather than the one charter opened printed
+        nothing and exited 0 — and inside a tmux you already have, where charter binds no
+        key, typing it IS the documented route to a density change. The frame is still
+        untouched, which is the half worth keeping."""
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": ""}), \
+             contextlib.redirect_stderr(err):
             rc, fake = self._run("full")
-        self.assertEqual(rc, 0)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("charter frame-density", err.getvalue())
         self.assertEqual(fake.calls, [])
         self.assertIsNone(state.density(self.fid))
 
     def test_an_unknown_level_is_refused_before_anything_moves(self):
         """The level reaches a slot list and a palette row; the closed set is the guard,
-        and it must be asked BEFORE the frame is touched, not after."""
+        and it must be asked BEFORE the frame is touched, not after.
+
+        Still a silent 0, and deliberately so: #734 separated the two refusals this
+        function used to share an `or` with, and only the empty `$CHARTER_SESSION_ID` half
+        crossed the line into "an operator typed this and got nothing back". A level
+        outside the closed set is answered inside a frame, on the `run-shell` side of that
+        line — see `commands_frame.outside_a_frame`'s own docstring."""
         rc, fake = self._run("enormous")
         self.assertEqual(rc, 0)
         self.assertEqual(fake.calls, [])

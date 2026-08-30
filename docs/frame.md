@@ -40,22 +40,49 @@ that carry the harness's exit code back out. Below 3.2 `charter <harness>` still
 nothing is switched off: the escape hatch stays bound but may do nothing, and if the
 exit-code hooks
 fail to install charter says so and declines to attach rather than risk a session nothing
-can end. The resize-recovery hook needs a further 3.3; below that a resize still works,
-panels can just drift out of shape until the frame is relaunched.
+can end. The resize-recovery hook needs a further 3.3; below that a resize still works, the panels
+just do not come back on their own — `charter frame-resize`, typed in the frame's own
+window, restores them.
 
 `charter <harness> --probe` (or the standalone `charter frame-probe`) answers "can a frame
 run here, and what will it not be able to do" without starting anything: exit 0 if a frame
 can run, non-zero if tmux is missing entirely, plus a line for each standing limit — a
-tmux below 3.2, a tmux below 3.3 (no resize-recovery hook), and any `[frame] slots` entry
-charter sizes but has no renderer for. `charter doctor` carries the same facts as its own
-`frame` row.
+tmux below 3.2, a tmux below 3.3 (no resize-recovery hook), any `[frame] slots` entry
+charter sizes but has no renderer for, and a `[[frame.component]]` arrangement charter
+refused. It closes with the three keys below, because it is also the closest thing charter
+has to "tell me about the frame". `charter doctor` carries the same facts — the machine's
+in its `frame` row, the file's in its `charter.toml` row, beside the other settings a plane
+declares and charter is not honouring.
 
 The 3.3 line is worth calling out because the two floors are easy to conflate: 3.3 sits
 *above* the 3.2 floor, so a tmux 3.2 passes the floor cleanly and still has no
 `window-resized` hook. Charter used to say so only in the milliseconds before the frame
-came up, which is nowhere. Now both surfaces name it, and what it costs is exactly one
-thing: resize your terminal and the panels stretch, and stay stretched until the frame is
-relaunched.
+came up, which is nowhere. Now both surfaces name it, and they name the remedy with it.
+
+What it costs is this. Resize your terminal on a tmux below 3.3 and nothing re-measures the
+panels, so they keep the shape the drag left them in. Measured on 3.2, a frame launched at
+120x40 and dragged to 80x24 and back:
+
+```
+%1 5x120   %0 22x97   %4 22x22   %3 5x120   %2 5x120     <- and staying that way
+```
+
+While you are at the small size it is more than cosmetic: the sidebar is squeezed to **two
+columns** of truncated glyphs (and still costs three, with its border), and the repo pane
+holds `⋯ too narrow for the repo table — 95 columns needed` — a line written to be
+transient, which here never settles because nothing measures again.
+
+**`charter frame-resize`, typed in the frame's own window, fixes it completely and at
+once.** It is the same command the missing hook would have called, and nothing in it
+depends on your tmux version — only the hook that fires it does. On the same frame:
+
+```
+$ charter frame-resize
+%1 1x120   %0 34x97   %4 34x22   %3 1x120   %2 1x120     <- the launch geometry, exactly
+```
+
+So the standing limit below 3.3 is not "until you relaunch", it is "until you ask". `F2 →`
+the palette reaches it too, and on this tmux that is the one recovery worth knowing.
 
 Those limits are deliberately **not** printed when a frame launches. A warning written to
 your terminal microseconds before tmux switches to the alternate screen is not readable —
@@ -794,6 +821,23 @@ component's `key`: the binds live in the config charter sources onto its own ser
 it never does inside your tmux, so `charter frame-toggle <name>` typed in the frame's own
 window is the route there.
 
+**"The frame's own window" is load-bearing, and charter says so if you miss it.** Every
+`charter frame-*` command acts on the frame it is run *inside*; typed in the window you
+started from, or in any ordinary shell, there is no frame to act on. Each one now says that
+on stderr and exits non-zero, rather than doing nothing and reporting success:
+
+```
+$ charter frame-toggle repos
+charter: charter frame-toggle acts on the frame it is run inside, and this shell is not in
+one — nothing was changed.
+  Run it in the window `charter <harness>` opened. …
+```
+
+That covers `frame-chat`, `frame-density`, `frame-toggle`, `frame-chrome`, `frame-switch`
+and `frame-resize` — the six you can type. The commands tmux fires for itself
+(`frame-palette`, `frame-respawn`, `frame-gather`) stay quiet at 0, because a non-zero exit
+inside a `run-shell` is what makes tmux print into your harness pane.
+
 `hotkey` is checked against the shape of a tmux key name — optional `C-`/`M-`/`S-`
 modifiers and then a key (`F2`, `Up`, `PPage`, `a`, `/`). Anything else falls back to
 `F2`, the same way every other key in `[frame]` falls back to its default when charter
@@ -1369,7 +1413,10 @@ one of the four, a provider placed without an `edge` and a `size`, or a `visible
 not `true`/`false` all mean the same thing: the arrangement is ignored and you get the
 frame your `slots` (or `density`, or the default) describes. You see your whole arrangement
 not take effect, which is something you can act on, rather than one pane's worth of quiet
-fiction. A `key` charter will not bind, a key two components both claim, and a key equal to
+fiction — and **`charter frame-probe` and `charter doctor` name the one key that did it**,
+so you are not re-reading the file line by line. The launch itself stays silent, for the
+reason every other standing limit does: a warning printed microseconds before tmux switches
+to the alternate screen is not readable. A `key` charter will not bind, a key two components both claim, and a key equal to
 your frame's own `hotkey` are on that list too — and so are a `bg` that is not one of the
 seventeen words, a `pad` outside `0` to `5`, and a `size` charter cannot give the component
 (any number but its own on the three whose height is fixed, and anything that is not a

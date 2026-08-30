@@ -316,6 +316,30 @@ def check_control_plane_config() -> Result:
                  f"plane that declares no default gets, so the key currently reads as "
                  f"absent. `charter <harness>` is unaffected.",
         )
+    # A committed `[[frame.component]]` arrangement charter cannot draw is refused WHOLE
+    # (`instance.component_arrangement`, #535) and degrades to the frame `[frame] slots`
+    # describes — which is byte-identical to the frame a plane that wrote no arrangement
+    # gets. So the third silently-ignored setting in a row, and here for the two above's
+    # reason: `docs/frame.md` told the operator they would "see your whole arrangement not
+    # take effect", and there was nothing to see (#738). The launch itself deliberately
+    # prints nothing — `commands_frame.frame_ready`'s docstring measures why a warning 86
+    # bytes before tmux's alternate screen is worse than silence — so this row and
+    # `charter frame-probe` are the whole surface.
+    #
+    # Read from `instance.frame_of` on the file parsed above, not from `config.FRAME`,
+    # which is the `[harness] default` branch's rule for its reason: this row is about the
+    # FILE. Reached only on a plane that actually wrote the key — the resolver answers
+    # `None` for every other one, which is every plane charter ships with — so no correct
+    # configuration can put this row in the yellow (#371's rule: a guard that fires on
+    # working setups gets switched off and then protects nothing).
+    _no_arrangement = _instance.frame_of(_cfg).get("components_refused")
+    if _no_arrangement:
+        return Result(
+            "charter.toml",
+            WARN,
+            detail="[[frame.component]] is refused; the frame is drawing `[frame] slots`",
+            hint=_instance.refused_arrangement_message(_no_arrangement),
+        )
     if not _config.HAS_CONTROL_PLANE:
         # NOT ok. Every check below reports green against a plane that does not exist —
         # `personas: none defined`, `vaults: none configured` — so a session with no

@@ -466,12 +466,43 @@ def below_resize_hook_message(v: tuple[int, int]) -> str:
     reading surfaces (`commands_frame.frame_ready`, `doctor.check_frame`), for the reason
     that message's own history records: two copies of one standing fact drift into two
     different facts.
+
+    **Two things this used to say were measured false (#744), and both were the kind of
+    wrong that stops an operator looking.**
+
+    *"…until the frame is relaunched."* It is until they ask. `charter frame-resize` typed
+    in the frame's own window does exactly what the missing hook would have done — it is
+    the same `cmd_resize`, and nothing in it is version-dependent; only the HOOK that
+    fires it is. Measured on ``~/.local/share/charter-testing/tmux-3.2``, a frame launched
+    at 120x40, dragged to 80x24 and back::
+
+        %1 5x120   %0 22x97   %4 22x22   %3 5x120   %2 5x120     <- stretched, and staying
+        $ charter frame-resize
+        %1 1x120   %0 34x97   %4 34x22   %3 1x120   %2 1x120     <- launch geometry, exactly
+
+    Naming the remedy on the ceiling it answers is `doctor.check_harness`'s rule for its
+    deficit lines, and it matters more here than there: below this floor that command is
+    the operator's ONLY recovery, and a limit stated with no remedy reads as "nothing can
+    be done".
+
+    *"Everything else in the frame works."* At 80x24 on the same build, the sidebar is
+    squeezed to **two columns** (`%4 18x2`, one truncated glyph per row) and the repo pane
+    holds `⋯ too narrow for the repo table — 95 columns needed` — a line
+    `frame/slots.py` writes to be transient, and which on 3.2 never settles because
+    nothing re-measures. "The panels stretch" reads as cosmetic; a sidebar of stubs and a
+    permanently apologising repo pane is not, and an operator told the first will not
+    connect the second to their tmux version.
     """
     return (f"tmux {v[0]}.{v[1]} predates the `window-resized` hook "
             f"(tmux {RESIZE_HOOK_FLOOR[0]}.{RESIZE_HOOK_FLOOR[1]}+), which is what "
-            f"restores each panel's fixed size after the terminal is resized. Everything "
-            f"else in the frame works; resize this terminal and the panels stretch, and "
-            f"stay stretched until the frame is relaunched.")
+            f"restores each panel's fixed size after the terminal is resized. Resize this "
+            f"terminal and the panels do not come back on their own: the sidebar can be "
+            f"left a couple of columns wide and the repo pane can hold `⋯ too narrow for "
+            f"the repo table` for good, because nothing re-measures. Run `charter "
+            f"frame-resize` in the frame's own window and every panel is restored to its "
+            f"launch geometry at once — that is the same command the hook would have "
+            f"called, and it is the recovery on this tmux. Everything else works "
+            f"unchanged.")
 
 
 def report_failure(action: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:

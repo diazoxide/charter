@@ -38,6 +38,8 @@ alphabet, and a name that is not in this frame's arrangement toggles nothing.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -254,27 +256,36 @@ class ARefusedToggleChangesNothingAtAll(PersonaIso, unittest.TestCase):
         self.assertEqual(fake.killed(), {"%5"}, fake.calls)
         self.assertEqual(state.hidden(self.fid), ("repos",))
 
-    def test_outside_a_frame_it_does_nothing(self):
+    def test_outside_a_frame_it_says_so_and_moves_nothing(self):
         """No `$CHARTER_SESSION_ID` — typed in an ordinary shell rather than fired by a
-        bind. Nothing runs and nothing is written.
+        bind. Nothing runs, nothing is written, and — since #734 — charter says so.
 
-        **`cmd_toggle` has no refusal of its own for this, and that is a finding rather
-        than an omission.** The deletion sweep proved an `if not fid: return 0` at the top
-        of that function exactly equivalent: with it gone the full suite stayed green and
-        every observable was identical — same return code, no tmux command, no file
-        created, nothing readable back. The line that actually carries the property is
-        `_relayout_target`'s `_PANE_ID_RE` check, because `contain.child` refuses `""` as a
-        path segment, so `state.frame_dir` and `state.harness_pane` both answer `None` and
-        the pane id is the empty string. That line IS pinned
-        (`test_a_harness_pane_that_is_not_tmuxs_own_shape_moves_nothing`), so the guarantee
-        rests on something a mutation can reach — which is the whole test the sweep applies.
+        **`cmd_toggle` used to have no refusal of its own for this, and that WAS defensible
+        until it was measured from the operator's side.** The deletion sweep had proved an
+        `if not fid: return 0` at the top of the function exactly equivalent: with it gone
+        the suite stayed green and every observable was identical — same return code, no
+        tmux command, nothing readable back. A guard nothing can pin is a comment with a
+        runtime cost, so it went, and the property was left resting on `_relayout_target`'s
+        `_PANE_ID_RE` check (which is pinned, by
+        `test_a_harness_pane_that_is_not_tmuxs_own_shape_moves_nothing`).
 
-        The chain is asserted here, not inferred: if `frame_dir` ever started answering for
-        an empty id, this test says so at the step where it changed."""
+        What that argument missed is that "every observable was identical" was itself the
+        bug. Inside a tmux you already have, charter binds no key at all, so
+        `charter frame-toggle <name>` typed in the frame's own window is the *only* route
+        to a toggle — and typed one window over it printed nothing and exited 0. The guard
+        is back with a consequence a mutation can reach: delete it now and this test goes
+        red on the stderr line and on the exit code.
+
+        The chain below it is still asserted rather than inferred: if `frame_dir` ever
+        started answering for an empty id, this test says so at the step where it changed.
+        """
         self.assertIsNone(state.frame_dir(""))
         self.assertIsNone(state.harness_pane(""))
-        rc, fake = self._toggle("repos")
-        self.assertEqual(rc, 0)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc, fake = self._toggle("repos")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("charter frame-toggle", err.getvalue())
         self.assertEqual(fake.calls, [])
         self.assertIsNone(state.hidden(self.fid))
 

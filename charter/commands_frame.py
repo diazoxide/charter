@@ -373,6 +373,46 @@ def no_renderer_message(missing: list[str]) -> str:
             f"nothing there, so the harness pane keeps that space")
 
 
+def driving_keys() -> list[str]:
+    """The three facts a first launch needs, one per entry. Read by `cli._wire`'s epilog —
+    every `charter <harness> --help` and `charter frame --help` — and by
+    :func:`frame_ready`, so the launcher and the probe cannot come to disagree.
+
+    **Nothing charter printed outside the frame said any of this** (#747). `charter claude
+    --help` listed four flags; `charter frame --help` was the same text; `frame-probe`
+    named every standing limit and no key. Inside the frame it is one two-word field on
+    the attention strip — `F2 palette` — which `density = minimal` drops, and
+    `charter docs show frame` had the whole answer with nothing pointing at it.
+
+    **The keys are resolved, not spelled.** `[frame] hotkey` moves the palette off `F2`,
+    and a help line that says `F2` on a plane that moved it is worse than one that says
+    nothing: it is a fact an operator will act on. `config.FRAME` has already resolved the
+    committed value (or the shipped default, for a key charter refused) by the time any
+    parser is built, and `frame/overlay.py`'s `HATCH_KEY` is charter's own constant for
+    the hatch — the same object `conf_text` binds in both cases.
+
+    Scrollback is the third and it is not a key at all. `docs/frame.md` calls it "the
+    difference people notice first", and it is the one an operator has no reason to
+    connect to charter: their terminal's own scrollbar stops moving, and the frame is
+    simply what was on screen when it happened.
+
+    **A list rather than a sentence, and the two readers join it differently on purpose.**
+    A `--help` epilog is not reflowed (`RawDescriptionHelpFormatter`, which is what keeps
+    a key name off the end of a line) and wants one fact per row; `frame_ready` prints a
+    paragraph per limit and wants a sentence. What must not be duplicated is the FACTS,
+    and they are here once — a joiner at each surface is presentation, not a second
+    answer.
+    """
+    return [
+        f"{config.FRAME['hotkey']} opens the palette — every action the frame has is in "
+        f"there",
+        f"{overlay.HATCH_KEY} takes the keyboard back from a pane that has stopped "
+        f"answering",
+        "scrollback is tmux's copy-mode now, not your terminal's own",
+    ]
+
+
+
 def frame_ready() -> tuple[int, str, str]:
     """Can a frame run on this machine right now, and what will it not be able to do?
     ``(exit code, util.* level, text)`` — read-only: `tmuxctl.version()` and
@@ -385,7 +425,8 @@ def frame_ready() -> tuple[int, str, str]:
     launcher goes on to draw regardless — a probe that lies about `cmd_launch`'s own
     behaviour is worse than one that runs nothing at all.
 
-    **The three STANDING conditions are reported here and nowhere else.** All three used
+    **The four STANDING conditions are reported here and nowhere else.** The first three
+    used
     to be `util.warn` calls inside `cmd_launch` (or, for the resize hook, inside
     `_draw_panels`), and all three were measured to be unreadable there: `util.warn` for
     an unimplemented slot lands 86 bytes before tmux's own `\\x1b[?1049h`, so the
@@ -405,6 +446,17 @@ def frame_ready() -> tuple[int, str, str]:
     recovery at all — the gap being closed here. It does NOT change this function's exit
     code, for the same reason the other two do not: `cmd_launch` draws the frame
     regardless, and a probe stricter than the launcher lies about the launcher.
+
+    **A refused `[[frame.component]]` arrangement is the fourth (#738), and it is the one
+    that is about the plane rather than the machine.** It joins the list rather than
+    getting a surface of its own because it is the same KIND of fact as the unimplemented
+    slot beside it — a standing property of the committed file, true on every launch until
+    somebody edits it — and because it fails in the same way: the frame comes up, at rc 0,
+    looking exactly like the frame the operator would have had if they had never written
+    the tables. It does not change the exit code either. `doctor.check_control_plane_config`
+    is its second reader, where `[plane] worktrees` and `[harness] default` are already
+    named for being silently ignored; this is the surface an operator asks BEFORE they
+    launch, and the one `docs/frame.md` sends them to.
 
     Two callers share this, both read-only for the same reason `charter/news.py`
     requires of a `check:` (reads, never acts; and this module's own tmux calls all go
@@ -426,9 +478,29 @@ def frame_ready() -> tuple[int, str, str]:
     missing = frame_slots.unimplemented(config.FRAME["slots"])
     if missing:
         ceilings.append(no_renderer_message(missing))
+    # The fourth, and the only one that is about this PLANE rather than this machine —
+    # which is `no_renderer_message`'s position too, and the reason it belongs on the same
+    # list rather than in a report of its own. A `[[frame.component]]` arrangement charter
+    # will not draw is refused whole and falls back to `slots`, and the frame that comes
+    # up is indistinguishable from the one the operator would have got without the tables
+    # (#738). Read off `config.FRAME`, which resolved it once at import, so this stays what
+    # this function promises to be: `tmuxctl.version()` and `config.FRAME`, nothing
+    # started, nothing written.
+    refused = config.FRAME.get("components_refused")
+    if refused:
+        ceilings.append(instance.refused_arrangement_message(refused))
+    # **Said on every probe, ceiling or none** (#747). This is not a limit and it is not
+    # news; it is the answer to the question an operator is actually asking when they run
+    # the closest thing charter has to "tell me about the frame", and it was the one thing
+    # this command could not tell them. It rides BELOW the ceilings rather than joining
+    # them, for `_statusline_suppressed_note`'s reason one surface over: a ceiling is a
+    # capability this machine does not have, and a key that works is the opposite of one.
+    drive = "\n".join([f"  \u00b7 {k}" for k in driving_keys()]
+                      + ["  · charter docs show frame — all of it, and what `[frame]` "
+                         "configures."])
     if not ceilings:
-        return 0, "ok", head
-    return 0, "warn", "\n".join([head, *(f"  ↳ {c}" for c in ceilings)])
+        return 0, "ok", "\n".join([head, drive])
+    return 0, "warn", "\n".join([head, *(f"  ↳ {c}" for c in ceilings), drive])
 
 
 def _report_probe(code: int, level: str, line: str) -> int:
@@ -5188,7 +5260,14 @@ def cmd_resize(args) -> int:
     """
     fid = getattr(args, "frame", None) or os.environ.get("CHARTER_SESSION_ID", "")
     if not fid:
-        return 0
+        # **This command stopped being hook-only the day the 3.2 limit named it** (#744).
+        # Below `tmuxctl.RESIZE_HOOK_FLOOR` there is no `window-resized` hook to fire it,
+        # and typing it by hand is the operator's ONLY way to get the panels back — so
+        # `frame-probe` and `docs/frame.md` now tell them to, and a hand-typed recovery
+        # that answers rc 0 and nothing else is the worst possible reply to "did that
+        # work?". The hook path cannot reach here: `_resize_hook_argv` writes
+        # `--frame <fid>` into the action or arms no hook at all.
+        return outside_a_frame("charter frame-resize")
     harness_pane = state.harness_pane(fid) or ""
     if not _PANE_ID_RE.fullmatch(harness_pane):
         return 0
@@ -5309,8 +5388,14 @@ def cmd_density(args) -> int:
     settled would repaint into the old shape.
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
+    if not fid:
+        return outside_a_frame("charter frame-density")
+    # Split off the empty *fid* above rather than sharing its `or`, and left a quiet
+    # no-op: a level outside the closed set is a DIFFERENT silence from #734's, on the
+    # `run-shell` side of the line `outside_a_frame`'s docstring draws, and it is not this
+    # change's to make. See that docstring, and the note in `cmd_toggle`.
     level = instance.density_level(getattr(args, "level", None))
-    if not fid or level is None:
+    if level is None:
         return 0
     where = _relayout_target(fid)
     if where is None:
@@ -5333,6 +5418,52 @@ def cmd_density(args) -> int:
     state.record_hidden(fid, [n for n in arrangement if n not in want])
     _apply_arrangement(fid, where=where, want=[n for n in arrangement if n in want])
     return 0
+
+
+def outside_a_frame(command: str) -> int:
+    """Say that *command* acts on a frame and this shell is not in one, and refuse. Never 0.
+
+    **The one sentence every `frame-*` command an operator can type says when it has no
+    frame to act on (#734), and having exactly one is the point.** `charter frame-chat`,
+    `frame-density`, `frame-toggle`, `frame-chrome`, `frame-switch` and `frame-resize` each
+    used to open with `if not fid: return 0` — four bytes of silence and a success status
+    for a command that did nothing. There was no way to tell "it worked" from "you are not
+    in a frame", and `docs/frame.md` makes two of them the ONLY route to their action:
+    inside a tmux you already have, charter binds no key at all, so typing the command in
+    the frame's own window is the documented escape hatch — and typing it in the window you
+    started from, one keystroke away, was indistinguishable from success.
+
+    **stderr, and never `_say_on_screen`.** There is no frame here by construction, so
+    there is no frame's screen to draw on: `_say_on_screen` with an empty id resolves `-t
+    ""` to whichever session on the SHARED server attached most recently, which is how
+    charter's refusal came to be drawn across somebody else's frame (see `cmd_chat`'s own
+    note). The operator's own stderr is the one surface that is certainly theirs.
+
+    **Non-zero, and the `run-shell` objection does not reach this branch.** Every one of
+    these commands is *also* fired by tmux — a `bind -n`, a window hook, a palette row —
+    and a non-zero status there makes tmux print `'<the whole command>' returned 1` INTO
+    THE HARNESS PANE, the one rectangle ADR 0018 says charter never draws in (measured on
+    3.7c; `conf_text`'s own docstring records the 127 case). That is why these commands
+    return 0 for every other refusal and always will. It does not apply here: a bind
+    carries `--chat` expanded from the presser's own window, the resize hook carries
+    `--frame`, a palette row's child is handed `CHARTER_SESSION_ID` explicitly
+    (`frame/builtin_actions._spawn`) — so on every path tmux drives, *fid* is set and this
+    function is unreachable. What is left is a human at a prompt, for whom rc 0 was the
+    lie. Measured on tmux 3.7c beside it: `run-shell` shows a child's **stdout** and
+    discards its **stderr** entirely, so even on a stale bind from an older charter the
+    sentence below costs the harness pane nothing; only the status would show.
+
+    The text names the window rather than only the failure, because "not in a frame" tells
+    an operator who typed this in the wrong pane nothing they did not know, and `charter
+    docs show frame` is where the rest of it lives — the one place F2, F12 and copy-mode
+    scrollback are written down (#747).
+    """
+    util.err(f"charter: {command} acts on the frame it is run inside, and this shell is "
+             f"not in one — nothing was changed.\n"
+             f"  Run it in the window `charter <harness>` opened. Inside a tmux you "
+             f"already have, charter binds no key, so typing it there is the route.\n"
+             f"  charter docs show frame")
+    return 1
 
 
 def _relayout_target(fid: str):
@@ -5538,8 +5669,13 @@ def cmd_chrome(args) -> int:
     (`_split_panels` reads `_current_chrome`).
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
+    if not fid:
+        return outside_a_frame("charter frame-chrome")
+    # `cmd_density`'s split, for its reason: the empty *fid* is #734's silence and is
+    # answered on the operator's own stderr; a word outside the closed set is not, and
+    # stays the quiet no-op it was.
     level = instance.chrome_level(getattr(args, "level", None))
-    if not fid or level is None:
+    if level is None:
         return 0
     panes = state.panes(fid)
     if not panes:
@@ -5659,10 +5795,29 @@ def cmd_toggle(args) -> int:
     property that survives it, and names the line that carries it.
     """
     fid = _pressers_chat(args)
+    # **The `if not fid` this function deleted, back — and back because it now carries a
+    # consequence a test can pin** (#734). It was removed as a guard nothing could turn
+    # red: with an empty id this command emitted nothing either way, so no mutation of it
+    # was observable. It says something now, on a surface that is certainly the asker's,
+    # and `test_a_frame_command_outside_a_frame_says_so.py` fails without it. It comes
+    # FIRST, before the arrangement is even read: `charter frame-toggle repos` typed in an
+    # ordinary shell names a component that IS in this plane's arrangement, so it used to
+    # fall past the check below and die in `_relayout_target`, where "you are not in a
+    # frame" and "this frame has no recorded harness pane" are one silence.
+    if not fid:
+        return outside_a_frame("charter frame-toggle")
     name = getattr(args, "component", None)
     frame = config.FRAME
     arrangement = instance.frame_arrangement(frame)
     if name not in arrangement:
+        # **Still a silent 0, and that is a scope line rather than an oversight.** A name
+        # this arrangement does not hold is the same "did nothing, said nothing" shape
+        # #734 is about, and it is worth its own issue — but every route to it is a
+        # `bind -n` charter wrote from the arrangement itself, and this is the ONE guard
+        # standing between an argv word and a `split-window`/hook action text
+        # (`test_component_toggle_keys.py`'s hostile-name class). Widening it into a
+        # `display-message` is a change to a security-shaped guard and belongs with a
+        # review of its own, not folded into a fix about being outside a frame.
         return 0
     where = _relayout_target(fid)
     if where is None:
@@ -5841,15 +5996,17 @@ def cmd_chat(args) -> int:
     """
     fid = _pressers_chat(args)
     if not fid:
-        # **Not fired from inside a frame at all, and unlike `cmd_toggle` this refusal is
-        # not free.** That command emits nothing by construction with an empty id, which
-        # is why the deletion sweep found its own `if not fid` equivalent and it was
-        # deleted. This one reaches :func:`_say_on_screen`, whose `-t <fid>` with an empty
+        # **Not fired from inside a frame at all.** This guard has always been here — what
+        # it may not do is reach :func:`_say_on_screen`, whose `-t <fid>` with an empty
         # target resolves to whichever session on the SHARED server was attached most
-        # recently — so `charter frame-chat api.2` typed in an ordinary shell drew
-        # charter's refusal across somebody else's frame. Measured by hand against the
-        # real server, which is how it was found. `cmd_switch`'s guard, for its reason.
-        return 0
+        # recently, which is how `charter frame-chat api.2` typed in an ordinary shell drew
+        # charter's refusal across somebody else's frame. Measured by hand against the real
+        # server, which is how it was found. What it does now is say so on the asker's own
+        # stderr instead of returning 0 into their silence (#734), which is the one surface
+        # that is certainly theirs — see :func:`outside_a_frame`. `docs/frame.md` makes
+        # this command the documented fallback when the palette's doorway is refused, so it
+        # is the last one that can afford to answer a typo with a success status.
+        return outside_a_frame("charter frame-chat")
     target = (getattr(args, "chat_id", None) or "").strip()
     # Asked again rather than trusted from the palette that spawned this: the same
     # command is typeable by hand on a name nobody drew, and `chats.check` is the one
@@ -6369,7 +6526,7 @@ def cmd_switch(args) -> int:
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     if not fid:
-        return 0
+        return outside_a_frame("charter frame-switch")
     ws = getattr(args, "workspace", None)
     persona_name = getattr(args, "persona", None)
     if ws:

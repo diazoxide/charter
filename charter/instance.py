@@ -1352,6 +1352,21 @@ def frame_of(cfg: dict) -> dict:
     # `[frame]` table is spelled `components`, and the generic type check below would read
     # `[[frame.component]]`'s raw tables straight into it without resolving one.
     out["components"] = []
+    # Set here for `components`' own reason, and carried for :func:`harness_of`'s: a
+    # `[[frame.component]]` arrangement charter refuses degrades to the frame `slots`
+    # describes, which is byte-identical to the frame a plane that wrote no arrangement at
+    # all gets — so the operator who committed one sees charter behaving exactly as though
+    # their tables were not there. Every OTHER key in this function degrades to a shipped
+    # default and the frame still draws with the rest of the file in force; this one takes
+    # the whole arrangement out of play (#535), which is the difference that earns it a
+    # reader. `None` is "nothing to say" and covers both the ordinary plane (no tables
+    # written) and the good one (tables written and honoured); a string is the one key that
+    # did it, ready for a sentence. Read by `doctor.check_control_plane_config`, where
+    # `config.worktrees_root_for`'s and `[harness] default`'s own silently-ignored keys are
+    # named for the same reason, and by `commands_frame.frame_ready` (`--probe`,
+    # `charter frame-probe`), which is the surface an operator asks "what will this frame
+    # not be able to do".
+    out["components_refused"] = None
     section = cfg.get("frame")
     if not isinstance(section, dict):
         return out
@@ -1402,7 +1417,8 @@ def frame_of(cfg: dict) -> dict:
     # refused when it would steal the frame's palette key, and the value it is compared
     # against has to be the one `conf_text` will actually bind — the operator's, if they
     # wrote a usable one, and the shipped ``F2`` if they did not.
-    placed = component_tables(section, hotkey=out["hotkey"])
+    placed, refused = component_arrangement(section, hotkey=out["hotkey"])
+    out["components_refused"] = refused
     if placed is not None:
         out["slots"] = [p["slot"] for p in placed if p["visible"]]
     # The arrangement itself, and not only the names it comes down to. `slots` carries
@@ -1598,10 +1614,104 @@ def _built_in_size(c, value):
 def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None:
     """The ``[[frame.component]]`` arrangement *section* declares, or ``None``.
 
-    ``None`` means "nothing usable was declared here" — no tables at all, or an
+    **The projection of :func:`component_arrangement` that drops the reason**, and a
+    separate function rather than a second resolver: every rule about what an arrangement
+    may say lives once, next door, and this is the shape the twenty-odd callers that only
+    want the placements already read. `frame_of` — the one caller that has somewhere to
+    put a refusal — asks the other one.
+    """
+    placed, _why = component_arrangement(section, hotkey=hotkey)
+    return placed
+
+
+def _component_value(value) -> str:
+    """A committed ``[[frame.component]]`` value, spelled the way its own file spells it.
+
+    Every refusal below quotes the operator's line back at them, and a line they cannot
+    find by searching for it is worth rather less: ``bg = "midnight"`` is what is in the
+    file, and :func:`contain.readable` alone answers ``midnight``, which matches nothing.
+    So a string gets its quotes and everything else — an int, a bool, a list, the table a
+    single-bracket `[frame.component]` produces — gets `readable`'s rendering unchanged.
+
+    The containment is `readable`'s either way and is not weakened by the two quote
+    characters: it runs on the value FIRST, so what they wrap is already ASCII with every
+    newline, control code and invisible codepoint escaped. A ``bg`` holding a `"` of its
+    own comes out as one visible character inside charter's pair, which reads oddly and
+    forges nothing — the property this is for.
+    """
+    return (f'"{contain.readable(value)}"' if isinstance(value, str)
+            else contain.readable(value))
+
+
+def _component_at(cid, n: int) -> str:
+    """Which ``[[frame.component]]`` table a refusal is about.
+
+    The ``use`` wherever one has already been established as a string, because that is the
+    name an operator reads their own file by; the ordinal for a table whose ``use`` is
+    itself the broken key, counting from 1 because that is how the file reads rather than
+    how the list indexes.
+
+    Contained even here: *cid* is a committed string on its way into a sentence `doctor`
+    prints, and a table whose ``use`` is a newline would otherwise forge a row of charter's
+    own report — :func:`harness_of`'s rule for :data:`contain.readable`, said about the
+    other committed identifier that reaches the same surface.
+    """
+    return (f"on `{contain.readable(cid)}`" if isinstance(cid, str)
+            else f"in `[[frame.component]]` table {n}")
+
+
+def refused_arrangement_message(why: str) -> str:
+    """The one sentence for a ``[[frame.component]]`` arrangement charter would not draw.
+
+    Shared by `doctor.check_control_plane_config` and `commands_frame.frame_ready`
+    (`--probe`, `charter frame-probe`) rather than written twice, for
+    `commands_frame.no_renderer_message`'s reason: this is a standing property of the
+    committed file, and two copies of a standing fact drift into two different facts.
+
+    *why* is :func:`component_arrangement`'s second answer — the ONE key that did it,
+    already contained. This adds what an operator cannot see for themselves: that the
+    refusal is whole-arrangement rather than one table, and that the frame they are
+    looking at is the `slots` one. Without that half, "``bg`` is not a colour word" reads
+    as one pane's worth of missing paint rather than as the entire arrangement dropped.
+    """
+    return (f"`[[frame.component]]` is not in force — {why}. An arrangement charter "
+            f"cannot draw is refused whole rather than one table at a time, so the frame "
+            f"you get is the one `[frame] slots` describes and every other table's "
+            f"`edge`, `size`, `bg`, `pad` and `key` goes with it. Fix that one key and "
+            f"the arrangement comes back.")
+
+
+def component_arrangement(section, *,
+                          hotkey: str | None = None) -> tuple[list[dict] | None, str | None]:
+    """The ``[[frame.component]]`` arrangement *section* declares, and why it was refused:
+    ``(placements or None, reason or None)``.
+
+    ``None`` placements means "nothing usable was declared here" — no tables at all, or an
     arrangement charter cannot draw — and the caller falls back to ``slots``, which falls
     back to ``density``, which falls back to the shipped default. Every layer of that is
     a frame charter is certain it can build.
+
+    **The two ``None`` placements are different facts and the reason is what tells them
+    apart (#738).** A plane that wrote no arrangement is every plane charter ships with,
+    and there is nothing to say about it; a plane that wrote one charter threw away is a
+    committed file whose declared layout is not the layout it has. Both used to come back
+    as one bare ``None``, so the only surfaces that could have said so — `doctor` and
+    `charter frame-probe` — had nothing to distinguish and said nothing. The reason is
+    ``None`` for the first and a sentence for the second, and the sentence names the ONE
+    key that did it, because "your arrangement was refused" without the key is a file to
+    re-read line by line.
+
+    **What counts as declared is the KEY's presence, not a usable value.** ``component =
+    "identity"`` and ``component = []`` are both a key an operator wrote that decides
+    nothing, which is the same class as the value refusals below; ``component`` absent is
+    a plane spelled with `slots` and gets silence. That line is where the whole reporting
+    risk sits: a warning that fires on correct configurations gets switched off and then
+    protects nothing (#371, and `_BRANCH_MOVERS`' deletion), and *every* plane charter
+    ships with — this repository's own included — takes the absent branch.
+
+    Everything below this paragraph is unchanged from when this function was
+    :func:`component_tables`, and each ``return`` now carries the sentence for its own
+    refusal rather than sharing one bare ``None`` with fourteen others.
 
     **An arrangement is refused whole, and #535 is the reason it is not refused one table
     at a time.** The obvious design — drop the table charter cannot make sense of, keep
@@ -1692,9 +1802,29 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
     outside a `[frame]` section has; the hatch and the two mouse keys are reserved
     regardless, because charter binds all three for every frame on its own server.
     """
+    # **The absent key is the one branch that must never produce a reason**, and it is
+    # asked before the value is looked at rather than inferred from the value being
+    # missing: `component = false` is a key an operator wrote and `section.get` answers
+    # `None` for a key nobody wrote, so a truthiness test here would put every plane on
+    # earth one `get` away from a warning about a table it never had.
+    declared = isinstance(section, dict) and FRAME_COMPONENT_KEY in section
     tables = section.get(FRAME_COMPONENT_KEY) if isinstance(section, dict) else None
-    if not isinstance(tables, list) or not tables:
-        return None
+    if not isinstance(tables, list):
+        if not declared:
+            return None, None
+        # `[frame.component]` — ONE pair of brackets — is the typo this branch is really
+        # about: TOML reads it as a table rather than an array of tables, so an operator
+        # who wrote every key correctly and one bracket wrong got the default frame and no
+        # word about it anywhere.
+        return None, (f"`component = {_component_value(tables)}` is not an array of "
+                      f"tables — an arrangement is spelled `[[frame.component]]`, with "
+                      f"two brackets, once per component")
+    if not tables:
+        # No `declared` test, and its absence is deliberate: the only value that reaches
+        # here is a list, and a key nobody wrote answers `None`, which is not one. A second
+        # `if not declared` would be a guard no mutation could turn red — the shape the
+        # deletion sweep calls a survivor.
+        return None, "`component = []` places no components at all"
     from .frame import builtins as _builtins
     from .frame import overlay as _overlay
     from .frame import tmuxctl as _tmuxctl
@@ -1723,18 +1853,33 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
     # re-checking, so this filter is load-bearing; see the comment there for what a
     # ``None`` in here would cost.
     bound: set[str] = {k for k in (hotkey, _overlay.HATCH_KEY, *_tmuxctl.MOUSE_KEYS) if k}
-    for table in tables:
+    for n, table in enumerate(tables, 1):
         if not isinstance(table, dict):
-            return None
-        if any(k not in FRAME_COMPONENT_FIELDS for k in table):
-            return None
+            return None, (f"the entry {_component_at(None, n)} is "
+                          f"{_component_value(table)} rather than a table of keys")
+        stray = sorted(str(k) for k in table if k not in FRAME_COMPONENT_FIELDS)
+        if stray:
+            # Named one at a time and not "has unknown keys": a misspelt key is the
+            # commonest way into this whole function, and the operator's next move is to
+            # find that word in their file.
+            form = ", ".join("`" + f + "`" for f in FRAME_COMPONENT_FIELDS)
+            return None, (f"`{contain.readable(stray[0])}` "
+                          f"{_component_at(table.get('use'), n)} is not a "
+                          f"`[[frame.component]]` key — the whole form is {form}")
         cid = table.get("use")
-        if not isinstance(cid, str) or cid in seen:
-            return None
+        if not isinstance(cid, str):
+            return None, (f"no `use` names a component {_component_at(None, n)} — every "
+                          f"table needs one, and it is a component id rather than a "
+                          f"`[frame] slots` word")
+        if cid in seen:
+            return None, (f"`use = \"{contain.readable(cid)}\"` is placed twice — a "
+                          f"component sits in one rectangle, so charter has no answer for "
+                          f"the second")
         seen.add(cid)
         visible = table.get("visible", True)
         if not isinstance(visible, bool):
-            return None
+            return None, (f"`visible = {_component_value(visible)}` "
+                          f"{_component_at(cid, n)} is not `true` or `false`")
         # The two refusals a toggle key gets, each its own line because each is a
         # different thing going wrong and the sweep has to be able to tell them apart.
         key = table.get("key")
@@ -1742,7 +1887,8 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         # hotkey`'s own injection, arriving through a second committed key — see
         # :func:`toggle_key`, which is the SAME pattern and not a second one.
         if key is not None and toggle_key(key) is None:
-            return None
+            return None, (f"`key = {_component_value(key)}` {_component_at(cid, n)} is "
+                          f"not a key charter will write into a `bind` line")
         # Two: something has already bound it. tmux key tables have no notion of a
         # conflict — the later `bind -n` simply replaces the earlier — so unrefused this
         # is one dead key and nothing anywhere saying which. `bound` starts holding the
@@ -1780,7 +1926,11 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         # the shape the deletion sweep calls a survivor: a line nothing can fail without.
         # One invariant, stated once, where it is established.
         if key in bound:
-            return None
+            return None, (f"`key = {_component_value(key)}` {_component_at(cid, n)} "
+                          f"is already bound — the frame's own palette, its escape hatch, "
+                          f"its two mouse keys and each other component's `key` have it "
+                          f"first, and tmux's later `bind` would silently replace the "
+                          f"earlier one rather than report a conflict")
         if key is not None:
             bound.add(key)
         # The pane's own surface. Refused by NAME rather than passed through, which is
@@ -1792,7 +1942,10 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         # subclass with a hostile `__str__` cannot travel onward either.
         bg = table.get("bg")
         if bg is not None and pane_bg(bg) is None:
-            return None
+            return None, (f"`bg = {_component_value(bg)}` {_component_at(cid, n)} is not "
+                          f"one of charter's {len(FRAME_PANE_BG)} pane background words "
+                          f"(`default`, the {len(FRAME_PANE_COLOURS)} ANSI colour names, "
+                          f"and each of those with a `bright` prefix)")
         # And the inset. Called ONCE, with the answer kept: `pad = table.get("pad", 0)`
         # followed by `if pane_pad(pad) is None` reads as two steps and is one — `pane_pad`
         # answers its own argument unchanged, so the second call could not have produced a
@@ -1806,7 +1959,9 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         # spelling-not-property shape this project has paid for six times.
         pad = pane_pad(table.get("pad", 0))
         if pad is None:
-            return None
+            return None, (f"`pad = {_component_value(table.get('pad'))}` "
+                          f"{_component_at(cid, n)} is not a whole number of cells from 0 "
+                          f"to {FRAME_PANE_PAD_MAX}")
         # **`places`, not `cid in SLOT_OF`, and the difference is Phase 5's two bars.**
         # That table is the shorthand between a committed `[frame] slots` word and a
         # component id; this asks the question this branch is actually about — is *cid*
@@ -1819,7 +1974,10 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         if _builtins.places(cid, reg):
             c = reg.get(cid)
             if "edge" in table and table["edge"] != c.edge:
-                return None
+                return None, (f"`edge = {_component_value(table['edge'])}` "
+                              f"{_component_at(cid, n)} is not the edge that built-in sits "
+                              f"on — charter derives its geometry at import, so `{c.edge}` "
+                              f"is the only value it can honour there")
             # The one key on a built-in that a plane may do more with than echo, and
             # :func:`_built_in_size` is where that asymmetry is argued: `identity`,
             # `attention` and `sidebar` are read out of a table `layout` derives at
@@ -1840,7 +1998,9 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
             if "size" in table:
                 size = _built_in_size(c, table["size"])
                 if size is None:
-                    return None
+                    return None, (f"`size = {_component_value(table['size'])}` "
+                                  f"{_component_at(cid, n)} is not a size charter reads "
+                                  f"for that built-in — see `charter docs show frame`")
             out.append(_built_in_placement(reg, cid, size=size, visible=visible, key=key,
                                            bg=bg, pad=pad))
             continue
@@ -1848,13 +2008,32 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
         # installed distribution declares it. Asked of entry point METADATA — nothing is
         # imported here, and a machine without the distribution refuses the arrangement
         # rather than drawing a frame with a hole where the panel was.
+        #
+        # **Three sequential tests where there was one `or` chain, and the split is the
+        # reporting, not a change of behaviour.** The order is the chain's order and the
+        # short-circuit is the same one — a `size < 1` still never runs against a value
+        # `isinstance(size, int)` has not already admitted. What it buys is that the three
+        # facts stop sharing a sentence: "no distribution on this machine supplies
+        # `chats`" sends an operator to `pip install`, "`edge` must be one of four words"
+        # sends them to their own file, and one message covering both said neither.
         edge, size = table.get("edge"), table.get("size")
-        if (not reg.providers.supplies(cid) or edge not in EDGES
-                or not isinstance(size, int) or isinstance(size, bool) or size < 1):
-            return None
+        if not reg.providers.supplies(cid):
+            return None, (f"`use = \"{contain.readable(cid)}\"` is not one of charter's "
+                          f"own components and no installed distribution supplies it on "
+                          f"this machine")
+        if edge not in EDGES:
+            return None, (f"`edge = {_component_value(edge)}` {_component_at(cid, n)} is "
+                          f"not one of {', '.join('`' + e + '`' for e in EDGES)} — a "
+                          f"component charter did not write must say which side it "
+                          f"attaches to, and how many cells it takes")
+        if not isinstance(size, int) or isinstance(size, bool) or size < 1:
+            return None, (f"`size = {_component_value(size)}` {_component_at(cid, n)} is "
+                          f"not a whole number of cells of 1 or more — a component "
+                          f"charter did not write must say how big it is, because asking "
+                          f"the provider would mean importing it on every charter command")
         out.append(_placement(cid, edge=edge, size=Fixed(size), visible=visible, key=key,
                               bg=bg, pad=pad))
-    return out
+    return out, None
 
 
 def frame_components(cfg: dict) -> list[dict]:
