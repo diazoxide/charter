@@ -1,0 +1,5 @@
+# A FEATURE CHARTER SHIPS MUST BE USABLE ON CHARTER'S OWN PLANE, AND TWICE
+
+_2026-08-30 18:43 · persistent_
+
+A FEATURE CHARTER SHIPS MUST BE USABLE ON CHARTER'S OWN PLANE, AND TWICE IT WAS NOT. #661: layout.repos_rows read the plane's charter.toml, so #660's own 'size' key reddened six tests when the operator used it. #701: three config tests compare this plane's committed arrangement with assertEqual against instance.FRAME_SLOTS, so adding the workspaces/chats bars charter itself registers and documents reddens the suite. Both times the feature had been exercised only against SYNTHETIC configs, never against a real plane using it — which is also how #660 shipped a size key that dropped a whole arrangement (#687) and how #690 shipped a documented snippet that turned the frame off. charter.toml is a TRACKED FILE in this repo, so committing the config would turn CI red for everyone, not just locally. Before adding any [[frame.component]] to this plane: run tests/test_frame_config.py and tests/test_component_config.py FIRST.

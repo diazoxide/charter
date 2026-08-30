@@ -45,3 +45,8 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [A CI cost written in a code comment has provenance in the job logs, not ](20260830-102658-a-ci-cost-written-in-a-code-comment-has-provenan.md)
 - [The deletion sweep's mutant was not always the edit it printed: ast node](20260830-110620-the-deletion-sweep-s-mutant-was-not-always-the-e.md)
 - [#655's third sweep verdict ('indistinguishable') was refuted by measurem](20260830-110628-655-s-third-sweep-verdict-indistinguishable-was-.md)
+- [Charter's signature defect has a recurring sub-shape worth checking firs](20260830-134004-charter-s-signature-defect-has-a-recurring-sub-s.md)
+- [A guard that reads prose must ship its attack corpus as test data AND an](20260830-144204-a-guard-that-reads-prose-must-ship-its-attack-co.md)
+- [tmux parses a -t target on '.' as window.pane, so a session or window NA](20260830-150349-tmux-parses-a-t-target-on-as-window-pane-so-a-se.md)
+- [A hand deletion-sweep harness must verify its restore with 'git diff --q](20260830-150352-a-hand-deletion-sweep-harness-must-verify-its-re.md)
+- [tmux 3.2 REWRITES a dot in a session name: 'new-session -s api.2' create](20260830-173221-tmux-3-2-rewrites-a-dot-in-a-session-name-new-se.md)

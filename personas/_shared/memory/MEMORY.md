@@ -44,3 +44,5 @@ Written by the persona as it learns; committed and shared.
 - [THE DELETE-THE-EQUIVALENT-MUTANT RULE NEEDS A MEASUREMENT, NOT A READING](the-delete-the-equivalent-mutant-rule-needs-a-me.md)
 - [A HEAD SHA WITH NO CHECKS AND A SHA THE REPO DOES NOT HAVE ARE DIFFERENT](a-head-sha-with-no-checks-and-a-sha-the-repo-doe.md)
 - [THREE FORGE READS THAT ARE SILENTLY PARTIAL, measured 2026-08-29. (1) A](three-forge-reads-that-are-silently-partial-meas.md)
+- [A FEATURE CHARTER SHIPS MUST BE USABLE ON CHARTER'S OWN PLANE, AND TWICE](a-feature-charter-ships-must-be-usable-on-charte.md)
+- [THE ASSERTION SAT ON THE PATH THAT ALREADY SATISFIED IT — the sharpest s](the-assertion-sat-on-the-path-that-already-satis.md)
