@@ -5714,5 +5714,112 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
                                  "width")
 
 
+class ASwitchDressesTheWindowItEntersEvenWithNothingToSplit(_ChatsOnOneSession,
+                                                            _TmuxServerFixture,
+                                                            PersonaIso):
+    """#686, against a real server: the options are *present on the window* afterwards.
+
+    The argv half is `tests/test_frame_border_surface.py`'s. What only a real tmux can say
+    is that the writes landed — nothing here is server- or session-scoped, so every chat's
+    window has to be told separately, and until this fix the only thing that ever told one
+    was that chat's own launch.
+
+    **The fixture is the one a mock cannot plant honestly**: a chat holding every panel it
+    wants, with the options stripped off it. That is the shipping state of a chat surfaced
+    by a charter predating #657/#631 and re-entered while its panels are alive, and it is
+    also one `charter claude` away on this charter — the second launch selects its own new
+    window and leaves the first's panels running and recorded.
+
+    Verified on tmux 3.7c and on tmux 3.2 (`tmuxctl.FLOOR`). Which options exist differs
+    between them — `pane-border-indicators` is 3.7's — so this asserts about the ones THIS
+    tmux has rather than about a list, the way `EveryBorderOptionThisTmuxHasIsPinned`
+    already does.
+    """
+
+    def _has(self, name: str) -> bool:
+        """Does this tmux have *name* as a window option at all? Probed, never inferred
+        from a version string — this module's own rule."""
+        return self._srv("set-option", "-w", "-t", self.pane, name,
+                         "off").returncode == 0
+
+    def _shown(self, scope: str, name: str) -> str:
+        return self._srv("show-options", scope, "-t", self.pane,
+                         name).stdout.strip()
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.one, _ = self._chat(f"{self.WS}.1", first=True)
+        self.pane, _ = self._chat(f"{self.WS}.2", first=False)
+        for chat in (f"{self.WS}.1", f"{self.WS}.2"):
+            state.record_workspace(chat, self.WS)
+            state.record_chrome(chat, "dark")
+        # Every drawable panel already split into the target's window — the branch
+        # `if missing:` skipped, and the one no existing switch test plants.
+        want = commands_frame._drawable_slots(
+            80, 24, commands_frame._visible_now(f"{self.WS}.2", config.FRAME))
+        self.assertTrue(want, "nothing is drawable at this size, so nothing is measured")
+        panels = {}
+        for slot in want:
+            r = self._srv("split-window", "-d", "-t", self.pane, "-P", "-F",
+                          "#{pane_id}", "--", *_gate_argv(
+                              os.path.join(self._gate_dir, f"gate-{slot}"), "exit 0"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            panels[slot] = r.stdout.strip()
+        state.record_panes(f"{self.WS}.2", panels=panels)
+        self.kept = panels
+        self.names = [n for n, _ in commands_frame._CHROME if self._has(n)]
+        self.assertTrue(self.names, "this tmux has none of the options under test")
+        for name in self.names:
+            self._srv("set-option", "-w", "-u", "-t", self.pane, name)
+        for name in instance.PANE_BORDER_OPTIONS:
+            self._srv("set-option", "-p", "-u", "-t", self.pane, name)
+
+    def _switch(self) -> None:
+        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+             mock.patch.object(commands_frame, "_say_on_screen",
+                               lambda fid, msg, *a, **k: self.fail(msg)), \
+             mock.patch.dict(os.environ,
+                             {"CHARTER_SESSION_ID": f"{self.WS}.1",
+                              "CHARTER_WORKSPACE": self.WS}, clear=False):
+            self.assertEqual(commands_frame.cmd_chat(
+                SimpleNamespace(chat_id=f"{self.WS}.2", chat=f"{self.WS}.1")), 0)
+
+    def test_the_fixture_really_has_nothing_left_to_split(self):
+        """Without this the class would be measuring the branch that already worked."""
+        before = self._srv("list-panes", "-t", self.pane, "-F", "#{pane_id}").stdout.split()
+        self._switch()
+        self.assertEqual(
+            self._srv("list-panes", "-t", self.pane, "-F", "#{pane_id}").stdout.split(),
+            before, "the switch split or killed something, so `missing` was not empty")
+
+    def test_the_windows_own_options_are_set_after_the_switch(self):
+        self.assertEqual([self._shown("-w", n) for n in self.names], [""] * len(self.names),
+                         "the fixture never stripped the options")
+        self._switch()
+        for name in self.names:
+            with self.subTest(option=name):
+                self.assertTrue(self._shown("-w", name),
+                                f"{name} is still unset on the window charter just "
+                                f"switched into")
+
+    def test_the_rules_around_the_harness_are_set_after_the_switch(self):
+        """#657's two `-p` writes — the ones the reported screenshot is about."""
+        self._switch()
+        self.assertTrue([self._shown("-p", n) for n in instance.PANE_BORDER_OPTIONS
+                         if self._shown("-p", n)],
+                        "the rules around the pane charter does not paint were never "
+                        "re-asserted, so a horizontal rule stays two colours")
+
+    def test_the_harnesss_interior_is_still_never_painted(self):
+        """#657's own design point, kept while making its rules apply: the harness's
+        RULES are charter's and its INTERIOR is the agent's (ADR 0018). A re-layout that
+        now dresses the window on every pass must not start painting inside it."""
+        self._switch()
+        for name in instance.chrome_option_names():
+            with self.subTest(option=name):
+                self.assertEqual(self._shown("-p", name), "",
+                                 f"charter painted the harness pane's {name}")
+
+
 if __name__ == "__main__":
     unittest.main()

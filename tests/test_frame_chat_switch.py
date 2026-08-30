@@ -698,6 +698,38 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         self.assertTrue(state.panes("api.2"))
         self.assertNotEqual(state.version("api.2"), before)
 
+    def test_a_target_that_kept_its_panels_still_has_its_rules_re_asserted(self):
+        """#686. Every switch test in this file — and in
+        `tests/test_frame_tmux_integration.py` — plants an EMPTY pane map for the target,
+        so all of them exercised the `missing != []` branch and none of them looked at a
+        border option. This plants the other branch.
+
+        It is one `charter claude` away: the second chat's window is created with
+        `new-window -d` and selected, so chat 1 keeps its panels alive **and recorded**,
+        and the operator's first `F2` back into chat 1 finds nothing missing. Before this
+        fix that switch wrote zero window and zero pane options — geometry and hooks
+        re-asserted, not one of `_CHROME`'s five, not #657's two, not `remain-on-exit`.
+        """
+        want = commands_frame._drawable_slots(
+            80, 24, commands_frame._visible_now("api.2", config.FRAME))
+        self.assertTrue(want, "the fixture has nothing to keep, so nothing is measured")
+        state.record_panes("api.2",
+                           panels={s: f"%{20 + i}" for i, s in enumerate(want)})
+        self._switch()
+        self.assertNotIn("split-window", self.fake.verbs(),
+                         "the target was missing a slot after all, so this is the branch "
+                         "that already worked")
+        options = [a[-2] for a in self.fake.calls
+                   if _FakeServer._verb(a) == "set-option" and "-u" not in a]
+        for name, _value in commands_frame._CHROME:
+            self.assertIn(name, options,
+                          f"the window's {name} was never asserted on the chat being "
+                          f"switched into")
+        harness = [a for a in self.fake.calls
+                   if _FakeServer._verb(a) == "set-option" and "-p" in a
+                   and a[a.index("-t") + 1] == "%2"]
+        self.assertTrue(harness, "#657's rules around the harness were not re-asserted")
+
     def test_a_window_that_is_gone_costs_a_sentence_and_no_panels(self):
         """The one refusal `chats.check` deliberately does not guess at. Nothing is torn
         down: the teardown is below the select for exactly this case."""

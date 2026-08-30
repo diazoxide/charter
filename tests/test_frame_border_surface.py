@@ -659,8 +659,15 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
     ``bg = None`` and the whole suite stayed green — a per-pane colour that production
     never resolves is a feature that does nothing on a real frame and a test file that
     says it works. The *surface* argument has exactly that shape, so it is driven through
-    exactly that funnel: `_split_panels`, which both launch paths and every density change
-    come through, with only `tmuxctl.run` faked.
+    exactly that funnel, with only `tmuxctl.run` faked.
+
+    **The funnel is `_draw_panels` since #686, and it is two functions rather than one.**
+    A window's options (`_dress_window`) and each pane's (`_split_panels`) were one call
+    for as long as a window option was only ever written when a pane was created — which
+    is exactly the assumption #686 found to be false, because `_relayout` calls the split
+    behind `if missing:`. Driving `_split_panels` alone here would now measure the pane
+    half and report the window half as absent, so this drives the level both halves hang
+    off, in the order `_draw_panels` calls them.
     """
 
     def _issued(self, frame: dict, slots: list[str], *, fid="f-1",
@@ -676,6 +683,8 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         with mock.patch.dict(config.FRAME, frame), \
                 mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
                 mock.patch.dict(os.environ, {}, clear=True):
+            commands_frame._dress_window("sock", fid=fid, harness_pane="%1",
+                                         env=None, v=v)
             commands_frame._split_panels("sock", slots=slots, fid=fid,
                                          harness_pane="%1", env=None, pane_env=None, v=v)
         return seen
@@ -877,10 +886,14 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         return self._styles(self._launch_calls(frame, level, v))
 
     def _launch_calls(self, frame, level, v=None):
-        """What `_split_panels` — the funnel both launch paths and every density change
+        """What `_draw_panels` — the funnel both launch paths and every density change
         come through — actually issues, with the frame's live word recorded rather than
         the resolver stubbed out. A reconstruction of the expression would agree with the
-        live path by being written twice, which is the thing #610 is about."""
+        live path by being written twice, which is the thing #610 is about.
+
+        `_draw_panels` and not `_split_panels` since #686: the window's own options moved
+        up a level (`_dress_window`) so that a re-layout which adds no pane still asserts
+        them, and the two halves are only both in view from here."""
         calls: list[list[str]] = []
         state.record_chrome(self.FID, level)
 
@@ -891,6 +904,8 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         with mock.patch.object(config, "FRAME", frame), \
                 mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
                 mock.patch.dict(os.environ, {}, clear=True):
+            commands_frame._dress_window("s", fid=self.FID, harness_pane="%1",
+                                         env=None, v=v)
             commands_frame._split_panels("s", slots=["top"], fid=self.FID,
                                          harness_pane="%1", env=None, pane_env=None, v=v)
         return calls
@@ -1058,6 +1073,99 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
             commands_frame.cmd_chrome(type("A", (), {"level": "dark"})())
         for argv in calls:
             self.assertNotIn("; kill-server", argv)
+
+
+class ARelayoutThatAddsNoPaneStillAssertsTheWindowsOwnOptions(PersonaIso,
+                                                              unittest.TestCase):
+    """#686: the frame's window options are a property of the FRAME, not of a split.
+
+    They used to be issued from inside `_split_panels`, which `_relayout` calls behind
+    `if missing:`. So a re-layout of a frame that already holds every slot it wants — a
+    switch back into a chat whose panels are still running, which is one `charter claude`
+    away — re-asserted geometry and hooks and **not one option**. Measured before the
+    fix, with the repo's own `_FakeServer` driving the real `cmd_chat` at 200x50: eleven
+    tmux calls, no `set-option` among them.
+
+    Nothing asserted this either way. `test_frame_chat_switch`'s switch tests and
+    `test_frame_tmux_integration`'s both plant an EMPTY pane map for the target, so both
+    exercised only the `missing != []` branch.
+    """
+
+    FID = "f-relayout"
+
+    def _calls(self, *, panels, want, v=(3, 7)) -> list[list[str]]:
+        seen: list[list[str]] = []
+        spare = iter(f"%{n}" for n in range(30, 99))
+
+        def fake_run(_why, argv, **_kw):
+            seen.append(list(argv))
+            out = next(spare) if "split-window" in argv else "80"
+            return subprocess.CompletedProcess(argv, 0, stdout=out + "\n", stderr="")
+
+        frame = _resolved(*["brightblack"] * 4, chrome="dark")
+        with mock.patch.object(config, "FRAME", frame), \
+                mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            commands_frame._relayout("sock", fid=self.FID, harness_pane="%1",
+                                     panels=panels, want=want, v=v,
+                                     window_cols=200, window_rows=50)
+        return seen
+
+    @staticmethod
+    def _options(calls, flag) -> dict[str, str]:
+        """The `_CHROME` window options only — `remain-on-exit` is window-scoped too and
+        has its own test, so folding it in here would let one of the two stand in for the
+        other."""
+        return {a[-2]: a[-1] for a in calls
+                if "set-option" in a and flag in a and "-u" not in a
+                and a[-2] in dict(commands_frame._CHROME)}
+
+    def test_a_relayout_with_nothing_missing_still_writes_the_window_options(self):
+        panels = {"top": "%3", "bottom": "%4"}
+        calls = self._calls(panels=panels, want=list(panels))
+        self.assertNotIn("split-window", [a[3] for a in calls if len(a) > 3],
+                         "the fixture split something, so this is the branch that "
+                         "already worked")
+        self.assertEqual(self._options(calls, "-w"), dict(commands_frame._CHROME),
+                         "a re-layout that added no pane wrote no window option, so "
+                         "#657's rules and #514's chrome do not apply after a switch")
+
+    def test_it_writes_the_two_rules_around_the_harness_as_well(self):
+        """#657's own two `-p` writes, which are the ones the reported screenshot is
+        about: unset, the 78 rule cells over the harness carry an explicit `ESC[49m`
+        while the cells beside them over a surfaced panel carry `ESC[100m` — one
+        horizontal rule in two colours."""
+        panels = {"top": "%3", "bottom": "%4"}
+        calls = self._calls(panels=panels, want=list(panels))
+        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        harness = [a for a in calls if "set-option" in a and "-p" in a
+                   and a[a.index("-t") + 1] == "%1"]
+        self.assertEqual([a[-1] for a in harness], [want, want],
+                         "the rules around the pane charter does not paint were not "
+                         "re-asserted")
+
+    def test_it_re_arms_remain_on_exit_on_the_window(self):
+        """Armed before any pane charter creates (#408), which on this path means before
+        the kill-and-split loop rather than only when that loop has work."""
+        panels = {"top": "%3"}
+        calls = self._calls(panels=panels, want=list(panels))
+        self.assertTrue([a for a in calls
+                         if "set-option" in a and "remain-on-exit" in a],
+                        "a frame's dead panels would be thrown away with their respawn "
+                        "hooks after a re-layout that added no pane")
+
+    def test_a_relayout_that_does_add_a_pane_is_unchanged(self):
+        """The control. Moving these calls up a level must not stop them happening on the
+        path that already had them, and must not double them."""
+        added = self._calls(panels={"top": "%3"}, want=["top", "bottom"])
+        none_added = self._calls(panels={"top": "%3", "bottom": "%4"},
+                                 want=["top", "bottom"])
+        self.assertEqual(self._options(added, "-w"), self._options(none_added, "-w"))
+        for calls in (added, none_added):
+            names = [a[-2] for a in calls if "set-option" in a and "-w" in a
+                     and a[-2] in dict(commands_frame._CHROME)]
+            self.assertEqual(len(names), len(set(names)),
+                             "a window option was written twice in one re-layout")
 
 
 if __name__ == "__main__":

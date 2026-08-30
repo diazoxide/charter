@@ -2775,6 +2775,11 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     `Pane is dead (status 2)`. Nothing about that is specific to charter's own server;
     inside an operator's tmux the cwd is the same cwd, so the hole is the same hole.
     """
+    # The window's own options first, and before any `split-window`: `remain-on-exit` has
+    # to be armed before a panel can be born into a window that would throw its corpse
+    # away (#408), which is the ordering this call site inherits from where these three
+    # used to live (`_dress_window`, #686).
+    _dress_window(socket, fid=fid, harness_pane=harness_pane, env=env, v=v)
     panes = _split_panels(socket, slots=slots, fid=fid, harness_pane=harness_pane,
                           env=env, pane_env=pane_env, sizes=sizes, v=v)
     _install_resize_hook(socket, harness_pane=harness_pane, panes=panes, v=v, env=env,
@@ -2787,6 +2792,84 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     return panes
 
 
+def _dress_window(socket: str, *, fid: str, harness_pane: str, env: dict | None,
+                  v: tuple[int, int] | None) -> None:
+    """Assert everything about a frame that belongs to its WINDOW rather than to a pane.
+
+    `remain-on-exit -w`, the five `_CHROME` window options, and #657's two `-p` rules
+    around the harness. Three calls' worth of scope semantics, measured on tmux 3.7c and
+    identical on 3.2:
+
+    * ``set-option -w -t %0 pane-border-lines double`` writes window `@0` and shows as
+      ``[]`` on a pane of any other window;
+    * ``set-option -p -t %0 pane-border-style …`` writes pane `%0` and shows as ``[]``
+      both on `%1` and on `show -w -t %0`.
+
+    Nothing is server- or session-scoped, so **every chat's window has to be told
+    separately** — and until #686 that only ever happened at that chat's own launch.
+
+    **Called on every re-layout, not only when a pane is created, and that is the whole
+    of #686.** These three used to live inside `_split_panels`, which `_relayout` calls
+    behind `if missing:`. A switch into a chat that still holds every drawable panel has
+    nothing missing, so it wrote geometry and hooks and **not one option** — measured with
+    the repo's own `_FakeServer` driving the real `cmd_chat` at 200x50: `select-window`,
+    two `display-message`, four hook calls, five `resize-pane`, `select-pane`, and no
+    `set-option` at all. It is reachable in one step: `cmd_launch` creates the second
+    chat's window with `new-window -d` and selects it, leaving chat 1's panels alive and
+    still recorded, so the operator's first `F2` back into chat 1 finds nothing missing.
+
+    **What is NOT hoisted is as deliberate as what is.** The per-pane calls —
+    `_panel_mark_argv`, `_surface_argvs` — stay in the split loop, because that is the one
+    place charter has a panel's own `%N` in hand and `window-style` is a pane option. And
+    the harness's INTERIOR is never painted at any version or level: `_harness_rule_argvs`
+    cannot emit `window-style`, which is ADR 0018's boundary made structural rather than
+    remembered. #657's own design point is that the harness's rules are charter's and its
+    interior is the agent's; making the rules apply everywhere must not blur that.
+
+    Reported but not fatal, like the splits: a frame whose borders kept tmux's own colours
+    looks wrong, it does not fail. `remain-on-exit` is armed FIRST and this function is
+    called before any `split-window`, so no panel is ever born into a window that would
+    throw its corpse away and its respawn hook with it (#408).
+    """
+    tmuxctl.run("keeping the frame's own dead panes long enough to bring them back",
+                _panel_remain_on_exit_argv(socket=socket, harness_pane=harness_pane),
+                env=env)
+    # The frame's own word for its chrome, resolved through `_current_chrome` so a live
+    # `charter frame-chrome` is what a re-layout re-asserts rather than the configured
+    # value the frame launched with. `_split_panels` resolves it the same way for the pane
+    # scope; one resolver, so the two cannot disagree.
+    chrome = _current_chrome(fid)
+    # Above `tmuxctl.PANE_BORDER_FLOOR` the rules are each pane's own
+    # (`_pane_border_pairs`, set beside that pane's surface in `_split_panels`) and the
+    # WINDOW's stay bare — which is #631: a frame-wide border surface is one value for
+    # every rule, so a panel whose colour is not the frame's got rules in a colour it does
+    # not wear. Below the floor those two options have no pane scope at all, so the
+    # frame-wide answer is the only one that can be given and it is given here. One or the
+    # other, never both.
+    #
+    # The rules carry the frame's surface from the ARRANGEMENT rather than from any slot
+    # list: `instance.border_bg` reads `config.FRAME`, which is the same thing `cmd_chrome`
+    # reads on the live path — the agreement #610 is about, made by construction rather
+    # than by two call sites matching.
+    pane_borders = _pane_borders_wanted(v)
+    for argv in _chrome_argvs(
+            socket=socket, harness_pane=harness_pane,
+            surface=None if pane_borders else instance.border_bg(config.FRAME, chrome)):
+        tmuxctl.run("styling the frame's own rules", argv, env=env)
+    # And the three rules AROUND the harness, which above the floor are the harness's own
+    # cells and are therefore the one part of the frame the loop above no longer reaches
+    # (`_harness_rule_argvs`, #657). Left unset by #631 they were the terminal's own
+    # background while the panel on the far side of the very same rule was surfaced, so one
+    # horizontal rule came out in two colours — reported off a screenshot three times, and
+    # reproduced through a nested client at 100x24: 78 rule cells carrying an explicit
+    # `ESC[49m` beside 22 cells of `ESC[100m`.
+    for argv in _harness_rule_argvs(
+            socket=socket, harness_pane=harness_pane, pane_borders=pane_borders,
+            surface=instance.agreed_border_bg(config.FRAME, chrome)):
+        tmuxctl.run("styling the rules around the pane charter does not paint", argv,
+                    env=env)
+
+
 def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
                   env: dict | None, pane_env: dict[str, str] | None,
                   sizes: dict[str, int] | None = None,
@@ -2797,20 +2880,18 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     a live re-layout (`_relayout`) can add panes to a frame that already has some without
     re-installing hooks per batch or overwriting the map it is in the middle of building.
 
-    **The one funnel every panel pane charter creates comes out of, which is why
-    `remain-on-exit` is armed here** — before the first `split-window`, so no panel is
-    ever born into a window that would throw its corpse away and its respawn hook with it
-    (`_panel_remain_on_exit_argv`, #408). Both launch paths and every density change
-    reach panels through this function; arming at the call sites instead is what left the
-    operator's server covered on one of two.
+    **What belongs to the WINDOW is not here, and #686 is why it moved out**
+    (:func:`_dress_window` — `remain-on-exit -w`, the five `_CHROME` options, the two
+    harness rules). Those are properties of the frame, not of a pane being created, and
+    this function is only ever called when there is a pane to create: `_relayout` calls it
+    behind `if missing:`, so a switch into a chat that still holds every drawable panel
+    wrote **zero** window and pane options — geometry and hooks re-asserted, not one
+    border option, measured with the repo's own `_FakeServer` driving the real `cmd_chat`
+    at 200x50. What was right about arming them here is the FUNNEL, and that survives: it
+    is the same funnel one level up, in `_draw_panels` and `_relayout`, where it runs
+    whether or not a pane is being split.
 
-    **The frame's own chrome is armed at the same point, for that same reason** (#514,
-    `_chrome_argvs`). A pane border belongs to the window, not to the pane that was just
-    split off, so every rule in the frame is drawn from one set of window options — and
-    the only way for the two servers to agree about them is for one call site to set them
-    on both.
-
-    **And the pane SURFACE is set here too, one pane at a time** (`_surface_argvs`). It
+    **The pane SURFACE is still here, one pane at a time** (`_surface_argvs`). It
     is the same funnel and the same argument, one scope down: `window-style` is a PANE
     option, so unlike the border it has to be set on each panel as it appears — which is
     also exactly why the harness pane never gets it. Both launch paths and every density
@@ -2829,9 +2910,6 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     separately and earlier (`_remain_on_exit_argv`), so the exit code does not ride on
     this.
     """
-    tmuxctl.run("keeping the frame's own dead panes long enough to bring them back",
-                _panel_remain_on_exit_argv(socket=socket, harness_pane=harness_pane),
-                env=env)
     # The word, resolved once for the whole batch, through `_current_chrome` rather than
     # off `config.FRAME` — which is the difference a live `charter frame-chrome` makes.
     # The configured value says what a frame STARTS at; a frame the operator has since
@@ -2840,44 +2918,10 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     # one it launched with. One resolver, so the palette's mark and this pane's option
     # cannot disagree. `instance.chrome_options` is still what turns the word into
     # styles, so a value charter does not know produces no commands at all, which is
-    # `off`.
+    # `off`. `_dress_window` resolves the same word for the WINDOW's options; both ask
+    # `_current_chrome`, so the pane scope and the window scope cannot answer differently.
     chrome = _current_chrome(fid)
-    # And the chrome those panes will be bordered with, armed at the same moment and for
-    # the same reason: this is the one funnel both launch paths and every density change
-    # reach panels through, so a rule cannot come out styled one way on charter's own
-    # server and another way on the operator's (#514, `_chrome_argvs`). Reported but not
-    # fatal, like the splits themselves — a frame whose borders kept tmux's own colours
-    # is a frame that looks wrong, not one that fails.
-    #
-    # The rules carry the frame's SURFACE, from the arrangement rather than from `slots`:
-    # this function is handed only the slots being split, which on a density change is the
-    # ones being ADDED (`_relayout` passes `missing`), so a rule colour derived from that
-    # list would change every time a panel appeared. `instance.border_bg` reads
-    # `config.FRAME`, which is the same thing `cmd_chrome` reads on the live path — the
-    # agreement #610 is about, made by construction rather than by two call sites matching.
-    # Above `tmuxctl.PANE_BORDER_FLOOR` the rules are each pane's own (`_pane_border_pairs`,
-    # set beside that pane's surface below) and the WINDOW's stay bare — which is #631: a
-    # frame-wide border surface is one value for every rule, so a panel whose colour is not
-    # the frame's got rules in a colour it does not wear. Below the floor those two options
-    # have no pane scope at all, so the frame-wide answer is the only one that can be given
-    # and it is given here. One or the other, never both.
     pane_borders = _pane_borders_wanted(v)
-    for argv in _chrome_argvs(
-            socket=socket, harness_pane=harness_pane,
-            surface=None if pane_borders else instance.border_bg(config.FRAME, chrome)):
-        tmuxctl.run("styling the frame's own rules", argv, env=env)
-    # And the three rules AROUND the harness, which above the floor are the harness's own
-    # cells and are therefore the one part of the frame the loop above no longer reaches
-    # (`_harness_rule_argvs`). Left unset by #631 they were the terminal's own background
-    # while the panel on the far side of the very same rule was surfaced, so one horizontal
-    # rule came out in two colours — reported off a screenshot three times. Its INTERIOR is
-    # untouched at every version and every level: `window-style` is not one of the two
-    # option names that function can emit. Reported but not fatal, like the rules above.
-    for argv in _harness_rule_argvs(
-            socket=socket, harness_pane=harness_pane, pane_borders=pane_borders,
-            surface=instance.agreed_border_bg(config.FRAME, chrome)):
-        tmuxctl.run("styling the rules around the pane charter does not paint", argv,
-                    env=env)
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
                                     harness_pane=harness_pane, env=pane_env,
                                     sizes=sizes)
@@ -4001,6 +4045,16 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
     # `env=None` throughout: see `_relayout_pane_env` for why a live re-layout has
     # no client environment to decide.
     pane_env = _relayout_pane_env(fid, v)
+    # **Unconditionally, and before anything is killed or split** (#686). What belongs to
+    # the window is a property of the FRAME, not of a pane being created, so it is asserted
+    # on every re-layout rather than only on the ones that happen to add a pane. Behind
+    # `if missing:` — where these calls lived, inside `_split_panels` — a switch into a
+    # chat that still holds every drawable panel wrote no window or pane option at all, and
+    # that chat is one `charter claude` away: the second launch selects its own new window
+    # and leaves the first's panels alive and recorded, so the first `F2` back has nothing
+    # missing. Before the kill loop for `_draw_panels`' reason: `remain-on-exit` is armed
+    # ahead of any pane charter creates, and a re-layout creates panes further down.
+    _dress_window(socket, fid=fid, harness_pane=harness_pane, env=None, v=v)
     keep: dict[str, str] = {}
     for slot, pane_id in panels.items():
         # Checked ABOVE the `want` branch, not inside the kill branch — #475. `panels` is
