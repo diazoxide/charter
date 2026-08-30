@@ -138,11 +138,11 @@ class TheOffsetIsBoundedByTheDataAndThePane(unittest.TestCase):
         self.assertEqual(slots._scroll_limit(14, 15), 0)
 
     def test_the_limit_leaves_the_overflow_line_its_row(self):
-        """`_table_lines` reserves `…(+N more)` OUT of the budget rather than trimming it
-        off the end, so a 14-row pane draws 13 repo rows — and the last repo is reachable
-        only if this subtracts the same row. Twenty repos, thirteen rows of them, so the
-        window's last position is 7; at 7 it shows ranks 7..19 and nothing is out of
-        reach."""
+        """`_table_lines` reserves the `…(N above, N below)` line OUT of the budget rather
+        than trimming it off the end, so a 14-row pane draws 13 repo rows — and the last
+        repo is reachable only if this subtracts the same row. Twenty repos, thirteen of
+        them drawn, so the window's last position is 7; at 7 it shows ranks 7..19 and
+        nothing is out of reach."""
         self.assertEqual(slots._scroll_limit(20, 14), 7)
         self.assertEqual(slots._scroll_limit(7, 6), 2)
 
@@ -156,7 +156,7 @@ class TheOffsetIsBoundedByTheDataAndThePane(unittest.TestCase):
         self.assertEqual(slots._scroll_limit(15, 3), 13)
 
     def test_a_one_row_pane_is_all_overflow_line_and_does_not_scroll(self):
-        """A budget of exactly one is spent on `…(+N more)` — "there is more here than
+        """A budget of exactly one is spent on `…(N below)` — "there is more here than
         fits" outranks "here is an arbitrary one of them" — so every offset over such a
         table draws the identical line. A limit taken from the repo count alone would let
         the wheel repaint that one line forty times, each repaint byte-identical."""
@@ -435,7 +435,7 @@ class TheWindowMovesOverPieceRowsToo(PersonaIso, unittest.TestCase):
 
     def test_a_capped_table_never_closes_its_tree_above_the_note(self):
         """`╰─` means *this is where the tree ends*, and on a capped table it does not:
-        `…(+N more)` is the next line. The glyph and the line under it would be saying
+        `…(N below)` is the next line. The glyph and the line under it would be saying
         opposite things, which is the one thing `_TREE_WT` exists to prevent."""
         drawn = self._lines()
         self.assertNotIn(statusline._TREE_WT.strip(),
@@ -843,7 +843,7 @@ class TheAttentionRowSaysWhatWasPicked(PersonaIso, unittest.TestCase):
     def test_a_quiet_repo_says_clean_rather_than_saying_nothing(self):
         """An absence standing in for a claim is the defect this repository keeps finding:
         a reader cannot tell "nothing is wrong" from "this field was cut". The word comes
-        from `_needs_attention`, the same predicate the `…(+N more), all clean` note asks,
+        from `_needs_attention`, the same predicate the `…(N below, all clean)` note asks,
         so the two cannot come to disagree about what clean means."""
         self.assertEqual(tui.strip_ansi(slots._detail_text(_row("charter"))),
                          "▪ charter · main · clean")
