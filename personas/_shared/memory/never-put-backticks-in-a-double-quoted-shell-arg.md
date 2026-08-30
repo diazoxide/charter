@@ -1,0 +1,5 @@
+# NEVER PUT BACKTICKS IN A DOUBLE-QUOTED SHELL ARGUMENT THAT GOES SOMEWHER
+
+_2026-08-30 19:47 · persistent_
+
+NEVER PUT BACKTICKS IN A DOUBLE-QUOTED SHELL ARGUMENT THAT GOES SOMEWHERE PUBLIC. On 2026-08-30 I filed a GitHub issue with 'gh issue create --body "... `env -u PYTHONSAFEPATH` ..."'. Inside double quotes the backticks are COMMAND SUBSTITUTION, so the shell ran env and pasted 64 environment variables into the body of a public issue — four 1Password service-account tokens (each carrying secretKey/srpX/muk, the master unlock key), a GitLab PAT named NPM_AUTH_TOKEN, and the harness's own CLAUDE_* vars. Exposed ~40 minutes before an agent noticed. REDACTION DOES NOT FIX IT: GitHub keeps public edit history, so rotation is the only remedy. The rule: for any body, comment or PR description, use --body-file - with a QUOTED heredoc ('BODY' not BODY), never --body "..." containing backticks. The blast radius is not the command you meant to show — it is whatever the operator's shell exports, so severity is decided by their environment and not by your intent. Nineteen other issues that night survived only because their backticked text was not a runnable command.

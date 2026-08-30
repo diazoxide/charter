@@ -1,0 +1,5 @@
+# A CASE TWO ARMS CAN BOTH SATISFY TESTS NEITHER — the second variant of t
+
+_2026-08-30 22:59 · persistent_
+
+A CASE TWO ARMS CAN BOTH SATISFY TESTS NEITHER — the second variant of this repo's signature defect, found 2026-08-30 by the sweep on #710. The first variant is 'the assertion sat on the path that already satisfied it' (one path of several reaches the assertion). This one is different: the INPUT satisfies two branches, the first answers, and the second is never exercised though every test appears to cover it. Instances: a heredoc scanner whose $( branch was dead because every test case also carried a backtick and the backtick arm answered first; and #675's pad checker, where a backticked range and a bare range are two arms and only the backticked one was ever fed. Detection: for any guard with alternative arms, construct an input that reaches ONLY the later arm. If you cannot, the arm is either dead code or untested — both are findings. Related: the oracle failure 'a marker that matches itself proves nothing' is the same shape one level up, in the test's own instrument.

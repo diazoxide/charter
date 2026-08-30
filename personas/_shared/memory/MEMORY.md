@@ -46,3 +46,6 @@ Written by the persona as it learns; committed and shared.
 - [THREE FORGE READS THAT ARE SILENTLY PARTIAL, measured 2026-08-29. (1) A](three-forge-reads-that-are-silently-partial-meas.md)
 - [A FEATURE CHARTER SHIPS MUST BE USABLE ON CHARTER'S OWN PLANE, AND TWICE](a-feature-charter-ships-must-be-usable-on-charte.md)
 - [THE ASSERTION SAT ON THE PATH THAT ALREADY SATISFIED IT — the sharpest s](the-assertion-sat-on-the-path-that-already-satis.md)
+- [NEVER PUT BACKTICKS IN A DOUBLE-QUOTED SHELL ARGUMENT THAT GOES SOMEWHER](never-put-backticks-in-a-double-quoted-shell-arg.md)
+- [A CASE TWO ARMS CAN BOTH SATISFY TESTS NEITHER — the second variant of t](a-case-two-arms-can-both-satisfy-tests-neither-t.md)
+- [NAMING A DEFECT CLASS DOES NOT IMMUNISE YOU AGAINST IT — construct the a](naming-a-defect-class-does-not-immunise-you-agai.md)

@@ -1,0 +1,5 @@
+# NAMING A DEFECT CLASS DOES NOT IMMUNISE YOU AGAINST IT — construct the a
+
+_2026-08-30 23:03 · persistent_
+
+NAMING A DEFECT CLASS DOES NOT IMMUNISE YOU AGAINST IT — construct the adversarial input or you have not tested the arm. Measured 2026-08-30 on #710: the agent named 'a case two arms can both satisfy tests neither' IN THAT PR, and the sweep then found FOUR instances of it in that same PR's tests. Every heredoc case it wrote carried a backtick, so the backtick arm always answered and the $( arm was never exercised; every backslash- and quote-delimiter case ended at end-of-string, where a swallowed remainder is empty and the bug is invisible. The guard's code was correct in all four — the tests were the gap. This is the sixth instance of 'a fix for a class of bug is unusually likely to contain that bug' and the strongest, because the author had the vocabulary and it did not help. The operational rule: for every alternative arm, WRITE THE INPUT that reaches only that arm and watch it fail without the arm. Awareness is not a test. Related: [[a-case-two-arms-can-both-satisfy-tests-neither-t]] and [[the-assertion-sat-on-the-path-that-already-satis]].

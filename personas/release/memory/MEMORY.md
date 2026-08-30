@@ -44,3 +44,5 @@ Written by the persona as it learns; committed and shared.
 - [release.yml's publish passes skip-existing ONLY on workflow_dispatch (#6](release-yml-s-publish-passes-skip-existing-only-.md)
 - [A release retry cannot be validated by comparing built artifacts against](a-release-retry-cannot-be-validated-by-comparing.md)
 - [The retry ref is a real choice: --ref v<X.Y.Z> retries the exact publish](the-retry-ref-is-a-real-choice-ref-v-x-y-z-retri.md)
+- [0.54.0 was the first release whose notes exceeded GitHub's 125,000-char](0-54-0-was-the-first-release-whose-notes-exceede.md)
+- [Resolved on the 0.54.0 release PR (#705): test_the_bound_is_an_exception](resolved-on-the-0-54-0-release-pr-705-test-the-b.md)
