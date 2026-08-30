@@ -31,8 +31,9 @@ string **fits where it is about to be sent**, and this module is that claim.
 **How close it already was.** 0.52.0 published at 111,723 characters — 3,277 short of the
 refusal — and nothing in the repository noticed, because nothing was looking. Entries
 accumulate one pull request at a time, each author sees their own and no other, and the
-total crosses on some ordinary afternoon with no pull request to blame. The 69 entries
-staged for the release after 0.53.0 rendered to 333,917.
+total crosses on some ordinary afternoon with no pull request to blame. The 86 entries that
+became 0.54.0 render to 423,196 whole — 3.4× the refusal, and the release that turned the
+bound below from insurance into the ordinary path.
 
 ## What this suite holds, and why it is not one assertion
 
@@ -184,7 +185,8 @@ class ReleaseBodyFits(unittest.TestCase):
         )
 
     def test_the_bound_is_an_exception_rather_than_the_normal_path(self):
-        """`_BODY_BUDGET`'s value, pinned from below. The headroom case pins it from above.
+        """`_BODY_BUDGET`'s value, pinned from below — and on a release branch, the only
+        half of its window still being asserted at all. The caveat at the end is why.
 
         Between them the number is in a window rather than free, and each side says
         something different. Too high and a release is refused after the upload, which is
@@ -193,20 +195,41 @@ class ReleaseBodyFits(unittest.TestCase):
         Nothing else in the suite would notice: a smaller budget is *safer* in the only
         direction the other cases measure.
 
-        So the claim the number actually makes is asserted here, and it is the one
-        `_BODY_BUDGET`'s own docstring makes: the bound reaches for at most one stamped
-        version. If a second crosses, the number wants re-examining and the docstring is
-        stale — which is a conversation worth having on the pull request that causes it,
-        rather than at a tag.
+        **What is counted is releases GitHub would have accepted whole, and it used to be
+        every elided release.** That was the wrong set, and 0.54.0 is what showed it: 86
+        notes, 423,196 characters rendered whole, 3.4× the 125,000 the API takes. No value
+        of `_BODY_BUDGET` publishes that body — its elision is the bound doing the job it
+        was added for — so counting it here charged the number for an outcome the number
+        cannot change, and reddened this case on a release where nothing was wrong. Asking
+        only about bodies GitHub *would* have taken asks what this case is actually for:
+        **is charter shortening notes it did not have to shorten?**
+
+        Which keeps the teeth, and keeps them without reading a literal from `news.py` back
+        at itself. Measured on the shipped tree, 100,000 reshapes exactly one such release
+        (0.52.0, 111,723 whole). 90,000 reshapes two — 0.53.0, at 98,265, joins it. A budget
+        squeezed down toward a table of contents still fails here.
+
+        **And the pin from above is not watching on the commit that matters.**
+        `test_the_staged_release_has_headroom` reads `render_body(UNRELEASED)` and skips
+        when nothing is staged, which is exactly what a stamped release branch looks like —
+        so on the commit where raising `_BODY_BUDGET` would decide a body about to be
+        published, the case that objects to raising it does not run, and a skipped case
+        reports success. This one is what is left. That is a reason to keep it honest
+        rather than to widen it until it is quiet.
         """
-        elided = [v for v in sorted(_versions())
-                  if news.render_body(v) != "\n\n".join(
-                      news._part(e) for e in news.for_version(v))]
+        whole = {v: "\n\n".join(news._part(e) for e in news.for_version(v))
+                 for v in sorted(_versions())}
+        reshaped = [v for v, text in whole.items()
+                    if news.render_body(v) != text
+                    and len(text) <= GITHUB_RELEASE_BODY_MAX]
         self.assertLessEqual(
-            len(elided), 1,
-            f"charter's own budget now reshapes {len(elided)} stamped releases "
-            f"({', '.join(elided)}). The bound is meant to be the exception — either "
-            f"_BODY_BUDGET is too small, or its docstring's claim has gone stale.")
+            len(reshaped), 1,
+            f"charter's own budget now reshapes {len(reshaped)} releases GitHub would "
+            f"have accepted whole ({', '.join(reshaped)}) — so _BODY_BUDGET is too small: "
+            f"it is eliding notes to buy headroom that was not needed. Raising it is the "
+            f"fix, and `test_the_staged_release_has_headroom` is the case that bounds how "
+            f"far — but it SKIPS on a stamped tree, so measure the raise by hand if this "
+            f"is a release branch.")
 
     def test_every_note_the_staged_release_carries_is_in_the_body(self):
         """The half that makes the case above worth passing.

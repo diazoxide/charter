@@ -613,8 +613,8 @@ def for_version(version: str) -> list[Entry]:
 #: Characters, not bytes, and the distinction is load-bearing in both directions. The API
 #: counts code points and charter's entries are not ASCII — they carry ``—``, ``✗``, ``⬢``
 #: — so ``len(body.encode())`` reports a bigger number than the one GitHub applies and
-#: would refuse a release GitHub would have accepted. The 69 notes staged for 0.54.0 differ
-#: by 3,023 between the two measures.
+#: would refuse a release GitHub would have accepted. 0.54.0's 86 notes differ by 438
+#: between the two measures in the body that shipped, and by 3,603 rendered whole.
 RELEASE_BODY_MAX = 125_000
 
 #: How much of :data:`RELEASE_BODY_MAX` :func:`render_body` will actually spend. **Charter's
@@ -637,10 +637,17 @@ RELEASE_BODY_MAX = 125_000
 #: only their own.
 #:
 #: 100,000 rather than a fraction of the limit, because a fraction invites re-deriving it:
-#: this is a round number a human holds, it leaves a fifth of the API's allowance unspent,
-#: and it is above every release charter has ever cut but one — 0.52.0, at 111,723, is the
-#: only stamped version it reaches for, so the bound does not begin eliding until a version
-#: is genuinely larger than any that has shipped.
+#: this is a round number a human holds, and it leaves a fifth of the API's allowance
+#: unspent.
+#:
+#: **It reaches for one release GitHub would have taken whole, and that is still 0.52.0, at
+#: 111,723.** This line used to say "above every release charter has ever cut but one",
+#: which counted elided releases rather than the thing the number decides — and 0.54.0
+#: retired that phrasing rather than merely dating it: 86 notes, 423,196 characters rendered
+#: whole, 3.4× the ceiling in :data:`RELEASE_BODY_MAX`. No value of this budget publishes
+#: that body, so eliding it is the bound doing the job it was added for and not the dial
+#: creeping down. The set this dial governs is the releases GitHub *would* have accepted
+#: whole, and there 0.52.0 is still the only one it reshapes.
 #:
 #: **The deletion sweep reports this line as unpinned, and it is right to.** `retune-constant`
 #: rewrites it as ``100_001`` and the suite stays green, because it must: this is a dial, and
@@ -650,6 +657,16 @@ RELEASE_BODY_MAX = 125_000
 #: `test_the_bound_is_an_exception_rather_than_the_normal_path` from below, so a budget small
 #: enough to turn ordinary releases into a table of contents cannot pass while every length
 #: assertion still does. 100,001 is inside that window, which is exactly why it survives.
+#:
+#: **The upper half of that window is open on a release branch, and that is where raising
+#: this number would be proposed.** `test_the_staged_release_has_headroom` measures
+#: ``render_body(UNRELEASED)`` and skips when nothing is staged — which is precisely the
+#: tree `charter news stamp` leaves behind, i.e. every release commit. So on the one commit
+#: where this number decides a body that is about to be published, the case that objects to
+#: raising it does not run, and a skipped case reports success. The floor below is the only
+#: half still speaking there. Treat a proposal to raise `_BODY_BUDGET` on a stamped tree as
+#: unguarded: measure it by hand, or make the case on a branch that still has entries
+#: staged — the alternative is discovering it in `announce`, after the upload.
 #:
 #: This is the "explained equivalent" the sweep's own docstring reserves, not a suppression:
 #: there is no suppression list and this needs none. The only test that would redden on
