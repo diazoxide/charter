@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import tomllib
 from pathlib import Path
+from typing import NamedTuple
 
 from . import contain
 from .root import MARKER
@@ -741,6 +742,87 @@ def pane_bg_options(name) -> tuple[tuple[str, str], ...]:
     return FRAME_PANE_BG[n] if n else ()
 
 
+#: The word a plane's ``[frame] text`` may say, and the ``fg`` clause each one means.
+#:
+#: **The FOREGROUND half of :data:`FRAME_PANE_BG`, and it exists because the eight recipes
+#: `frame/chrome.py` hands out were chosen against a dark terminal and nothing could say
+#: so.** ``bg`` is configurable across seventeen words; the text drawn on it was not
+#: configurable at all. An operator who writes ``bg = "brightblack"`` gets a surface their
+#: own theme decides the shade of — dark grey on most, a light tan on the machine this key
+#: was written for — and every uncoloured cell in the pane still comes out in the
+#: foreground their terminal picked to sit on its OWN background, which is no longer the
+#: background it is sitting on.
+#:
+#: **Charter cannot compute this and does not try.** The sixteen ANSI names have no fixed
+#: RGB, and this plane's own `charter.toml` already records why charter cannot find out
+#: what they look like: OSC 11 through tmux answers nothing, and ``$COLORTERM`` inside a
+#: pane describes the terminal that started the SERVER rather than the one looking at the
+#: pane. A charter that picked a "legible" foreground from the background word would be
+#: claiming a measurement it does not have — so the plane is asked instead, in the same
+#: vocabulary it already answers ``bg`` in.
+#:
+#: **Painted by tmux, not by a renderer**, which is what makes one key reach every cell.
+#: `window-style` carries an ``fg`` exactly as it carries a ``bg``, and tmux resolves the
+#: pane's DEFAULT foreground from it — so charter's own ``\\033[0m`` returns to the plane's
+#: colour rather than the terminal's, and no renderer has to be told. Measured through a
+#: nested client, one panel at ``fg=black,bg=brightblack``, on 3.7c and at
+#: `tmuxctl.FLOOR` alike::
+#:
+#:     bg only    '\\x1b[0m\\x1b[100mPLAIN one'          <- reset returns to the TERMINAL's fg
+#:     fg and bg  '\\x1b[0m\\x1b[30m\\x1b[100mPLAIN one'  <- reset returns to the PLANE's
+#:     …and a green span's own close came back '\\x1b[30m' rather than '\\x1b[39m'
+#:
+#: **One word for the frame and not one per pane.** ``bg`` is per component because a frame
+#: reads as an application when its regions are told apart; a foreground has the opposite
+#: property — text that changed colour from pane to pane would stop reading as one
+#: document — and a per-pane foreground would only add a second way to make one pane
+#: unreadable. `FRAME_PANE_BG`'s focus partner has no counterpart here for the same reason:
+#: which pane is live is said by the background pair, and a foreground that moved with focus
+#: would say it twice.
+#:
+#: ``default`` is the seventeenth word and its clause is **empty**, which is not a hole. A
+#: pane whose style names no ``fg`` already draws in the terminal's own foreground, so
+#: "leave the text alone" and "say ``fg=default``" are the same pane — and the empty clause
+#: is what makes a plane that says nothing emit byte-identical options to the frame it had
+#: before this key existed. The word is in the table anyway so the vocabulary is exactly
+#: `FRAME_PANE_BG`'s seventeen and a plane can say the default out loud.
+FRAME_PANE_FG: dict[str, str] = {
+    "default": "",
+    **{name: f"fg={name}" for name in FRAME_PANE_COLOURS},
+    **{f"bright{name}": f"fg=bright{name}" for name in FRAME_PANE_COLOURS},
+}
+
+
+def pane_text(name) -> str | None:
+    """*name* if it names a :data:`FRAME_PANE_FG` foreground, else ``None``.
+
+    :func:`pane_bg`'s job for the foreground key, and the same function for the same
+    reasons: ``isinstance`` first because ``value in FRAME_PANE_FG`` raises ``TypeError``
+    for an unhashable value, and the matched NAME rather than ``True`` so a caller can
+    store a value it has already checked.
+
+    The containment is :func:`text_fg`'s, not this one's — what reaches tmux is a value out
+    of the table, indexed by a word that was only ever a key.
+    """
+    return name if isinstance(name, str) and name in FRAME_PANE_FG else None
+
+
+def text_fg(name) -> str:
+    """The ``fg=`` clause *name* means — ``""`` for ``default``, and ``""`` for every word
+    charter does not know.
+
+    :func:`pane_bg_options`' contract said about one clause instead of two pairs: what
+    comes back is charter's own constant and never the caller's argument, so a word this
+    function did not recognise cannot leave through it.
+
+    Empty is the ANSWER for ``default`` and only incidentally the failure mode — see
+    :data:`FRAME_PANE_FG`. Both callers append it to a style, and appending nothing is
+    exactly what a plane that named no foreground asked for.
+    """
+    n = pane_text(name)
+    return FRAME_PANE_FG[n] if n else ""
+
+
 #: The most cells a component may inset its content by, per side.
 #:
 #: **A cap and not a clamp**: a ``pad`` above this is REFUSED by
@@ -854,7 +936,159 @@ def chrome_option_names() -> tuple[str, ...]:
 PANE_BORDER_OPTIONS: tuple[str, ...] = ("pane-border-style", "pane-active-border-style")
 
 
-def rule_options(surface: str | None, style: str) -> tuple[tuple[str, str], ...]:
+#: What a plane's ``[frame] rules`` may say about the seam between two panes.
+#:
+#: **tmux always paints a glyph on a border cell, so this is a CONTRAST question and never
+#: a character one.** `pane-border-lines` has no ``none``: its five values are ``single``,
+#: ``double``, ``heavy``, ``simple`` and ``number``, and every one of them draws something.
+#: A frame whose panels are painted therefore cannot stop tmux drawing the rule; it can
+#: only decide what the glyph is drawn IN.
+#:
+#: ``visible`` is what charter has always drawn — `commands_frame._CHROME_STYLE` over the
+#: surface, an ``fg=default`` and a ``dim``. On a plane whose panels carry no colour that is
+#: a quiet line in the operator's own foreground and it is the whole of the frame's
+#: structure. On a plane whose panels ARE painted it is a dim default-foreground glyph
+#: sitting in the middle of a surface, which is the seam this operator has now reported four
+#: times (#627, #631, #657, and again against the frame that fixed #657).
+#:
+#: ``hidden`` gives the glyph the surface's own colour, so tmux draws it and nobody sees it
+#: and two adjacent panels read as one surface. Measured through a nested client on 3.7c,
+#: three panes at ``bg = "brightblack"``, read off the wire::
+#:
+#:     visible  '\\x1b[2m\\x1b[100m───…'   <- ESC[2m: a dim default fg ON the surface
+#:     hidden   '\\x1b[90m\\x1b[100m───…'  <- ESC[90m on ESC[100m: the glyph is the surface
+#:
+#: **A WORD, never a style string**, which is :data:`FRAME_CHROME`'s rule and not a fresh
+#: one: a tmux style value is FORMAT-EXPANDED at draw time (measured on this very option —
+#: ``set -w pane-border-style 'bg=#{?#{==:1,1},colour196,colour46}'`` is rc 0 and reaches
+#: the wire as ``ESC[48;5;196m``), and `charter.toml` arrives from someone else's machine.
+#: So the operator's word selects a BRANCH here and the colour it resolves to comes out of
+#: charter's own tables, exactly as ``bg`` and ``chrome`` do.
+FRAME_RULES: tuple[str, ...] = ("hidden", "visible")
+
+
+def rules_level(name) -> str | None:
+    """*name* if it names a :data:`FRAME_RULES` treatment, else ``None``.
+
+    :func:`chrome_level`'s job for the rules key — the one place a value arriving from a
+    hand-edited, committed `charter.toml` is admitted, with ``isinstance`` first for
+    :func:`density_level`'s reason.
+    """
+    return name if isinstance(name, str) and name in FRAME_RULES else None
+
+
+class Look(NamedTuple):
+    """The three frame-wide answers about how charter's own chrome READS, resolved once.
+
+    **One record rather than three parameters threaded through five functions**, and the
+    reason is #547's rather than tidiness: `_chrome_argvs`, `_harness_rule_argvs`,
+    `_surface_argvs` and `_resurface_argvs` all need the same answers, two of them run on
+    the launch path and two on the live `charter frame-chrome` path, and three loose
+    keywords is three chances for one of those four to be handed a different frame's
+    appearance. Passed whole, they cannot come apart.
+
+    It carries what the PLANE said and nothing derived from a pane: which pane wears which
+    background is `component_style`'s question and stays there.
+
+    ``dim`` is a ``bool`` and the other two are words out of :data:`FRAME_RULES` and
+    :data:`FRAME_PANE_FG`. Nothing here is trusted as a tmux VALUE — `rules` selects a
+    branch, `text` is a key into a table, and `dim` decides whether a constant is appended.
+    """
+
+    #: ``hidden`` or ``visible`` — :data:`FRAME_RULES`.
+    rules: str
+    #: The ``[frame] text`` word — a key into :data:`FRAME_PANE_FG`.
+    text: str
+    #: Whether charter may reduce the contrast of its own chrome — ``[frame] dim``.
+    dim: bool
+
+
+def look_of(frame: dict) -> Look:
+    """*frame*'s :class:`Look` — the appearance keys, read once for a whole launch.
+
+    ``.get`` with the shipped default rather than a subscript, for `component_style`'s own
+    reason: a frame relaunched by a charter that predates these keys has a `frame.state`
+    record without them, and a caller must get the shipped answer there rather than a
+    ``KeyError`` raised on the repaint path.
+
+    **No re-validation.** :func:`frame_of` is the boundary and it already refuses a word
+    charter does not know; asking again here would be the second, weaker answer #568's
+    sweep deletes. What guards a value that never went through `frame_of` — a dict a test
+    built by hand — is the same thing that guards every other one: :func:`text_fg` indexes
+    a table and :func:`rule_style` compares against a constant, so an unknown word reaches
+    no tmux value through either.
+    """
+    return Look(rules=frame.get("rules", FRAME_DEFAULTS["rules"]),
+                text=frame.get("text", FRAME_DEFAULTS["text"]),
+                dim=frame.get("dim", FRAME_DEFAULTS["dim"]))
+
+
+def rule_style(surface: str | None, style: str, look: Look) -> str:
+    """The ONE style value every rule in a frame is drawn with — the whole assembly, in one
+    place.
+
+    **Three decisions and no more**, taken in the order that makes each one answerable:
+
+    * ``rules = "hidden"`` over a surface that names a COLOUR wins outright, because it is
+      the only answer where the foreground is not a choice at all: the glyph is asked for in
+      the same colour as the cell behind it, which is the most a frame can do about a glyph
+      tmux insists on drawing. **Asked for, and not promised invisible** — the two clauses
+      name one word out of the operator's own palette, so what a terminal actually paints
+      for ``fg=brightblack`` and ``bg=brightblack`` is theirs rather than charter's, and a
+      theme that renders its bright foreground and bright background as different shades
+      leaves a faint glyph rather than none. Charter cannot see which theme that is
+      (:data:`FRAME_PANE_FG`), so the honest claim is the one about the values it emits.
+      No ``dim`` beside them: an attribute over a glyph asked to disappear is an
+      instruction to make it visibly something. The live style the operator hand-applied
+      and confirmed on their own frame is exactly this — ``fg=brightblack,bg=brightblack``
+      — and this is that value made permanent.
+    * otherwise the foreground is the plane's own ``text`` word where it named one
+      (:func:`text_fg`) and the caller's *style* where it did not, so a frame that gave its
+      panes a foreground draws its rules in it rather than in a colour nothing else on the
+      screen is wearing.
+    * ``dim`` is appended unless the plane turned it off, and never under ``hidden`` — see
+      above.
+
+    **``bg=default`` is a surface that ``hidden`` cannot be honoured over, and it is a real
+    input rather than a defensive one**: ``default`` is the seventeenth `FRAME_PANE_BG`
+    word and a component may name it to opt one pane out of a frame-wide `chrome`. It means
+    "the terminal's own background", and there is no ``fg=`` spelling for that — ``fg=
+    default`` is the terminal's own FOREGROUND, which is the one colour guaranteed to be
+    visible against it. So a ``hidden`` honoured there would emit ``fg=default,bg=default``
+    and draw the rule at FULL strength: brighter than the ``dim`` it replaced, which is the
+    opposite of what the word asked for. It falls through to *visible* instead, which is
+    the frame such a pane already had.
+
+    *style* is the caller's base rule foreground — `commands_frame._CHROME_FG`,
+    ``fg=default`` — passed in rather than imported so the one place that decides what a
+    charter rule looks like stays the one place. It is the FOREGROUND alone and not the
+    whole of `_CHROME_STYLE`, because the ``dim`` half is now a decision rather than a
+    constant: a caller that handed the composed style in would be asking this function to
+    take an attribute back out of a string, which is the parsing-charter's-own-constants
+    shape one function over deliberately avoids.
+
+    **``look.rules`` is compared against a constant and never validated here.** It selects
+    a branch; it is not a value that reaches tmux. :func:`frame_of` is the boundary that
+    refuses a word charter does not know, and a word that got past nothing still cannot be
+    ``"hidden"``, so it draws the frame charter shipped.
+    """
+    hidden = bool(surface) and look.rules == "hidden"
+    if hidden:
+        # `removeprefix` and not a split: every value this can be handed comes out of
+        # `FRAME_PANE_BG` or `FRAME_CHROME`, whose `window-style` entries are all exactly
+        # `bg=<name>`. `TheSurfaceIsAlwaysABareBackgroundClause` pins that over every word
+        # in both tables, so the prefix is a property of charter's own constants rather
+        # than a shape hoped for at a call site.
+        colour = surface.removeprefix("bg=")
+        if colour != "default":
+            return f"fg={colour},{surface}"
+        hidden = False
+    return ((text_fg(look.text) or style)
+            + ("" if hidden or not look.dim else ",dim")
+            + (f",{surface}" if surface else ""))
+
+
+def rule_options(surface: str | None, style: str, look: Look) -> tuple[tuple[str, str], ...]:
     """The ``(option, value)`` pairs that draw ONE pane's own edges over *surface* — empty
     where there is no surface to draw them over.
 
@@ -875,9 +1109,10 @@ def rule_options(surface: str | None, style: str) -> tuple[tuple[str, str], ...]
     with the pair identical every rule cell held its colour, and the frame did not move when
     focus did.
 
-    *style* is the caller's rule style — `commands_frame._CHROME_STYLE`, `fg=default,dim` —
-    passed in rather than imported so the one place that decides what a charter rule looks
-    like stays the one place.
+    *style* and *look* are :func:`rule_style`'s, which is where the value itself is now
+    assembled: this function is the PAIR — which options carry it, and that they carry the
+    identical thing — and that split is what lets `_chrome_argvs` draw the same rule
+    window-wide below `tmuxctl.PANE_BORDER_FLOOR` without a second assembler.
 
     Empty rather than a bare *style* for a pane with no surface: the window option is
     already exactly that, so a pane that adds nothing must SET nothing. What a caller does
@@ -885,11 +1120,55 @@ def rule_options(surface: str | None, style: str) -> tuple[tuple[str, str], ...]
     a pane that may be carrying yesterday's value issues the unset
     (`commands_frame._harness_rule_argvs`) — and that is the caller's question, not this
     one's.
+
+    **The emptiness is still asked of the SURFACE and not of the assembled style**, which
+    matters now that a style can differ from the caller's without a surface: a plane that
+    named a ``text`` colour changes what `_chrome_argvs` puts on the window, and must still
+    put nothing on a pane that has no surface to draw a rule over. Those are two questions
+    and this one answers the second.
     """
-    return tuple((n, f"{style},{surface}") for n in PANE_BORDER_OPTIONS) if surface else ()
+    if not surface:
+        return ()
+    value = rule_style(surface, style, look)
+    return tuple((n, value) for n in PANE_BORDER_OPTIONS)
 
 
-def pane_border_options(name, chrome, style: str) -> tuple[tuple[str, str], ...]:
+def surface_options(name, chrome, look: Look) -> tuple[tuple[str, str], ...]:
+    """The ``(option, value)`` pairs ONE pane's whole rectangle is painted from — the
+    background it wears and the foreground its text comes out in.
+
+    **`pane_bg_options(name) or chrome_options(chrome)` with the plane's own ``text``
+    folded in, and it is one expression rather than two call sites merging.** The ``or`` is
+    `commands_frame._surface_argvs`' own and unchanged — a component that named no ``bg``,
+    and one whose word charter does not know, both take the frame-wide surface — and the
+    foreground is appended to whatever that answered, so a pane is one word's background or
+    the other's and never a blend, while every pane in the frame carries the same
+    foreground.
+
+    **A ``text`` with no surface at all is a real arrangement and gets the options anyway.**
+    `chrome = "off"`, no ``bg`` anywhere, ``text = "black"``: there is no background to
+    paint, and the plane has still said what colour its frame's text is. So the pairs are
+    built from :func:`chrome_option_names` — the two style options, derived from the table
+    the way everything else in this module derives them — carrying the foreground alone.
+
+    Empty only when the plane said neither, which is the frame charter shipped: no
+    background, no foreground, and `_surface_argvs` issues no command at all.
+
+    What reaches tmux is charter's own constant on both halves. The background comes out of
+    :data:`FRAME_PANE_BG`/:data:`FRAME_CHROME` as it always did, and the foreground out of
+    :data:`FRAME_PANE_FG` through :func:`text_fg`, so a committed word that charter does not
+    know indexes nothing and leaves through neither.
+    """
+    pairs = pane_bg_options(name) or chrome_options(chrome)
+    fg = text_fg(look.text)
+    if not fg:
+        return pairs
+    if not pairs:
+        return tuple((n, fg) for n in chrome_option_names())
+    return tuple((n, f"{fg},{value}") for n, value in pairs)
+
+
+def pane_border_options(name, chrome, style: str, look: Look) -> tuple[tuple[str, str], ...]:
     """The ``(option, value)`` pairs that draw ONE panel pane's own edges in its own
     surface — empty for a pane that has no surface to draw them in.
 
@@ -906,13 +1185,22 @@ def pane_border_options(name, chrome, style: str) -> tuple[tuple[str, str], ...]
     (:func:`agreed_border_bg`) and its INTERIOR is not a question at all — `window-style`
     is not in :data:`PANE_BORDER_OPTIONS`, so nothing assembled here can reach one.
 
-    *style* and the pair-building are :func:`rule_options`'. The surface is
+    *style*, *look* and the pair-building are :func:`rule_options`'. The surface is
     ``pane_bg_options(name) or chrome_options(chrome)``'s ``window-style`` value, which is
     the SAME expression the pane's interior is painted from: a pane and its own edges cannot
     come out two colours, because they are read off one answer.
+
+    **The BACKGROUND expression and not :func:`surface_options`**, and the difference is
+    load-bearing rather than an oversight. A plane that named a ``text`` colour has an
+    ``fg`` in the value its pane's rectangle is painted with, and a rule resolved off that
+    string would carry two foregrounds — the plane's, and then whatever
+    :func:`rule_style` appends. The rule's own foreground is `rule_style`'s decision, taken
+    from the same ``look``, and what this reads off the pane is only which colour it is
+    sitting in. `TheRuleReadsTheBackgroundAndNotTheWholeSurface` pins it.
     """
     return rule_options(
-        dict(pane_bg_options(name) or chrome_options(chrome)).get("window-style"), style)
+        dict(pane_bg_options(name) or chrome_options(chrome)).get("window-style"),
+        style, look)
 
 
 def _component_surfaces(frame: dict, chrome) -> set:
@@ -1215,6 +1503,56 @@ FRAME_FIELDS = {
     #: One word, so `docs/frame.md`'s hyphen rule (`history-limit`, not `history_limit`)
     #: does not arise.
     "chrome": ("off", "chrome"),
+    #: How the seam between two panes is drawn — see :data:`FRAME_RULES` for why this is a
+    #: contrast question rather than a character one, and what the two words mean.
+    #:
+    #: **``hidden`` is the shipped default, and unlike `chrome` it cannot make an existing
+    #: frame worse.** The two are not symmetric: `chrome`'s default is `off` because
+    #: `dark` would repaint a stranger's terminal, and a stranger's terminal is exactly
+    #: what charter cannot see. ``hidden`` repaints nothing. It has an effect only where
+    #: there is already a surface to hide the rule INTO, which is a plane that has written
+    #: a `chrome` or a `bg` by hand — and such a plane has already said it wants panels
+    #: rather than boxes, which is the whole of what this word means.
+    #:
+    #: **A plane with no surface gets byte-identical options to the frame it had**, and
+    #: that is stated rather than left implicit: there is no colour for the glyph to take,
+    #: so `rule_style` falls through to the ``visible`` assembly and emits `_CHROME_STYLE`
+    #: exactly as it always did. `hidden` there is not a silent failure — it is the same
+    #: rendering the word would produce if it could be honoured, because a rule over the
+    #: terminal's own background IS the terminal's own background either way.
+    #:
+    #: The asymmetry that makes `hidden` right as the default is the report: an operator
+    #: who wanted the seam and gets none can say ``rules = "visible"`` in one line, and the
+    #: operator who did not want it has now reported it four times.
+    "rules": ("hidden", "rules"),
+    #: The foreground every pane charter paints draws its text in — see
+    #: :data:`FRAME_PANE_FG` for the seventeen words, why charter cannot compute this one,
+    #: and why it is frame-wide where ``bg`` is per component.
+    #:
+    #: ``default`` is the shipped value and it emits nothing at all, so a plane that says
+    #: nothing gets the frame it had. One word, so `docs/frame.md`'s hyphen rule does not
+    #: arise.
+    "text": ("default", "text"),
+    #: Whether charter may reduce the contrast of its own chrome — the ``dim`` in the rule
+    #: style, and the ``\\033[2m`` `frame/chrome.py` calls ``muted``.
+    #:
+    #: **The one thing in the frame that is wrong by construction on a surface it was not
+    #: chosen for**, which is why it is a key of its own rather than one more colour.
+    #: `frame/chrome.py`'s `_role_values` argues that bold, dim and reverse need no gate
+    #: because they are "statements relative to whatever the operator's terminal already
+    #: is". That is true of bold and reverse and it is the wrong half of true for dim: dim
+    #: is relative, and it is relative in the direction of LESS contrast. On the terminal
+    #: charter's recipes were chosen against — light text on a dark ground — a dim grey is
+    #: readable. On a pane the plane painted light it moves the text toward the background
+    #: it is already too close to, and the operator reported it unreadable.
+    #:
+    #: **``true`` is the shipped value and the default does not move**, for a reason that
+    #: is about information rather than caution. `dim` is not decoration in this frame: it
+    #: is the ONLY thing separating muted text from ordinary text — a tree glyph from a
+    #: repo name, a count from a heading — and a frame with it off everywhere is a frame
+    #: whose hierarchy is flat. Turning it off is right for a plane whose surface makes it
+    #: unreadable and wrong as an answer for every plane, so the plane says it.
+    "dim": (True, "dim"),
     "hotkey": ("F2", "hotkey"),
     "history_limit": (50000, "history-limit"),
     "min_cols": (100, "min-cols"),
@@ -1224,6 +1562,16 @@ FRAME_FIELDS = {
 #: The plain ``{key: default}`` view of :data:`FRAME_FIELDS`, for callers (and the
 #: ``config.FRAME`` docstring) that only want the shipped defaults, not the TOML mapping.
 FRAME_DEFAULTS = {key: default for key, (default, _toml_key) in FRAME_FIELDS.items()}
+
+#: The :class:`Look` of a plane that has said nothing — derived from :data:`FRAME_DEFAULTS`
+#: rather than spelled, so it cannot drift from the table above.
+#:
+#: It is the DEFAULT for every parameter that takes a `Look` in `commands_frame`, and that
+#: choice is deliberate: a call site that forgets to pass one draws the frame charter
+#: ships, never the frame charter used to ship. The failure mode of the other default —
+#: `Look("visible", "default", True)`, today's rendering — is a new call site quietly
+#: keeping the old behaviour, which is the one bug this whole change is about.
+SHIPPED_LOOK: Look = look_of({})
 
 #: The shape of a tmux key name, and the ONE thing standing between ``[frame] hotkey``
 #: and arbitrary code execution at launch.
@@ -1317,13 +1665,25 @@ def frame_of(cfg: dict) -> dict:
     module is imported by every command, including ``charter --version``, so a
     hand-edited charter.toml must degrade to the defaults rather than raise.
 
-    Four keys need more than a type check, and all four get it here rather than
+    Six keys need more than a type check, and all six get it here rather than
     downstream: ``slots`` is filtered against :data:`FRAME_SLOTS`, ``density`` against
-    :data:`FRAME_DENSITY`, ``chrome`` against :data:`FRAME_CHROME`, and ``hotkey``
-    against :data:`_HOTKEY_RE` — see those two constants for the injection a bare
-    ``isinstance(value, str)`` lets through in each case. All four degrade to
+    :data:`FRAME_DENSITY`, ``chrome`` against :data:`FRAME_CHROME`, ``rules`` against
+    :data:`FRAME_RULES`, ``text`` against :data:`FRAME_PANE_FG`, and ``hotkey``
+    against :data:`_HOTKEY_RE` — see those constants for the injection a bare
+    ``isinstance(value, str)`` lets through in each case. All six degrade to
     the shipped default, which is the contract every other key in this function already
     keeps: a charter.toml charter cannot make sense of never stops charter from running.
+
+    **Degrading rather than refusing is the right half of #535 for a `[frame]` key**, and
+    the boundary is worth stating because the neighbouring rule goes the other way. An
+    ARRANGEMENT is refused whole (:func:`component_tables`) because a component silently
+    missing reads as a plane with no clones — a frame short a pane looks like a machine
+    short a repo, and nobody suspects a typo. A `rules` or `text` word charter cannot read
+    costs a rule drawn the shipped way in a frame that is otherwise entirely intact, which
+    is what `chrome`, `density` and `hotkey` have always done. #687 is the standing warning
+    against over-refusing, and it bites here in the direction of ACCEPTANCE: every word in
+    both new vocabularies is usable, so the tests assert the whole of each rather than a
+    sample.
 
     **`density` is expanded here, and only when it was actually declared.** A declared
     level replaces ``slots`` with the list it expands to, so everything downstream —
@@ -1377,6 +1737,24 @@ def frame_of(cfg: dict) -> dict:
             # bare `isinstance(value, str)` here would carry a committed string from
             # someone else's machine into a tmux evaluator. See :data:`FRAME_CHROME`.
             if chrome_level(value):
+                out[key] = value
+            continue
+        if key == "rules":
+            # The closed enum again, and for `chrome`'s sharper reason rather than by
+            # symmetry: `rules` decides a `pane-border-style`, which tmux FORMAT-EXPANDS at
+            # draw time exactly as it does a `window-style` (measured — see
+            # :data:`FRAME_RULES`). A bare `isinstance(value, str)` here would be the one
+            # door in this section that a committed string could walk a tmux format
+            # through.
+            if rules_level(value):
+                out[key] = value
+            continue
+        if key == "text":
+            # Checked against :data:`FRAME_PANE_FG` here for the same reason `bg` is
+            # checked against `FRAME_PANE_BG` at the component boundary: what an accepted
+            # word buys is an index into charter's own table, and what a refused one costs
+            # is the shipped `default`.
+            if pane_text(value):
                 out[key] = value
             continue
         if key == "hotkey":

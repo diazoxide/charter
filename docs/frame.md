@@ -937,6 +937,146 @@ on: `window-style` is pane-scoped, it honours a colour and silently ignores `rev
 byte-identical to 3.7c, and the two that were not turned out to be the measuring harness.
 So there is no version gate on any of it.
 
+### The seam between two panels
+
+```toml
+[frame]
+rules = "hidden"    # or "visible" — `hidden` is the default
+```
+
+Once your panels have a background, the one-cell gap between two of them is the only part
+of the frame that does not. tmux draws that cell from `pane-border-style`, and charter has
+pinned it to a dim glyph in your own foreground since it started drawing its own chrome —
+so four grey panels came out as four grey rectangles with a dark line between each pair.
+Reported four times, off a screenshot each time.
+
+**You cannot ask for fewer characters.** tmux always paints something on a border cell:
+`pane-border-lines` takes `single`, `double`, `heavy`, `simple` or `number`, and there is no
+`none`. So this is a contrast question. `hidden` asks for the glyph in the same colour as the
+cell behind it, and the two panels read as one surface. Both halves of that name one word out
+of your own palette, so how close to invisible it lands is your theme's answer and not
+charter's — the same reason `chrome` has no `auto`:
+
+```
+visible  ESC[2m ESC[100m ─────   a dim foreground glyph, on the surface
+hidden   ESC[90m ESC[100m ─────  the glyph IS the surface
+```
+
+**A plane with no surface is unchanged, byte for byte.** There is no colour for the glyph
+to take, so `hidden` composes exactly the style charter always drew and your frame looks
+the same as it did. That is why this default is safe where `chrome`'s is `off`: it only
+does anything on a plane that has already written a `chrome` or a `bg` by hand, which is a
+plane that has already said it wants panels rather than boxes.
+
+One pane can opt out of a frame-wide `chrome` with `bg = "default"`, and a rule over *that*
+stays visible: `default` means your terminal's own background, and there is no way to spell
+"your terminal's background" as a foreground. `hidden` there would draw the rule at full
+strength, which is the opposite of what you asked for, so it draws the dim one instead.
+
+Say `rules = "visible"` if you want the seams back.
+
+### The colour of the text on it
+
+```toml
+[frame]
+text = "black"      # any of `bg`'s seventeen words — `default` is the default
+dim  = false        # `true` is the default
+```
+
+`bg` has been configurable across seventeen words for a while. The text drawn *on* it was
+not configurable at all — charter's greens, blues, dims and bolds were chosen against a
+dark terminal, and a plane that paints its panes light is drawing them on a background none
+of them was picked for. `brightblack` is a dark grey on most themes and a light **tan** on
+at least one real operator's, which is how this was found.
+
+**Charter cannot work this out for you and does not pretend to.** The sixteen names have no
+fixed RGB — that is the whole point of naming them rather than indexing the cube — so
+"is this readable" is a question about a terminal charter cannot see. It cannot see it for
+the same reason `chrome` has no `auto`: a colour query through tmux gets no reply, and
+`$COLORTERM` inside a pane describes the terminal that started the *server*. A charter that
+computed a "legible" foreground from your background word would be guessing and calling it
+a measurement.
+
+`text` sets your panes' **default foreground**, and tmux resolves it the way it resolves the
+background — from the same two options, on the same rectangle, at draw time. So it reaches
+every cell no renderer coloured, charter's own `ESC[0m` returns to *your* colour rather than
+the terminal's, and nothing in charter or in a component you wrote has to be told. Measured
+on tmux 3.7c and at the 3.2 floor.
+
+**Which case this actually fixes**, stated plainly so you can tell whether it is yours. It
+fixes a pane whose background is *inverted* relative to your terminal's — a dark terminal
+with `bg = "white"`, or a light terminal with `bg = "black"` — where the foreground your
+terminal picked for its own background is now sitting on the opposite one. If your terminal
+is already light and your panes are light, your default foreground was already dark and this
+key has nothing to do; what is hard to read there is the **accent** colours, and `text` does
+not reach those. That gap is real and named rather than papered over: `ok`, `warn` and `bad`
+are still your palette's green, yellow and red, and yellow on a tan surface is exactly the
+combination nobody's palette was designed for. Making those three configurable is the
+obvious next key and is not in this release.
+
+`dim = false` stops charter reducing the contrast of its own chrome — the `ESC[2m` on muted
+text, and the `dim` on the frame's rules. It is a key of its own rather than one more colour
+because it is the one thing in the frame that is **wrong by construction** on a surface it
+was not chosen for: bold adds weight and reverse swaps your own two colours, so neither can
+be wrong on a theme charter cannot see, but dim moves text toward the background, and that
+is only safe when there is contrast to spare.
+
+It stays *on* by default, and the reason is information rather than caution: dim is the only
+thing separating muted text from ordinary text in the frame — a tree glyph from a repo name,
+a count from a heading — so a frame with it off everywhere is a frame with a flat hierarchy.
+Turn it off when your surface makes it unreadable.
+
+**Why there is no `accent` yet, and no key per colour.** charter draws through eight named
+roles — `heading`, `muted`, `selected`, `ok`, `warn`, `bad`, `reset`, `inset`. Four of them
+are theme-safe by construction: bold, reverse, a reset and two spaces. Three of them —
+`ok`, `warn`, `bad` — are green, yellow and red **as your palette defines them**, so
+renaming them would swap your own green for your own blue, which is a preference and not a
+legibility fix. What is left is the two that are not slots in your palette at all: the
+default foreground, which your terminal chose to sit on *its* background rather than on the
+one charter painted, and dim. Those are the two keys here.
+
+The argument for stopping there is weaker than it looks, and the honest version is this: it
+holds while the three accents are readable on your surface, and an operator has reported
+that they are not on a light one. Restating them would be three more words in this table —
+`ok`, `warn`, `bad` — and the reason it is not in this release is mechanical rather than
+principled: charter's own panels write those colours directly, so serving new ones means
+routing about forty call sites through the same recipe table a component already reads, and
+that is a change worth making on its own rather than at the end of this one.
+
+`NO_COLOR` still wins over both, and over everything else here.
+
+### Why the frame ships with no surface at all
+
+`chrome = "off"` is the default and stays there, and the reason is the one above: charter
+cannot see your theme, so any colour it shipped would be wrong for whoever's theme differs.
+That is not a hedge — it is what produced the tan.
+
+The obvious way out is an attribute rather than a colour. **`reverse` is theme-independent**
+by definition: it swaps whatever your own foreground and background are, so a reversed panel
+is distinct from your work area on every theme without charter knowing which, and tmux's own
+status line has used it forever. It was measured for exactly this, on tmux 3.7c and at the
+3.2 floor, and it does not work. tmux **accepts** `window-style reverse`, stores it, and
+reads it back verbatim — and puts nothing at all on an attached client's wire for it. The
+same is true of `bold` and `dim`. A pane style honours colour and silently ignores every
+attribute.
+
+A panel could reverse its own rows instead, and that is worse rather than merely harder: a
+pane style fills the whole rectangle — the cells no renderer wrote, on resize, on reattach —
+while a fill a panel painted itself lasts until the pane changes shape. You would get three
+reversed rows in a fifteen-row pane and twelve of your terminal's own until the next tick.
+
+So there is no theme-independent surface to ship, and what you get instead is three lines:
+
+```toml
+[frame]
+chrome = "dark"     # or "light" — whichever side your terminal is on
+text   = "white"    # or "black" — the other side
+dim    = false      # if your surface is light
+```
+
+`rules = "hidden"` is already the default, so the seams are gone without you writing
+anything. Add a `bg` per component if you want your regions told apart (below).
+
 ### A colour and an inset for one pane
 
 `chrome` gives every panel the same background, which is the right default and the wrong

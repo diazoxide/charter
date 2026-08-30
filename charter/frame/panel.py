@@ -203,6 +203,19 @@ def _write(text: str) -> None:
     strip is `tui.strip_ansi` per LINE and never over the whole write: `sanitize` drops
     every CSI that is not SGR, so stripping the assembled string would delete the
     clear-screen that makes a repaint a repaint.
+
+    **And it is where `[frame] dim` is honoured** (`chrome.dim_ok`, `chrome.undim`), for
+    exactly that reason said about a smaller question. Charter's own renderers spell
+    `statusline._DIM` at some forty call sites in `frame/slots.py` and a provider's
+    component spells whatever it likes; one deletion here reaches both, where forty edits
+    would reach one of them and drift. The setting is read ONCE per write rather than per
+    line — it cannot change in the middle of a paint, and a panel repaints on a clock.
+
+    **The two are not two branches of one question**, and the order says so: `NO_COLOR`
+    already strips every SGR, dim included, so the dim pass is unreachable under it rather
+    than skipped by it. A frame that asked for no colour and a plane that asked for no dim
+    agree about dim; they differ about everything else, and the stronger answer is the one
+    that runs.
     """
     lines = text.split("\n")[:_rows()]
     if not chrome.colour_ok():
@@ -210,7 +223,9 @@ def _write(text: str) -> None:
         # painted, and "no colour on the operator's screen caused by charter" is the
         # promise rather than "no colour except charter's own housekeeping".
         return _out("\x1b[H\x1b[2J" + "\n".join(chrome.plain(ln) for ln in lines))
-    _out("\x1b[m\x1b[H\x1b[2J" + "\n".join(lines))
+    dim = chrome.dim_ok()
+    _out("\x1b[m\x1b[H\x1b[2J"
+         + "\n".join(ln if dim else chrome.undim(ln) for ln in lines))
 
 
 def _out(payload: str) -> None:
