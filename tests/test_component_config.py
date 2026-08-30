@@ -264,6 +264,13 @@ class TheOperatorsOwnPlane(unittest.TestCase):
     copy that agrees with the real thing until somebody edits one of them. That is the
     whole failure mode: the change #535 shipped removed the repo table from charter's own
     plane and every fixture in the suite went on describing a frame that had one.
+
+    **Every case here asks whether a panel charter SHIPS is still drawn, never whether
+    this plane draws only those (#701).** The three cases that already read that way —
+    the repo table by name, the split order, the committed names resolving — are the
+    shape; the first one was an equality, and an equality is a claim about the
+    OPERATOR's file rather than about charter. It made `[[frame.component]]` unusable on
+    the plane that ships it: adding either bar `docs/frame.md` documents turned this red.
     """
 
     def setUp(self) -> None:
@@ -272,10 +279,27 @@ class TheOperatorsOwnPlane(unittest.TestCase):
         self.cfg = tomllib.loads(CHARTER_TOML.read_text())
 
     def test_charters_own_plane_still_draws_every_panel_it_draws_today(self):
-        got = instance.frame_components(self.cfg)
-        self.assertEqual([(p["use"], p["edge"], p["visible"]) for p in got],
-                         [("identity", "top", True), ("attention", "bottom", True),
-                          ("repos", "bottom", True), ("sidebar", "right", True)])
+        """Every panel the SHIPPED frame places, on its shipped edge, visible, in the
+        shipped split order — with this plane's own components allowed to sit between
+        them.
+
+        *want* comes off `instance.frame_components({})` rather than a literal, which is
+        the same reason the class name says *today*: today moves, and the day charter
+        ships a fifth panel this should follow it rather than need a new literal.
+        `SlotsIsShorthandForPlacingBuiltIns.test_the_shipped_default_places_every_panel_charter_draws`
+        is where that default is pinned against literals, so deriving here is not both
+        sides moving together.
+
+        Filtered by `use` and not by the whole tuple, so a `repos` this plane moved to
+        another edge or hid survives the filter and reddens the comparison naming
+        itself — rather than being dropped as *not one of ours* and reported as a length
+        mismatch."""
+        want = [(p["use"], p["edge"], p["visible"])
+                for p in instance.frame_components({})]
+        shipped = {use for use, _, _ in want}
+        got = [(p["use"], p["edge"], p["visible"])
+               for p in instance.frame_components(self.cfg)]
+        self.assertEqual([t for t in got if t[0] in shipped], want, got)
 
     def test_charters_own_plane_still_has_its_repo_table(self):
         """Said separately from the list above, and on purpose. The assertion that shape

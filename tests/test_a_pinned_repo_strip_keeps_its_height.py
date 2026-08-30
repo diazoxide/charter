@@ -490,6 +490,15 @@ class TheCommittedFileIsReadAtABoundaryAndNotInTheArithmetic(unittest.TestCase):
         plane that later commits the same key for real is running the case this test
         already ran, and the day charter's own frame gains a pin this stays green rather
         than needing to be rewritten.
+
+        **`slot_sizes`' answer is compared over the shipped slots and not whole (#701),
+        for the same reason this test reads the real file at all.** An operator whose
+        `[[frame.component]]` places something charter did not ship — the two bars
+        `docs/frame.md` documents — gets an extra key here, and asserting the dict whole
+        made that arrangement a failure. Which is #661 itself, said about a test instead
+        of about `repos_rows`: charter's own plane could not use a feature charter ships.
+        The property is unchanged — the fixed strips stay 1 and 22, and `repos` stays the
+        6 rows it was HANDED rather than the 15 the file now pins.
         """
         cfg = tomllib.loads(_COMMITTED.read_text(encoding="utf-8"))
         tables = cfg["frame"]["component"]
@@ -506,9 +515,10 @@ class TheCommittedFileIsReadAtABoundaryAndNotInTheArithmetic(unittest.TestCase):
                 layout.repos_rows(content_rows=4, window_rows=50,
                                   slots=["top", "bottom", "repos"]),
                 4)
+            sizes = layout.slot_sizes(resolved["slots"], window_rows=50, content_rows=6)
             self.assertEqual(
-                layout.slot_sizes(resolved["slots"], window_rows=50, content_rows=6),
-                {"top": 1, "bottom": 1, "repos": 6, "right": 22})
+                {s: n for s, n in sizes.items() if s in instance.FRAME_SLOTS},
+                {"top": 1, "bottom": 1, "repos": 6, "right": 22}, sizes)
 
     def test_the_number_the_arithmetic_was_handed_is_the_number_it_used(self):
         """The other half, and it is what stops the two tests above being satisfied by a
