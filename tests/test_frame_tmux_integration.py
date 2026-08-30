@@ -2743,6 +2743,84 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
                          "operator's harness must be able to receive a keystroke "
                          "the instant the frame comes up")
 
+    def _require_resize_hook(self) -> None:
+        """Skip unless charter would install a `window-resized` hook on THIS tmux.
+
+        **Charter is right here and the two tests below were wrong** (#717).
+        `tmuxctl.RESIZE_HOOK_FLOOR` is 3.3 and charter's own floor is 3.2, so on the
+        supported floor `commands_frame._install_resize_hook` deliberately installs
+        nothing — `set-hook -w window-resized` answers `invalid option`, rc 1, there. Both
+        tests below issued it unconditionally and asserted rc 0, so on tmux 3.2 they
+        reported `installing the resize hook failed`: charter failing to do a thing
+        charter chooses not to do.
+
+        Not a widened assertion. The hook either exists on this tmux or these two have
+        nothing to say — there is no weaker version of "tmux really runs the hook charter
+        installed" available on a tmux with no such hook.
+
+        **The VERSION, and not a probe, unlike this class's neighbours.** What these tests
+        need is not "does tmux have the hook" but "would charter have installed one", and
+        in production that is a version decision (`tmuxctl.RESIZE_HOOK_FLOOR`) rather than
+        a probe. The two are held together by
+        `test_the_resize_hook_floor_agrees_with_what_this_tmux_actually_does` below, which
+        is the one case here that asks the binary — so a constant that drifts from the
+        binary goes red there rather than turning these two into a silent skip.
+        """
+        v = tmuxctl.version()
+        if v is None or v < tmuxctl.RESIZE_HOOK_FLOOR:
+            self.skipTest(
+                f"`window-resized` arrived in tmux {tmuxctl.RESIZE_HOOK_FLOOR[0]}."
+                f"{tmuxctl.RESIZE_HOOK_FLOOR[1]} (`tmuxctl.RESIZE_HOOK_FLOOR`) and this "
+                f"machine has {v}; charter installs no resize hook here, so there is no "
+                "hook for this to fire")
+
+    def test_the_resize_hook_floor_agrees_with_what_this_tmux_actually_does(self):
+        """The constant the two tests below skip on, checked against the binary rather
+        than against tmux's own CHANGES — the shape `ChromeIsOneColour.test_the_floor_
+        agrees_with_what_this_tmux_actually_does` already gives `PANE_BORDER_FLOOR`.
+
+        Without it `_require_resize_hook` is a skip nobody audits: a
+        `RESIZE_HOOK_FLOOR` raised too far would quietly stop measuring the resize
+        recovery on a tmux that has it, and a floor lowered too far would put #717's own
+        failure back. Both directions are one assertion because the floor is one claim.
+
+        A bare session and not `_spawn_frame`: this is about tmux's own hook table, and
+        the four panels, the gather child and the plane behind them are cost with nothing
+        to say about it. The hook argv is still the production one — `_resize_hook_argv`,
+        the exact bytes a launch sends.
+
+        **The refusal is asserted by its REASON**, not merely by its rc: production reads
+        that same stderr (`commands_frame._INVALID_HOOK_NAME`) to tell "this tmux has no
+        such hook name" from "the install failed for some other reason", and a floor test
+        that accepted any non-zero rc would pass on a broken socket.
+        """
+        v = tmuxctl.version()
+        if v is None:
+            self.skipTest("no readable tmux version to check the floor against")
+        session = "resize-hook-floor"
+        r = _tmux("new-session", "-d", "-s", session, "-x", "80", "-y", "24",
+                  "-P", "-F", "#{pane_id}", "--", "sleep", str(int(_DEADLINE * 10)),
+                  env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pane = r.stdout.strip()
+        self.addCleanup(_kill_pid, _tmux("display-message", "-p", "-t", pane,
+                                         "#{pane_pid}").stdout.strip())
+        hook = commands_frame._resize_hook_argv(socket=SOCKET, harness_pane=pane,
+                                                fid=state.frame_id("hook-floor",
+                                                                   os.getpid()))
+        self.assertIsNotNone(hook, "the frame's own id was refused by the hook builder")
+        got = self._run_env(hook)
+        self.assertEqual(
+            got.returncode == 0, v >= tmuxctl.RESIZE_HOOK_FLOOR,
+            f"tmux {v} {'accepts' if got.returncode == 0 else 'refuses'} "
+            f"`set-hook -w window-resized`, which is not what `RESIZE_HOOK_FLOOR` "
+            f"{tmuxctl.RESIZE_HOOK_FLOOR} says: {got.stderr!r}")
+        if got.returncode != 0:
+            self.assertIn(commands_frame._INVALID_HOOK_NAME, got.stderr or "",
+                          "the install failed for a reason that is not `this tmux has "
+                          "no such hook name`, so this measured a broken fixture rather "
+                          f"than the floor: {got.stderr!r}")
+
     def test_the_resize_hook_really_fires_and_charter_really_recomputes(self):
         """The one link `_reassert_sizes`' own integration test (`TmuxIntegration.
         test_recomputed_sizes_really_hold_across_real_window_resizes`) cannot reach: that
@@ -2767,6 +2845,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         CONTENT, and this frame's plane has no clones to table — so a pane that came out
         SMALLER after the window grew can only be charter's answer.
         """
+        self._require_resize_hook()
         fid = state.frame_id("four-edge-resize", os.getpid())
         harness_pane, panes = self._spawn_frame(fid)
         state.record_harness_pane(fid, harness_pane)
@@ -2837,6 +2916,7 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         pass "the pane came back". The frame has to end this test with exactly the panes a
         launch at its final size would have drawn.
         """
+        self._require_resize_hook()
         fid = state.frame_id("four-edge-shape", os.getpid())
         harness_pane, panes = self._spawn_frame(fid)
         state.record_harness_pane(fid, harness_pane)
