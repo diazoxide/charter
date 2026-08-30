@@ -40,9 +40,9 @@ that carry the harness's exit code back out. Below 3.2 `charter <harness>` still
 nothing is switched off: the escape hatch stays bound but may do nothing, and if the
 exit-code hooks
 fail to install charter says so and declines to attach rather than risk a session nothing
-can end. The resize-recovery hook needs a further 3.3; below that a resize still works, the panels
-just do not come back on their own — `charter frame-resize`, typed in the frame's own
-window, restores them.
+can end. The resize-recovery hook needs a further 3.3; below that a resize still works, the
+panels just do not come back on their own — `charter frame-resize`, typed in the frame's
+own window, restores them.
 
 `charter <harness> --probe` (or the standalone `charter frame-probe`) answers "can a frame
 run here, and what will it not be able to do" without starting anything: exit 0 if a frame
@@ -81,8 +81,10 @@ $ charter frame-resize
 %1 1x120   %0 34x97   %4 34x22   %3 1x120   %2 1x120     <- the launch geometry, exactly
 ```
 
-So the standing limit below 3.3 is not "until you relaunch", it is "until you ask". `F2 →`
-the palette reaches it too, and on this tmux that is the one recovery worth knowing.
+So the standing limit below 3.3 is not "until you relaunch", it is "until you ask" — and
+on this tmux that command is the one recovery worth knowing. There is no palette row and
+no key for it: the frame binds keys through the config it sources onto its own server, and
+this is a command you type.
 
 Those limits are deliberately **not** printed when a frame launches. A warning written to
 your terminal microseconds before tmux switches to the alternate screen is not readable —
