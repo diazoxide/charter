@@ -112,7 +112,51 @@ real-tmux tests skip there. **Every tmux claim in this spec has to be hand-verif
 machine, on both versions**, and a green gate says nothing about any of them. The 3.2 floor
 binary is preserved at `~/.local/share/charter-testing/tmux-3.2`.
 
-**2.13 `.charter/` is already per-machine.** `/.charter/` is gitignored wholesale and holds
+**2.13 One tmux server serves every plane on the machine, and session names carry no plane.**
+`SOCKET = "charter"` (`commands_frame.py:167`), documented as *"one shared tmux server for every
+frame **this machine** runs"*. `config.STATE_DIR` is per **plane**. Session names are
+`state.workspace_prefix(ws)` — the bare workspace name. Live on this machine: `default`,
+`harness-wrapper`, `marketing`, `platform-next-97003`. **`default` is
+`DEFAULT_WORKSPACE_FALLBACK`, a name every plane has.**
+
+**This is the flaw eight rounds of grilling did not reach, and §4c's central rule is inverted
+because of it** — see §3.3.
+
+**2.14 A dead pane with `remain-on-exit` blocks `attach` forever.** Measured on 3.7c: session
+with one window, `remain-on-exit on`, harness `sh -c 'exit 7'`, the `pane-died` *write* hook
+installed but not the `kill-window` hook —
+
+```
+panes:  %0 dead=1 status=7        exit file: 7
+RESULT: attach STILL BLOCKED after 5s
+```
+
+`_pane_died_teardown_hook_argv`'s own docstring calls that `kill-window` *"the single most
+dangerous line in the move to chats"*. **§4j's dead tab reopens it** — see §5.
+
+**2.15 `inflight` is per-plane and records no chat.** `charter/inflight.py` holds four kinds —
+`DISPATCH`, `CLONE`, `REFRESH`, `ACTION` — **not tool calls** — in one flat plane-scoped
+directory, each record `{"agent", "kind", "ts"}` with **no fid, no chat, no workspace**.
+Records clear only on `finish()`, and `still_running()` holds a stranded one for 30 minutes,
+`live()` for 24 hours.
+
+**2.16 `max_chats` does not exist.** One hit in `charter/`, and it is a comment.
+`instance.FRAME_FIELDS` is a closed 8-key set, so `max_chats = 6` in a `charter.toml` today is
+**silently ignored, not refused**.
+
+**2.17 `record_exit` is written by a pane hook, not the launcher.** Measured across four
+teardowns on one session:
+
+| what happened | `exit` written |
+|---|---|
+| harness exits on its own (`exit 7`) | **yes — `7`** |
+| harness killed by SIGTERM | **yes — `1`** |
+| `kill-pane` / `kill-window` / `kill-session` | no |
+
+So the file means precisely *"this harness ended on its own"*, which is a sharper fact than
+§2.9 claimed.
+
+**2.18 `.charter/` is already per-machine.** `/.charter/` is gitignored wholesale and holds
 zero tracked files. The per-machine state this design needs has a home already.
 
 ## 3. The two reversals
@@ -133,6 +177,33 @@ means by "close folder" — a thing you ask for, not a thing you land in.
 second launch joins. What was missing was not a lock but a defect fix (§2.3) — and given §2.4,
 forbidding a second client would have bought a geometry fight rather than sync. **The
 requirement is "never fork the state", and attaching already satisfies it.**
+
+**3.3 A third reversal, found by attacking this spec rather than by grilling it.** §2.13: one
+tmux server per machine, session names carrying no plane, and `default` a name every plane has.
+
+**§4c's rule was inverted.** `open = disk ∪ live` was written as *"tmux is the truth; the file
+is a hint"*. For **plane membership tmux cannot answer at all**: `_live_chats(SOCKET)` returns
+every chat on the machine, and the only thing saying a live chat is *this plane's* is its
+directory existing on this plane's disk — the `disk` half. So `∪ live` contributes exactly and
+only the chats this plane does not have. The case it was written to rescue — a chat of mine
+whose directory was lost — is indistinguishable from one that was never mine.
+
+**The rule is now `open = what is on this plane's disk`, and tmux answers only "is it live".**
+The reboot objection I raised at the time was the shallow version of this; the real one holds
+while everything is running.
+
+Two more parts of the design inherit it:
+
+* **§4k weaponises an existing collision.** `charter -w default` in plane B already adds a
+  window to plane A's session today (`if session in live_sessions:`), because both planes have
+  a workspace called `default`. Open-or-focus would make that the *advertised* behaviour.
+  **Open-or-focus must match on this plane's chat directories, never on a live session name.**
+* **§4i's quit has an unbounded blast radius.** The obvious spelling is `kill-server`, which
+  kills every plane's frames. Even per-session kill needs a plane filter, and the filter can
+  only come from disk.
+
+**§7's acceptance test cannot catch any of this.** It needs *two planes on one machine*, and it
+now says so.
 
 ## 4. The design
 
@@ -195,14 +266,19 @@ Two states, and the distinction is load-bearing:
 * **open** — has a chat directory that has not been closed. Appears in the bar.
 * **live** — has a running session and harness.
 
-**The bars distinguish three, because charter can (§2.9).** *Live*; *idle* — never started
-this run, or exited cleanly, which are the same thing to an operator and both mean "touch it to
-start"; and *died* — a non-zero exit, which is not the same thing at all and is the one state
-that should reach for the operator's attention.
+**Three marks, and the distinguishing file is one `stat`.** *Live* — a window exists. *Dead* —
+`exit` is present, which per §2.17 means the harness ended **on its own**, and the code says
+whether it finished or crashed. *Cold* — no `exit`, i.e. never started, or taken down by the
+machine.
 
 An earlier draft drew two marks on the grounds that cold and dead were indistinguishable. They
-are not: the exit code is per chat and survives. Drawing a crash as though it were an ordinary
-closed tab is the convincing-empty this project refuses everywhere else.
+are not, and the honest limit is narrower than the claim: **charter cannot distinguish a chat
+the machine took down from one never started** — `kill-pane`, `kill-window` and `kill-session`
+write no `exit`. It can distinguish both from a harness that ended by itself, which §4j calls
+the most common ending of all.
+
+`state.exit_code(fid) is not None` is one `stat`, already written and already correct. **The
+same read is §4e's missing gauge gate** — see there.
 
 **tmux is the truth; the file is a hint.** On every paint, open is `(what is on disk) ∪ (live
 sessions)`. A session charter did not record is still open, because it exists. That way the
@@ -230,9 +306,20 @@ Charter already records the harness's own session id (`.charter/frame/<fid>/sess
 exactly what a resume needs, and `clear_shape` deliberately deletes it (§2.5).
 
 **Both requirements are right; the file is serving two purposes.** The *gauge* must not show a
-stale reading. The *identifier* is fine to keep. So: **keep the id as durable per-chat state;
-make the gauge refuse to draw unless the id belongs to a live harness.** The deletion was
-protecting a reading, not the identifier.
+stale reading. The *identifier* is fine to keep. So: **keep the id as durable per-chat state,
+and gate the gauge on `state.exit_code(fid) is None`.**
+
+**That gate is the only implementable one, and an earlier draft asserted a different one it did
+not check.** "Refuse unless the id belongs to a live harness" has no mechanism a panel can
+afford: the gauge is drawn by a panel process on its repaint path, and `state.is_live` for a
+chat has no launcher pid, so it falls to `pane_matches` — which answers `False` for every
+panel, always. The alternative is a tmux subprocess on a path whose whole design forbids one.
+`exit_code` is one `stat`, and it hands §4c its third mark for the same read.
+
+**Ordering hazard §6 must respect:** the usage history the gauge reads is keyed by the harness's
+session id and lives *outside* the frame directory, so deleting the `session` mapping is the
+only thing suppressing a stale gauge today. The durable-id stage is "no behaviour change" only
+while the reopen stage has not landed — **the gate must ship before it**, not after.
 
 What a reopen restores is Task 9's own list — **workspace, persona, harness, cwd** — into the
 chat's *existing* directory rather than a new `fid`, which is what those `clear_*` calls say
@@ -243,11 +330,32 @@ destroying those are still right.
 in §4f names, per chat, what will and will not come back — at the moment the operator is
 deciding, not after.
 
-**A resumed chat says what was in flight.** `--resume` restores a conversation, not work: a
-half-finished edit is half-finished, a running test is dead. Charter already knows what was
-running — `inflight` is what the spinner reads. A resumed chat opening with *"2 tools were
-running when this closed"* is honest; one opening pristine is the convincing-empty this project
-refuses everywhere else.
+**A resumed chat says what was in flight — but not from `inflight`, which cannot answer it.**
+§2.15: `inflight` records dispatches, clones, refreshes and palette actions — **not tool
+calls** — in one flat **plane-scoped** directory with no fid, no chat and no workspace on any
+record. With several workspaces open it would report another workspace's dispatches as this
+chat's. An earlier draft named it as the source; that was wrong in kind, not merely in scope.
+
+What a resumed chat can honestly say is what its **own** directory records: the exit code, and
+that it was killed rather than ended. Anything richer needs a per-chat record that does not
+exist, and inventing one is a cost this spec should name rather than assume.
+
+**Quit must prune the tracker.** §2.15: records clear only on `finish()`, so killing every
+harness strands every record — `still_running()` reports them for 30 minutes and `live()` holds
+them 24 hours. The frame's spinner would animate for a plane doing nothing, and the
+dispatch-overlap nudge would name agents your own quit killed. **Quit is the one moment that
+knows it is killing everything and can prune.**
+
+**`cwd` has no home on disk.** Of §4e's four restore items, `workspace` is a file, and
+`identity` already carries `CHARTER_HARNESS` and `CHARTER_PERSONA` — **nothing records `cwd`**.
+Either it is added, or the list is three items and says so.
+
+**Resume is not cwd-scoped.** Measured: a session created in the charter checkout resumed
+successfully from an unrelated empty directory. Lucky, given the line above.
+
+**No harness has a resume seam.** `Harness.launch_argv` is `[self.binary, *extra]` and nothing
+in the registry mentions `--resume`. §2.8 cited *"defined once with no overrides"* as evidence
+the harness is cheap; it is equally evidence that **there is nothing here to hook into yet**.
 
 ### 4f. Scrollback: preserve a record, do not fake a session
 
@@ -337,16 +445,22 @@ well" or "instead". **Open-or-focus**: if `foo` is live, attach to it; if not, o
 leave the others. That is `code <path>`'s behaviour, it never destroys state, and the flag
 means one thing whether or not the workspace happens to be running.
 
-### 4l. What draws first
+### 4l. What draws first — withdrawn
 
-Panels first, harness second. **The bar is what tells the operator the restore worked**, and
-drawing it first makes a slow harness launch legible instead of looking like a hang.
+An earlier draft asked for panels before the harness, on the grounds that a bar drawn early
+makes a slow launch legible. **Both halves were wrong and the section is withdrawn.**
 
-**This is machinery, not ordering, and an earlier draft said otherwise.** Charter separates
-panel launch from harness launch only on the operator-tmux path, which uses a placeholder plus
-`respawn_argv`. On the private path `layout.session_argv` and `chat_window_argv` start the
-harness *inside* the `new-session`/`new-window`, so panels cannot precede it without adopting
-the placeholder machinery there too. Cost it as such.
+It is machinery, not ordering: `layout.session_argv` and `chat_window_argv` create the window
+*with the harness as its first pane*, and `_draw_panels` splits off `harness_pane`. Panels-first
+needs a placeholder plus `respawn-pane`, which relocates `remain-on-exit` arming, the eager
+dead-status query, and the strictly ordered `pane-died[0]`/`[1]` installs whose order the
+teardown docstring calls "the entire fix".
+
+And the benefit is unreachable by reordering anyway: on the private path the operator sees
+nothing until `attach`, which happens *after* panels — so panels drawn earlier are drawn into a
+detached session nobody is looking at. Making a slow launch legible would mean attaching before
+the harness starts, which destroys #384: the early-death message prints to charter's own stderr
+*before* the alternate screen, and after an attach it lands behind it.
 
 ### 4m. `charter status` learns about open and live
 
@@ -367,6 +481,20 @@ plane is the kind of thing found six months later.
   clean. Nothing here makes a killed session's history scroll again.
 * **Notify outside the frame.** §4g marks a tab that wants you; it does not ring a bell, raise
   a desktop notification, or reach an operator who is not looking at charter at all.
+* **Tell a chat the machine killed from one never started.** §4c — `kill-pane`, `kill-window`
+  and `kill-session` write no `exit`. Only a harness that ended by itself is distinguishable.
+* **Keep the last chat of a workspace alive as a dead tab.** §4j — that is what returns the
+  exit code and unblocks `attach` (§2.14). Open question, not a deferred feature.
+* **Say what tools were running when a chat was killed.** §4e — `inflight` records dispatches,
+  not tool calls, and is plane-scoped with no chat on any record.
+* **Bound the open set by anything except the operator closing things.** §4d's cap plus
+  `chat: close` are the only reapers afterwards. **The open set only ever grows** — every chat
+  started is a tab until closed, every workspace touched is in the bar until closed. §3.1
+  argues no IDE opens blank; **no IDE makes "close folder" mandatory-forever either**, and this
+  design does. That is a real cost of the durability redesign and it is stated, not hidden.
+* **Survive a schema change across a long-lived chat directory.** After durability a directory
+  can be months old and reopened by a much newer charter, and nothing in it carries a schema
+  version — `version` is a repaint counter. Created by the redesign, not by resume.
 
 ## 6. Delivery
 
@@ -400,35 +528,55 @@ quietly changed is one nobody can audit.
    **Ten lines and a tmux semantics claim is not cheap.** #664, #687 and #690 all came from
    exactly that combination. Two-version verification by hand (§2.12).
 
-### Not a stage — a redesign
+### Not a stage — a redesign, and it is six edits rather than one
 
 **Stage 4 changes what a chat directory *is***: a liveness marker today, reaped when no window
 holds it; durable state afterwards, reaped only when the operator closes the chat. #685, #691
 and #696 all rest on the current rule — #685 exists *because* a directory was deleted by the
 next launch.
 
-It is also **three features, not one**. `reap` carries four keep-rules and only `if d.name in
-live` inverts; the other three (server scope, exit-code protection, the claim window) are about
-other races and survive untouched. What makes it expensive is that **~60 tests across 10 files
-assert the current rule**, four by name in their titles, and that **`chat: close` does not
-exist anywhere in `charter/`** while `max_chats` is a comment nothing reads. Ship the inversion
-without close and the cap and `.charter/frame/` grows forever — which `reap`'s own docstring
-names as the failure it exists to prevent.
+`reap` carries four keep-rules and **only `if d.name in live` inverts**; server scope,
+exit-code protection and the claim window are about other races and survive untouched. What
+makes it expensive is everything that leaves with it:
 
-4. **A chat directory becomes durable (§4c, §4d), with `chat: close` and the `max_chats` cap.**
-   Verify against #685's own reproduction before anything lands on top.
+* **~60 tests across 10 files assert the current rule**, four by name in their titles.
+* **`chat: close` does not exist anywhere in `charter/`**, and it is the new reaper.
+* **`max_chats` does not exist either** (§2.16) — one comment, and `FRAME_FIELDS` is closed, so
+  a plane writing it today is silently ignored. Ship the inversion without both and
+  `.charter/frame/` grows forever, which `reap`'s own docstring names as the failure it exists
+  to prevent.
+* **Ordinals stop being freed.** `new_chat_id` walks upward to `_CHAT_ORDINAL_MAX = 10_000`
+  and reap is what frees them today.
+* **Ghost tabs become permanent.** A launcher SIGKILLed mid-launch leaves a claimed directory
+  with no window and a dead pid; the `_claiming_pid` rule is the only thing collecting it.
+  Afterwards it is a tab no operator will ever close, because they never saw it become a chat.
+* **`cmd_workspace_remove` leaks.** It deletes the workspace tree and touches no
+  `.charter/frame/<ws>.<n>`; reap collects them today. Afterwards, deleting a workspace leaves
+  its chats as open tabs for a workspace that no longer exists.
+* **`state.clear_claim`** at two call sites means *"I am done, you may delete me"* — the exact
+  opposite of the new contract. Those go with this stage, not after it.
+
+4. **A chat directory becomes durable (§4c, §4d)** — with `chat: close`, the `max_chats` cap
+   *and its `FRAME_FIELDS` entry*, the ghost-tab collector, `cmd_workspace_remove`, and
+   `clear_claim`. Verify against #685's own reproduction first.
 5. **Reopen into an existing directory, and resume (§4e).** Phase 5's Task 9, plane-scoped.
-6. **Quit, the warning, and the scrollback capture (§4i, §4f, §4j).** Quit is what makes the
-   capture necessary; they ship together or the capture has no trigger.
-7. **Bare `charter` and `[harness] default` (§4a)**, including the non-tty hazard.
-8. **Place the `workspaces` bar with activity and stale marks (§4b, §4g, §4h), and
-   `charter status` (§4m).** One change, not three — splitting them means touching the same
-   render, width arithmetic and plumbing three times.
+   **The gauge gate ships before this**, not with it (§4e).
+6. **A dead chat is kept while a sibling is live (§4j).** Its own stage, because it touches
+   `pane-died[1]` and charter's exit-code contract (§2.14).
+7. **Quit, the warning, the scrollback capture, and pruning `inflight` (§4i, §4f, §4e).** Quit
+   is what makes the capture necessary and the prune possible.
+8. **Bare `charter` and `[harness] default` (§4a)**, including the non-tty hazard.
+9. **Place the `workspaces` bar with activity and stale marks (§4b, §4g, §4h), and
+   `charter status` (§4m).** One change, not three.
 
 ### Already shipped, specified in error
 
-**`F2 → charter: detach` exists** (§2.11) and is already correct after Stage 5a. An earlier
-draft listed it as work. It needs none.
+**`F2 → charter: detach` exists** (§2.11) and works — but not for the reason its own docstring
+gives. It runs `detach-client -s <fid>` with a **chat id** against a session named for the
+**workspace**, and resolves only by tmux's target grammar — the parsing hazard #695 was about.
+Its docstring's *"a frame normally has exactly one client"* is false by §2.1's own `attached=2`,
+and `-s` drops **every** client of the workspace session. It needs no new feature and it does
+need that docstring corrected.
 
 ## 7. How this gets verified
 
@@ -438,5 +586,15 @@ plane rather than a synthetic config. Two of tonight's defects — a `size` key 
 whole arrangement, and a documented snippet that turned the frame off — reached `main` because
 nothing tested them anywhere else.
 
-So the acceptance test is not a unit test. It is: **this plane, with several workspaces open,
-quit and reopened, with the suite green and `charter.toml` carrying the bars.**
+So the acceptance test is not a unit test. It is: **two planes on one machine, each with
+several workspaces open — including one workspace name they share — quit and reopened, with the
+suite green and `charter.toml` carrying the `chats` bar.**
+
+**Two planes, not one, and that is §3.3's doing.** A single-plane test cannot see the flaw the
+grilling missed: one tmux server serves the machine, session names carry no plane, and
+`default` is a name every plane has. Every rule about what is open, what quit kills and what
+open-or-focus attaches to is only tested when a second plane exists to be confused with.
+
+And per §2.12, **none of it runs in CI** — there is no tmux there. Every tmux claim in this
+document is a hand-run on a real machine, on 3.7c and at the 3.2 floor preserved at
+`~/.local/share/charter-testing/tmux-3.2`.
