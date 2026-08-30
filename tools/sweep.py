@@ -276,10 +276,35 @@ class Mutation:
 
     @property
     def tag(self) -> str:
-        return f"{self.path}:{self.line}:{self.operator}"
+        """`path:line:operator`, and then the edit that makes this one not its sibling.
+
+        The prefix is unchanged, because it is what a reader greps for; the discriminator
+        is appended rather than substituted. What is appended is the one field that is
+        different by construction: :func:`mutations_for` de-duplicates on
+        ``(line, col, operator, replacement)``, so two mutants that survive that key
+        together differ in `after` and in nothing else the report round-trips. Without it
+        a single `if A and B:` renders both of its `drop-conjunct` mutants as one string
+        in the not-applied and no-verdict lists, and a list that names two different
+        mutations identically discriminates neither (#721).
+        """
+        edit = _oneline(self.after, 40) or "(deleted)"
+        return f"{self.path}:{self.line}:{self.operator} -> {edit}"
 
     def __str__(self) -> str:
-        return f"{self.path}:{self.line} [{self.operator}] {_oneline(self.before)}"
+        """The per-mutation progress line's whole account of one mutation.
+
+        `before` is the mutated NODE, and **ambiguity appears exactly where the node is
+        larger than the thing being varied** — for `drop-conjunct` it is the whole
+        condition, identical for every conjunct. `question` is the field that says which
+        one went, and until #721 only the gate summary printed it. A shard reclaimed
+        before it could emit a summary leaves this log as the only record, and it read the
+        same whether the dropped half was a cheap prefilter (equivalent, and correctly
+        dismissed) or the test that decides. Two fail-open holes in a security guard were
+        read as the first and dismissed across two full sweep runs on exactly that. The
+        two streams now say the same thing, which is the property that failed.
+        """
+        return (f"{self.path}:{self.line} [{self.operator}] "
+                f"{_oneline(self.before, 72)} — {self.question}")
 
 
 def _oneline(s: str, limit: int = 96) -> str:
@@ -1046,9 +1071,14 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
             yield (value, str(value.value + 1), "retune-constant",
                    f"is `{target}`'s value pinned, or would any number do?")
         if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
-            for side in (value.left, value.right):
-                yield (value, sp.text(side), "drop-term",
-                       f"is every term of `{target}` pinned?")
+            # The question names the term that WENT, not "every term": the mutated node
+            # is the whole sum, so both mutants of `A + B` print identically, and until
+            # #721 they carried one question too — the `unclamp` shape, where no field at
+            # all told a reviewer which of two opposite claims had survived.
+            for kept, gone in ((value.left, value.right), (value.right, value.left)):
+                yield (value, sp.text(kept), "drop-term",
+                       f"is the `{_oneline(sp.text(gone), 40)}` term of `{target}` "
+                       f"pinned?")
 
     for node in ast.walk(tree):
 
@@ -1071,8 +1101,17 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # happen and a mutation that reddens the suite for that reason is a false pin —
         # the one outcome worse than no signal.
         if isinstance(node, ast.If) and node.orelse:
-            yield (node.test, "False", "disable-branch", "is this branch pinned?")
-            yield (node.test, "True", "disable-branch", "is the other branch pinned?")
+            # "this" and "the other" are two different questions and they are also not
+            # self-locating: which is which is knowable only by reading this file, and the
+            # reviewer holding the report does not have it open. Naming the direction the
+            # condition was forced makes each one checkable against the printed line,
+            # which is what #721 asks of a question that has to carry the disambiguation.
+            yield (node.test, "False", "disable-branch",
+                   "is this branch pinned, or does nothing change when its condition "
+                   "never holds?")
+            yield (node.test, "True", "disable-branch",
+                   "is the rest of the chain pinned, or does nothing change when this "
+                   "condition always holds?")
 
         # The same refusal in expression clothes: `[x for x in xs if C]`. Round two's
         # first finding, `harness_rows`' `if _edge_of(slot) not in _COLUMN_EDGES`, lives
@@ -1115,9 +1154,16 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                 and node.func.id in ("max", "min") and len(node.args) == 2 \
                 and not node.keywords:
+            # The operand the mutant collapses to, named. This was the worst instance of
+            # #721 in the table and the one nothing had tripped over: both mutants of
+            # `max(a, b)` print identically AND shared one question, while asking opposite
+            # things — `-> a` asks whether anything requires the value to clear the floor,
+            # `-> b` whether anything requires the floor at all. No field distinguished
+            # them, so a survivor here could not be read at all, only guessed at.
             for arg in node.args:
                 yield (node, sp.text(arg), "unclamp",
-                       "is the clamp pinned, or only its inner value?")
+                       f"is the clamp pinned, or is `{_oneline(sp.text(arg), 40)}` "
+                       f"always the answer?")
 
         # `except E:` — narrowed to something nothing raises. `_component_text`'s
         # `except Exception` was round two's finding 4.
@@ -1156,10 +1202,16 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # `a if C else b` — collapsed to each side. `_policy_cells`' `else 1` was round
         # three's fifth finding and is exactly this.
         if isinstance(node, ast.IfExp):
+            # Technically two questions and practically one: "this" and "the other" are
+            # only decodable with this function open, and 767 nodes in `charter/` carry
+            # the pair. The branch that went is named by keyword and the branch that
+            # stayed by its own text, so the report is readable on its own (#721).
             yield (node, sp.text(node.body), "collapse-ifexp",
-                   "is the other branch pinned?")
+                   f"is the `else` branch pinned, or is "
+                   f"`{_oneline(sp.text(node.body), 40)}` always the answer?")
             yield (node, sp.text(node.orelse), "collapse-ifexp",
-                   "is this branch pinned?")
+                   f"is the `if` branch pinned, or is "
+                   f"`{_oneline(sp.text(node.orelse), 40)}` always the answer?")
 
         # ------------------------------------------------------------------------------
         # String and regex constants (#569). The general form is :func:`retune`.
@@ -1226,9 +1278,15 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
                 parts = [spelled[0]]
                 for o, right in zip(ops, spelled[1:]):
                     parts += [o, right]
+                # WHICH boundary, because a chained comparison is one node with two
+                # edges: `" " <= c <= "~"` yields two mutants that print identically and,
+                # when both edges spell the same operator, carried the same question as
+                # well — 8 of the 13 chained comparisons in `charter/` and `tools/` (#721).
+                edge = (f"{_oneline(sp.text(operands[i]), 24)} {swap[0]} "
+                        f"{_oneline(sp.text(operands[i + 1]), 24)}")
                 yield (node, " ".join(parts), "shift-boundary",
-                       f"is the boundary pinned, or only the direction ({swap[0]} vs "
-                       f"{swap[1]})?")
+                       f"is `{edge}`'s boundary pinned, or only the direction "
+                       f"({swap[0]} vs {swap[1]})?")
 
         # `x.lower()` -> `x.upper()`, `sorted(xs)` -> `list(xs)`, and the rest of
         # :data:`SYNONYMS`. The mutant is type-correct by construction, so a red here is a
