@@ -3599,7 +3599,16 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         was missing. It is a shape the launcher really passes, not one invented here —
         `_drawable_slots` answers `[]` below its size floors and `cmd_launch` calls
         straight through with it.
+
+        **Two calls since #686, and that is exactly what these tests are for.** The window
+        half moved out of `_split_panels` (`_dress_window`) so that a re-layout adding no
+        pane still asserts it — and with `slots=()` this fixture adds no pane either, so
+        driving the split alone would leave charter's own window at tmux's default
+        `remain-on-exit` and the assertions below would be measuring nothing. Called in
+        `_draw_panels`' own order.
         """
+        commands_frame._dress_window(OP_SOCKET_PATH, fid="charter-demo-1",
+                                     harness_pane=harness_pane, env=None, v=None)
         return commands_frame._split_panels(
             OP_SOCKET_PATH, slots=list(slots), fid="charter-demo-1",
             harness_pane=harness_pane, env=None, pane_env=None)
