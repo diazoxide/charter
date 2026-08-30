@@ -76,8 +76,23 @@ action's tree; it does not pin what that tree then names. A Docker action builds
 own `uses:` lines — neither is in this repository, neither can be read without the network,
 and both run in the job holding `id-token: write`. So the property this file enforces is
 "every reference charter *writes* is a content address", which is narrower than "every byte
-that runs in the publishing job is pinned", and the gap between those two sentences is
-where the next look goes.
+that runs in the publishing job is pinned".
+
+**The gap between those two sentences is now written down, and going stale in it is now
+loud.** `.github/publish-closure.json` records, for every remote action that runs in a job
+holding `id-token: write`, what that action's own tree names — read with the network, by a
+person, at the SHA pinned here. `TheHopIntoAPinnedActionIsRecordedRatherThanChecked`
+asserts that the record and the workflow name the same SHAs, so bumping a pin in `publish`
+reddens the suite until somebody re-reads the tree it now points at. It is a **prompt, not
+a proof**: nothing here can tell a re-reading from a retyped SHA, and that limit is stated
+in the record, in that class, and in the news entry rather than left to be discovered. What
+it removes is the failure that had already happened — the reading published on #473 on
+2026-08-28 was wrong twenty-seven hours later, when `actions/download-artifact` moved from
+v4.3.0 to v8.0.1 and `runs.using` moved from node20 to node24 with it, and nothing asked
+anybody to look. Today one reference in that closure is movable and no test here can pin
+it: PyPA's `Dockerfile` says `FROM python:3.13-slim`. Closing *that* means vendoring the
+action or uploading from a `run:` step — a change to how charter releases itself, which is
+the operator's decision and stays in #473.
 
 **A second question, and a second reader for it (#558).** Pinning asks *what code runs*.
 The other thing this file has to hold is *which trigger reaches the job that publishes,
@@ -95,8 +110,10 @@ satisfied by a lie: the **shape** — no `if:` on the guard job, none on any ste
 why. Not that it passed; that it ran.
 
 **The next place to look**, since that is the question this file exists to keep asking. The
-transitive hop above is the first. Then the two mismatches a reader like this always has
-with the real one: what counts as a line break — see
+transitive hop above is recorded now, not closed: what a re-read of `python:3.13-slim`
+costs is a decision about how charter releases itself, and it is open. Then the two
+mismatches a reader like this always has with the real one: what counts as a line break —
+see
 `ALineBreakIsTheOtherHalfOfTheSpellingProblem`, which shows the mismatch runs the safe way
 round — and a ref that is well formed here and means something else on the runner, such as a
 branch somebody named after a 40-character hex string. And last, this reader judges a key by
@@ -108,6 +125,7 @@ guess — all of it stated rather than quietly assumed.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -1730,6 +1748,598 @@ class TheVersionCheckRunsOnEveryTriggerThatCanPublish(unittest.TestCase):
         code, said = _execute(script, _Run("the same tag", "push", "v9.9.9"),
                               packaged="0.53.0")
         self.assertNotEqual(code, 0, said)
+
+
+# ------------------------------------------------- what a pinned action then names (#473)
+
+#: The record of the hop this suite cannot take, read at the SHAs this repository pins.
+#:
+#: `.json` and not `.y*ml`, on purpose and load-bearing: the record NAMES a movable
+#: reference, because naming one is the whole point of it, and every `.y*ml` under
+#: `.github/` is a seed file whose every reference the rule above refuses. Written as YAML
+#: there, a record of somebody else's tree would be read as a claim about charter's — and
+#: correctly refused, with no config key anywhere that could lift the denial (#370).
+PUBLISH_CLOSURE = GITHUB / "publish-closure.json"
+
+#: The permission that makes a job the one this record is about. PyPI's Trusted Publishing
+#: accepts the token minted under it as charter's genuine publisher, so code in such a job
+#: can act as charter off this platform, and what it uploads cannot be taken back.
+_IDENTITY = "id-token"
+
+
+def the_grant_that_can_publish(workflow: dict, job: dict) -> str | None:
+    """What makes this job one that can publish charter — in words — or None if nothing.
+
+    A sentence rather than a boolean, and that is not decoration. The three ways a job
+    arrives here are not the same claim: two of them are grants somebody wrote down, and
+    the third is this reader admitting it cannot see the answer. Telling a reader "this
+    job holds `id-token: write`" when what actually happened is "nobody declared any
+    permissions" would be a guard overstating what it verified — which is the defect #473
+    is about, committed by #473's own fix. It said exactly that in its first draft.
+
+    A job-level `permissions:` **replaces** the workflow's rather than adding to it, which
+    `release.yml` says at length about `publish` itself. So the job's own block is the
+    whole answer when it has one, and the workflow's is the answer when it does not.
+
+    Fail-closed on everything else, exactly as the two readers above are. A workflow that
+    declares no permissions at all runs on the repository's DEFAULT token permissions — a
+    setting in GitHub's web UI, not a byte in this tree — so answering "no identity" there
+    would be this file confidently reporting a value it cannot see. It answers with the
+    admission instead, and the fix is to declare the permissions, which every workflow
+    here already does. A spelling neither this function nor GitHub's schema knows raises
+    `Unparsed` rather than being read as an absence, for the same reason `container:` had
+    to grow its second shape: an unrecognised spelling that reads as "nothing here" is a
+    blind spot with a green tick on it.
+    """
+    where = job if "permissions" in job else workflow
+    declared = where.get("permissions")
+    if "permissions" in where and declared is None:
+        # The key with nothing under it is neither a grant nor a silence, and reading it
+        # as either would put a wrong sentence in a failure message. `permissions: {}` —
+        # GitHub's own spelling of "no scopes at all" — is a flow mapping and already
+        # stops the reader above by name, so this is the one shape left where "declared
+        # and empty" and "never declared" would be told apart by nothing.
+        raise Unparsed(0, "a `permissions:` key with no scopes under it")
+    if declared is None:
+        return ("no `permissions:` is declared on the job or on the workflow, so it runs "
+                "on the repository's default token permissions — a setting in GitHub's "
+                "web UI and not a byte in this tree. Which is to say this reader cannot "
+                "see the identity WITHHELD, not that it saw it granted; declare the "
+                "permissions and this job stops being one of these")
+    if isinstance(declared, str):
+        if declared == "write-all":
+            return "`permissions: write-all`, which is every scope including this one"
+        if declared == "read-all":
+            return None
+        raise Unparsed(0, f"a `permissions:` scalar this reader does not know: {declared!r}")
+    if not isinstance(declared, dict):
+        raise Unparsed(0, "a `permissions:` value that is neither a mapping nor a scalar")
+    granted = declared.get(_IDENTITY)
+    if granted is None or granted in ("none", "read"):
+        return None
+    if granted == "write":
+        return f"`{_IDENTITY}: write`"
+    raise Unparsed(0, f"an `{_IDENTITY}:` value this reader does not know: {granted!r}")
+
+
+class Beside(NamedTuple):
+    """A remote action that runs in a job which can publish charter."""
+    workflow: str      # the file it is written in
+    job: str           # the job it runs in
+    action: str        # `owner/repo`, or `owner/repo/path`, with no ref on it
+    sha: str           # what it is pinned to — a full commit SHA, by the rule above
+    grant: str         # why the job counts, in `the_grant_that_can_publish`'s own words
+
+
+def beside_the_publishing_identity(root: Path = REPO,
+                                   index: set[str] | None = None) -> list[Beside]:
+    """Every remote `uses:` that runs in a job which can publish charter.
+
+    Read from the tree and not from `scan_text`, because this question is about a JOB and a
+    reference scanner does not know which job a step is in — the same reason `load` exists
+    for #558. Images are skipped: a `container:` beside the identity is already held to a
+    digest by the rule above, and a digest addresses the whole image, so there is no hop
+    left to record.
+
+    A local `uses:` is **followed**, not skipped, and getting that wrong was this
+    collector's first draft. `uses: ./x` names charter's own file, so the rule above does
+    reach it — but a local composite action runs INSIDE the calling job with the calling
+    job's token, so a remote action written in one stands beside `id-token: write` exactly
+    as a remote action written in the job does. Stopping at the job would have been this
+    collector bounding the refs the *workflow file* names rather than the refs that
+    actually run beside the identity: #473's own defect, one level in, inside #473's fix.
+    """
+    index = tracked() if index is None else index
+    found: list[Beside] = []
+    # `sorted` for the failure messages, not for the answer: every caller compares sets, so
+    # the deletion sweep is right that dropping it changes nothing a test can see. It stays
+    # because a `subTest` list that reorders between runs makes two red runs of the same
+    # branch look like two different findings.
+    for path in sorted((root / ".github" / "workflows").glob("*.y*ml")):
+        workflow = load(path.read_text())
+        # `or {}` because a file under `.github/workflows/` need not be a workflow yet — a
+        # half-written one has no `jobs:` — and this reader crashing the suite on it would
+        # be an unrelated failure standing where a pin check should be.
+        for name, job in (workflow.get("jobs") or {}).items():
+            grant = the_grant_that_can_publish(workflow, job)
+            if grant is None:
+                continue
+            found.extend(
+                _reached_from(root, index, path.name, name, grant, _every(job, "uses")))
+    return found
+
+
+def _reached_from(root: Path, index: set[str], workflow: str, job: str, grant: str,
+                  refs: list) -> list[Beside]:
+    """The remote actions these references reach, through this repository's own files.
+
+    One hop per local reference and as many hops as there are local references, which is
+    the same walk `closure` describes and the same one GitHub takes: a local `uses:`
+    resolves to a tracked `action.y*ml`, or to a reusable workflow under
+    `.github/workflows/`, and both may name further references of their own.
+
+    A local reference to a file this repository does not track contributes nothing here —
+    deliberately, and not silently: `test_every_local_action_is_a_file_committed_to_this_
+    repository` already refuses that ref by name, so swallowing it a second time here
+    would only produce a second complaint about the same line.
+
+    A local reference to a **reusable workflow** is read whole rather than job by job, and
+    that over-collects on purpose. `workflow_call` hands the called workflow the caller
+    job's permissions, which it can reduce but not exceed, so every job in it may be
+    holding the identity — and this reader would be guessing which. Asking for a record of
+    one action too many is a question somebody answers; missing one is the whole of #473.
+    """
+    out: list[Beside] = []
+    queue = [_unquote(r) for r in refs]
+    walked: set[str] = set()
+    while queue:
+        ref = queue.pop()
+        if not is_local(ref):
+            action, _, sha = ref.rpartition("@")
+            out.append(Beside(workflow, job, action, sha, grant))
+            continue
+        target = local_target(ref)
+        # Two refusals, deliberately on two lines: they are two different facts, and the
+        # deletion sweep can only charge them separately when they are written separately.
+        if target is None:
+            continue                       # a path out of the tree names nothing in it
+        if target in walked:
+            continue                       # a cycle ends here rather than spinning
+        walked.add(target)
+        for rel in _action_files(target, index):
+            queue.extend(_unquote(r.ref)
+                         for r in scan_text((root / rel).read_text()) if r.key == "uses")
+    return out
+
+
+def publish_closure(path: Path = PUBLISH_CLOSURE) -> dict:
+    """The record, as data. Read with `json` and never with this file's YAML reader: the
+    record is not a workflow, and the one thing that must not happen to it is being read
+    as one."""
+    return json.loads(path.read_text())
+
+
+class TheHopIntoAPinnedActionIsRecordedRatherThanChecked(unittest.TestCase):
+    """The boundary the docstring states, given the one tooth it can honestly have (#473).
+
+    `uses: owner/action@<sha>` pins that action's tree. It does not pin what that tree then
+    names: a composite action has its own `uses:` lines, a Docker action builds from a
+    `Dockerfile` whose `FROM` is a tag its publisher rewrites. Both run in the job holding
+    `id-token: write`, both are files in somebody else's repository, and no test in this
+    suite makes a network call. **So this cannot be checked here, and nothing in this class
+    pretends to check it.**
+
+    What it checks is that the RECORD of that reading names the same code the workflow
+    runs. `.github/publish-closure.json` says which action was read, at which SHA, what its
+    `runs:` block said and what it named; these tests say the SHA in the record is the SHA
+    in the workflow, that nothing runs beside the identity without an entry, that no entry
+    outlives the pin it was written for, and that the record's own `pinned` verdicts agree
+    with the very predicate this file applies to charter's own refs. When a pin moves the
+    record is stale, and this goes red **at the moment somebody is already reading that
+    pin**, with the command to re-read the tree in the failure message.
+
+    **That is a prompt, not a proof.** Nothing offline can tell whether the person who
+    bumped the SHA re-read the tree or merely retyped the record, and the record says so
+    about itself. What it removes is the failure that actually happened here rather than a
+    hypothetical one: the reading published on #473 on 2026-08-28 named
+    `actions/download-artifact@d3f86a1 # v4.3.0`; commit 032a061 moved that pin the next
+    day; `runs.using` moved with it, node20 to node24; and nothing anywhere asked anybody
+    to look. Six days of documented boundary, wrong within twenty-seven hours of being
+    re-verified on purpose.
+
+    **Why `id-token: write` and not every write grant** is argued in the record's own
+    `scope` block, and it is the same crying-wolf argument that kept option (2) of #473 —
+    a scheduled network job — unbuilt: a prompt that fires on every `actions/checkout`
+    bump is a prompt that gets waved through, and it takes whatever else it would have
+    caught with it (#171, #55).
+    """
+
+    def test_there_is_a_job_holding_the_publishing_identity_for_this_to_be_about(self):
+        """A reader that found no privileged job would pass every test below it, and a
+        record with nothing in it would pass most of them."""
+        self.assertIn(
+            ("release.yml", "publish"),
+            {(b.workflow, b.job) for b in beside_the_publishing_identity()},
+            "no remote action was found in a job that can publish charter — either the "
+            "grant moved, or the permissions reader has gone blind, and every assertion "
+            "below is vacuous either way")
+        self.assertTrue(
+            publish_closure()["reviewed"],
+            f"{PUBLISH_CLOSURE.name} records no reading at all, which is not the same "
+            f"claim as `there was no hop to read`")
+
+    def test_every_action_beside_the_identity_is_recorded_at_the_sha_it_is_pinned_to(self):
+        """The whole point. Bump a pin in `publish` without re-reading the tree it now
+        names, and the record is a description of code nothing runs."""
+        entries = {e["uses"]: e for e in publish_closure()["reviewed"]}
+        for b in beside_the_publishing_identity():
+            with self.subTest(workflow=b.workflow, job=b.job, action=b.action):
+                entry = entries.get(b.action)
+                self.assertIsNotNone(
+                    entry,
+                    f"`{b.action}` runs in `{b.workflow}`'s `{b.job}` job, which can "
+                    f"publish charter — {b.grant} — and nothing in "
+                    f"{PUBLISH_CLOSURE.name} says what its own tree names. Read it at the "
+                    f"SHA it is pinned to and add an entry: a composite action's `uses:` "
+                    f"lines, a Docker action's `image:` or its `Dockerfile` `FROM`, "
+                    f"nothing at all for a JavaScript one. That reading needs the "
+                    f"network, which is why no test here can do it for you.")
+                self.assertEqual(
+                    entry["sha"], b.sha,
+                    f"`{b.action}` is recorded at {entry['sha']} ({entry['tag']}), and "
+                    f"`{b.workflow}` now pins {b.sha}. The record describes a tree nothing "
+                    f"runs any more. Re-read the new one:\n\n    "
+                    f"{entry['reread'].replace(entry['sha'], b.sha)}\n\n"
+                    f"then set `sha`, `tag`, `runs`, `reread` and `transitive` from what "
+                    f"comes back. Retyping the SHA without reading the tree passes this "
+                    f"test, and is the one thing it cannot catch.")
+
+    def test_the_record_keeps_no_entry_for_a_hop_nothing_takes_any_more(self):
+        """The other direction, and it is not decoration: a record free to accumulate
+        entries reads as more thorough the longer it goes untended, and an entry for an
+        action this repository has dropped is a reading nobody has any reason to refresh —
+        so it is exactly the entry that will still be there, and still believed, when
+        somebody adds the action back at a different SHA."""
+        live = {(b.action, b.sha) for b in beside_the_publishing_identity()}
+        for entry in publish_closure()["reviewed"]:
+            with self.subTest(action=entry["uses"]):
+                self.assertIn(
+                    (entry["uses"], entry["sha"]), live,
+                    f"{PUBLISH_CLOSURE.name} records `{entry['uses']}@{entry['sha']}` and "
+                    f"no job that can publish charter runs it. Delete the entry, or put "
+                    f"back the pin it was written for.")
+
+    def test_each_entry_says_what_was_read_and_how_to_read_it_again(self):
+        """Two SHAs and a verdict would be a record nobody can check or refresh. The
+        `reread` command has to name the entry's own SHA, which is what catches the
+        half-update: a bumped `sha` beside a command that still fetches the old tree is
+        a record claiming to have read something it did not.
+
+        `.strip()` here — and in the two assertions after it — survives the deletion sweep
+        as `.lstrip()`, and that is a genuine equivalent rather than a gap. A string is
+        all-whitespace exactly when its `lstrip` is empty and exactly when its `strip` is,
+        so inside `assertTrue` the two cannot be told apart by any input at all. The call
+        still earns its place: without it a record whose `tag` is `"  "` would pass.
+        """
+        for entry in publish_closure()["reviewed"]:
+            with self.subTest(action=entry["uses"]):
+                self.assertTrue(
+                    _SHA.match(entry["sha"]),
+                    f"`{entry['uses']}` is recorded at {entry['sha']!r}, which is not a "
+                    f"full commit SHA — the record has to name a content address for the "
+                    f"same reason the workflow does")
+                self.assertTrue(entry["tag"].strip(),
+                                f"`{entry['uses']}` is recorded at a SHA with no version "
+                                f"beside it, so nobody can tell how stale the reading is")
+                self.assertTrue(entry["runs"].strip(),
+                                f"`{entry['uses']}` has no `runs:` recorded, and `runs:` "
+                                f"is what decides whether there is a hop at all")
+                self.assertIn(
+                    entry["sha"], entry["reread"],
+                    f"`{entry['uses']}`'s `reread` command does not name the SHA the "
+                    f"entry claims to have read, so running it would read a different "
+                    f"tree than the one recorded")
+
+    def test_the_records_own_verdicts_are_judged_by_the_rule_this_file_already_applies(self):
+        """The reference is somebody else's; the claim about it is this repository's, and
+        that claim is checkable offline. `immutable` is the same predicate that judges
+        charter's own refs, so a record calling `docker://python:3.13-slim` a pin
+        disagrees with the rule the file is built on — and so does one calling a full
+        commit SHA movable, which inflates the exposure instead of hiding it. Both
+        directions, because a record that overstates is as unreadable as one that lies."""
+        for entry in publish_closure()["reviewed"]:
+            for hop in entry["transitive"]:
+                with self.subTest(action=entry["uses"], ref=hop["ref"]):
+                    self.assertTrue(
+                        hop["note"].strip(),
+                        f"`{hop['ref']}` is recorded under `{entry['uses']}` with no note "
+                        f"— a bare list of refs is a count, and this file reports "
+                        f"findings rather than counts")
+                    fixed = immutable(hop["ref"]) or is_local(hop["ref"])
+                    if hop["pinned"]:
+                        self.assertTrue(
+                            fixed,
+                            f"the record calls `{hop['ref']}` pinned, and `immutable` — "
+                            f"the predicate this file uses on charter's own refs — says "
+                            f"it is a promise its owner can move")
+                    else:
+                        self.assertFalse(
+                            fixed,
+                            f"the record calls `{hop['ref']}` movable, and it is a "
+                            f"content address by this file's own rule. Overstating the "
+                            f"residual exposure is how a real one stops being read.")
+
+    def test_the_record_is_a_tracked_file_this_suite_does_not_read_as_a_workflow(self):
+        """Tracked, because an untracked record is one a working tree rewrites between the
+        reading and the release. And NOT a seed file, because it names a movable reference
+        on purpose: rename it to `.yml` under `.github/` and the rule above would read
+        `docker://python:3.13-slim` as a ref charter had written and refuse it — correctly,
+        unanswerably, and about the wrong repository's file."""
+        self.assertIn(
+            PUBLISH_CLOSURE.relative_to(REPO).as_posix(), tracked(),
+            "the closure record is not committed, so 'it moves only with a commit here' "
+            "is false of it")
+        self.assertNotIn(
+            PUBLISH_CLOSURE, seed_files(),
+            "the closure record is being read as a workflow. It names refs charter does "
+            "not write and cannot pin; judging them by the rule above is a refusal aimed "
+            "at somebody else's repository, and there is no key that lifts one (#370).")
+
+    def test_the_record_states_its_own_reach(self):
+        """Shape, not content, and said plainly rather than dressed up: this holds that
+        the `about` and `scope` blocks exist and are not empty. They are where the record
+        says it is a reading and not a verification, and which jobs it covers — and a
+        guard whose reach is not written down beside it gets read as a wider guard than it
+        is, which is #473 itself one level up."""
+        record = publish_closure()
+        self.assertTrue("".join(record["about"]).strip(),
+                        "the record does not say what it is, or that it is not a check")
+        self.assertTrue("".join(record["scope"]).strip(),
+                        "the record does not say which jobs it covers")
+
+
+class TheJobThisIsAboutIsTheOneThatCanPublish(unittest.TestCase):
+    """`the_grant_that_can_publish` on the spellings a `grep id-token` gets wrong.
+
+    Both directions, and the withheld cases are the load-bearing half: a reader that said
+    "privileged" about everything would satisfy every assertion in the class above by
+    demanding a record entry for `actions/checkout`, and a reader that said it about
+    nothing would satisfy them by demanding none at all.
+
+    The granted cases assert **which** grant was found and not merely that one was, since
+    the three are three different sentences and one of them is an admission rather than a
+    finding. A boolean here is how the first draft of this told a reader that a job with
+    no declared permissions "holds `id-token: write`" — the guard-overstates-its-reach
+    defect, inside the fix for the guard-overstates-its-reach defect.
+    """
+
+    SHA = "a" * 40
+
+    def _grants(self, text: str) -> dict[str, str | None]:
+        workflow = load(text)
+        return {name: the_grant_that_can_publish(workflow, job)
+                for name, job in workflow["jobs"].items()}
+
+    GRANTED = [
+        ("a job that asks for it",
+         "permissions:\n  contents: read\njobs:\n  publish:\n    permissions:\n"
+         "      id-token: write\n    steps:\n      - uses: owner/act@" + SHA + "\n",
+         "`id-token: write`"),
+        ("a workflow grant, inherited by a job that declares nothing",
+         "permissions:\n  id-token: write\njobs:\n  publish:\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n",
+         "`id-token: write`"),
+        ("write-all, which is every scope including this one",
+         "permissions: write-all\njobs:\n  publish:\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n",
+         "write-all"),
+        ("no permissions declared anywhere — the repository default, which is a setting "
+         "in a web UI and not a byte in this tree",
+         "jobs:\n  publish:\n    steps:\n      - uses: owner/act@" + SHA + "\n",
+         "cannot see the identity WITHHELD"),
+    ]
+
+    WITHHELD = [
+        ("a job block, which REPLACES the workflow's rather than adding to it",
+         "permissions:\n  id-token: write\njobs:\n  publish:\n    permissions:\n"
+         "      contents: read\n    steps:\n      - uses: owner/act@" + SHA + "\n"),
+        ("read-all",
+         "permissions: read-all\njobs:\n  publish:\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n"),
+        ("id-token: read",
+         "jobs:\n  publish:\n    permissions:\n      id-token: read\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n"),
+        ("id-token: none",
+         "jobs:\n  publish:\n    permissions:\n      id-token: none\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n"),
+        ("a write grant that is not this one",
+         "jobs:\n  publish:\n    permissions:\n      contents: write\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n"),
+    ]
+
+    REFUSED = [
+        ("a `permissions:` scalar nobody taught this reader",
+         "permissions: bananas\njobs:\n  publish:\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n",
+         "a `permissions:` scalar this reader does not know"),
+        ("an `id-token:` value nobody taught this reader",
+         "jobs:\n  publish:\n    permissions:\n      id-token: maybe\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n",
+         "an `id-token:` value this reader does not know"),
+        ("a `permissions:` sequence, which is not a permission set at all",
+         "permissions:\n  - id-token\njobs:\n  publish:\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n",
+         "neither a mapping nor a scalar"),
+        ("a `permissions:` key with nothing under it, which is neither a grant nor a "
+         "silence and must not be read as the second",
+         "jobs:\n  publish:\n    permissions:\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n",
+         "a `permissions:` key with no scopes under it"),
+        ("the same empty key at the workflow level",
+         "permissions:\njobs:\n  publish:\n    steps:\n"
+         "      - uses: owner/act@" + SHA + "\n",
+         "a `permissions:` key with no scopes under it"),
+    ]
+
+    def test_a_job_that_can_publish_is_recognised_and_says_which_grant_made_it_one(self):
+        for name, text, says in self.GRANTED:
+            with self.subTest(case=name):
+                grant = self._grants(text)["publish"]
+                self.assertIsNotNone(grant, "a job that can publish charter read as one "
+                                            "that cannot")
+                self.assertIn(says, grant,
+                              "the job was recognised, and for a different reason than "
+                              "the one this case exists to exercise — which is the whole "
+                              "of what the failure message will tell somebody")
+
+    def test_a_job_that_cannot_publish_is_not_dragged_in(self):
+        for name, text in self.WITHHELD:
+            with self.subTest(case=name):
+                self.assertIsNone(self._grants(text)["publish"])
+
+    def test_a_permission_set_this_reader_cannot_read_stops_the_suite_by_name(self):
+        """Fail-closed, and the message is asserted rather than the exception: three
+        different unreadable shapes all raise `Unparsed`, so a test that only checked the
+        type would pass while the reader stopped being able to say which one it met."""
+        for name, text, says in self.REFUSED:
+            with self.subTest(case=name):
+                with self.assertRaises(Unparsed) as caught:
+                    self._grants(text)
+                self.assertIn(says, str(caught.exception))
+
+    def test_only_the_remote_actions_of_a_privileged_job_are_collected(self):
+        """The collector, on a tree built to trip every branch of it: an action in an
+        unprivileged job beside one in a privileged job, a local reference, and an image
+        that is not a `uses:` at all."""
+        text = (
+            "permissions:\n"
+            "  contents: read\n"
+            "jobs:\n"
+            "  build:\n"
+            "    steps:\n"
+            "      - uses: owner/unprivileged@" + "b" * 40 + "\n"
+            "  publish:\n"
+            "    permissions:\n"
+            "      id-token: write\n"
+            "    container: ghcr.io/x@sha256:" + "c" * 64 + "\n"
+            "    steps:\n"
+            "      - uses: owner/act@" + self.SHA + "\n"
+            "      - uses: owner/act/sub@" + self.SHA + "\n"
+            "      - uses: ./tools/local\n")
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(os.path.realpath(raw))
+            (tmp / ".github" / "workflows").mkdir(parents=True)
+            (tmp / ".github" / "workflows" / "release.yml").write_text(text)
+            found = beside_the_publishing_identity(tmp)
+        self.assertEqual(
+            {(b.job, b.action, b.sha) for b in found},
+            {("publish", "owner/act", self.SHA), ("publish", "owner/act/sub", self.SHA)})
+        self.assertEqual({b.workflow for b in found}, {"release.yml"})
+        self.assertEqual({b.grant for b in found}, {f"`{_IDENTITY}: write`"},
+                         "the reason the job counted did not reach the finding, so the "
+                         "failure message cannot say why this action needs a record")
+
+    def _tree(self, tmp: Path, files: dict[str, str]) -> set[str]:
+        for rel, text in files.items():
+            path = tmp / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return set(files)
+
+    def test_a_remote_action_reached_through_a_local_one_is_collected_too(self):
+        """A composite action runs INSIDE the calling job with the calling job's token, so
+        every remote action it names stands beside `id-token: write` exactly as the job's
+        own steps do. A collector that stopped at the workflow file would report the
+        closure of a FILE and call it the closure of a JOB — #473's own defect, one level
+        in. The cycle back to the first action is here because a walk that can be sent
+        round one is a walk that hangs the suite rather than failing it.
+
+        The **image** in the deeper action is here for the other half: this walk follows
+        `uses:` and nothing else, and a `runs.image` reached through a local action is a
+        reference the rule above already holds to a digest — collecting it would ask for a
+        reading of an action that is not one. The **doubly-`@`'d** ref is here for the
+        third: the split has to take the LAST `@`, because that is the end `immutable`
+        judges, and a collector splitting at a different one would key the record on a
+        name the rule above never saw."""
+        far = "d" * 40
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(os.path.realpath(raw))
+            index = self._tree(tmp, {
+                ".github/workflows/release.yml":
+                    "jobs:\n  publish:\n    permissions:\n      id-token: write\n"
+                    "    steps:\n      - uses: ./.github/actions/inner\n",
+                ".github/actions/inner/action.yml":
+                    "runs:\n  using: composite\n  steps:\n"
+                    "    - uses: owner/reached@" + self.SHA + "\n"
+                    "    - uses: owner/odd@branch@" + far + "\n"
+                    "    - uses: ./.github/actions/deeper\n",
+                ".github/actions/deeper/action.yml":
+                    "runs:\n  using: docker\n"
+                    "  image: docker://ghcr.io/x@sha256:" + "e" * 64 + "\n"
+                    "  steps:\n"
+                    "    - uses: owner/deeper@" + far + "\n"
+                    "    - uses: ./.github/actions/inner\n",
+            })
+            found = beside_the_publishing_identity(tmp, index)
+        self.assertEqual(
+            {(b.job, b.action, b.sha) for b in found},
+            {("publish", "owner/reached", self.SHA),
+             ("publish", "owner/odd@branch", far),
+             ("publish", "owner/deeper", far)},
+            "this is not the closure of that job. A remote action reached through a local "
+            "composite action has to be in it — nothing would ask for a reading of its "
+            "tree otherwise; an image must not be, because a digest is already a content "
+            "address with no hop behind it; and a ref splits at its LAST `@`, the end "
+            "`immutable` reads.")
+
+    def test_a_local_reference_this_repository_does_not_track_adds_nothing_here(self):
+        """It is not swallowed, it is somebody else's complaint: `uses: ./nope` is already
+        refused by name for not being a file committed here, and a second finding about
+        the same line would be this collector inventing a reason of its own.
+
+        The tracked step beside them is what keeps this from passing for the wrong reason.
+        Its first version asserted an empty result, which a collector that read nothing at
+        all — a mistyped path, a glob that stopped matching — satisfies just as well. The
+        deletion sweep found exactly that: the workflow's filename could be replaced with
+        gibberish and the test stayed green. So the job also holds one ref that MUST come
+        back, and the assertion is the whole set rather than its emptiness."""
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(os.path.realpath(raw))
+            index = self._tree(tmp, {
+                ".github/workflows/release.yml":
+                    "jobs:\n  publish:\n    permissions:\n      id-token: write\n"
+                    "    steps:\n      - uses: ./node_modules/probe\n"
+                    "      - uses: ../outside/the/tree\n"
+                    "      - uses: owner/tracked@" + self.SHA + "\n",
+            })
+            (tmp / "node_modules" / "probe").mkdir(parents=True)
+            (tmp / "node_modules" / "probe" / "action.yml").write_text(
+                "runs:\n  using: composite\n  steps:\n"
+                "    - uses: owner/untracked@" + self.SHA + "\n")
+            found = beside_the_publishing_identity(tmp, index)
+        self.assertEqual(
+            {(b.action, b.sha) for b in found}, {("owner/tracked", self.SHA)},
+            "either an untracked local action leaked a remote ref into this closure, or "
+            "the collector read nothing at all — and an empty result cannot tell those "
+            "two apart, which is what the tracked step is here to stop")
+
+    def test_a_file_under_workflows_that_is_not_a_workflow_yet_is_not_a_crash(self):
+        """A half-written file under `.github/workflows/` has no `jobs:`, and this reader
+        raising on it would put an unrelated `AttributeError` exactly where a pin check
+        should be — a red suite that says nothing about pinning, on a branch that has not
+        finished writing its workflow. The job beside it still has to come back, so this
+        is not "reads nothing and survives"."""
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(os.path.realpath(raw))
+            index = self._tree(tmp, {
+                ".github/workflows/half-written.yml": "name: not finished\non:\n  push:\n",
+                ".github/workflows/release.yml":
+                    "jobs:\n  publish:\n    permissions:\n      id-token: write\n"
+                    "    steps:\n      - uses: owner/act@" + self.SHA + "\n",
+            })
+            found = beside_the_publishing_identity(tmp, index)
+        self.assertEqual({(b.workflow, b.action) for b in found},
+                         {("release.yml", "owner/act")})
 
 
 if __name__ == "__main__":
