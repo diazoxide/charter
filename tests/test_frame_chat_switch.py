@@ -560,7 +560,7 @@ class AHostileChatRendersAsOneRowAndRunsNothing(PersonaIso, unittest.TestCase):
                                      f"{bad!r} is inside the tmux format {word!r}")
                 self.assertIn(word, ("#{pane_id}",
                                      "#{window_width}:#{window_height}",
-                                     "#{session_id}:#{window_id}",
+                                     "#{session_id}\t#{window_id}",
                                      "#{window_id}"),
                               f"an unexpected tmux format reached the switch: {word!r}")
 
@@ -670,7 +670,7 @@ class _FakeServer:
         fmt, target = argv[-1], self._target(argv)
         if fmt == commands_frame._PANE_PLACE_FORMAT:
             seat = self.place.get(target)
-            return f"{seat[0]}:{seat[1]}" if seat else ""
+            return f"{seat[0]}\t{seat[1]}" if seat else ""
         if fmt == commands_frame._WINDOW_ID_FORMAT:
             return self.current.get(target, "")
         if fmt == commands_frame._PANE_WIDTH_FORMAT:
@@ -1079,6 +1079,27 @@ class TheSwitchEstablishesTheWindowItIsMovingTo(PersonaIso, unittest.TestCase):
         commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
         self.assertNotIn("select-window", self.fake.verbs())
         self.assertIn("has no window any more", self.said[0])
+
+    def test_a_placement_that_is_not_two_fields_answers_nothing(self):
+        """The reading is `split("\\t")` and a field COUNT rather than a `partition`, and
+        that is the deletion sweep's doing: with exactly one separator by construction,
+        `partition` and `rpartition` are the same program and no test could ever tell them
+        apart. A count says the same thing and is a guard a test can redden — which is
+        also how `_chat_being_left` asks it (#688).
+
+        Asked of the reader directly, because a real tmux cannot be made to answer with
+        the wrong number of fields."""
+        for answer in ("$0", "", "$0\t@1\textra"):
+            with self.subTest(answer=answer):
+                with mock.patch.object(
+                        tmuxctl, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            [], 0, answer, "")), \
+                     mock.patch.object(
+                        commands_frame.tmuxctl, "run",
+                        lambda *a, **k: __import__("subprocess").CompletedProcess(
+                            [], 0, answer, "")):
+                    self.assertIsNone(commands_frame._pane_place("sock", "%1"))
 
     def test_the_placement_reading_never_makes_a_target_of_a_non_pane(self):
         """#475's rule at the boundary the placement reading adds, asserted of the reader

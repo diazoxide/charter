@@ -263,10 +263,14 @@ _PANE_WIDTH_FORMAT = "#{pane_width}"
 #: output rename its window), the ids are what tmux hands back for its own targets, and
 #: `#{session_id}` is about to be one.
 #:
-#: `:` is the separator because neither id can contain it: tmux spells them `$<digits>`
-#: and `@<digits>`, which is exactly what :data:`_SESSION_ID_RE` and :data:`_WINDOW_ID_RE`
-#: hold them to on the way back.
-_PANE_PLACE_FORMAT = "#{session_id}:#{window_id}"
+#: `\t` is the separator, and it is not `:` for the deletion sweep's reason. Neither id can
+#: contain either character — tmux spells them `$<digits>` and `@<digits>`, which is what
+#: :data:`_SESSION_ID_RE` and :data:`_WINDOW_ID_RE` hold them to on the way back — but a
+#: split on `:` has to be spelled `partition` or `rpartition`, and with exactly one
+#: separator by construction those two are the same program: a question no test can ever
+#: answer. `split("\t")` and a field COUNT says the same thing and is a guard a test can
+#: redden, which is also how `_WINDOW_SEAT_FORMAT` asks it.
+_PANE_PLACE_FORMAT = "#{session_id}\t#{window_id}"
 
 #: The format that says which window a SESSION is on right now — what a switch has to
 #: read back before it may believe the client moved. Measured on tmux 3.7c and 3.2:
@@ -4899,7 +4903,10 @@ def _pane_place(socket: str, pane: str | None) -> tuple[str, str] | None:
     # boundary), and a window id that came back empty beside a session id that did not is
     # an answer charter has no reading of — treated as "no window", which is the sentence
     # it would get anyway one line later, said for the right reason.
-    sid, _, wid = p.stdout.strip().partition(":")
+    fields = p.stdout.strip().split("\t")
+    if len(fields) != 2:
+        return None
+    sid, wid = fields
     if not _SESSION_ID_RE.fullmatch(sid) or not _WINDOW_ID_RE.fullmatch(wid):
         return None
     return sid, wid
