@@ -207,6 +207,32 @@ class ThePaneSaysWhichComponentItIs(PersonaIso, unittest.TestCase):
                             commands_frame._PANEL_SLOT_OPTION)
         self.assertEqual(commands_frame._PANEL_MARK, "1")
 
+    def test_the_option_name_is_spelled_out_because_a_rename_costs_a_release(self):
+        """**The one case in this file allowed to compare the constant against text**, and
+        the sweep is what asked for it: every other case here builds its expectation out of
+        `_PANEL_SLOT_OPTION`, so all of them pass with the constant respelled to anything
+        at all.
+
+        The spelling is a promise across VERSIONS, which is what makes it worth an
+        assertion rather than a convention. A pane carries this option for as long as it
+        lives, and the whole of #714 is a charter reading back what an earlier charter
+        wrote onto a pane that is still running. Rename it and every panel of every live
+        frame answers `""` again — charter's pane, unnameable, never killed and never
+        adopted — which is this defect returning for one release per rename, silently,
+        on exactly the frames that were already up.
+
+        It also has to stay inside charter's own `@charter_` namespace: this option is
+        written on the operator's own server as well as charter's (`_split_panels` does
+        not gate on which), and charter compares it and closes panes on it. A name outside
+        that namespace is a name something else on their server may also be using.
+        """
+        self.assertEqual(commands_frame._PANEL_SLOT_OPTION, "@charter_panel_slot")
+        self.assertEqual(
+            commands_frame._panel_slot_argv(socket="s", pane_id="%1",
+                                            slot="chats")[-2],
+            "@charter_panel_slot")
+        self.assertIn("#{@charter_panel_slot}", commands_frame._PANEL_LIST_FORMAT)
+
     def test_a_name_charter_would_not_put_on_a_bind_line_is_refused(self):
         """The value reaches a comparison against `want` and a decision to `kill-pane`, so
         it is held to the alphabet `frame/component.py` holds every id that reaches tmux
