@@ -641,6 +641,20 @@ RELEASE_BODY_MAX = 125_000
 #: and it is above every release charter has ever cut but one — 0.52.0, at 111,723, is the
 #: only stamped version it reaches for, so the bound does not begin eliding until a version
 #: is genuinely larger than any that has shipped.
+#:
+#: **The deletion sweep reports this line as unpinned, and it is right to.** `retune-constant`
+#: rewrites it as ``100_001`` and the suite stays green, because it must: this is a dial, and
+#: one character of it changes no output anyone can name. What IS pinned is the *window* the
+#: dial has to sit in, from both ends and for different reasons —
+#: `test_the_staged_release_has_headroom` from above, so GitHub keeps real slack, and
+#: `test_the_bound_is_an_exception_rather_than_the_normal_path` from below, so a budget small
+#: enough to turn ordinary releases into a table of contents cannot pass while every length
+#: assertion still does. 100,001 is inside that window, which is exactly why it survives.
+#:
+#: This is the "explained equivalent" the sweep's own docstring reserves, not a suppression:
+#: there is no suppression list and this needs none. The only test that would redden on
+#: ``100_001`` is one asserting the literal back at itself, and a test that reads the source
+#: it is checking is the assertion this file has watched fail more than once.
 _BODY_BUDGET = 100_000
 
 

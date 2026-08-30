@@ -311,6 +311,33 @@ class ABodyThatFitsIsUntouched(NewsDir):
         self.assertNotIn("listed by headline only", body)
         self.assertNotIn("Full note:", body)
 
+    def test_a_body_of_exactly_the_budget_is_still_rendered_whole(self):
+        """The early return's boundary, not just its direction.
+
+        `<` instead of `<=` would send a release that fits exactly through the elision
+        path — every note but the last rendered whole, the last one traded for a link, and
+        a heading explaining an elision that was not needed. One character, and the only
+        release it could ever happen to is one nobody would think to test.
+
+        The dial moves rather than the fixture, for the reason its sibling in
+        `TheGateRefusesABodyItCannotBound` does: `_BODY_BUDGET` is charter's own policy
+        number and the claim under test is what the comparison means by it, not what the
+        number is.
+        """
+        for slug in ("a-one", "b-two", "c-three"):
+            self.write(f"{_V}-{slug}.md", _entry(_V, slug, self.filler(f"BODY-{slug}")))
+        whole = "\n\n".join(news._part(e) for e in news.for_version(_V))
+        with mock.patch.object(news, "_BODY_BUDGET", len(whole)):
+            self.assertEqual(
+                news.render_body(_V), whole,
+                "a body of exactly the budget went through the elision path, so the "
+                "budget is being read as exclusive")
+        with mock.patch.object(news, "_BODY_BUDGET", len(whole) - 1):
+            self.assertIn(
+                "listed by headline only", news.render_body(_V),
+                "one character under the budget changed nothing, so the case above is "
+                "not measuring the boundary it claims to")
+
     def test_an_entry_with_no_body_does_not_open_a_gap_in_the_notes(self):
         """The one shape `_part`'s `rstrip` is for, and the only one it can change.
 
