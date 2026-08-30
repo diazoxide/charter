@@ -34,6 +34,8 @@ a refusal with no measurement behind it, on the one path where a refusal is invi
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import pathlib
 import subprocess
@@ -337,10 +339,21 @@ class TheChromeCommandChangesOneRunningFrame(PersonaIso, unittest.TestCase):
         self.assertEqual(state.chrome(self.FID), "off")
         self.assertTrue(all("-u" in a for a in self.ran), self.ran)
 
-    def test_no_session_id_records_nothing_and_runs_nothing(self):
+    def test_no_session_id_says_so_and_still_runs_nothing(self):
+        """Records nothing, runs nothing — and, since #734, says so and exits non-zero.
+
+        `charter frame-chrome dark` typed in an ordinary shell used to print zero bytes and
+        report success. Separated from the level check below because they are two different
+        refusals: this one is an operator who is not where they think they are, and the
+        surface that is certainly theirs is their own stderr; that one is a word outside a
+        closed set, answered inside a frame where a `run-shell` child's non-zero status
+        would print into the harness pane."""
         self._with_panes()
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(commands_frame.cmd_chrome(self._args("dark")), 0)
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             contextlib.redirect_stderr(err):
+            self.assertNotEqual(commands_frame.cmd_chrome(self._args("dark")), 0)
+        self.assertIn("charter frame-chrome", err.getvalue())
         self.assertIsNone(state.chrome(self.FID))
         self.assertEqual(self.ran, [])
 
