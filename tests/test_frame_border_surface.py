@@ -41,6 +41,28 @@ from tests._isolation import PersonaIso
 
 _STYLES = ("pane-border-style", "pane-active-border-style")
 
+#: A tmux old enough to have every option `_CHROME` names — the version the cases that are
+#: about the SURFACE are asked at, so a row dropped for its own floor cannot quietly change
+#: what they measure. DERIVED from the table rather than written as a number, because a
+#: sixth option floored higher than any of today's five must move this with it or those
+#: cases start measuring four options and still passing.
+_EVERY_CHROME_OPTION = max(floor for _n, _v, floor in commands_frame._CHROME)
+
+
+def _pinned_at(v) -> dict[str, str]:
+    """`{option: charter's answer}` for the rows of `_CHROME` a tmux *v* is told about.
+
+    The cases below are about the frame's SURFACE — which value reaches which option — and
+    several of them run the funnel at `None`, `tmuxctl.FLOOR` and above it to prove the
+    per-pane writes appear only above `tmuxctl.PANE_BORDER_FLOOR`. #716 made the SET of
+    options depend on that same *v*, and this is that dependency said once so those cases
+    keep asking their own question. Whether the set is the right one is
+    `AnOptionThisTmuxDoesNotHaveIsNeverIssued`'s, measured against the real binaries by
+    `tests/test_frame_tmux_integration.py`'s `EveryBorderOptionThisTmuxHasIsPinned`.
+    """
+    known = v if v is not None else tmuxctl.FLOOR
+    return {name: value for name, value, floor in commands_frame._CHROME if known >= floor}
+
 
 def _frame(*bgs, **rest) -> dict:
     """A `[frame]` mapping whose arrangement names one component per *bgs* entry — `None`
@@ -191,20 +213,20 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
     """`commands_frame._chrome_argvs` — the five `set-option -w`s, with the surface in
     the two that are styles."""
 
-    def _tails(self, surface=None):
+    def _tails(self, surface=None, v=_EVERY_CHROME_OPTION):
         return [a[a.index("set-option"):]
                 for a in commands_frame._chrome_argvs(socket="s", harness_pane="%1",
-                                                      surface=surface)]
+                                                      v=v, surface=surface)]
 
-    def _values(self, surface=None):
-        return {a[-2]: a[-1] for a in self._tails(surface)}
+    def _values(self, surface=None, v=_EVERY_CHROME_OPTION):
+        return {a[-2]: a[-1] for a in self._tails(surface, v=v)}
 
     def test_no_surface_is_byte_identical_to_the_frame_charter_shipped(self):
         """The `off` invariant, and the reason the border needs no `-u` where the pane
         surface does: these two options are charter's own at EVERY level (#514 pins them
         with or without a surface), so "no surface" is a value rather than an absence, and
         it is the value that was there before this parameter existed."""
-        self.assertEqual(self._values(), dict(commands_frame._CHROME))
+        self.assertEqual(self._values(), commands_frame._chrome_values())
 
     def test_the_surface_is_appended_to_the_styles_and_to_nothing_else(self):
         got = self._values("bg=brightblack")
@@ -212,7 +234,7 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
             with self.subTest(option=name):
                 self.assertEqual(got[name],
                                  f"{commands_frame._CHROME_STYLE},bg=brightblack")
-        for name, value in commands_frame._CHROME:
+        for name, value in commands_frame._chrome_values().items():
             if name not in _STYLES:
                 with self.subTest(option=name):
                     self.assertEqual(got[name], value,
@@ -241,7 +263,8 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
         with mock.patch.object(
                 commands_frame, "_CHROME",
                 commands_frame._CHROME + (("pane-border-status-style",
-                                           commands_frame._CHROME_STYLE),)):
+                                           commands_frame._CHROME_STYLE,
+                                           tmuxctl.FLOOR),)):
             self.assertEqual(self._values("bg=blue")["pane-border-status-style"],
                              f"{commands_frame._CHROME_STYLE},bg=blue")
 
@@ -260,10 +283,10 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
         one is still charter putting colour on their screen."""
         with mock.patch.dict(os.environ, {"NO_COLOR": ""}, clear=True):
             self.assertEqual(self._values("bg=brightblack"),
-                             dict(commands_frame._CHROME))
+                             commands_frame._chrome_values())
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertNotEqual(self._values("bg=brightblack"),
-                                dict(commands_frame._CHROME))
+                                commands_frame._chrome_values())
 
     def test_no_operator_string_reaches_a_style_value(self):
         """The boundary asserted end to end rather than at the table: whatever a committed
@@ -274,11 +297,78 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
         hostile = "bg=#{?#{==:1,1},colour196,colour46}"
         for level in ("dark", hostile):
             argvs = commands_frame._chrome_argvs(
-                socket="s", harness_pane="%1",
+                socket="s", harness_pane="%1", v=_EVERY_CHROME_OPTION,
                 surface=instance.border_bg(_frame(hostile, hostile), level))
             for argv in argvs:
                 for word in argv:
                     self.assertNotIn("#", word)
+
+
+class AnOptionThisTmuxDoesNotHaveIsNeverIssued(unittest.TestCase):
+    """#716: every row of `_CHROME` carries the oldest tmux it may be issued to, and
+    `_chrome_argvs` applies it.
+
+    **The defect was one option and the class of defect is a missing gate.**
+    `pane-border-indicators` arrived in tmux 3.3 and charter's floor is 3.2, so the table
+    shipped issuing, on every launch a 3.2 operator makes, a `set-option` tmux answers
+    `invalid option: pane-border-indicators`, rc 1 — which `tmuxctl.run` reports. Not a
+    degraded frame: a working frame that tells the operator something of charter's failed,
+    every single time they start one.
+
+    It was the THIRD time in this file. `pane-border-style` at pane scope is gated by
+    `tmuxctl.PANE_BORDER_FLOOR` and `window-resized` by `tmuxctl.RESIZE_HOOK_FLOOR`, each
+    with a check written for it alone. So the floor is a field of the table rather than a
+    fourth check: a row cannot be added without one, and the two cases below are what
+    reads it.
+
+    The other direction — that a floor written here matches what a real tmux actually
+    has — cannot be asked of a table, only of a binary, and is
+    `tests/test_frame_tmux_integration.py`'s `EveryBorderOptionThisTmuxHasIsPinned`.
+    """
+
+    #: The option the defect was reported for, and the only row floored above
+    #: `tmuxctl.FLOOR` today. Named once here rather than in each case below.
+    OPTION = "pane-border-indicators"
+
+    def _names(self, v):
+        return [a[-2] for a in commands_frame._chrome_argvs(socket="s", harness_pane="%1",
+                                                            v=v)]
+
+    def test_charters_own_floor_is_below_the_option_that_needs_a_gate(self):
+        """The premise, asserted rather than assumed — without it every case below is
+        vacuous. A charter whose `FLOOR` rises to 3.3 can delete this whole gate, and this
+        is the line that says so."""
+        self.assertLess(tmuxctl.FLOOR, tmuxctl.BORDER_INDICATORS_FLOOR,
+                        "charter's floor now has `pane-border-indicators`, so the floor "
+                        "field on that row no longer gates anything")
+
+    def test_a_tmux_at_the_options_own_floor_is_told_about_it(self):
+        self.assertIn(self.OPTION, self._names(tmuxctl.BORDER_INDICATORS_FLOOR),
+                      "the option is not issued to the very tmux release that added it")
+
+    def test_a_tmux_below_it_is_not(self):
+        """#716 itself: the launch on `tmuxctl.FLOOR` that printed `styling the frame's
+        own rules failed`. The other four are still issued, because the fix is a gate on
+        one row and not a frame with no chrome."""
+        got = self._names(tmuxctl.FLOOR)
+        self.assertNotIn(self.OPTION, got,
+                         "charter still pins an option this tmux has no such name for, "
+                         "so every launch on the supported floor reports its own failure")
+        self.assertEqual([n for n, _v, f in commands_frame._CHROME if f <= tmuxctl.FLOOR],
+                         got, "a row this tmux DOES have was dropped with it")
+
+    def test_an_unreadable_version_takes_the_supported_floor(self):
+        """`None` is "charter could not find out", and here it answers `tmuxctl.FLOOR` —
+        the opposite of `_pane_borders_wanted`'s `None`, for a reason rather than by
+        inconsistency (see `_chrome_argvs`). Every failure on this path is loud and
+        recoverable, so the useful guess is the baseline charter supports: pin what every
+        supported tmux has, and leave the rest to a tmux that says what it is.
+
+        Both halves are asserted, because the two ways to get this wrong differ from each
+        other and not from the middle: issuing nothing would leave the operator's own
+        config deciding all five, and issuing everything is the defect back again."""
+        self.assertEqual(self._names(None), self._names(tmuxctl.FLOOR))
+        self.assertTrue(self._names(None), "an unreadable version pinned nothing at all")
 
 
 class APanelDrawsItsOwnEdgesAndTheHarnessKeepsItsOwn(unittest.TestCase):
@@ -691,7 +781,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
 
     def _rules(self, issued: list[list[str]]) -> dict[str, str]:
         return {a[-2]: a[-1] for a in issued
-                if "set-option" in a and "-w" in a and a[-2] in dict(commands_frame._CHROME)}
+                if "set-option" in a and "-w" in a and a[-2] in commands_frame._chrome_values()}
 
     def test_a_launch_below_the_floor_draws_its_rules_in_the_agreed_colour(self):
         """The frame-wide design, which is all a tmux without pane-scoped border options
@@ -715,7 +805,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         style and every panel pane that was actually split gets its own two options."""
         frame = _resolved(*["brightblack"] * 4, chrome="dark")
         issued = self._issued(frame, ["top", "bottom", "repos", "right"], v=(3, 7))
-        self.assertEqual(self._rules(issued), dict(commands_frame._CHROME),
+        self.assertEqual(self._rules(issued), commands_frame._chrome_values(),
                          "the window carries a surface above the floor, so a rule is "
                          "being coloured in two places")
         want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
@@ -755,7 +845,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         for v in (None, (3, 2), (3, 7)):
             with self.subTest(v=v):
                 issued = self._issued({}, ["top", "bottom"], v=v)
-                self.assertEqual(self._rules(issued), dict(commands_frame._CHROME))
+                self.assertEqual(self._rules(issued), _pinned_at(v))
                 self.assertEqual([a for a in issued if "set-option" in a and "-p" in a
                                   and a[-2] in instance.PANE_BORDER_OPTIONS], [])
 
@@ -1054,7 +1144,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
                                 clear=True):
             self.assertEqual(
                 commands_frame.cmd_chrome(type("A", (), {"level": "dark"})()), 0)
-        self.assertEqual([a[-2] for a in calls if a[-2] in dict(commands_frame._CHROME)],
+        self.assertEqual([a[-2] for a in calls if a[-2] in commands_frame._chrome_values()],
                          [])
         self.assertTrue([a for a in calls if "window-style" in a],
                         "the panes were not repainted either")
@@ -1118,7 +1208,7 @@ class ARelayoutThatAddsNoPaneStillAssertsTheWindowsOwnOptions(PersonaIso,
         other."""
         return {a[-2]: a[-1] for a in calls
                 if "set-option" in a and flag in a and "-u" not in a
-                and a[-2] in dict(commands_frame._CHROME)}
+                and a[-2] in commands_frame._chrome_values()}
 
     def test_a_relayout_with_nothing_missing_still_writes_the_window_options(self):
         panels = {"top": "%3", "bottom": "%4"}
@@ -1126,7 +1216,7 @@ class ARelayoutThatAddsNoPaneStillAssertsTheWindowsOwnOptions(PersonaIso,
         self.assertNotIn("split-window", [a[3] for a in calls if len(a) > 3],
                          "the fixture split something, so this is the branch that "
                          "already worked")
-        self.assertEqual(self._options(calls, "-w"), dict(commands_frame._CHROME),
+        self.assertEqual(self._options(calls, "-w"), commands_frame._chrome_values(),
                          "a re-layout that added no pane wrote no window option, so "
                          "#657's rules and #514's chrome do not apply after a switch")
 
@@ -1163,7 +1253,7 @@ class ARelayoutThatAddsNoPaneStillAssertsTheWindowsOwnOptions(PersonaIso,
         self.assertEqual(self._options(added, "-w"), self._options(none_added, "-w"))
         for calls in (added, none_added):
             names = [a[-2] for a in calls if "set-option" in a and "-w" in a
-                     and a[-2] in dict(commands_frame._CHROME)]
+                     and a[-2] in commands_frame._chrome_values()]
             self.assertEqual(len(names), len(set(names)),
                              "a window option was written twice in one re-layout")
 

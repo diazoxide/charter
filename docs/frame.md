@@ -387,6 +387,9 @@ the sentence above:
   five of the options tmux draws a border from — both border styles, plus
   `pane-border-lines`, `pane-border-indicators` and `pane-border-status` — so every rule in
   the frame is one colour and the frame looks the same in your tmux as in charter's own.
+  Each is pinned only on a tmux that has it: `pane-border-indicators` arrived in tmux 3.3,
+  and on 3.2 charter pins the other four and says nothing about a name that release does
+  not know.
   With `[frame] chrome` left at its default this is the only place charter overrides a
   preference of yours rather than deferring to it; setting `chrome` adds a second — a
   background on charter's own panel panes, and never on the pane your harness runs in — and
