@@ -2342,5 +2342,122 @@ class TheJobThisIsAboutIsTheOneThatCanPublish(unittest.TestCase):
                          {("release.yml", "owner/act")})
 
 
+# ------------------------------------------ what can speak for a run that never happened
+
+def requirable(workflow: object) -> dict[str, str]:
+    """Job key -> the check-run name it publishes, for the jobs that can be *required*.
+
+    Branch protection matches a required status check by NAME and by nothing else, so a job
+    has to answer two questions to be one: what name does it publish, and does that name
+    hold still. A job with no `name:` publishes its key; one with a `name:` publishes that.
+
+    A name carrying `${{ }}` publishes a different string on every branch. Requiring it
+    would protect a branch against a string that never appears again — and a required
+    context nothing ever reports does not pass, it blocks forever. Two jobs in `sweep.yml`
+    are deliberately in that class: `verdict`, whose name IS the answer (#630), and the
+    sharded `sweep` job, whose name counts shards. Neither is a mistake and neither is a
+    candidate.
+
+    A job with no body at all is a workflow somebody is still writing, and it names no
+    check yet — the same half-written case `beside_the_publishing_identity` handles rather
+    than crashing on.
+    """
+    out: dict[str, str] = {}
+    for key, job in workflow["jobs"].items():
+        if not isinstance(job, dict):
+            continue
+        name = job.get("name", key)
+        if "${{" not in name:
+            out[key] = name
+    return out
+
+
+class TheSweepsAbsenceIsSomethingOnlyARequiredCheckCanSay(unittest.TestCase):
+    """#646 and #561 are one defect seen from two heights, and this holds the code half.
+
+    #561: *a check that never ran reports CLEAN*. #646: *a branch with no gate run looks
+    identical to one whose gate found nothing*. Neither can be answered from inside the
+    workflow, because every line of a workflow is code that runs only on the runs that
+    already happen — so the answer is a required status check, which is a repository
+    setting and not a commit.
+
+    What IS in this repository's gift is keeping that setting meaningful, and there are
+    exactly two ways a commit can quietly hollow it out. Add `push:` to `sweep.yml` and the
+    required check can be satisfied by a run that swept the branch tip instead of the merge
+    result — the hole reopened one level below the fix. Or rename the job that check names,
+    or take away the `always()` that makes it report at all.
+
+    So the trigger set and the two properties of `collect` are pinned here, and `requirable`
+    is exercised in both directions: a reader that called everything requirable would make
+    the `verdict` assertion vacuous, and one that called nothing requirable would satisfy
+    the `collect` assertion by finding no jobs at all.
+    """
+
+    def sweep(self) -> dict:
+        return load((GITHUB / "workflows" / "sweep.yml").read_text())
+
+    NAMES = [
+        ("a job with no name of its own publishes its key",
+         "jobs:\n  collect:\n    runs-on: ubuntu-latest\n", {"collect": "collect"}),
+        ("a job with a fixed name publishes that name",
+         'jobs:\n  c:\n    name: Add up what the shards found\n', {"c": "Add up what"
+                                                                   " the shards found"}),
+        ("a name that interpolates an output is not a context anything can require",
+         'jobs:\n  verdict:\n    name: "${{ needs.collect.outputs.headline }}"\n', {}),
+        ("a name that interpolates a matrix value is not one either",
+         "jobs:\n  sweep:\n    name: Sweep shard ${{ matrix.shard }} of 8\n", {}),
+        ("the fixed names survive beside the moving ones",
+         "jobs:\n  plan:\n    name: Size the sweep\n  v:\n    name: ${{ x }}\n",
+         {"plan": "Size the sweep"}),
+        ("a job nobody has finished writing names no check yet",
+         "jobs:\n  half:\n", {}),
+    ]
+
+    def test_a_job_names_a_required_context_only_when_that_name_holds_still(self):
+        for label, text, expected in self.NAMES:
+            with self.subTest(label):
+                self.assertEqual(requirable(load(text)), expected, label)
+
+    def test_the_sweep_runs_on_the_two_triggers_it_can_answer_for(self):
+        """The assertion the header of `sweep.yml` argues at length, and #646 asks to
+        overturn. `pull_request` is the only trigger that hands this gate a merge commit
+        and a base sha — the tree that will land, which is what "scoped to added lines"
+        means. `workflow_dispatch` is a human asking, once.
+
+        A `push:` here would let the required `collect` check be reported by a run that
+        swept the branch TIP against the merge-base instead, under the same name — so the
+        check's presence would stop proving that the pull-request-scoped sweep ever ran.
+        Overturning this is a decision; it is not a line somebody adds in passing.
+        """
+        self.assertEqual(set(self.sweep()["on"]), {"pull_request", "workflow_dispatch"})
+
+    def test_the_context_to_require_is_the_job_that_reports_whatever_the_shards_did(self):
+        """`collect` is the one job in this workflow fit to be a required check, and both
+        halves of that were measured on real runs rather than reasoned from the file.
+
+        Its name is fixed, so branch protection can name it. And it runs under `always()`,
+        which is why it reports at all when the shards die (#626) and when a newer push
+        cancels the run (#654): across twelve consecutive runs it concluded `success` every
+        time, including the two whose `plan` job concluded `cancelled`. That is what makes
+        it absent EXACTLY when the workflow did not fire, which is the whole property #646
+        needs — a `cancelled` required context blocks, so requiring `Size the sweep`
+        instead would block every pull request that got a second push.
+        """
+        jobs = self.sweep()["jobs"]
+        self.assertEqual(requirable(self.sweep())["collect"],
+                         "Add up what the shards found")
+        self.assertEqual(jobs["collect"]["if"], "always()")
+
+    def test_the_job_whose_name_is_the_answer_can_never_be_a_required_check(self):
+        """The `verdict` job says this about itself already; this is that comment with
+        teeth. Its name is `no survivors` on one branch and `114 survivors, 1 not measured`
+        on the next, so requiring it would demand a context that never reports twice — and
+        a required context nothing reports blocks forever rather than passing.
+        """
+        names = requirable(self.sweep())
+        self.assertNotIn("verdict", names)
+        self.assertNotIn("sweep", names)
+
+
 if __name__ == "__main__":
     unittest.main()

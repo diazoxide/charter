@@ -1,4 +1,53 @@
 name: deletion sweep
+
+# **`push:` is deliberately absent, and #646 is the issue that asks for it by name.**
+#
+# The hole #646 reports is real: two pushes produced no `synchronize` event, no sweep ran,
+# and the checks list simply had no sweep row — which reads exactly like a sweep that found
+# nothing. #630 spent a whole workflow teaching this gate to say `no survivors` rather than
+# wearing a silent green tick; a run that never happened says nothing at all, and that is
+# the fourth state none of the three careful ones can be told apart from.
+#
+# **A workflow that did not run cannot report that it did not run.** Nothing added to this
+# file can close that, because every line here is code that only executes on the runs that
+# already happen. Only something outside the run can speak for a missing one, and on GitHub
+# that is a required status check — which is #561, and a repository setting rather than a
+# commit.
+#
+# Adding `push:` here does not close the hole, and it quietly widens it. Measured on this
+# repository rather than read out of the documentation:
+#
+#   * **The two events sweep different trees.** On `pull_request`, `github.sha` is the merge
+#     commit and `--base` is the pull request's base sha — the tree that will land. A `push`
+#     run has neither: `BASE_SHA` is empty, so `sweep.py` takes its own default of the
+#     merge-base with `origin/main` and charges the branch TIP. Both answers are defensible.
+#     They are not the same answer, and under `push:` they would arrive on the same pull
+#     request under the same check names.
+#   * **That is what makes it worse rather than better.** The remedy #646 settles on is to
+#     require this workflow's `collect` job, so that a missing row BLOCKS instead of passing
+#     silently. The moment `push:` can also produce that check, its presence stops proving
+#     the pull-request-scoped sweep ran — a push-scoped run of a different tree satisfies it.
+#     The one-line fix reintroduces one level down the exact defect it was reached for.
+#   * **The cost is not the cost of `test.yml`.** That workflow carries both triggers, and
+#     every pull request there runs its matrix twice — once on the head sha, once on the
+#     merge commit. Four cheap jobs, twice, is affordable. This gate is eight parallel jobs
+#     and up to forty minutes on a large diff (#639: 443 mutations), and `push:` would spend
+#     that on every push of every branch, PR or not.
+#
+# `workflow_dispatch` stays. It has the same missing merge commit, and it is a hazard of
+# degree rather than of kind: somebody has to ask for it, once, on purpose — which is the
+# whole reason it is here.
+#
+# **The job to require is `collect`, and that was measured too.** Its check is named
+# `Add up what the shards found`, it runs under `always()`, and across twelve consecutive
+# real runs it concluded `success` every time — including the two whose `plan` job concluded
+# `cancelled` because a newer push superseded them. `plan` is therefore the wrong context to
+# require: `cancelled` blocks, so requiring `Size the sweep` would block every pull request
+# that got a second push. `verdict` is the wrong one for the reason stated on the job itself
+# — its name is the answer, so it is different on every branch.
+#
+# `tests/test_workflows.py` holds the trigger set and those two job properties, so a future
+# `push:` is a deliberate act that meets an assertion rather than a one-line convenience.
 on:
   pull_request:
   workflow_dispatch:      # so a branch can be re-swept without a noise commit
