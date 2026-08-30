@@ -219,6 +219,24 @@ rule while one who reads a bare refusal files an issue.
   `-m "…"` every one of those is live. A guard that fires
   constantly on legitimate work is one that gets switched off, and then it covers nothing.
 
+  **What it does not reach, checked rather than assumed.** The guard matches a
+  `(tool, noun, verb)` triple, so every route that publishes without spelling one is
+  outside it — and the nearest of those is not exotic:
+
+  ```bash
+  gh api repos/o/r/issues -f body="`env`"    # ALLOWED — same publish, no noun and verb
+  ```
+
+  `gh api` is the REST escape hatch and it writes as well as reads; covering it means
+  deciding which invocations write, from `--method` or from `-f`, and that is a surface
+  nobody has verified the way the nineteen verbs were. A **user-defined alias**
+  (`gh alias set ic 'issue create'`) is the same hole one step further, and so is a program
+  name that arrives in a variable (`$GH issue create`). Below those sit the routes any
+  guard on argv is blind to and `_leak_reason` already lists: `sh -c '…'`, `eval`, a `curl`
+  straight at the API, an interpreter. None of that is a reason to distrust the denial you
+  do get — it is why this is a guard against a mistake an agent makes while trying to do
+  its job, and not a boundary.
+
   Unlike the four guards above it, this one is **not gated on there being a control
   plane**. What it refuses is a fact about the shell rather than a policy this plane holds,
   and its remedy is plain `gh`/`glab` usage — the same reason the secret-leak guard is

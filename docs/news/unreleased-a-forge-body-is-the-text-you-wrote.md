@@ -76,6 +76,13 @@ Three limits, stated rather than left to be discovered:
   putting a shell inside the guard — the failure the leak guard has already documented four
   times. Run the substitution in a separate Bash call; each is judged alone.
 
+And a fourth, which is the nearest one and worth knowing before you rely on this:
+**`gh api` is not covered.** `gh api repos/o/r/issues -f body="…"` publishes the same issue
+without ever spelling a noun and a verb, and so does a user-defined `gh alias`, or a program
+name that arrives in a variable. Covering `gh api` means deciding which of its invocations
+write, which is a surface nobody has verified the way the nineteen verbs were — so it is
+stated rather than half-covered.
+
 It also closes, for this one command family, a bypass the secret-leak guard has always
 listed as open: a **quoted** command substitution. `gh issue create --body "$(cat <vault>)"`
 walks past the leak guard — shlex keeps it as one word and no vault predicate looks
