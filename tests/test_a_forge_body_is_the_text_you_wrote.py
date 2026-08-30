@@ -398,8 +398,9 @@ class WhatItDoesNotClaim(ForgeGuardCase):
         `(tool, noun, verb)` rows were each checked against `gh`/`glab` `--help`; nothing
         equivalent has been done for the commit surface. And that surface is dense with the
         exact character this guard keys on — measured on this repository, **26 of 30
-        consecutive commit messages on `main` contained a backtick**, 10 of them around text that reads
-        as a runnable command. Inside `-m "…"` every one of those is live. A security guard
+        consecutive commit messages on `main` contained a backtick**, nineteen of them
+        around text that reads as a runnable command. Inside `-m "…"` every one of those
+        is live. A security guard
         that fires constantly on legitimate work is how a guard gets switched off, and then
         it protects nothing (`_BRANCH_MOVERS` and #371 both make this argument).
 
