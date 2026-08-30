@@ -139,6 +139,31 @@ PANE_ENV_FLOOR = (3, 0)
 #: shade on one row of cells, not a frame.
 PANE_BORDER_FLOOR = (3, 7)
 
+#: The first tmux release that has `pane-border-indicators` AT ALL — one of the five
+#: options `commands_frame._CHROME` pins so the operator's own `.tmux.conf` cannot decide
+#: part of the frame's chrome (#514).
+#:
+#: **VERSION read out of tmux's own published CHANGES** (github.com/tmux/tmux, "CHANGES
+#: FROM 3.2a TO 3.3"): "Add an option (pane-border-indicators) to select how the active
+#: pane is shown on the pane border (colour, arrows or both)." **Confirmed by running both
+#: sides**: `show -w pane-border-indicators` is rc 0 on a real 3.7c and answers `invalid
+#: option: pane-border-indicators`, rc 1, on a real 3.2 built from source on this machine —
+#: which is the whole of #716. `_CHROME`'s other four are rc 0 on that same 3.2, measured
+#: the same way, which is why this is the only entry in that table floored above `FLOOR`.
+#:
+#: HIGHER than `FLOOR`, and a separate constant for `RESIZE_HOOK_FLOOR`'s reason exactly —
+#: it is the same failure as that one, in an option rather than a hook. An operator on 3.2
+#: is explicitly still allowed to launch (`below_floor_message` warns, does not refuse),
+#: and pinning a name that tmux does not have is not degraded but REFUSED: :func:`run`
+#: reports it, so before this constant existed **every launch on the supported floor**
+#: printed `charter frame: styling the frame's own rules failed — … invalid option:
+#: pane-border-indicators` to the operator's stderr. What is lost below the line is one
+#: hostile setting left inherited — `pane-border-indicators arrows` marks the active
+#: pane's borders with `←`/`↓` and its neighbours' not — on a tmux that has no such
+#: setting to inherit. Nothing at all, in other words, which is why the gate is a version
+#: and the option stays in the table.
+BORDER_INDICATORS_FLOOR = (3, 3)
+
 #: The session-scoped tmux environment variable carrying the interpreter that runs
 #: charter from inside a frame — `"$CHARTER_PY" -m charter …`, never a bare `charter`
 #: off `$PATH`. Defined HERE, not in either of the two modules that build text around it

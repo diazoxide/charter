@@ -4415,15 +4415,44 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         self._outer("kill-server")
         (Path("/tmp") / f"tmux-{os.getuid()}" / self._outer_socket).unlink(missing_ok=True)
 
-    def _hostile(self) -> None:
+    def _has_option(self, name: str) -> bool:
+        """Does THIS tmux have *name* as a window option at all?
+
+        Probed, never inferred from a version string — this module's own rule, and the
+        same question `ASwitchDressesTheWindowItEntersEvenWithNothingToSplit._has` asks of
+        the same table. `show-options -wg <name>` answers rc 1 and `invalid option:
+        <name>` on a tmux that does not have it (measured on a real 3.2, for
+        `pane-border-indicators`) and rc 0 on one that does.
+        """
+        return self._srv("show-options", "-wg", name).returncode == 0
+
+    def _hostile(self) -> list[str]:
         """Somebody else's `.tmux.conf`, applied the way theirs is: `-wg`, reaching every
-        window on the server charter is a guest on."""
+        window on the server charter is a guest on. Returns the names that landed.
+
+        **Only the settings THIS tmux has, probed rather than assumed** — the rule this
+        module already follows in `ASwitchDressesTheWindowItEntersEvenWithNothingToSplit.
+        _has`. `pane-border-indicators` arrived in tmux 3.3 and charter's floor is 3.2
+        (`tmuxctl.BORDER_INDICATORS_FLOOR`), and nobody's `.tmux.conf` can hand charter a
+        hostile value for an option their tmux has no name for: at the floor this method
+        asserted rc 0 on `set -wg pane-border-indicators arrows` and reported the TEST's
+        own config failing as though it were charter's (#716).
+        """
+        applied = []
         for name, value in (("pane-border-style", "fg=blue"),
                             ("pane-active-border-style", "fg=red,bold"),
                             ("pane-border-indicators", "arrows"),
                             ("pane-border-lines", "double"),
                             ("pane-border-status", "top")):
+            if not self._has_option(name):
+                continue
             self.assertEqual(self._srv("set", "-wg", name, value).returncode, 0)
+            applied.append(name)
+        self.assertTrue(applied, "this tmux has none of the five settings an operator's "
+                                 "own config would hand charter, so nothing hostile was "
+                                 "applied and the frame under test is not a guest in "
+                                 "anything")
+        return applied
 
     def _screenshot(self, *, arm: bool, hostile: bool = False,
                     surface: str | None = None, design: str = "pane",
@@ -4479,9 +4508,13 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         if hostile:
             self._hostile()
         if arm:
-            # The production argv, never a hand-retyped `set-option` — see `_run`.
+            # The production argv, never a hand-retyped `set-option` — see `_run`. `v` is
+            # the real `tmux -V`, which is what a launch hands it: below
+            # `tmuxctl.BORDER_INDICATORS_FLOOR` the builder drops the row this tmux has no
+            # such option for, so the rc-0 assertion below is about charter's argv rather
+            # than about which release the developer happens to be on (#716).
             for cmd in commands_frame._chrome_argvs(
-                    socket=self.SOCKET_NAME, harness_pane=harness,
+                    socket=self.SOCKET_NAME, harness_pane=harness, v=tmuxctl.version(),
                     surface=surface if design == "window" else None):
                 self.assertEqual(_run(cmd).returncode, 0, cmd)
             # The production argv for the harness's OWN three edges, which above the floor
@@ -4587,9 +4620,10 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
     def test_the_frame_draws_every_rule_the_same_inside_the_operators_own_tmux(self):
         """The second server path, where charter's assumptions do not hold: the borders
         are not tmux's defaults here, they are the operator's own config, which charter
-        would otherwise inherit whole. All five settings, because colour is only the most
-        visible of them — their `pane-border-status top` writes this machine's hostname
-        into every rule and takes a row the frame's own arithmetic never budgeted for."""
+        would otherwise inherit whole. Every one of the five settings this tmux HAS,
+        because colour is only the most visible of them — their `pane-border-status top`
+        writes this machine's hostname into every rule and takes a row the frame's own
+        arithmetic never budgeted for."""
         self._control(hostile=True)
         shot = self._screenshot(arm=True, hostile=True)
         states = _rule_states(shot)
@@ -4600,9 +4634,15 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         self.assertNotIn(socket.gethostname().split(".")[0], shot,
                          "`pane-border-status` is still on, so the frame's rules are "
                          "carrying this machine's hostname")
-        self.assertEqual(set(shot) & _INDICATOR_GLYPHS, set(),
-                         "`pane-border-indicators` is still theirs, so charter's frame "
-                         "marks its active pane's borders and not its others")
+        # Asked only where there is something to ask about. Below
+        # `tmuxctl.BORDER_INDICATORS_FLOOR` no `.tmux.conf` can set this option, so no
+        # glyph can be on this screen and the line would pass for a reason that is not
+        # charter's — an assertion nobody can read the strength of. Skipping it there is
+        # naming what cannot be measured; the tmux that HAS the option still measures it.
+        if self._has_option("pane-border-indicators"):
+            self.assertEqual(set(shot) & _INDICATOR_GLYPHS, set(),
+                             "`pane-border-indicators` is still theirs, so charter's "
+                             "frame marks its active pane's borders and not its others")
         # The whole property in one line: the frame drawn inside their tmux is the same
         # frame, cell for cell of chrome, as the one drawn on charter's own server.
         # Colour alone would not catch a `pane-border-lines double` — every rule would
@@ -4770,12 +4810,14 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         #
         # **`arm=False` for both, and that is not laziness.** This test is about the two
         # servers' lifetimes and nothing else, and `arm=True` would put charter's own
-        # chrome argvs on its path — which at `tmuxctl.FLOOR` fail over an option tmux
-        # 3.2 does not have (`pane-border-indicators`, a separate defect this class
-        # already reports through three other tests). A lifecycle test that goes red for
-        # that reason is a test reporting somebody else's failure, which is the whole
-        # thing #694 and #713 are about. Unarmed builds and kills exactly the same
-        # sessions.
+        # chrome argvs on its path — a whole second subject, whose own failures this case
+        # would then report as a lifetime one. (Until #716 that was not hypothetical: at
+        # `tmuxctl.FLOOR` those argvs carried `pane-border-indicators`, which tmux 3.2 does
+        # not have, so an armed lifecycle test went red over an option. The argvs are now
+        # floored per option and would pass here — the reason to stay unarmed is the
+        # subject, not the defect.) A test that goes red for somebody else's failure is
+        # the whole thing #694 and #713 are about. Unarmed builds and kills exactly the
+        # same sessions.
         self._screenshot(arm=False)
         after_one = pids()
         self._screenshot(arm=False, focus=0)
@@ -5008,7 +5050,8 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         harness = r.stdout.strip()
         for cmd in commands_frame._chrome_argvs(socket=self.SOCKET_NAME,
-                                                harness_pane=harness):
+                                                harness_pane=harness,
+                                                v=tmuxctl.version()):
             _run(cmd)
         for cmd in commands_frame._harness_rule_argvs(
                 socket=self.SOCKET_NAME, harness_pane=harness, surface="bg=brightblack",
@@ -5059,7 +5102,8 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         harness = r.stdout.strip()
         for cmd in commands_frame._chrome_argvs(socket=self.SOCKET_NAME,
-                                                harness_pane=harness):
+                                                harness_pane=harness,
+                                                v=tmuxctl.version()):
             self.assertEqual(_run(cmd).returncode, 0, cmd)
         for cmd in commands_frame._harness_rule_argvs(
                 socket=self.SOCKET_NAME, harness_pane=harness, surface="bg=brightblack",
@@ -5096,6 +5140,15 @@ class EveryBorderOptionThisTmuxHasIsPinned(_TmuxServerFixture, PersonaIso,
     charter's chrome and charter never gave an answer", and a hand-written list of five
     names cannot see the sixth option a later tmux adds. `show-options -wg` is tmux
     itself saying what it draws a border from.
+
+    **And since #716 it is where the table's FLOORS are measured, which is the same
+    sentence read the other way.** Each row of `_CHROME` carries the oldest tmux charter
+    will issue it to, and a floor is a claim about a binary: `pane-border-indicators` is
+    3.3's, so on a real 3.2 charter must issue four options and on 3.7c five. Only a tmux
+    can settle that, and the tmux that can settle it is whichever one this run is on —
+    which is why every case below asks the binary rather than a version string, and why
+    `test_every_floor_in_the_table_is_what_this_tmux_actually_has` asks in BOTH
+    directions.
     """
 
     def _window_options(self) -> dict[str, str]:
@@ -5110,6 +5163,17 @@ class EveryBorderOptionThisTmuxHasIsPinned(_TmuxServerFixture, PersonaIso,
             out[name] = value
         return out
 
+    def _pinned_here(self) -> dict[str, str]:
+        """`{option: value}` charter would really issue on THIS tmux.
+
+        Read off the production builder rather than off the table, so #716's floor field
+        is applied here exactly as a launch applies it instead of being restated in a
+        test that would then agree with itself. `harness_pane` and `socket` reach only the
+        argv's other words, which nothing below looks at.
+        """
+        return {argv[-2]: argv[-1] for argv in commands_frame._chrome_argvs(
+            socket=self.SOCKET_NAME, harness_pane="%0", v=tmuxctl.version())}
+
     def test_no_pane_border_option_is_left_for_the_operators_config_to_decide(self):
         """Every `pane-*border*` window option this tmux has, pinned by `_CHROME`.
 
@@ -5118,8 +5182,13 @@ class EveryBorderOptionThisTmuxHasIsPinned(_TmuxServerFixture, PersonaIso,
         `off`, so nothing renders it. The first assertion re-establishes that condition
         instead of trusting it — turn the status on and this test starts demanding the
         format be pinned too.
+
+        **Asked of what charter ISSUES here, not of what the table names** (#716). An
+        option pinned in the table and floored above this tmux is one the operator's own
+        config still decides, which is precisely the defect this case is named for — so a
+        floor set too high goes red here, on the tmux that has the option.
         """
-        pinned = dict(commands_frame._CHROME)
+        pinned = self._pinned_here()
         self.assertEqual(pinned.get("pane-border-status"), "off",
                          "`pane-border-status` is no longer off, so `pane-border-format` "
                          "renders and must be pinned as well")
@@ -5135,10 +5204,44 @@ class EveryBorderOptionThisTmuxHasIsPinned(_TmuxServerFixture, PersonaIso,
     def test_every_option_charter_pins_is_one_this_tmux_actually_has(self):
         """The other direction. A misspelt option name is refused by `set-option`, and a
         launch treats that refusal as non-fatal — so the typo would leave the real option
-        inherited and the frame wrong, with nothing but a warning to show for it."""
+        inherited and the frame wrong, with nothing but a warning to show for it.
+
+        **This is #716 itself, on the floor.** Before the table carried floors, charter
+        issued `pane-border-indicators` on tmux 3.2 — which has no such option — so every
+        launch there printed `charter frame: styling the frame's own rules failed … invalid
+        option`. Asking about what charter ISSUES on this tmux, rather than about every
+        name in the table, is what turns this from "the developer is on 3.7c" into a
+        measurement that means the same thing on both.
+        """
         theirs = self._window_options()
-        for name in dict(commands_frame._CHROME):
+        pinned = self._pinned_here()
+        self.assertTrue(pinned, "charter pins nothing at all on this tmux")
+        for name in pinned:
             self.assertIn(name, theirs, f"{name} is not a window option on this tmux")
+
+    def test_every_floor_in_the_table_is_what_this_tmux_actually_has(self):
+        """`_CHROME`'s floors, checked against the binary rather than against tmux's own
+        CHANGES — the shape `ChromeIsOneColour.test_the_floor_agrees_with_what_this_tmux_
+        actually_does` already gives `tmuxctl.PANE_BORDER_FLOOR`.
+
+        **Both directions, per row.** A floor set too LOW is #716 back again — charter
+        issues a name this tmux does not have and reports its own failure on every launch.
+        A floor set too HIGH is quieter and no better: the operator's own `.tmux.conf`
+        goes on deciding an option their tmux really does have, which is the whole of
+        #514. Neither can be seen without a tmux, and each of the two binaries this suite
+        is run against sees a different half: 3.2 is where the low direction bites and
+        3.7c is where the high one does.
+        """
+        v = tmuxctl.version()
+        if v is None:
+            raise unittest.SkipTest("no readable tmux version to check the floors against")
+        theirs = self._window_options()
+        for name, _value, floor in commands_frame._CHROME:
+            with self.subTest(option=name, floor=floor):
+                self.assertEqual(
+                    name in theirs, v >= floor,
+                    f"tmux {v} {'has' if name in theirs else 'does not have'} `{name}`, "
+                    f"which is not what its floor {floor} in `_CHROME` says")
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
@@ -5910,9 +6013,9 @@ class ASwitchDressesTheWindowItEntersEvenWithNothingToSplit(_ChatsOnOneSession,
     window and leaves the first's panels running and recorded.
 
     Verified on tmux 3.7c and on tmux 3.2 (`tmuxctl.FLOOR`). Which options exist differs
-    between them — `pane-border-indicators` is 3.7's — so this asserts about the ones THIS
-    tmux has rather than about a list, the way `EveryBorderOptionThisTmuxHasIsPinned`
-    already does.
+    between them — `pane-border-indicators` arrived in 3.3
+    (`tmuxctl.BORDER_INDICATORS_FLOOR`) — so this asserts about the ones THIS tmux has
+    rather than about a list, the way `EveryBorderOptionThisTmuxHasIsPinned` already does.
     """
 
     def _has(self, name: str) -> bool:
@@ -5946,7 +6049,7 @@ class ASwitchDressesTheWindowItEntersEvenWithNothingToSplit(_ChatsOnOneSession,
             panels[slot] = r.stdout.strip()
         state.record_panes(f"{self.WS}.2", panels=panels)
         self.kept = panels
-        self.names = [n for n, _ in commands_frame._CHROME if self._has(n)]
+        self.names = [n for n in commands_frame._chrome_values() if self._has(n)]
         self.assertTrue(self.names, "this tmux has none of the options under test")
         for name in self.names:
             self._srv("set-option", "-w", "-u", "-t", self.pane, name)

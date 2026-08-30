@@ -2002,16 +2002,44 @@ _CHROME_STYLE = "fg=default,dim"
 #: `_CHROME_STYLE` — derived from this table the way `instance.chrome_option_names`
 #: derives its own, so a sixth border-style option added here is not the one rule left
 #: with a seam through it.
-_CHROME: tuple[tuple[str, str], ...] = (
-    ("pane-border-style", _CHROME_STYLE),
-    ("pane-active-border-style", _CHROME_STYLE),
-    ("pane-border-indicators", "off"),
-    ("pane-border-lines", "single"),
-    ("pane-border-status", "off"),
+#:
+#: **The third field is the oldest tmux charter will issue that option to, and it is a
+#: FIELD rather than a check for #716's reason.** `pane-border-indicators` does not exist
+#: at `tmuxctl.FLOOR` — it arrived in 3.3 — and pinning a name tmux does not have is not
+#: degraded but refused, so this table shipped for a release making **every launch on the
+#: supported floor** print `charter frame: styling the frame's own rules failed — … invalid
+#: option: pane-border-indicators`. That was the third time charter got this wrong in one
+#: file: `pane-border-style` at pane scope has `tmuxctl.PANE_BORDER_FLOOR` and
+#: `window-resized` has `tmuxctl.RESIZE_HOOK_FLOOR`, each a bespoke check of its own, and
+#: a third bespoke check would leave the FOURTH just as easy to add unguarded. A row here
+#: cannot be written without a floor, `_chrome_argvs` cannot read one without applying it,
+#: and `tests/test_frame_tmux_integration.py`'s
+#: `EveryBorderOptionThisTmuxHasIsPinned` measures every floor in it against the binary
+#: it is running on — in both directions, so a floor set too high goes red on the tmux
+#: that has the option and a floor set too low goes red on the tmux that does not.
+#:
+#: `tmuxctl.FLOOR` means "everywhere charter supports", and it is measured rather than
+#: assumed: all four of these answer `show -w` with rc 0 on a real tmux 3.2.
+_CHROME: tuple[tuple[str, str, tuple[int, int]], ...] = (
+    ("pane-border-style", _CHROME_STYLE, tmuxctl.FLOOR),
+    ("pane-active-border-style", _CHROME_STYLE, tmuxctl.FLOOR),
+    ("pane-border-indicators", "off", tmuxctl.BORDER_INDICATORS_FLOOR),
+    ("pane-border-lines", "single", tmuxctl.FLOOR),
+    ("pane-border-status", "off", tmuxctl.FLOOR),
 )
 
 
-def _chrome_argvs(*, socket: str, harness_pane: str,
+def _chrome_values() -> dict[str, str]:
+    """`{option: charter's answer}` for every row of :data:`_CHROME`, floors dropped.
+
+    The one reading of that table that is about WHAT charter pins rather than about which
+    tmuxes get told — `dict(_CHROME)` said once, now that a row is three fields wide, so
+    the callers that only want the two do not each re-spell the unpacking.
+    """
+    return {name: value for name, value, _floor in _CHROME}
+
+
+def _chrome_argvs(*, socket: str, harness_pane: str, v: tuple[int, int] | None,
                   surface: str | None = None) -> list[list[str]]:
     """`set-option -w`: charter's own answer for every option tmux draws a border from.
 
@@ -2084,12 +2112,29 @@ def _chrome_argvs(*, socket: str, harness_pane: str,
     a colour charter chose, so it is not what `NO_COLOR` is about, while a background is
     exactly what it is about. Asked through `chrome.no_colour` so there is one reading of
     the variable (#547), the same way `_surface_argvs` asks.
+
+    ***v* is this tmux's version, and every row of `_CHROME` is filtered through its own
+    floor by it (#716).** REQUIRED rather than defaulted, because a default is the shape
+    the defect had: `pane-border-indicators` does not exist below
+    `tmuxctl.BORDER_INDICATORS_FLOOR`, and a caller that could forget to say which tmux it
+    is talking to is a caller that goes on issuing it there. Both production call sites
+    already hold the answer for `_pane_borders_wanted`, so this asks for nothing new — it
+    only stops the question being skipped.
+
+    ``None`` — charter could not read a version — is taken as `tmuxctl.FLOOR`, and that is
+    the opposite of `_pane_borders_wanted`'s ``None`` for a stated reason rather than by
+    inconsistency. There the unknown answers *False* because the failure below its floor is
+    SILENT and destructive (a `set -p` that writes the window). Here every failure is loud
+    and harmless — `run` reports it and the launch continues — so the useful answer is the
+    supported baseline: pin everything every tmux charter supports has, and leave the one
+    option that arrived after it to a tmux that says so.
     """
     rule = (f"{_CHROME_STYLE},{surface}"
             if surface and not chrome_mod.no_colour() else _CHROME_STYLE)
+    known = v if v is not None else tmuxctl.FLOOR
     return [tmuxctl.server_argv(socket, "set-option", "-w", "-t", harness_pane, name,
                                 rule if value == _CHROME_STYLE else value)
-            for name, value in _CHROME]
+            for name, value, floor in _CHROME if known >= floor]
 
 
 def _pane_borders_wanted(v: tuple[int, int] | None) -> bool:
@@ -2978,8 +3023,12 @@ def _dress_window(socket: str, *, fid: str, harness_pane: str, env: dict | None,
     # reads on the live path — the agreement #610 is about, made by construction rather
     # than by two call sites matching.
     pane_borders = _pane_borders_wanted(v)
+    # The same *v*, handed on rather than re-read: `_chrome_argvs` drops the rows of
+    # `_CHROME` this tmux has no such option for (#716), and a second `tmux -V` here would
+    # be a second subprocess for one unchanging fact — and one more place for the two
+    # readings to disagree.
     for argv in _chrome_argvs(
-            socket=socket, harness_pane=harness_pane,
+            socket=socket, harness_pane=harness_pane, v=v,
             surface=None if pane_borders else instance.border_bg(config.FRAME, chrome)):
         tmuxctl.run("styling the frame's own rules", argv, env=env)
     # And the three rules AROUND the harness, which above the floor are the harness's own
@@ -4949,7 +4998,13 @@ def cmd_chrome(args) -> int:
     # one `tmux -V`; this path is a keypress that already spawns a process, and it is not
     # a refusal — an unreadable version answers the frame-wide design, which is correct on
     # every tmux (`_pane_borders_wanted`).
-    pane_borders = _pane_borders_wanted(tmuxctl.version())
+    #
+    # Kept in a name rather than passed straight in, because `_chrome_argvs` below needs
+    # the same answer for a different question (#716: which rows of `_CHROME` this tmux has
+    # an option for). Two `version()` calls would be two subprocesses for one unchanging
+    # fact on a path that is a keypress, and two answers that could disagree.
+    v = tmuxctl.version()
+    pane_borders = _pane_borders_wanted(v)
     for slot, pane_id in panes.items():
         # `_PANE_ID_RE` is #475's rule applied to a value that arrived off DISK and is
         # about to be a tmux argv — the same check `_relayout_target` makes of the harness
@@ -4983,7 +5038,7 @@ def cmd_chrome(args) -> int:
     harness = state.harness_pane(fid) or ""
     if _PANE_ID_RE.fullmatch(harness):
         for argv in _chrome_argvs(
-                socket=socket, harness_pane=harness,
+                socket=socket, harness_pane=harness, v=v,
                 surface=None if pane_borders
                 else instance.border_bg(config.FRAME, level)):
             tmuxctl.run("styling the frame's own rules", argv)

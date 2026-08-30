@@ -389,6 +389,13 @@ class Conf(unittest.TestCase):
         self.assertIn("bind -n M-m run-shell", text)
 
 
+#: A tmux old enough to have every option `commands_frame._CHROME` names, so the cases in
+#: `Chrome` below are asked about all of them rather than about whichever subset the
+#: floor field lets through (#716). DERIVED from the table: a sixth option floored higher
+#: than today's five moves this with it instead of quietly leaving those cases short.
+_EVERY_CHROME_OPTION = max(floor for _n, _v, floor in commands_frame._CHROME)
+
+
 class Chrome(unittest.TestCase):
     """The frame's own pane-border settings (#514) — the builder alone; the launch paths
     that issue them are pinned in `Launch` and `LaunchInsideTmux` below, and what tmux
@@ -402,9 +409,16 @@ class Chrome(unittest.TestCase):
     """
 
     def _argvs(self, **kw):
-        """The real builder, with the arguments a launch would hand it."""
+        """The real builder, with the arguments a launch would hand it.
+
+        *v* defaults to a tmux that has every option in the table, because none of these
+        cases is about #716's floor field — they are about sameness and scope, and a
+        subset would let one of them pass by not asking. The floor itself is
+        `tests/test_frame_border_surface.py`'s `AnOptionThisTmuxDoesNotHaveIsNeverIssued`.
+        """
         return commands_frame._chrome_argvs(
-            **{"socket": "charter", "harness_pane": "%7", **kw})
+            **{"socket": "charter", "harness_pane": "%7", "v": _EVERY_CHROME_OPTION,
+               **kw})
 
     def test_both_border_styles_are_given_the_same_answer(self):
         """#514 itself. Setting one and leaving the other is what makes a rule change
@@ -2981,7 +2995,7 @@ class Launch(PersonaIso, unittest.TestCase):
         which a hand-written list here would not notice."""
         fake = _FakeTmux(exit_code=0)
         self.assertEqual(_launch(fake), 0)
-        self.assertEqual(_chrome_values(fake.calls), dict(commands_frame._CHROME))
+        self.assertEqual(_chrome_values(fake.calls), commands_frame._chrome_values())
         for cmd in [c for c in fake.calls if _is_chrome(c)]:
             self.assertEqual(cmd[cmd.index("-t") + 1], fake.pane_id, cmd)
             self.assertNotIn("-g", cmd, cmd)
@@ -5097,7 +5111,7 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         answers is the shape that produced a two-coloured rule in the first place."""
         fake = _FakeOperatorTmux(exit_code=0)
         self.assertEqual(_launch_inside(fake), 0)
-        self.assertEqual(_chrome_values(fake.calls), dict(commands_frame._CHROME))
+        self.assertEqual(_chrome_values(fake.calls), commands_frame._chrome_values())
 
     def test_the_chrome_here_reaches_charters_own_window_and_no_other(self):
         """The boundary, stated where it costs something — and it is the TARGET rather
