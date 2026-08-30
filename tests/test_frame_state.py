@@ -394,6 +394,29 @@ class AClaimSurvivesASiblingsReap(PersonaIso, unittest.TestCase):
         self.assertEqual(state.reap(set(), server="charter"), [])   # must not raise
         self.assertTrue(d.is_dir())
 
+    def test_the_claim_is_a_plain_file_inside_the_directory_it_claimed(self):
+        """Both halves of where the marker goes, because both are load-bearing.
+
+        INSIDE the claimed directory, so `reap` removing that directory removes the marker
+        with it and there is nothing outside the frame root to keep in step — the property
+        that makes this "no new file to keep in sync" rather than one more thing to reap.
+
+        And the FIRST thing in it, which is what makes the empty-directory rule and the
+        pid rule meet with no gap between them: a frame directory holding anything at all
+        is one whose claimer has already said who it is.
+
+        Named plainly beside `server` and `workspace` rather than as a dotfile:
+        everything under a frame's directory is charter's own bookkeeping and none of it
+        hides from `ls`.
+        """
+        chat = state.new_chat_id("api")
+        d = state.frame_dir(chat)
+        self.assertEqual([p.name for p in d.iterdir()], ["launcher"],
+                         "the claim is not the only thing in a just-claimed directory, "
+                         "so `reap`'s empty-directory rule and its pid rule no longer "
+                         "meet")
+        self.assertEqual((d / "launcher").read_text().strip(), str(os.getpid()))
+
     def test_a_launcher_that_has_finished_gives_the_claim_up(self):
         """`state.clear_claim` — the half that keeps this fix from making
         `.charter/frame/` unbounded. The marker is held for the LAUNCH, not for the life
@@ -415,6 +438,10 @@ class AClaimSurvivesASiblingsReap(PersonaIso, unittest.TestCase):
         state.bump("f-1")
         state.clear_claim("f-1")            # no marker to remove
         state.clear_claim("nothing.9")      # no directory at all
+        # And a name `contain.child` refuses to shape into one — `$CHARTER_SESSION_ID` is
+        # a value from the environment, so "there is no directory" and "there could not
+        # be one" are two different answers and both have to be no-ops here.
+        state.clear_claim("../../etc")
         self.assertFalse(state.frame_dir("nothing.9").exists(),
                          "giving up a claim created the directory it was asked about")
         with mock.patch("charter.frame.state.Path.unlink",
