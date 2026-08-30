@@ -6389,6 +6389,16 @@ def _close_open_overlays(socket: str, *, harness: str) -> None:
     listing that comes back empty, unparseable, or naming panes that have since gone costs
     one no-op and the palette opens regardless.
 
+    **The palette this kills does not fight back**, and that is measured rather than
+    assumed. `_draw_palette` hands the pane back from a ``finally``, so the obvious worry
+    is a swept process running `_close_palette` on its way out: that would `select-pane`
+    the harness — pulling focus off the palette being opened — and re-arm the hatch with
+    NO overlay, leaving `F12` unable to close the new one. It cannot happen. `kill-pane`
+    terminates the pane's program without Python cleanup; measured directly, on a pane
+    running a process whose ``finally`` writes a file, the file is never written. The
+    ``finally`` runs when the palette CHOOSES to close, which is the only time anything
+    needs it to.
+
     **Every overlay on the window, not only the last one.** The reachable route is a
     double `F2`, but it is not the only one — any second open against a live palette does
     it, including a `charter frame-palette` typed in the harness and a second client

@@ -27,7 +27,7 @@ import re
 import unittest
 
 from charter import commands_frame, config, tui
-from charter.frame import layout, overlay
+from charter.frame import layout, overlay, tmuxctl
 
 #: The two DEC private modes the overlay turns on and has to turn back off, spelled out
 #: here rather than reached for through `overlay.ENTER`/`overlay.LEAVE`. A constant
@@ -947,7 +947,27 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
         self.assertIn("split-window", argv)
         self.assertEqual(argv[argv.index("-t") + 1], "%0")
         self.assertEqual(argv[argv.index("-F") + 1], "#{pane_id}")
-        self.assertEqual(argv[argv.index("--") + 1:], ["python3", "-m", "x"])
+        # Up to the command SEPARATOR, not to the end: the mark rides on this same
+        # invocation as a second command (below), and everything after `--` and before it
+        # is the pane's program.
+        cmd = argv[argv.index("--") + 1:]
+        self.assertEqual(cmd[:cmd.index(tmuxctl.SEPARATOR)], ["python3", "-m", "x"])
+
+    def test_the_pane_is_marked_in_the_SAME_invocation_that_makes_it(self):
+        """#739. A pane id is not knowable until `split-window` has answered with one, so
+        a targeted mark is necessarily a second round trip — and the gap between the two
+        is exactly the instant a second `F2` arrives in, finding an overlay pane that is
+        open and not yet findable. One command list closes it: tmux runs the whole list
+        server-side and the split makes the new pane current for the rest of it, so an
+        untargeted `set-option -p` lands on the pane just made (measured on 3.7c and on
+        the 3.2 floor).
+        """
+        argv = overlay.open_argv("charter", harness="%0", command=["true"])
+        after = argv[argv.index(tmuxctl.SEPARATOR) + 1:]
+        self.assertEqual(after, overlay.mark_argv("charter")[3:])
+        self.assertNotIn("-t", after,
+                         "a targeted mark cannot be chained onto the split that makes "
+                         "the pane it would target")
 
     def test_a_target_that_is_not_a_pane_id_opens_nothing(self):
         self.assertIsNone(overlay.open_argv("charter", harness="0", command=["true"]))

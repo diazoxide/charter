@@ -80,6 +80,10 @@ _F2 = b"\x1bOQ"
 #: source file is a byte the next reader cannot see.
 _ESCAPE = b"\x1b"
 
+#: What `overlay.HATCH_KEY` is on the wire. F12 in the same xterm form :data:`_F2` uses —
+#: `\x1b[24~` — spelled beside it so a reader can see the two are the same kind of thing.
+_HATCH = b"\x1b[24~"
+
 _TERM_CANDIDATES = tuple(dict.fromkeys(
     ([os.environ["TERM"]] if os.environ.get("TERM", "dumb") != "dumb" else [])
     + ["xterm-256color", "screen", "vt100"]))
@@ -526,6 +530,27 @@ class ThereIsNeverMoreThanOnePalettePane(_ThePalette, unittest.TestCase):
             os.write(fd, _F2)
             pane = self._await_drawn(replacing=pane)
         self.assertEqual(self._overlays(), [pane])
+
+    def test_the_escape_hatch_still_closes_the_palette_a_reopen_drew(self):
+        """The hatch is armed per palette, and a reopen must leave the LIVE one armed.
+
+        The worry is a swept process running `_close_palette` from its `finally` on the
+        way out: that re-arms the hatch with no overlay, and `F12` would then select the
+        harness and leave the new palette standing — the very leak this is fixing, one
+        keypress later. It cannot happen, because `kill-pane` terminates a Python process
+        without running its `finally` (measured directly, against a process whose
+        `finally` writes a file: the file is never written). This is that fact asserted
+        through the surface rather than restated as a comment.
+        """
+        fd, first = self._open()
+        os.write(fd, _F2)
+        self._await_drawn(replacing=first)
+        os.write(fd, _HATCH)
+        self.assertTrue(_await(lambda: self._overlays() == []),
+                        f"the hatch left the reopened palette standing: {self._panes()}")
+        self.assertTrue(
+            _await(lambda: self._panes().get(self.harness) == "1"),
+            f"the hatch did not put the operator back in the harness: {self._panes()}")
 
     def test_the_sweep_cannot_reach_another_chats_palette(self):
         """Scoped to the frame's own window, and this is the case that says so.
