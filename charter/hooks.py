@@ -3572,6 +3572,32 @@ _FORGE_PROSE = {
     ("glab", "snippet", "create"),
 }
 
+# **What the deletion sweep says about the scanner below, written down so it is not
+# re-derived.** Twenty-five mutations of these functions survived their first sweep. Nine
+# were real gaps in the tests and are now pinned; two were real defects in the code and are
+# fixed (the empty QUOTED heredoc delimiter, and the flag filter in `_forge_prose_command`
+# that paired two flag VALUES into a noun and a verb). The six that still survive are
+# **equivalent mutants**, and each was checked rather than assumed — every string up to
+# length six over `" ' ` $ ( \ < - B x` and a newline, ~2M of them, comparing the mutant's
+# verdict against this one:
+#
+#   * the loop bounds in `_ansi_c_end` and `_heredoc_bodies` (`i < n`, `end < 0`) — shifting
+#     either changes no verdict, because the characters they would skip cannot open a
+#     substitution;
+#   * `c == "$"` in front of `.startswith("$(", i)`, in two places, and `and pending` in
+#     front of the heredoc-body call. These are PREFILTERS: what follows them decides, and
+#     they only avoid the call. Not deleted, and measured rather than asserted — the
+#     double-quote one is worth 66 µs against 94 µs on a body carrying 300 bare `$`
+#     characters, which is the input that makes it matter. The other two measured as noise
+#     and are kept for symmetry with it;
+#   * the `if not any(...)` fast path in `_forge_substitution_hit` — 0.28 µs against 4.45 µs
+#     on an ordinary command, on a per-Bash-call hot path. Sixteen times, for a line whose
+#     deletion changes no answer.
+#
+# A survivor that is genuinely equivalent is dead code by this project's rule. These are the
+# exception the rule allows for: each buys time rather than correctness, and the ones that
+# buy nothing measurable are two lines kept beside a third that buys a third of the runtime.
+
 #: The two spellings of command substitution. `$(` covers `$((` arithmetic too, which is
 #: not a substitution — a false DENY on `--body "$((1+2))"`, and the direction to be wrong
 #: in. Separating them would mean deciding `$((x) )` from `$( (x) )`, and a parser that
@@ -3700,7 +3726,13 @@ def _heredoc_header(text: str, i: int) -> tuple[str, bool, bool, int] | None:
             parts.append(c)
             j += 1
     delim = "".join(parts)
-    return (delim, not quoted, strip, j) if delim else None
+    # `delim or quoted` — an EMPTY delimiter is a real heredoc when it was written as one.
+    # `<<""` and `<<''` name the empty string, do not expand, and end at the first empty
+    # line; `<<` with no word after it is not a heredoc at all. Testing `delim` alone
+    # collapsed the two, so the quoted-empty form was not tracked and its body was read as
+    # command text — charter refused `<<""` bodies that bash does not expand. Found by the
+    # deletion sweep and settled against bash, which runs neither.
+    return (delim, not quoted, strip, j) if (delim or quoted) else None
 
 
 def _heredoc_bodies(text: str, i: int,
@@ -3810,18 +3842,27 @@ def _live_substitution(cmd: str) -> str | None:
 def _forge_prose_command(cmd: str) -> str | None:
     """``"gh issue create"`` — the prose-publishing forge command in *cmd*, or ``None``.
 
-    Adjacent PAIRS of non-flag words rather than the first two, which is where A4's own
-    reader stops: `gh --repo o/r issue create` puts `o/r` in front, and a guard that read
-    `words[0], words[1]` would see `("gh", "o/r", "issue")` and allow. shlex is what keeps
-    that honest in the other direction — a quoted `--search "pr create"` stays ONE word and
-    can never supply the pair.
+    Adjacent PAIRS rather than the first two words, which is where A4's own reader stops:
+    `gh --repo o/r issue create` puts `o/r` in front, and a guard that read `words[0],
+    words[1]` would see `("gh", "o/r", "issue")` and allow. shlex is what keeps that honest
+    in the other direction — a quoted `--search "pr create"` stays ONE word and can never
+    supply the pair.
+
+    **Pairs over every token, flags included.** Dropping `-…` tokens first was the obvious
+    spelling and it was strictly worse: removing a flag JOINS the words it stood between, so
+    `gh issue list --label issue --state create` paired two flag VALUES into
+    `("gh", "issue", "create")` and refused a command that publishes nothing. It bought
+    nothing back — a global flag's value sits in front of the noun rather than between the
+    noun and the verb, so `gh --repo o/r issue create` still pairs correctly without the
+    filter. The deletion sweep found it: the filter survived deletion because no test
+    distinguished the two, and looking for the test showed the mutant was the better code.
     """
     for _toks in _segment_argv(cmd):
         prog, _env, argv = _split_env(_toks)
         base = os.path.basename(prog).lower()
         if base not in ("gh", "glab"):
             continue
-        words = [a for a in argv[1:] if not a.startswith("-")]
+        words = argv[1:]
         for noun, verb in zip(words, words[1:]):
             if (base, noun, verb) in _FORGE_PROSE:
                 return f"{base} {noun} {verb}"

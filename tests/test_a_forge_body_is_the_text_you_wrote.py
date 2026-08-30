@@ -108,6 +108,14 @@ class LiveSubstitution(unittest.TestCase):
         "cat <<EO'F'\na `@S@` b\nEOF",
         "cat <<-'EOF'\n\ta `@S@` b\n\tEOF",
         'cat <<-EOF\n\ta `@S@` b\n\tEOF',
+        # an expanding body whose only substitution is the modern spelling
+        'cat <<EOF\nbuilt at $(@S@) today\nEOF',
+        # a backslash-quoted delimiter must still terminate its body at the right line
+        'cat <<\\EOF\nplain text\nEOF\nprintf %s "`@S@`"',
+        # a quoted delimiter ends at its own closing quote, not the line's last one
+        "cat <<'BODY'\nnotes\nBODY\nprintf %s \"`@S@`\" 'tail'",
+        # an empty QUOTED delimiter is a heredoc that ends at the first blank line
+        'cat <<""\na `@S@` b\n\n',
         # two on one line: the bodies follow in the order the headers did
         "cat <<'A' <<B\nx `@N@` x\nA\ny `@S@` y\nB",
         "cat <<A <<'B'\nx `@S@` x\nA\ny `@N@` y\nB",
@@ -296,6 +304,47 @@ class TheRuleItSteersToward(ForgeGuardCase):
     def test_a_backslash_escaped_span_in_an_expanding_body_is_allowed(self) -> None:
         self.allowed("gh issue create --body-file - <<BODY\nsee \\`id -un\\`\nBODY")
 
+    def test_a_dollar_substitution_alone_in_an_expanding_body_is_caught(self) -> None:
+        """The modern spelling with **no backtick anywhere**, which is the point.
+
+        The deletion sweep found this: every other heredoc case here carries a backtick, so
+        the backtick arm answered first and the `$(` arm of the body scanner was never the
+        thing under test. Disabling it left an expanding heredoc whose body runs `$(…)`
+        allowed — confirmed against bash, which really does execute it. A case that two
+        arms can both satisfy tests neither.
+        """
+        self.deny_reason("gh issue create --body-file - <<BODY\nbuilt at $(date) today\nBODY")
+
+    def test_a_backslash_quoted_delimiter_still_ends_its_own_body(self) -> None:
+        """`<<\\EOF` does not expand, so nothing in its body is scanned — but the scanner
+        still has to know **where that body stops**, or everything after it is swallowed as
+        more inert body.
+
+        Also from the sweep. The delimiter of `<<\\EOF` is `EOF`: the backslash quotes the
+        heredoc and the character it escapes is still part of the name. Losing that
+        character leaves the scanner hunting a terminator that never arrives, so it consumes
+        the rest of the command — and the live substitution after the heredoc was allowed.
+        Every other backslash-delimiter case here ends at the end of the string, where a
+        swallowed remainder is empty and the bug is invisible.
+        """
+        self.deny_reason("gh issue create --body-file - <<\\EOF\nplain text\nEOF\n"
+                         'echo "`id -un`"')
+
+    def test_a_quoted_delimiter_ends_at_its_OWN_closing_quote(self) -> None:
+        """`<<'BODY'` closes at the next quote, not at the last one on the line.
+
+        The third finding the sweep produced here, and the subtlest: the delimiter scan
+        reaches for the closing quote, and reaching for the *wrong* one swallows everything
+        between into the delimiter — including a live substitution in a later command, which
+        is then never scanned at all. Every other quoted-delimiter case in this file has no
+        second quote anywhere after it, so the two spellings agree and the bug is invisible.
+
+        The shape below is ordinary: file an issue from a heredoc, then comment on a request
+        with a substitution in it and a quoted `--repo`. bash runs that substitution.
+        """
+        self.deny_reason("gh issue create --body-file - <<'BODY'\nnotes\nBODY\n"
+                         "gh pr comment 1 --body \"`id -un`\" --repo 'o/r'")
+
 
 class WhatItDoesNotClaim(ForgeGuardCase):
     """The stated limits, pinned so a later edit cannot quietly widen the claim.
@@ -386,6 +435,8 @@ class AMalformedCommandStillGetsAnAnswer(ForgeGuardCase):
         "gh issue create --body \"trailing escape \\",
         'gh issue create --body "$',
         'gh issue create --body "x`',
+        "gh issue create --body $'abc",
+        'gh issue create --body-file - <<<<"`id -un`"',
     )
 
     def test_no_input_makes_the_scanner_raise(self) -> None:
@@ -405,10 +456,115 @@ class AMalformedCommandStillGetsAnAnswer(ForgeGuardCase):
         off-by-one is what decides a body whose backtick happens to land last."""
         self.deny_reason('gh issue create --body "x`')
 
+    def test_an_empty_quoted_delimiter_is_still_a_heredoc(self) -> None:
+        """`<<""` names the empty string: it does not expand, and it ends at the first
+        empty line. `<<` with no word after it is not a heredoc at all.
+
+        Collapsing those two made the quoted-empty form untracked, so its body was read as
+        command text and charter refused a body bash does not expand — a false REFUSAL
+        rather than a miss, which is why nothing caught it until the sweep did. Settled
+        against bash, which runs neither of these."""
+        self.assertIsNone(hooks._live_substitution('cat <<""\n`id -un`\n\n'))
+        # And the other half: `<<` with no word is not a heredoc, so what follows is
+        # COMMAND text and its quoting applies. Tracking it as an empty-delimiter heredoc
+        # instead would scan those lines under heredoc rules, where a single quote protects
+        # nothing — refusing a backtick the shell keeps literal.
+        self.assertIsNone(hooks._live_substitution("cat <<\n'`id -un`'"))
+        self.assertEqual(hooks._live_substitution("cat <<\nx\n`id -un`"), "`")
+
+    def test_the_last_line_of_an_unterminated_body_is_not_truncated(self) -> None:
+        """A heredoc body's final line has no trailing newline to stop at, and reading it
+        as \"up to the newline\" silently drops its last character.
+
+        Every input that distinguishes this is one bash rejects — for anything it will
+        actually run, the final line holds a complete substitution and losing one character
+        still leaves the opener visible. It is asserted anyway, on the same footing as the
+        here-string case: the cost is a refusal of something that would not have run."""
+        self.assertEqual(hooks._live_substitution("cat <<BODY\n`"), "`")
+
+    def test_a_here_string_is_never_read_as_a_heredoc_header(self) -> None:
+        """`<<<` is stepped over whole. Reading it one character at a time leaves a `<<`
+        whose "delimiter" is the quoted word, which files a live substitution away as an
+        inert heredoc body — the fail-open a real bash caught during review.
+
+        Bash rejects this input outright (`<<<<` is a syntax error) and it is asserted
+        anyway, for the reason `_leak_reason` gives about unparseable commands: a false
+        refusal of something that would not have run is survivable, and the other direction
+        is not. It is the only input that distinguishes the branch, which is worth knowing
+        rather than discovering when somebody deletes it."""
+        self.assertEqual(hooks._live_substitution('cat <<<<"`id -un`"'), "`")
+
     def test_an_unterminated_single_quote_leaves_the_rest_literal(self) -> None:
         """The opposite end of the same property: what a shell would refuse to run, this
         reads as literal rather than guessing a second meaning for it."""
         self.assertIsNone(hooks._live_substitution("gh issue create --body 'x`"))
+
+
+class TheArmsThatOtherArmsWereAnswering(ForgeGuardCase):
+    """Cases where a second, easier arm had been answering for the one under test.
+
+    Every one of these came from the deletion sweep rather than from review, and they share
+    a shape with the oracle defect this module's docstring names: **a case that two arms can
+    both satisfy tests neither.** Each test below is written so exactly one arm can answer
+    it — the other spelling removed, the other position moved, or the other quoting dropped.
+    """
+
+    def test_an_unquoted_substitution_is_caught(self) -> None:
+        """`--body $(cat …)` with no quotes at all.
+
+        Every other `$(` case in this file sits inside double quotes, so they were answered
+        by the double-quoted scanner and the unquoted arm of the main loop was never the
+        thing under test. Removing that arm left this allowed — and bash runs it."""
+        self.deny_reason("gh issue create --title t --body $(cat /tmp/b.md)")
+
+    def test_a_bare_dollar_in_an_expanding_body_is_not_a_substitution(self) -> None:
+        """`$` alone is not `$(`, and an expanding heredoc full of prices or variables is
+        prose.
+
+        Asserted on the scanner, and that is not a style choice: routed through the hook
+        this command never reaches the code under test, because it holds no backtick and
+        no `$(` and the hot-path filter answers first. It would pass on a guard with no
+        heredoc scanner at all — an assertion sitting on the path that already satisfies
+        it, which is the failure this file keeps finding."""
+        self.assertIsNone(hooks._live_substitution(
+            "cat <<BODY\nset $HOME first\nBODY"))
+
+    def test_a_single_quoted_run_ends_at_its_own_closing_quote(self) -> None:
+        """The single-quote scan reaches for the *next* quote, not the line's last one.
+
+        Reaching for the last one swallows everything between two quoted arguments — here a
+        live substitution in the `--title` between `--body 'plain'` and `--repo 'o/r'`,
+        which bash really runs."""
+        self.deny_reason("gh issue create --body 'plain' --title \"`id -un`\" --repo 'o/r'")
+
+    def test_a_tab_stripped_heredoc_still_ends_where_it_says(self) -> None:
+        """`<<-'BODY'` strips leading tabs from the terminator, so a tab-indented `BODY`
+        closes it. Not stripping means it never closes, the rest of the command is eaten as
+        inert body, and the substitution in the command after it is never seen."""
+        self.deny_reason("gh issue create --body-file - <<-'BODY'\n\tnotes\n\tBODY\n"
+                         "gh pr comment 1 --body \"`id -un`\"")
+
+    def test_a_plain_heredoc_does_not_strip_tabs_from_its_terminator(self) -> None:
+        """The other direction, and the one that costs a false refusal. `<<'BODY'` without
+        the dash does **not** strip, so a tab-indented `BODY` inside the body is body text.
+        Stripping anyway ends the heredoc early and reads the rest of its own body as
+        commands — including a `$(…)` that is inert where it actually sits."""
+        self.allowed("gh issue create --body-file - <<'BODY'\n\tBODY\n$(id -un)\nBODY")
+
+    def test_a_flag_value_cannot_supply_the_noun_and_the_verb(self) -> None:
+        """Flag values are words too, and two of them can read as `issue create`.
+
+        The scan used to drop `-…` tokens before pairing, which joined words a flag stood
+        between — and made `--label issue --state create` a match on a command that
+        publishes nothing. Pairing over every token instead keeps the real cases (a global
+        flag's value still sits in front of the noun) and drops that false one."""
+        # A LIVE substitution must be present, or nothing reaches the pairing at all: the
+        # hot-path filter answers first on a command with none, and `_forge_prose_command`
+        # is only consulted once a live one has been found. An inert backtick here made the
+        # case vacuous in a second way, which is the same defect one layer along.
+        self.allowed('gh issue list --label issue --state create --jq "$(cat /tmp/f)"')
+        self.deny_reason('gh --repo o/r issue create --body "`id -un`"')
+
 
 
 class TheFalsePositivesValueMatchingWouldHaveHad(ForgeGuardCase):
