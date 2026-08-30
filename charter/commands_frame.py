@@ -497,6 +497,48 @@ _PANEL_OPTION = "@charter_panel"
 #: palette's, and the operator's own.
 _PANEL_MARK = "1"
 
+#: WHICH component a panel draws, said to tmux beside :data:`_PANEL_OPTION` — and the two
+#: are separate options rather than one because they answer two different questions, only
+#: one of which a `bind` line reads.
+#:
+#: `_PANEL_OPTION` is a truth-value: `conf_text`'s `MouseDown1Pane` bind format-expands it
+#: and tmux decides where a click goes on whether it reads true. Folding the component's
+#: id into that value would have worked by accident — every id `component.usable_id`
+#: admits is a true format value — right up to the first id spelled `0`, which that
+#: alphabet does not forbid and which would have made one component's panel the only one
+#: in the frame that steals the keyboard. Two options, so naming a component cannot change
+#: the routing answer.
+#:
+#: **This is what makes #714's reconciliation possible at all.** `state.record_panes`
+#: cannot be the authority on which pane draws which component, because a wrong record is
+#: that defect's failure mode: the file is rewritten whole on every re-layout, so the
+#: moment a second pane is split for a component the first one's id is gone from it and no
+#: reader that goes through `state.panes` can see that pane again — `_drop_panels`
+#: included. tmux still can. A pane carrying this option answers "which component am I"
+#: out of the SERVER, which is the one place a wrong file does not reach.
+#:
+#: The value is held to `component.usable_id` on the way out (:func:`_panel_slot_argv`)
+#: and again on the way back (:func:`_window_panels`) — the same alphabet
+#: `frame/component.py` already holds every id that reaches a `bind` line to. Measured on
+#: tmux 3.7c and at `tmuxctl.FLOOR`: a user option's VALUE is not re-expanded when a
+#: format reads it — ``set-option -p @charter_panel_slot '#{pane_id}'`` comes back out of
+#: ``list-panes -F '#{@charter_panel_slot}'`` as those literal ten characters — so the
+#: guard is about what charter compares against `want` and what it will kill a pane over,
+#: not about tmux's parser.
+_PANEL_SLOT_OPTION = "@charter_panel_slot"
+
+#: The one `list-panes` format :func:`_window_panels` asks the window with, held beside the
+#: two option names it is built from so the reader and the writers cannot drift apart.
+#:
+#: A single space between the three, and that is safe rather than lucky: `_PANE_ID_RE`'s
+#: `%N` and `component.usable_id`'s alphabet both exclude it, so the only field that could
+#: ever contain one is a slot value charter did not write — which fails `usable_id` on the
+#: way back in and is discarded there. An unset option expands to the empty string on both
+#: tmux 3.7c and `tmuxctl.FLOOR` (measured), so the line for an unmarked pane is `%0` and
+#: two empty fields, and `str.split(" ")` — never bare `.split()`, which collapses them —
+#: is what keeps that three fields rather than one.
+_PANEL_LIST_FORMAT = f"#{{pane_id}} #{{{_PANEL_OPTION}}} #{{{_PANEL_SLOT_OPTION}}}"
+
 
 def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
               toggles: dict | None = None) -> str:
@@ -2369,6 +2411,35 @@ def _panel_mark_argv(*, socket: str, pane_id: str) -> list[str]:
                                _PANEL_OPTION, _PANEL_MARK)
 
 
+def _panel_slot_argv(*, socket: str, pane_id: str, slot: str) -> list[str] | None:
+    """`set-option -p`: say WHICH component this panel draws — or ``None`` for a name
+    charter will not put on a pane.
+
+    The write half of :data:`_PANEL_SLOT_OPTION`, issued from `_split_panels`' funnel one
+    line after :func:`_panel_mark_argv` and for the same funnel reason: a panel that
+    reached the screen without it is a panel `_reconcile_panels` cannot name, and a panel
+    charter cannot name is one it will never kill (see there).
+
+    **Unlike :func:`_panel_mark_argv` this one CAN decline, because its value is not
+    charter's own constant.** A slot name arrives from `[[frame.component]]` — a committed
+    file — by way of a density level's list or `_drawable_slots`, and every guard between
+    here and there is a guard on a different question (`frame_slots.drawable` asks whether
+    anything can DRAW it). `component.usable_id` is the alphabet `frame/component.py`
+    holds an id to before it may reach a `bind` line, asked here rather than re-spelled,
+    so a name charter would not let near tmux's parser does not get onto a pane either.
+
+    Declining is not silent about its consequence: the pane is still split, still marked,
+    still drawn and still recorded — it is only unnameable to a later reconciliation,
+    which is exactly the position every pane split by a charter older than #714 is in, and
+    :func:`_reconcile_panels` treats both the same way. That is the safe direction: a pane
+    charter cannot identify is left running, never guessed at and never killed.
+    """
+    if not component.usable_id(slot):
+        return None
+    return tmuxctl.server_argv(socket, "set-option", "-p", "-t", pane_id,
+                               _PANEL_SLOT_OPTION, slot)
+
+
 def _resurface_argvs(*, socket: str, pane_id: str, chrome, bg=None,
                      pane_borders: bool = False) -> list[list[str]]:
     """:func:`_surface_argvs` for a pane that is ALREADY DRAWN — with the unsets.
@@ -2882,6 +2953,192 @@ def _window_settled(socket: str, harness_pane: str,
     return _window_still(socket, harness_pane, measured)
 
 
+def _window_panels(socket: str, harness_pane: str) -> dict[str, str | None] | None:
+    """What panes *harness_pane*'s WINDOW actually has, and which component each of
+    charter's own draws — **asked of tmux, never of `state.panes`** (#714).
+
+    ``{pane id: mark}`` in tmux's own order, with three distinguishable answers per pane
+    and a fourth for the whole window:
+
+    * ``None`` — this pane does not carry :data:`_PANEL_OPTION`. It is the harness's, the
+      palette overlay's (`frame/overlay.py` splits one and never marks it), or one the
+      operator split themselves. **Not charter's to kill**, and that is the single
+      discriminator constraint 1 of #714 rests on.
+    * ``""`` — a panel charter split, by a charter that did not yet write
+      :data:`_PANEL_SLOT_OPTION` (anything before #714), or one whose slot name
+      :func:`_panel_slot_argv` declined. Charter's pane, and charter cannot say which
+      component it is.
+    * ``"<id>"`` — a panel charter split for that component, said by the pane itself.
+    * ``None`` from the whole function — charter could not ask. `list-panes` exited
+      non-zero (a harness pane that has gone), or answered something that is not this
+      window's pane list. Callers fall back to the record, which is exactly the behaviour
+      that shipped before this function existed.
+
+    **The window, and only the window.** `list-panes -t %N` resolves a pane target to its
+    containing window on tmux 3.7c and at `tmuxctl.FLOOR` alike — measured by adding a
+    second window to the session and re-reading, which returned the same three lines — so
+    a frame with several chats reconciles one chat's window per call and cannot reach
+    another's. That scoping is the same one `_install_resize_hook` relies on, and it is
+    what makes this safe to run inside an operator's own tmux at all.
+
+    **The harness pane is the proof that the answer is real.** tmux lists the window
+    containing the target, so the target is always in its own answer; a reply that does
+    not contain it is not this window's pane list, whatever its exit code said. That is
+    not belt and braces over the return code — it is what tells a truthful empty window
+    (impossible) from a stub, a truncated read, or a `tmuxctl.run` that answered something
+    else, and it is what makes the whole reconciliation degrade to "charter cannot tell"
+    rather than to "charter's window has no panes", which would be a licence to split
+    duplicates and a licence to kill.
+
+    **The mark is compared against the constant, not read as a tmux truth-value, and the
+    asymmetry with `conf_text`'s bind is deliberate.** That bind is generous — `2`, `on`
+    and even `off` all read TRUE (see :data:`_PANEL_MARK`) — because being wrong there
+    costs a click going to the wrong pane. Being wrong here costs a pane. `_PANEL_MARK` is
+    charter's own literal, written by exactly one function, so a pane carrying anything
+    else is a pane charter did not write and the safe answer is that it is not charter's.
+
+    `report=False`: a frame whose harness pane has gone is a frame this cannot be asked
+    about, and both callers are on paths (`cmd_resize`'s hook child, a `run-shell`
+    keypress) whose only remaining screen is the agent's own.
+    """
+    p = tmuxctl.run("asking which panes this frame's window already has",
+                    tmuxctl.server_argv(socket, "list-panes", "-t", harness_pane,
+                                        "-F", _PANEL_LIST_FORMAT),
+                    report=False)
+    if p.returncode != 0:
+        return None
+    found: dict[str, str | None] = {}
+    for line in p.stdout.splitlines():
+        # Exactly three, split on the single space the format joins them with — see
+        # :data:`_PANEL_LIST_FORMAT` for why that is a property of the two alphabets
+        # rather than an assumption about the values.
+        fields = line.split(" ")
+        if len(fields) != 3:
+            continue
+        pane_id, mark, slot = fields
+        # #475's rule on the way IN from tmux's stdout, the same way `_split_panels`
+        # applies it to `split-window`'s: these ids become `kill-pane -t` arguments below.
+        if not _PANE_ID_RE.fullmatch(pane_id):
+            continue
+        if mark != _PANEL_MARK:
+            found[pane_id] = None
+            continue
+        found[pane_id] = slot if component.usable_id(slot) else ""
+    if harness_pane not in found:
+        return None
+    return found
+
+
+def _reconcile_panels(socket: str, *, harness_pane: str, want: list[str],
+                      panels: dict[str, str]) -> dict[str, str]:
+    """Make the panes this window HAS agree with the components *want* names, and answer
+    with the ``{slot: pane id}`` that survived. **The whole of #714.**
+
+    Two directions, one walk, and they were two different bugs with one cause:
+
+    * a component `want` names that already has a pane nobody recorded is **adopted**,
+      instead of getting a second pane split for it. Six panel panes where there should
+      have been two, each holding a ~24 MB `charter panel` process and each drawing
+      correct content, is what the other answer looked like on a real frame;
+    * a component `want` no longer names loses its pane, **whether or not the record
+      still points at it**. That direction is how the first orphans were made: a
+      `charter.toml` edited twice in a session left `state.panes` naming only the newest
+      pane per component, so the previous one was already unreachable to the kill loop
+      that ran here, to `_drop_panels`, and to every other reader of `state.panes`.
+
+    **Why the record cannot be the authority, stated once.** `state.record_panes` writes
+    the map whole on every re-layout. Splitting a second pane for a component therefore
+    *deletes* the first one's id — not corrupts it, deletes it — and after that no reader
+    that goes through `state.panes` can see the pane at all. A reconciliation built on the
+    record would be built on the thing that is wrong. So the window is read
+    (:func:`_window_panels`) and the record is demoted to what it is good for: naming
+    panes split by a charter that predates :data:`_PANEL_SLOT_OPTION`, and choosing WHICH
+    of several panes for one component is the one to keep.
+
+    **What may be killed, as a rule rather than a list.** A pane is killed only if charter
+    itself said so — either the pane carries :data:`_PANEL_SLOT_OPTION` naming a component
+    (tmux's word), or `state.panes` names it for a slot (charter's own record of a
+    `split-window` it ran). Everything else is left running: the harness pane, the palette
+    overlay, a pane the operator split, and — the case worth naming — a pane carrying
+    :data:`_PANEL_OPTION` but no component id, which is every panel of a frame launched by
+    a charter older than this one and not otherwise recorded. Charter can see that such a
+    pane is its own and cannot see which component it is; killing it would be a positional
+    guess on a window whose panes have moved, which is the guess that kills the wrong
+    pane. It is left alone, and one re-layout later every pane charter splits carries an
+    id, so the frame heals forward rather than being repaired by guesswork.
+
+    **The record still chooses, and that is why it is walked first.** Where a component
+    has both a recorded pane and unrecorded ones, the recorded one is the survivor: it is
+    the one the resize hook, the respawn hooks and `layout.repos_cols`' ordering already
+    agree about, so keeping it makes the reconciliation a no-op for a healthy frame —
+    `keep` comes out in exactly the order and with exactly the contents the loop this
+    replaced produced. A recorded id tmux does not list is dropped instead of kept, so a
+    pane that has gone gets its component re-split rather than leaving a hole nothing
+    fills; that is only ever done when the window could actually be read.
+
+    Adopted panes are not re-armed for respawn. A pane split for component `x` was armed
+    for `x` at its creation (`_arm_panel_respawn`) and a re-layout does not change which
+    component it draws, so the hook it carries is already the right one; re-arming would
+    be a second writer of a fact that has not changed.
+    """
+    live = _window_panels(socket, harness_pane)
+    keep: dict[str, str] = {}
+    doomed: list[tuple[str, str]] = []
+    # Which pane ids the record spoke for at all — the set the window walk below defers
+    # to, so one pane cannot be decided twice.
+    recorded: set[str] = set()
+    for slot, pane_id in panels.items():
+        # #475, on the value that is about to become a `kill-pane -t` argument. `panels`
+        # is `state.panes(fid)`, JSON on disk, so a truncated write or a hand edit reaches
+        # here: a `%1;kill-server` in that file armed `kill-server` on every window resize
+        # for the life of a window once already.
+        if not _PANE_ID_RE.fullmatch(pane_id):
+            continue
+        # The harness pane is the one pane `state.record_panes` deliberately never holds
+        # (see its docstring), so a record naming it is a record charter did not write —
+        # and this loop's other branch would `kill-pane` it, taking the agent's own
+        # rectangle down along with the panel the operator was dropping.
+        if pane_id == harness_pane:
+            continue
+        recorded.add(pane_id)
+        if live is not None and pane_id not in live:
+            # The record points at a pane this window does not have. Neither kept (there
+            # is nothing to keep) nor killed (there is nothing to kill) — dropping it is
+            # what puts the component back in `_relayout`'s `missing` list.
+            continue
+        # No `and slot not in keep` here, unlike the window walk below: `panels` is a
+        # dict, so a slot cannot arrive twice and a second check would be one no input
+        # could ever reach.
+        if slot in want:
+            keep[slot] = pane_id
+            continue
+        doomed.append((slot, pane_id))
+    for pane_id, mark in (live or {}).items():
+        if pane_id in recorded:
+            # Already decided by the record, above, which is where a component with both
+            # a recorded pane and unrecorded ones picks its survivor.
+            continue
+        if not mark:
+            # `None` — not charter's pane at all — and `""` — charter's, but from a
+            # charter that could not say which component. One outcome for two facts, and
+            # it is the same outcome for the same reason: charter will not kill a pane it
+            # cannot name.
+            continue
+        if mark in want and mark not in keep:
+            # The adoption. Without it this is the split that made the duplicates.
+            keep[mark] = pane_id
+        else:
+            doomed.append((mark, pane_id))
+    for slot, pane_id in doomed:
+        # Disarm before killing, always: `kill-pane` on an armed panel fires its own
+        # `pane-died` hook, and `cmd_respawn` brings back the panel the operator just
+        # dropped, one respawn life poorer. See :func:`_disarm_panel_respawn`.
+        _disarm_panel_respawn(socket, pane_id=pane_id)
+        tmuxctl.run(f"closing the {slot} panel",
+                    tmuxctl.server_argv(socket, "kill-pane", "-t", pane_id))
+    return keep
+
+
 def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
                  env: dict | None, v: tuple[int, int],
                  pane_env: dict[str, str] | None = None,
@@ -2900,14 +3157,40 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     the checkout instead of the install, which is how both panels once came up reading
     `Pane is dead (status 2)`. Nothing about that is specific to charter's own server;
     inside an operator's tmux the cwd is the same cwd, so the hole is the same hole.
+
+    **The reconciliation runs here as well as in `_relayout`, and #697's `_dress_window`
+    is the precedent rather than a caution** (:func:`_reconcile_panels`). On both launch
+    paths this window was created by the launch two dozen lines above — `new-session` on
+    charter's own server, `new-window` inside an operator's — so it holds the harness pane
+    and nothing else, and the reconciliation correctly finds nothing to adopt and nothing
+    to kill. That is precisely the shape #686 cost a release: the window options were
+    right at launch and issued from a branch a re-layout could skip, and "this path
+    happens not to need it" is what made it possible to be wrong on the other one. "One
+    pane per placed component in this window" is a property of `_draw_panels`, not of one
+    of its two callers, so both callers assert it. The cost is one `list-panes` per launch
+    — one round trip, ~5ms against a real tmux 3.7c, beside the several dozen calls a
+    launch already makes.
+
+    **And it is handed NO record, which is the whole difference between the two callers.**
+    A re-layout's `state.panes` describes the frame that is running; a launch's describes
+    whatever held this frame id last. Frame ids are reused — a chat is `<session>.<n>` and
+    a workspace relaunched after its server died gets the same one — so the file in the
+    frame's directory can name panes of a server that no longer exists, and believing it
+    here would mean a launch that split no panel at all and recorded a map of dead ids.
+    Only the window's own answer is admissible at launch, and it is authoritative:
+    `_reconcile_panels` drops a recorded id the window does not have, so even a `panels`
+    passed here would be discarded the moment tmux could be asked — passing ``{}`` is that
+    same conclusion made structural instead of depending on `list-panes` succeeding.
     """
     # The window's own options first, and before any `split-window`: `remain-on-exit` has
     # to be armed before a panel can be born into a window that would throw its corpse
     # away (#408), which is the ordering this call site inherits from where these three
     # used to live (`_dress_window`, #686).
     _dress_window(socket, fid=fid, harness_pane=harness_pane, env=env, v=v)
-    panes = _split_panels(socket, slots=slots, fid=fid, harness_pane=harness_pane,
-                          env=env, pane_env=pane_env, sizes=sizes, v=v)
+    panes = _reconcile_panels(socket, harness_pane=harness_pane, want=slots, panels={})
+    panes.update(_split_panels(socket, slots=[s for s in slots if s not in panes],
+                               fid=fid, harness_pane=harness_pane,
+                               env=env, pane_env=pane_env, sizes=sizes, v=v))
     _install_resize_hook(socket, harness_pane=harness_pane, panes=panes, v=v, env=env,
                          fid=fid)
     # Written down, because a frame's shape can now be CHANGED while it runs (the density
@@ -3075,6 +3358,19 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
             # is still clicked, it just costs the operator an `F12` afterwards.
             tmuxctl.run("marking a panel so a click on it stays where it points",
                         _panel_mark_argv(socket=socket, pane_id=pane_id), env=env)
+            # And WHICH panel it is, on the same pane and out of the same funnel (#714,
+            # `_panel_slot_argv`). The mark above says a pane is charter's; this says what
+            # charter meant by it, which is the half `state.panes` cannot be trusted for —
+            # that file is rewritten whole on every re-layout, so a component whose pane
+            # got split twice has one id recorded and the other invisible to every reader
+            # that goes through it. Written where the pane is CREATED rather than by a
+            # later pass, because a later pass is a thing to forget: `_reconcile_panels`
+            # will not kill a pane it cannot name, so a panel that missed this is a panel
+            # that can be orphaned exactly once more. `None` for a name charter will not
+            # put on a pane — see there for why that is not silent about its cost.
+            slot_argv = _panel_slot_argv(socket=socket, pane_id=pane_id, slot=slot)
+            if slot_argv is not None:
+                tmuxctl.run("saying which component a panel draws", slot_argv, env=env)
             # The pane surface, on the pane that was just created and on no other — the
             # one place charter has a panel's `%N` in hand. The harness pane is never an
             # argument (`_surface_argvs`), which is how ADR 0018's boundary holds by
@@ -4155,9 +4451,9 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
               window_cols: int, window_rows: int) -> dict[str, str]:
     """Make the running frame's panes match *want*, and return the map that resulted.
 
-    Dress the window, kill what is no longer wanted, split what is newly wanted, re-arm
-    the hooks, re-assert every size. In that order, and each step is here for a measured
-    reason:
+    Dress the window, reconcile the panes it already has against *want*, split what is
+    still missing, re-arm the hooks, re-assert every size. In that order, and each step is
+    here for a measured reason:
 
     * **Dress the window first, and unconditionally** (#686, :func:`_dress_window`). What
       belongs to the WINDOW — `remain-on-exit`, the frame's chrome, #657's rules round the
@@ -4168,6 +4464,17 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
       leaves the first's panels alive and recorded, so the first `F2` back has nothing to
       split. First rather than last because `remain-on-exit` has to be armed ahead of any
       pane charter creates, and this function creates some further down.
+    * **Ask the WINDOW which panes it has, not the record** (#714,
+      :func:`_reconcile_panels`). *panels* used to be the whole answer: a slot in it and
+      in *want* was kept, a slot in it and not in *want* was killed, and a slot in *want*
+      and not in it was split. All three go wrong together the moment the record is wrong,
+      and the record is rewritten whole on every re-layout — so a `charter.toml` edited
+      twice in one session left `state.panes` naming only the newest pane per component
+      and the older ones unreachable to every reader of it, this loop included. Six panel
+      panes where there should have been two, each holding a ~24 MB process and each
+      drawing correct content, is what that looked like on a real frame. The record is
+      still read, and still chooses which of several panes for one component survives; it
+      is no longer the only thing that can see a pane.
     * **Disarm before killing.** See :func:`_disarm_panel_respawn` — otherwise the panel
       charter just closed comes straight back, one respawn life poorer.
     * **Split off the HARNESS pane, never off a sibling panel.** `_draw_panels` already
@@ -4210,25 +4517,12 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
     # no corpse, because that option decides what happens when a pane's COMMAND exits and
     # not what happens when tmux is told to close it.
     _dress_window(socket, fid=fid, harness_pane=harness_pane, env=None, v=v)
-    keep: dict[str, str] = {}
-    for slot, pane_id in panels.items():
-        # Checked ABOVE the `want` branch, not inside the kill branch — #475. `panels` is
-        # `state.panes(fid)`, read back out of the frame's directory on disk, so it is
-        # not tmux's own word for a pane any more whichever branch it takes. The guard
-        # used to sit below the `continue`, which meant every slot the new density KEPT
-        # went into `keep` unexamined and straight on to a `resize-pane -t` and a hook —
-        # a `%1;kill-server` in that file armed `kill-server` on every window resize for
-        # the life of the window. The property is that nothing off disk is used as a pane
-        # id until it has tmux's own shape, and a guard on one branch of a loop is a
-        # guard on the wrong thing.
-        if not _PANE_ID_RE.fullmatch(pane_id):
-            continue
-        if slot in want:
-            keep[slot] = pane_id
-            continue
-        _disarm_panel_respawn(socket, pane_id=pane_id)
-        tmuxctl.run(f"closing the {slot} panel",
-                    tmuxctl.server_argv(socket, "kill-pane", "-t", pane_id))
+    # The kill loop that used to be written out here lives in `_reconcile_panels` now,
+    # with the window's own answer alongside the record — see this function's second
+    # bullet and that function's docstring for what the record could not see (#714). It
+    # is shared with `_draw_panels` for #697's reason, so a pane per placed component is a
+    # property of both paths rather than of this one.
+    keep = _reconcile_panels(socket, harness_pane=harness_pane, want=want, panels=panels)
 
     missing = [s for s in want if s not in keep]
     # The table pane's width is not the window's, and a re-layout is where the two come
