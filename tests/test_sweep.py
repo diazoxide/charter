@@ -1959,10 +1959,12 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
         SPAN = ROWS + COLS
 
 
-        def render(rows, name, d, path, text, x, y, ch):
+        def render(rows, name, d, path, text, x, y, ch, i, n, in_class):
             if not isinstance(name, str):
                 return []
             if name and name not in d:
+                return []
+            if in_class and i + 2 < n and text[i + 1] == "-" and text[i + 2] != "]":
                 return []
             if text.startswith("focus:"):
                 return []
@@ -2109,6 +2111,33 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
         self.assertTrue(gone.tag.endswith("(deleted)"),
                         "a deletion has no `after` to name, and an empty discriminator "
                         "would put every deletion on one line back")
+
+    def test_a_long_edit_is_shortened_without_becoming_its_siblings_tag(self):
+        """The first fix for #721 contained #721, and this fixture line is why it was
+        caught. `after` is everything the mutant KEEPS, so `drop-conjunct` siblings share
+        a long PREFIX — `_regex_shape`'s four-conjunct guard in `tools/sweep.py` has two
+        whose replacements agree for their first 48 characters — and a plain truncation
+        merged them back onto one line. Not truncating is not the answer either:
+        replacements reach 7,149 characters in this tree. So the shortening stays and
+        carries a digest of the whole replacement."""
+        four = [ms for (_, operator), ms in self.siblings().items()
+                if operator == "drop-conjunct" and len(ms) == 4]
+        self.assertEqual(len(four), 1, "the fixture's four-conjunct guard is gone, and "
+                                       "with it the only case that catches this")
+        ms = four[0]
+        edits = [m.tag.split(" -> ", 1)[1] for m in ms]
+        self.assertLess(
+            len({e[:40] for e in edits}), len(ms),
+            "no two of these tags share their visible prefix any more, so this no longer "
+            "measures what a plain truncation did to them: " + " | ".join(sorted(edits)))
+        self.assertEqual(len(set(edits)), 4,
+                         "two mutants of one line render as one tag again")
+        for m in ms:
+            with self.subTest(after=m.after):
+                self.assertLessEqual(
+                    len(m.tag.split(" -> ", 1)[1]), 48,
+                    "the discriminator is bounded, or a 7,149-character replacement "
+                    "puts a bullet list past anything a reader will read")
 
     def test_the_progress_line_says_what_the_gate_summary_says(self):
         """The asymmetry that hid the two holes: the gate summary printed `question` and

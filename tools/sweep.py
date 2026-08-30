@@ -286,8 +286,24 @@ class Mutation:
         a single `if A and B:` renders both of its `drop-conjunct` mutants as one string
         in the not-applied and no-verdict lists, and a list that names two different
         mutations identically discriminates neither (#721).
+
+        **Truncating alone re-created the very bug, one line inside its fix.** `after` is
+        everything the mutant KEEPS, so for `drop-conjunct` it is nearly the whole
+        condition and its siblings share a long prefix: `_regex_shape`'s own four-conjunct
+        guard on line 706 of this file has two mutants whose replacements agree for their
+        first 48 characters, and a cut there put them back on one line. Replacements run
+        to 7,149 characters in this tree, so not cutting is not an option either — the
+        digest is of the WHOLE replacement, so the tag stays short and still names exactly
+        one mutant.
         """
-        edit = _oneline(self.after, 40) or "(deleted)"
+        flat = " ".join(self.after.split())
+        if not flat:
+            edit = "(deleted)"
+        elif len(flat) <= 48:
+            edit = flat
+        else:
+            edit = flat[:40] + "…#" + hashlib.sha256(
+                self.after.encode("utf-8")).hexdigest()[:6]
         return f"{self.path}:{self.line}:{self.operator} -> {edit}"
 
     def __str__(self) -> str:

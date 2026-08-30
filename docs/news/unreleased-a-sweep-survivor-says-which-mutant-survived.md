@@ -73,6 +73,18 @@ for — and the edit is **appended**:
 charter/hooks.py:3658:drop-conjunct -> text.startswith("$(", i)
 ```
 
+## The first version of this fix contained the bug it fixes
+
+`after` is everything the mutant **keeps**, so `drop-conjunct` siblings share a long
+*prefix* — and a tag that truncated the edit at 40 characters put two of them straight
+back onto one line. The instance is in `tools/sweep.py` itself: `_regex_shape`'s
+four-conjunct guard, whose middle two replacements agree for their first 40 characters.
+
+Not truncating is not the answer either — replacements reach **7,149 characters** in this
+tree. So the shortening stays and carries a six-hex digest of the whole replacement, and
+the fixture that catches it is that same four-conjunct guard, copied into
+`tests/test_sweep.py`.
+
 ## The check that is worth more than the six fixes
 
 `tests/test_sweep.py` now asserts the rule on the table rather than on the operators that
