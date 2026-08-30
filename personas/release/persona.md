@@ -120,13 +120,39 @@ Release untouched, so a `workflow_dispatch` retry after a partial failure is saf
 but it must now say which version it is retrying (#558):
 
 ```
-gh workflow run release.yml --ref main -f version=<X.Y.Z>
+gh workflow run release.yml --ref v<X.Y.Z> -f version=<X.Y.Z>   # transient failure
+gh workflow run release.yml --ref main    -f version=<X.Y.Z>    # the fix is on main
 ```
 
 Without `-f version=`, `guard` refuses. That check used to be gated on the ref being a tag,
 so on the retry path it was skipped — and a skipped step reports success, which is how a
 retry could publish with its version cross-check never having run. Passing the version is
 what gives the guard a claim it can refuse.
+
+**Until #673 that retry could not repair anything that failed after the upload.** `announce`
+is `needs: publish`, so the retry re-entered `publish`, PyPI rejected a version it already
+had, and `announce` was unreachable on that version forever — the only exit being the one
+this charter forbids, writing the Release body by hand. `publish` now passes
+`skip-existing` **on the dispatch trigger only**. Three things follow, and they are the
+operator's, not the workflow's:
+
+- **The dispatch retry is the retry.** It is not there to publish; it is there to *finish* a
+  publish that may already have happened. It will report having skipped files PyPI holds,
+  and that is the run working.
+- **Re-pushing a deleted tag is not a retry.** It arrives as `push`, gets the strict path,
+  and is refused at the upload — deliberately. On the tag path a version PyPI already holds
+  means a changed tree with the version not bumped, and the answer is a patch version. Were
+  `skip-existing` on there too, that run would go green having shipped nothing while
+  `pip install charter-cp==<X.Y.Z>` still served the old code.
+- **Which ref.** `--ref v<X.Y.Z>` retries the exact tree that published and stays available
+  forever; use it unless the fix is on main. `--ref main` works only until main's
+  `pyproject.toml` bumps past the version being retried, since `guard` compares the input
+  against the tree it is handed — so a deterministic failure is repaired promptly or not at
+  all.
+
+Whatever the retry does, PyPI keeps the artifacts it already holds. A published version is
+one immutable thing, and a rebuild will not be the same bytes anyway: `docs/news/` ships
+inside the sdist, so fixing an entry changes it.
 
 ## Then upgrade this machine — CLI first, pinned
 
