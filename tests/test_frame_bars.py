@@ -23,7 +23,7 @@ import os
 import unittest
 from unittest import mock
 
-from charter import config, instance, tui
+from charter import config, contain, instance, tui
 from charter.frame.component import Fixed
 from charter.frame import builtins, layout, slots, state
 from tests._isolation import PersonaIso
@@ -233,6 +233,182 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
             text = row[0] if row else ""
             self.assertEqual(text, "".join(text.splitlines()), repr(text))
             self.assertLessEqual(tui.width(tui.strip_ansi(text)), width, repr(text))
+
+
+class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
+    """`slots.TABS` — the column map every rung of `slots._bar` publishes.
+
+    **The map is measured off the ROW, never off the map.** Each case below finds the
+    columns it clicks by looking for the field in the string `_bar` returned, which is the
+    thing the operator points at; asking `TABS` where it put something and then asking
+    `TABS` what is there would agree with itself whatever the ladder did. The fixtures are
+    ASCII on purpose, so a character index into that string IS a terminal column — the one
+    case that is about a name needing repair says so and measures with `tui.width`.
+
+    **A bar is horizontal, so the map is per column, and the ladder is why it has to exist
+    at all**: three of the four rungs draw a different set of names and the fourth draws
+    none, so "which name is at column 40" cannot be recomputed from the names and the
+    width without re-walking the ladder — a second answer that disagrees with the first
+    the moment a repaint lands between the paint and the click.
+    """
+
+    NAMES = ["api.1", "api.2", "api.3"]
+
+    def setUp(self):
+        # The strip is one object at module scope (`slots._Tabs`), so a case that did not
+        # clear it would be reading the previous case's paint — and one that left a map
+        # behind would hand it to whatever renders next.
+        slots.TABS.forget()
+        self.addCleanup(slots.TABS.forget)
+
+    def _draw(self, width, names=None, here="api.2", note=""):
+        rows = slots._bar("chats", list(names or self.NAMES), here, width, note=note)
+        return rows[0] if rows else ""
+
+    def _cells(self, row, field):
+        """Every column *field* occupies in *row*, taken from the drawn row itself."""
+        at = row.index(field)
+        self.assertNotIn(field, row[at + 1:], f"{field!r} is not unique in {row!r}")
+        return range(at, at + len(field))
+
+    def test_every_tab_on_a_wide_row_resolves_to_its_own_name(self):
+        """The whole feature, at the rung that draws every name: point at a tab, get that
+        tab. `here` is a name that is NOT in the list so no tab is the current one and
+        every one of them has an answer — the current-tab rule has its own case below."""
+        row = self._draw(200, here="nowhere")
+        for name in self.NAMES:
+            for col in self._cells(row, name):
+                self.assertEqual(slots.TABS.switch_to(col), name,
+                                 f"column {col} of {row!r}")
+
+    def test_the_mark_belongs_to_the_tab_it_marks(self):
+        """A tab is its mark and its name together — the operator sees one field, and
+        clicking either half of it means the same thing.
+
+        Asserted on BOTH marks, because they are different characters in the same cell:
+        the inactive `_BAR_MARK[1]` is the blank in front of a name you can switch to, and
+        the active `_BAR_MARK[0]` is the `*`. The second is measured by drawing the same
+        names with `here` somewhere else, which moves no column (the two marks are the
+        same width — `test_the_two_marks_are_the_same_width…`), so the star's own cell can
+        be asked about while it belongs to a tab that is not the current one.
+        """
+        row = self._draw(200, here="api.2")
+        blank = self._cells(row, " api.3").start
+        self.assertEqual(slots.TABS.switch_to(blank), "api.3",
+                         "the blank mark in front of an inactive tab is not part of it")
+        star = self._cells(row, "*api.2").start
+        self.assertIsNone(slots.TABS.switch_to(star), "the tab you are on switched")
+        self._draw(200, here="nowhere")
+        self.assertEqual(slots.TABS.switch_to(star), "api.2",
+                         "the marked tab's own mark column belongs to no tab")
+
+    def test_the_gap_between_two_tabs_resolves_to_nothing(self):
+        """Separator cells the operator can see are empty. Picking the nearer name for
+        them would be the clamp `events.Dispatcher._on_canvas` refuses one rectangle out —
+        a click on a cell nothing was drawn into is not a click on a neighbour."""
+        row = self._draw(200, here="nowhere")
+        end = self._cells(row, "api.1").stop
+        for col in range(end, end + slots._BAR_GAP):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_heading_resolves_to_nothing(self):
+        """`  chats  ` is about no chat, exactly as the repo table's heading row is about
+        no repo (`slots._repos` publishes `None` for it)."""
+        row = self._draw(200, here="nowhere")
+        # Up to the first tab's own MARK column, not to its name: the mark belongs to the
+        # tab (`test_the_mark_belongs_to_the_tab_it_marks`), so a heading measured to the
+        # first letter would assert the opposite of that case one cell over.
+        for col in range(self._cells(row, " api.1").start):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_empty_space_past_the_last_tab_resolves_to_nothing(self):
+        """Most of a wide bar is blank. A click out there has to answer falsy rather than
+        land on the last name, which is what a map running to the pane's width — or an
+        index counting from the end — would do."""
+        row = self._draw(200, here="nowhere")
+        for col in range(len(row), 200):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_tab_you_are_already_on_resolves_to_nothing(self):
+        """Re-selecting what is already selected is not news — `_repos_events`' sentence,
+        and here it is worth more: a re-switch is a real teardown and split (~360 ms for a
+        chat) arriving exactly where the operator already was. It is also what keeps a
+        double-click from switching twice."""
+        row = self._draw(200, here="api.2")
+        for col in self._cells(row, "api.2"):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_overflow_count_resolves_to_nothing(self):
+        """Rung 2's `+2` stands for names that are NOT on the row, so there is nothing
+        there to switch to — `…(+N more)`'s rule one axis over. On a plane with fifteen
+        workspaces that field is a `+14`, and it is the one an operator is most likely to
+        try: it answers falsy, and the palette is what reaches those names."""
+        row = self._draw(30, here="api.2")
+        self.assertIn("+2", row, f"this width is not rung 2: {row!r}")
+        for col in self._cells(row, "+2"):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_rung_that_says_only_where_you_are_has_no_tabs_at_all(self):
+        """`2/3` is a position, not a name, and there is no name on the row to click."""
+        row = self._draw(16, here="api.2")
+        self.assertEqual(row.strip(), "chats  2/3", repr(row))
+        for col in range(0, 200):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_a_narrowed_bar_forgets_the_tabs_it_is_no_longer_drawing(self):
+        """**The `_Viewport.blank` half, one axis over.** A pane that drew every name and
+        then narrowed to a count — or to nothing at all — must not go on answering for the
+        tabs that were there: a click would switch to a name the operator can see is not on
+        screen. Every rung publishes, including the two that draw no tab."""
+        wide = self._draw(200, here="nowhere")
+        col = self._cells(wide, "api.3").start
+        self.assertEqual(slots.TABS.switch_to(col), "api.3")
+        for width in (30, 16, 11):
+            self._draw(width, here="api.2")
+            self.assertIsNone(slots.TABS.switch_to(col),
+                              f"width {width} kept a stale tab")
+
+    def test_a_bar_with_no_names_at_all_publishes_no_tabs(self):
+        """`chats.roster` answers with the chat asking and nothing else for a frame root it
+        could not scan, and `_bar` answers `[]` for an empty list — so this is the
+        unreadable-plane path, and it must leave nothing clickable behind either."""
+        self._draw(200, here="nowhere")
+        self.assertEqual(slots._bar("chats", [], "api.1", 200), [])
+        for col in range(0, 200):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col}")
+
+    def test_the_add_chat_affordance_is_not_a_tab(self):
+        """It is a reminder naming a command, not a name to switch to."""
+        row = self._draw(120, names=["api.1"], here="nowhere", note=slots.ADD_CHAT)
+        self.assertIn(slots.ADD_CHAT, row)
+        for col in self._cells(row, slots.ADD_CHAT):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_a_column_nothing_drew_answers_nothing_however_far_out(self):
+        """A mapping has no answer to give for a column outside it — which is where
+        `_Viewport.repo_at`'s bounds check went. `-1` is the one that matters: a tuple
+        would have answered with the LAST tab, hiding a wrong reading behind a plausible
+        name, and the row's last column IS a tab here so that wrong answer is available."""
+        row = self._draw(200, here="nowhere")
+        self.assertEqual(slots.TABS.switch_to(len(row) - 1), "api.3",
+                         "the last drawn column is not a tab, so -1 measures nothing")
+        for col in (-1, -99, 10_000):
+            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_map_carries_the_name_on_disk_and_not_the_repaired_one(self):
+        """`contain.one_line` is a REPAIR for drawing (#472), and what a click has to hand
+        `charter frame-chat` or `switch.to_workspace` is the name in the directory. The two
+        are one string for every name either caller can produce today, which is exactly why
+        this asks with a name that needs repairing rather than waiting for a caller to stop
+        refusing one."""
+        raw = "api\t1"
+        row = slots._bar("chats", [raw, "api.2"], "api.2", 200)[0]
+        drawn = contain.one_line(raw)
+        self.assertNotEqual(drawn, raw, "this name needs no repair, so it measures none")
+        at = row.index(drawn)
+        for col in range(at, at + tui.width(drawn)):
+            self.assertEqual(slots.TABS.switch_to(col), raw,
+                             f"column {col} of {row!r} carries the drawn name")
 
 
 class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):

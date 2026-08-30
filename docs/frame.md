@@ -121,7 +121,7 @@ component declares `click` or `scroll` asks *its own* terminal to report, so if 
 that panel's pane (with your tmux prefix, say), your terminal starts reporting and native
 selection goes for as long as it is the active pane. Selecting the harness back — or `F12`
 — ends it. Panels that declare neither ask for nothing and change nothing, which is three
-of the four panels charter ships.
+of the four panels charter ships — and the two bars, if you place one, are not among them.
 
 **The repo table is the fourth: it scrolls and it selects.** Roll the wheel over it and the
 window moves down the list; click a row and that repo is selected, its row drawn in reverse
@@ -147,6 +147,22 @@ Three things follow that are worth saying plainly rather than leaving you to fin
   only route on a plane with `mouse = false`, which is the default, and charter will not
   bind a bare arrow key to change it: a `bind -n Up` is server-wide and would take the arrow
   before your harness sees it.
+
+**The tab bars are the exception to "a click only selects", and they say why.** Click a name
+on the `chats` or `workspaces` bar and the frame *switches* to it — there is no in-between
+state to confirm, because the tab you are on *is* the selection and the `*` beside it is how
+you can see that. The three things that make a click safe to switch on here are the same
+three that keep it a mere selection on the table: charter acts on the **press**, which is the
+half that is never delivered unpaired; a switch is undone by the identical click on the tab
+you came from; and nothing else could ever finish the gesture, because a keypress does not
+reach a panel at all — tmux gives your typing to the active pane, which is the harness.
+
+Clicking the tab you are already on does nothing at all, rather than tearing the panels down
+and putting them back to arrive where you were. So does clicking the heading, the gap between
+two names, the `+14` where names did not fit, or the empty space past the last tab: those are
+cells no tab was drawn into, and charter will not pick the nearest name for you. On a bar
+narrow enough that only your own name is drawn, nothing on it is clickable — `F2` is what
+reaches the rest at any width, which is what the bar being a readout means.
 
 **Focus events are on inside a frame charter launched, and off inside your own tmux.** tmux
 ships `focus-events` off, and it is a server-wide setting; charter turns it on for its own
@@ -283,6 +299,13 @@ already in.
 workspace with yours marked, and the workspace bar does the same for the plane. Where the
 names do not all fit the bar keeps yours whole and counts the rest (`*api.2  +2`); narrower
 still it says only where you are (`2/3`). It never shows half a name.
+
+**They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
+exactly what `F2` → `chat` does — the same command, the same five refusals, the same
+sentence on your screen when one fires — and a workspace tab does what `charter frame-switch
+--workspace <name>` does. *Mouse is off by default* above has the rules a click follows and
+why a tab switches where a repo row only selects; the short of it is that clicking the tab
+you are on, the `+N`, or anything that is not a drawn name does nothing at all.
 
 **Neither is drawn unless a plane places it**, and that is deliberate rather than
 unfinished: on the ordinary plane there is one chat, and a row saying so permanently costs
