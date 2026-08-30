@@ -277,9 +277,11 @@ class AFrameCommandOutsideAFrameSaysSo(unittest.TestCase):
     def test_the_commands_tmux_fires_for_itself_stay_quiet_at_zero(self):
         """The exit code is not free. `run-shell` prints `'<the whole command>' returned 1`
         into the harness pane — the one rectangle ADR 0018 says charter never draws in —
-        so a command tmux drives must not start doing that. These three are never typed:
-        `frame-palette` is a bind, `frame-respawn` a `pane-died` hook, `frame-gather` a
-        detached child of the launcher."""
+        so a command tmux drives must not start doing that. Neither of these is ever typed:
+        `frame-respawn` is a `pane-died` hook and `frame-gather` a detached child of the
+        launcher. (`frame-palette` is the third of that set and is not driven here — it has
+        no early return to assert against; it opens a palette whatever it finds, which is
+        the one of the nine that was never in this class.)"""
         for name, fn, args in (
                 ("frame-respawn", commands_frame.cmd_respawn,
                  SimpleNamespace(slot="repos", pane="%9", frame=None)),
