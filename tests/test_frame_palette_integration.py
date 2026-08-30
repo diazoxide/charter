@@ -356,6 +356,32 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         self.assertTrue(_await(lambda: state.version(self.fid) != was),
                         "the frame was never bumped, so no panel repaints")
 
+    def test_a_name_that_the_doorway_also_matches_still_wins_the_cursor(self):
+        """**#732, end to end, on the collision that produced it.** The frame is in
+        `alpha`, so the workspace doorway reads `workspace: alpha — pick another` and holds
+        the typed name inside its own title. The doorway is in the catalogue and the names
+        are gathered after it, so it used to be the row Enter ran — and on the reported
+        plane the colliding row was the `chat:` doorway, which was also *refused*, so Enter
+        opened nothing and switched nothing.
+
+        Asserted on what Enter DOES rather than on the drawn order, because the drawn order
+        is a rendering and this is about the keypress: pressing it must hand the pane back
+        (the row was a name) and must not replace the surface with a picker (the row was a
+        doorway). `zebra` is the tell — it is the other workspace, so it is on the picker
+        and on nothing else.
+        """
+        fd, pane = self._open()
+        self._await_screen(pane, "workspace: alpha")
+        os.write(fd, b"alpha")
+        # Both rows are on screen: the doorway is not hidden, it is outranked.
+        self._await_screen(pane, "detach", present=False)
+        self._await_screen(pane, "workspace: alpha — pick another")
+        os.write(fd, b"\r")
+        self.assertTrue(_await(lambda: self._palette_pane() is None),
+                        f"Enter did not hand the pane back — the doorway took the "
+                        f"keypress and opened a picker:\n{self._screen(pane)}")
+        self.assertEqual(state.frame_workspace(self.fid), "alpha")
+
     def test_nothing_typed_lists_no_names_at_all(self):
         """The other half, and the one a display test cannot fake: the palette that just
         opened is the doorways and the actions, with `zebra` nowhere on it. A palette that
