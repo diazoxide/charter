@@ -228,6 +228,26 @@ is a file rather than a directory.
 `$CHARTER_ROOT` is never redirected, so pointing it at a worktree is the escape hatch if
 you genuinely want a plane of its own there.
 
+#### What follows the plane, and what follows the tree
+
+Identity is not the only question a command asks, and the two answers differ:
+
+| | Follows the **plane** (the main tree) | Follows the **tree you are standing in** |
+|---|---|---|
+| what | who this plane is, and what only this machine knows | committed content on a branch |
+| examples | the persona roster, the vault, the MCP approval record, memory, workspaces, `.charter/` | generated files — `charter persona sync-agents` reads `personas/` and writes `.claude/agents/` |
+| why | a worktree is a view of a repo, so identity must not fork per worktree; a memory written into one is deleted with it | the artifact belongs to the commit, and the commit belongs to the branch |
+
+So `charter persona sync-agents` run inside a worktree regenerates **that worktree's**
+`.claude/agents/` from **that worktree's** `personas/`, and says so; the plane's own copy
+changes when the branch merges. Reads that answer *for the plane* — `charter persona lint`,
+and the news `check:` probes asking whether this plane has adopted something — keep
+answering for the plane.
+
+Before that split was drawn, `sync-agents` edited tracked files in the main clone from
+inside a worktree: a write into a tree the caller does not own, with no conflict and no
+message, while other workers held their own worktrees over the same clone.
+
 ### Nested planes
 
 `charter` takes the **innermost** `charter.toml` above your working directory. That is the
