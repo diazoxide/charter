@@ -65,7 +65,7 @@ from typing import Any, Mapping
 from .. import contain, tui
 from . import chrome
 from .component import (API_VERSION, EDGES, Component, ComponentError, Content,
-                        Fill)
+                        Fill, Fixed)
 
 #: The entry point group an installed distribution declares its components in (§4b):
 #:
@@ -231,6 +231,70 @@ def _rectangle(c: Component, *, edge, size) -> Component:
                                size=c.size if size is None else size)
 
 
+def _placeable(c: Component) -> Component:
+    """*c*, or a refusal — a component charter did not write is PLACED at a fixed size.
+
+    **The refusal is the point, and the coercion it replaces is #708.** A provider's
+    `Content()` or `Fill()` used to be accepted here, kept on the component object, and
+    then read by nothing: the pane's height came from the committed ``size`` — a whole
+    number of cells (`instance.component_tables`) — so the declaration produced a frame
+    that drew and was not the one the provider asked for, with nothing anywhere saying so.
+    That is #687's shape exactly, a value read and quietly overridden, and #687's verdict
+    was that the honest options are honour it or refuse it.
+
+    **Charter cannot honour either policy for a component it did not write, and the
+    reasons are structural rather than unfinished work.**
+
+    * ``Content()`` is "as tall as my own content". Charter answers that for `repos` with
+      `layout.repos_rows`, from the resolved arrangement and the plane's clone count,
+      **without running the component**. There is no such answer for a stranger's: the only
+      way to measure a provider's content is to import its module and call its ``render``,
+      and `config.FRAME` is resolved by `charter --version` as much as by `charter frame`.
+      §4b's whole safety argument is that a committed file cannot make a stranger's code
+      run, so this policy has nowhere to be read.
+    * ``Fill()`` is "whatever is left". The frame has **exactly one** pane that may say
+      that, by construction: `layout.slot_sizes` answers every member of
+      `layout.VARIABLE_ROW_SLOTS` with `repos_rows`, and `commands_frame._reassert_sizes`
+      leaves that set unasserted so tmux's ``resize-pane -y`` — which moves one boundary —
+      has one remainder to give the rows to. A second claimant is measured in
+      `frame/builtins.py`'s own note: registered as a placed `Content()`, the sidebar's
+      `changes` section was handed the REPO TABLE's height.
+
+    So the answer is `Fixed(n)`, and the committed table is what picks the number — which
+    is what `docs/frame.md` already documents for `edge` and `size` alike: *arrangement is
+    committed, execution is local*. The declaration is the default for a rectangle nobody
+    configured, and a provider's rectangle is always configured.
+
+    **PLACED, not registered**, and the distinction is a composite's parts. `Fill()` is
+    the required policy for exactly one child of a composite (`Registry._check_children`),
+    and a part is drawn inside its parent's pane rather than split for — so it never comes
+    through here. This is `Registry.place`'s path only: the question is "may charter give
+    this component a pane of its own at that size", and for a part there is no pane to
+    give.
+
+    Raised as a `ComponentError` so `Registry.place` turns it into the pane that says why,
+    like every other refusal in this seam: the operator sees which component is not drawn
+    and the rest of the frame is drawn around it (§4b).
+
+    **The id is interpolated bare, and that is the one refusal in this module that may.**
+    Every other one quotes a *cid* that arrived from a committed file or an entry point
+    name and has been through nothing, so `contain.one_line` is what stands between it and
+    a forged report line. This one is handed a CONSTRUCTED `Component`, and
+    `component.usable_id` has already held its id to `component._ID_RE` —
+    ``[a-z][a-z0-9_]{0,31}`` with at most one dot — which contains no character
+    `one_line` would rewrite. A containment here was written first and the deletion sweep
+    found it surviving, correctly: it is the second, weaker answer to a question
+    `Component.__post_init__` answered before this function could be reached.
+    """
+    if isinstance(c.size, Fixed):
+        return c
+    raise ComponentError(
+        f"{c.id} declares size={type(c.size).__name__}() — declare "
+        f"Fixed(n) instead. Charter places a component it did not write at the cells its "
+        f"[[frame.component]] table gives it, resolved without importing anything, so a "
+        f"policy charter would have to run your module to measure has nowhere to be read")
+
+
 class Providers:
     """The providers installed on this machine, listed without importing one.
 
@@ -392,6 +456,32 @@ class Providers:
         # entry point (`acme_charter.metrics:Component`) reads as an object and a factory
         # is the obvious other spelling — refusing either would refuse a provider author
         # for a choice that changes nothing charter can observe.
+        #
+        # **`isinstance` and not a Protocol, and that IS the decision rather than an
+        # accident of the line** (#709). What it costs is stated so nobody has to
+        # rediscover it: every provider distribution depends on `charter-cp` at build time
+        # and at run time, because the only way to hand charter a `Component` is to import
+        # the class and construct one. Discovery is genuinely loose — `_scan` reads entry
+        # point METADATA and imports nothing, so an installed-but-unplaced provider costs a
+        # frame nothing — and construction is genuinely tight. Those are different
+        # properties and only the first one the entry point group buys.
+        #
+        # A `typing.Protocol` plus a runtime shape check would let a provider construct
+        # something charter accepts without importing charter, and the trade is refused:
+        # `component.Component.__post_init__` is where this contract's provider-facing
+        # guards live — the closed id alphabet that reaches tmux, the edge, the size
+        # policy, `events` without `on_event` and `on_event` without `events` — and a
+        # structural check cannot perform them. It would move each of those refusals from
+        # construction, where the message names a fixable thing before a pane exists, to
+        # the moment the pane draws, which is §4g's own argument for refusing a version
+        # mismatch at load. A duck-typed seam would buy a provider one line in a
+        # `pyproject.toml` and cost every provider its validation.
+        #
+        # The version coupling that comes with it is real and is what :data:`API_VERSION`
+        # is for: one integer, declared on both sides, refused rather than negotiated, so a
+        # provider built against a `Component` shape charter has moved does not load rather
+        # than half-working. That is the seam's answer to "which shape of the class is
+        # this", and it is why the class may change without a shim band.
         if not isinstance(obj, self.kind):
             if not callable(obj):
                 raise self.error(
@@ -571,6 +661,14 @@ class Registry:
         this in (`frame/panel.py:run`): the pane is already split at the size the launcher
         chose, so a panel has no rectangle to pass and asks only for the component.
 
+        **And a size policy charter cannot place a stranger's component at is REFUSED
+        here rather than coerced** (:func:`_placeable`, #708). The committed table wins, as
+        the paragraph above says — but ``Content()`` and ``Fill()`` are not numbers that
+        lost to a bigger one, they are policies charter has nowhere to read for a component
+        it did not write, and accepting one produced a frame that drew at a height nobody
+        asked for with nothing said. The refusal is a pane like every other refusal in this
+        seam.
+
         Already registered — a built-in, or a provider placed twice by a config listing
         it twice — answers what is registered rather than refusing: this asks for *cid*
         to be on the frame, where `register` asks for a component to be added. A
@@ -587,7 +685,7 @@ class Registry:
             return self._by_id[cid]
         try:
             c = self.register(
-                _rectangle(self.providers.load(cid), edge=edge, size=size))
+                _rectangle(_placeable(self.providers.load(cid)), edge=edge, size=size))
         except ComponentError as exc:
             return self._stand_in(cid, str(exc), edge=edge, size=size)
         # AFTER the registration that could still have refused it, so a component that

@@ -30,6 +30,10 @@ closing paragraph, each with a case that fails without the guard:
    The other five were each pinned on the failing path first; this one shipped inverted
    because only its failing path was pinned, which is why every case in
    `TheArrangementIsCommittedAndAProviderDoesNotOverruleIt` asks about both.
+7. **A size policy charter cannot place a stranger's component at is REFUSED, not
+   coerced** (#708). `Content()` and `Fill()` are not numbers that lost to the committed
+   one — they are policies with nowhere to be read for a component charter did not write,
+   and accepting one drew a frame nobody asked for in silence.
 
 **Nothing here reads the machine.** Each case asserts about ids its own fixture installed,
 never about the set of providers this machine happens to carry, so a suite run on a
@@ -64,7 +68,7 @@ _CHARTERS = object()
 def _source(*, cid: str = CID, api: object = _CHARTERS,
             render: str = "lambda ctx: ['ok']", head: str = "",
             needs: tuple[str, ...] = (), events: tuple[str, ...] = (),
-            on_event: str = "None") -> str:
+            on_event: str = "None", size: str = "component.Fixed(12)") -> str:
     """A provider module: a version, a factory, and a record of whether it ran.
 
     ``built`` is what makes "refused before the provider built anything" an assertion
@@ -81,6 +85,12 @@ def _source(*, cid: str = CID, api: object = _CHARTERS,
     move together because `component.Component` refuses them apart. *on_event* is SOURCE
     text, like *render*, so a case can install a handler that keeps state across events —
     which is the only way to watch a `focus` change what the next `render` draws.
+
+    *size* is the third declaration (#708), and it is SOURCE text for the same reason:
+    what a case varies is which POLICY the provider declared, and `Content()` and `Fill()`
+    are objects rather than values a keyword could carry. The default stays `Fixed(12)`
+    because `TheArrangementIsCommittedAndAProviderDoesNotOverruleIt` needs a rectangle a
+    regression has somewhere different to go from.
     """
     api = component.API_VERSION if api is _CHARTERS else api
     return textwrap.dedent(f"""\
@@ -95,7 +105,7 @@ def _source(*, cid: str = CID, api: object = _CHARTERS,
             built = True
             return component.Component(
                 id={cid!r}, title="Metrics", edge="right",
-                size=component.Fixed(12), needs={needs!r}, events={events!r},
+                size={size}, needs={needs!r}, events={events!r},
                 on_event={on_event},
                 render={render})
         """)
@@ -679,3 +689,126 @@ class CharterContainsWhatCameBack(unittest.TestCase):
             needs=(), events=(), render=lambda c: [f"{bold}charter{tui.RESET}"]))
         self.assertEqual(self.r.draw("identity", _ctx()),
                          (f"{bold}charter{tui.RESET}",))
+
+
+class APlacedProvidersSizePolicyIsRefusedRatherThanCoerced(unittest.TestCase):
+    """#708. A component charter did not write is placed at a FIXED size or not at all.
+
+    **The refusal replaces a coercion, and the coercion is what made it a defect.** A
+    provider's `Content()` or `Fill()` was accepted, kept on the component object, and
+    read by nothing: the pane's height is the committed ``size``, a whole number of cells
+    that `instance.component_tables` resolves without importing anything. So a provider
+    that copied charter's own worked example — `repos` is `Content()`, and it is the
+    component `docs/frame.md` shows you — got a frame that drew and was not the one it
+    asked for, with nothing anywhere saying so. That is #687's shape, and #687's verdict
+    was that the honest options are honour it or refuse it.
+
+    **Honouring it is not available, and the two reasons are different.** `Content()`
+    would need charter to run a stranger's `render` to measure their content, on the path
+    `charter --version` takes, which is the one thing §4b's safety argument forbids.
+    `Fill()` would need a second pane taking the remainder, and `layout` supports exactly
+    one by construction (`layout.VARIABLE_ROW_SLOTS`, and `commands_frame._reassert_sizes`
+    leaving it unasserted so `resize-pane -y` has one boundary to move).
+
+    So every case here asserts the REASON as well as the refusal: the pane names the
+    component and the policy it declared, the rest of the frame draws, and the rectangle
+    config asked for is still the rectangle the standin takes — because a refusal that
+    moved the geometry would be #535 arriving through the new door.
+    """
+
+    def setUp(self):
+        self.site = _SitePackages(self)
+        self.r = registry.Registry()
+
+    def _install(self, size: str):
+        self.site.install("acme-charter", "1.4.0", {CID: ENTRY},
+                          {MODULE: _source(size=size)})
+
+    def test_a_provider_declaring_content_gets_a_pane_that_says_so(self):
+        self._install("component.Content()")
+        self.r.place(CID, edge="right", size=component.Fixed(12))
+        reason = self.r.failures[CID]
+        self.assertIn(CID, reason)
+        self.assertIn("Content()", reason)
+        self.assertIn("Fixed(n)", reason)
+
+    def test_a_provider_declaring_fill_gets_the_same_answer_naming_fill(self):
+        """A separate case rather than a loop, because the two arms have to be
+        distinguishable: a message that said `Content()` for a `Fill()` would pass a
+        subTest that only asked for `Fixed(n)`."""
+        self._install("component.Fill()")
+        self.r.place(CID, edge="right", size=component.Fixed(12))
+        reason = self.r.failures[CID]
+        self.assertIn("Fill()", reason)
+        self.assertNotIn("Content()", reason)
+
+    def test_the_reason_is_the_reason_and_not_only_the_refusal(self):
+        """"Charter cannot place you that way" is a refusal; the fixable thing is WHY, and
+        for this one the why is that there is nowhere for the policy to be read without
+        charter importing the module on every command that resolves a config."""
+        self._install("component.Content(cap=4)")
+        self.r.place(CID)
+        reason = self.r.failures[CID]
+        self.assertIn("[[frame.component]]", reason)
+        self.assertIn("without importing", reason)
+
+    def test_a_provider_declaring_fixed_is_placed_and_draws(self):
+        """The control. Without it every assertion above passes on a seam that refuses
+        every provider there is."""
+        self._install("component.Fixed(12)")
+        placed = self.r.place(CID, edge="right", size=component.Fixed(12))
+        self.assertEqual(placed.size, component.Fixed(12))
+        self.assertEqual(self.r.failures, {})
+        self.assertEqual(self.r.draw(CID, _ctx()), ("ok",))
+
+    def test_the_refusal_costs_that_pane_and_nothing_else(self):
+        """§4b's fourth property, asked of this refusal specifically: the rest of the
+        frame is drawn and the standin takes the rectangle config asked for, so a machine
+        with the bad provider installed draws the same geometry as one without it."""
+        self._install("component.Fill()")
+        self.r.register(_builtin("repos", edge="bottom"))
+        self.r.register(_builtin("identity", edge="top"))
+        placed = self.r.place(CID, edge="right", size=component.Fixed(12))
+        self.assertEqual((placed.edge, placed.size), ("right", component.Fixed(12)))
+        self.assertEqual([c.id for c in self.r.on_edge("right")], [CID])
+        self.assertEqual(self.r.split_order(CID), 3)
+        self.assertEqual(self.r.draw("repos", _ctx()), ("repos drew",))
+        self.assertEqual(self.r.draw("identity", _ctx()), ("identity drew",))
+
+    def test_the_pane_says_it_rather_than_the_command_raising(self):
+        """`place` degrades, like every other refusal in this seam. A committed file must
+        never be able to make charter unusable for somebody who has not installed a
+        third-party package — including one that is installed and wrong."""
+        self._install("component.Content()")
+        placed = self.r.place(CID)
+        self.assertIn(CID, placed.title)
+        drawn = "\n".join(self.r.draw(CID, _ctx()))
+        self.assertIn("Fixed(n)", drawn)
+
+    def test_a_composite_part_may_still_be_fill_because_it_is_never_placed(self):
+        """The distinction the guard is written on: PLACED, not registered. `Fill()` is
+        the required policy for exactly one child of a composite, and a child is drawn
+        inside its parent's pane rather than split for — so it never asks for a rectangle
+        of its own and this refusal never sees it."""
+        self.r.register(component.Component(
+            id="acme.left", title="Left", edge="right", size=component.Fill(),
+            needs=(), render=lambda c: ["left"]))
+        self.r.register(component.Component(
+            id="acme.right", title="Right", edge="right",
+            size=component.Content(cap=2), needs=(), render=lambda c: ["right"]))
+        self.r.register(component.Component(
+            id="acme.pair", title="Pair", edge="right", size=component.Fixed(8),
+            needs=(), render=lambda c: ["pair"],
+            children=("acme.left", "acme.right")))
+        self.assertEqual([c.id for c in self.r.children_of("acme.pair")],
+                         ["acme.left", "acme.right"])
+        self.assertEqual(self.r.failures, {})
+
+    def test_the_declaration_is_checked_and_not_what_config_replaced_it_with(self):
+        """A committed `size = 3` does not launder a policy charter cannot honour. The
+        table wins over a NUMBER the provider would have preferred; it does not answer the
+        question of whether the provider asked for something that has nowhere to be read,
+        and a check placed after `_rectangle` would have said it did."""
+        self._install("component.Content()")
+        self.r.place(CID, edge="top", size=component.Fixed(3))
+        self.assertIn("Content()", self.r.failures[CID])

@@ -1150,6 +1150,32 @@ code to answer a geometry question on every command. And they win, because your
 one file drawing two different frames on two machines depending on what happens to be
 installed. Arrangement is committed; execution is local.
 
+**So a component charter did not write declares `Fixed(n)`, and charter refuses the other
+two rather than quietly substituting one.** `Content()` is "as tall as my own content" and
+`Fill()` is "whatever is left", and charter can honour neither for a package: measuring
+your content means importing your module and calling your `render` on every command that
+reads a config, and the frame has exactly one pane that takes what is left — the repo
+table, which is what gives `resize-pane` one boundary to move. A component that declares
+either gets a pane saying so, named, with the rest of the frame drawn around it. Your
+`Fixed(n)` is then the default for a rectangle nobody configured, and the committed table
+is what picks the number.
+
+`Fill()` is still the right — and required — policy for exactly one part of a composite: a
+part is drawn inside its parent's pane rather than split for, so it has a parent with a
+remainder to give it. It is *placing* that needs a number.
+
+**Your distribution depends on `charter-cp`, at build time and at run time.** Discovery
+does not: charter reads the entry point group out of your distribution's metadata and
+imports nothing, so a provider you have installed but not placed costs a frame nothing at
+all. Construction does: what charter accepts is a `charter.frame.component.Component`, and
+the only way to hand it one is to import the class and build one. That is a trade taken on
+purpose rather than an oversight — `Component.__post_init__` is where a mistake in your
+component is refused with a message naming it, before charter has split a pane, and a
+duck-typed shape would move every one of those refusals to the moment your pane draws.
+`API_VERSION` is the other half of it: one integer declared on both sides, so a provider
+built against a shape charter has since moved does not load, rather than half-working
+inside somebody's frame.
+
 **Charter never runs code your config names.** `use` is a *name*, resolved against what is
 installed on this machine. If nothing supplies it, nothing runs and your arrangement is
 refused — which is the whole reason components bind by name rather than by a `command =
