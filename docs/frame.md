@@ -279,15 +279,35 @@ still it says only where you are (`2/3`). It never shows half a name.
 unfinished: on the ordinary plane there is one chat, and a row saying so permanently costs
 a row off your harness, a 24 MB panel process, and about seven of every switch's 41 tmux
 commands — to draw a name `F2` already reaches in two keystrokes. Turn one on with a
-`[[frame.component]]` table, which is also how it gets a key of its own:
+`[[frame.component]]` table, which is also how it gets a key of its own.
+
+**`[[frame.component]]` replaces your whole arrangement rather than adding to it**, so the
+bar goes in a list of every panel you want — charter's four and then the bar. A file that
+names only the bar gets a frame that is only the bar:
 
 ```toml
 [[frame.component]]
-use = "chats"
+use = "identity"
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
+use = "repos"
+
+[[frame.component]]
+use = "sidebar"
+
+[[frame.component]]
+use  = "chats"
 edge = "top"
 size = 1
-key = "F9"
+key  = "F9"
 ```
+
+Those first four are the shipped frame written out longhand, and
+[Writing the arrangement out](#writing-the-arrangement-out) says what each of them is. File
+order is split order, so the bar named last is split off last.
 
 Both are the first things a short terminal gives up — before the identity row, because the
 palette reaches everything they show and nothing is lost but the reminder.
@@ -936,12 +956,25 @@ id**, which is the vocabulary the frame reasons in, and not a `slots` name. The 
 Mixing the vocabularies is refused rather than half-understood, so a file says which of the
 two it is written in.
 
+**An arrangement is the whole list, every time.** These tables do not add to the shipped
+frame, they replace it — so every example below writes all four out, and so must your file.
+Naming one panel gets you a frame with one panel in it.
+
 A component can be kept in the arrangement and not drawn:
 
 ```toml
 [[frame.component]]
-use = "repos"
+use = "identity"
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
+use     = "repos"
 visible = false
+
+[[frame.component]]
+use = "sidebar"
 ```
 
 That is the one thing `slots` cannot express. Deleting a name from `slots` loses its
@@ -1019,14 +1052,25 @@ round-trip.
 
 `size` is the same for three of the four: `size = 1` on identity, `size = 1` on the
 attention strip, `size = 22` on the sidebar, and any other number takes the arrangement
-out of play for the reason above.
+out of play for the reason above. **That reason is about those three and not about
+built-ins in general** — the two bars are a built-in charter derives nothing for, and they
+take a real height like any component a package supplies (see below).
 
-**`size` on the repo table is the one exception, and it pins the strip's height.**
+**`size` on the repo table pins the strip's height.**
 
 ```toml
 [[frame.component]]
+use = "identity"
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
 use  = "repos"
 size = 15
+
+[[frame.component]]
+use = "sidebar"
 ```
 
 The table is the one panel charter sizes to its content — one row per repo, so a plane
@@ -1042,13 +1086,22 @@ It is a number of cells: a whole number, at least 1. Anything else — `0`, a ne
 `true`, a string, a float — takes the arrangement out of play like every other value
 charter cannot honour.
 
+**The chat and workspace bars take a real height too, by the same rule.** Charter places
+neither of them by default, so neither has a slot whose geometry is derived at import;
+their height is read off your arrangement at every launch, exactly like the repo table's
+pin. So `size = 3` on `chats` gives you a three-row bar. They draw one row of names — the
+rest is empty surface, which is a thing you may want under a `bg` and is otherwise a waste
+of rows. The same whole-number rule applies: anything charter cannot turn into cells takes
+the arrangement out of play.
+
 **Your pin is still capped so your session keeps its 12 rows.** tmux does not refuse an
 over-large pane height, it grants it out of the neighbour, and the neighbour is your agent
 session — `size = 40` in a 20-row window would leave it one row tall. So a pin is what the
 strip *wants*, and what the window can spare is decided afterwards, exactly as it already
 is for a fourteen-repo plane on a short terminal. On a terminal with room, you get your
 number; on one without, you get what is left, and the strip is dropped entirely below the
-95 columns its table needs.
+width its table needs — the one
+[When the terminal is too small](#when-the-terminal-is-too-small) names.
 
 `bg` and `pad` are the two keys that have no `slots` equivalent at all: they say how a pane
 *looks*, not where it sits, so they only exist in the long form.
@@ -1067,7 +1120,7 @@ With that installed, your arrangement can place it:
 
 ```toml
 [[frame.component]]
-use  = "identity"
+use = "identity"
 
 [[frame.component]]
 use  = "acme.metrics"
@@ -1075,11 +1128,19 @@ edge = "right"
 size = 12
 
 [[frame.component]]
-use  = "attention"
+use = "attention"
+
+[[frame.component]]
+use = "repos"
+
+[[frame.component]]
+use = "sidebar"
 ```
 
 File order is split order here as everywhere else, so `acme.metrics` is split off before
-the attention strip and the strip is inset beside it.
+the attention strip and the strip is inset beside it. Charter's own four are written out
+again because this list is the whole arrangement — leaving one out is how you turn it off,
+not how you leave it alone.
 
 **`edge` and `size` are required here, and they win.** Required, because the only way to
 ask a package where it would like to sit is to import it — and your config is resolved by

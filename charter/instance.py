@@ -1523,22 +1523,41 @@ def _built_in_size(c, value):
 
     **A committed value is accepted exactly where something reads it, and refused
     everywhere else — which is the rule :func:`component_tables` already keeps for
-    ``edge``, not a new one.** `layout._derive` turns each component's declared size into
-    :data:`layout.SLOT_SIZE` once, at import, and `layout._size_of` answers `top`,
-    `bottom` and `right` out of that table on every launch. There is no per-plane
-    override between `charter.toml` and `split-window` for those three, so a ``size`` that
-    disagreed with the declaration would be a value read, validated, stored and then
-    ignored — the convincing empty the whole form is written against. It may therefore
-    only ECHO, which is what it could do before.
+    ``edge``, not a new one.** The question is therefore *is this number read at launch*,
+    and it is asked of :data:`frame.builtins.SLOT_OF` — the table that decides it —
+    rather than of the component's declared policy CLASS.
 
-    ``repos`` is the exception because it is the one placed built-in charter declares
-    ``Content()``, and a `Content` height is not in that table at all: `layout.slot_sizes`
-    routes it to `layout.repos_rows`, which is recomputed from the RESOLVED config on
-    every launch and on every `window-resized` (`commands_frame._reassert_sizes`). So
-    there is somewhere for a number to be read, and pinning it is what makes the strip a
-    fixed height instead of one that collapses to two rows on a two-repo plane.
+    ``SLOT_OF`` is the whole of it because `layout._PLACED` is literally
+    ``[c for c in every built-in if c.id in SLOT_OF]`` and `layout._derive` keys
+    :data:`layout.SLOT_SIZE` off it, so *in ``SLOT_OF``* and *in ``SLOT_SIZE``* are the
+    same set said twice. `tests/…_pinned_repo_strip…` asserts that equivalence for every
+    registered component, because this function reads the cheap one and the launch path
+    reads the other.
 
-    The pin is `Fixed`, and `component.Fixed` is asked rather than re-checked: it refuses
+    * **In ``SLOT_OF`` — `identity`, `attention`, `sidebar`.** `layout._size_of` answers
+      `top`, `bottom` and `right` out of `SLOT_SIZE`, derived once at import, and there is
+      no per-plane override between `charter.toml` and `split-window` for them. A ``size``
+      disagreeing with the declaration would be a value read, validated, stored and then
+      ignored — the convincing empty the whole form is written against. It may only ECHO.
+    * **In ``SLOT_OF`` and ``Content()`` — `repos`.** A `Content` height is not in
+      `SLOT_SIZE` as anything but a floor: `layout.slot_sizes` routes it to
+      `layout.repos_rows`, recomputed from the RESOLVED config on every launch and every
+      `window-resized` (`commands_frame._reassert_sizes`). There is somewhere for a number
+      to be read, and pinning it (#660) is what makes the strip a fixed height instead of
+      one that collapses to two rows on a two-repo plane.
+    * **Not in ``SLOT_OF`` — `chats`, `workspaces` (#687).** These are `Fixed(1)` and are
+      placeable only from a ``[[frame.component]]`` table, so they were never *placed* and
+      never entered `SLOT_SIZE`. `layout._size_of` misses the table and falls through to
+      `layout._placed_here` → `layout._policy_cells`, which reads the committed policy off
+      this resolved arrangement on every launch and hands it to ``split-window -l``.
+      **Their number is read.** They took the echo branch anyway until #687, on a reason —
+      "it could only be ignored" — that was measurably false for them: ``size = 2`` on a
+      chat bar reached `_built_in_size`, came back ``None``, and took the operator's ENTIRE
+      arrangement out of play (#535) in silence (see :data:`_HOTKEY_RE`'s note). Charter's
+      own bar on `top` may now pick a height exactly as a provider's component on `top`
+      already could.
+
+    The value is `Fixed`, and `component.Fixed` is asked rather than re-checked: it refuses
     a `bool`, a non-int and anything below one cell in `component.cells`, which is the one
     place that rule is written. Asked inside a ``try`` because this runs while a committed
     file is being resolved — on the path of `charter --version` as much as `charter frame`
@@ -1549,17 +1568,31 @@ def _built_in_size(c, value):
     ``not isinstance(value, bool)`` stays on the echo branch and is not redundant beside
     it: ``True == 1`` in Python, so without it a ``size = true`` on `identity` or
     `attention` — both `Fixed(1)` — would compare equal and be accepted as the number
-    nobody wrote. Four separate shapes of that trap have been caught in this suite.
+    nobody wrote. Four separate shapes of that trap have been caught in this suite. It is
+    not needed on the two branches that build a `Fixed`, because `Fixed` refuses a `bool`
+    itself.
+
+    A policy that is neither `Content` nor `Fixed` — `Fill()`, which `personas` declares —
+    has no number to echo and no height to pin, and is refused rather than asked for a
+    ``.n`` it does not have.
     """
+    from .frame import builtins as _builtins
     from .frame.component import ComponentError, Content, Fixed
     if isinstance(c.size, Content):
         try:
             return Fixed(value)
         except ComponentError:
             return None
-    if isinstance(c.size, Fixed) and value == c.size.n and not isinstance(value, bool):
-        return c.size
-    return None
+    if not isinstance(c.size, Fixed):
+        return None
+    if c.id in _builtins.SLOT_OF:
+        if value == c.size.n and not isinstance(value, bool):
+            return c.size
+        return None
+    try:
+        return Fixed(value)
+    except ComponentError:
+        return None
 
 
 def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None:
@@ -1788,12 +1821,15 @@ def component_tables(section, *, hotkey: str | None = None) -> list[dict] | None
             if "edge" in table and table["edge"] != c.edge:
                 return None
             # The one key on a built-in that a plane may do more with than echo, and
-            # :func:`_built_in_size` is where that asymmetry is argued: `top`, `bottom`
-            # and `right` are read out of a table `layout` derives at IMPORT, so a
-            # different number there could only be ignored; `repos` is `Content()` and its
-            # height is recomputed from this resolved arrangement on every launch and
-            # every resize, so a number there is read. `None` is refused the way every
-            # other unusable value in this loop is — whole arrangement, #535.
+            # :func:`_built_in_size` is where that asymmetry is argued: `identity`,
+            # `attention` and `sidebar` are read out of a table `layout` derives at
+            # IMPORT, so a different number there could only be ignored; `repos` is
+            # `Content()` and its height is recomputed from this resolved arrangement on
+            # every launch and every resize; `chats` and `workspaces` are in no derived
+            # table at all, so `layout._placed_here` reads their number off this
+            # arrangement too (#687). A number is honoured where it is READ. `None` is
+            # refused the way every other unusable value in this loop is — whole
+            # arrangement, #535.
             #
             # `None` rather than `c.size` for a table that names no size, and that is this
             # function's own #547 rule kept: `_built_in_placement` already declares what a
