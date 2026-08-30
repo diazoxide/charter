@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "charter-cp"
-version = "0.53.0"
+version = "0.54.0"
 description = "Personas, workspaces and memory for coding agents across many repos — Claude Code, opencode and Codex"
 readme = "README.md"
 license = "MIT"
