@@ -34,6 +34,7 @@ rather than a plausible number.
 
 from __future__ import annotations
 
+import bisect
 import os
 import time
 from typing import NamedTuple
@@ -2674,16 +2675,57 @@ def _page(fields: list[str], at: int, room: int) -> tuple[int, int]:
     # The widest count either end can carry: every name but one left out. Measured with
     # `tui.width` for this module's own reason, even though charter mints the digits.
     tail = _BAR_GAP + tui.width(f"+{len(fields) - 1}")
-    start = 0
-    while True:
-        budget = room - tail - (_BAR_GAP + tui.width(f"+{start}") if start else 0)
+
+    def room_for(start: int) -> int:
+        """What a page beginning at *start* may spend on names and the gaps between."""
+        return room - tail - (_BAR_GAP + tui.width(f"+{start}") if start else 0)
+
+    def reach(start: int) -> int:
+        """Where a page beginning at *start* ends when it is filled to the brim."""
         used, stop = tui.width(fields[start]), start + 1
+        budget = room_for(start)
         while stop < len(fields) and used + _BAR_GAP + tui.width(fields[stop]) <= budget:
             used += _BAR_GAP + tui.width(fields[stop])
             stop += 1
-        if at < stop:
-            return start, stop
-        start = stop
+        return stop
+
+    cuts = [0]
+    while cuts[-1] < len(fields):
+        cuts.append(reach(cuts[-1]))
+    # **The last page is not allowed to be a lone tab while the boundary can move**, and
+    # that is #767. Every page but the last is filled to the brim, so the last one holds
+    # the REMAINDER — and a remainder shrinks as the pages grow. With the marked name
+    # sorting last that made a WIDER bar draw fewer names, and at 228 columns on a
+    # fifteen-workspace plane it collapsed to a single tab: the one the operator was
+    # already on, which `_Tabs.switch_to` correctly refuses. #758 returning at a width
+    # wider than the one that fixed it.
+    #
+    # Moving the final cut one name left is decided on the NAMES and the WIDTH alone, so
+    # it cannot move a page out from under a click — the property `_Tabs` depends on and
+    # the reason this is not a window centred on the mark. Measured across 82 lists at
+    # every room from 5 to 300: no page moves when the frame switches to a tab drawn on it.
+    #
+    # **Balancing every page instead was measured and is WORSE**, which is why only the
+    # last one is rescued. Equal-sized pages ignore what names actually cost: on this
+    # project's own fifteen workspaces it drew 4/4/5/7/7 tabs at 100/120/160/200/240
+    # columns where filling each page draws 4/6/8/10/13, and across those 82 lists it left
+    # MORE pages holding a single tab (6,969 against 4,775), not fewer. Packing the last
+    # page from the right instead removes the drops and puts them on a middle name: the
+    # same fifteen workspaces then draw 8 tabs at 160 and 6 at 200.
+    while len(cuts) >= 3 and cuts[-1] - cuts[-2] < 2:
+        moved = cuts[-2] - 1
+        if moved <= cuts[-3] or reach(cuts[-3]) < moved or reach(moved) < cuts[-1]:
+            break
+        cuts[-2] = moved
+    # **What this does NOT restore is a monotone COUNT, and that is a stated limit rather
+    # than an oversight.** The remainder still shrinks as the pages grow, so a name that
+    # sorts late can still lose one tab as the pane widens — 10 such widths between 60 and
+    # 280 on a fifteen-name list, down from 12, each of exactly one name. What it does
+    # guarantee is that the row is never reduced to the tab you are standing on while
+    # there was room for another, which is the harm: at every width from 150 columns up,
+    # the marked page holds at least two names where it used to hold one.
+    i = bisect.bisect_right(cuts, at) - 1
+    return cuts[i], cuts[i + 1]
 
 
 def _bar(head: str, names: list[str], here: str, width: int, *,

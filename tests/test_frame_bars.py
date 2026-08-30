@@ -133,6 +133,42 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
                              "the row does not fill the width it is first drawn at, so "
                              "this measures no boundary")
 
+    def test_the_last_page_is_never_the_tab_you_are_on_alone(self):
+        """**#767, and it is #758 coming back at a WIDER width.**
+
+        Every page but the last is filled to the brim, so the last holds the remainder —
+        and a remainder shrinks as the pages grow. With the marked name sorting last, a
+        fifteen-name plane drew `+14  *workspace-14` at 228 columns: one tab, the one the
+        frame is already on, which `_Tabs.switch_to` correctly refuses. The bar was
+        clickable and reached nothing, at a width wider than the one that fixed it.
+
+        The last page now takes a name back from the page before it rather than standing
+        alone. Asked from 150 columns up, where the room is never the reason.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        here = names[-1]
+        for width in range(150, 281):
+            row = self._row(width, names=names, here=here)
+            drawn = [n for n in names if n in row]
+            self.assertIn(here, drawn, f"{width}: the marked name is not on the row")
+            self.assertGreaterEqual(
+                len(drawn), 2,
+                f"{width} columns drew only the tab the frame is on: {row!r}")
+
+    def test_rescuing_the_last_page_costs_the_pages_before_it_nothing_here(self):
+        """The floor is on the LAST page, so it moves one boundary and no other. On this
+        project's own fifteen workspaces — where `harness-wrapper` sorts mid-list and the
+        last page is never the marked one — every width draws exactly what filling each
+        page to the brim drew, which is what makes this free rather than a trade."""
+        ws = ThisPlaneIsWhyTheRungIsWindowed.NAMES
+        drawn = []
+        for width in (100, 120, 160, 200, 240):
+            rows = slots._bar("workspaces", list(ws), "harness-wrapper", width)
+            row = rows[0] if rows else ""
+            drawn.append(len([n for n in ws if n in row]))
+        self.assertEqual(drawn, [4, 6, 8, 10, 13],
+                         "the rescue took a tab off a plane it was not for")
+
     def test_the_page_is_the_same_page_for_every_name_on_it(self):
         """**Why it is a page and not a window centred on the marked name.** The cut is a
         function of the names and the width alone, so switching to a tab that is ON the row
