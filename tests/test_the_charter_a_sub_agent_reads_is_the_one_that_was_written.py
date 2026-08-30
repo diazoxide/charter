@@ -51,6 +51,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from charter import commands_persona as cp
 from charter import config, root
@@ -212,13 +213,18 @@ class WorktreeCase(PersonaIso):
     asserting against this module's idea of git's layout rather than against git's.
     """
 
+    #: Does the plane hold a persona at all? A plane that holds none is the case the
+    #: refusal below must NOT fire on — see `TestAPlaneWithNoPersonasIsNotARefusal`.
+    SEED_PERSONA = True
+
     def setUp(self) -> None:
         super().setUp()
         self.plane = self.tmp / "plane"
         self.plane.mkdir(parents=True, exist_ok=True)
         self.addCleanup(config.restore, config.use(self.plane))
         (self.plane / "charter.toml").write_text("schema = 1\n\n[[forge]]\nkind = \"github\"\n")
-        self.make_persona("scribe", role="Scribe of the plane", vault="none")
+        if self.SEED_PERSONA:
+            self.make_persona("scribe", role="Scribe of the plane", vault="none")
         self.git("init", "-q", "-b", "main", ".")
         self.git("add", "-A")
         self.git("commit", "-qm", "base")
@@ -230,11 +236,12 @@ class WorktreeCase(PersonaIso):
 
         self.worktree = self.tmp / "wt"
         self.git("worktree", "add", "-q", "-b", "branch", str(self.worktree))
-        # The branch edits the persona. Without this the two trees render identically and a
-        # write into the wrong one is invisible — which is exactly how #678 survived.
-        edited = (self.worktree / "personas" / "scribe" / "persona.md")
-        edited.write_text(edited.read_text().replace("Scribe of the plane",
-                                                     "Scribe of the branch"))
+        if self.SEED_PERSONA:
+            # The branch edits the persona. Without this the two trees render identically
+            # and a write into the wrong one is invisible — exactly how #678 survived.
+            edited = (self.worktree / "personas" / "scribe" / "persona.md")
+            edited.write_text(edited.read_text().replace("Scribe of the plane",
+                                                         "Scribe of the branch"))
 
     def git(self, *argv: str) -> None:
         subprocess.run(["git", "-C", str(self.plane), *argv], check=True, capture_output=True)
@@ -304,6 +311,31 @@ class TestASyncFollowsTheTreeItWasRunFrom(WorktreeCase):
         self.assertEqual(config.ROOT, self.plane)
         self.assertEqual(config.STATE_DIR, state)
 
+    def test_a_developer_who_relocated_their_state_keeps_it_afterwards(self):
+        """The pin is an argument to one `derive` call, not a change to the process — so a
+        developer who put their state somewhere with `$CHARTER_HOME` must find it still set,
+        to their value, once the generation is over.
+
+        `in_tree` sets that variable to make the plane's state survive the re-derivation. A
+        restore that always *unset* it would look correct in every test where it started
+        unset, and silently move the next command's vault back into the plane for the one
+        developer who had relocated theirs."""
+        chosen, state = str(self.tmp / "elsewhere"), config.STATE_DIR
+        with mock.patch.dict(os.environ, {config.STATE_HOME_VAR: chosen}):
+            with config.in_tree(self.worktree):
+                # The pin carries the state directory this session ALREADY resolved, not
+                # whatever the variable says now — the plane's answer, whichever way it was
+                # reached.
+                self.assertEqual(config.STATE_DIR, state)
+            self.assertEqual(os.environ.get(config.STATE_HOME_VAR), chosen)
+
+    def test_a_developer_who_never_set_it_does_not_acquire_it(self):
+        """The other side of the same branch: the pin is lifted, not left behind."""
+        os.environ.pop(config.STATE_HOME_VAR, None)
+        with config.in_tree(self.worktree):
+            pass
+        self.assertNotIn(config.STATE_HOME_VAR, os.environ)
+
     def test_reading_a_worktree_never_writes_a_state_directory_into_it(self):
         """`config.derive` migrates a legacy state directory as a side effect of being
         called. Re-deriving for a worktree must not make charter create — or move — anything
@@ -332,6 +364,26 @@ class TestASyncRefusesAWorktreeThatCarriesNoSources(WorktreeCase):
         self.sync_from(self.worktree)
         self.assertEqual(self.plane_agent.read_text(), before)
         self.assertFalse((self.worktree / ".claude" / "agents").exists())
+
+
+class TestAPlaneWithNoPersonasIsNotARefusal(WorktreeCase):
+    """The refusal is narrow, and this is the half that makes it narrow.
+
+    "The worktree has no `personas/`" is not enough to refuse on: a plane that has no
+    personas *at all* has nothing for either tree to generate, and `sync-agents` already has
+    a true answer for that — "No personas to sync. Create one first." Refusing there would
+    hand a worker a message about worktrees for a plane that simply has no roster yet, and
+    would make `charter persona create` in a worktree unreachable through the report that
+    tells you to run this next.
+    """
+
+    SEED_PERSONA = False
+
+    def test_a_worktree_of_an_empty_plane_is_told_the_plane_is_empty(self):
+        rc, said = self.sync_from(self.worktree)
+        self.assertEqual(rc, 0, said)
+        self.assertIn("No personas to sync", said)
+        self.assertNotIn("carries no", said)
 
 
 class TestTreeOfIsTheNarrowQuestion(WorktreeCase):
@@ -377,9 +429,25 @@ class TestTreeOfIsTheNarrowQuestion(WorktreeCase):
         plain.mkdir()
         self.assertIsNone(root.tree_of(self.plane, plain))
 
-    def test_a_start_that_cannot_be_resolved_answers_none(self):
-        """It sits on a command path and must never raise."""
+    def test_a_start_that_does_not_exist_answers_none(self):
         self.assertIsNone(root.tree_of(self.plane, self.tmp / "gone" / "deeper"))
+
+    def test_a_working_directory_that_no_longer_exists_answers_none(self):
+        """It sits on a command path and must never raise — and this is the way that
+        actually happens, which no non-existent *argument* reaches: with no `start`, the
+        question is asked of `Path.cwd()`, and a process whose working directory was deleted
+        out from under it gets `FileNotFoundError` there. `find_root_or_cwd` catches the same
+        pair for the same reason and says so in its own docstring; without the catch,
+        `sync-agents` would traceback instead of generating.
+
+        Both spellings, because `.resolve()` answers a symlink loop with `RuntimeError`
+        rather than an `OSError`, and a catch narrowed to one of the two is a catch that
+        holds for one of the two.
+        """
+        for boom in (FileNotFoundError("cwd deleted"), RuntimeError("symlink loop")):
+            with self.subTest(raises=type(boom).__name__):
+                with mock.patch.object(Path, "cwd", side_effect=boom):
+                    self.assertIsNone(root.tree_of(self.plane))
 
 
 if __name__ == "__main__":
