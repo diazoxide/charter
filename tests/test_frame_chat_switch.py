@@ -126,6 +126,56 @@ class TheRosterIsTheDirectory(PersonaIso, unittest.TestCase):
         with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "api"}, clear=False):
             self.assertEqual([c.id for c in chats.roster(huge)], ["api.2", huge])
 
+    def test_the_sort_key_reads_the_LAST_dot_and_refuses_what_is_not_an_ordinal(self):
+        """`_order`, at the four inputs that tell its clauses apart — the sweep found all
+        four unpinned because every earlier test used a plain `api.<n>`.
+
+        * `a.b.3` — `rpartition` takes the LAST dot and reads `3`; `partition` takes the
+          first and reads `b.3`, which is not an ordinal at all.
+        * `12345` — a name that is all digits and has NO dot. Without the `sep` clause it
+          sorts as ordinal 12,345 instead of last, which puts a chat charter never minted
+          in the middle of the bar.
+        * `api.x` — a short non-digit tail. Without `tail.isdigit()` this reaches
+          `int("x")` and the sort raises.
+        * `api.99999` — exactly `_MAX_ORDINAL_DIGITS` digits, so `<=` draws it as an
+          ordinal and `<` sorts it last.
+        """
+        self.assertEqual(chats._order("a.b.3"), (0, 3, "a.b.3"))
+        self.assertEqual(chats._order("12345"), (1, 0, "12345"))
+        self.assertEqual(chats._order("api.x"), (1, 0, "api.x"))
+        edge = "api." + "9" * chats._MAX_ORDINAL_DIGITS
+        self.assertEqual(chats._order(edge), (0, int("9" * chats._MAX_ORDINAL_DIGITS),
+                                              edge))
+        over = "api." + "9" * (chats._MAX_ORDINAL_DIGITS + 1)
+        self.assertEqual(chats._order(over), (1, 0, over))
+        # And through the list, which is where the ordering is actually read.
+        for fid in ("a.b.3", "12345", "api.x", "api.2"):
+            _plant(fid, workspace="w")
+        self.assertEqual(chats.of_workspace("w"),
+                         ["api.2", "a.b.3", "12345", "api.x"])
+
+    def test_a_chat_with_no_pane_record_at_all_is_refused_rather_than_raising(self):
+        """`state.harness_pane` answers ``None`` for a frame that has none — a chat
+        launched by a charter that predates the record — and `re.fullmatch(None)` is a
+        `TypeError`, not a refusal. The earlier test wrote a BAD pane string, which is a
+        different input and left the fallback unpinned."""
+        _plant("w.1", workspace="w")
+        state.frame_dir("w.2", create=True)
+        state.record_workspace("w.2", "w")
+        self.assertIsNone(state.harness_pane("w.2"))
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "w"}, clear=False):
+            out = chats.check("w.1", "w.2")
+        self.assertFalse(out.ok)
+        self.assertIn("no usable record", out.message)
+
+    def test_a_harness_with_a_TRAILING_space_is_trimmed_too(self):
+        """`.strip()`, not `.lstrip()`. The earlier test recorded three spaces, for which
+        both answer `""` — so the half that matters on a real value was unpinned. A note
+        is a column beside a name, and a trailing space in it moves nothing visible and
+        makes two identical harnesses compare unequal."""
+        _plant("w.1", workspace="w", harness="  Codex  ")
+        self.assertEqual(chats.harness_of("w.1"), "Codex")
+
     def test_the_roster_marks_the_chat_asking_and_carries_each_ones_harness(self):
         _plant("api.1", workspace="api", harness="Claude Code")
         _plant("api.2", workspace="api", harness="Codex")
@@ -314,6 +364,22 @@ class TheChatDoorwaySaysWhyBeforeTheKeypress(PersonaIso, unittest.TestCase):
                  for r in choose.roster(choose.CHAT, "api.1").rows}
         self.assertEqual(notes, {"api.1": "Claude Code", "api.2": "Codex"})
         self.assertEqual(choose._note(choose.WORKSPACE, "api"), "")
+
+    def test_only_a_chat_row_carries_a_harness_even_when_the_names_collide(self):
+        """`_note`'s `if noun == CHAT`, at the one input that can tell it from an
+        unconditional lookup.
+
+        `chats.harness_of` answers `""` for a name with no frame directory, so on an
+        ordinary plane dropping the branch changes nothing — which is why the sweep found
+        it unpinned. A workspace and a chat CAN share a name (`chats.is_chat` accepts a
+        name with no dot; `workspace.valid_name` accepts one), and then an unconditional
+        lookup puts a chat's harness in a workspace row's note.
+        """
+        _plant("shared", workspace="api", harness="Codex")
+        self.assertEqual(choose._note(choose.CHAT, "shared"), "Codex")
+        self.assertEqual(choose._note(choose.WORKSPACE, "shared"), "",
+                         "a workspace row borrowed a chat's harness")
+        self.assertEqual(choose._note(choose.PERSONA, "shared"), "")
 
     def test_no_launch_pin_can_refuse_a_chat_doorway(self):
         """`$CHARTER_SESSION_ID` IS a chat's identity and is set on every frame, so an
@@ -664,6 +730,21 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         self.assertEqual(self.fake.calls, [])
         self.assertEqual(said, [], "a refusal was aimed at a frame this is not in")
 
+    def test_an_absent_or_padded_chat_id_is_refused_rather_than_raising(self):
+        """`(… or "").strip()`, both halves. `None` reaches `str.strip` as an
+        `AttributeError` without the fallback, and a padded id passes `ID_RE` only once
+        the trailing space is gone — `lstrip` leaves it and the name is refused as
+        unknown, which is a different sentence for a name that is really fine."""
+        said = []
+        with mock.patch.object(commands_frame, "_say_on_screen",
+                               lambda fid, msg, *a, **k: said.append(msg)):
+            commands_frame.cmd_chat(mock.Mock(chat_id=None, chat="api.1"))
+            self.assertIn("cannot name a chat", said[-1])
+            self.assertEqual(self.fake.calls, [])
+            commands_frame.cmd_chat(mock.Mock(chat_id="  api.2  ", chat="api.1"))
+        self.assertIn("select-window", self.fake.verbs(),
+                      "a padded id was not trimmed back to a real chat")
+
     def test_a_refused_name_never_reaches_tmux_at_all(self):
         said = []
         with mock.patch.object(commands_frame, "_say_on_screen",
@@ -777,6 +858,58 @@ class ThePaletteStartsTheSwitchRatherThanPerformingIt(PersonaIso, unittest.TestC
         argv, fid = spawned[0]
         self.assertEqual(argv[-2:], ["frame-chat", "api.2"])
         self.assertEqual(fid, "api.1")
+
+    def test_the_palette_starts_nothing_for_a_chat_the_check_refused(self):
+        """**`if out.ok and noun == choose.CHAT`, both halves, through the real
+        `_draw_palette`.** The sweep found the whole `if` and its `out.ok` conjunct
+        unpinned: every other case here calls `_start_chat_switch` directly, so none of
+        them would notice the palette spawning a switch for a name `chats.check` has just
+        refused — the chat you are already in, or one whose window record is unusable.
+
+        Driven with `palette.own_the_tty` faked out the way `tests/test_frame_pickers.py`
+        drives it, so the row travels the path a keypress does.
+        """
+        from types import SimpleNamespace
+
+        from charter.frame import palette
+
+        def pane(*rows):
+            """`tests/test_frame_pickers._pane`: one row per surface, in order — the
+            doorway first, which is what opens the picker and puts its roster where
+            `_chosen_name` looks, then the name."""
+            def fake(surface, *, then=None, **kw):
+                chosen = None
+                for row in rows:
+                    chosen = row
+                    if row is None or then is None or then(row) is None:
+                        break
+                return chosen
+            return fake
+
+        doorway = next(r for r in choose.open_rows("api.1")
+                       if choose.noun_of(r) == choose.CHAT)
+
+        def row_for(name):
+            roster = choose.roster(choose.CHAT, "api.1")
+            return next(r for r in roster.rows if roster.name_of(r) == name)
+
+        for target, expect in (("api.1", 0), ("api.2", 1)):
+            with self.subTest(target=target):
+                spawned = []
+                with mock.patch.dict(os.environ,
+                                     {"CHARTER_SESSION_ID": "api.1"}, clear=False), \
+                     mock.patch.object(commands_frame.builtin_actions, "_spawn",
+                                       lambda argv, *, fid: spawned.append(argv)), \
+                     mock.patch.object(commands_frame, "_say_on_screen"), \
+                     mock.patch.object(commands_frame, "_close_palette"), \
+                     mock.patch.object(palette, "own_the_tty",
+                                       pane(doorway, row_for(target))):
+                    rc = commands_frame.cmd_palette(
+                        SimpleNamespace(client="/dev/ttys7", pane=True))
+                self.assertEqual(rc, 0)
+                self.assertEqual(len(spawned), expect,
+                                 f"the palette started {len(spawned)} switch(es) for "
+                                 f"{target!r}")
 
     def test_choose_switch_to_decides_and_does_not_perform(self):
         """`choose.switch_to` is asked in the palette's own process, which may make no

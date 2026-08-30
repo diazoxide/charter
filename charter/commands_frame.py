@@ -4951,8 +4951,12 @@ def cmd_chat(args) -> int:
         # instant it matters. Nothing has been torn down at this point — the teardown is
         # below this line on purpose, so a chat whose window is gone costs the operator
         # nothing but a sentence.
-        _say_on_screen(fid, f"cannot switch: chat "
-                            f"'{contain.one_line(target)}' has no window any more")
+        # No `contain.one_line` on *target*: `chats.check` has already held it to
+        # `chats.ID_RE`, whose alphabet holds nothing `one_line` touches, so the call
+        # would be one whose result is provably its argument — the sweep found it as a
+        # survivor for that reason. `_say_on_screen`'s own `inert_format` is what makes
+        # this a tmux format's business rather than this line's.
+        _say_on_screen(fid, f"cannot switch: chat '{target}' has no window any more")
         return 0
     here = _relayout_target(fid)
     if here is not None:

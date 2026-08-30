@@ -143,6 +143,71 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         row = self._row(20, names=["averylongchatname.1"], here="averylongchatname.1")
         self.assertNotIn("+0", row)
 
+    def _rung(self, width, names=None, here="api.2", note=""):
+        rows = slots._bar("chats", list(names or self.NAMES), here, width, note=note)
+        return rows[0] if rows else ""
+
+    def _fits_at(self, names, here, note=""):
+        """Each rung's own row, and the exact width at which it stops fitting.
+
+        Measured off the row rather than written down, so the assertions below follow the
+        ladder if the inset or the gap ever moves.
+        """
+        seen, out = None, []
+        for width in range(200, 0, -1):
+            row = self._rung(width, names, here, note)
+            if row != seen:
+                if seen:
+                    out.append((seen, width + 1))
+                seen = row
+                if not row:
+                    break
+        return out
+
+    def test_every_rung_is_drawn_at_its_own_width_and_gone_one_cell_narrower(self):
+        """**Each `<=` asserted on both sides of its own boundary**, which is the only way
+        a comparison is pinned rather than its direction.
+
+        The deletion sweep found eight `shift-boundary` survivors in this function — every
+        `<=` → `<` and every `>=` → `>` — and each was a test measuring at a round width
+        instead of at the width where the rung actually changes. A row that fits in
+        exactly N cells must be drawn at N and must be gone at N-1.
+        """
+        for names, here, note in ((self.NAMES, "api.2", ""),
+                                  (self.NAMES, "api.1", ""),
+                                  (self.NAMES, "api.2", slots.ADD_CHAT),
+                                  (["only.1"], "only.1", slots.ADD_CHAT)):
+            rungs = self._fits_at(list(names), here, note)
+            self.assertGreaterEqual(len(rungs), 2,
+                                    f"{names} at {here!r} never changed rung")
+            for row, width in rungs:
+                with self.subTest(row=row, width=width):
+                    self.assertEqual(tui.width(row), width,
+                                     "the row does not fill the width it needs, so this "
+                                     "measures no boundary")
+                    self.assertEqual(self._rung(width, names, here, note), row)
+                    self.assertNotEqual(self._rung(width - 1, names, here, note), row,
+                                        "the row was still drawn one cell too narrow")
+
+    def test_the_chat_you_are_in_being_FIRST_still_reaches_every_rung(self):
+        """`at >= 0`, twice. The first name has index 0, so `at > 0` skips rung 2 entirely
+        and turns `1/3` into a bare `3` — a row that has stopped saying where you are.
+        Every other test here marks the middle name, which is exactly why the sweep found
+        both comparisons unpinned."""
+        rung2 = [r for r, _ in self._fits_at(self.NAMES, "api.1")
+                 if "+2" in r]
+        self.assertTrue(rung2, "rung 2 was never reached with the first name marked")
+        self.assertIn(f"{slots._BAR_MARK[0]}api.1", rung2[0])
+        counted = [r for r, _ in self._fits_at(self.NAMES, "api.1") if "/" in r]
+        self.assertEqual([r.strip() for r in counted], ["chats  1/3"])
+
+    def test_a_row_with_no_note_spends_no_columns_pretending_to_have_one(self):
+        """`note and …` — without it an empty note still buys its own gap, and the row
+        gains a trailing two cells that belong to the names."""
+        row = self._rung(200, ["a.1"], "a.1", note="")
+        self.assertEqual(row, row.rstrip(),
+                         "an absent note still spent its separator")
+
     def test_the_mark_follows_the_raw_name_and_not_the_repaired_one(self):
         """`contain.one_line` is a REPAIR, so two names differing only in what it repairs
         are one string after it — and a mark matched on the drawn text would follow the

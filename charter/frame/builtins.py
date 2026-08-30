@@ -162,8 +162,14 @@ def places(cid, reg: Registry | None = None) -> bool:
     charter had then, which is wrong for a long-lived process and wrong in the direction
     that is hard to see.
     """
-    if not isinstance(cid, str):
-        return False
+    # **No `isinstance` refusal, and the deletion sweep is why.** This is asked of a value
+    # read out of a committed `charter.toml`, so a TOML array or table can reach it — and
+    # `Registry.on_edge` answers with components whose `id` is always a string, so
+    # `c.id == cid` is already False for every one of them. A guard in front of that is a
+    # line no input can make observable, which the sweep found as a survivor. The property
+    # it was protecting is structural rather than guarded, and
+    # `ABarIsPlaceableByConfig.test_places_refuses_anything_that_is_not_a_name` keeps
+    # asking for it.
     if reg is None:
         reg = build()
     return any(c.id == cid for edge in EDGES for c in reg.on_edge(edge))

@@ -125,14 +125,14 @@ def of_workspace(workspace: str) -> list[str]:
     when a bar repaints, not on a tick. `state.reap` is what bounds it.
     """
     try:
-        # `is_dir()` inside the same `try` as the scan, deliberately, and it is one guard
-        # rather than two. A `DirEntry.is_dir()` can raise `OSError` of its own — a
-        # `stat` on an entry that went away between the scan and the question, or one the
-        # process may not stat — and a second `try` around it would be a line that only a
-        # race could turn red, which is a line no test can pin. Answered the same way for
-        # the same reason the outer one is: a bar that could not read the directory draws
-        # nothing.
-        names = [e.name for e in os.scandir(state._root()) if e.is_dir()]
+        # **No `is_dir()` filter, and the deletion sweep is what settled that too.** It
+        # reads as the obvious first question and it cannot change the answer: a frame's
+        # workspace is a FILE inside its directory, so `frame_workspace` answers ``None``
+        # for a loose file whatever its name is, and the filter below already refuses it.
+        # A guard that passes only because a different guard caught it is the shape this
+        # repository deletes. What it cost was one `stat` per entry, which the read below
+        # pays anyway.
+        names = [e.name for e in os.scandir(state._root())]
     except OSError:
         # No frame root at all is the ordinary answer on a plane that has never launched
         # one, and an unreadable one is the same answer for the caller: no chats to
@@ -212,7 +212,7 @@ def roster(fid: str) -> list[Chat]:
     to the end of the bar because its record was unreadable.
     """
     names = of_workspace(state.workspace_for(fid))
-    if fid and is_chat(fid) and fid not in names:
+    if is_chat(fid) and fid not in names:
         names = sorted([*names, fid], key=_order)
     return [Chat(id=n, harness=harness_of(n), active=n == fid) for n in names]
 

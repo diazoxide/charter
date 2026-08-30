@@ -2471,15 +2471,26 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     shown = [contain.one_line(n) for n in names]
     marked = [f"{_BAR_MARK[0] if i == at else _BAR_MARK[1]}{n}"
               for i, n in enumerate(shown)]
-    lead = _inset() + contain.one_line(head) + " " * _BAR_GAP
+    # **`head` and `note` are NOT contained, and the deletion sweep is what settled it.**
+    # Both are charter's own literals — `"chats"`, `"workspaces"`, :data:`ADD_CHAT` — and
+    # no caller can hand this an open-alphabet one, so a `contain.one_line` on either is a
+    # call whose result is provably its argument. The sweep found both as survivors for
+    # exactly that reason: no input could make the mutation differ. The NAMES are
+    # contained, one line up, which is where the open alphabet actually is.
+    lead = _inset() + head + " " * _BAR_GAP
     room = width - tui.width(lead)
     joined = (" " * _BAR_GAP).join(marked)
     if note and tui.width(joined) + _BAR_GAP + tui.width(note) <= room:
-        return [lead + joined + " " * _BAR_GAP + contain.one_line(note)]
+        return [lead + joined + " " * _BAR_GAP + note]
     if tui.width(joined) <= room:
         return [lead + joined]
     if at >= 0:
-        rest = f"{' ' * _BAR_GAP}+{len(names) - 1}" if len(names) > 1 else ""
+        # **No `if len(names) > 1` on the count, and it is unreachable rather than merely
+        # untested.** With ONE name `joined` IS `marked[at]` and the count is empty, so
+        # the rung above asks exactly what this one asks and always answers first: a `+0`
+        # can be built here and can never be returned. The sweep found the conditional as
+        # a survivor for that reason.
+        rest = f"{' ' * _BAR_GAP}+{len(names) - 1}"
         if tui.width(marked[at]) + tui.width(rest) <= room:
             return [lead + marked[at] + rest]
     counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
