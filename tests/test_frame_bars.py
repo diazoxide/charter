@@ -60,12 +60,101 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         widths = {tui.width(self._row(200, here=n)) for n in self.NAMES}
         self.assertEqual(len(widths), 1, "the row changed width when the mark moved")
 
-    def test_a_row_with_no_room_for_every_name_keeps_yours_and_counts_the_rest(self):
+    def test_a_row_with_no_room_for_every_name_draws_the_page_yours_is_on(self):
+        """The names that FIT, not the one you are on and a count of everything else.
+
+        The rung this replaces drew `*api.2  +2`, whose only tab is the one the operator
+        is already standing on — correct, and inert. What the row can hold is drawn
+        instead, and the rest is counted at whichever end it fell off.
+        """
         row = self._row(30)
         self.assertIn("*api.2", row)
-        self.assertIn("+2", row)
-        self.assertNotIn("api.1", row)
+        self.assertIn("api.1", row, "the row had room for a neighbour and drew none")
         self.assertNotIn("api.3", row)
+        self.assertIn("+1", row, "the name left off the row was not counted")
+
+    def test_both_ends_are_counted_so_a_page_says_where_in_the_list_it_sits(self):
+        """A single trailing `+N` beside a page that starts in the middle of the list
+        claims the names on the row are the FIRST N — which a windowed strip makes false.
+
+        Measured on a list long enough to have a page with names on both sides of it.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        row = self._row(80, names=names, here="workspace-07")
+        self.assertIn("*workspace-07", row)
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        self.assertEqual(len(counts), 2, f"one end went uncounted: {row!r}")
+        left, right = counts
+        drawn = [n for n in names if n in row]
+        self.assertEqual(int(left[1:]) + len(drawn) + int(right[1:]), len(names),
+                         f"the two counts and the drawn names are not the list: {row!r}")
+        self.assertEqual(names[int(left[1:])], drawn[0],
+                         f"the leading count does not name where the page starts: {row!r}")
+
+    def test_a_page_is_cut_inside_the_room_its_own_leading_count_has_left(self):
+        """**The leading `+N` is paid for before a name is, and this is where that shows.**
+
+        A page after the first is cut inside `room` MINUS that count, so the row it goes on
+        to compose fits the pane. Cut inside the whole room instead and the row comes out
+        one name too wide — the ladder measures it, gives the entire rung up, and a name
+        with a perfectly good page is drawn as `3/15`, with nothing on the bar to click.
+        The deletion sweep found that reserve unpinned and this is the case it asked for.
+
+        Asked as the property that failure breaks, which is **widening the pane never takes
+        a name away**. The reserve is what keeps the ladder monotone: without it a wider
+        room cuts a page one name longer, the leading count that page has to carry was
+        never budgeted for, the row overflows and the whole rung is given up. Measured on
+        the mutant — with these fifteen names the row is drawn at 31 columns, gone at 42
+        through 45, and back at 46. A bar that loses its names when the pane gets bigger is
+        a bug an operator reports as a flicker.
+
+        Every name of the list, at every width from 0 to 200, plus the narrowest row for
+        three of them written out — one near the start, one in the middle, one at the end,
+        because the leading count is two cells wide for some and three for others.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for here in names:
+            drawn = [w for w in range(201)
+                     if here in self._row(w, names=names, here=here)]
+            self.assertTrue(drawn, f"{here} is drawn at no width at all")
+            missing = [w for w in range(min(drawn), 201) if w not in drawn]
+            self.assertEqual(missing, [],
+                             f"{here} was drawn at {min(drawn)} columns and gone at "
+                             f"{missing[:3]} — the pane got wider and lost a name")
+        for here, expected in (("workspace-02", "chats  +2  *workspace-02  +12"),
+                               ("workspace-07", "chats  +7  *workspace-07  +7"),
+                               ("workspace-13", "chats  +13  *workspace-13  +1")):
+            narrowest = min(w for w in range(201)
+                            if here in self._row(w, names=names, here=here))
+            row = self._row(narrowest, names=names, here=here)
+            self.assertEqual(row.strip(), expected)
+            self.assertEqual(tui.width(row), narrowest,
+                             "the row does not fill the width it is first drawn at, so "
+                             "this measures no boundary")
+
+    def test_the_page_is_the_same_page_for_every_name_on_it(self):
+        """**Why it is a page and not a window centred on the marked name.** The cut is a
+        function of the names and the width alone, so switching to a tab that is ON the row
+        redraws the identical row with only the `*` moved — which is what makes the column
+        the operator pressed still mean the same thing an instant later.
+
+        A centred window does not have this property, and the difference is not
+        theoretical: measured on this project's own fifteen workspaces at 160 columns, six
+        of the nine tabs a centred strip draws answer a second press at the identical
+        column with a second, different workspace. `_Tabs.switch_to` cannot refuse that —
+        the name at that column really did change — so a double-click would switch twice.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for width in (60, 80, 120, 160, 200):
+            row = self._row(width, names=names, here="workspace-07")
+            drawn = [n for n in names if n in row]
+            self.assertIn("workspace-07", drawn, f"{width}: nothing was drawn")
+            for name in drawn:
+                again = self._row(width, names=names, here=name)
+                self.assertEqual([n for n in names if n in again], drawn,
+                                 f"{width}: switching to {name} moved the page:\n"
+                                 f"  {row!r}\n  {again!r}")
 
     def test_a_row_with_no_room_for_a_name_says_where_you_are_and_how_many(self):
         """§3.6's "marks only", and a count IS the mark: `2/3` says where you are, which
@@ -338,15 +427,47 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         for col in self._cells(row, "api.2"):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
 
-    def test_the_overflow_count_resolves_to_nothing(self):
-        """Rung 2's `+2` stands for names that are NOT on the row, so there is nothing
-        there to switch to — `…(+N more)`'s rule one axis over. On a plane with fifteen
-        workspaces that field is a `+14`, and it is the one an operator is most likely to
-        try: it answers falsy, and the palette is what reaches those names."""
-        row = self._draw(30, here="api.2")
-        self.assertIn("+2", row, f"this width is not rung 2: {row!r}")
-        for col in self._cells(row, "+2"):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+    def test_neither_overflow_count_resolves_to_anything(self):
+        """A `+N` stands for names that are NOT on the row, so there is nothing there to
+        switch to — `…(+N more)`'s rule one axis over. **Both ends**, and the LEADING one
+        is the new half: it sits between the heading and the first tab, so a map measured
+        from the lead rather than from where the tabs actually start would hand its cells
+        to the first name on the page — a click landing one tab off where the operator
+        pressed."""
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        row = self._draw(80, names=names, here="workspace-07")
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        self.assertEqual(len(counts), 2, f"this width is not a page in the middle: {row!r}")
+        for count in counts:
+            for col in self._cells(row, count):
+                self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_a_page_that_starts_in_the_middle_still_maps_its_tabs_where_they_are(self):
+        """The leading count moves every tab right of where a bar without one puts them.
+
+        **This is the case a map measured from the heading gets wrong**, and it gets it
+        wrong quietly: every tab answers with its LEFT neighbour, which is a real name and
+        a plausible switch. Asked on the drawn row, one column at a time, so the answer
+        follows the paint rather than a second walk of the same arithmetic.
+
+        The marked name is the one tab with no answer of its own
+        (`test_the_tab_you_are_already_on_resolves_to_nothing`), and it is excluded here
+        rather than the page being drawn for a `here` that names nothing — the windowed
+        rung is only reached when the marked name is IN the list, which is the whole point
+        of it drawing the page that name falls on.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        here = "workspace-07"
+        row = self._draw(80, names=names, here=here)
+        self.assertTrue(row.lstrip().split("  ")[1].startswith("+"),
+                        f"this row has no leading count to displace anything: {row!r}")
+        drawn = [n for n in names if n in row and n != here]
+        self.assertTrue(drawn, f"no switchable tab on the page: {row!r}")
+        for name in drawn:
+            for col in self._cells(row, name):
+                self.assertEqual(slots.TABS.switch_to(col), name,
+                                 f"column {col} of {row!r}")
 
     def test_the_rung_that_says_only_where_you_are_has_no_tabs_at_all(self):
         """`2/3` is a position, not a name, and there is no name on the row to click."""
@@ -409,6 +530,102 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         for col in range(at, at + tui.width(drawn)):
             self.assertEqual(slots.TABS.switch_to(col), raw,
                              f"column {col} of {row!r} carries the drawn name")
+
+    def test_a_second_press_on_the_column_you_just_switched_from_does_nothing(self):
+        """**The double-click property, asserted across the repaint that a switch causes**
+        rather than against one paint.
+
+        `test_the_tab_you_are_already_on_resolves_to_nothing` asks whether the marked tab
+        is inert on the row in front of it. This asks the thing an operator can actually
+        do wrong: press a tab, let the frame switch and repaint, press the same cell again.
+        The answer has to be nothing — and it is only nothing because the page did not
+        move. A window centred on the marked name would put a DIFFERENT workspace under
+        that cell, and the second press would switch to it.
+
+        Every drawn tab, at five widths, including the widths where the page has names on
+        both sides of it.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for width in (60, 80, 120, 160, 200):
+            row = self._draw(width, names=names, here="workspace-07")
+            for name in [n for n in names if n in row and n != "workspace-07"]:
+                for col in self._cells(row, name):
+                    # Redrawn each time round: the strip is one object, so the paint the
+                    # first press resolves against has to be the one in front of it.
+                    self._draw(width, names=names, here="workspace-07")
+                    self.assertEqual(slots.TABS.switch_to(col), name)
+                    after = self._draw(width, names=names, here=name)
+                    self.assertIsNone(
+                        slots.TABS.switch_to(col),
+                        f"{width}: pressing column {col} twice switched twice — "
+                        f"{name} then {slots.TABS.switch_to(col)}\n"
+                        f"  before {row!r}\n  after  {after!r}")
+
+
+class ThisPlaneIsWhyTheRungIsWindowed(unittest.TestCase):
+    """The fifteen workspaces this repository's own plane has, at the widths it is run at.
+
+    **The measurement #725 shipped with, kept as a test.** That change made both bars
+    clickable and the `workspaces` bar stayed inert on the plane it was reported from:
+    those names need 274 columns for rung 1, so every real width fell to a rung whose only
+    drawn tab was the one the operator was already on. "Clickable" and "reaches nothing"
+    are the same screen.
+
+    Written against the real names rather than a fixture of even-width ones, because the
+    greedy cut is about the widths names actually have — `relations-and-delegations` is 25
+    cells and `todos` is 5, and a page of uniform names would measure neither.
+    """
+
+    NAMES = sorted([
+        "authority-audit", "autonomy", "charter-update-skill", "default", "fleet",
+        "harness-wrapper", "news-dispatch-guard", "opencode-integration", "plane-shape",
+        "relations-and-delegations", "showcase", "statusline-improvements", "todos",
+        "tracking-github-issues", "user-reporting",
+    ])
+    HERE = "harness-wrapper"
+
+    def setUp(self):
+        slots.TABS.forget()
+        self.addCleanup(slots.TABS.forget)
+
+    def _switchable(self, width):
+        rows = slots._bar("workspaces", list(self.NAMES), self.HERE, width)
+        row = rows[0] if rows else ""
+        self.assertLessEqual(tui.width(row), width, repr(row))
+        return row, {slots.TABS.switch_to(col) for col in range(width)} - {None}
+
+    def test_rung_one_still_needs_two_hundred_and_seventy_four_columns(self):
+        """The number the whole change is about. Measured off the ladder, so it follows
+        the inset and the gap if either moves."""
+        widest = next(w for w in range(400)
+                      if len(slots._bar("workspaces", list(self.NAMES), self.HERE, w)) == 1
+                      and all(n in slots._bar("workspaces", list(self.NAMES),
+                                              self.HERE, w)[0] for n in self.NAMES))
+        self.assertEqual(widest, 274)
+
+    def test_every_real_width_now_reaches_workspaces_the_operator_is_not_on(self):
+        """120, 160 and 200 columns. Before this change each of them drew
+        `*harness-wrapper  +14` and switched to nothing at all."""
+        for width, least in ((120, 5), (160, 7), (200, 9)):
+            row, switchable = self._switchable(width)
+            self.assertNotIn(self.HERE, switchable,
+                             "the tab you are on is not somewhere to switch to")
+            self.assertGreaterEqual(
+                len(switchable), least,
+                f"{width} columns reaches {len(switchable)} workspaces: {row!r}")
+
+    def test_the_narrowest_frame_that_draws_a_name_still_says_where_in_the_list_it_is(self):
+        """A page of one is inert — there is nothing on it but the name you are on — and
+        that is the rung this replaced, arrived at honestly. It still carries both counts,
+        so it says strictly more than the `*harness-wrapper  +14` it replaces: which of
+        the fifteen this is."""
+        row, switchable = self._switchable(60)
+        self.assertIn(f"{slots._BAR_MARK[0]}{self.HERE}", row)
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        self.assertEqual(sum(int(c[1:]) for c in counts),
+                         len(self.NAMES) - len([n for n in self.NAMES if n in row]),
+                         f"the counts do not add up to what is off the row: {row!r}")
 
 
 class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):

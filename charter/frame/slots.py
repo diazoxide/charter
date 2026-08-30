@@ -2510,8 +2510,8 @@ class _Tabs:
         *columns* maps a column of the component's OWN canvas — the rectangle `ctx.width`
         describes, which is what `events.Dispatcher._on_canvas` delivers a click in — to
         the name of the tab drawn there. Absent means the operator clicked a cell this
-        bar drew no tab into: the heading, the gap between two tabs, the `+14`, the
-        `n/N`, the empty space past the last name. `events.Dispatcher._on_canvas` applies
+        bar drew no tab into: the heading, the gap between two tabs, EITHER `+N` count,
+        the `n/N`, the empty space past the last name. `events.Dispatcher._on_canvas` applies
         the identical rule one axis over for the pad, and `_Viewport.publish` applies it
         for the table's heading row.
 
@@ -2592,6 +2592,63 @@ def _tab_columns(start: int, drawn) -> dict:
     return cols
 
 
+def _page(fields: list[str], at: int, room: int) -> tuple[int, int]:
+    """The half-open run of *fields* the tab at index *at* is drawn with, inside *room*.
+
+    :func:`_bar`'s windowed rung. *fields* are the already-marked, already-contained tab
+    texts; the answer is a slice of them wide enough to draw, with room left for the two
+    counts that stand for what it leaves out.
+
+    **The pages do not depend on *at*, and that is the whole design.** The list is cut
+    into consecutive pages left to right — greedily, as many whole names as fit, then the
+    next page from where that one stopped — and this returns whichever page the marked tab
+    falls in. So the page is a pure function of the NAMES and the WIDTH, and switching to a
+    tab that is on the page redraws that page unchanged with only the `*` moved.
+
+    That property is what makes a windowed strip safe to click, and the alternative is
+    where it was measured. A window CENTRED on the marked tab moves every column each time
+    the operator switches, so the cell they just pressed holds a different name a moment
+    later: on this project's own fifteen workspaces at 160 columns, six of the nine drawn
+    tabs answer a second press at the identical column with a SECOND, different workspace.
+    `_Tabs.switch_to`'s "the tab you are on is not news" cannot catch that — the name at
+    that column really did change — so a double-click would switch twice, which is the one
+    thing that rule exists to stop. Pages cannot: a drawn tab is by construction on the
+    current page, so switching to it cannot turn the page.
+
+    **Anchoring to the previous window would buy the same steadiness and would have to be
+    remembered.** A panel is one long-lived process per slot, so state does survive an
+    ordinary repaint — but not `cmd_respawn`, not the respawn hook a dead pane fires, and
+    not a density change that re-splits the panels. The row would then depend on history
+    the operator cannot see, and two frames showing the same plane at the same width could
+    disagree. Pages need nothing remembered.
+
+    **Both counts are paid for before a name is, and the trailing one is sized for the
+    worst case.** The leading `+N` is exactly ``+start``, which is known before the page is
+    built. The trailing one is not: whether it is drawn at all depends on where the page
+    ends, which is what is being computed. Reserving the widest count the list can produce
+    breaks that circle for the price of at most a cell or two on the final page, where the
+    reserve is spent on a count that is never drawn. The alternative is an iteration whose
+    fixed point is not obvious, to save a column.
+
+    At least one field per page, always, so a name wider than the whole row cannot spin
+    this. Such a page overflows, and :func:`_bar` measures the row it composed and gives
+    the rung up rather than drawing it — the ladder's own rule, one rung down.
+    """
+    # The widest count either end can carry: every name but one left out. Measured with
+    # `tui.width` for this module's own reason, even though charter mints the digits.
+    tail = _BAR_GAP + tui.width(f"+{len(fields) - 1}")
+    start = 0
+    while True:
+        budget = room - tail - (_BAR_GAP + tui.width(f"+{start}") if start else 0)
+        used, stop = tui.width(fields[start]), start + 1
+        while stop < len(fields) and used + _BAR_GAP + tui.width(fields[stop]) <= budget:
+            used += _BAR_GAP + tui.width(fields[stop])
+            stop += 1
+        if at < stop:
+            return start, stop
+        start = stop
+
+
 def _bar(head: str, names: list[str], here: str, width: int, *,
          note: str = "") -> list[str]:
     """One bar row: *head*, then *names* with *here* marked, inside *width* columns.
@@ -2604,10 +2661,18 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     **The ladder, and every rung drops a whole thing rather than truncating one.**
 
     1. **Every name in full**, *here* marked. What a wide row shows.
-    2. **The one you are in, in full, plus a count of the rest** (`+2`). The others go
-       WHOLE, which is `_fit_fields`' own discipline one row over: a list cut off
-       mid-name is a list where `api-staging` and `api-standby` are the same string, and
-       half a name is worse than an honest count.
+    2. **The PAGE the one you are in falls on, plus a count at each end** (`+5  …  +9`).
+       Every name on the row goes WHOLE, which is `_fit_fields`' own discipline one row
+       over: a list cut off mid-name is a list where `api-staging` and `api-standby` are
+       the same string, and half a name is worse than an honest count. :func:`_page` is
+       the cut and carries why it is a page rather than a window centred on *here*.
+
+       **This rung used to draw the marked name alone**, and on a real plane that made
+       the whole bar inert: fifteen workspaces need 274 columns for rung 1, so every
+       width an operator actually runs at drew `*harness-wrapper  +14` — one tab, the one
+       they were already on, which `_Tabs.switch_to` correctly refuses. The bar was
+       clickable and reached nothing. A page reaches five more at 120 columns, seven at
+       160 and nine at 200.
     3. **`n/N` alone** — which position you are in and how many there are. This is the
        rung §3.6 calls "marks only", and a count IS what a mark per chat degenerates to
        once there is no room to draw one per chat. It says strictly more: `2/3` tells you
@@ -2641,11 +2706,18 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     bar clickable at all and is the same discipline `_repos` keeps for the table's rows:
     the handler resolves a click against WHAT WAS DRAWN rather than against what it
     thinks would have been. Only the names actually on the row get columns — the heading,
-    the gaps, the `+N`, the `n/N` and the affordance are cells this bar drew no tab into
-    and a click on one of them switches nothing. **The rungs that draw NOTHING publish
-    too**, and that is the half `_Viewport.blank` exists for one axis over: a bar that
-    kept its last map through a resize down to `2/3`, or down to no row at all, would
+    the gaps, BOTH `+N` counts, the `n/N` and the affordance are cells this bar drew no
+    tab into and a click on one of them switches nothing. **The rungs that draw NOTHING
+    publish too**, and that is the half `_Viewport.blank` exists for one axis over: a bar
+    that kept its last map through a resize down to `2/3`, or down to no row at all, would
     switch to a tab the operator can see is not on screen.
+
+    **The windowed rung sharpens that rather than softening it.** It draws a different
+    slice of the names at every width, so a map kept across a resize would answer with a
+    name that is genuinely somewhere else on the row — not merely absent from it. The map
+    is published from the composition itself (`row`'s *before*, and :func:`_tab_columns`
+    walking the fields the rung actually joined), so there is no second walk of the ladder
+    to disagree with the first.
     """
     # **`head` and `note` are NOT contained, and the deletion sweep is what settled it.**
     # Both are charter's own literals — `"chats"`, `"workspaces"`, :data:`ADD_CHAT` — and
@@ -2655,7 +2727,7 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     # contained, below, which is where the open alphabet actually is.
     lead = _inset() + head + " " * _BAR_GAP
 
-    def row(body: str = "", drawn=()) -> list[str]:
+    def row(body: str = "", drawn=(), before: str = "") -> list[str]:
         """This rung's row, and the column map for the tabs it actually drew.
 
         **Every way out of the ladder goes through here**, which is what keeps "the map
@@ -2666,9 +2738,17 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
 
         An empty *body* is the rung that draws nothing — rung 4, and a bar with no names.
         It still publishes, for the reason the docstring above gives.
+
+        *before* is what a rung draws between the heading and its FIRST tab — the leading
+        `+3` of the windowed rung, and nothing else today. It is passed rather than glued
+        onto *body* by the caller because the map is measured from where the first tab
+        starts: a rung that composed its own prefix would be publishing columns three
+        cells left of the names it drew, which is a click landing on the tab beside the one
+        the operator pressed. Every other rung starts its tabs at the lead and says so by
+        not passing it.
         """
-        TABS.publish(_tab_columns(tui.width(lead), drawn), here)
-        return [lead + body] if body else []
+        TABS.publish(_tab_columns(tui.width(lead + before), drawn), here)
+        return [lead + before + body] if body else []
 
     if not names:
         return row()
@@ -2692,20 +2772,28 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     if tui.width(joined) <= room:
         return row(joined, zip(names, marked))
     if at >= 0:
-        # **No `if len(names) > 1` on the count, and it is unreachable rather than merely
-        # untested.** With ONE name `joined` IS `marked[at]` and the count is empty, so
-        # the rung above asks exactly what this one asks and always answers first: a `+0`
-        # can be built here and can never be returned. The sweep found the conditional as
-        # a survivor for that reason.
-        rest = f"{' ' * _BAR_GAP}+{len(names) - 1}"
-        if tui.width(marked[at]) + tui.width(rest) <= room:
-            # The count is NOT a tab. `+2` stands for names that are not on the row, so
-            # there is nothing there to switch to and saying so is better than picking one
-            # of them — `_Viewport.publish`'s rule for `…(+N more)`, one axis over. The
-            # one name this rung draws is the one you are already on, so this rung is
-            # inert by construction, which is honest rather than a gap: the palette is
-            # what reaches the other names at a width that cannot draw them.
-            return row(marked[at] + rest, [(names[at], marked[at])])
+        # **No `if len(names) > 1` here, and it is unreachable rather than merely
+        # untested.** With ONE name the page is that name, both counts are absent, and the
+        # body this composes IS `joined` — so the rung above asks exactly what this one
+        # asks and always answers first. The sweep found the old conditional as a survivor
+        # for that reason and the shape has not changed.
+        first, last = _page(marked, at, room)
+        # Neither count is a tab. `+9` stands for names that are not on the row, so there
+        # is nothing there to switch to and saying so is better than picking one of them —
+        # `_Viewport.publish`'s rule for `…(+N more)`, one axis over. **Two of them, and
+        # the left one is what a windowed strip owes the operator**: a single trailing
+        # `+14` beside a page that starts in the middle of the list says the names on the
+        # row are the FIRST fourteen, which is false. `+5  *harness-wrapper  …  +9` says
+        # where in the plane's fifteen this page sits, which is the readout `n/N` gives
+        # one rung down and the reason that rung was worth keeping.
+        before = f"+{first}{' ' * _BAR_GAP}" if first else ""
+        after = f"{' ' * _BAR_GAP}+{len(names) - last}" if last < len(names) else ""
+        body = (" " * _BAR_GAP).join(marked[first:last]) + after
+        # Measured, not assumed. :func:`_page` puts at least one name on a page, so a name
+        # wider than the whole row composes a body that overflows — and this ladder gives a
+        # rung up rather than drawing part of anything.
+        if tui.width(before + body) <= room:
+            return row(body, zip(names[first:last], marked[first:last]), before=before)
     counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
     if tui.width(counted) <= room:
         return row(counted)
