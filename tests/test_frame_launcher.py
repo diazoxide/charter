@@ -2397,8 +2397,15 @@ class ALaunchTakesThePanelsOfTheChatItLeaves(PersonaIso, unittest.TestCase):
     def test_a_chat_id_outside_the_alphabet_answers_nothing(self):
         """#475\'s rule where this value enters charter\'s vocabulary: it came off a tmux
         option and it is about to be a state directory\'s name and the key
-        `state.harness_pane` is read under."""
-        for hostile in ("../../etc", "demo 9", "demo.9;kill-server", "demo\x1b[31m"):
+        `state.harness_pane` is read under.
+
+        ` demo.9 ` is in the list on purpose: the field is NOT stripped, so a value
+        somebody padded is refused rather than normalised into a real chat charter would
+        then tear the panels off. A `\\r` cannot be tested here and that is a fact about
+        the reader rather than a gap — `splitlines` treats it as a line terminator, so it
+        becomes a row boundary before this ever sees it."""
+        for hostile in ("../../etc", "demo 9", "demo.9;kill-server", "demo\x1b[31m",
+                        " demo.9 "):
             with self.subTest(hostile=hostile):
                 fake = _SeatReader(f"$0\t1\t{hostile}\n$0\t0\tdemo.1")
                 with mock.patch("charter.commands_frame.subprocess.run",

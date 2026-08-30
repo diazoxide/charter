@@ -1488,9 +1488,16 @@ def _chat_being_left(socket: str, *, beside: str) -> str:
     # `None` when *beside*'s own window is not in the listing, and it needs no branch of
     # its own: no session id is ever `None`, so the second lookup below matches nothing
     # and answers "". A sentinel that cannot collide is one guard rather than two.
-    session = next((s[0] for s in seats if s[2].strip() == beside), None)
-    chat = next((s[2].strip() for s in seats
-                 if s[0] == session and s[1] == "1"), "")
+    session = next((s[0] for s in seats if s[2] == beside), None)
+    chat = next((s[2] for s in seats if s[0] == session and s[1] == "1"), "")
+    # **Not stripped, and that is the guard rather than a missing one.** `splitlines`
+    # has already taken the line terminator and the fields are cut on tabs, so there is
+    # no whitespace here tmux put in — only whitespace somebody put in the OPTION, and
+    # `_FRAME_ID_RE`'s alphabet holds none. Stripping would turn ` demo.1 ` into a chat
+    # charter then tears the panels off, which is normalising a value the one rule below
+    # is there to refuse. It is also the `strip`/`lstrip` shape `_live_chats`' own
+    # docstring names: truthy for exactly the same strings, so no test can tell the two
+    # apart — a question with one answer, not asked.
     return chat if chat != beside and _FRAME_ID_RE.fullmatch(chat) else ""
 
 
