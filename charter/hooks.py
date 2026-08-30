@@ -3573,30 +3573,48 @@ _FORGE_PROSE = {
 }
 
 # **What the deletion sweep says about the scanner below, written down so it is not
-# re-derived.** Twenty-five mutations of these functions survived their first sweep. Nine
-# were real gaps in the tests and are now pinned; two were real defects in the code and are
-# fixed (the empty QUOTED heredoc delimiter, and the flag filter in `_forge_prose_command`
-# that paired two flag VALUES into a noun and a verb). The six that still survive are
-# **equivalent mutants**, and each was checked rather than assumed — every string up to
-# length six over `" ' ` $ ( \ < - B x` and a newline, ~2M of them, comparing the mutant's
-# verdict against this one:
+# re-derived.** Three sharded runs have now mutated these functions, and each one found
+# something the run before it could not reach.
 #
-#   * the loop bounds in `_ansi_c_end` and `_heredoc_bodies` (`i < n`, `end < 0`) — shifting
-#     either changes no verdict, because the characters they would skip cannot open a
-#     substitution;
-#   * `c == "$"` in front of `.startswith("$(", i)`, in two places, and `and pending` in
-#     front of the heredoc-body call. These are PREFILTERS: what follows them decides, and
-#     they only avoid the call. Not deleted, and measured rather than asserted — the
-#     double-quote one is worth 66 µs against 94 µs on a body carrying 300 bare `$`
-#     characters, which is the input that makes it matter. The other two measured as noise
-#     and are kept for symmetry with it;
+#   * **Two real defects, both false REFUSALS** — which is why a green suite sat over them:
+#     the empty QUOTED heredoc delimiter (`<<""`), which bash treats as an inert heredoc and
+#     charter was scanning as command text; and a flag filter in `_forge_prose_command` that
+#     paired two flag VALUES into a noun and a verb.
+#   * **Two raises**, which is the outcome this module may least have — `dispatch` runs a
+#     handler as a bare `rc = fn()`, so an exception takes the turn down instead of
+#     producing a verdict. An `IndexError` on a heredoc delimiter ending in a backslash, and
+#     a `TypeError` on a `None` command.
+#   * **Two fail-OPEN holes in the guard's own dispatch**, each hiding behind the fact that
+#     the branch it belongs to was reached by an easier route in every existing test. Both
+#     are the SECOND half of a two-part condition doing the real work: `text.startswith("$'",
+#     i)` is what keeps a bare `$VAR` out of :func:`_ansi_c_end`, which would otherwise skip
+#     to the next single quote and step over a live substitution; `text.startswith("<<", i)`
+#     is what keeps a plain `<` redirection out of :func:`_heredoc_header`, which read a
+#     QUOTED filename as an inert heredoc delimiter and swallowed the rest of the command.
+#     Both were verified against a real bash, which runs the substitution in each.
+#
+# What still survives is **equivalent mutants**, and each was checked rather than argued —
+# every string up to length six over `" ' ` $ ( \ < - B x` and a newline, ~2M of them, plus
+# the edge inputs an alphabet cannot spell, comparing the mutant's verdict against this one:
+#
+#   * the loop and slice boundaries in `_ansi_c_end`, `_heredoc_header` and
+#     `_heredoc_bodies` (`i < n`, `end < 0`, `j + 1 < n` widened) — shifting any of them
+#     changes no verdict, because the character it would skip cannot open a substitution.
+#     The other direction of two of those DOES raise, and that half is pinned;
+#   * the FIRST half of each two-part condition — `c == "$"`, `c == "<"`, `c == "\n" and`
+#     — and the `base not in ("gh", "glab")` early continue, whose work the table lookup
+#     redoes. These are PREFILTERS: what follows them decides, and they only avoid a call.
+#     Kept, and measured rather than asserted — the double-quote one is worth 66 µs against
+#     94 µs on a body carrying 300 bare `$` characters. The others measured as noise and are
+#     kept for symmetry with it. **Do not read a surviving prefilter as an untested guard
+#     without checking which half of the condition was dropped**: one half is a cheap
+#     pre-test and the other is the whole rule, and this section is the record of what
+#     happened when that distinction was not made.
 #   * the `if not any(...)` fast path in `_forge_substitution_hit` — 0.28 µs against 4.45 µs
-#     on an ordinary command, on a per-Bash-call hot path. Sixteen times, for a line whose
-#     deletion changes no answer.
+#     on an ordinary command, on a per-Bash-call hot path.
 #
 # A survivor that is genuinely equivalent is dead code by this project's rule. These are the
-# exception the rule allows for: each buys time rather than correctness, and the ones that
-# buy nothing measurable are two lines kept beside a third that buys a third of the runtime.
+# exception it allows for: each buys time rather than correctness.
 
 #: The two spellings of command substitution. `$(` covers `$((` arithmetic too, which is
 #: not a substitution — a false DENY on `--body "$((1+2))"`, and the direction to be wrong

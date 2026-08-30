@@ -437,12 +437,24 @@ class AMalformedCommandStillGetsAnAnswer(ForgeGuardCase):
         'gh issue create --body "x`',
         "gh issue create --body $'abc",
         'gh issue create --body-file - <<<<"`id -un`"',
+        # a heredoc delimiter that ends in a backslash: the escape has nothing to escape
+        "gh issue create --body-file - <<\\",
     )
 
     def test_no_input_makes_the_scanner_raise(self) -> None:
         for cmd in self.MALFORMED:
             with self.subTest(cmd):
                 self.assertIn(hooks._live_substitution(cmd), (None, "`", "$("))
+
+    def test_the_scanner_answers_for_a_command_that_is_not_a_string(self) -> None:
+        """`None` is not a command, and the answer is still an answer.
+
+        `_forge_substitution_hit` normalises before it calls, so this fallback looks
+        redundant from the one call site that exists today. The next caller is the reason it
+        is here, and an exception is the one outcome this module may not have: `dispatch`
+        runs the handler as a bare `rc = fn()`, so a raise takes the turn down rather than
+        producing a verdict."""
+        self.assertIsNone(hooks._live_substitution(None))
 
     def test_no_input_makes_the_guard_raise(self) -> None:
         for cmd in self.MALFORMED:
@@ -550,6 +562,26 @@ class TheArmsThatOtherArmsWereAnswering(ForgeGuardCase):
         Stripping anyway ends the heredoc early and reads the rest of its own body as
         commands — including a `$(…)` that is inert where it actually sits."""
         self.allowed("gh issue create --body-file - <<'BODY'\n\tBODY\n$(id -un)\nBODY")
+
+    def test_a_bare_dollar_does_not_open_an_ansi_c_quotation(self) -> None:
+        """`$USER` is not `$'…'`, and reading it as one skips to the next single quote —
+        over a live substitution on the way.
+
+        `_ansi_c_end` exists because `$'a\\'b'` ends at the LAST quote, so a plain
+        single-quote scan ends it in the wrong place. Entering it on any `$` instead of on
+        `$'` turns that repair into a much larger hole: an unquoted `$VAR` anywhere before
+        the body swallows the rest of the line. bash runs the substitution here."""
+        self.deny_reason('gh issue create --title $USER --body "`id -un`"')
+
+    def test_a_plain_redirection_is_not_a_heredoc(self) -> None:
+        """`<` is one character and `<<` is two, and treating the first as the second reads
+        the redirection's filename as a heredoc delimiter.
+
+        A QUOTED filename is what makes this bite: the delimiter comes back \"quoted\", so
+        the invented heredoc does not expand, and everything after the redirection — the
+        next command included — is swallowed as inert body. bash runs the substitution that
+        is then never looked at."""
+        self.deny_reason("gh issue create --body-file - < 'notes.md'\necho \"`id -un`\"")
 
     def test_a_flag_value_cannot_supply_the_noun_and_the_verb(self) -> None:
         """Flag values are words too, and two of them can read as `issue create`.
