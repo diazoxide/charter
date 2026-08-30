@@ -690,6 +690,10 @@ class WhatReachesTheOperatorsScreen(PersonaIso, unittest.TestCase):
         super().setUp()
         state.frame_dir(self.FID, create=True)
         state.record_server(self.FID, "charter")
+        # A frame HAS one, and since #695 it is what a message without a client is aimed
+        # at — the record charter already keeps of where this frame's harness runs, whose
+        # `%N` tmux cannot read as anything but a pane.
+        state.record_harness_pane(self.FID, "%4")
 
     def test_what_is_put_on_screen_is_inert_before_tmux_ever_parses_it(self):
         """`display-message`'s argument is a tmux FORMAT (its own docs say so), and what
@@ -702,20 +706,42 @@ class WhatReachesTheOperatorsScreen(PersonaIso, unittest.TestCase):
         self.assertNotIn("x #(touch /tmp/pwned) y", argv)
         self.assertIn("charter: x ##(touch /tmp/pwned) y", argv)
 
-    def test_a_named_client_is_told_and_an_unnamed_one_is_the_session(self):
+    def test_a_named_client_is_told_and_an_unnamed_one_is_the_frames_own_pane(self):
         """Measured against tmux 3.7c with two real ptys on one session: `-t <session>`
         drew on the most recently attached client regardless of who pressed, and `-c` drew
         on exactly the named one. The palette carries the presser's own client from the
-        hotkey bind, so a refusal reaches the terminal that asked for it."""
+        hotkey bind, so a refusal reaches the terminal that asked for it.
+
+        With no client the target is the frame's own PANE and never its id (#695). A chat
+        id is `{workspace}.{ordinal}` and tmux splits a `-t` on the dot, so
+        `-t harness-wrapper.2` is not the window of that name: measured on 3.7c it resolves
+        to session `harness-wrapper`, its CURRENT window, and `2` as a pane index. The
+        session half happened to be the right screen, which is why nothing was ever seen to
+        go wrong — the target has never once meant what it was spelled to mean."""
         with mock.patch.object(commands_frame.tmuxctl, "run") as run:
             commands_frame._say_on_screen(self.FID, "hello", "/dev/ttys7")
         self.assertIn("-c", run.call_args[0][1])
         self.assertIn("/dev/ttys7", run.call_args[0][1])
         with mock.patch.object(commands_frame.tmuxctl, "run") as run:
             commands_frame._say_on_screen(self.FID, "hello")
-        self.assertNotIn("-c", run.call_args[0][1])
-        self.assertIn("-t", run.call_args[0][1])
-        self.assertIn(self.FID, run.call_args[0][1])
+        argv = run.call_args[0][1]
+        self.assertNotIn("-c", argv)
+        self.assertEqual(argv[argv.index("-t") + 1], "%4")
+        self.assertNotIn(self.FID, argv,
+                         "a frame id reached tmux as a target, where the dot in it is a "
+                         "separator and not a character")
+
+    def test_a_frame_with_no_usable_pane_record_is_told_nothing_at_all(self):
+        """The direction the refusal falls, and it is the same one an empty id already
+        falls: there is nothing here that can be aimed at that is CERTAINLY this frame, and
+        `-t <fid>` is how a refusal came to be drawn across somebody else's. An operator
+        loses a sentence; the alternative is another operator gaining one."""
+        for record in ("", "not-a-pane", "%1;kill-server"):
+            with self.subTest(record=record):
+                state.record_harness_pane(self.FID, record)
+                with mock.patch.object(commands_frame.tmuxctl, "run") as run:
+                    commands_frame._say_on_screen(self.FID, "hello")
+                self.assertEqual(run.call_count, 0, run.call_args)
 
 
 if __name__ == "__main__":                          # pragma: no cover

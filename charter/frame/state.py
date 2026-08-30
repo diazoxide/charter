@@ -55,7 +55,26 @@ from .. import config, contain
 #: Anything outside this becomes an underscore. Only used to MINT an id in
 #: :func:`frame_id` — never to rewrite one handed to :func:`frame_dir`, which resolves
 #: through :func:`charter.contain.child` instead and refuses rather than rewrites.
-_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
+#:
+#: **The `.` is not in it, and that is #695 rather than tidiness.** A workspace may be
+#: called `api.2` — `instance.WORKSPACE_NAME_RE` accepts a dot and this does not narrow
+#: what an operator may call anything — but the name this function MINTS goes on to be a
+#: tmux SESSION (`commands_frame.cmd_launch`), and a session name is not a string tmux
+#: reads as a string. Measured:
+#:
+#: * tmux 3.7c keeps the dot and then splits on it in every `-t`: `new-window -t api.2`
+#:   answers ``can't specify pane here`` rc 1, so a dotted workspace could never open its
+#:   SECOND chat; `set-environment -t api.2` answers rc **0** and writes on session
+#:   `api`, which is another workspace's frame told it is this one.
+#: * tmux 3.2 — `tmuxctl.FLOOR` — does not even keep it: ``new-session -s api.2`` creates
+#:   a session actually named ``api_2``. So charter asked for one name and got another,
+#:   and every later `-t` missed the session it had just made.
+#:
+#: A trailing `:` disambiguates the target on 3.7c and does nothing on 3.2, so the fix
+#: cannot live at the target. It lives here, where charter chooses the identifier: the
+#: workspace keeps its own name, and the thing derived from it is spelled in an alphabet
+#: tmux reads back the way it was written — which is what 3.2 was going to do anyway.
+_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 def workspace_prefix(workspace: str) -> str:
