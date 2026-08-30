@@ -159,10 +159,18 @@ reach a panel at all — tmux gives your typing to the active pane, which is the
 
 Clicking the tab you are already on does nothing at all, rather than tearing the panels down
 and putting them back to arrive where you were. So does clicking the heading, the gap between
-two names, the `+14` where names did not fit, or the empty space past the last tab: those are
-cells no tab was drawn into, and charter will not pick the nearest name for you. On a bar
-narrow enough that only your own name is drawn, nothing on it is clickable — `F2` is what
-reaches the rest at any width, which is what the bar being a readout means.
+two names, either `+N` count where names did not fit, or the empty space past the last tab:
+those are cells no tab was drawn into, and charter will not pick the nearest name for you. On
+a bar narrow enough that only your own name is drawn, nothing on it is clickable — `F2` is
+what reaches the rest at any width, which is what the bar being a readout means.
+
+**The names on a narrow bar do not move when you switch between them.** Where the whole list
+does not fit, the bar cuts it into pages and draws the page yours falls on — and that cut is
+decided by the names and the width alone, never by which one you are on. So clicking a tab
+redraws the same row with the `*` moved and every other tab still where you pressed it, which
+is what makes a double-click harmless: the second press lands on the tab you just arrived at,
+and that one does nothing. It also means the names a click can reach are the ones on your
+page; `F2` is what reaches the other pages.
 
 **Focus events are on inside a frame charter launched, and off inside your own tmux.** tmux
 ships `focus-events` off, and it is a server-wide setting; charter turns it on for its own
@@ -297,8 +305,12 @@ already in.
 
 `chats` and `workspaces` are one-row components: the chat bar names every chat in this
 workspace with yours marked, and the workspace bar does the same for the plane. Where the
-names do not all fit the bar keeps yours whole and counts the rest (`*api.2  +2`); narrower
-still it says only where you are (`2/3`). It never shows half a name.
+names do not all fit the bar draws the page yours falls on and counts what is off each end
+(`+5  *harness-wrapper   news-dispatch-guard  …  +7`); narrower still it says only where you
+are (`2/3`). It never shows half a name.
+
+Fifteen workspaces need 274 columns to fit on one row, so on a real terminal the bar is
+usually drawing a page. At 120 columns it draws six of them, at 160 eight, at 200 ten.
 
 **They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
 exactly what `F2` → `chat` does — the same command, the same five refusals, the same

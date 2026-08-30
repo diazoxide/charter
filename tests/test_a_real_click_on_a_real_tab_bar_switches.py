@@ -534,3 +534,113 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCas
         time.sleep(2.0)
         self.assertEqual(self._current_window(self.WS), window)
         self.assertEqual(self._active(), self.harness)
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealClickOnAWINDOWEDWorkspaceBarMovesTheFrame(_ARealFrameWithBars,
+                                                     unittest.TestCase):
+    """The rung an operator's plane actually draws, clicked on a real terminal.
+
+    **Every other case in this file clicks rung 1**, where every name is on the row —
+    which needs 274 columns for the fifteen workspaces this project's own plane has. So
+    the cases above pass on a bar no operator can produce, and the report that produced
+    them (*"seems not working?"*) survived them: the rung a 120-column terminal reaches
+    drew one tab, the one the frame was already on, and clicking it is correctly nothing.
+
+    This is that plane. Fifteen real workspace names, a 120-column window, and a click on a
+    tab that is only on the row because the rung draws a PAGE rather than the marked name
+    alone. Nothing here is a narrower unit of the same thing: the columns the operator's
+    pointer lands in are read off the pane tmux painted, so a page whose map was published
+    from the wrong starting column — the leading `+N` displaces every tab right of it —
+    fails here and passes every unit test that asks `slots.TABS` where it put something.
+    """
+
+    #: The fifteen this plane has. Real names rather than even-width ones: the cut is
+    #: greedy over the widths names actually have, and `relations-and-delegations` (25
+    #: cells) against `todos` (5) is what makes the page boundary land where it does.
+    NAMES = sorted([
+        "authority-audit", "autonomy", "charter-update-skill", "default", "fleet",
+        "harness-wrapper", "news-dispatch-guard", "opencode-integration", "plane-shape",
+        "relations-and-delegations", "showcase", "statusline-improvements", "todos",
+        "tracking-github-issues", "user-reporting",
+    ])
+    #: The workspace this frame is on, and one that shares its page at :data:`COLS`. Both
+    #: are asserted to be on the drawn row in `setUp` rather than assumed, so a change to
+    #: the cut fails loudly here instead of silently clicking empty cells.
+    HERE = "harness-wrapper"
+    THERE = "authority-audit"
+
+    def setUp(self) -> None:
+        super().setUp()
+        for name in self.NAMES:
+            (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
+        self.fid = state.frame_id("tabbarwin", os.getpid())
+        state.frame_dir(self.fid, create=True)
+        state.record_workspace(self.fid, self.HERE)
+        self.harness = self._start_session(self.fid)
+        state.record_server(self.fid, self.socket)
+        state.record_harness_pane(self.fid, self.harness)
+        self._source_conf(self.fid)
+        self.bar = self._split_bar(self.harness, "workspaces", self.fid)
+        self.assertEqual(self._tmux("select-pane", "-t", self.harness).returncode, 0)
+        self.fd = self._attach(self.fid)
+        self.assertTrue(
+            _await(lambda: f"*{self.HERE}" in self._bar_row(self.bar)),
+            f"the bar never painted: {self._bar_row(self.bar)!r}")
+        row = self._bar_row(self.bar)
+        self.assertNotIn(self.NAMES[-1], row,
+                         f"{COLS} columns drew every name, so this measures rung 1 and "
+                         f"not the windowed rung: {row!r}")
+        self.assertIn(f" {self.THERE}", row,
+                      f"the page does not hold the tab this case clicks: {row!r}")
+        self.assertEqual(self._active(), self.harness)
+
+    def test_a_click_on_a_tab_the_old_rung_never_drew_moves_the_frame(self):
+        """The operator's report, at the operator's width. Before the windowed rung this
+        row was `workspaces  *harness-wrapper  +14` and this click had nothing to land
+        on."""
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
+        self.assertTrue(
+            _await(lambda: state.frame_workspace(self.fid) == self.THERE),
+            f"the click never reached the switch: "
+            f"{state.frame_workspace(self.fid)!r} — row {self._bar_row(self.bar)!r}")
+
+    def test_the_page_does_not_move_under_the_pointer_when_the_frame_switches(self):
+        """**The double-click property, through a real terminal.** The cut is made from the
+        names and the width alone, so the row that comes back after the switch holds the
+        same names in the same columns with only the `*` moved — and a second press at the
+        cell that just switched lands on the tab the frame has arrived at, which does
+        nothing.
+
+        A window centred on the marked name would have slid one step here, putting a third
+        workspace under that cell; `slots._Tabs.switch_to` could not refuse it, because the
+        name at that column really would have changed.
+        """
+        before = self._bar_row(self.bar)
+        col = self._column_of(self.bar, f" {self.THERE}")
+        self._click(self.bar, col=col)
+        self.assertTrue(
+            _await(lambda: state.frame_workspace(self.fid) == self.THERE),
+            "the first click never switched, so there is no repaint to measure")
+        self.assertTrue(
+            _await(lambda: f"*{self.THERE}" in self._bar_row(self.bar)),
+            f"the bar never redrew the mark: {self._bar_row(self.bar)!r}")
+        after = self._bar_row(self.bar)
+        self.assertEqual([n for n in self.NAMES if n in after],
+                         [n for n in self.NAMES if n in before],
+                         f"the page moved under the pointer:\n  {before!r}\n  {after!r}")
+        self._click(self.bar, col=col)
+        time.sleep(2.0)
+        self.assertEqual(state.frame_workspace(self.fid), self.THERE,
+                         "the second press at the same column switched a second time")
+
+    def test_neither_overflow_count_is_a_tab(self):
+        """`+9` stands for names that are not on the row. It is the field an operator is
+        most likely to try, and it has to do nothing rather than pick one of them."""
+        row = self._bar_row(self.bar)
+        counts = [f.strip() for f in row.split("  ") if f.strip().startswith("+")]
+        self.assertTrue(counts, f"this row carries no count to click: {row!r}")
+        for count in counts:
+            self._click(self.bar, col=self._column_of(self.bar, count))
+        time.sleep(2.0)
+        self.assertEqual(state.frame_workspace(self.fid), self.HERE)
