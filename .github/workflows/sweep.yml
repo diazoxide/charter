@@ -69,7 +69,7 @@ jobs:
           # #508's entire defect, out of the sweep's reach. `sweep.reach()` says so in the
           # report rather than letting a smaller sweep read like a clean one.
           python-version: "3.12"
-      # The selection map is one trace of the whole suite — 350 s measured, and the
+      # The selection map is one trace of the whole suite and, per `SHARD_FIXED_COSTS`, the
       # largest fixed cost a shard pays. It is content-addressed on the tree it measured,
       # so this step saves it once here and every shard below restores it instead of
       # measuring it again. A fork's pull request cannot write this cache and will simply
