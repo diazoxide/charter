@@ -3367,6 +3367,23 @@ class Launch(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(state.harness_pane(fake.fid), fake.pane_id)
 
+    def test_a_finished_chat_leaves_no_directory_behind(self):
+        """The bounding property the comment above depends on, asserted rather than
+        assumed.
+
+        Since #685 a claim carries its launcher's pid, so a SIBLING's reap cannot delete
+        it mid-launch — and that pid is this very process's, alive by construction. `reap`
+        would therefore keep this frame's directory for as long as the launcher lived if
+        the launcher did not give the claim up on its way out (`state.clear_claim`), and
+        the closing reap would have nothing left that only it can do.
+        """
+        fake = _FakeTmux(exit_code=0)
+        self.assertEqual(_launch(fake), 0)
+        self.assertFalse(state.frame_dir(fake.fid).exists(),
+                         "the finished chat's directory outlived its launch — the claim "
+                         "was never given up, and the process that made it is still "
+                         "running")
+
     def test_the_panels_are_told_the_frames_identity_too(self):
         """#411's other half, and the one that outlives the tmux floor. A panel splits off
         a server another launcher may have started, so `$CHARTER_WORKSPACE` and

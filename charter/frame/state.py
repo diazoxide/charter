@@ -119,6 +119,16 @@ _CHAT_SEP = "."
 #: refusal a caller can report rather than a hang nobody can see.
 _CHAT_ORDINAL_MAX = 10_000
 
+#: The file :func:`new_chat_id` writes its own pid into as it claims a directory, and the
+#: third keep-rule :func:`reap` reads it back through (#685).
+#:
+#: A plain name beside `server` and `workspace`, not a dotfile: everything in a frame's
+#: directory is charter's own bookkeeping and nothing here hides from `ls`. It is read by
+#: `reap` alone — no bar, no panel and no palette asks who claimed a chat — which is why
+#: the reader below is private and there is no `record_launcher` in this module's public
+#: surface for a second caller to reach for.
+_CLAIM_FILE = "launcher"
+
 
 def _root() -> Path:
     return Path(config.STATE_DIR) / "frame"
@@ -143,6 +153,16 @@ def new_chat_id(workspace: str) -> str | None:
     this name mine?". Here ``FileExistsError`` is the claim failing, and the answer to it
     is ``n+1``. Two allocators racing the same workspace cannot both win, because
     ``mkdir`` is one syscall and the kernel picks.
+
+    **Winning the `mkdir` is only half of it, and the other half is :func:`_record_claim`**
+    (#685). A claim has to survive until it is a chat, and for hundreds of milliseconds
+    after this returns it is a directory with no window, no `server` marker and — unlike
+    the `{workspace}-{pid}` ids this replaced — no pid in its name, which is to say a
+    directory every one of :func:`reap`'s rules said was dead. A sibling launcher runs a
+    reap on the way in to its own claim, so the loser of the race deleted the winner's
+    directory and then claimed the same ordinal: the silent collision the paragraph above
+    says the design makes impossible, arriving one layer down. The pid goes in the
+    directory as its first byte, and `reap` reads it.
 
     **A scan is not a substitute.** Reading the directory and taking ``max + 1`` gives
     two racers the same answer, and the loser silently adopts the winner's frame
@@ -189,8 +209,49 @@ def new_chat_id(workspace: str) -> str | None:
             # ENAMETOOLONG for an id no `mkdir` will take, a full filesystem, a
             # permission the plane does not have. None of those gets better at `n+1`.
             return None
+        # And the claim is SAID, immediately, in the directory the `mkdir` just made
+        # (#685). Winning the `mkdir` is only half of "cannot both win": the other half
+        # is that the winner's directory survives long enough to become a chat, and
+        # between this line and the `new-window` hundreds of milliseconds later the
+        # claim passed all three of `reap`'s keep-rules — no window yet, no `server`
+        # marker yet, and a chat id carries no launcher pid for the third to abstain in
+        # favour of. A sibling launcher's reap (every launch runs one) deleted it, and
+        # both launchers then held `api.1`: one `exit` file, one `panes` map, one pane
+        # record, and a switch aimed at whichever wrote last. Reproduced.
+        _record_claim(d)
         return d.name
     return None
+
+
+def _record_claim(d: Path) -> None:
+    """Write this process's pid into the directory :func:`new_chat_id` has just claimed.
+
+    **What the old `{workspace}-{pid}` id shape said in its NAME, said in a file.** That
+    shape got `reap`'s launcher rule for free — the pid was in the name, so the `mkdir`
+    that made the directory also made it un-reapable — and Stage 5a spent it deliberately:
+    `_launcher_pid`'s `-`-vs-`.` answer is the version discriminator, and widening it to
+    read `api.1` as pid 1 would hand every chat ``launchd`` and keep every dead one
+    forever. Nothing replaced the guard it removed. This does, in the one place that can:
+    the allocator, on the path that has already made the directory.
+
+    **The first byte written into a claimed directory, and that ordering is the guard
+    rather than a tidiness.** `reap` reads this file to decide, so between the `mkdir` and
+    this write there is a directory it can see and no pid it can read — which is why
+    :func:`reap` keeps an EMPTY frame directory outright. Those two rules meet exactly:
+    the directory is empty until this lands, and marked from the moment it does. Any later
+    writer (`record_server`, `record_workspace`, `bump`) would leave a window in between
+    where the directory holds something and says nothing, which is the window this closes.
+
+    Never raises, like every other writer here: a claim that could not be marked is a
+    directory a sibling's reap may delete out from under this launch — the defect above —
+    but a launch is not worth failing over a file, and the empty-directory rule still
+    covers the instant this was called at. Written with `config.write_for` at 0700's
+    dispatch for `record_server`'s reason: this is charter's own state.
+    """
+    try:
+        config.write_for(d / _CLAIM_FILE, f"{os.getpid()}\n")
+    except OSError:
+        return
 
 
 def frame_dir(fid: str, *, create: bool = False) -> Path | None:
@@ -345,6 +406,34 @@ def clear_exit(fid: str) -> None:
         # Same must-not-raise promise the rest of this module makes: a launch is not
         # worth failing over a file that could not be deleted, and the stale-code
         # reading below is the caller's own to notice.
+        return
+
+
+def clear_claim(fid: str) -> None:
+    """Give up the claim :func:`new_chat_id` made on *fid*'s directory (#685).
+
+    **The marker is held for the LAUNCH, not for the life of the process**, and this is
+    the half that makes those two different. `_record_claim` says "a launcher is still
+    working on this directory"; a launcher that has read its harness's exit code and is
+    about to return is not, and its own last `reap` — the one whose whole job is to remove
+    the frame it just finished — would otherwise be refused by a marker naming a process
+    that is still, necessarily, alive.
+
+    Called at the END of a launch and nowhere else, which is why the window this protects
+    stays protected: the #383 hazard is a SIBLING's reap landing between a harness dying
+    and its own launcher reading `exit`, and that launcher has not reached here yet.
+
+    Nothing is lost when it is never called — a launcher killed outright leaves the marker
+    behind and its pid dies with it, so the next reap removes the directory on the pid rule
+    exactly as it does for an old `{workspace}-{pid}` frame. Never raises and never
+    creates, like :func:`clear_exit` beside it.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        (d / _CLAIM_FILE).unlink(missing_ok=True)
+    except OSError:
         return
 
 
@@ -1268,6 +1357,37 @@ def _launcher_pid(name: str) -> int | None:
     return pid if pid > 0 else None
 
 
+def _claiming_pid(d: Path) -> int | None:
+    """The pid :func:`_record_claim` wrote into *d*, or ``None``.
+
+    :func:`_launcher_pid`'s counterpart, asked of the FILE rather than of the name, and
+    the same answer means the same thing in both: "this directory carries no claim about
+    any process". ``None`` is the ordinary answer for every frame directory an older
+    charter left behind and for every old-shape `{workspace}-{pid}` frame, both of which
+    go on being decided by the rules that already decided them.
+
+    A `Path`, not a frame id, because its one caller is :func:`reap` — which is walking
+    `os.scandir`'s own entries and has the directory in hand. Resolving a name back into a
+    path here would be `frame_dir`'s containment asked a second time about a value that
+    never left this module.
+
+    Held to the same shape :func:`_launcher_pid` holds its own to: digits, and greater
+    than zero, because ``0`` is "every process in my group" to ``kill(2)`` rather than a
+    process. Anything else on disk — a truncated write, a hand-edited file, a directory
+    where the file should be — is no claim at all, which is the safe direction: a chat
+    whose marker cannot be read is reaped like one that never had one, exactly as it is
+    today.
+    """
+    try:
+        val = (d / _CLAIM_FILE).read_text().strip()
+    except (OSError, ValueError):
+        return None
+    if not val.isdigit():
+        return None
+    pid = int(val)
+    return pid if pid > 0 else None
+
+
 def _launcher_is_alive(pid: int) -> bool:
     """Is the process *pid* names still running? Asks; never signals anything.
 
@@ -1417,6 +1537,24 @@ def reap(live: set[str], *, server: str) -> list[str]:
     whose launcher is still a live process is one somebody may still come back to, and
     is left alone — no age, no timestamps, no extra file, nothing to keep in sync.
 
+    **A CHAT id carries no pid, so that question is asked of a file instead** (#685,
+    :func:`_record_claim`). Stage 5a's ids are `{workspace}.{n}`, and the paragraph above
+    is the whole reason: reading `api.1` as pid 1 would hand every chat ``launchd`` and
+    keep every dead one forever. What Stage 5a did not do was replace the guard that
+    removed. Without it a directory `new_chat_id` had just claimed passed every rule here
+    — no window yet (`@charter_chat` is set hundreds of milliseconds later, after
+    `_spawn_gather`, the tmux.conf write and `new-window`), no `server` marker yet
+    (`record_server` runs after the claim), and no pid in the name by design — so a
+    SIBLING launcher's reap deleted it and both launchers went on holding `api.1`. Two
+    live chats, one `exit` file, one `panes` map, one pane record. Reproduced.
+
+    The claim marker restores the old shape's guard exactly, including its two failure
+    directions and the price of each: a recycled pid keeps one directory until that
+    process ends, and a launcher misread as dead costs a real exit code. It also restores
+    for chats the #383 protection the paragraph above describes — a chat whose harness has
+    exited is now kept until its launcher has read the code, where before Stage 5b it was
+    reapable the instant its window went away.
+
     Both ways of being wrong point the same way, deliberately. A pid the OS has recycled
     onto an unrelated process reads as "alive" and costs one directory's cleanup, deferred
     until that process ends and some later launch reaps it — bounded, silent, and measured
@@ -1439,14 +1577,48 @@ def reap(live: set[str], *, server: str) -> list[str]:
     for d in sorted(root.iterdir()):
         if not d.is_dir() or d.name in live:
             continue
-        # Two independent reasons to keep a directory, and BOTH must be absent before
-        # anything is deleted. They answer different questions and neither implies the
-        # other: the frame may belong to the OTHER tmux server (#381), or its launcher
-        # may still be running on this one (#383).
+        # Four independent reasons to keep a directory, and ALL must be absent before
+        # anything is deleted. They answer different questions and none implies another:
+        # the frame may belong to the OTHER tmux server (#381), its launcher may still be
+        # running on this one (#383), or the directory may be a claim that is not a frame
+        # yet (#685) — either because its marker has not landed (it holds nothing at all)
+        # or because it has (a live pid is in it).
         owner = frame_server(d.name)
         if owner is not None and owner != server:
             continue
-        pid = _launcher_pid(d.name)
+        try:
+            claimed = next(d.iterdir(), None) is None
+        except OSError:
+            # A directory this process cannot list is one it has no reading of, and
+            # `rmtree` would not have emptied it either. Kept, on the same side every
+            # unreadable answer in this module falls: no proof, no deletion.
+            continue
+        if claimed:
+            # **Nothing in it yet, so its claimer is between two syscalls.**
+            # `new_chat_id` creates the directory and `_record_claim` writes the pid as
+            # the very first byte into it, so an EMPTY frame directory is a claim caught
+            # in the microseconds between the two — the only window the marker itself
+            # cannot cover, and the reason the marker has to be the first write rather
+            # than merely an early one. Every frame that has ever run holds `server`,
+            # `workspace` and `version` at minimum, so nothing this keeps is a frame.
+            #
+            # It costs an ordinal rather than bytes, and that is the honest price: a
+            # directory left empty by an `rmtree` that half-failed is now kept, and
+            # `new_chat_id` skips its name for good. One name out of
+            # `_CHAT_ORDINAL_MAX`, against a collision that hands two live chats one
+            # `exit` file.
+            continue
+        pid = _claiming_pid(d)
+        if pid is None:
+            # The claim's own record first and the NAME second, never both at once: a
+            # chat's launcher is in the file (#685) and an old `{workspace}-{pid}` frame's
+            # is in its id, and no directory carries the two. `is None` rather than
+            # falsiness, and that is the difference between a guard and an accident: pid
+            # `0` is a value this reads off disk, `kill(2)` takes it as "every process in
+            # my group" and would answer alive, and a `0` that fell through to the name
+            # would be a corrupt marker being saved by a rule that is about something
+            # else. `_claiming_pid` refuses it on its own terms.
+            pid = _launcher_pid(d.name)
         if pid is not None and _launcher_is_alive(pid):
             continue
         shutil.rmtree(d, ignore_errors=True)
