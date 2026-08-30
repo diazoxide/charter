@@ -216,13 +216,23 @@ running"*. Every reader now says which kinds it means, and the default is dispat
 the next kind of work charter learns to record cannot leak into a sentence by being
 forgotten at one call site.
 
-The moment the last of it finishes, the frame goes completely still again and the panel
-goes back to waiting for a version bump. Nothing is polled to find this out: charter
-records work when it *starts* (that is also what makes overlapping agents visible at all),
-so the panel asks one question per tick — a single `stat` of that tracker's own directory
-— and reads the records themselves only when that answer moves. Measured on macOS/APFS:
-about 5µs per tick added to the ~26µs a panel already spends checking the version file,
-five times a second, or roughly 0.003% of one core while idle.
+The moment the last of it finishes, the frame paints once more and then goes completely
+still, and the panel goes back to waiting for a version bump. Nothing is polled to find
+this out: charter records work when it *starts* (that is also what makes overlapping
+agents visible at all), so the panel asks one question per tick — a single `stat` of that
+tracker's own directory — and reads the records themselves only when that answer moves.
+Measured on macOS/APFS: about 5µs per tick added to the ~26µs a panel already spends
+checking the version file, five times a second, or roughly 0.003% of one core while idle.
+
+**That one last paint is the whole of it, and until #727 it was missing.** The panel had
+a reason to repaint for every tick work was running and no reason at all on the tick after
+the last record cleared — nothing resized, the version had not moved, no event arrived —
+so the pane kept the last thing drawn into it: a spinner stopped mid-turn over a count of
+work that had already finished, which is exactly what a hung frame looks like. Measured
+against a real client with the tracker directory empty, it held for 15 s and kept holding;
+one sighting survived a detach and reattach and was still claiming `⠸ 1 running` fifteen
+minutes later. It now clears **0.21 s** after the last record goes, on tmux 3.7c and at
+the 3.2 floor alike.
 
 Work charter has stopped believing in — no result after thirty minutes, so the process was
 probably killed — is still reported, and deliberately *not* animated: `⋯ 1 stalled`.
@@ -320,6 +330,30 @@ is restarted, and the chat you left goes on running exactly as it was.
 A switch is refused, with the reason on your own screen, for a chat this workspace does not
 have, one whose window has gone, one charter has no pane record for, and the chat you are
 already in.
+
+### Where a switch says what it did
+
+**On the attention row — the frame's own last row, not tmux's message line.** Whatever you
+choose off `F2`, the outcome appears there for a few seconds and then gives the row back:
+`charter: workspace → gamma`, or `charter: no workspace 'gamm' — have: alpha, beta,
+gamma`. A refusal stays up longer than a success, because a refusal is the only one of the
+two with nothing else confirming it — when a switch takes, the identity row above has
+already changed to say so.
+
+**It used to be a `display-message`, and that cost four seconds of frozen screen** (#729).
+A tmux client does not redraw its *panes* while a message is up, and the freeze is exactly
+as long as the message asks for. So every workspace, persona and chat switch put a sentence
+on screen announcing a repaint that the same sentence was hiding: measured with a real
+client, the panes were correct at 0.5 s and the operator went on looking at the previous
+workspace until 4.3 s — on tmux 3.7c and at the 3.2 floor alike, within 0.1 s of each
+other. The same switch now reaches your eyes in **0.33 s**, with no stale window at all.
+
+The row is also the only surface that can be aimed at *your* frame. `display-message -t`
+selects the target for format evaluation, not the client — measured on both versions, a
+message aimed at a pane of one session was drawn on a terminal attached to a *different*
+one — so on a machine running several frames a refusal about one could be drawn across
+another. A panel reads its own frame's state, and every client attached to that frame sees
+it.
 
 ### The two bars, and why they are off unless you ask
 

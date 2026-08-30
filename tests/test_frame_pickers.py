@@ -318,7 +318,12 @@ class ThePaletteOpensThePickerAndActsOnWhatComesBack(_Frame, unittest.TestCase):
         self.assertNotEqual(state.version(self.FID), was)
         self.said.assert_called_once()
         self.assertIn("workspace → beta", self.said.call_args[0][1])
-        self.assertEqual(self.said.call_args[0][2], "/dev/ttys7")
+        # On THIS frame, and said as an outcome that happened. Since #729 the sentence is
+        # a line in the frame's own state that its attention panel draws, so the argument
+        # after the message names the frame rather than a client's terminal — a workspace
+        # switch moves this frame in place, so the frame it is filed against is this one.
+        self.assertEqual(self.said.call_args[0][0], self.FID)
+        self.assertIs(self.said.call_args[1]["ok"], True)
 
     def test_a_persona_name_takes_the_same_route(self):
         self.assertEqual(self._draw(self._doorway(choose.PERSONA),

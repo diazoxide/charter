@@ -430,11 +430,16 @@ class ATmuxFormatInAMessageIsInert(_ThePalette, unittest.TestCase):
     """The CRITICAL finding, carried onto the surface that still has it.
 
     `display-menu`'s item names were formats, and so is a `display-message` argument —
-    tmux's own docs say so — and that is where `commands_frame._say_on_screen` still puts a
-    workspace name, a persona name and an action's refusal. `tests/test_frame_menu.py::
-    LabelSafety` proved the ESCAPING at argv level and moved whole to
-    `test_frame_tmuxctl.py::InertFormat`; this proves the escaping is still NECESSARY,
-    which is the half a unit test cannot show.
+    tmux's own docs say so. charter no longer puts a switch outcome through either
+    (#729: it goes to the frame's own attention row, where no tmux parser is in the path),
+    so what this class proves is no longer "the escaping charter applies is necessary" but
+    the fact underneath it: **an unescaped `#` in a tmux message argument really is read by
+    tmux's parser rather than drawn.** That is what makes `inert_format` the right thing
+    for the next surface that hands tmux a string built from a name, and what makes the
+    narrower per-value guards charter uses elsewhere load-bearing rather than decorative.
+    `tests/test_frame_menu.py::LabelSafety` proved the ESCAPING at argv level and moved
+    whole to `test_frame_tmuxctl.py::InertFormat`; this is the half a unit test cannot
+    show, and it is asserted against tmux rather than against charter.
 
     **`#{...}`, not `#(...)`, and that is a measurement rather than a preference.** On tmux
     3.7c a `#(shell command)` in a `display-message` substitutes to EMPTY and the job was

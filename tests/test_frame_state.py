@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 import unittest
 from unittest import mock
 
@@ -1204,6 +1205,147 @@ class ThePinOutranksTheFramesOwnRungs(PersonaIso, unittest.TestCase):
         self._pin("   ")
         state.record_workspace("f-1", "recorded-at-launch")
         self.assertEqual(state.workspace_for("f-1"), "recorded-at-launch")
+
+
+class ANotice(PersonaIso, unittest.TestCase):
+    """`state.say` / `state.notice` / `state.notice_expiry` — the surface a switch
+    outcome moved onto with #729.
+
+    What it replaced was `display-message -d 4000`, and the two measurements that moved
+    it are recorded on `state.say` itself: a tmux client suspends its PANE redraw for the
+    whole of a message's duration (4.03s of frozen screen on tmux 3.7c and at the 3.2
+    floor alike), and `display-message -t <pane>` selects the format target rather than
+    the client, so an outcome about one frame was drawn on whichever client attached most
+    recently. Neither is reachable from a file a frame's own panel reads.
+    """
+
+    def test_a_notice_is_read_back(self):
+        state.say("f-1", "charter: workspace \u2192 gamma")
+        self.assertEqual(state.notice("f-1"), "charter: workspace \u2192 gamma")
+
+    def test_a_frame_with_no_notice_has_nothing_to_say(self):
+        self.assertEqual(state.notice("f-1"), "")
+
+    def test_reading_a_notice_creates_nothing_on_disk(self):
+        """`version`'s rule, for the same reason and the same caller: a panel polls this
+        five times a second, and a read that created a directory would fight `reap`."""
+        self.assertEqual(state.notice("never-noticed"), "")
+        self.assertFalse(state.frame_dir("never-noticed").exists())
+
+    def test_a_notice_stops_being_read_back_once_it_expires(self):
+        """The property the whole dwell rests on. Written with a duration already spent,
+        so this pins the EXPIRY rather than sleeping through one."""
+        state.say("f-1", "charter: gone by now", seconds=-1)
+        self.assertEqual(state.notice("f-1"), "")
+
+    def test_the_expiry_is_when_it_stops_being_drawn(self):
+        """`panel._watch` needs the deadline and not the text: the falling edge it has to
+        repaint on is a clock crossing this number, and nothing else announces it."""
+        before = time.time()
+        state.say("f-1", "charter: still here", seconds=30)
+        self.assertGreaterEqual(state.notice_expiry("f-1"), before + 30)
+
+    def test_an_absent_notices_expiry_is_already_past(self):
+        """`0.0` rather than `None`, so `time.time() < expiry` is the whole of the
+        caller's question and there is no branch for "no notice" to get wrong."""
+        self.assertEqual(state.notice_expiry("f-1"), 0.0)
+
+    def test_a_newline_cannot_write_a_second_line_of_the_file(self):
+        """The notice is stored as an expiry line and then the text, so a newline in the
+        message is a value crossing into a format with structure — `contain.one_line`'s
+        own case. Without it the text after the newline is silently dropped on read, and
+        with a leading newline the message would vanish entirely."""
+        state.say("f-1", "charter: first\nsecond")
+        said = state.notice("f-1")
+        self.assertNotIn("\n", said)
+        self.assertIn("second", said)
+
+    def test_a_corrupt_expiry_degrades_to_silence_rather_than_raising(self):
+        """`slots._bottom` draws the one row `docs/frame.md` promises is never dropped,
+        so a notice file it cannot parse must cost the line and never the row."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "notice").write_text("not-a-number\ncharter: hello\n")
+        self.assertEqual(state.notice("f-1"), "")
+        self.assertEqual(state.notice_expiry("f-1"), 0.0)
+
+    def test_a_non_utf8_notice_degrades_to_silence(self):
+        d = state.frame_dir("f-1", create=True)
+        (d / "notice").write_bytes(b"\xff\xfe\x80")
+        self.assertEqual(state.notice("f-1"), "")
+        self.assertEqual(state.notice_expiry("f-1"), 0.0)
+
+    def test_a_hostile_fid_writes_nothing_and_says_nothing(self):
+        """`frame_dir`'s containment, reached through the new writer. `say` takes an id
+        that came off `$CHARTER_SESSION_ID` exactly as `bump` does."""
+        state.say("../escape", "charter: nope")
+        self.assertEqual(state.notice("../escape"), "")
+
+    def test_a_refusal_is_given_longer_than_an_outcome_that_happened(self):
+        """The one thing `ok` decides. A refusal is the outcome with no other surface —
+        nothing moved, so no panel repaints into the answer — and it carries the fix in
+        its own text."""
+        self.assertGreater(state.REFUSAL_SECONDS, state.NOTICE_SECONDS)
+
+    def test_an_empty_message_writes_no_notice(self):
+        """Otherwise a blank line would take the row's top priority away from an alert
+        for the whole dwell, saying nothing while it did — and keep `panel._watch`
+        repainting five times a second to keep saying it.
+
+        Asserted on the FILE, not on `notice()`: the reader strips too, so a version that
+        wrote the blank notice and hid it on the way out would satisfy a `notice() == ""`
+        check while still holding the dwell open for `notice_expiry`."""
+        state.say("f-1", "   ")
+        self.assertEqual(state.notice_expiry("f-1"), 0.0)
+        self.assertFalse((state.frame_dir("f-1") / "notice").exists())
+
+    def test_what_is_written_is_already_trimmed(self):
+        """Asserted on the FILE, and it has to be: `notice()` strips on the way out too,
+        so a writer that only `lstrip`ped would be invisible through the reader — which is
+        exactly how the sweep found this line unpinned. The property is that what charter
+        stores is already clean, because the row joins fields with ` · ` and a trailing
+        space would draw as `charter: gamma  · 5 todos`."""
+        state.say("f-1", "charter: gamma   ")
+        raw = (state.frame_dir("f-1") / "notice").read_text()
+        self.assertEqual(raw.split("\n")[1], "charter: gamma")
+
+    def test_a_notice_is_gone_AT_its_expiry_and_not_a_moment_after(self):
+        """The boundary, not just the direction. `<=` here would keep a notice for one
+        more instant than it was given, which no operator could see — but the sweep is
+        right that an unpinned boundary is an unpinned line, and the dwell is a half-open
+        interval on purpose: `say(seconds=n)` means n seconds of it, not n plus a tick."""
+        state.say("f-1", "charter: on the edge", seconds=30)
+        at = state.notice_expiry("f-1")
+        with mock.patch("time.time", return_value=at - 0.001):
+            self.assertEqual(state.notice("f-1"), "charter: on the edge")
+        with mock.patch("time.time", return_value=at):
+            self.assertEqual(state.notice("f-1"), "")
+
+    def test_a_hostile_fid_has_no_expiry_either(self):
+        """`notice`'s containment guard has a twin in `notice_expiry`, and it is a
+        separate line that needs a separate reason to exist: `frame_dir` answers `None`
+        for a name `contain.child` refuses, and `None / "notice"` is a `TypeError` that
+        the `(OSError, ValueError)` below would not catch — out of `panel._watch`'s run
+        loop, which is the one place in this module that must never raise."""
+        self.assertEqual(state.notice_expiry("../escape"), 0.0)
+
+    def test_a_notice_whose_expiry_is_nan_is_not_live_forever(self):
+        """`float("nan")` parses, and every comparison against a NaN is False — so a
+        `now >= expiry` test reads False and the notice never expires. That is exactly the
+        stuck row #727 is about, reachable through a corrupt file rather than a loop, so
+        the comparison asks for the LIVE case and NaN falls out with every other
+        degenerate value."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "notice").write_text("nan\ncharter: forever\n")
+        self.assertEqual(state.notice("f-1"), "")
+
+    def test_a_notice_whose_expiry_is_infinite_is_still_bounded_by_nothing_but_reap(self):
+        """The companion value: `inf` also parses, and unlike NaN it compares the way it
+        reads. Pinned so the NaN guard above is understood as being about NaN rather than
+        about "unusual floats" — an `inf` here is a notice that genuinely never expires,
+        which nothing in charter writes and `reap` still removes."""
+        d = state.frame_dir("f-1", create=True)
+        (d / "notice").write_text("inf\ncharter: forever\n")
+        self.assertEqual(state.notice("f-1"), "charter: forever")
 
 
 if __name__ == "__main__":

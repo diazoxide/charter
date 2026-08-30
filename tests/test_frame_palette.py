@@ -637,12 +637,17 @@ class ThePaletteCommand(PersonaIso, unittest.TestCase):
     def test_a_refusal_at_the_moment_of_the_keypress_is_said_on_the_operators_screen(self):
         """`invoke` re-asks availability, so a row drawn while a plane was one way and
         pressed while it is another is refused — and that sentence has nowhere else to go,
-        because the pane it would have been drawn in is the one about to be killed."""
+        because the pane it would have been drawn in is the one about to be killed.
+
+        It is said on the frame, not at a client: since #729 the outcome is a line in this
+        frame's own state that its attention panel draws, so there is no third argument
+        naming a terminal and no way for the sentence to land on a frame it is not about.
+        The refusal itself is unchanged, which is what this asserts."""
         state.record_harness_pane(self.FID, "not-a-pane-id")
         self.assertEqual(self._draw(overlay.Row(id="density.full", title="d")), 0)
         self.said.assert_called_once()
         self.assertIn("no record of this frame's harness pane", self.said.call_args[0][1])
-        self.assertEqual(self.said.call_args[0][2], "/dev/ttys7")
+        self.assertEqual(self.said.call_args[0][0], self.FID)
 
     def test_the_pane_is_not_killed_before_the_action_has_started(self):
         """§4g says `run` starts work and returns; `kill-pane` hands SIGHUP to this pane's
@@ -681,8 +686,22 @@ class ThePaletteCommand(PersonaIso, unittest.TestCase):
 
 
 class WhatReachesTheOperatorsScreen(PersonaIso, unittest.TestCase):
-    """`_say_on_screen` — the one line charter puts on a status area, and the parser it
-    has to survive on the way."""
+    """`_say_on_screen` — the one line charter puts on the operator's screen.
+
+    **It no longer goes through tmux at all** (#729), and every property below changed
+    with it. What it was: `display-message -d 4000`, whose argument is a tmux FORMAT and
+    whose `-c`/`-t` decided which terminal saw it. What it is: a line in the frame's own
+    state, drawn by that frame's attention panel into a pane charter owns.
+
+    So the escaping question is answered by removal rather than by `tmuxctl.inert_format`
+    — there is no tmux parser left in the path — and the "which client" question is
+    answered by the surface, since every client attached to a frame sees its panes.
+
+    The dwell and the row itself are pinned in
+    `tests/test_frame_density.py::TheOutcomeGoesOnTheFramesOwnRow` and
+    `tests/test_frame_slots.py::BottomRenderer`; this class keeps the two properties that
+    are about what does NOT happen any more.
+    """
 
     FID = "f-say"
 
@@ -690,58 +709,40 @@ class WhatReachesTheOperatorsScreen(PersonaIso, unittest.TestCase):
         super().setUp()
         state.frame_dir(self.FID, create=True)
         state.record_server(self.FID, "charter")
-        # A frame HAS one, and since #695 it is what a message without a client is aimed
-        # at — the record charter already keeps of where this frame's harness runs, whose
-        # `%N` tmux cannot read as anything but a pane.
         state.record_harness_pane(self.FID, "%4")
 
-    def test_what_is_put_on_screen_is_inert_before_tmux_ever_parses_it(self):
-        """`display-message`'s argument is a tmux FORMAT (its own docs say so), and what
-        goes into it here is a workspace name or a provider's own refusal. The escaping is
-        `tmuxctl.inert_format`'s and is asked for rather than re-spelled — a second copy is
-        a second answer to "what may reach tmux's parser"."""
+    def test_a_hostile_message_reaches_no_tmux_parser_because_it_reaches_no_tmux(self):
+        """`#(...)` in an unexpanded tmux format EXECUTES the moment tmux draws it — found
+        for real through charter's production path with a git branch named
+        `#(id>/tmp/...)`, where the job ran and the branch never appeared on screen. The
+        old fix was to double every `#`. The fix now is that nothing charter says on a
+        switch is handed to tmux at all, which is the stronger of the two: a doubling can
+        be forgotten at a new call site, and an argv that is never built cannot be.
+        """
         with mock.patch.object(commands_frame.tmuxctl, "run") as run:
             commands_frame._say_on_screen(self.FID, "x #(touch /tmp/pwned) y")
-        argv = run.call_args[0][1]
-        self.assertNotIn("x #(touch /tmp/pwned) y", argv)
-        self.assertIn("charter: x ##(touch /tmp/pwned) y", argv)
+        self.assertEqual(run.call_count, 0, run.call_args)
 
-    def test_a_named_client_is_told_and_an_unnamed_one_is_the_frames_own_pane(self):
-        """Measured against tmux 3.7c with two real ptys on one session: `-t <session>`
-        drew on the most recently attached client regardless of who pressed, and `-c` drew
-        on exactly the named one. The palette carries the presser's own client from the
-        hotkey bind, so a refusal reaches the terminal that asked for it.
+    def test_the_hash_is_kept_literal_rather_than_doubled(self):
+        """The other half, and the reason the old escaping cannot simply be left in place
+        "for safety": the row is charter's own pane, so a `##` would now be two visible
+        characters where the operator typed one. Escaping for a parser that is no longer
+        in the path is not free — it is a wrong answer drawn on screen."""
+        commands_frame._say_on_screen(self.FID, "branch #(x) here")
+        self.assertEqual(state.notice(self.FID), "charter: branch #(x) here")
 
-        With no client the target is the frame's own PANE and never its id (#695). A chat
-        id is `{workspace}.{ordinal}` and tmux splits a `-t` on the dot, so
-        `-t harness-wrapper.2` is not the window of that name: measured on 3.7c it resolves
-        to session `harness-wrapper`, its CURRENT window, and `2` as a pane index. The
-        session half happened to be the right screen, which is why nothing was ever seen to
-        go wrong — the target has never once meant what it was spelled to mean."""
-        with mock.patch.object(commands_frame.tmuxctl, "run") as run:
-            commands_frame._say_on_screen(self.FID, "hello", "/dev/ttys7")
-        self.assertIn("-c", run.call_args[0][1])
-        self.assertIn("/dev/ttys7", run.call_args[0][1])
-        with mock.patch.object(commands_frame.tmuxctl, "run") as run:
-            commands_frame._say_on_screen(self.FID, "hello")
-        argv = run.call_args[0][1]
-        self.assertNotIn("-c", argv)
-        self.assertEqual(argv[argv.index("-t") + 1], "%4")
-        self.assertNotIn(self.FID, argv,
-                         "a frame id reached tmux as a target, where the dot in it is a "
-                         "separator and not a character")
-
-    def test_a_frame_with_no_usable_pane_record_is_told_nothing_at_all(self):
-        """The direction the refusal falls, and it is the same one an empty id already
-        falls: there is nothing here that can be aimed at that is CERTAINLY this frame, and
-        `-t <fid>` is how a refusal came to be drawn across somebody else's. An operator
-        loses a sentence; the alternative is another operator gaining one."""
+    def test_a_frame_with_no_pane_record_is_still_told(self):
+        """**This is the case that got better, not merely different.** The old path had
+        nothing it could safely aim a `display-message` at without a harness pane on
+        record, so it stayed silent and the operator lost the sentence — and it stayed
+        silent because `-t <fid>` was how a refusal came to be drawn across somebody
+        else's frame. A row needs no pane id: it is read by whichever panel is drawing
+        that frame, so there is no target to get wrong and no reason to withhold."""
         for record in ("", "not-a-pane", "%1;kill-server"):
             with self.subTest(record=record):
                 state.record_harness_pane(self.FID, record)
-                with mock.patch.object(commands_frame.tmuxctl, "run") as run:
-                    commands_frame._say_on_screen(self.FID, "hello")
-                self.assertEqual(run.call_count, 0, run.call_args)
+                commands_frame._say_on_screen(self.FID, "hello")
+                self.assertEqual(state.notice(self.FID), "charter: hello")
 
 
 if __name__ == "__main__":                          # pragma: no cover
