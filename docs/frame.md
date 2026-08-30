@@ -1195,6 +1195,24 @@ unchanged: the keys never disappear, so a component built on them does not break
 There is no `surface` or `focus` recipe, because there is nothing to hand over — those two
 are tmux pane options and no renderer can write one.
 
+**Those eight are also the whole of what survives the trip.** Charter contains every row a
+component outside its own tree returns, before it reaches the terminal — and containment
+means an escape comes out as the visible characters of itself, so `\x1b[2J` prints as
+`\x1b[2J` instead of erasing somebody's pane. **What is exempt is the vocabulary above, and
+it is exempt as a property rather than as a spelling**: an SGR whose every parameter is one
+of these roles' comes through, however you spelled it. `\x1b[1m`, `\x1b[01m` and `\x1b[m`
+are all charter's own vocabulary; so is `\x1b[1;32m`, which is two of the roles in one
+escape and something charter never writes itself.
+
+Everything else does not. A colour outside your palette's sixteen — `\x1b[38;5;236m`,
+`\x1b[38;2;30;60;90m`, a background like `\x1b[41m` — a cursor move, an erase, an OSC title
+string, a newline: each arrives as its own text. And one parameter charter does not serve
+takes the whole escape with it, so `\x1b[1;41m` is contained entire rather than half-kept.
+Under `NO_COLOR`, or a pane that is not a terminal, nothing is exempt: the recipes are
+already empty there, so a component built on them is unaffected, and one that hard-coded an
+escape has it contained like any other — charter emits no SGR from the frame, including on
+somebody else's behalf.
+
 **What charter does not promise is that your pane looks like its own.** A component that
 ignores the recipes and paints something else will not match, and charter will not make it:
 it does not overdraw your heading, and it does not take a row out of your rectangle to fit
