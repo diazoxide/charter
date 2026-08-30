@@ -1133,8 +1133,98 @@ class TheDocumentedExampleIsRunThroughCharter(unittest.TestCase):
             with self.subTest(word=word):
                 self.assertIn(f"`{word}`", md)
         self.assertIn("`bright` forms", md)
-        self.assertIn(f"`0` to `{instance.FRAME_PANE_PAD_MAX}`", md)
 
+
+#: Every bound `docs/frame.md` writes as a range, in the two spellings the file uses:
+#: `` `0` to `5` `` and the dash form `` `0`–`5` ``. Version numbers (tmux `3.2` to `3.6`)
+#: are dotted and are deliberately not matched — a range in this file is a range of cells,
+#: which is a thing charter enforces, and that is what may not drift.
+_STATED_RANGE = re.compile(r"`(\d+)`\s*(?:to|through|[-–—])\s*`(\d+)`")
+
+
+def stated_ranges(prose: str) -> list[tuple[int, int]]:
+    """**Every** range *prose* states — not the first one, and not whether one exists.
+
+    That distinction is the whole of #669. `docs/frame.md` gave `pad` two ranges four
+    hundred lines apart — `` `0` to `5` `` and `` `0`–`8` `` — and the test asked
+    ``assertIn(f"`0` to `{FRAME_PANE_PAD_MAX}`", md)``, which the *right* copy satisfied.
+    An assertion that one occurrence exists cannot see a second, wrong one; the wrong one
+    was the sentence about refusal, so `pad = 6` on the documentation's word silently cost
+    the operator their whole `[[frame.component]]` block.
+    """
+    return [(int(a), int(b)) for a, b in _STATED_RANGE.findall(prose)]
+
+
+class EveryStatementOfThePadBoundIsHeldToTheConstant(unittest.TestCase):
+    """#669. `FRAME_PANE_PAD_MAX` is written out in prose more than once, and every copy
+    has to agree with the constant — all of them, not one of them.
+
+    Scoped to `docs/frame.md`, the way `test_readme_states_the_ceilings` is scoped to the
+    README: it is the file an operator reads to learn what they may write, and the file the
+    enforcement sentence lives in. A news entry records what a release said and is not held
+    to a constant that may move after it.
+    """
+
+    MD = Path(__file__).resolve().parents[1] / "docs" / "frame.md"
+
+    def setUp(self) -> None:
+        self.md = self.MD.read_text()
+
+    def test_the_reader_finds_the_second_copy_the_old_assertion_could_not(self):
+        """The control, and the reason `stated_ranges` is a function.
+
+        Run over the exact pair #669 reported — the right copy and the wrong one. `assertIn`
+        on the first was green with the second sitting in the same file, so a reader that
+        returned only the first would rebuild the defect."""
+        both = ("`0` to `5`. Five is not a round number picked by hand …\n"
+                "… and so are a `bg` that is not one of the seventeen words, a `pad` "
+                "outside `0`–`8`, and a `size` charter cannot give the component")
+        self.assertEqual(stated_ranges(both), [(0, 5), (0, 8)])
+        self.assertEqual(stated_ranges("On tmux 3.2 to 3.6"), [])
+        self.assertEqual(stated_ranges("On tmux `3.2` to `3.6`"), [])
+
+    def test_the_documentation_states_the_bound_at_all(self):
+        """The vacuity control: the assertion below is green on a file that says nothing."""
+        self.assertTrue(stated_ranges(self.md),
+                        "docs/frame.md states no range — the `pad` bound went missing")
+
+    def test_every_range_the_documentation_states_is_the_pad_range(self):
+        """The fix. Each copy is checked, so the enforcement sentence at the bottom of the
+        file is in reach whatever the copy up by the `pad` prose says.
+
+        `pad` is the only bound this file states as a range of cells. A second one arriving
+        is a reason to teach this test the second constant — never a reason to go back to
+        asking whether one of them appears somewhere."""
+        want = (0, instance.FRAME_PANE_PAD_MAX)
+        wrong = [r for r in stated_ranges(self.md) if r != want]
+        self.assertEqual(
+            wrong, [],
+            f"docs/frame.md states {wrong} where charter enforces {want}. #669 was two "
+            "copies of this range disagreeing, and the harmful copy was the sentence about "
+            "refusal: an arrangement charter cannot draw is refused WHOLE, so a `pad` the "
+            "documentation invited costs the operator the entire `[[frame.component]]` "
+            "block and the frame falls back to `slots`.")
+
+    def test_no_number_the_documentation_prints_beside_pad_is_one_charter_refuses(self):
+        """The copy that is not written as a range — "a `pad` of `8`", "capped at `8`" —
+        held to `pane_pad` itself rather than to a spelling of the constant.
+
+        The rule this puts on the file: do not print an integer in a sentence about `pad`
+        that charter would refuse. Asked of the enforcing function, so it moves when
+        `FRAME_PANE_PAD_MAX` moves. The fenced examples are excluded because
+        `TheDocumentedExampleIsRunThroughCharter` resolves those through `instance` itself,
+        which is a stronger question than this one."""
+        prose = re.sub(r"```.*?```", "", self.md, flags=re.S)
+        sentences = [s for s in re.split(r"(?<=[.!?])\s+", " ".join(prose.split()))
+                     if "`pad`" in s]
+        self.assertTrue(sentences, "docs/frame.md no longer mentions `pad`")
+        for sentence in sentences:
+            for number in re.findall(r"`(\d+)`", sentence):
+                with self.subTest(number=number):
+                    self.assertIsNotNone(
+                        instance.pane_pad(int(number)),
+                        f"docs/frame.md prints `{number}` as a `pad` and charter refuses it "
+                        f"(the cap is {instance.FRAME_PANE_PAD_MAX}): …{sentence[:140]}")
 
 
 class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCase):

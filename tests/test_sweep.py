@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -2533,6 +2534,91 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
         self.assertIn("225 mutations", loud)
         self.assertIn("still swept", loud)
         self.assertIn("nothing here is dropped", loud)
+
+
+#: Every duration a piece of prose quotes in seconds. The shape the workflow's comments
+#: used — ``350 s``, ``250 s``, ``about 240 seconds`` — and deliberately not minutes, so
+#: `timeout-minutes: 30` (a YAML key, not a claim about a measurement) is not one.
+#:
+#: A function rather than a regex inlined into an assertion, because the assertion below
+#: is green on an empty list and would therefore be green against a reader that matched
+#: nothing at all. `TheWorkflowQuotesNoCostTheToolDoesNotState` proves the reader first.
+_DURATION = re.compile(r"\b(\d+)\s?(?:s\b|seconds\b)")
+
+
+def durations_stated(prose: str) -> list[int]:
+    return [int(n) for n in _DURATION.findall(prose)]
+
+
+class TheWorkflowQuotesNoCostTheToolDoesNotState(unittest.TestCase):
+    """#670: one measurement, written down twice and not identically.
+
+    `SHARD_FIXED`'s itemisation said the selection map costs **250 s** and `sweep.yml`'s
+    cache step said **350 s**, about the same trace, and *neither was asserted* — so
+    nothing in the repository was able to notice. It survived because nothing downstream
+    turns on it: `SHARD_FIXED` is twelve minutes and the itemised total fits under it at
+    either reading, so no arithmetic moved and no run failed. It was only a number a
+    reader would quote, with no way to know which one to quote.
+
+    Re-measured across nine cache-miss runs on `ubuntu-latest` — the tool prints its own
+    ``selection map: … in Ns`` — the trace is 242 to 285 s. 250 was honest when #630 wrote
+    it and the suite has grown past it; 350 matches no run at all.
+
+    **The fix is the second copy, not the digits.** `SHARD_FIXED_COSTS` is now the one
+    place the itemisation is written, `sweep.yml` names the constant instead of quoting a
+    figure, and this class holds any duration the workflow's comments *do* quote to one
+    the tool states. A third copy is then either right or red.
+    """
+
+    WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "sweep.yml"
+
+    def test_the_reader_finds_the_copy_this_class_is_about(self):
+        """The control, and the reason the reader is a function.
+
+        The assertion below is satisfied by an empty list, which is the same shape of
+        defect as #669 next door — an assertion about absence standing in for one about a
+        value. This one runs the reader over the exact line #670 reported."""
+        self.assertEqual(
+            durations_stated("# The selection map is one trace of the whole suite — "
+                             "350 s measured, and the"), [350])
+        self.assertEqual(durations_stated("under 5 s, and about 240 seconds"), [5, 240])
+        self.assertEqual(durations_stated("timeout-minutes: 30"), [])
+        self.assertEqual(durations_stated("python-version: \"3.12\""), [])
+
+    def test_every_duration_the_workflow_quotes_is_one_the_tool_states(self):
+        stated = set(sweep.SHARD_FIXED_COSTS.values())
+        loose = [n for n in durations_stated(self.WORKFLOW.read_text()) if n not in stated]
+        self.assertEqual(
+            loose, [],
+            f"sweep.yml quotes {loose} s, which `SHARD_FIXED_COSTS` does not state. That "
+            "is the #670 shape: a cost written down in two files, in words, in neither of "
+            "which anything can check it. Name the constant in the comment instead, or "
+            "move the measurement into `SHARD_FIXED_COSTS` and let the comment cite it.")
+
+    def test_the_budget_covers_the_itemisation_it_is_written_from(self):
+        """`SHARD_FIXED`'s note claims to be the no-cache figure rounded up past the items.
+        Asserted, so a re-measurement that outgrows the budget is red here rather than in
+        a shard that gets cancelled at `timeout-minutes` and reports nothing at all."""
+        itemised = sum(sweep.SHARD_FIXED_COSTS.values())
+        self.assertLess(itemised, sweep.SHARD_FIXED,
+                        "the fixed costs no longer fit the fixed-cost budget")
+        self.assertLess(sweep.SHARD_FIXED, sweep.SHARD_BUDGET,
+                        "a shard would have no time left to measure a mutation in")
+
+    def test_the_itemisation_names_every_cost_and_the_map_is_the_largest(self):
+        """A dict is a source of truth only while it is complete: drop an entry and the
+        sum still fits the budget, silently, which is how a shard comes to be sized
+        against a cost it no longer counts. And "the largest fixed cost a shard pays" is
+        the claim `sweep.yml`'s cache step makes about the map — held to the numbers."""
+        self.assertEqual(sorted(sweep.SHARD_FIXED_COSTS), [
+            "checkout at fetch-depth 0, and the interpreter",
+            "the sandbox clone",
+            "the selection map, traced",
+            "the unmutated baseline",
+        ])
+        self.assertEqual(max(sweep.SHARD_FIXED_COSTS,
+                             key=sweep.SHARD_FIXED_COSTS.__getitem__),
+                         "the selection map, traced")
 
 
 class EverySurvivorLandsOnTheLineItIsAbout(unittest.TestCase):

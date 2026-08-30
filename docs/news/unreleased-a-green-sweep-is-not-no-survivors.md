@@ -70,10 +70,10 @@ now warmed once and restored by every shard in seconds, so a second machine cost
 baseline and not its own trace. That the map was cached was the premise for sharding, and
 it was not true before: the workflow had no cache step at all, so every run rebuilt it.
 
-The exact figure is written down twice and not identically: `SHARD_FIXED`'s budget note in
-`tools/sweep.py` says 250 s and `sweep.yml`'s cache step says 350 s. The 12-minute
-`SHARD_FIXED` covers either reading, so nothing downstream turns on which is right — but
-neither number is one to quote until somebody re-measures, so this entry does not.
+The figure: **about 285 seconds**, and under five restored from the cache. Nine cache-miss
+runs on `ubuntu-latest` measured 242 to 285 s, and the trace is quoted at the top of that
+range because a budget is sized against the slow run. It is written down once now, in
+`SHARD_FIXED_COSTS`, which `sweep.yml`'s cache comment names rather than restates (#670).
 
 The budget is written for the case where the cache misses anyway, because a fork's pull
 request cannot write one and a budget that only holds on a hit fails on exactly the runs

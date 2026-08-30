@@ -2154,22 +2154,42 @@ def gate_exit_code(gate: Gate, enforce: bool) -> int:
 #: survivors it had already printed, nothing the merge step can read.
 SHARD_BUDGET = 40 * 60
 
-#: What a shard pays before it measures its first mutation. Measured on `ubuntu-latest`
-#: and not on a workstation, because that is where the budget has to hold:
+#: What a shard pays before it measures its first mutation, itemised, in seconds. Measured
+#: on `ubuntu-latest` and not on a workstation, because that is where the budget has to
+#: hold.
 #:
-#: * checkout at ``fetch-depth: 0`` and the interpreter — 3 s;
-#: * the selection map, traced — **250 s**, and restored from cache — under 5 s;
-#: * the sandbox clone — about 15 s;
-#: * the unmutated baseline — about 240 s, the same 7,693 tests `test.yml` runs in 4 min.
+#: **Data and not a bulleted comment, which is what #670 cost.** The largest of these was
+#: written in prose here and written again in `sweep.yml`'s cache step, and the two copies
+#: said 250 and 350 for a month with nothing able to notice: a figure two files state in
+#: words drifts, and neither copy was in reach of an assertion. This dict is the one place
+#: it is written, `test_sweep` holds the workflow's comments to it, and `sweep.yml` names
+#: the constant instead of quoting a number.
+#:
+#: The map figure is nine cache-miss traces on `ubuntu-latest` (242, 252, 257, 276, 277,
+#: 279, 280, 282, 285 s — the tool prints its own `selection map: … in Ns`), taken at the
+#: ceiling because a budget is sized against the slow run. 250 was honest when #630 wrote
+#: it against 7,693 tests and the suite has grown since; 350 never matched a run.
+#:
+#: The baseline is the whole suite once, the same run `test.yml` makes in about four
+#: minutes; the clone is the sandbox `git clone` of this checkout.
+SHARD_FIXED_COSTS = {
+    "checkout at fetch-depth 0, and the interpreter": 3,
+    "the selection map, traced": 285,
+    "the sandbox clone": 15,
+    "the unmutated baseline": 240,
+}
+
+#: What a shard pays before it measures its first mutation, as one number.
 #:
 #: The baseline is the expensive half and it is not negotiable: a shard that skips it
 #: cannot tell a survivor from a tree that was already red, which is the spec's second way
 #: a sweep lies. So every shard buys its own — the marginal cost of a machine.
 #:
-#: The map is the half that CAN be shared, and `sweep.yml` warms it once for all of them.
-#: This constant is deliberately the NO-CACHE figure anyway, and rounded up past even
-#: that: a pull request from a fork cannot write that cache, and a budget that only holds
-#: when the cache hits is a budget that fails on exactly the runs nobody is watching.
+#: The map is the half that CAN be shared, and `sweep.yml` warms it once for all of them;
+#: restored from that cache it costs under 5 s. This constant is deliberately the NO-CACHE
+#: figure anyway, and rounded up past even `sum(SHARD_FIXED_COSTS.values())`: a pull
+#: request from a fork cannot write that cache, and a budget that only holds when the cache
+#: hits is a budget that fails on exactly the runs nobody is watching.
 SHARD_FIXED = 12 * 60
 
 #: What one mutation costs a shard. Read off the runs that ran out of time rather than off
