@@ -5224,6 +5224,110 @@ class TheChatALaunchIsLeavingIsReadFromTmux(_ChatsOnOneSession, _TmuxServerFixtu
         self.assertEqual(state.panes(f"{self.WS}.1"), {})
 
 
+class AWorkspaceNamedWithADotIsStillAWorkspace(_TmuxServerFixture, PersonaIso,
+                                              unittest.TestCase):
+    """#695, against a real server: a session NAME is not a string tmux reads as a string.
+
+    `instance.WORKSPACE_NAME_RE` accepts a dot, so `api.2` is a workspace
+    `charter workspace create` takes — and `state.workspace_prefix` turns a workspace into
+    the tmux SESSION name. Two facts about tmux, neither of which a mock can produce, and
+    which disagree with each other:
+
+    * **3.7c keeps the dot and then splits on it.** `-t api.2` is `window.pane`, so
+      `new-window` answers `can't specify pane here` rc 1 and `set-environment` answers rc
+      **0** onto a sibling session called `api`.
+    * **3.2 — `tmuxctl.FLOOR` — does not keep it at all.** `new-session -s api.2` creates
+      a session named `api_2`, so charter asked for one name and got another and every
+      later target missed.
+
+    That disagreement is the whole reason the fix is in what charter MINTS rather than in
+    how it spells a target: a trailing `:` disambiguates on 3.7c and finds nothing on 3.2.
+    So this class asserts the property both versions can hold — the identifier charter
+    derives is one tmux gives back unchanged, and the frame works.
+
+    The sibling session called `api` is not decoration: on 3.7c it is what `-t api.2`
+    resolves TO once tmux has split the name, so without it the wrong target would merely
+    fail instead of quietly working on another workspace's frame.
+    """
+
+    WS = "api.2"
+    SIBLING = "api"
+
+    def _session(self, name: str) -> str:
+        r = self._srv("new-session", "-d", "-s", name, "-n", f"{name}.1", "-P", "-F",
+                      "#{pane_id}", "--", *_gate_argv(
+                          os.path.join(self._gate_dir, f"gate-{name}"), "exit 0"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pane = r.stdout.strip()
+        self.addCleanup(_kill_pid, self._srv("display-message", "-p", "-t", pane,
+                                             "#{pane_pid}").stdout.strip())
+        return pane
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.prefix = state.workspace_prefix(self.WS)
+        self.pane = self._session(self.prefix)
+        self._session(self.SIBLING)
+
+    def test_tmux_gives_back_the_name_charter_asked_for(self):
+        """The property both versions can hold, and the one a dotted name cannot. Read out
+        of `list-sessions` rather than assumed: on 3.2 a dotted name comes back rewritten,
+        which is how charter came to target a session that was never there."""
+        self.assertNotIn(".", self.prefix,
+                         "charter is still minting a dot into a tmux session name")
+        names = self._srv("list-sessions", "-F", "#{session_name}").stdout.split()
+        self.assertIn(self.prefix, names)
+
+    def test_a_second_chat_can_be_opened_in_it(self):
+        """The reachable defect. `layout.chat_window_argv` is the production builder, and
+        with a dotted session name it answered `can't specify pane here` rc 1 on 3.7c — so
+        `charter claude` a second time in that workspace returned 1 with nothing to explain
+        it, and the workspace was a one-chat workspace for good."""
+        chat = f"{self.prefix}.2"
+        cmd = layout.chat_window_argv(socket=self.SOCKET_NAME, session=self.prefix,
+                                      chat=chat, cwd=self._gate_dir,
+                                      harness_argv=_gate_argv(
+                                          os.path.join(self._gate_dir, "gate-2"),
+                                          "exit 0"))
+        r = _run(cmd)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.addCleanup(_kill_pid, self._srv("display-message", "-p", "-t",
+                                             r.stdout.strip(),
+                                             "#{pane_pid}").stdout.strip())
+        self.assertEqual(
+            sorted(self._srv("list-windows", "-t", self.prefix,
+                             "-F", "#{window_name}").stdout.split()),
+            sorted([f"{self.prefix}.1", chat]))
+
+    def test_the_frames_identity_lands_on_its_own_session(self):
+        """`$CHARTER_SESSION_ID` is what the hotkey bind and every palette action resolve
+        themselves from. With a dotted session name `set-environment` answered rc **0** and
+        wrote it on session `api` — another workspace's frame, told it was this one."""
+        cmd = commands_frame._session_id_env_argv(socket=self.SOCKET_NAME,
+                                                  session=self.prefix,
+                                                  chat=f"{self.prefix}.1")
+        self.assertEqual(_run(cmd).returncode, 0)
+        mine = self._srv("show-environment", "-t", self.prefix, "CHARTER_SESSION_ID")
+        self.assertEqual(mine.stdout.strip(), f"CHARTER_SESSION_ID={self.prefix}.1")
+        theirs = self._srv("show-environment", "-t", self.SIBLING, "CHARTER_SESSION_ID")
+        self.assertNotEqual(theirs.returncode, 0,
+                            "this frame's identity was written on another workspace's "
+                            "session")
+
+    def test_the_reattach_line_charter_prints_is_one_that_works(self):
+        """The launcher's own advice, run. An operator who cannot reattach to a detached
+        agent has lost it, and a hint that fails is worse than none."""
+        self.assertEqual(self._srv("has-session", "-t", self.prefix).returncode, 0)
+
+    def test_a_chat_id_carries_exactly_one_dot_and_it_is_the_ordinal(self):
+        """What the mint buys beyond the target: the only dot left in a chat id is
+        `state._CHAT_SEP`, so `chats._order`'s `rpartition` reads an ordinal rather than
+        whichever dot happened to be last."""
+        chat = state.new_chat_id(self.WS)
+        self.assertEqual(chat, f"{self.prefix}.1")
+        self.assertEqual(chat.count("."), 1)
+
+
 class ChatsAreWindowsOnOneWorkspaceSession(_ChatsOnOneSession, _TmuxServerFixture,
                                            PersonaIso):
     """Phase 5 Stage 5a, against a real server: a workspace is a SESSION and a chat is a

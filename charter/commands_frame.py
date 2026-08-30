@@ -820,7 +820,8 @@ def _charter_py_env_argv(*, socket: str, session: str) -> list[str]:
     write would hand frame N's interpreter to frame N-1 — the same "last launched wins"
     trap `conf_text`'s docstring already names for `mouse`/`history-limit`.
     """
-    return tmuxctl.server_argv(socket, "set-environment", "-t", session, _CHARTER_PY_ENV,
+    return tmuxctl.server_argv(socket, "set-environment", "-t", session,
+                               _CHARTER_PY_ENV,
                                sys.executable)
 
 
@@ -876,7 +877,8 @@ def _exit_path_env_argv(*, socket: str, session: str, frame_root: str) -> list[s
     reports a number that was never its own. The hook appends the chat itself, from the
     window option `_chat_option_argv` writes; see `_pane_died_write_hook_argv`.
     """
-    return tmuxctl.server_argv(socket, "set-environment", "-t", session, _EXIT_PATH_ENV,
+    return tmuxctl.server_argv(socket, "set-environment", "-t", session,
+                               _EXIT_PATH_ENV,
                                frame_root)
 
 
@@ -5791,7 +5793,27 @@ def _say_on_screen(fid: str, message: str, client: str | None = None) -> None:
     if client:
         argv += ["-c", client]
     else:
-        argv += ["-t", fid]
+        # **The frame's own PANE, and never its id** (#695). A chat id is
+        # `{workspace}.{ordinal}` and tmux parses a `-t` on the dot, so
+        # `-t harness-wrapper.2` is not the window of that name: measured on 3.7c it
+        # resolves to session
+        # `harness-wrapper`, its CURRENT window, and `2` as a pane index — and
+        # `-t harness-wrapper.9` answers rc 0 with pane index 0 rather than failing. The
+        # session half happens to be the right screen, which is why nothing has ever been
+        # seen to go wrong here; the target has never once meant what it was spelled to
+        # mean, and the day a workspace is called `api.2` beside one called `api` it means
+        # a different operator's frame. There is no spelling that fixes a window: tmux
+        # takes `session:window` and this side has no session in hand — so the answer is
+        # the record charter already keeps of where this frame's harness runs, which is a
+        # `%N` and cannot be parsed as anything else.
+        pane = state.harness_pane(fid) or ""
+        if not _PANE_ID_RE.fullmatch(pane):
+            # No usable record and no client: there is nothing this can be aimed at that is
+            # certainly this frame. Silence rather than `-t <fid>`, which is how a refusal
+            # came to be drawn across somebody else's frame — the same direction the empty
+            # id above is refused for, and one an operator loses only a sentence to.
+            return
+        argv += ["-t", pane]
     # One prefix for every outcome. Every refusal `switch.py` produces already reads as
     # one ("cannot switch: …", "no workspace 'x' — have: …"), and a second word saying so
     # only ate columns off a status line tmux truncates without saying it did — measured

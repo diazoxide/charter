@@ -115,13 +115,21 @@ class ChatIdIsAllocated(PersonaIso, unittest.TestCase):
 
     def test_a_workspace_spelled_like_a_chat_id_does_not_collide_with_one(self):
         """Workspace `api.2` and chat 2 of workspace `api` are two different names, and
-        the allocator has to keep them that way: `api.2`'s own chats are `api.2.1`,
-        `api.2.2`, and the directory `api.2` belongs to whichever allocator claimed it.
-        Pinned as literals, because the point is which strings come out."""
+        the allocator has to keep them that way. Since #695 it keeps them apart by not
+        minting the dot at all: `api.2`'s chats are `api_2.1`, `api_2.2`, so the only dot
+        in a chat id is the ordinal separator and nothing has to be told which one it is.
+
+        Pinned as literals, because the point is which strings come out — and because the
+        prefix is a tmux SESSION name, where a dot is a target separator on 3.7c and is
+        rewritten to `_` outright on 3.2. Charter now spells what 3.2 was going to spell
+        anyway, on both."""
         self.assertEqual(state.new_chat_id("api"), "api.1")
         self.assertEqual(state.new_chat_id("api"), "api.2")
-        self.assertEqual(state.new_chat_id("api.2"), "api.2.1")
+        self.assertEqual(state.new_chat_id("api.2"), "api_2.1")
         self.assertEqual(state.new_chat_id("api"), "api.3")
+        self.assertNotEqual(state.workspace_prefix("api.2"), "api.2",
+                            "the identifier charter derives still carries a dot, which is "
+                            "a tmux target separator")
 
     def test_a_taken_ordinal_is_skipped_rather_than_adopted(self):
         """A directory already holding another chat's record is not an id to hand out.
@@ -151,8 +159,8 @@ class ChatIdIsAllocated(PersonaIso, unittest.TestCase):
         self.assertEqual(state.workspace_prefix("api_"), "api")
         self.assertEqual(state.workspace_prefix("_api"), "api",
                          "the leading end too, so `_launcher_pid` still finds a head")
-        self.assertEqual(state.workspace_prefix("a.p-i"), "a.p-i",
-                         "and only at the ENDS: the three characters are ordinary inside "
+        self.assertEqual(state.workspace_prefix("a.p-i"), "a_p-i",
+                         "and only at the ENDS: `-` and `_` are ordinary inside "
                          "a name, or `harness-wrapper` would come back as `harness`")
         self.assertEqual(state.new_chat_id("api."), "api.1")
         self.assertEqual(state.workspace_prefix("..."), "frame",
