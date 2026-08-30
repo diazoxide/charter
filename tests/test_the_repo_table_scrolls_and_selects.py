@@ -697,6 +697,56 @@ class ThePaneWiresItAllTogether(PersonaIso, unittest.TestCase):
         self._paint(rows=1)
         self.assertEqual(slots.VIEWPORT.limit, 0)
 
+    def test_a_pane_that_drew_no_table_leaves_no_bound_either(self):
+        """**The case above, on the three ways out that never reached `settle`.** Each
+        cleared the click map and left the BOUND where the last table put it, so the one
+        property `_repos` claims for every paint held on exactly the path that already had
+        it — the guard was written where the assertion could see it rather than where the
+        property lives.
+
+        Three separate paints and not one loop over a helper: they are three different
+        reasons for a pane to have no table, each reached by its own line, and a helper
+        would let one of them stop being exercised without anything going red. Asserted as
+        the value 0, because a bound the handler can still move against is the whole defect
+        whatever its size — and the OFFSET with it, since `settle` is what carries one down
+        with the other."""
+        rows = [_row(f"r{i}") for i in range(20)]
+
+        gather.save(FID, _data(rows))
+        self._paint(rows=8)
+        self.assertGreater(slots.VIEWPORT.limit, 0, "the table had room to move")
+        self._paint(cols=40, rows=8)                       # narrower than `_LEFT_W`
+        self.assertEqual((slots.VIEWPORT.limit, slots.VIEWPORT.offset), (0, 0))
+
+        gather.save(FID, _data(rows))
+        self._paint(rows=8)
+        gather.discard(FID)                                # nothing has gathered yet
+        self._paint(rows=8)
+        self.assertEqual((slots.VIEWPORT.limit, slots.VIEWPORT.offset), (0, 0))
+
+        gather.save(FID, _data(rows))
+        self._paint(rows=8)
+        gather.save(FID, _data([]))                        # gathered, and no clones
+        self._paint(rows=8)
+        self.assertEqual((slots.VIEWPORT.limit, slots.VIEWPORT.offset), (0, 0))
+
+    def test_the_wheel_over_a_pane_with_no_table_repaints_nothing(self):
+        """The cost that bound is read for, at the surface that reads it. A notch on a pane
+        drawing one static sentence answered truthy, so the panel repainted a byte-identical
+        line once per notch — `_scroll_limit`'s own "motion the operator can see is not
+        happening, charged to their terminal", reached through the one paint that never told
+        it anything.
+
+        Driven through the component's real handler rather than through `VIEWPORT.move`, so
+        what is pinned is what a wheel report actually costs this frame."""
+        gather.save(FID, _data([_row(f"r{i}") for i in range(20)]))
+        self._paint(rows=8)
+        gather.discard(FID)
+        self._paint(rows=8)
+        on_event = builtins.build(FID).get("repos").on_event
+        self.assertFalse(on_event(overlay.Event(overlay.SCROLL, "down")),
+                         "there is nothing on this pane to scroll")
+
     def test_a_worktree_removed_under_a_scrolled_table_clamps_it_on_the_next_paint(self):
         """The stale-offset clamp, in the unit that changed. `charter worktree remove`
         takes rows off the bottom of this table without touching the repo list, so a bound

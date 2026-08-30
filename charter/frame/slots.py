@@ -533,13 +533,42 @@ class _Viewport:
 
         Indexed by the PANE's row, not the table's: `_repos` puts a heading on row 0 and
         the table under it, and the three one-line answers it draws instead of a table
-        (`_unknown_lines`, `_empty_lines`, `_too_narrow_lines`) publish nothing at all. So
-        a click on the heading, on a message, or below the last row lands on ``None`` and
-        is not a selection — which is the same rule `events.Dispatcher._on_canvas` applies
-        to the pad, one axis over: cells the component did not draw a row into are not
-        cells it was clicked in.
+        (`_unknown_lines`, `_empty_lines`, `_too_narrow_lines`) publish nothing at all —
+        through :meth:`blank`, which is the one call that says so, because such a paint
+        has a bound to record as well. So a click on the heading, on a message, or below
+        the last row lands on ``None`` and is not a selection — which is the same rule
+        `events.Dispatcher._on_canvas` applies to the pad, one axis over: cells the
+        component did not draw a row into are not cells it was clicked in.
         """
         self._rows = tuple(rows)
+
+    def blank(self) -> None:
+        """What a paint that drew NO TABLE leaves behind: no map, and nowhere to scroll.
+
+        **The two halves of a paint are recorded together, because a paint that recorded
+        one and not the other is the defect this method exists to make unwriteable.**
+        `_repos` has four ways out and three of them draw a single sentence instead of a
+        table (`_too_narrow_lines`, `_unknown_lines`, `_empty_lines`). Each cleared the
+        click map and none of them touched the bound, so a pane that had been scrolled and
+        then lost its table — the terminal narrowed below `statusline._LEFT_W`, the gather
+        cache went away, the workspace's last clone was removed — kept whatever
+        :meth:`settle` recorded for the TALLER table that was there before. The handler
+        reads that bound and nothing else (§4f), so every wheel notch over the sentence
+        answered truthy and the panel repainted a byte-identical line, once per notch:
+        motion the operator can see is not happening, charged to their terminal, which is
+        the exact cost :func:`_scroll_limit`'s own docstring refuses one paragraph over.
+
+        **Zero and not "leave the bound alone", because zero is what the arithmetic
+        already answers for this pane.** `_scroll_limit` answers 0 for any budget at or
+        below one row, and a pane drawing one sentence has no rows for a table at all — so
+        this is that function's answer for the shape rather than a second rule beside it.
+        The offset goes with it through :meth:`settle`'s own clamp, which is the same
+        thing that happens to a table starved to no rows by a resize (that path reaches
+        `settle` and always did); the two shapes now agree instead of differing by which
+        line `_repos` returned from.
+        """
+        self.publish(())
+        self.settle(0)
 
     def repo_at(self, row: int):
         """The repo on pane row *row*, or ``None`` — the paint the operator was looking at.
@@ -2168,6 +2197,14 @@ def _repos(fid: str) -> str:
       three one-line answers below publish nothing, which is what makes a click on
       `gathering this workspace's repos…` not a selection.
 
+    **All four ways out record BOTH, and the three that draw no table say so in one call**
+    (:meth:`_Viewport.blank`). They used to clear the map and leave the bound where the
+    last table put it, so a pane whose terminal had narrowed, whose cache had gone or whose
+    workspace had lost its last clone still answered every wheel notch truthy — repainting
+    one static sentence, once per notch, off a bound for a table that was no longer on
+    screen. That is the same stale-bound reading the `settle` below is unconditional for;
+    the guard was on the one path that already reached it, and these three went round it.
+
     `state.selection` is read here and handed to :func:`_table_lines`, which is what draws
     the chosen row in reverse video. One extra file read per repaint of a pane that is not
     animated — it repaints on a version bump or a resize, and a click is a version bump
@@ -2191,7 +2228,7 @@ def _repos(fid: str) -> str:
         # needs rather than what the table needs — see :func:`_too_narrow_lines`. Asked of
         # :func:`pad_of` and not subtracted back out of `w`, because `pad_of` is the one
         # that knows whether the pad was afforded at all.
-        VIEWPORT.publish(())
+        VIEWPORT.blank()
         return "\n".join(_too_narrow_lines(w, pad_of("repos")))
     from . import gather
     # `gather.cached`, never `gather.read` (#512). The two differ by exactly one thing:
@@ -2217,14 +2254,14 @@ def _repos(fid: str) -> str:
     # hook refreshes it after that (`notify.plane_changed`).
     data = gather.cached(fid)
     if data is None:
-        VIEWPORT.publish(())
+        VIEWPORT.blank()
         return "\n".join(_unknown_lines(w))
     repos = data.get("repos") or []
     if not repos:
         # Gathered, and there is nothing in it. Said out loud rather than left as an
         # empty bordered rectangle — see :func:`_empty_lines`. No heading: `▪ repos 0`
         # above "no clones in demo" is the same fact twice in a two-row pane.
-        VIEWPORT.publish(())
+        VIEWPORT.blank()
         return "\n".join(_empty_lines(_frame_workspace(fid), w))
     # The heading takes the first row and the table spends what is left. Asked for fewer
     # ROWS rather than sliced afterwards, so what survives at `terse` (or in a pane a
