@@ -745,6 +745,38 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         self.assertIn("select-window", self.fake.verbs(),
                       "a padded id was not trimmed back to a real chat")
 
+    def test_a_pane_record_that_vanishes_between_the_check_and_the_send(self):
+        """**The one survivor CI's first sweep left, and it was a real hazard rather than
+        an equivalent.** `cmd_chat` reads the target's pane a second time — the check
+        answered about the record a moment ago — and with an `or ""` fallback a record
+        that had gone in between became `select-window -t ""`. An empty tmux target is
+        not nothing: it resolves to the CURRENT window, so charter would report a switch
+        that did not happen and then tear this chat's panels down around it.
+
+        Driven by making the SECOND read answer differently from the first, which is the
+        only shape that can tell a re-read from a carried value.
+        """
+        real = state.harness_pane
+        seen = []
+
+        def racing(fid):
+            seen.append(fid)
+            if fid == "api.2" and seen.count("api.2") > 1:
+                return None
+            return real(fid)
+
+        said = []
+        with mock.patch.object(state, "harness_pane", racing), \
+             mock.patch.object(commands_frame.state, "harness_pane", racing), \
+             mock.patch.object(chats.state, "harness_pane", racing), \
+             mock.patch.object(commands_frame, "_say_on_screen",
+                               lambda fid, msg, *a, **k: said.append(msg)):
+            self.assertEqual(self._switch(), 0)
+        self.assertEqual(self.fake.calls, [],
+                         "an empty `-t` target reached tmux")
+        self.assertEqual(len(said), 1)
+        self.assertIn("stopped being one while charter was switching", said[0])
+
     def test_a_refused_name_never_reaches_tmux_at_all(self):
         said = []
         with mock.patch.object(commands_frame, "_say_on_screen",

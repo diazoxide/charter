@@ -197,6 +197,25 @@ def harness_of(fid: str) -> str:
     return state.identity(fid).get("CHARTER_HARNESS", "").strip()
 
 
+def pane_of(chat: str) -> str | None:
+    """The tmux pane charter records for *chat*, held to tmux's own shape — or ``None``.
+
+    **One read of that record, asked by both the check and the switch**, and the reason it
+    is a function rather than a line in each is what the sweep found: `cmd_chat` re-read
+    it with an `or ""` fallback, so a record that changed between the two reads — a reap,
+    a relaunch — became `select-window -t ""`. An empty tmux target is not nothing; it
+    resolves to the CURRENT window, so charter would have reported a switch that did not
+    happen and then torn the panels down around it.
+
+    `tmuxctl.PANE_ID_RE` and not merely "non-empty", for #475's reason and at #475's
+    boundary: this value comes off disk and is about to be a `-t` target, and
+    `%1;kill-server` in that file is the shape that already cost this project a
+    `kill-server` armed on every window resize.
+    """
+    pane = state.harness_pane(chat) or ""
+    return pane if tmuxctl.PANE_ID_RE.fullmatch(pane) else None
+
+
 def roster(fid: str) -> list[Chat]:
     """Every chat in *fid*'s workspace, with *fid* marked.
 
@@ -284,7 +303,7 @@ def check(fid: str, chat: str) -> Outcome:
         return Outcome(False, f"no chat '{shown}' here — have: {_some(names)}")
     if chat == fid:
         return Outcome(False, f"already in chat '{shown}'")
-    if not tmuxctl.PANE_ID_RE.fullmatch(state.harness_pane(chat) or ""):
+    if pane_of(chat) is None:
         return Outcome(False, f"charter has no usable record of chat {shown}'s harness "
                               "pane, so it cannot find its window — relaunch that chat")
     return Outcome(True, f"chat → {shown}")

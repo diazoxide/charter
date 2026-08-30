@@ -4938,10 +4938,19 @@ def cmd_chat(args) -> int:
         _say_on_screen(fid, out.message)
         return 0
     socket = state.frame_server(fid) or SOCKET
-    # `chats.check` has already held this to `tmuxctl.PANE_ID_RE`, which is what makes it
-    # a `-t` target rather than a string off disk (#475). Read again rather than carried
-    # out of the check, so the value that reaches tmux is the one the file holds now.
-    pane = state.harness_pane(target) or ""
+    # `chats.pane_of` and never a bare `state.harness_pane`: the read is the same one
+    # `chats.check` made a moment ago, so this is a SECOND reading of a record that can
+    # have moved — a reap, a relaunch — and the fallback the sweep found here turned that
+    # into `select-window -t ""`. An empty tmux target resolves to the CURRENT window, so
+    # charter would have reported a switch that did not happen and then torn this chat's
+    # panels down around it. Its own sentence rather than the check's, because it is a
+    # different fact: the check answered about a record, and this is about that record
+    # going away underneath the answer.
+    pane = chats.pane_of(target)
+    if pane is None:
+        _say_on_screen(fid, f"cannot switch: chat '{target}' stopped being one while "
+                            "charter was switching to it")
+        return 0
     selected = tmuxctl.run("switching to the chat",
                            tmuxctl.server_argv(socket, "select-window", "-t", pane))
     if selected.returncode != 0:
