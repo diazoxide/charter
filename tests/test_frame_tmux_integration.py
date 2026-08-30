@@ -989,6 +989,60 @@ class _TmuxServerFixture(_VoidDeaths):
             self._srv("set", "-g", "remain-on-exit", "on")
         return name, r.stdout.strip(), gate
 
+    #: The name of the session `_hold_the_server` opens. One per SERVER, so a class that
+    #: holds two servers uses this name on both.
+    KEEPER = "keep"
+
+    def _hold_the_server(self, run) -> None:
+        """Open one detached session that nothing in the test kills, so *run*'s server is
+        born ONCE and is still the same server at the end.
+
+        **A class needs this exactly when it kills its own sessions mid-test, and #713 is
+        the bill for the class that did without it.** `exit-empty` is `on` by default and
+        tmux means it: the moment the last session goes, the server retires — but it does
+        NOT unlink its socket file (`_teardown_socket` documents that for `kill-server`,
+        and it is the same file for this exit). So the file stays, and the next
+        `new-session` on that socket is a client that finds a socket to `connect` to
+        rather than a path to build a server at. Which server it reaches depends on where
+        the retiring one has got to:
+
+        * already closed its listening fd — `ECONNREFUSED`, and the client takes the
+          lock, unlinks and starts a fresh server. The healthy path, and the only one an
+          idle machine ever sees.
+        * still holding it open, somewhere between "no sessions left" and `exit(0)` — the
+          `connect` SUCCEEDS, the client hands its command to a server that will never
+          run it, and is hung up on instead of answered. tmux's own words for that are
+          **`server exited unexpectedly`**, rc 1 (`CLIENT_EXIT_LOST_SERVER`).
+
+        **That is why it flakes rather than fails.** Nothing is wrong with the command,
+        the socket or the test's argument; what varies is whether a process that has
+        already decided to exit gets to `exit(0)` before the next client's `connect`
+        lands, and under load it does not. Measured on this machine, `ChromeIsOneColour`
+        alone, three paired campaigns of 45 runs against an unheld copy of this class:
+        **27 of 135 loaded runs**, spread over nine different tests, every one of them a
+        `new-session` that followed a `kill-session`. Held: 0 of 135.
+
+        **How many draws that is, counted rather than guessed.** A rebuilding client
+        unlinks the stale socket and binds a new one, so a fresh inode at the socket path
+        is one server birth. Instrumented on the version this fixed, one run of this
+        class: **61 births** — 41 on the inner server, 20 on the outer, up to 13 inside a
+        single test. With the servers held it is exactly one per server per test.
+
+        **So the fix is a construction, not a wait** (#650's rule): the server is never
+        allowed to become empty, so no client ever has to rebuild one and there is no
+        window to lose. Nothing here has to settle, because nothing is being rebuilt —
+        which is also why there is no `sleep`, no retry and no widened assertion.
+
+        The keeper is a plain detached session running `cat`, the same program every pane
+        in this module runs and for the same reason (it blocks on a pty that never
+        closes). It is never a target: everything this module writes is `-t`'d at a pane
+        id or a session name it created itself, and everything it reads is captured from
+        one it named. `_teardown_socket`'s `kill-server` takes it down with the rest.
+        """
+        r = run("new-session", "-d", "-s", self.KEEPER, "-x", "80", "-y", "24",
+                "--", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     @staticmethod
     def _release(gate: str) -> None:
         """Open a pane's gate: its program stops waiting and dies the way it was built to."""
@@ -4275,6 +4329,20 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         super().setUp()
         self._outer_socket = f"{self.SOCKET_NAME}-host"
         self.addCleanup(self._teardown_outer)
+        # **Both servers are held for the whole test, and #713 is what the version that
+        # held neither cost.** This is the one class in this module that kills its own
+        # sessions in the middle of a test rather than at the end of it — `_screenshot`
+        # ends by killing the session it photographed AND the host session that
+        # photographed it, and `_pane_scoped_borders` kills its probe session — which on
+        # tmux's `exit-empty` default retires the server every time and makes the NEXT
+        # `new-session` a client racing a process that is already on its way out. See
+        # `_hold_the_server` for what that race looks like from the client's side and why
+        # it produced `server exited unexpectedly` rather than anything about colour.
+        #
+        # Registered AFTER the cleanups, so a keeper that fails to open still leaves
+        # both servers reaped.
+        self._hold_the_server(self._srv)
+        self._hold_the_server(self._outer)
 
     def _teardown_outer(self) -> None:
         """The same two-step `_teardown_socket` does, for the second server these tests
@@ -4531,6 +4599,127 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                          f"tmux {v} {'does' if supported else 'does not'} keep "
                          "`pane-border-style` per pane, which is not what "
                          f"`PANE_BORDER_FLOOR` {tmuxctl.PANE_BORDER_FLOOR} says")
+
+    def test_a_server_this_module_empties_is_gone_and_its_socket_file_is_not(self):
+        """The tmux facts `_hold_the_server` is shaped around, measured rather than
+        assumed — the whole of #713's mechanism, in four assertions on a throwaway socket.
+
+        1. `exit-empty` is `on`. tmux's own default, and this module never turns it off.
+        2. Killing the last session therefore ends the SERVER, not just the session —
+           **eventually.** It is not instantaneous, and the loop that waits for it is the
+           fourth fact rather than a convenience: measured under load, `list-sessions`
+           issued straight after the `kill-session` answers **rc 0 with no sessions**, a
+           server that has lost its last session and is still serving.
+        3. **The socket FILE outlives it.** `_teardown_socket` records this for
+           `kill-server` — it is the same file and the same exit here. So the path is
+           still there for the next client to `connect` to, and a `new-session` that
+           follows a `kill-session` is a client meeting a socket rather than a client
+           building a server.
+        4. The server that answers afterwards is a DIFFERENT process. Nothing was
+           re-used; something was rebuilt, once per emptying.
+
+        Together those four are the race, and (2) is the width of it: for as long as a
+        server that has decided to exit is still listening, a `connect` succeeds and the
+        client it belongs to is hung up on rather than answered — `server exited
+        unexpectedly`, rc 1. This class used to rebuild its two servers 61 times per run
+        and lost that race on 27 of 135 loaded runs. It now rebuilds them never.
+
+        If a later tmux ever stopped retiring an empty server, or started unlinking its
+        socket on the way out, this goes red and `_hold_the_server`'s argument should be
+        re-made rather than inherited.
+        """
+        socket_name = _tmuxreap.name("chrome-empty")
+        path = Path("/tmp") / f"tmux-{os.getuid()}" / socket_name
+
+        def probe(*args: str) -> subprocess.CompletedProcess:
+            return _tmux_on(socket_name, *args)
+
+        def teardown() -> None:
+            probe("kill-server")
+            path.unlink(missing_ok=True)
+
+        self.addCleanup(teardown)
+        first = probe("new-session", "-d", "-s", "only", "-x", "80", "-y", "24",
+                      "-P", "-F", "#{pid}", "--", "cat")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(probe("show", "-gv", "exit-empty").stdout.strip(), "on",
+                         "this tmux does not retire an empty server, so nothing below "
+                         "measures what `_hold_the_server` is for")
+        was = first.stdout.strip()
+        probe("kill-session", "-t", "only")
+        # **Polled for, and having to poll IS the finding.** Retirement is not
+        # instantaneous. The first version of this line read `list-sessions` once, straight
+        # after the `kill-session`, and under load it came back **rc 0 with no sessions
+        # listed** — a server that has lost its last session, has not yet exited, and is
+        # still answering clients. That is precisely the window `_hold_the_server` is
+        # about, so asserting the instant result would have made this test flake on the
+        # mechanism it exists to document. It waits for a fact read back FROM TMUX, never
+        # for a duration: the deadline below only bounds how long "it never retired" takes
+        # to report, and reaching it is a failure rather than a pass.
+        deadline = time.monotonic() + _DEADLINE
+        gone = probe("list-sessions")
+        while gone.returncode == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+            gone = probe("list-sessions")
+        self.assertNotEqual(gone.returncode, 0,
+                            "the server outlived its last session for the whole of "
+                            f"{_DEADLINE:g}s ({gone.stdout!r}), so `exit-empty` is not "
+                            "retiring it and nothing here is measuring a rebuild")
+        self.assertTrue(path.exists(),
+                        "tmux unlinked its own socket on the way out, so the next client "
+                        "would find no path to connect to and could not lose this race")
+        again = probe("new-session", "-d", "-s", "again", "-x", "80", "-y", "24",
+                      "-P", "-F", "#{pid}", "--", "cat")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertNotEqual(again.stdout.strip(), was,
+                            "the same server answered both times, so emptying it cost "
+                            "nothing and there was never anything to race")
+
+    def test_neither_server_this_class_uses_is_ever_rebuilt_mid_test(self):
+        """#713's fix, asserted rather than trusted: the inner server and the outer one
+        are each born ONCE, before the first tmux command a test issues, and are still
+        the same processes after seven `kill-session`s across the two of them — every
+        session-killing shape this class has, three per screenshot (the scope probe, the
+        frame, and the host that photographed it) and one standalone probe.
+
+        **Red on the version this fixed, in two different ways, and both are the defect.**
+        Without `_hold_the_server` neither server is standing when a test begins at all —
+        `display-message` does not start one (rc 1, `error connecting to …`), so the
+        opening read answers `''` — and every `_screenshot` below leaves a different pid
+        behind it than it found. A rebuilt server is not merely wasteful: each rebuild is
+        one draw in the race `test_a_server_this_module_empties_is_gone_and_its_socket_
+        file_is_not` measures, and this class used to take 61 of them per run — 41 on the
+        inner server, 20 on the outer, up to 13 inside one test.
+        """
+        def pids() -> tuple[str, str]:
+            return (self._srv("display-message", "-p", "#{pid}").stdout.strip(),
+                    self._outer("display-message", "-p", "#{pid}").stdout.strip())
+
+        started = pids()
+        self.assertTrue(
+            all(started),
+            f"a server this class talks to was not standing before its first command "
+            f"({started}) — `display-message` does not start one, so this is a class "
+            f"whose servers are built on demand and retired the moment they empty")
+        # Two screenshots and a probe: seven `kill-session`s across the two servers,
+        # which is every session-killing shape this class has.
+        #
+        # **`arm=False` for both, and that is not laziness.** This test is about the two
+        # servers' lifetimes and nothing else, and `arm=True` would put charter's own
+        # chrome argvs on its path — which at `tmuxctl.FLOOR` fail over an option tmux
+        # 3.2 does not have (`pane-border-indicators`, a separate defect this class
+        # already reports through three other tests). A lifecycle test that goes red for
+        # that reason is a test reporting somebody else's failure, which is the whole
+        # thing #694 and #713 are about. Unarmed builds and kills exactly the same
+        # sessions.
+        self._screenshot(arm=False)
+        after_one = pids()
+        self._screenshot(arm=False, focus=0)
+        self._pane_scoped_borders()
+        self.assertEqual([after_one, pids()], [started, started],
+                         "a server was rebuilt in the middle of this test, so the next "
+                         "`new-session` on it was a client racing a process that had "
+                         "already decided to exit")
 
     #: The colour every panel in a surfaced screenshot is painted, and the only
     #: non-default background on the screen — the harness pane is never painted, and every
@@ -4799,6 +4988,11 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         self._pane_counter += 1
         r = self._srv("new-session", "-d", "-s", session, "-x", "80", "-y", "24",
                       "-P", "-F", "#{pane_id}", "--", "cat")
+        # Checked, the way every other `new-session` in this class is — #713. Unchecked,
+        # a `new-session` that failed still let this test run on with `harness == ""`,
+        # and the failure surfaced four lines down as `set-option -w -t '' …` rc 1: a
+        # message about charter's own chrome argv, for a session that was never created.
+        self.assertEqual(r.returncode, 0, r.stderr)
         harness = r.stdout.strip()
         for cmd in commands_frame._chrome_argvs(socket=self.SOCKET_NAME,
                                                 harness_pane=harness):
@@ -4825,7 +5019,8 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
             commands_frame._CHROME_STYLE,
             "the pane-scoped unset reached the WINDOW's value, which is charter's own "
             "#514 pin for every rule in the frame")
-        self._srv("kill-session", "-t", session)
+        # Once. The second copy this line used to carry could only ever answer `can't
+        # find session: hu-N` to a server it had just emptied.
         self._srv("kill-session", "-t", session)
 
 
