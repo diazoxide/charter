@@ -17,7 +17,7 @@ import json
 import os
 import sys
 
-from . import commands_secrets, config, contain, mcpseen, persona, trace, tui, util
+from . import commands_secrets, config, contain, mcpseen, persona, root, trace, tui, util
 from .secrets import base, registry
 
 #: The scaffold a new persona starts from.
@@ -1725,6 +1725,37 @@ def _approve_mcp(names: list[str], yes: bool, dry_run: bool) -> int:
 
 
 def cmd_persona_sync_agents(args) -> int:
+    """Generate one Claude Code sub-agent per persona, **into the tree this was run from**.
+
+    A generation reads tracked files and writes tracked files, so it follows the working
+    tree and not the plane — `root.tree_of` states the split and why. Run from the plane
+    itself (the overwhelmingly common case) `tree_of` answers ``None`` and nothing below
+    changes; run from a linked worktree of the plane, the whole generation moves into that
+    worktree, sources included.
+
+    **Sources included is the load-bearing half.** Moving only the output would render the
+    plane's `personas/` over the worktree's own edits and commit the result — a worse defect
+    than #678, quietly reverting the change the author is making on the branch.
+    """
+    plane = config.ROOT
+    tree = root.tree_of(plane)
+    if tree is None:
+        return _sync_agents(args)
+    if not (tree / "personas").is_dir() and (plane / "personas").is_dir():
+        # A worktree of the plane on a branch that does not carry `personas/` — cut before
+        # the plane was committed, or from a repo whose `charter.toml` was never staged.
+        # Generating here would write nothing and prune nothing while reporting success;
+        # generating into the plane instead is #678. Say which tree has the sources.
+        util.err(f"{tree} is a worktree of the plane at {plane}, and carries no "
+                 f"`personas/`. Generated sub-agents belong to the tree that holds their "
+                 f"sources, and this one holds none — nothing was written. Run this in "
+                 f"{plane}, or check out a branch that carries `personas/`.")
+        return 1
+    with config.in_tree(tree):
+        return _sync_agents(args, plane=plane)
+
+
+def _sync_agents(args, plane=None) -> int:
     one = getattr(args, "persona", None)
     if one and not persona.load(one):
         util.err(f"no persona '{one}'")
@@ -1766,6 +1797,13 @@ def cmd_persona_sync_agents(args) -> int:
 
     util.ok(f"Synced {len(written)} persona sub-agent(s) → "
             f".claude/agents/ ({', '.join(written) or 'none'})")
+    if plane is not None:
+        # ADR 0013's second rule: a divergence charter can see, charter names. The write
+        # went somewhere other than the plane, and a worker who does not know that goes
+        # looking for the change in the clone — or, worse, assumes it landed there.
+        util.info(f"  written into the worktree you ran from: {_agents_dir()}")
+        util.info(f"  the plane's own copy ({plane / '.claude' / 'agents'}) is untouched "
+                  f"— it updates when this branch merges.")
     if drafts:
         util.warn(f"Skipped {len(drafts)} draft persona(s): {', '.join(drafts)} — "
                   "an unfinished charter must not become a sub-agent's system prompt. "

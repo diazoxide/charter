@@ -35,6 +35,12 @@ DEFAULT_WORKSPACE_FALLBACK = "default"
 #: Not derived — it is the same name in every control plane.
 SHARED_PERSONA = "_shared"
 
+#: Where the per-developer state directory lives, when the developer chose a path. One
+#: spelling, because :func:`in_tree` sets it to hold the plane's state still while every
+#: other path follows a working tree — and a second spelling of the name would make that
+#: pin silently stop pinning.
+STATE_HOME_VAR = "CHARTER_HOME"
+
 
 def worktrees_root_for(root: "Path", cfg: dict) -> "Path | None":
     """An explicitly relocated worktree root, or ``None`` for the default.
@@ -101,7 +107,7 @@ def _migrate_state_dir(root: Path) -> Path:
       naming both paths and fall back to the legacy directory so vault access is
       never silently lost.
     """
-    override = os.environ.get("CHARTER_HOME")
+    override = os.environ.get(STATE_HOME_VAR)
     if override:
         return Path(override)
 
@@ -689,6 +695,50 @@ def use(root) -> dict:
 def restore(previous: dict) -> None:
     """Put back what :func:`use` returned."""
     globals().update(previous)
+
+
+@contextlib.contextmanager
+def in_tree(tree):
+    """Resolve committed paths against the working *tree* for the duration. The plane keeps
+    its state directory.
+
+    **The one place the plane/tree split is stated, and it is one line of mechanism.**
+
+    A plane is identity: which personas exist, which vault they open, what has been approved
+    on this machine, where memory is written. A worktree is a *view of that plane's repo*,
+    so identity must not fork per worktree — `root._plane_of` redirects a linked worktree
+    back to the tree it was cut from, and for identity that is right.
+
+    A *generation* is not identity. It reads tracked files and writes tracked files, and the
+    artifact it writes belongs to the branch it was produced on. Run from a worktree it must
+    read that worktree's sources and write that worktree's outputs, or it edits tracked files
+    in a clone the caller does not own (#678) — or, worse, renders the main tree's sources
+    over the worktree's own edits.
+
+    So: everything :func:`derive` computes from the root follows *tree*, and the ONE
+    exception is the per-developer state directory, which stays where the plane put it.
+    Expressed by pinning ``$CHARTER_HOME`` across the re-derivation rather than by listing
+    the state-scoped names, so a setting added under ``STATE_DIR`` tomorrow stays with the
+    plane without anybody remembering this function exists. The pin is lifted as soon as the
+    derivation is done — it is an argument to :func:`derive`, not a change to the process.
+
+    Nothing here creates or migrates anything in *tree*: the pin also means
+    :func:`_migrate_state_dir` returns the override verbatim, so a plane-shaped worktree
+    never gets a ``.charter/`` written into it by the act of being read.
+    """
+    prior_home = os.environ.get(STATE_HOME_VAR)
+    os.environ[STATE_HOME_VAR] = str(STATE_DIR)
+    try:
+        previous = use(tree)
+    finally:
+        if prior_home is None:
+            os.environ.pop(STATE_HOME_VAR, None)
+        else:
+            os.environ[STATE_HOME_VAR] = prior_home
+    try:
+        yield
+    finally:
+        restore(previous)
 
 
 # Bootstrap: locate the plane the same way every command does, and derive from it.

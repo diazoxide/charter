@@ -187,6 +187,49 @@ def main_worktree_of(tree: Path) -> Path | None:
     return None
 
 
+def tree_of(plane: Path, start: Path | None = None) -> Path | None:
+    """The linked worktree of *plane*'s repository that *start* stands in — else ``None``.
+
+    The inverse question to :func:`_plane_of`, and the reason both exist: **a plane and a
+    working tree are not the same object, and different operations follow different ones.**
+
+    * The PLANE is identity and machine-local state — personas as a roster, the vault, the
+      MCP approval record, memory, workspaces. A worktree is a view of the plane's repo, not
+      a second plane, so those must not fork per worktree; that is `_plane_of`'s redirect and
+      it is right.
+    * The TREE is *committed content on a branch*. An operation that reads tracked files and
+      writes tracked files belongs to the checkout it was invoked in, because the artifact it
+      produces belongs to the commit, and the commit belongs to the tree.
+
+    `charter persona sync-agents` is the second kind, and before this it took the first
+    answer: run from a worktree, it wrote ``.claude/agents/`` into the main clone — a tree
+    the caller does not own and, under parallel work, may not even know about (#678). Every
+    worker here is told never to run git in another worktree; a command that edits tracked
+    files in the shared clone defeats that rule from underneath, and silently, because the
+    write lands where nobody is looking.
+
+    ``None`` — not the plane — when *start* is not inside such a worktree, so a caller has to
+    say what it wants for the ordinary case rather than inheriting an answer.
+
+    **Narrow on purpose.** The match is on the worktree's own main tree BEING the plane, not
+    on "is a worktree of something": a repo clone under ``workspaces/<ws>/<repo>`` resolves
+    its plane by walking up, and its worktrees are views of that clone, which have nothing to
+    do with the plane's generated files.
+
+    Never raises: it sits on a command path, and :func:`main_worktree_of` is already pure
+    path arithmetic.
+    """
+    try:
+        cur = (Path(start) if start is not None else Path.cwd()).resolve()
+        target = Path(plane).resolve()
+    except (OSError, RuntimeError):
+        return None
+    for d in (cur, *cur.parents):
+        if main_worktree_of(d) == target:
+            return d
+    return None
+
+
 def _plane_of(marked: Path) -> Path:
     """The plane a found marker really belongs to.
 
