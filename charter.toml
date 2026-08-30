@@ -105,6 +105,31 @@ bg  = "brightblack"
 pad = 1
 key = "F5"
 
+# The two tab strips, between the identity row and the work area: what plane, then
+# which workspace, then which chat inside it. Split order is the geometry (#488).
+#
+# Neither ships placed (`instance.FRAME_SLOTS`) and that is deliberate — a plane with one
+# chat is the ordinary permanent state, and each costs a row, a ~24 MB process and about
+# seven of every switch's tmux calls. This plane opts in because its operator wants them.
+#
+# `workspaces` draws `switch.workspaces()` — EVERY directory under `workspaces/`, with the
+# current one marked. It is a listing, not a project switcher, and it stays one until open
+# and live are real states (the IDE spec, 4c). Placed here anyway at the operator's
+# request, with that limit stated rather than discovered.
+[[frame.component]]
+use  = "workspaces"
+edge = "top"
+size = 1
+bg   = "brightblack"
+pad  = 1
+
+[[frame.component]]
+use  = "chats"
+edge = "top"
+size = 1
+bg   = "brightblack"
+pad  = 1
+
 [[frame.component]]
 use = "attention"
 bg  = "brightblack"
