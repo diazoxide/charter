@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: '`charter` on its own opens the frame, once your plane says which harness it means'
+headline: `charter` on its own opens the frame, once your plane says which harness it means
 ---
 
 The command was `charter claude`, every time, for the whole life of the frame. Now it is:
