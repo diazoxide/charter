@@ -450,6 +450,131 @@ class TheStringShape(unittest.TestCase):
         nothing to do with the property — the definition of a false pin."""
         self.assertEqual(sweep.retune(r"^Ran (\d+) tests?"), r"^Sbo (\d+) uftut?")
 
+    def test_a_retuned_pattern_is_still_a_pattern(self):
+        """#698. `retune` shifts a digit `0 -> 1` and `9 -> 0`, and inside a character
+        class that INVERTS the range: `[0-9] -> [1-0]` is `re.error: bad character
+        range`. The module then raises on import, no test runs at all, and the sweep
+        reports `no verdict` on a question it could have asked properly.
+
+        Measured over `charter/` and `tools/` before this rule: **56 of the 108**
+        patterns in the tree retuned into something `re.compile` refuses.
+        """
+        for shipped in (r"\$[0-9]+", r"@[0-9]+", "[A-Za-z0-9._-]+", "(?i)^core=",
+                        "^[a-z0-9][a-z0-9._-]*$", r"\bagentId:\s*([0-9a-f]{6,})"):
+            with self.subTest(shipped=shipped):
+                moved = sweep.retune(shipped, regex=True)
+                self.assertNotEqual(moved, shipped,
+                                    "the question was withdrawn, not kept")
+                re.compile(moved)          # must not raise
+
+    def test_the_low_end_of_a_range_moves_and_the_high_end_holds(self):
+        """WHICH end moves is the whole reason the rule names one. Holding both would
+        keep the pattern valid by making the mutation a no-op — and a character class is
+        the whole of many patterns here, so that would withdraw the question rather than
+        fix it. `[0-9] -> [1-9]` is a valid pattern that stops matching `0`."""
+        self.assertEqual(sweep.retune(r"@[0-9]+", regex=True), r"@[1-9]+")
+        self.assertEqual(sweep.retune("[A-Za-z]", regex=True), "[B-Zb-z]")
+
+    def test_the_letter_after_an_inline_group_is_left_alone(self):
+        """`(?i) -> (?j)` is `unknown extension ?j`. The same rule as the backslash, one
+        step over: a character that says what KIND of thing comes next is syntax, and
+        the syntax is not the value this operator asks about."""
+        self.assertEqual(sweep.retune("(?i)^core", regex=True), "(?i)^dpsf")
+        re.compile(sweep.retune("(?P<n>x)", regex=True))
+
+    def test_the_regex_rules_are_off_for_a_string_that_is_not_one(self):
+        """A separator that happens to spell `[a-b]` has no syntax to protect, and holding
+        a character in it would weaken the mutation for nothing. The caller says which
+        strings are patterns — `regex_positions` knows and `retune` does not guess.
+
+        And a `-` OUTSIDE a class is not a range in either mode: `a-b` is two literals and
+        a dash, so both ends move and the two answers agree. The rule is about a character
+        class, not about every dash in a string."""
+        self.assertEqual(sweep.retune("[a-b]"), "[b-c]")
+        self.assertEqual(sweep.retune("[a-b]", regex=True), "[b-b]")
+        self.assertEqual(sweep.retune("a-b"), sweep.retune("a-b", regex=True))
+
+    def test_a_pattern_the_rules_cannot_keep_valid_is_withheld_not_dropped(self):
+        """The backstop, and the reason the shift rules may be approximate. A `\\x1f`
+        retunes to `\\x2g`, which is not a hex escape — the one case left in `charter/`
+        today. It is planned, declined, and REPORTED: a question not asked in silence is
+        the same failure as a shard that never reported."""
+        muts = _mutations(
+            'import re\n'
+            'P = re.compile("[\\\\x00-\\\\x1f]")\n')
+        offered = [m for m in muts if m.operator == "retune-string"]
+        self.assertEqual(len(offered), 1)
+        self.assertTrue(offered[0].withheld.startswith("the retuned pattern"),
+                        offered[0].withheld)
+
+    def test_a_pattern_that_survives_the_rules_carries_no_refusal(self):
+        """The control: the backstop must not decline what the rules already fixed."""
+        muts = _mutations(
+            'import re\n'
+            'P = re.compile(r"[0-9]+")\n')
+        offered = [m for m in muts if m.operator == "retune-string"]
+        self.assertEqual([m.withheld for m in offered], [""])
+
+    def test_only_the_pattern_argument_of_an_re_call_is_a_pattern(self):
+        """`re.split` takes a regex and `str.split` takes a separator; they share a name,
+        which is why this is keyed on the module and not on `READERS`."""
+        tree = ast.parse('import re\nre.split("[a-b]", s)\n"[a-b]".split(x)\n')
+        found = sweep.regex_positions(tree)
+        consts = [n for n in ast.walk(tree)
+                  if isinstance(n, ast.Constant) and n.value == "[a-b]"]
+        self.assertEqual(len(consts), 2)
+        self.assertEqual([id(c) in found for c in consts], [True, False])
+
+    def test_a_class_that_ended_really_ended(self):
+        """The `not in_class` guard on `[`, which decides where the class STOPS. Inside a
+        class a `[` is a literal, so treating it as an opening one leaves the scan still
+        inside a class after the real `]` has closed it — and the next `x-y` in ordinary
+        pattern text, where a dash is a literal dash, gets read as a range and held."""
+        self.assertEqual(sweep.retune("[^[]x-y", regex=True), "[^[]y-z")
+
+    def test_a_string_that_is_not_a_pattern_is_never_withheld_for_being_a_bad_one(self):
+        """The backstop asks `re.compile` only where the program does. A comparison
+        operand that happens to spell a character class has no regex syntax to be wrong
+        about, and withholding its mutation would subtract a question for a reason that
+        does not apply to it."""
+        muts = _mutations(
+            'def f(x):\n'
+            '    return x == "[0-9] items"\n')
+        offered = [m for m in muts if m.operator == "retune-string"]
+        self.assertEqual([m.withheld for m in offered], [""])
+        self.assertEqual([m.after for m in offered], ["'[1-0] jufnt'"])
+
+    def test_a_withheld_mutation_never_reaches_a_sandbox(self):
+        """It has its verdict before anything is applied, and that is the point: running
+        it would measure an import error. The box raises if it is touched at all."""
+        class _Untouchable:
+            def clean_failures(self, modules):
+                raise AssertionError("a withheld mutation was measured")
+
+            def apply(self, mutation):
+                raise AssertionError("a withheld mutation reached the tree")
+
+        m = sweep.Mutation(path="p.py", line=1, end_line=1, operator="retune-string",
+                           question="q", before="a", after="b", symbol="f",
+                           withheld="the retuned pattern is not one re.compile accepts")
+        verdict, outcome, full = sweep.decide(_Untouchable(), m, ["tests.test_x"])
+        self.assertEqual(verdict, "withheld")
+        self.assertIn("re.compile", outcome.detail)
+        self.assertFalse(outcome.conclusive)
+        self.assertIsNone(full)
+
+    def test_a_withheld_verdict_gets_its_own_bucket_and_fails_nothing(self):
+        """Its own bucket and not `unresolved`: the two say opposite things about what
+        the tool knows, and a deliberate subtraction that rendered as a timeout is how a
+        branch comes to sit behind a `no verdict` no re-run can clear (#693)."""
+        m = sweep.Mutation(path="p.py", line=1, end_line=1, operator="retune-string",
+                           question="q", before="a", after="b", symbol="f",
+                           withheld="not a pattern")
+        gate = sweep.classify([sweep.Result(m, "withheld", None, None, [], None)])
+        self.assertEqual(len(gate.withheld), 1)
+        self.assertEqual((gate.unresolved, gate.unapplied, gate.actionable), ([], [], []))
+        self.assertEqual(sweep.headline(gate), "no survivors, 1 withheld")
+
     def test_a_string_with_nothing_to_move_offers_no_mutation(self):
         muts = _mutations("""
             def f(x):

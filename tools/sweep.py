@@ -262,6 +262,17 @@ class Mutation:
     #: somebody to write a test for a line that is already covered, and the first person
     #: who chases one and finds that out stops believing the tool.
     origin: str = ""
+    #: Why this mutation was never run, or ``""`` for the ordinary case (#698).
+    #:
+    #: **A mutation the tool declines is a question it did not ask, and the one thing it
+    #: may not do is decline one in silence** — that is the same failure as a shard that
+    #: never reported, arriving from inside the plan instead of from a runner. So a
+    #: declined mutation is still planned, still sharded and still reported; it simply
+    #: carries its reason here and gets its verdict without a sandbox. `unevaluated` and
+    #: `reach` are the two subtractions that came before this one, and the difference is
+    #: that those remove a POSITION the operator never reaches while this removes a
+    #: mutant the operator did produce — which is exactly the one worth counting.
+    withheld: str = ""
 
     @property
     def tag(self) -> str:
@@ -609,7 +620,73 @@ def _shift_char(ch: str) -> str:
     return ch
 
 
-def retune(text: str) -> str:
+def _regex_shape(text: str) -> set[int]:
+    """The indices in *text* that spell a regex's SHAPE rather than its value.
+
+    :func:`retune`'s backslash rule, generalised to the two other places where shifting a
+    character does not produce a different pattern but an unparseable one. The rule they
+    are all three instances of: **a character that says what kind of thing comes next is
+    part of the syntax, and the syntax is not the value this operator asks about.**
+
+    * the character after a ``\\`` — `\\d` -> `\\e` is ``re.error: bad escape``. That one is
+      applied in :func:`retune` itself, on every string, because an escape is an escape in
+      a replacement template too.
+    * the character after ``(?`` — `(?i)` -> `(?j)` is ``unknown extension ?j``, and
+      `(?P<n>` -> `(?Q<n>` the same. Four of these in `charter/hooks.py` alone.
+    * the HIGH end of a ``[a-b]`` range — `[0-9]` -> `[0-0]`… or rather `[1-0]`, which is
+      ``bad character range``. The LOW end is left shiftable on purpose and is the whole
+      reason this function names *which* end: `[0-9]` -> `[1-9]` is a valid pattern and a
+      genuinely different one (it stops matching `0`), so the question survives. Holding
+      both ends would keep the pattern valid by making the mutation a no-op, which is the
+      same as not asking — and a character class is the whole of many patterns in this
+      tree, so that would withdraw the question for most of them.
+
+    **Measured over `charter/` and `tools/` before choosing.** 108 string constants are
+    compiled as regexes. Under the escape rule alone, **56 of them** retune into something
+    `re.compile` refuses — more than half of every pattern in the tree, each one a question
+    that could never be answered and, since #698, a `no verdict` on the day its line moved.
+    With these two rules the 56 become **1** (a `\\x1f` -> `\\x2g` hex escape in
+    `charter/tui.py`), and the 20 patterns whose retune was already a no-op are unchanged.
+    That last one is left to the backstop in :func:`mutations_for` rather than chased with
+    a fourth rule: the rules recover questions, and the backstop is what makes being wrong
+    about them safe.
+
+    A `[` inside a class is a literal and a `]` first in a class is too, so the scan tracks
+    both; getting that wrong cannot produce a bad mutation, only a missed or a needless
+    hold, because nothing here is offered without `re.compile` agreeing it is a pattern.
+    """
+    held: set[int] = set()
+    i, n, in_class = 0, len(text), False
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            i += 2                      # `retune` holds the escaped character itself
+            continue
+        if not in_class and ch == "(" and i + 1 < n and text[i + 1] == "?":
+            held.add(i + 2)
+            i += 3
+            continue
+        if not in_class and ch == "[":
+            in_class = True
+            i += 1
+            if i < n and text[i] == "^":
+                i += 1
+            if i < n and text[i] == "]":    # a `]` first in a class is a literal `]`
+                i += 1
+            continue
+        if in_class and ch == "]":
+            in_class = False
+            i += 1
+            continue
+        if in_class and i + 2 < n and text[i + 1] == "-" and text[i + 2] != "]":
+            held.add(i + 2)
+            i += 3
+            continue
+        i += 1
+    return held
+
+
+def retune(text: str, *, regex: bool = False) -> str:
     """*text*, re-spelled: same length, same character classes, a different value.
 
     **This is the principled general form the spec said a string constant did not have,
@@ -630,11 +707,20 @@ def retune(text: str) -> str:
     and shifting the neighbour turns a working pattern into `re.error: bad escape \\e`.
     That is a red for a reason that has nothing to do with the property, which is the one
     outcome this whole file exists to refuse.
+
+    **`regex` widens that same rule to the two other places a shift changes a pattern's
+    shape instead of its value** — the letter after `(?`, and the high end of a `[a-b]`
+    range. See :func:`_regex_shape` for both, for which end of a range moves and why, and
+    for the measurement that says this is 56 of the 108 patterns in the tree rather than a
+    tidy-up. It is a keyword and it is off by default because a string is only a regex
+    where the program compiles one: `read_positions` knows that and this function does not,
+    so the caller says so rather than this one guessing from the bytes.
     """
+    shape = _regex_shape(text) if regex else frozenset()
     out: list[str] = []
     escaped = False
-    for ch in text:
-        out.append(ch if escaped else _shift_char(ch))
+    for i, ch in enumerate(text):
+        out.append(ch if escaped or i in shape else _shift_char(ch))
         escaped = ch == "\\" and not escaped
     return "".join(out)
 
@@ -728,6 +814,50 @@ def unevaluated(tree: ast.AST) -> set[int]:
         # and keeps the `"left"`.
         for part in ast.walk(annotation):
             out.add(id(part))
+    return out
+
+
+#: The `re` functions whose FIRST argument is a pattern. `split` is here and `str.split`
+#: is not, which is the whole reason this is keyed on the module: the two share a name and
+#: only one of them takes a regex.
+_RE_PATTERN_ARG = frozenset({
+    "compile", "match", "search", "fullmatch", "sub", "subn", "split", "findall",
+    "finditer",
+})
+
+
+def regex_positions(tree: ast.AST) -> set[int]:
+    """The ids of the string constants the program compiles as a REGEX.
+
+    Two callers and one reason between them: a pattern's *shape* is not the value
+    `retune-string` asks about, so :func:`retune` needs to know which strings are patterns
+    (`_regex_shape`), and `mutations_for` needs to know which mutants have to survive
+    `re.compile` before they may be offered at all.
+
+    **`re.<fn>(…)` spelled that way, and nothing cleverer.** Not `READERS`, which holds
+    `match`, `search` and `split` because `str` has them too — `"a,b".split(",")` takes a
+    separator and `re.split(r"[,;]", s)` takes a pattern, and treating the first as a regex
+    would hold characters in a string that has no syntax to protect. Not `RE.match(s)`
+    either: the pattern there is the receiver's own constant, which was already recognised
+    where `re.compile` was called on it, and the argument is the subject.
+
+    The first positional argument only, because that is where every function in
+    :data:`_RE_PATTERN_ARG` takes its pattern. A `pattern=` keyword is legal and nobody in
+    this tree writes one; missing it costs a question asked in the older, blunter way,
+    which the backstop then declines — a bounded loss that says so, rather than a rule
+    guessing at an argument's role from its name.
+    """
+    out: set[int] = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and node.args
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "re"
+                and node.func.attr in _RE_PATTERN_ARG):
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            out.add(id(first))
     return out
 
 
@@ -888,6 +1018,7 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
     parents = _parents(tree)
     docstrings = _docstrings(tree)
     reads = read_positions(tree)
+    patterns = regex_positions(tree)
     modules = module_names(tree)
     in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
                   for part in ast.walk(node) if part is not node}
@@ -1037,7 +1168,7 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
                 and id(node) in reads and id(node) not in docstrings:
             raw = node.value if isinstance(node.value, str) \
                 else node.value.decode("latin-1")
-            moved = retune(raw)
+            moved = retune(raw, regex=id(node) in patterns)
             if moved != raw:
                 if id(node) in in_fstring:
                     # A literal segment of an f-string, including a `{x:<28}` FORMAT SPEC,
@@ -1194,6 +1325,41 @@ def _is_empty_literal(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and node.value in ("", 0, None)
 
 
+def _not_a_pattern(node: ast.AST, replacement: str, is_pattern: bool) -> str:
+    """Why *replacement* may not be offered here, or ``""`` when it may.
+
+    **The backstop, and the reason the shift rules are allowed to be approximate.**
+    `_regex_shape` keeps a retuned pattern parseable in the three places this tool knows
+    how; a fourth it does not know about would produce a mutant `re.compile` refuses, the
+    module would raise on import, every selected test would fail to load, and the sweep
+    would report `no verdict` on a question it could have declined to ask. That is #698: a
+    `retune-string` on a `[0-9]` pattern produced a `[1-0]` one, and a reviewer had to read a
+    CI log and a stack trace to find out that the tool had asked something unanswerable.
+
+    So the two layers hold each other up. The shift rules recover the question where they
+    can — measured, 56 patterns to 1 — and this refuses to offer what is left, by name,
+    so being wrong about a rule costs a question rather than a verdict.
+
+    `ast.literal_eval` and not a strip of the quotes: *replacement* is a `repr`, and the
+    one thing this must not do is guess at its own encoding. Anything it cannot read back
+    is not a pattern it can vouch for and is left alone — the mutation goes out as it
+    always did, and `re.compile` in the sandbox is nobody's problem but the suite's.
+    """
+    if not is_pattern:
+        return ""
+    try:
+        value = ast.literal_eval(replacement)
+    except (ValueError, SyntaxError):
+        return ""
+    if not isinstance(value, str):
+        return ""
+    try:
+        re.compile(value)
+    except re.error as why:
+        return f"the retuned pattern is not one re.compile accepts ({why})"
+    return ""
+
+
 def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
     """Every mutation this file offers on the lines the branch is answerable for."""
     try:
@@ -1202,6 +1368,11 @@ def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
         return []
     sp = _Spans(source)
     raw = _fstring_segments(tree)
+    # The one place a mutant is checked for being a PROGRAM before it is offered (#698).
+    # `_regex_shape` keeps a retuned pattern parseable where the tool can see how; this is
+    # what happens when it could not — a `\x1f` -> `\x2g` hex escape is the one case left
+    # in `charter/` today. Withheld and not dropped: see `Mutation.withheld`.
+    patterns = regex_positions(tree)
     out: list[Mutation] = []
     seen: set[tuple[int, int, str, str]] = set()
     for node, replacement, operator, question in _iter_operators(tree, sp):
@@ -1221,6 +1392,7 @@ def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
         if key in seen:
             continue
         seen.add(key)
+        refused = _not_a_pattern(node, replacement, id(node) in patterns)
         mutated = sp.splice(node, replacement)
         try:
             ast.parse(mutated, filename=path)
@@ -1241,7 +1413,7 @@ def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
             path=path, line=node.lineno, end_line=node.end_lineno or node.lineno,
             operator=operator, question=question, before=before, after=replacement,
             symbol=_enclosing(tree, node), source=mutated, span=sp.span(node),
-            origin=hashlib.sha256(source).hexdigest()))
+            origin=hashlib.sha256(source).hexdigest(), withheld=refused))
     out.sort(key=lambda m: (m.path, m.line, m.operator, m.after))
     return out
 
@@ -1816,6 +1988,13 @@ def decide(box, mutation: Mutation, modules: list[str]) -> tuple[str, Outcome, O
       suite for 1800s instead of failing, and reading that as green would have pinned a
       guard on a timeout.
     """
+    # Before anything is measured, and before a sandbox is touched: a mutation the plan
+    # declined has its verdict already (#698, `Mutation.withheld`). It is answered here
+    # rather than filtered out of the plan so that it is sharded, serialised and counted
+    # like every other one — a question not asked is a fact about the sweep, and the only
+    # way to report it is to carry it.
+    if mutation.withheld:
+        return "withheld", Outcome(False, 0, mutation.withheld, conclusive=False), None
     # Measured BEFORE the mutation goes anywhere near the tree.
     clean = box.clean_failures(modules) if modules else frozenset()
     try:
@@ -2055,6 +2234,7 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     unresolved = [r for r in results if r.verdict == "unresolved"]
     pinned = [r for r in results if r.verdict == "pinned"]
     unapplied = [r for r in results if r.verdict == "unapplied"]
+    withheld = [r for r in results if r.verdict == "withheld"]
     pairs = pairs or []
     out: list[str] = []
     w = out.append
@@ -2073,6 +2253,8 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     w(f"UNRESOLVED        : {len(unresolved)}")
     if unapplied:
         w(f"NOT APPLIED       : {len(unapplied)}  (a defect in this tool, not a finding)")
+    if withheld:
+        w(f"WITHHELD          : {len(withheld)}  (questions this tool declined to ask)")
     w(f"wall clock        : {elapsed / 60:.1f} min")
     w("")
 
@@ -2089,6 +2271,22 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
             m = r.mutation
             w(f"  {m.path}:{m.line}  [{m.operator}]  "
               f"{r.subset.detail if r.subset else ''}")
+        w("")
+
+    if withheld:
+        w("-" * 86)
+        w("WITHHELD — these questions were not asked, and here is why")
+        w("-" * 86)
+        w("Not a verdict and not a timeout: the mutant would not have been a program, so")
+        w("running it would have measured an import error rather than the guard. Each line")
+        w("below is one question this sweep is NOT answering — read the count, not the")
+        w("silence. A rule in `_regex_shape` is what turns one of these back into a")
+        w("question that can be asked.")
+        for r in sorted(withheld, key=lambda r: (r.mutation.path, r.mutation.line)):
+            m = r.mutation
+            w(f"  {m.path}:{m.line}  [{m.operator}]  {m.withheld}")
+            w(f"    shipped : {_oneline(m.before, 70)}")
+            w(f"    mutant  : {_oneline(m.after, 70)}")
         w("")
 
     if unresolved:
@@ -2202,6 +2400,7 @@ def as_json(results: list[Result]) -> str:
         "operator": r.mutation.operator, "symbol": r.mutation.symbol,
         "question": r.mutation.question,
         "before": r.mutation.before, "after": r.mutation.after,
+        "withheld": r.mutation.withheld,
         "verdict": r.verdict,
         # `detail` and not only the verdict: a run that went red says WHICH test went red,
         # and that is the first thing anyone asks of a mutation reported as pinned.
@@ -2248,6 +2447,15 @@ class Gate:
       this repository hits it repeatedly, and "I could not look" must never render as
       "nothing to see".
     * ``unapplied`` — the mutation never reached the tree (#586). A defect in the tool.
+    * ``withheld`` — the mutation was never offered, because the mutant was not a program
+      (#698). **Its own bucket and not folded into `unresolved`**, because the two say
+      opposite things about what the tool knows: `unresolved` is "I looked and could not
+      tell", and this is "I decided not to ask, and here is why". Collapsing them would
+      make a deliberate, bounded, explained subtraction read as a timeout — which is how
+      #693 came to sit behind a `no verdict` that no re-run could ever clear. It never
+      fails the gate, for the same reason `reach()` does not: a question not asked is not
+      a finding about the branch. It is loud in the report so that it is not a finding
+      about nothing either.
     """
 
     unpinned: list[Result] = dataclasses.field(default_factory=list)
@@ -2255,6 +2463,7 @@ class Gate:
     platform: list[Result] = dataclasses.field(default_factory=list)
     unresolved: list[Result] = dataclasses.field(default_factory=list)
     unapplied: list[Result] = dataclasses.field(default_factory=list)
+    withheld: list[Result] = dataclasses.field(default_factory=list)
     pinned: int = 0
 
     @property
@@ -2278,6 +2487,8 @@ def classify(results: list[Result]) -> Gate:
             gate.unresolved.append(r)
         elif r.verdict == "unapplied":
             gate.unapplied.append(r)
+        elif r.verdict == "withheld":
+            gate.withheld.append(r)
         elif r.verdict == "survived":
             if platform_caveat(r.mutation):
                 gate.platform.append(r)
@@ -2523,8 +2734,15 @@ def headline(gate: Gate, missing: int = 0, shards: int = 1) -> str:
     never planned as a sweep that was planned and lost.
     """
     conclusion = gate_conclusion(gate, missing)
+    # Said in the check's NAME when there is one, and said BESIDE "no survivors" rather
+    # than instead of it (#698). A withheld mutation does not put the branch in doubt —
+    # nothing about it was measured and found wanting, and nothing about it could not be
+    # measured either; the tool declined to ask and can say why. Turning a clean sweep
+    # into `no verdict` over that would spend the one signal a reviewer must stop on, and
+    # #693 is what it costs when `no verdict` stops meaning "look at this".
+    aside = f", {len(gate.withheld)} withheld" if gate.withheld else ""
     if conclusion == CLEAN:
-        return "no survivors"
+        return f"no survivors{aside}"
     found = _plural(len(gate.actionable), "survivor", "survivors")
     unsure = []
     if missing:
@@ -2536,10 +2754,10 @@ def headline(gate: Gate, missing: int = 0, shards: int = 1) -> str:
     if gate.unresolved:
         unsure.append(f"{len(gate.unresolved)} not measured")
     if conclusion == SURVIVORS:
-        return f"{found}, {'; '.join(unsure)}" if unsure else found
+        return (f"{found}, {'; '.join(unsure)}{aside}" if unsure else f"{found}{aside}")
     if gate.actionable:
-        return f"no verdict: {found} so far, {'; '.join(unsure)}"
-    return f"no verdict: {'; '.join(unsure)}"
+        return f"no verdict: {found} so far, {'; '.join(unsure)}{aside}"
+    return f"no verdict: {'; '.join(unsure)}{aside}"
 
 
 #: How many annotations of one LEVEL, per step, GitHub will draw before it stops. Not per
@@ -2696,6 +2914,9 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
     w(f"| platform-deferred | {len(gate.platform)} | the clause may be unreachable on "
       f"{sys.platform}; never fails this gate |")
     w(f"| unresolved | {len(gate.unresolved)} | no verdict — timed out, not measured |")
+    if gate.withheld:
+        w(f"| withheld | {len(gate.withheld)} | the mutant was not a program, so the "
+          "question was not asked |")
     if reach():
         w(f"| not asked about | — | {reach()} |")
     w(f"| not applied | {len(gate.unapplied)} | the edit never reached the tree — a bug "
@@ -2705,6 +2926,21 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         w(f"> **Reporting only.** This job blocks nothing; it {verdict} with `--enforce`. "
           "The spec's own staging argument says a gate whose numbers nobody has seen gets "
           "disabled the first time it is inconvenient, so the numbers come first.")
+        w("")
+    if gate.withheld:
+        w("### Withheld — questions this sweep did not ask")
+        w("")
+        w(f"{len(gate.withheld)} mutation(s) were planned and then declined: the mutant "
+          "would not have been a program, so running it would have measured an import "
+          "error rather than the guard. This is **not** `no verdict` — the tool knows "
+          "what it did and why — but it is a question nobody answered, and a sweep that "
+          "subtracted questions in silence would read exactly like a clean one.")
+        w("")
+        w("| line | operator | why |")
+        w("|---|---|---|")
+        for r in sorted(gate.withheld, key=lambda r: (r.mutation.path, r.mutation.line)):
+            m = r.mutation
+            w(f"| `{m.path}:{m.line}` | `{m.operator}` | {m.withheld} |")
         w("")
     if missing:
         w("### Did not report — this page is not a count")
@@ -2787,7 +3023,11 @@ def results_from_json(payload: str) -> list[Result]:
     for row in json.loads(payload):
         m = Mutation(path=row["path"], line=row["line"], end_line=row["end_line"],
                      operator=row["operator"], question=row["question"],
-                     before=row["before"], after=row["after"], symbol=row["symbol"])
+                     before=row["before"], after=row["after"], symbol=row["symbol"],
+                     # `.get`, and it is the one field read that way: a shard built by an
+                     # older sweep than the merge has no such key, and a merge that raised
+                     # on it would turn a mixed-version run into no report at all.
+                     withheld=row.get("withheld", ""))
         # `null` means the evidence pass never ran, which is not the same as running and
         # finding nothing: `_summary_rows` tells "nothing measured executes this file"
         # from "N modules execute it and not one names the symbol" by exactly that field,
@@ -3149,7 +3389,8 @@ def _say(args, gate: Gate, log, missing: int = 0, shards: int = 1) -> None:
     log("")
     log(f"gate: {len(gate.unpinned)} unpinned, {len(gate.masked)} in masked cluster(s), "
         f"{len(gate.platform)} platform-deferred, {len(gate.unresolved)} unresolved, "
-        f"{len(gate.unapplied)} not applied, {gate.pinned} pinned")
+        f"{len(gate.unapplied)} not applied, {len(gate.withheld)} withheld, "
+        f"{gate.pinned} pinned")
     log(f"gate: {headline(gate, missing, shards)}")
     if not args.enforce:
         log("gate: reporting only — nothing here blocks. Pass --enforce to make it.")
