@@ -119,7 +119,7 @@ class TheConjunctShape(unittest.TestCase):
                         out[name] = placed
         """)
         self.assertEqual(_afters(muts, "drop-conjunct"),
-                         ["isinstance(name, str)", "name not in SLOT_SIZE"])
+                         ["(name not in SLOT_SIZE)", "isinstance(name, str)"])
 
     def test_a_three_part_guard_drops_one_part_at_a_time_and_keeps_the_rest(self):
         muts = _mutations("""
@@ -128,7 +128,7 @@ class TheConjunctShape(unittest.TestCase):
                     return 1
         """)
         self.assertEqual(_afters(muts, "drop-conjunct"),
-                         ["a and b", "a and c", "b and c"])
+                         ["(a and b)", "(a and c)", "(b and c)"])
 
     def test_a_single_condition_offers_no_conjunct_mutation(self):
         muts = _mutations("""
@@ -149,7 +149,7 @@ class TheClampShape(unittest.TestCase):
                 n = max(1, height - _CHROME_ROWS)
                 return n
         """)
-        self.assertEqual(_afters(muts, "unclamp"), ["1", "height - _CHROME_ROWS"])
+        self.assertEqual(_afters(muts, "unclamp"), ["(height - _CHROME_ROWS)", "1"])
 
     def test_a_nested_clamp_offers_the_inner_variable_on_its_own(self):
         """`self._top = max(0, min(top, max(0, len(self.rows) - n)))` is unpinned, and
@@ -743,14 +743,14 @@ class TheBoundaryShape(unittest.TestCase):
                     return sel
                 return top
         """)
-        self.assertEqual(_afters(muts, "shift-boundary"), ["(sel) <= (top)"])
+        self.assertEqual(_afters(muts, "shift-boundary"), ["((sel) <= (top))"])
 
     def test_an_inclusive_comparison_is_offered_one_notch_narrower(self):
         muts = _mutations("""
             def f(n, cap):
                 return n <= cap
         """)
-        self.assertEqual(_afters(muts, "shift-boundary"), ["(n) < (cap)"])
+        self.assertEqual(_afters(muts, "shift-boundary"), ["((n) < (cap))"])
 
     def test_a_chain_moves_one_link_and_respells_the_rest(self):
         """`0 <= i < n` is ONE node. Moving one link means writing the whole chain back
@@ -761,14 +761,14 @@ class TheBoundaryShape(unittest.TestCase):
                 return 0 <= i < n
         """)
         self.assertEqual(sorted(_afters(muts, "shift-boundary")),
-                         ["(0) < (i) < (n)", "(0) <= (i) <= (n)"])
+                         ["((0) < (i) < (n))", "((0) <= (i) <= (n))"])
 
     def test_a_link_that_is_not_a_boundary_is_carried_through_untouched(self):
         muts = _mutations("""
             def f(a, b, c):
                 return a < b == c
         """)
-        self.assertEqual(_afters(muts, "shift-boundary"), ["(a) <= (b) == (c)"])
+        self.assertEqual(_afters(muts, "shift-boundary"), ["((a) <= (b) == (c))"])
 
     def test_every_comparison_operator_python_has_is_spelled(self):
         """`CMP_TEXT` is subscripted directly, with no fallback, so an operator missing
@@ -862,12 +862,15 @@ class TheSynonymShape(unittest.TestCase):
         """`shlex.split` and `re.split` live in a namespace with no `rsplit` in it at all,
         so the swap is an `AttributeError` rather than a question about which end was
         searched. The pair is justified by two methods on one TYPE, and a module is not an
-        instance of anything. Measured on `charter/`: eight such call sites."""
+        instance of anything. Measured on `charter/`: eight such call sites.
+
+        The `maxsplit` on the second call is what keeps it a question at all rather than
+        scenery — see :func:`sweep.indistinguishable`."""
         muts = _mutations("""
             import shlex
 
             def f(command, name):
-                return shlex.split(command), name.split(",")
+                return shlex.split(command), name.split(",", 1)
         """)
         self.assertEqual(_afters(muts, "swap-synonym"), ["name.rsplit"])
 
@@ -887,6 +890,270 @@ class TheSynonymShape(unittest.TestCase):
         for name, (other, axis) in sweep.SYNONYMS.items():
             self.assertTrue(axis and isinstance(axis, str), name)
             self.assertNotEqual(name, other)
+
+
+class TheMutantIsTheEditDescribed(unittest.TestCase):
+    """`parenthesised` (#655): the mutation applied is the mutation the report prints.
+
+    Measured over `charter/` and `tools/` before this existed: **144 of 8,903 expression
+    mutations spliced something else**, because an `ast` node's span excludes the
+    parentheses a programmer put around it. `(x or "").strip()` became
+    ``x or "".lstrip()`` — not a swap of which end is stripped but a deletion of the
+    strip on every path but one — and `(vc or {}).get("config", {})` became
+    ``vc or {}["config"]``, which is a `KeyError` and therefore a FALSE PIN, the failure
+    this whole file exists to prevent.
+
+    The shapes below are the real ones from that measurement, and each is written to die
+    if the mutant stops standing exactly where it was put.
+    """
+
+    def _every_splice_stands_where_it_was_put(self, source: str, least: int = 1) -> None:
+        """The property, not an example of it: bracketing the mutant changes nothing.
+
+        A splice that re-associates is exactly a splice whose result would parse
+        DIFFERENTLY with brackets around it, so this is the whole claim and it needs no
+        table of precedences to state. Two splices are not expressions at all and are
+        skipped rather than fudged: a statement deletion, and an f-string's literal text.
+        """
+        blob = textwrap.dedent(source).lstrip("\n").encode("utf-8")
+        tree = ast.parse(blob)
+        sp = sweep._Spans(blob)
+        raw = {sp.span(part) for node in ast.walk(tree)
+               if isinstance(node, ast.JoinedStr)
+               for part in node.values if isinstance(part, ast.Constant)}
+        muts = sweep.mutations_for(
+            "charter/x.py", blob, set(range(1, len(blob.splitlines()) + 2)))
+        self.assertGreaterEqual(len(muts), least)
+        checked = 0
+        for m in muts:
+            if m.span in raw:
+                continue
+            try:
+                ast.parse(m.after, mode="eval")
+            except SyntaxError:
+                continue
+            a, b = m.span
+            bracketed = blob[:a] + b"(" + m.after.encode("utf-8") + b")" + blob[b:]
+            with self.subTest(mutation=str(m)):
+                self.assertEqual(
+                    ast.dump(ast.parse(m.source)), ast.dump(ast.parse(bracketed)),
+                    f"{m.tag}: the mutant re-associates — the program it makes is not "
+                    f"the edit the report describes ({m.before!r} -> {m.after!r})")
+            checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_a_grouped_receiver_keeps_its_grouping(self):
+        """137 of the 144 are this line, in one spelling or another: the receiver is an
+        `or` chain, its parentheses are grouping rather than syntax, and `ast` does not
+        put them in the span. The mutant the report called "which side is stripped"
+        stripped neither side."""
+        muts = _mutations("""
+            def f(p):
+                return (p.stderr or p.stdout or "").strip()
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"),
+                         ['(p.stderr or p.stdout or "").lstrip'])
+        self._every_splice_stands_where_it_was_put("""
+            def f(p):
+                return (p.stderr or p.stdout or "").strip()
+        """)
+
+    def test_a_fallback_on_a_grouped_receiver_does_not_become_a_key_error(self):
+        """The false pin, which is the half that matters. `vc or {}["config"]` evaluates
+        the subscript only when `vc` is falsy, and `{}["config"]` raises — so the suite
+        goes red for a crash and the fallback is certified as tested. Four sites in
+        `charter/` are exactly this."""
+        muts = _mutations("""
+            def f(vc):
+                return (vc or {}).get("config", {})
+        """)
+        self.assertIn('(vc or {})["config"]', _afters(muts, "no-fallback"))
+
+    def test_a_fallback_written_as_an_or_keeps_its_receiver_grouped_too(self):
+        """The other `no-fallback` spelling, `d.get(k) or ()`, builds the same subscript
+        from the same receiver — and a test that only covered `d.get(k, v)` left this one
+        unpinned. Found by deleting the line."""
+        muts = _mutations("""
+            def f(vc):
+                return (vc or {}).get("config") or {}
+        """)
+        self.assertIn('(vc or {})["config"]', _afters(muts, "no-fallback"))
+
+    def test_a_conjunct_that_is_itself_an_or_keeps_its_grouping(self):
+        """`and` binds tighter than `or`, so a half spelled `a or b` joined back with
+        ` and ` reads as `a or (b and c)` — a different condition from the one dropped.
+        Also found by deleting the line: the two-conjunct fixtures could not reach it,
+        because a lone survivor gets its brackets from the outer spelling instead."""
+        muts = _mutations("""
+            def f(a, b, c, d):
+                if (a or b) and c and d:
+                    return 1
+        """)
+        self.assertIn("((a or b) and c)", _afters(muts, "drop-conjunct"))
+
+    def test_a_clamp_dropped_inside_a_tighter_expression_keeps_its_grouping(self):
+        """`2 * max(0, inner - w)` -> `2 * inner - w` is not the clamp dropped, it is
+        arithmetic rewritten."""
+        muts = _mutations("""
+            def f(inner, w):
+                return 2 * max(0, inner - w)
+        """)
+        self.assertIn("(inner - w)", _afters(muts, "unclamp"))
+
+    def test_a_containment_dropped_beside_a_concatenation_keeps_its_grouping(self):
+        muts = _mutations("""
+            def f(detail):
+                return contain.one_line(detail[-1] if detail else "no output") + "!"
+        """)
+        self.assertEqual(_afters(muts, "uncontain"),
+                         ['(detail[-1] if detail else "no output")'])
+
+    def test_an_fstring_format_spec_is_text_and_never_grows_brackets(self):
+        """A format spec's span holds raw bytes and not an expression, so `retune-string`
+        splices text there. `x-y` happens to parse as a `BinOp`, and bracketing it would
+        put `(y-z)` inside the string — a corruption, not a mutation.
+
+        BOTH arms, for the reason the width-literal case above gives at length: PEP 701
+        landed in 3.12, and before it an f-string's internal positions are approximate, so
+        `span_is_sound` refuses the segment and there is nothing here to protect. That is
+        `sweep.reach`'s declared gap rather than a different answer to this question."""
+        muts = _mutations("""
+            def f(v):
+                return f"{v:x-y}"
+        """)
+        if sys.version_info >= (3, 12):
+            self.assertEqual(_afters(muts, "retune-string"), ["y-z"])
+            self.assertIn('f"{v:y-z}"', _by(muts, "retune-string")[0].source.decode())
+        else:
+            self.assertEqual(_by(muts, "retune-string"), [])
+
+    def test_text_that_is_not_an_expression_is_returned_untouched(self):
+        """A statement deletion splices nothing, or `pass`. Neither is an expression and
+        neither may grow brackets."""
+        self.assertEqual(sweep.parenthesised(""), "")
+        self.assertEqual(sweep.parenthesised("pass"), "pass")
+        self.assertEqual(sweep.parenthesised("<39"), "<39")
+
+    def test_a_bracket_already_around_the_whole_expression_is_not_doubled(self):
+        """`drop-conjunct` spells each half and then the join is spelled again, so this
+        runs twice over the same text. `((prog != "export"))` is a mutant nobody reads."""
+        self.assertEqual(sweep.parenthesised("(a and b)"), "(a and b)")
+        self.assertEqual(sweep.parenthesised("(a) and b"), "((a) and b)")
+
+    def test_a_tight_expression_is_left_alone(self):
+        for text in ("name", "d[k]", "f(x)", "p.stem", '"lit"', "[1, 2]", "{}"):
+            self.assertEqual(sweep.parenthesised(text), text)
+
+    def test_every_expression_python_has_is_either_loose_or_tight(self):
+        """The same protection `CMP_TEXT` gets, for the same reason: an expression node
+        in neither tuple would be treated as tight by default, and a splice that
+        re-associates is a mutation that is not the mutation the report describes. This
+        fails on the day Python grows a new expression, rather than on the day somebody's
+        survivor turns out to be a different program."""
+        self.assertEqual(set(ast.expr.__subclasses__()),
+                         set(sweep.LOOSE) | set(sweep.TIGHT))
+        self.assertEqual(set(sweep.LOOSE) & set(sweep.TIGHT), set())
+
+    def test_every_shape_in_the_table_stands_where_it_was_put(self):
+        """The property over one module carrying every operator that splices source text
+        back into the tree, each in a position tight enough to rebuild it."""
+        self._every_splice_stands_where_it_was_put("""
+            BUDGET = 3 + 4
+
+            def f(p, vc, detail, xs, n, cap, w):
+                a = 2 * max(0, n - w)
+                b = (p.stderr or "").strip()
+                c = (vc or {}).get("config", {})
+                d = contain.one_line(detail[-1] if detail else "x") + "!"
+                e = 2 * (n if cap else n - 1)
+                g = 2 * ((vc or {}).get("k") or ())
+                h = -(n if cap else n - 1)
+                if isinstance(n, int) and n - 1 < cap:
+                    return a, b, c, d, e, g, h
+                return (p.name or "").lower()
+        """, least=10)
+
+
+class TheMutantThatAsksNothing(unittest.TestCase):
+    """`indistinguishable` (#655): a mutation that cannot be killed is not offered.
+
+    #655 proposed a third verdict beside `pinned`/`survived` for the mutant no honest
+    test can redden. The measurement it asked for first refuses it: across every sweep
+    result this repository still holds — 461 distinct survivors on ten branches — the
+    number a rule could decide is one. `path.partition("/")` is equivalent only if a
+    GitHub `path_with_namespace` holds one slash, which is a fact about a remote API and
+    not about the code; `GIT_TIMEOUT = 20 -> 21` would have to be decided from "no
+    covering test names the symbol", which is the report's loudest FINDING and is lifted
+    by renaming the constant.
+
+    What is decidable is answered where #632 answered its sibling — the operator does not
+    offer the mutation. A survivor no test can kill is a false positive, and the place to
+    fix a false positive is the question, not the answer.
+    """
+
+    def test_a_split_with_no_maxsplit_is_not_offered(self):
+        muts = _mutations("""
+            def f(path):
+                return path.split("/")
+        """)
+        self.assertEqual(_by(muts, "swap-synonym"), [])
+
+    def test_an_rsplit_with_no_maxsplit_is_not_offered_either(self):
+        muts = _mutations("""
+            def f(path):
+                return path.rsplit("/")
+        """)
+        self.assertEqual(_by(muts, "swap-synonym"), [])
+
+    def test_the_whitespace_form_is_the_same_function_too(self):
+        muts = _mutations("""
+            def f(text):
+                return text.split()
+        """)
+        self.assertEqual(_by(muts, "swap-synonym"), [])
+
+    def test_a_maxsplit_makes_it_a_question_again(self):
+        muts = _mutations("""
+            def f(path):
+                return path.split("/", 1)
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"), ["path.rsplit"])
+
+    def test_a_maxsplit_passed_by_keyword_counts_too(self):
+        muts = _mutations("""
+            def f(path):
+                return path.split("/", maxsplit=1)
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"), ["path.rsplit"])
+
+    def test_the_pair_really_is_one_function_without_a_maxsplit(self):
+        """The evidence for the rule rather than a restatement of it. Exhaustive over
+        every string of up to five characters drawn from an alphabet that CONTAINS the
+        separator, for `str` and for `bytes`, plus the no-argument whitespace form."""
+        import itertools
+        for n in range(6):
+            for letters in itertools.product("ab.", repeat=n):
+                s = "".join(letters)
+                self.assertEqual(s.split(), s.rsplit(), s)
+                for sep in (".", "a", "ab"):
+                    self.assertEqual(s.split(sep), s.rsplit(sep), (s, sep))
+                    self.assertEqual(s.encode().split(sep.encode()),
+                                     s.encode().rsplit(sep.encode()), (s, sep))
+        self.assertNotEqual("a.b.c".split(".", 1), "a.b.c".rsplit(".", 1))
+
+    def test_a_pair_that_does_move_its_axis_is_untouched(self):
+        muts = _mutations("""
+            def f(name):
+                return name.lower()
+        """)
+        self.assertEqual(_afters(muts, "swap-synonym"), ["name.upper"])
+
+    def test_the_refusal_names_the_reason_rather_than_dropping_it_silently(self):
+        call = ast.parse('x.split(",")', mode="eval").body
+        self.assertIn("maxsplit", sweep.indistinguishable("split", "rsplit", call))
+        self.assertEqual(sweep.indistinguishable("lower", "upper", call), "")
+        with_max = ast.parse('x.split(",", 1)', mode="eval").body
+        self.assertEqual(sweep.indistinguishable("split", "rsplit", with_max), "")
 
 
 class TheNonDecimalConstantShape(unittest.TestCase):
@@ -1505,7 +1772,11 @@ class TwoGuardsCanHideBehindEachOther(unittest.TestCase):
         how the harness asks that question."""
         muts = sweep.mutations_for("charter/frame/layout.py", self.SRC, set(range(1, 9)))
         a = next(m for m in muts if m.operator == "no-fallback")
-        b = next(m for m in muts if m.operator == "drop-conjunct")
+        # The half this test is about, named rather than taken by sort order: it is
+        # `name not in SLOT_SIZE` whose consequence hides behind the fallback, and the
+        # mutation that asks about it is the one that KEEPS `isinstance`.
+        b = next(m for m in muts
+                 if m.operator == "drop-conjunct" and "isinstance" in m.after)
         combined = sweep.compose(self.SRC, (a, b))
         self.assertIsNotNone(combined)
         text = combined.decode()

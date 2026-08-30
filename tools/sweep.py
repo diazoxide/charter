@@ -314,6 +314,120 @@ class _Spans:
         return self.source[:a] + rep + b"\n" * max(0, lost) + self.source[b:]
 
 
+#: Expression nodes whose source text **re-associates** with whatever it is spliced next
+#: to. `ast` positions do not include the grouping parentheses a programmer wrote, so
+#: `sp.text` of the `x or ""` inside `(x or "").strip()` is `x or ""` — and splicing that
+#: back somewhere tighter silently rebuilds the expression. See :func:`parenthesised`.
+LOOSE = (ast.BoolOp, ast.NamedExpr, ast.BinOp, ast.UnaryOp, ast.Lambda, ast.IfExp,
+         ast.Await, ast.Yield, ast.YieldFrom, ast.Compare, ast.Tuple)
+
+#: And the ones that do not: a name, a call, a subscript, a display, a literal. Their
+#: source text already carries its own delimiters, so it means the same thing wherever it
+#: lands.
+#:
+#: `Starred` and `Slice` are here because a parenthesis around either is a `SyntaxError`,
+#: and both are unreachable by construction rather than by luck: :func:`parenthesised`
+#: only ever sees text that ``ast.parse(..., mode="eval")`` accepted, and `*a` and `a:b`
+#: are not expressions that mode can parse. `TheSpliceIsTheEditDescribed` asserts that
+#: these two tuples between them name **every** subclass of `ast.expr`, which is the same
+#: protection `CMP_TEXT` gets and for the same reason — the day Python grows a new
+#: expression node, the suite says so rather than the tool quietly guessing.
+#:
+#: The tail is PEP 750's template strings, which 3.14 added and 3.12 — the version the
+#: gate pins — does not have. They are the ``t"…"`` analogues of `JoinedStr` and
+#: `FormattedValue`, delimited by their own quotes and braces, so they are tight for the
+#: same reason those are. Reached through `getattr` because naming them outright is an
+#: `AttributeError` on the interpreter CI actually runs, and the completeness test is
+#: what keeps the conditional honest rather than a guess: on 3.14 it demands them, on
+#: 3.12 there is nothing to demand.
+TIGHT = (ast.Dict, ast.Set, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+         ast.Call, ast.FormattedValue, ast.JoinedStr, ast.Constant, ast.Attribute,
+         ast.Subscript, ast.Name, ast.List, ast.Starred, ast.Slice) + tuple(
+    t for t in (getattr(ast, "TemplateStr", None), getattr(ast, "Interpolation", None))
+    if t is not None)
+
+
+def parenthesised(text: str) -> str:
+    """*text*, spelled so that splicing it cannot rebuild the expression around it.
+
+    **The mutant has to be the edit the report describes.** Measured over `charter/` and
+    `tools/` before this existed: 144 of 8,903 expression mutations spliced something
+    else. The shape is everywhere — `(x or "").strip()` is 137 of them — and it comes
+    from one fact about `ast`: a node's span excludes the parentheses the programmer put
+    around it, because they are grouping and not syntax. So `sp.text` of the receiver in
+    `(p.stderr or p.stdout or "").strip()` is `p.stderr or p.stdout or ""`, and the
+    `swap-synonym` mutant built from it reads ``p.stderr or p.stdout or "".lstrip()`` —
+    which does not swap which end is stripped, it deletes the strip on every path but
+    one.
+
+    Two ways that lies, and they are the two failures this file is built around:
+
+    * **A survivor answering a question nobody asked.** The report prints "is `how much`
+      pinned?" beside a mutant that dropped the normalisation entirely. Under
+      ``--enforce`` that is a blocked branch whose author is sent to write a test for a
+      property the mutation never perturbed.
+    * **A false pin**, which is worse and is the one this file exists to prevent.
+      ``(vc or {}).get("config", {})`` becomes ``vc or {}["config"]``, and `{}["config"]`
+      is a `KeyError` — so the suite goes red for a crash and the fallback is certified
+      as tested. Four sites in this tree are exactly that.
+
+    The rule is a property of Python, not a list of the shapes that happened to be
+    caught: an expression whose top node is in :data:`LOOSE` binds more weakly than
+    something it could be spliced beside, so it is wrapped; one in :data:`TIGHT` carries
+    its own delimiters and is left alone. Text that is not an expression at all — the
+    empty string of a statement deletion, the ``pass`` that replaces it, the raw
+    ``{:<28}`` of an f-string's format spec — does not parse here and is returned
+    untouched, which is the only correct answer for a splice that is not an expression.
+    """
+    try:
+        top = ast.parse(text, mode="eval").body
+    except SyntaxError:
+        return text
+    if not isinstance(top, LOOSE):
+        return text
+    # Idempotent, because two operators reach this with text that has already been
+    # through it: `drop-conjunct` spells each half and then :func:`mutations_for` spells
+    # the join. `((prog != "export"))` is a mutant nobody can read.
+    #
+    # A bracket already around the WHOLE expression is the only thing that pushes its
+    # first token off line one, column zero, and that holds because of what reaches here:
+    # a node's own source text, which by definition starts where the node starts, or a
+    # replacement built by joining such texts. Neither can begin with whitespace or a
+    # comment. `(a) and b` is the case this must NOT match and does not — the `and`
+    # begins at column zero however many brackets sit inside it.
+    #
+    # A `text.startswith("(")` was written beside this and the deletion sweep took it:
+    # with the column test present it is a second answer to the same question, and a
+    # guard nothing can redden is a line this file's own rule says to delete.
+    if (top.lineno, top.col_offset) > (1, 0):
+        return text
+    return f"({text})"
+
+
+def _spell(sp: "_Spans", node: ast.AST) -> str:
+    """*node*'s source, safe to interpolate into a replacement built around it.
+
+    The outer half of :func:`parenthesised` is applied once, in :func:`mutations_for`, to
+    every replacement. That cannot reach an operand spliced INTO the middle of one —
+    ``f"{receiver}.{other}"`` produces a `swap-synonym` mutant whose top node is an
+    `Attribute` however loose the receiver is — so an operand is spelled here instead.
+    """
+    return parenthesised(sp.text(node))
+
+
+def _fstring_segments(tree: ast.AST) -> set[int]:
+    """The ids of the constants that are an f-string's *literal text*.
+
+    These are the one place a replacement is raw bytes rather than an expression: the
+    span holds no quotes, so `retune-string` splices `<28` -> `<39` as text. Running
+    :func:`parenthesised` over that would be a category error and occasionally a
+    corruption — a segment spelling `a-b` parses as a `BinOp` and would come back
+    `(b-c)`, parentheses and all, inside the string.
+    """
+    return {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
+            for part in node.values if isinstance(part, ast.Constant)}
+
+
 def _sole_statement(parent_body: list[ast.stmt], node: ast.AST) -> bool:
     return len(parent_body) == 1 and parent_body[0] is node
 
@@ -416,6 +530,66 @@ SYNONYMS = {
 #: the double `resolve()` two lines away. A test that never sees a symlink, a relative path
 #: or a trailing separator cannot tell the mutant from the shipped line.
 NORMALISERS = ("resolve", "absolute", "expanduser", "casefold")
+
+
+def indistinguishable(name: str, other: str, call: ast.Call) -> str:
+    """Why re-spelling a call to *name* as *other* would be the SAME PROGRAM, or ``""``.
+
+    #655 asks for a third verdict beside `pinned`/`survived`, for the mutant no honest
+    test can redden. The measurement it asked for first says no: across every sweep this
+    repository still holds a result for — 461 distinct survivors on ten branches — the
+    number a rule could decide is **one**, and the cases the proposal names are not
+    decidable at all. `path.partition("/")` is equivalent only if a GitHub
+    `path_with_namespace` really does hold one slash, which is a fact about a remote API
+    and not about the code; a tool asserting it is a suppression list with a rule's
+    manners. `GIT_TIMEOUT = 20 -> 21` would have to be decided from "no covering test
+    names the symbol", which is the report's *loudest finding* and not an equivalence —
+    and it would be lifted by renaming the constant.
+
+    So there is no third verdict here, and the one genuinely decidable case is answered
+    where #632 answered its sibling: the mutation is **not offered**. A survivor no test
+    can kill is a false positive, and the place to fix a false positive is the question,
+    not the answer. `unevaluated` took the same line about a forward reference under PEP
+    563, for the same reason — under ``--enforce`` an unkillable mutant is a blocked
+    branch whose author has no move to make, so the operator must not offer it at all.
+
+    **`split` and `rsplit` are one function when no `maxsplit` is given.** Not "usually",
+    not "on the values this project happens to pass" — `str.split(sep)` and
+    `str.rsplit(sep)` return the same list for every string and every separator, because
+    the only thing the `r` decides is which end runs out of splits first and with an
+    unlimited budget neither does. Verified exhaustively over every string of up to six
+    characters from an alphabet containing the separator, for `str` and `bytes`, and for
+    the no-argument whitespace form. `SYNONYMS` justifies a pair by the axis it moves;
+    with `maxsplit` absent this pair moves nothing, so the mutation asks nothing and its
+    survival says nothing.
+
+    Measured over `charter/` and `tools/`: 67 of the 98 `split`/`rsplit` call sites the
+    table would mutate pass no `maxsplit`, against 31 that do and stay a real question.
+    Two of them turned up as survivors in the corpus above; every one of the 67 becomes a
+    permanent survivor the moment :func:`parenthesised` lands, because until now the
+    receiver's lost parentheses were accidentally making the mutant a different program.
+
+    The rule is about the arguments and not about the receiver, so what it claims is
+    exactly what it can check. On a receiver that is not a `str` the mutant is not
+    equivalent, it is an `AttributeError` — `re.Pattern` has `split` and no `rsplit` —
+    and that is a FALSE PIN, the failure this file exists to prevent. Three sites in this
+    tree are that shape (`_BACKTICK_RE.split`, `_OPERATOR_SPLIT_RE.split` twice) and all
+    three pass no `maxsplit`, so this rule happens to withdraw them; a compiled pattern
+    split with a `maxsplit` would still be offered and would still crash. That gap is
+    named here rather than papered over, because the fix for it is a receiver-type
+    question this pass cannot answer and `SYNONYMS`' own comment on `index`/`rindex`
+    already measures by hand.
+
+    Nothing in this tree defines a `split` or an `rsplit` of its own. If something ever
+    does, the cost of this rule is one question not asked, which is the direction this
+    file errs in everywhere else.
+    """
+    if {name, other} != {"split", "rsplit"}:
+        return ""
+    if len(call.args) >= 2 or any(k.arg == "maxsplit" for k in call.keywords):
+        return ""
+    return ("`split` and `rsplit` are the same function with no `maxsplit`, so the "
+            "mutant is the shipped program")
 
 
 def _shift_char(ch: str) -> str:
@@ -792,7 +966,7 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
                 and isinstance(node.test.op, ast.And) and len(node.test.values) > 1:
             for i, part in enumerate(node.test.values):
                 rest = [v for j, v in enumerate(node.test.values) if j != i]
-                kept = " and ".join(sp.text(v) for v in rest)
+                kept = " and ".join(_spell(sp, v) for v in rest)
                 yield (node.test, kept, "drop-conjunct",
                        f"is the `{_oneline(sp.text(part), 48)}` half pinned?")
 
@@ -835,10 +1009,10 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or) \
                 and len(node.values) == 2 and _is_get(node.values[0]):
             call = node.values[0]
-            yield (node, f"{sp.text(call.func.value)}[{sp.text(call.args[0])}]",
+            yield (node, f"{_spell(sp, call.func.value)}[{sp.text(call.args[0])}]",
                    "no-fallback", "is the fallback pinned?")
         if _is_get(node) and len(node.args) == 2:
-            yield (node, f"{sp.text(node.func.value)}[{sp.text(node.args[0])}]",
+            yield (node, f"{_spell(sp, node.func.value)}[{sp.text(node.args[0])}]",
                    "no-fallback", "is the fallback pinned?")
 
         # `A or B` where B is an empty literal — `placed or []`, `paint or _paint`.
@@ -932,8 +1106,12 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
                 and node.func.attr in SYNONYMS \
                 and _receiver_root(node.func.value) not in modules:
             other, axis = SYNONYMS[node.func.attr]
-            yield (node.func, f"{sp.text(node.func.value)}.{other}", "swap-synonym",
-                   f"is `{axis}` pinned, or does `{other}` pass the same tests?")
+            # A swap that produces the same program asks nothing, and #655's answer is
+            # that such a mutation is not offered rather than given a verdict of its own.
+            if not indistinguishable(node.func.attr, other, node):
+                yield (node.func, f"{_spell(sp, node.func.value)}.{other}",
+                       "swap-synonym",
+                       f"is `{axis}` pinned, or does `{other}` pass the same tests?")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                 and node.func.id in SYNONYMS and not node.keywords \
                 and len(node.args) == 1 and not any(
@@ -1023,6 +1201,7 @@ def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
     except SyntaxError:
         return []
     sp = _Spans(source)
+    raw = _fstring_segments(tree)
     out: list[Mutation] = []
     seen: set[tuple[int, int, str, str]] = set()
     for node, replacement, operator, question in _iter_operators(tree, sp):
@@ -1033,6 +1212,11 @@ def mutations_for(path: str, source: bytes, lines: set[int]) -> list[Mutation]:
         before = sp.text(node)
         if before.strip() == replacement.strip():
             continue
+        # Spelled AFTER the no-op check above and in one place for every operator, so
+        # that a shape added to the table below cannot forget it. `parenthesised` is a
+        # no-op on a replacement that is already tight, which is most of them.
+        if id(node) not in raw:
+            replacement = parenthesised(replacement)
         key = (node.lineno, node.col_offset, operator, replacement)
         if key in seen:
             continue
