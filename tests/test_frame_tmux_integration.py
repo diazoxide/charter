@@ -5095,6 +5095,126 @@ class _ChatsOnOneSession:
         return False
 
 
+class TheChatALaunchIsLeavingIsReadFromTmux(_ChatsOnOneSession, _TmuxServerFixture,
+                                            PersonaIso):
+    """#688: which chat the client is on, and whether charter can name it without naming
+    a session.
+
+    **A mock cannot make either claim.** `#{window_active}` is tmux's own word for "the
+    session's current window", and `-t <session name>` is how a target gets parsed — a
+    workspace called `api.2` is read as ``window.pane``, so a question aimed that way lands
+    on somebody else's window or on none. The reading here is `list-windows -a` over ids
+    and an option, and this is where that is measured rather than argued.
+
+    Verified on tmux 3.7c and on tmux 3.2 (`tmuxctl.FLOOR`); the answers were identical,
+    so nothing here carries a version gate.
+    """
+
+    def test_the_active_window_is_the_one_the_session_is_on(self):
+        one, _ = self._chat(f"{self.WS}.1", first=True)
+        two, _ = self._chat(f"{self.WS}.2", first=False)
+        self.assertEqual(
+            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.2"),
+            f"{self.WS}.1",
+            "the chat a second launch would be leaving was not the one on screen")
+        self._srv("select-window", "-t", two)
+        self.assertEqual(
+            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"),
+            f"{self.WS}.2",
+            "`#{window_active}` did not follow the select on this tmux, so the whole "
+            "reading is measuring something else")
+        self.assertTrue(one)
+
+    def test_the_only_chat_of_a_session_answers_nothing(self):
+        """A launch that CREATED the session has one window and it is its own — there is
+        nothing to leave, and the `chat != beside` filter is what says so."""
+        self._chat(f"{self.WS}.1", first=True)
+        self.assertEqual(
+            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"), "")
+
+    def test_a_chat_in_another_session_is_never_the_one_being_left(self):
+        """The session comes from the new chat's OWN row rather than from a name, so a
+        window that is current in a different session cannot be mistaken for this one's."""
+        self._chat(f"{self.WS}.1", first=True)
+        r = self._srv("new-session", "-d", "-s", "elsewhere", "-P", "-F",
+                      "#{pane_id}", "--", *_gate_argv(
+                          os.path.join(self._gate_dir, "gate-elsewhere"), "exit 0"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(r.stdout.strip()))
+        named = commands_frame._chat_option_argv(socket=self.SOCKET_NAME,
+                                                 harness_pane=r.stdout.strip(),
+                                                 chat="other.1")
+        self.assertEqual(_run(named).returncode, 0)
+        self.assertEqual(
+            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"), "")
+
+    def test_a_workspace_whose_name_holds_a_dot_is_still_answered(self):
+        """The reason nothing here is a `-t <session>`: tmux parses a target on `.` as
+        ``window.pane``, so `display-message -t api.2` resolves to a pane INDEX of some
+        other window rather than to the session called `api.2`. Measured on 3.7c: the
+        session is found, the window is not, and the answer is whatever was current.
+
+        This class's own reading takes no target at all, so a workspace an operator is
+        perfectly entitled to name is answered like any other."""
+        r = self._srv("new-session", "-d", "-s", "api.2", "-n", "api.2.1", "-P", "-F",
+                      "#{pane_id}", "--", *_gate_argv(
+                          os.path.join(self._gate_dir, "gate-dotted"), "exit 0"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        first = r.stdout.strip()
+        self.addCleanup(_kill_pid, self._pane_pid_on(first))
+        self.assertEqual(_run(commands_frame._chat_option_argv(
+            socket=self.SOCKET_NAME, harness_pane=first, chat="api.2.1")).returncode, 0)
+        # A second window of that session, made the way `_chat_being_left`'s caller would
+        # have to reach it — off the FIRST window's pane id, never off the session's name.
+        window = self._srv("display-message", "-p", "-t", first,
+                           "#{window_id}").stdout.strip()
+        r2 = self._srv("new-window", "-d", "-a", "-t", window, "-P", "-F", "#{pane_id}",
+                       "--", *_gate_argv(os.path.join(self._gate_dir, "gate-dotted2"),
+                                         "exit 0"))
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(r2.stdout.strip()))
+        self.assertEqual(_run(commands_frame._chat_option_argv(
+            socket=self.SOCKET_NAME, harness_pane=r2.stdout.strip(),
+            chat="api.2.2")).returncode, 0)
+        self.assertEqual(
+            commands_frame._chat_being_left(self.SOCKET_NAME, beside="api.2.2"),
+            "api.2.1")
+
+    def test_a_window_carrying_no_chat_is_not_one_to_tear_down(self):
+        """The operator's-tmux case: the window they were on is one of THEIRS and carries
+        no `@charter_chat` at all, so this answers `""` and nothing of theirs is touched."""
+        pane, _ = self._chat(f"{self.WS}.1", first=True)
+        window = self._srv("display-message", "-p", "-t", pane,
+                           "#{window_id}").stdout.strip()
+        r = self._srv("new-window", "-a", "-t", window, "-P", "-F", "#{pane_id}",
+                      "--", *_gate_argv(os.path.join(self._gate_dir, "gate-theirs"),
+                                        "exit 0"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.addCleanup(_kill_pid, self._pane_pid_on(r.stdout.strip()))
+        self.assertEqual(
+            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"), "",
+            "charter would have torn down a window that is not a chat")
+
+    def test_the_panels_of_the_chat_left_behind_really_stop(self):
+        """The other half, end to end against real panes: `_drop_panels` kills them and
+        rewrites the map, so nothing is left rendering at a width its window no longer
+        has."""
+        pane, _ = self._chat(f"{self.WS}.1", first=True)
+        panels = {}
+        for slot in ("top", "bottom"):
+            r = self._srv("split-window", "-d", "-t", pane, "-P", "-F", "#{pane_id}",
+                          "--", *_gate_argv(
+                              os.path.join(self._gate_dir, f"gate-{slot}"), "exit 0"))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            panels[slot] = r.stdout.strip()
+        state.record_panes(f"{self.WS}.1", panels=panels)
+        commands_frame._drop_panels(self.SOCKET_NAME, f"{self.WS}.1")
+        alive = self._srv("list-panes", "-t", pane, "-F", "#{pane_id}").stdout.split()
+        for slot, panel in panels.items():
+            self.assertNotIn(panel, alive, f"the {slot} panel is still running")
+        self.assertEqual(state.panes(f"{self.WS}.1"), {})
+
+
 class ChatsAreWindowsOnOneWorkspaceSession(_ChatsOnOneSession, _TmuxServerFixture,
                                            PersonaIso):
     """Phase 5 Stage 5a, against a real server: a workspace is a SESSION and a chat is a
@@ -5712,126 +5832,6 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
             self.assertLessEqual(width, self.SMALL[0],
                                  "a panel was born at the background window's stale "
                                  "width")
-
-
-class TheChatALaunchIsLeavingIsReadFromTmux(_ChatsOnOneSession, _TmuxServerFixture,
-                                            PersonaIso):
-    """#688: which chat the client is on, and whether charter can name it without naming
-    a session.
-
-    **A mock cannot make either claim.** `#{window_active}` is tmux's own word for "the
-    session's current window", and `-t <session name>` is how a target gets parsed — a
-    workspace called `api.2` is read as ``window.pane``, so a question aimed that way lands
-    on somebody else's window or on none. The reading here is `list-windows -a` over ids
-    and an option, and this is where that is measured rather than argued.
-
-    Verified on tmux 3.7c and on tmux 3.2 (`tmuxctl.FLOOR`); the answers were identical,
-    so nothing here carries a version gate.
-    """
-
-    def test_the_active_window_is_the_one_the_session_is_on(self):
-        one, _ = self._chat(f"{self.WS}.1", first=True)
-        two, _ = self._chat(f"{self.WS}.2", first=False)
-        self.assertEqual(
-            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.2"),
-            f"{self.WS}.1",
-            "the chat a second launch would be leaving was not the one on screen")
-        self._srv("select-window", "-t", two)
-        self.assertEqual(
-            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"),
-            f"{self.WS}.2",
-            "`#{window_active}` did not follow the select on this tmux, so the whole "
-            "reading is measuring something else")
-        self.assertTrue(one)
-
-    def test_the_only_chat_of_a_session_answers_nothing(self):
-        """A launch that CREATED the session has one window and it is its own — there is
-        nothing to leave, and the `chat != beside` filter is what says so."""
-        self._chat(f"{self.WS}.1", first=True)
-        self.assertEqual(
-            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"), "")
-
-    def test_a_chat_in_another_session_is_never_the_one_being_left(self):
-        """The session comes from the new chat's OWN row rather than from a name, so a
-        window that is current in a different session cannot be mistaken for this one's."""
-        self._chat(f"{self.WS}.1", first=True)
-        r = self._srv("new-session", "-d", "-s", "elsewhere", "-P", "-F",
-                      "#{pane_id}", "--", *_gate_argv(
-                          os.path.join(self._gate_dir, "gate-elsewhere"), "exit 0"))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.addCleanup(_kill_pid, self._pane_pid_on(r.stdout.strip()))
-        named = commands_frame._chat_option_argv(socket=self.SOCKET_NAME,
-                                                 harness_pane=r.stdout.strip(),
-                                                 chat="other.1")
-        self.assertEqual(_run(named).returncode, 0)
-        self.assertEqual(
-            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"), "")
-
-    def test_a_workspace_whose_name_holds_a_dot_is_still_answered(self):
-        """The reason nothing here is a `-t <session>`: tmux parses a target on `.` as
-        ``window.pane``, so `display-message -t api.2` resolves to a pane INDEX of some
-        other window rather than to the session called `api.2`. Measured on 3.7c: the
-        session is found, the window is not, and the answer is whatever was current.
-
-        This class's own reading takes no target at all, so a workspace an operator is
-        perfectly entitled to name is answered like any other."""
-        r = self._srv("new-session", "-d", "-s", "api.2", "-n", "api.2.1", "-P", "-F",
-                      "#{pane_id}", "--", *_gate_argv(
-                          os.path.join(self._gate_dir, "gate-dotted"), "exit 0"))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        first = r.stdout.strip()
-        self.addCleanup(_kill_pid, self._pane_pid_on(first))
-        self.assertEqual(_run(commands_frame._chat_option_argv(
-            socket=self.SOCKET_NAME, harness_pane=first, chat="api.2.1")).returncode, 0)
-        # A second window of that session, made the way `_chat_being_left`'s caller would
-        # have to reach it — off the FIRST window's pane id, never off the session's name.
-        window = self._srv("display-message", "-p", "-t", first,
-                           "#{window_id}").stdout.strip()
-        r2 = self._srv("new-window", "-d", "-a", "-t", window, "-P", "-F", "#{pane_id}",
-                       "--", *_gate_argv(os.path.join(self._gate_dir, "gate-dotted2"),
-                                         "exit 0"))
-        self.assertEqual(r2.returncode, 0, r2.stderr)
-        self.addCleanup(_kill_pid, self._pane_pid_on(r2.stdout.strip()))
-        self.assertEqual(_run(commands_frame._chat_option_argv(
-            socket=self.SOCKET_NAME, harness_pane=r2.stdout.strip(),
-            chat="api.2.2")).returncode, 0)
-        self.assertEqual(
-            commands_frame._chat_being_left(self.SOCKET_NAME, beside="api.2.2"),
-            "api.2.1")
-
-    def test_a_window_carrying_no_chat_is_not_one_to_tear_down(self):
-        """The operator's-tmux case: the window they were on is one of THEIRS and carries
-        no `@charter_chat` at all, so this answers `""` and nothing of theirs is touched."""
-        pane, _ = self._chat(f"{self.WS}.1", first=True)
-        window = self._srv("display-message", "-p", "-t", pane,
-                           "#{window_id}").stdout.strip()
-        r = self._srv("new-window", "-a", "-t", window, "-P", "-F", "#{pane_id}",
-                      "--", *_gate_argv(os.path.join(self._gate_dir, "gate-theirs"),
-                                        "exit 0"))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.addCleanup(_kill_pid, self._pane_pid_on(r.stdout.strip()))
-        self.assertEqual(
-            commands_frame._chat_being_left(self.SOCKET_NAME, beside=f"{self.WS}.1"), "",
-            "charter would have torn down a window that is not a chat")
-
-    def test_the_panels_of_the_chat_left_behind_really_stop(self):
-        """The other half, end to end against real panes: `_drop_panels` kills them and
-        rewrites the map, so nothing is left rendering at a width its window no longer
-        has."""
-        pane, _ = self._chat(f"{self.WS}.1", first=True)
-        panels = {}
-        for slot in ("top", "bottom"):
-            r = self._srv("split-window", "-d", "-t", pane, "-P", "-F", "#{pane_id}",
-                          "--", *_gate_argv(
-                              os.path.join(self._gate_dir, f"gate-{slot}"), "exit 0"))
-            self.assertEqual(r.returncode, 0, r.stderr)
-            panels[slot] = r.stdout.strip()
-        state.record_panes(f"{self.WS}.1", panels=panels)
-        commands_frame._drop_panels(self.SOCKET_NAME, f"{self.WS}.1")
-        alive = self._srv("list-panes", "-t", pane, "-F", "#{pane_id}").stdout.split()
-        for slot, panel in panels.items():
-            self.assertNotIn(panel, alive, f"the {slot} panel is still running")
-        self.assertEqual(state.panes(f"{self.WS}.1"), {})
 
 
 if __name__ == "__main__":
