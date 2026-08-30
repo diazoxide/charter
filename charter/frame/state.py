@@ -451,7 +451,15 @@ def say(fid: str, message: str, *, seconds: float = NOTICE_SECONDS) -> None:
     try:
         config.write_for(tmp, f"{time.time() + float(seconds)}\n{text}\n")
         os.replace(tmp, d / "notice")
-    except (OSError, ValueError, OverflowError):
+    except OSError:
+        # `OSError` alone, exactly as `bump` and `record_exit` above — one shape for the
+        # three writers in this module rather than a wider net here. `ValueError` and
+        # `OverflowError` were in this tuple first, for a `float(seconds)` that cannot
+        # happen: every caller passes one of the two module constants below. The sweep
+        # found the wider catch as a survivor and it was right to — a clause no input
+        # reaches is not a guard, it is a claim that some caller might one day pass
+        # nonsense, and the honest place for that is the caller raising rather than this
+        # swallowing it into a silent no-notice.
         return
 
 

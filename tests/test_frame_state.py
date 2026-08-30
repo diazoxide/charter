@@ -1298,6 +1298,36 @@ class ANotice(PersonaIso, unittest.TestCase):
         self.assertEqual(state.notice_expiry("f-1"), 0.0)
         self.assertFalse((state.frame_dir("f-1") / "notice").exists())
 
+    def test_what_is_written_is_already_trimmed(self):
+        """Asserted on the FILE, and it has to be: `notice()` strips on the way out too,
+        so a writer that only `lstrip`ped would be invisible through the reader — which is
+        exactly how the sweep found this line unpinned. The property is that what charter
+        stores is already clean, because the row joins fields with ` · ` and a trailing
+        space would draw as `charter: gamma  · 5 todos`."""
+        state.say("f-1", "charter: gamma   ")
+        raw = (state.frame_dir("f-1") / "notice").read_text()
+        self.assertEqual(raw.split("\n")[1], "charter: gamma")
+
+    def test_a_notice_is_gone_AT_its_expiry_and_not_a_moment_after(self):
+        """The boundary, not just the direction. `<=` here would keep a notice for one
+        more instant than it was given, which no operator could see — but the sweep is
+        right that an unpinned boundary is an unpinned line, and the dwell is a half-open
+        interval on purpose: `say(seconds=n)` means n seconds of it, not n plus a tick."""
+        state.say("f-1", "charter: on the edge", seconds=30)
+        at = state.notice_expiry("f-1")
+        with mock.patch("time.time", return_value=at - 0.001):
+            self.assertEqual(state.notice("f-1"), "charter: on the edge")
+        with mock.patch("time.time", return_value=at):
+            self.assertEqual(state.notice("f-1"), "")
+
+    def test_a_hostile_fid_has_no_expiry_either(self):
+        """`notice`'s containment guard has a twin in `notice_expiry`, and it is a
+        separate line that needs a separate reason to exist: `frame_dir` answers `None`
+        for a name `contain.child` refuses, and `None / "notice"` is a `TypeError` that
+        the `(OSError, ValueError)` below would not catch — out of `panel._watch`'s run
+        loop, which is the one place in this module that must never raise."""
+        self.assertEqual(state.notice_expiry("../escape"), 0.0)
+
     def test_a_notice_whose_expiry_is_nan_is_not_live_forever(self):
         """`float("nan")` parses, and every comparison against a NaN is False — so a
         `now >= expiry` test reads False and the notice never expires. That is exactly the

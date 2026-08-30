@@ -817,11 +817,18 @@ class TheOutcomeGoesOnTheFramesOwnRow(PersonaIso, unittest.TestCase):
     def test_a_refusal_is_given_longer_on_screen_than_a_success(self):
         """`ok` decides the dwell and nothing else. A refusal is the outcome with no other
         surface — nothing moved, so no panel repaints into the answer — where a success
-        has the frame itself confirming it a row higher up."""
-        self._say(ok=True)
-        quick = state.notice_expiry(self.FID)
-        self._say(ok=False)
-        self.assertGreater(state.notice_expiry(self.FID), quick)
+        has the frame itself confirming it a row higher up.
+
+        **Asserted as two DURATIONS, not as one expiry being later than the other.** The
+        obvious spelling — say a success, read the expiry, say a refusal, assert the
+        second is greater — is satisfied by the clock advancing between the two calls, so
+        it passes against a version that hands both the same dwell. The sweep found it
+        exactly that way, as a `collapse-ifexp` survivor on both branches at once."""
+        for ok, want in ((True, state.NOTICE_SECONDS), (False, state.REFUSAL_SECONDS)):
+            with self.subTest(ok=ok):
+                self._say(ok=ok)
+                left = state.notice_expiry(self.FID) - time.time()
+                self.assertAlmostEqual(left, want, delta=1.0)
 
     def test_a_frame_this_is_not_about_never_sees_it(self):
         """The targeting half. `-t <a well-formed pane of the right frame>` leaked to
@@ -942,6 +949,20 @@ class TheNoticeIsPendingUntilItExpires(PersonaIso, unittest.TestCase):
 
     def test_a_frame_that_never_said_anything_is_not(self):
         self.assertIs(panel._notice_pending("np-never"), False)
+
+    def test_it_stops_being_pending_AT_the_expiry_and_not_a_moment_after(self):
+        """The boundary rather than the direction, and it matters here for a reason it
+        does not in `state.notice`: this is what decides the tick on which `_watch` spends
+        its falling-edge repaint. A `<=` would put that repaint one tick later than the
+        row stopped drawing the notice, so for one tick the pane would hold a line
+        `slots._bottom` had already dropped — the stale frame this whole cluster is
+        about, one tick wide."""
+        state.say("np-1", "charter: on the edge", seconds=30)
+        at = state.notice_expiry("np-1")
+        with mock.patch("time.time", return_value=at - 0.001):
+            self.assertIs(panel._notice_pending("np-1"), True)
+        with mock.patch("time.time", return_value=at):
+            self.assertIs(panel._notice_pending("np-1"), False)
 
 
 class PanesAreRememberedForTheFrame(PersonaIso, unittest.TestCase):
