@@ -3810,12 +3810,19 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         the pane the moment it has the code (:data:`_VoidDeaths._ON_THE_SERVER`).
 
         **A void is retried and only then skipped, and every other `1` still fails.** Which
-        `1` it is comes off two facts that are already recorded rather than a new guess:
-        whether tmux ran the pane's array, and what `state.exit_code` holds — `None` for a
-        pane that vanished rather than died askably (`_wait_for_harness`'s own `None`, and
-        every early `return 1` before the harness ever ran), the fallback for a death tmux
-        held no status for. A `1` with the array RUN is charter losing an exit code tmux
-        had, and that is the failure this test exists to report.
+        `1` it is comes off two facts about the launch rather than a new guess: whether
+        tmux ran the pane's array, and what the launch RECORDED as this frame's exit —
+        nothing at all for a pane that vanished rather than died askably
+        (`_wait_for_harness`'s own `None`, and every early `return 1` before the harness
+        ever ran), the fallback code for a death tmux held no status for. A `1` with the
+        array RUN is charter losing an exit code tmux had, and that is the failure this
+        test exists to report.
+
+        **The second fact is watched, not read back, and #694 is why** — see `recorded`.
+        `state.exit_code(fid)` answers `None` after every launch on this path, because the
+        launch's own closing reap removes the directory it just wrote the code into. Read
+        that way the classifier could only ever say "charter recorded nothing", so the
+        first void this test met on CI failed it instead of retrying.
         """
         name, sid, op_pane, _ = self._operator_server()
         server_pid = self._srv("display-message", "-p", "#{pid}").stdout.strip()
@@ -3832,6 +3839,42 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                 ("list-keys",)))
 
         before = _snapshot()
+
+        # Every exit code this launch RECORDS, watched as charter records it.
+        #
+        # **`state.exit_code(fid)` cannot answer that question and never could — #694.**
+        # The last two things `_launch_in_operator_tmux` does are `state.clear_claim(fid)`
+        # and its own closing `_reap_this_server(socket)`, and that reap's whole job is to
+        # remove the frame the launch has just finished — `state.clear_claim`'s docstring
+        # says so in as many words ("its own last `reap` — the one whose whole job is to
+        # remove the frame it just finished"). Traced on this module's own green path, in
+        # this class, on this machine:
+        #
+        #     record_exit('demo.1', 21)
+        #     reap(live={'sh'})  ->  ['demo.1']
+        #     state.exit_code('demo.1')  ->  None
+        #
+        # So the read this used to do answered `None` after EVERY launch on this path.
+        # It sits on the branch only a void reaches, so on a healthy machine it never ran
+        # at all, and the first time it ran it failed: `None != 1`, blaming charter for
+        # "the harness pane vanished rather than dying askably" on a runner where nothing
+        # of the sort happened. #609 put the retry here for a trial that measured
+        # nothing and gave it a classifier that fails instead of retrying.
+        #
+        # The fact the message is about — "recorded no exit for this frame" — is
+        # charter's own ACT, so it is taken from the act rather than from a directory
+        # charter deletes on its way out. The spy calls through: the launch under test is
+        # the real one, with an observation added and nothing taken away.
+        recorded: list[tuple[str, int]] = []
+        _really_record_exit = state.record_exit
+
+        def _watch_record_exit(fid: str, code: int) -> None:
+            recorded.append((fid, code))
+            _really_record_exit(fid, code)
+
+        watching = mock.patch.object(state, "record_exit", _watch_record_exit)
+        watching.start()
+        self.addCleanup(watching.stop)
 
         def _one_whole_launch(attempt: int) -> bool:
             """One real `cmd_launch` in the operator's server. ``True`` when it measured
@@ -3855,6 +3898,12 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                                    rest=["--", *_gate_argv(gate, "exit 21")],
                                    no_frame=False)
             rc: list[int] = []
+            # Emptied per attempt, not per test: a launch reaps its own frame directory
+            # on the way out (see `recorded`), so the ordinal is FREE again and the next
+            # attempt is handed the same `demo.1` back. Two attempts' codes under one id
+            # would otherwise pile up in here and the assertion below would be about the
+            # trial before it.
+            recorded.clear()
 
             def _run_launch():
                 env = dict(os.environ, TMUX=f"{OP_SOCKET_PATH},{server_pid},{sid[1:]}",
@@ -3944,6 +3993,21 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                     "on it reports nothing. Its silence on a void would then mean nothing "
                     "either, and every void would skip a test that could still have been "
                     "measured")
+                # **And the exit-code observation is checked on the GREEN path for exactly
+                # the same reason, which is why it is here rather than only below.** `21`
+                # came off `#{pane_dead_status}`, so this launch had a code to record and
+                # `_launch_in_operator_tmux` records every code it gets. A watcher that
+                # cannot see that one would see nothing on the void path either, and its
+                # silence there is read as "the launch never ran the harness" — a loud
+                # failure blaming charter, on the one branch this test cannot exercise on
+                # a healthy machine. It is the read this replaced (`state.exit_code`) that
+                # was never checked anywhere it could be seen to be broken.
+                self.assertEqual(
+                    recorded, [(fid, 21)],
+                    "the harness's own exit code came back from `cmd_launch`, so the "
+                    "launch had one to record — and nothing was seen being recorded. The "
+                    "same blindness on a void reports charter as having lost a code it "
+                    "never had")
                 return True
             # Not the harness's code. `_UNKNOWN_DEATH_CODE` is the ONLY other number this
             # path can answer for a harness that really started, so anything else is a
@@ -3952,7 +4016,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                              "the harness's own exit code did not come back, and what did "
                              "is not charter's fallback either")
             self.assertEqual(
-                state.exit_code(fid), commands_frame._UNKNOWN_DEATH_CODE,
+                recorded, [(fid, commands_frame._UNKNOWN_DEATH_CODE)],
                 "charter answered its fallback code and recorded no exit for this frame — "
                 "the harness pane vanished rather than dying askably (nothing kept it: "
                 "`_remain_on_exit_argv`), or the launch returned before the harness ever "
@@ -5049,24 +5113,38 @@ class _ChatsOnOneSession:
     #: `state.workspace_prefix` happens to do with it.
     WS = "wsdemo"
 
-    def _chat(self, chat: str, *, first: bool, dies_by: str = "exit 0") -> tuple[str, str]:
+    def _chat(self, chat: str, *, first: bool, dies_by: str = "exit 0",
+              ws: str | None = None) -> tuple[str, str]:
         """Open *chat* on this class's server and return its pane id and gate.
 
         The FIRST chat of a workspace starts the session (`layout.session_argv`); every
         later one joins it (`layout.chat_window_argv`). Both are the production builders,
         never a hand-retyped command, so this measures the argv charter really sends.
+
+        *ws* is the workspace — the tmux SESSION's name — and defaults to :data:`WS`,
+        which is what every caller with one workspace to talk about wants.
+
+        **A caller passes its own when a trial has to be independent of the one before
+        it, and #694 is the bill for the version that could not.** `new-session -s <name>`
+        on a name this server is already holding does not join it, it fails: `duplicate
+        session: <name>`, rc 1. A `_HOOK_TRIALS` retry that re-uses one name is therefore
+        a retry that can only ever run in the one situation where that name is still
+        taken — the previous trial's session outliving it is exactly what sent the loop
+        round again. See
+        `ChatsAreWindowsOnOneWorkspaceSession.test_the_last_chats_teardown_still_ends_the_session`.
         """
+        ws = ws or self.WS
         gate = os.path.join(self._gate_dir, f"gate-{chat}")
         argv = _gate_argv(gate, dies_by)
         if first:
             conf = os.path.join(self._gate_dir, f"{chat}.conf")
             Path(conf).write_text(commands_frame._PLACEHOLDER_CONF)
-            cmd = layout.session_argv(session=self.WS, conf=conf, chat=chat,
+            cmd = layout.session_argv(session=ws, conf=conf, chat=chat,
                                       socket=self.SOCKET_NAME, cols=80, rows=24,
                                       harness_argv=argv,
                                       env={"CHARTER_SESSION_ID": chat})
         else:
-            cmd = layout.chat_window_argv(socket=self.SOCKET_NAME, session=self.WS,
+            cmd = layout.chat_window_argv(socket=self.SOCKET_NAME, session=ws,
                                           chat=chat, cwd=self._gate_dir,
                                           harness_argv=argv,
                                           env={"CHARTER_SESSION_ID": chat})
@@ -5430,6 +5508,31 @@ class ChatsAreWindowsOnOneWorkspaceSession(_ChatsOnOneSession, _TmuxServerFixtur
                          "the chat's identity went with its name — reaping would now "
                          "delete a running chat's state")
 
+    def test_a_name_this_server_already_holds_is_refused_a_second_session(self):
+        """The tmux fact the retry below is shaped around, measured rather than assumed.
+
+        `new-session -s <a name this server is already holding>` does not join it, adopt
+        it or replace it: it FAILS — rc 1, `duplicate session: <name>` on stderr, no
+        session created. Identical on tmux 3.7c and on tmux 3.2 (`tmuxctl.FLOOR`).
+
+        Which is why `test_the_last_chats_teardown_still_ends_the_session` gives every
+        `_HOOK_TRIALS` trial a workspace of its own. It used to re-use one name, and the
+        only state that reaches its retry is that name still being held — so the retry ran
+        `new-session` into this refusal and `_chat` reported it as charter declining to
+        open a chat (#694). If a later tmux ever made `new-session -s` idempotent, this
+        goes red and that argument should be re-made rather than inherited.
+        """
+        self._chat(f"{self.WS}.1", first=True)
+        again = self._srv("new-session", "-d", "-s", self.WS)
+        self.assertEqual(again.returncode, 1,
+                         f"this tmux accepted a second session named {self.WS!r} "
+                         f"({again.returncode}, {again.stdout!r})")
+        self.assertIn(f"duplicate session: {self.WS}", again.stderr)
+        self.assertEqual(
+            self._srv("list-sessions", "-F", "#{session_name}").stdout.split().count(
+                self.WS), 1,
+            "tmux refused the second session and made one anyway")
+
     def _arm_the_production_pair(self, pane: str) -> None:
         """Both `pane-died` hooks, in `cmd_launch`'s own order and from its own builders.
 
@@ -5484,14 +5587,35 @@ class ChatsAreWindowsOnOneWorkspaceSession(_ChatsOnOneSession, _TmuxServerFixtur
     def test_the_last_chats_teardown_still_ends_the_session(self):
         """The half that keeps the single-chat case unchanged: killing a session's LAST
         window destroys the session, so `cmd_launch`'s `attach` returns exactly as it did
-        when the teardown said `kill-session`. Measured on tmux 3.7c and tmux 3.2."""
+        when the teardown said `kill-session`. Measured on tmux 3.7c and tmux 3.2.
+
+        **Every trial gets its own workspace, and #694 is what the version that did not
+        cost.** The retry here is #487's — a death tmux never ran the array for measured
+        nothing — and the ONE state that reaches it is the session still standing. Every
+        trial used to open `wsdemo` with `first=True`, so trial 1's `new-session -s
+        wsdemo` ran against a server already holding that name: `duplicate session:
+        wsdemo`, rc 1, and `_chat`'s own `assertEqual(r.returncode, 0, r.stderr)` reporting
+        it as charter's. That is how it FLAKED rather than failed — the retry is entered
+        only by a void, which on a loaded tmux 3.4 is roughly one death in seventeen
+        (:data:`_VoidDeaths._HOOK_TRIALS`), so the collision was unreachable on an idle
+        machine and unmissable on `ubuntu-latest`. A trial that cannot run twice is not a
+        retry; it is a second way to fail.
+
+        The sibling above needs the opposite and already had it: it opens a SECOND chat,
+        so its session must persist across trials and it passes `first=(attempt == 0)`.
+        Here the whole subject is a session with exactly one window in it, so each trial
+        needs one of its own. Named rather than waited for — nothing has to settle,
+        because nothing is being re-used.
+        """
         self._require_pane_died_fires()
         for attempt in range(self._HOOK_TRIALS):
-            chat = f"wsdemo.{attempt}"
-            pane, gate = self._chat(chat, first=True, dies_by="exit 3")
+            # One workspace per trial, and the chat is its first (`.1`, the ordinal
+            # `state.new_chat_id` really starts at).
+            ws, chat = f"{self.WS}{attempt}", f"{self.WS}{attempt}.1"
+            pane, gate = self._chat(chat, first=True, dies_by="exit 3", ws=ws)
             self._arm_the_production_pair(pane)
             self._release(gate)
-            if self._wait_until(lambda: self.WS not in self._srv(
+            if self._wait_until(lambda: ws not in self._srv(
                     "list-sessions", "-F", "#{session_name}").stdout.split()):
                 return
             self._the_array_never_ran(
