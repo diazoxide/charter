@@ -197,6 +197,9 @@ class TheShapeThatWasPublished(ForgeGuardCase):
         self.assertIn("gh issue create", why)
         self.assertIn("substitution", why)
         self.assertIn("--body-file", why)
+        # and it names the spelling it actually saw — a denial that always said `$(…)`
+        # would be describing a command the agent did not write
+        self.assertIn("`\u2026`", why)
 
     def test_the_refusal_says_the_shell_runs_it_before_gh_starts(self) -> None:
         """The mechanism, not the outcome. An agent that reads 'denied: unsafe' learns
@@ -455,6 +458,9 @@ class AMalformedCommandStillGetsAnAnswer(ForgeGuardCase):
         runs the handler as a bare `rc = fn()`, so a raise takes the turn down rather than
         producing a verdict."""
         self.assertIsNone(hooks._live_substitution(None))
+        # and the same contract one level out, where the hot-path filter would be the
+        # thing that raises
+        self.assertIsNone(hooks._forge_substitution_hit(None))
 
     def test_no_input_makes_the_guard_raise(self) -> None:
         for cmd in self.MALFORMED:
@@ -562,6 +568,32 @@ class TheArmsThatOtherArmsWereAnswering(ForgeGuardCase):
         Stripping anyway ends the heredoc early and reads the rest of its own body as
         commands — including a `$(…)` that is inert where it actually sits."""
         self.allowed("gh issue create --body-file - <<'BODY'\n\tBODY\n$(id -un)\nBODY")
+
+    def test_a_backslash_escapes_outside_quotes_too(self) -> None:
+        """`\\`` is a literal backtick wherever it stands, not only inside double quotes.
+
+        Every other escape case in this file sits inside a heredoc body or a double-quoted
+        run, so the main loop's own backslash branch was never the thing answering. Removing
+        it turns an escaped backtick into a live one and refuses a command bash runs
+        literally."""
+        self.allowed("gh issue create --title t --body x\\`y")
+
+    def test_a_bare_dollar_outside_quotes_is_not_a_substitution(self) -> None:
+        """`$HOME` is not `$(`, unquoted just as much as quoted.
+
+        The inert backtick in the title is load-bearing: without a substitution somewhere
+        the hot-path filter answers first and the case proves nothing about the `$` at
+        all."""
+        self.allowed("gh issue create --title 'a `b`' --body $HOME/x")
+
+    def test_a_pending_heredoc_body_is_consumed_at_the_NEWLINE(self) -> None:
+        """A heredoc's body starts on the next line, not at the next character.
+
+        Consuming it the moment a header is seen eats the rest of the header's own line —
+        here a `--title` carrying a live substitution — and an inert (`<<'BODY'`) heredoc
+        never rescans what it swallowed, so the substitution is simply lost. bash runs it."""
+        self.deny_reason("gh issue create --body-file - <<'BODY' --title \"`id -un`\"\n"
+                         "x\nBODY")
 
     def test_a_bare_dollar_does_not_open_an_ansi_c_quotation(self) -> None:
         """`$USER` is not `$'…'`, and reading it as one skips to the next single quote —
