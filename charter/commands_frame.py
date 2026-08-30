@@ -279,12 +279,20 @@ _PANE_PLACE_FORMAT = "#{session_id}\t#{window_id}"
 _WINDOW_ID_FORMAT = "#{window_id}"
 
 #: tmux's own shapes for a session and a window, held to for :data:`_PANE_ID_RE`'s reason
-#: and at its boundary: both come back through text tmux re-parsed, and the session id
-#: goes straight back out as a `-t` target. A format that expanded to nothing — which is
-#: what tmux answers for a target it cannot resolve, with rc **0** and no stderr (measured
-#: on 3.7c) — fails these rather than becoming an empty target, and an empty `-t` resolves
-#: to the CURRENT window, which is the exact shape #668's own last commit closed for
-#: `select-window`.
+#: and at its boundary: both come back through text tmux re-parsed. A format that expanded
+#: to nothing — which is what tmux answers for a target it cannot resolve, with rc **0**
+#: and no stderr (measured on 3.7c) — fails these rather than becoming an empty target,
+#: and an empty `-t` resolves to the CURRENT window, which is the exact shape #668's own
+#: last commit closed for `select-window`.
+#:
+#: **The two are not load-bearing in the same way, and saying which is which is the point
+#: of writing them down separately.** The SESSION id goes straight back out as a `-t`
+#: target (`_session_window`), so its whole alphabet is #475's rule and every part of it
+#: is asserted — the sigil, the digits, and that `$0;kill-server` never reaches a command
+#: line. The WINDOW id is only ever COMPARED, against a reading taken from the same tmux a
+#: moment later, so beyond telling a window id from a session id its strictness decides
+#: nothing that the comparison does not already decide. A sweep that reports `r"@[0-9]+"`
+#: widened to `r".+"` as a survivor is right, and this is the answer to it.
 _SESSION_ID_RE = re.compile(r"\$[0-9]+")
 _WINDOW_ID_RE = re.compile(r"@[0-9]+")
 

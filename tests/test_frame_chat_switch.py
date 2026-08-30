@@ -1080,6 +1080,27 @@ class TheSwitchEstablishesTheWindowItIsMovingTo(PersonaIso, unittest.TestCase):
         self.assertNotIn("select-window", self.fake.verbs())
         self.assertIn("has no window any more", self.said[0])
 
+    def test_a_session_id_that_is_not_tmuxs_own_never_becomes_a_target(self):
+        """#475\'s rule, on the one value of the placement that goes back OUT to tmux.
+
+        `_pane_place`\'s session id is what `_session_window` sends as `-t` afterwards, so
+        its ALPHABET is load-bearing and not decoration — `$0;kill-server` in that position
+        is the shape that already cost this project a `kill-server` armed on every window
+        resize. The window id beside it is only ever compared, which is why its own
+        strictness is not asserted here and its docstring says so.
+
+        Driven through a whole switch as well as through the reader, because the property
+        is "it never reaches tmux", not "the function returned None".
+        """
+        self.fake.place["%2"] = ("$0;kill-server", "@1")
+        self.assertIsNone(commands_frame._pane_place("sock", "%2"))
+        commands_frame.cmd_chat(mock.Mock(chat_id="beta.1", chat="api.1"))
+        for argv in self.fake.calls:
+            self.assertNotIn("$0;kill-server", argv,
+                             "a session id charter did not recognise reached a tmux "
+                             "command line")
+        self.assertIn("has no window any more", self.said[0])
+
     def test_a_placement_that_is_not_two_fields_answers_nothing(self):
         """The reading is `split("\\t")` and a field COUNT rather than a `partition`, and
         that is the deletion sweep's doing: with exactly one separator by construction,
