@@ -2548,7 +2548,8 @@ class _Tabs:
         already answers ``None`` for it. A guard in front of that is a line no input can
         make observable, which is exactly what the deletion sweep reports as a survivor.
         """
-        return None if self._cols.get(col) == self._here else self._cols.get(col)
+        name = self._cols.get(col)
+        return None if name == self._here else name
 
 
 #: The one tab strip this process's bar draws into. See :class:`_Tabs` for why there is
