@@ -40,8 +40,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import cli, commands_frame, doctor, instance
-from charter.frame import overlay, tmuxctl
+from charter.frame import component, overlay, tmuxctl
 from tests import _envguard
+from tests.test_component_providers import CID, ENTRY, MODULE, _SitePackages, _source
 
 
 def _frame(section: dict) -> dict:
@@ -172,6 +173,47 @@ class ARefusedArrangementNamesTheKeyThatDidIt(unittest.TestCase):
                 self.assertEqual(out["components"], [])
                 self.assertTrue(out["components_refused"])
 
+    def test_a_stray_key_is_contained_too_because_toml_keys_can_be_quoted(self):
+        """A bare TOML key cannot hold a newline; a QUOTED one can — `"bg\\nx" = 1` is a
+        legal table key — and this one is interpolated into `doctor`'s hint the same way a
+        value is. The sweep found it uncontained: the `bg` case covered the values and
+        nothing covered the keys."""
+        why = _frame({"component": [{"use": "repos", "bg\n  ✓  frame": 1}]})
+        self.assertTrue(why["components_refused"])
+        self.assertNotIn("\n", why["components_refused"])
+        self.assertNotIn("✓", why["components_refused"])
+
+    def test_a_value_that_is_not_a_string_is_cut_to_a_length_a_row_can_hold(self):
+        """`_component_value`'s other branch. A `pad` holding a four-thousand-element
+        inline array is ordinary TOML and its `str()` is twenty kilobytes; unclipped it
+        goes into a `doctor` hint and a `frame-probe` line whole. `contain.readable`'s
+        limit is what stands between a committed file and a report nobody can read, and
+        the sweep found nothing asserting it on this branch."""
+        why = _frame({"component": [{"use": "repos", "pad": list(range(4000))}]})
+        self.assertTrue(why["components_refused"])
+        self.assertLess(len(why["components_refused"]), 500)
+
+    def test_a_table_with_no_usable_use_is_named_by_its_position(self):
+        """`_component_at`'s other branch. When the broken key IS the `use`, there is no
+        name to quote back and the ordinal is all the operator has to find the table by —
+        counting from 1, because that is how the file reads. The sweep collapsed the
+        conditional and nothing noticed: every other case in this module has a usable
+        `use` for it to fall back on."""
+        why = _frame({"component": [{"use": "identity"}, {"edge": "top"}]})
+        self.assertIn("table 2", why["components_refused"])
+
+    def test_a_hostile_use_never_reaches_the_duplicate_message(self):
+        """The argument that lets the duplicate message interpolate its `use` raw, written
+        as a test rather than left in a comment. `seen` only ever holds an id that
+        completed a whole pass of the loop, so a `use` that needs containing is refused on
+        its FIRST occurrence — by the branch that says no distribution supplies it, not by
+        the one that says it is placed twice. Reorder those and this goes red."""
+        forged = "repos\n  ✓  frame             tmux 3.7"
+        why = _frame({"component": [{"use": forged}, {"use": forged}]})["components_refused"]
+        self.assertIn("no installed distribution supplies it", why)
+        self.assertNotIn("placed twice", why)
+        self.assertNotIn("\n", why)
+
     def test_the_stray_key_named_is_the_first_one_down_the_file(self):
         """`tomllib` hands back keys in the order they were written, and the operator is
         about to go looking for one. Alphabetical was the first spelling and the sweep
@@ -180,6 +222,33 @@ class ARefusedArrangementNamesTheKeyThatDidIt(unittest.TestCase):
         why = _frame({"component": [{"use": "repos", "zzz": 1, "aaa": 2}]})
         self.assertIn("`zzz`", why["components_refused"])
         self.assertNotIn("`aaa`", why["components_refused"])
+
+
+class OneCellIsASizeAndZeroIsNot(unittest.TestCase):
+    """The provider branch's `size < 1`, from both sides.
+
+    Splitting one `or` chain into three sentences made the boundary its own line, and the
+    sweep immediately shifted it: `size <= 1` passed the whole suite, because every case
+    that reached this branch was refused for a different reason first — no installed
+    distribution supplied the id. A boundary only one side of which is exercised is not a
+    boundary that has been tested, so this class installs a real distribution and asks for
+    the smallest size charter will honour as well as the largest it will not.
+    """
+
+    def setUp(self) -> None:
+        _envguard.unset_all()
+        site = _SitePackages(self)
+        site.install("acme-charter", "1.0", {CID: ENTRY}, {MODULE: _source()})
+
+    def test_one_cell_is_placed(self):
+        out = _frame({"component": [{"use": CID, "edge": "right", "size": 1}]})
+        self.assertIsNone(out["components_refused"])
+        self.assertEqual([p["size"] for p in out["components"]], [component.Fixed(1)])
+
+    def test_zero_cells_is_refused_and_says_so(self):
+        why = _frame({"component": [{"use": CID, "edge": "right", "size": 0}]})
+        self.assertEqual(why["components"], [])
+        self.assertIn("`size = 0`", why["components_refused"])
 
 
 class RefusedIsNotTheSameAsUndeclared(unittest.TestCase):

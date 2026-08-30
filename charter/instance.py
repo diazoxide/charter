@@ -1888,9 +1888,27 @@ def component_arrangement(section, *,
                           f"table needs one, and it is a component id rather than a "
                           f"`[frame] slots` word")
         if cid in seen:
-            return None, (f"`use = \"{contain.readable(cid)}\"` is placed twice — a "
-                          f"component sits in one rectangle, so charter has no answer for "
-                          f"the second")
+            # **The one message here that interpolates a committed value RAW, and the
+            # sweep is what forced the argument out into the open.** `[uncontain]` on a
+            # `contain.readable` here survived: nothing could reach this line with a value
+            # that needed containing, which makes the call dead code rather than defence —
+            # and this project's rule is that an equivalent mutant and a dead line are the
+            # same finding.
+            #
+            # Why it cannot be reached: `seen` only ever holds an id that completed a whole
+            # pass of this loop, which means it got past `places()` or
+            # `providers.supplies()`. The first is charter's own four-plus-two constants;
+            # the second is an entry point NAME out of a `.dist-info`, which is INI and
+            # cannot hold a newline. So a `use` needing containment is refused on its FIRST
+            # occurrence and never becomes a duplicate — pinned by
+            # `test_a_hostile_use_never_reaches_the_duplicate_message`.
+            #
+            # What would make it necessary again is a REORDER: move this test above the
+            # two membership branches and the value stops being one that passed them. That
+            # is exactly the "guard whose consequence depends on where another line sits"
+            # shape #553 names, so it is written here rather than left to be rediscovered.
+            return None, (f"`use = \"{cid}\"` is placed twice — a component sits in one "
+                          f"rectangle, so charter has no answer for the second")
         seen.add(cid)
         visible = table.get("visible", True)
         if not isinstance(visible, bool):
