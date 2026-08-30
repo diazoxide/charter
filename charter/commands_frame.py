@@ -4006,9 +4006,19 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
               window_cols: int, window_rows: int) -> dict[str, str]:
     """Make the running frame's panes match *want*, and return the map that resulted.
 
-    Kill what is no longer wanted, split what is newly wanted, re-arm the hooks, re-assert
-    every size. In that order, and each step is here for a measured reason:
+    Dress the window, kill what is no longer wanted, split what is newly wanted, re-arm
+    the hooks, re-assert every size. In that order, and each step is here for a measured
+    reason:
 
+    * **Dress the window first, and unconditionally** (#686, :func:`_dress_window`). What
+      belongs to the WINDOW — `remain-on-exit`, the frame's chrome, #657's rules round the
+      harness — is a property of the frame rather than of a pane being created, and it
+      used to be issued from inside the split below. Behind `if missing:` that meant a
+      re-layout of a frame already holding everything it wants wrote no option at all,
+      which is one `charter claude` away: the second launch selects its own new window and
+      leaves the first's panels alive and recorded, so the first `F2` back has nothing to
+      split. First rather than last because `remain-on-exit` has to be armed ahead of any
+      pane charter creates, and this function creates some further down.
     * **Disarm before killing.** See :func:`_disarm_panel_respawn` — otherwise the panel
       charter just closed comes straight back, one respawn life poorer.
     * **Split off the HARNESS pane, never off a sibling panel.** `_draw_panels` already
@@ -4045,18 +4055,11 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
     # `env=None` throughout: see `_relayout_pane_env` for why a live re-layout has
     # no client environment to decide.
     pane_env = _relayout_pane_env(fid, v)
-    # **Unconditionally, and before anything is killed or split** (#686). What belongs to
-    # the window is a property of the FRAME, not of a pane being created, so it is asserted
-    # on every re-layout rather than only on the ones that happen to add a pane. Behind
-    # `if missing:` — where these calls lived, inside `_split_panels` — a switch into a
-    # chat that still holds every drawable panel wrote no window or pane option at all, and
-    # that chat is one `charter claude` away: the second launch selects its own new window
-    # and leaves the first's panels alive and recorded, so the first `F2` back has nothing
-    # missing. Before the kill loop for `_draw_panels`' reason: `remain-on-exit` is armed
-    # ahead of any pane charter creates, and a re-layout creates panes further down.
-    # It costs the kills nothing — measured on 3.7c, `kill-pane` destroys a pane on a
-    # window with `remain-on-exit on` outright, leaving no corpse: the option decides
-    # what happens when a pane's COMMAND exits, not when tmux is told to close it.
+    # Unconditionally, and above the kill loop — see this function's own first bullet for
+    # both halves of why (#686). Being above it costs the kills nothing: measured on 3.7c,
+    # `kill-pane` destroys a pane on a window with `remain-on-exit on` outright and leaves
+    # no corpse, because that option decides what happens when a pane's COMMAND exits and
+    # not what happens when tmux is told to close it.
     _dress_window(socket, fid=fid, harness_pane=harness_pane, env=None, v=v)
     keep: dict[str, str] = {}
     for slot, pane_id in panels.items():
