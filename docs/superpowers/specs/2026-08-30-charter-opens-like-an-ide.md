@@ -82,7 +82,16 @@ overrides. But **the context gauge only ever draws for Claude Code** —
 `record_harness_session` has exactly one caller, Claude's `statusLine` hook, and Codex and
 opencode both carry a `status-bar` deficit.
 
-**2.9 `.charter/` is already per-machine.** `/.charter/` is gitignored wholesale and holds
+**2.9 A harness's exit is already recorded, per chat, and survives.** `record_exit`
+(`state.py:382`) writes the exit *code* into the chat's own directory, and `clear_shape` wipes
+`density`, `hidden`, `panes`, `session`, `selection` — **not `exit`**. Measured on this plane:
+`.charter/frame/harness-wrapper.2/exit` holds `0`, from the frame the operator killed when they
+restarted. **An earlier draft of this spec claimed charter could not tell a cold chat from a
+dead one and drew both the same. That was wrong, and the correction is richer than the claim:
+never-started, exited-cleanly, and died-with-code-N are all distinguishable and already
+recorded.**
+
+**2.10 `.charter/` is already per-machine.** `/.charter/` is gitignored wholesale and holds
 zero tracked files. The per-machine state this design needs has a home already.
 
 ## 3. The two reversals
@@ -138,10 +147,14 @@ Two states, and the distinction is load-bearing:
 * **open** — has a chat directory that has not been closed. Appears in the bar.
 * **live** — has a running session and harness.
 
-**The bars draw two marks, not three.** Cold (never started this run) and dead (harness
-exited) are the same thing to an operator — nothing is running, touching it starts something —
-and charter cannot reliably distinguish them after the fact. A third mark would be a
-distinction the tool cannot sustain.
+**The bars distinguish three, because charter can (§2.9).** *Live*; *idle* — never started
+this run, or exited cleanly, which are the same thing to an operator and both mean "touch it to
+start"; and *died* — a non-zero exit, which is not the same thing at all and is the one state
+that should reach for the operator's attention.
+
+An earlier draft drew two marks on the grounds that cold and dead were indistinguishable. They
+are not: the exit code is per chat and survives. Drawing a crash as though it were an ordinary
+closed tab is the convincing-empty this project refuses everywhere else.
 
 **tmux is the truth; the file is a hint.** On every paint, open is `(what is on disk) ∪ (live
 sessions)`. A session charter did not record is still open, because it exists. That way the
@@ -188,7 +201,62 @@ running — `inflight` is what the spinner reads. A resumed chat opening with *"
 running when this closed"* is honest; one opening pristine is the convincing-empty this project
 refuses everywhere else.
 
-### 4f. Leaving: detach is the default, quit is a choice
+### 4f. Scrollback: preserve a record, do not fake a session
+
+tmux history dies with the session. `claude --resume` re-renders the *conversation*; it does
+not restore the pane's raw scrollback, and for Codex and opencode it restores nothing at all
+(§2.8). For a design whose headline requirement is *"less invasive"*, losing every visible
+transcript on quit is a hole in the premise — and eight rounds of grilling did not find it.
+
+Quit is the one moment charter knows a pane is about to be destroyed, and
+`tmux capture-pane -p -S -` hands back the whole history.
+
+**On quit, each chat's scrollback is written to its own directory. On reopen it is offered,
+never replayed.** `F2 → chat: previous transcript` opens the captured text; the live pane
+starts clean. Replaying bytes into a pane would present a session that is not running as
+though it were, which is the convincing-empty this project refuses everywhere else — and it
+would put a *previous* run's output above a *new* run's prompt with nothing marking the seam.
+
+This is also the half that works where resume does not: a harness charter cannot resume still
+had a transcript, and that transcript is the whole of what the operator loses.
+
+**Bounded like the chats are** (§4d): the last capture per chat, not a history of them.
+
+### 4g. Activity: a tab that wants you says so
+
+With several workspaces open, an agent finishing in one you are not looking at is invisible.
+That makes multiple-open *worse* than single-open — four more places where something may have
+happened and no signal from any of them. Every surface a modern engineer uses solves this with
+an unread mark, and the reason is the same one.
+
+Charter already has the data: `inflight` is what the panel spinner reads, and the frame already
+knows when a dispatch starts and ends.
+
+**Three marks per tab in the `workspaces` bar** — *working*, *wants you* (something finished
+since you last looked at it), *idle* — plus *died* from §4c, which is the one that should be
+loudest.
+
+**"Since you last looked" is per client and needs no new persistence**: switching into a
+workspace clears its mark, and tmux already knows which session a client is on.
+
+**This belongs in the same change that places the bar, not after it.** Adding it later means
+revisiting the bar's render, its width arithmetic and the state plumbing separately; adding it
+now is a field in something already being written. It is the clearest instance of the
+operator's own rule — *a cheap feature added now is a dear one added later*.
+
+### 4h. Stale is marked, because §4d stopped refreshing it
+
+§4d stops a background workspace's `gather` from scanning. That is right — you are not looking
+at it — but it means the numbers a tab carries can be old, and charter owes the operator a mark
+saying so rather than presenting a stale count as current.
+
+The refresh happens on switch-in. Between backgrounding and that refresh, the workspace's own
+counts are marked stale wherever they are drawn.
+
+This is not a new feature; it is the other half of a decision already taken. Deferring it means
+touching the same renderers twice.
+
+### 4i. Leaving: detach is the default, quit is a choice
 
 **Closing the window detaches.** tmux sessions survive a client leaving, so the common exit
 costs nothing, loses nothing, and needs no resume. This is the whole of "less invasive", and it
@@ -207,27 +275,27 @@ terminal. A terminal that dies detaches, as it always did.
 **`F2 → charter: detach`** exists so that leaving deliberately does not require knowing tmux's
 prefix, which the frame otherwise hides.
 
-### 4g. A harness that exits on its own
+### 4j. A harness that exits on its own
 
 Neither detach nor quit, and the most common ending of all. **The chat becomes a dead tab and
 is kept** — the same state as a cold one (§4c), so it costs nothing new. Closing the workspace
 because one chat ended would be charter deciding the operator is finished when they closed one
 thing.
 
-### 4h. `charter -w foo` opens or focuses
+### 4k. `charter -w foo` opens or focuses
 
 With several workspaces open, an explicit `--workspace` is ambiguous for the first time: "as
 well" or "instead". **Open-or-focus**: if `foo` is live, attach to it; if not, open it and
 leave the others. That is `code <path>`'s behaviour, it never destroys state, and the flag
 means one thing whether or not the workspace happens to be running.
 
-### 4i. What draws first
+### 4l. What draws first
 
 Panels first, harness second. **The bar is what tells the operator the restore worked**, and
 drawing it first makes a slow harness launch legible instead of looking like a hang. Charter
 already separates panel launch from harness launch, so this is ordering rather than machinery.
 
-### 4j. `charter status` learns about open and live
+### 4m. `charter status` learns about open and live
 
 It is the non-frame view of the plane. A `status` reporting "15 workspaces" while five are open
 and one is live is answering a question nobody asked, and two surfaces disagreeing about the
@@ -242,6 +310,10 @@ plane is the kind of thing found six months later.
 * **Two workspaces visible at once.** §4b — that is a different product.
 * **Solve the geometry fight** (§2.4). Two clients on one session still race; this design
   removes the reason to have two rather than making two work.
+* **Restore live scrollback.** §4f preserves a *record* and offers it; the reopened pane starts
+  clean. Nothing here makes a killed session's history scroll again.
+* **Notify outside the frame.** §4g marks a tab that wants you; it does not ring a bell, raise
+  a desktop notification, or reach an operator who is not looking at charter at all.
 
 ## 6. Delivery, in an order that can be stopped between stages
 
@@ -252,7 +324,7 @@ plane is the kind of thing found six months later.
 3. **Open vs live, and the persisted pointer (§4c, §4d).** Includes the reap rule change, which
    is the riskiest single edit here: it inverts a rule three PRs this week depended on.
 4. **Reopen into an existing directory (§4e).** Phase 5's Task 9, with the plane-level framing.
-5. **Detach, quit, and the warning (§4f, §4g).**
+5. **Detach, quit, and the warning (§4i, §4j).**
 6. **Bare `charter` and `[harness] default` (§4a).**
 7. **Place the `workspaces` bar by default (§4b), and `charter status` (§4j).** Last, because
    both are only correct once the states beneath them are real.
