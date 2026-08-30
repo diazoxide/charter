@@ -51,6 +51,23 @@ name: release
 # the check it dropped was the one guarding the irreversible act. Both paths now state
 # the version independently of the file being published and are refused when the two
 # disagree: the tag on one, this input on the other. Neither is skippable.
+#
+# And the retry has to be able to repair a release that half-happened, which until #673 it
+# could not do at all. `announce` is `needs: publish`, so everything that can fail AFTER
+# the irreversible upload sits behind a job PyPI refuses to run twice; the retry re-entered
+# `publish`, was rejected for a version PyPI already had, and `announce` was unreachable on
+# that version forever. `publish` therefore passes `skip-existing` on THIS trigger and only
+# this one — the reasoning is written where the input is set, because it is the one place
+# in this file where re-running an irreversible step changes meaning.
+#
+# Which ref to retry from is a real choice and this file cannot make it. `--ref main` is
+# the one to use when the fix is on main — the #665 shape, where `announce` failed for a
+# reason still true of the tagged tree — and it works only until main's `pyproject.toml`
+# bumps past the version being retried, because `guard` compares the input against the
+# tree it is handed. `--ref v<X.Y.Z>` retries the exact tree that published, which is what
+# you want for a transient failure and what stays available afterwards. Re-pushing a
+# deleted tag is NOT a retry: it arrives here as `push`, gets the strict path, and is
+# refused at the upload — deliberately, see `publish`.
 on:
   push:
     tags: ["v*"]
@@ -228,6 +245,43 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          # ON THE RETRY TRIGGER, AND ONLY THERE (#673).
+          #
+          # A `workflow_dispatch` run is not here to publish. It is here to FINISH a
+          # publish that may already have happened, because `announce` — the job that
+          # creates the GitHub Release — waits on this one. Without this input that retry
+          # re-enters this step, hands PyPI a version it already holds, is rejected, and
+          # `announce` is unreachable on that version forever. The only exit left is the
+          # one `personas/release/persona.md` forbids: writing the Release body by hand,
+          # which forks the published notes from the entry that is their single source.
+          #
+          # "PyPI already holds these files" is the EXPECTED state on that path, not a
+          # fault, and the run cannot check it by comparing bytes either. `docs/news/`
+          # ships inside the sdist, so the #665 recovery — fix the entry, re-dispatch —
+          # rebuilds a different sdist by construction, and `--ref main` picks up whatever
+          # else merged besides. PyPI keeps what it has. That is what makes a version one
+          # immutable thing, and it is the right outcome: this run's business is the
+          # Release, not the artifacts.
+          #
+          # NOT `true`, and the asymmetry is the whole of the decision. On the tag path a
+          # version PyPI already holds has one realistic cause: a tag deleted and re-pushed
+          # over a changed tree with the version not bumped — which is exactly what gets
+          # reached for when a release went wrong. Unconditionally, that run skips every
+          # file, reaches `announce`, finds the Release already there, leaves it as it
+          # stands, and reports GREEN having shipped nothing, while
+          # `pip install charter-cp==<that version>` still serves the old code. Scoped like
+          # this it fails here instead, loudly and correctly: PyPI cannot take the new
+          # bytes, and the answer is a patch version rather than a retry.
+          #
+          # So the discriminator is which trigger asked, because it is the only honest one
+          # available — see above, a legitimate retry rebuilds different bytes, so nothing
+          # in the artifacts distinguishes the two. A third entry under `on:` renders this
+          # `false` and gets the strict path; that is the safe default and
+          # `tests/test_a_half_finished_release_can_be_finished.py` asserts it rather than
+          # trusting it. An `if:` on this step or this job would be the other shape of the
+          # same idea and is refused: a skipped step is a green step, which is #558.
+          skip-existing: ${{ github.event_name == 'workflow_dispatch' }}
 
   announce:
     name: Create the GitHub Release from the shipped news entry
