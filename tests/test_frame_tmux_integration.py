@@ -2042,8 +2042,11 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
     _BAD_SLOT_STDERR = (f"charter panel: unknown slot '{_BAD_SLOT}' "
                         f"(known: {', '.join(sorted(frame_slots.SLOTS))})")
 
-    #: How wide the one-row pane below is. Named because the reason's WRAPPED height is
-    #: derived from it, and a width written twice would let the two drift.
+    #: How wide the one-row pane below is. Narrow on purpose: the 74-column reason has to
+    #: WRAP for the pane's single row to be scrolled away by the write itself, which is the
+    #: fixture's own load-bearing half (see the test's docstring). It is a constant here
+    #: rather than a number in one call because the reason's own length is compared against
+    #: it in prose, and a width written twice would let the two drift.
     _PANE_COLS = 40
 
     #: A pane program that waits for a gate file, prints *stderr text* and exits 2 — the
@@ -2058,7 +2061,11 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
     def _capture(self, target: str, *history: str) -> str:
         """What `capture-pane` reports for *target* — the VISIBLE screen by default,
         which is the whole point: it is what an operator sees without knowing to scroll
-        a one-row pane's history. Pass `"-S", "-<n>"` to look into that history instead."""
+        a one-row pane's history. Pass `"-S", "-"` — the start of the history — to look
+        into that instead. A `"-S", "-<n>"` window is available too and is deliberately
+        not used: how many rows back a thing sits depends on how the RUNNING TMUX chose to
+        draw its own dead-pane marker, which is one row on 3.7c and two at
+        `tmuxctl.FLOOR` (#718)."""
         return _tmux("capture-pane", "-p", *history, "-t", target).stdout
 
     def _dead(self, target: str) -> str:
@@ -2230,15 +2237,24 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
                          "a pane that small no longer loses a newline-terminated write, "
                          "so `panel._hold` is solving a problem that no longer exists: "
                          f"{visible!r}")
-        # One row deeper than the reason's own wrapped height. `-3` today, exactly as it
-        # was written by hand — but DERIVED, because the reason names every key of
-        # `frame_slots.SLOTS` and therefore grows whenever charter ships a slot. Measured
-        # while `changes` was briefly a slot: the sentence went from two wrapped rows to
-        # three, this history window stopped reaching the row carrying the slot name, and
-        # the case went red for the LENGTH of a message rather than for the property it
-        # is named for. That is the failure this arithmetic removes.
-        depth = -(-len(self._BAD_SLOT_STDERR) // self._PANE_COLS) + 1
-        with_history = self._capture("panel-oldshape", "-S", f"-{depth}")
+        # **The WHOLE history, and the depth arithmetic that used to be here is gone**
+        # (#718). That line read `-(-len(reason) // cols) + 1`: the reason's own wrapped
+        # height, DERIVED because the sentence names every key of `frame_slots.SLOTS` and
+        # grows whenever charter ships a slot — plus one row for tmux's `Pane is dead (…)`
+        # marker. The derived half was right and is the reason this comment existed; the
+        # `+ 1` was a hard-coded constant that is not a constant at all but a tmux
+        # RENDERING decision. Measured, same program, same 40-column pane: 3.7c truncates
+        # `Pane is dead (status 0, <date>)` to the pane's width and spends ONE row, while
+        # tmux 3.2 wraps it onto TWO — so `-3` reached the slot name on 3.7c and stopped
+        # one row short of it on the floor, and the case went red for how another program
+        # draws its own text.
+        #
+        # `-S -` is the start of the pane's history (rc 0 on 3.7c and on `tmuxctl.FLOOR`,
+        # measured), and it removes the question rather than re-tuning the number for one
+        # more tmux. Nothing here needed the bound: the assertion below is that the reason
+        # REACHED the pane at all — the "it is one row up" claim belongs to the visible
+        # capture above, which is where it is made.
+        with_history = self._capture("panel-oldshape", "-S", "-")
         self.assertIn(self._BAD_SLOT, with_history,
                       "the reason never reached the pane AT ALL — that is a different "
                       "failure from the one #382 fixes, and `_hold` would not cure it: "
