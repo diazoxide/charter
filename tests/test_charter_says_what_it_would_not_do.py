@@ -121,6 +121,66 @@ class ARefusedArrangementNamesTheKeyThatDidIt(unittest.TestCase):
         self.assertNotIn("\n", why["components_refused"])
         self.assertIn("\\u000a", why["components_refused"])
 
+    def test_a_hostile_use_is_contained_on_both_paths_that_print_it(self):
+        """The `use` reaches the report twice and the two are different lines of code:
+        `_component_at` names the table a refusal is about, and the provider branch names
+        an id no distribution supplies. The deletion sweep found BOTH uncontained — a
+        `bg` with a newline was pinned and a `use` with one was not, so the guard rested on
+        the value the test happened to pick.
+
+        A `use` is the likelier of the two, at that: it is the key an operator writing an
+        arrangement types first, and `frame/component.py`'s own `_ID_RE` docstring records
+        what a committed name that reaches tmux already cost once."""
+        forged = "repos\n  ✓  frame             tmux 3.7"
+        # `_component_at`: the id is good enough to be named, and a LATER key is refused.
+        by_at = _frame({"component": [{"use": forged, "bg": "midnight"}]})
+        # The provider branch: the id itself is what nothing supplies.
+        by_provider = _frame({"component": [{"use": forged, "edge": "top", "size": 1}]})
+        for name, out in (("_component_at", by_at), ("provider branch", by_provider)):
+            with self.subTest(name):
+                why = out["components_refused"]
+                self.assertTrue(why)
+                self.assertNotIn("\n", why)
+                self.assertNotIn("✓", why)
+
+    def test_a_value_is_quoted_the_way_its_own_file_spells_it(self):
+        """`bg = "midnight"` is what is in the file; `bg = midnight` matches nothing an
+        operator can search for. The quotes are a string's and only a string's — a `pad =
+        99` that came back `pad = "99"` would send them looking for a line they did not
+        write. The sweep found the branch unpinned: nothing failed when
+        `contain.readable(value)` became the answer for both."""
+        quoted = _frame({"component": [{"use": "repos", "bg": "midnight"}]})
+        bare = _frame({"component": [{"use": "repos", "pad": 99}]})
+        self.assertIn('`bg = "midnight"`', quoted["components_refused"])
+        self.assertIn("`pad = 99`", bare["components_refused"])
+
+    def test_a_use_charter_cannot_hash_is_refused_rather_than_raised(self):
+        """**The one refusal here whose consequence is not a sentence.** `use = ["repos"]`
+        and `use = {a = 1}` are both ordinary TOML, and both are unhashable — so without
+        the `isinstance(cid, str)` line, `cid in seen` raises `TypeError` out of a function
+        `config.derive` resolves OUTSIDE its try/except. That does not degrade to the
+        default frame: it takes down `import charter.config`, and with it `charter
+        --version` and every other command on that clone. The same cost this function's
+        docstring already records for `Fixed`.
+
+        Written because the sweep dropped that guard and stayed green: a hashable non-str
+        `use` falls through to the provider branch and is refused there anyway, so the
+        line looked like it merely chose which sentence came back."""
+        for value in (["repos"], {"a": 1}, {1, 2}):
+            with self.subTest(repr(value)):
+                out = _frame({"component": [{"use": value}]})
+                self.assertEqual(out["components"], [])
+                self.assertTrue(out["components_refused"])
+
+    def test_the_stray_key_named_is_the_first_one_down_the_file(self):
+        """`tomllib` hands back keys in the order they were written, and the operator is
+        about to go looking for one. Alphabetical was the first spelling and the sweep
+        found `sorted` and `list` indistinguishable — asked again from the operator's side,
+        file order is also the better answer."""
+        why = _frame({"component": [{"use": "repos", "zzz": 1, "aaa": 2}]})
+        self.assertIn("`zzz`", why["components_refused"])
+        self.assertNotIn("`aaa`", why["components_refused"])
+
 
 class RefusedIsNotTheSameAsUndeclared(unittest.TestCase):
     """The half of #738 that keeps it from becoming #371.

@@ -1857,7 +1857,14 @@ def component_arrangement(section, *,
         if not isinstance(table, dict):
             return None, (f"the entry {_component_at(None, n)} is "
                           f"{_component_value(table)} rather than a table of keys")
-        stray = sorted(str(k) for k in table if k not in FRAME_COMPONENT_FIELDS)
+        # **File order, not sorted, and the sweep is what settled it.** Alphabetical was
+        # the first spelling and `[swap-synonym] sorted -> list` survived it: no test could
+        # tell the two apart, which is the sweep's definition of a line that earns nothing.
+        # Asked again from the operator's side, file order is also the better answer — a
+        # `dict` from `tomllib` preserves the order the keys were written in, so the key
+        # this names is the first misspelt one going down their own file rather than the
+        # one that happens to sort first.
+        stray = [str(k) for k in table if k not in FRAME_COMPONENT_FIELDS]
         if stray:
             # Named one at a time and not "has unknown keys": a misspelt key is the
             # commonest way into this whole function, and the operator's next move is to
@@ -1867,6 +1874,15 @@ def component_arrangement(section, *,
                           f"{_component_at(table.get('use'), n)} is not a "
                           f"`[[frame.component]]` key — the whole form is {form}")
         cid = table.get("use")
+        # **This one is not only a message, and the sweep is why that is written down.**
+        # `[drop-if]` survived here, because a non-str `use` that IS hashable falls through
+        # to the provider branch and is refused there anyway — so the guard looked like it
+        # only chose which sentence came back. An UNHASHABLE one does not: `component = [{
+        # use = ["identity"] }]` is four keystrokes of TOML, and without this line
+        # `cid in seen` raises `TypeError: unhashable type` out of a function
+        # `config.derive` resolves OUTSIDE its try/except — taking down `import
+        # charter.config`, and with it `charter --version` and every other command on that
+        # clone. Exactly the cost this function's docstring already records for `Fixed`.
         if not isinstance(cid, str):
             return None, (f"no `use` names a component {_component_at(None, n)} — every "
                           f"table needs one, and it is a component id rather than a "
