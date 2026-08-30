@@ -128,3 +128,17 @@ key = "F7"
 # Track main instead of the last release. `charter update` installs straight from git;
 # nothing is published, and PEP 610 gives `charter --version` the exact commit.
 channel = "dev"
+
+[harness]
+# Bare `charter` opens the frame with this harness — the same command as `charter
+# claude`, which still works and is what this expands to. Claude Code and not one of the
+# other two, and the reason is not preference: it is the only harness that writes its
+# session id where charter can read it (`state.record_harness_session`, whose one caller
+# is Claude Code's own `statusLine` hook), so it is the only one with a context gauge in
+# the top bar. codex and opencode both carry a `status-bar` deficit saying charter cannot
+# render into their chrome at all.
+#
+# A plane that writes no default keeps argparse's usage message, which is what charter does
+# for every plane but this one. And `charter 2>&1 | head` still prints that usage rather
+# than exec-ing the harness: a script probing for charter must not start a session.
+default = "claude"
