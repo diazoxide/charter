@@ -12,9 +12,13 @@ echo a number charter had already declared, and since `repos` declares no number
 Four claims are pinned here, and they are separable on purpose:
 
 * **the config boundary** decides which built-ins may carry a `size` that means
-  something, and `repos` is the only one — every other placed built-in is `Fixed` in its
-  own declaration, `layout` derives that into `SLOT_SIZE` at import, and a per-plane
-  number there could only be ignored;
+  something, and the question it asks is *is this number READ at launch* — every built-in
+  charter PLACES by default is `Fixed` in its own declaration, `layout` derives that into
+  `SLOT_SIZE` at import, and a per-plane number there could only be ignored. #687 corrects
+  the earlier form of that sentence, which said "every other placed built-in is `Fixed`"
+  and was read as being about every built-in: `chats` and `workspaces` are placeable and
+  are not PLACED, so nothing derives their geometry and `layout._placed_here` reads their
+  committed number on every launch;
 * **the arithmetic** replaces the CONTENT term and leaves the floor and the cap alone, so
   the harness keeps `layout.HARNESS_MIN_ROWS` however large a number was committed —
   measured on tmux 3.7c, an over-large `-y` is not refused, it is granted out of the
@@ -85,12 +89,25 @@ class TheConfigBoundaryDecidesWhichBuiltInsMayCarryASize(unittest.TestCase):
     """A committed number is honoured exactly where something reads it.
 
     Not "on the components charter feels like allowing it on": the rule is mechanical and
-    is the same one `edge` already keeps. `layout._derive` turns each component's declared
-    size into `SLOT_SIZE` once, at import, and `_size_of` answers `top`, `bottom` and
-    `right` out of that table forever after — so a number on those three has nowhere to be
-    read. `repos` is `Content()`, which never enters that table: `slot_sizes` routes it to
-    `repos_rows`, which is handed the resolved arrangement's number at every launch and
-    again on every `window-resized` (`commands_frame._slot_sizes`).
+    is the same one `edge` already keeps. `layout._derive` turns each PLACED component's
+    declared size into `SLOT_SIZE` once, at import, and `_size_of` answers `top`, `bottom`
+    and `right` out of that table forever after — so a number on those three has nowhere to
+    be read. `repos` is `Content()`, which never enters that table as more than a floor:
+    `slot_sizes` routes it to `repos_rows`, which is handed the resolved arrangement's
+    number at every launch and again on every `window-resized`
+    (`commands_frame._slot_sizes`).
+
+    **#687: `is it read` and `what policy did it declare` are two questions, and the
+    boundary was asking the second.** `chats` and `workspaces` declare `Fixed(1)` and took
+    the echo branch on the reasoning quoted above — which is measurably false for them:
+    charter places neither by default, so neither is in `layout._PLACED`, neither enters
+    `SLOT_SIZE`, and `_size_of` answers them out of `_placed_here` → `_policy_cells`, a
+    live read of the committed number on every launch. `size = 2` on a chat bar was
+    refused on the grounds that it could only be ignored, and refusing it took the
+    operator's ENTIRE arrangement out of play (#535) in silence. The condition is
+    membership of `builtins.SLOT_OF` now, and
+    `test_the_table_the_boundary_asks_is_the_table_the_launch_path_reads` is the assertion
+    that the cheap question and the expensive one have the same answer.
     """
 
     def test_the_repo_table_resolves_a_committed_size_to_a_fixed_policy(self):
@@ -140,6 +157,83 @@ class TheConfigBoundaryDecidesWhichBuiltInsMayCarryASize(unittest.TestCase):
                                  [component.Fixed(echo)])
                 self.assertIsNone(instance.component_tables(
                     {"component": [{"use": use, "size": other}]}))
+
+    def test_the_table_the_boundary_asks_is_the_table_the_launch_path_reads(self):
+        """#687's load-bearing link, asserted rather than assumed.
+
+        `_built_in_size` decides on ``c.id in builtins.SLOT_OF``, and the property it is
+        deciding about is *is this component's slot in `layout.SLOT_SIZE`* — the table
+        that makes a committed number unreadable. They are the same set because
+        `layout._PLACED` is filtered by `SLOT_OF` and `_derive` keys the table off it,
+        and that is exactly the kind of two-step nobody re-checks.
+
+        `instance` reads the cheap one deliberately: it is imported by every command and
+        must not reach `frame/layout.py` at module scope (`FRAME_PANE_PAD_MAX`'s note
+        makes the same trade). This is the test that keeps the trade honest — split the
+        two and it goes red here rather than in an operator's frame.
+        """
+        for c in builtins.build().all():
+            with self.subTest(component=c.id):
+                self.assertEqual(
+                    c.id in builtins.SLOT_OF,
+                    builtins.SLOT_OF.get(c.id, c.id) in layout.SLOT_SIZE,
+                    f"`{c.id}` is in one of SLOT_OF/SLOT_SIZE and not the other, so "
+                    "`instance._built_in_size` is now asking a different question from "
+                    "the one `layout._size_of` answers.")
+
+    def test_a_bar_charter_derives_no_geometry_for_takes_the_height_it_is_given(self):
+        """#687. The two bars are `Fixed(1)` and are placeable only from a
+        `[[frame.component]]` table, so charter places neither and `layout` derives
+        nothing for either — their height is read off the resolved arrangement at every
+        launch, exactly like the repo table's pin.
+
+        The echo is asserted beside the non-echo for the same reason it is above: a
+        boundary that accepted everything would pass a test that only tried `3`.
+        """
+        for use in ("chats", "workspaces"):
+            for n in (1, 2, 3, 12):
+                with self.subTest(use=use, n=n):
+                    kept = instance.component_tables(
+                        {"component": [{"use": use, "edge": "top", "size": n}]})
+                    self.assertIsNotNone(
+                        kept, f"`size = {n}` on `{use}` took the whole arrangement out of "
+                        "play (#535) — and #687 measured that the number IS read: "
+                        "`layout._placed_here` hands it to `split-window -l`.")
+                    self.assertEqual([p["size"] for p in kept], [component.Fixed(n)])
+
+    def test_a_bar_still_refuses_a_value_that_is_not_a_number_of_cells(self):
+        """Widening which built-ins may carry a number is not widening what a number is.
+
+        `Fixed` is asked rather than re-checked, so `0`, a negative, a `bool`, a string
+        and a float are refused by `component.cells` — the one place that rule is written.
+        `True` is in the list because ``True == 1`` and both bars declare `Fixed(1)`: the
+        branch that once compared it away is gone, and `Fixed` has to be the thing that
+        catches it now."""
+        for value in (0, -1, True, False, "3", 3.0, [3]):
+            with self.subTest(value=value):
+                self.assertIsNone(instance.component_tables(
+                    {"component": [{"use": "chats", "edge": "top", "size": value}]}))
+
+    def test_the_height_a_bar_carries_reaches_split_window(self):
+        """The refusal was argued from the launch path, so the launch path is where the
+        acceptance is checked — not at the boundary that resolved it.
+
+        This is the measurement #687 filed: `_size_of` misses `SLOT_SIZE`, falls through
+        to `_placed_here` → `_policy_cells`, and `slot_sizes` hands the number to tmux as
+        `-l`. A committed `3` that stopped at the placement would be the inert value the
+        whole form is written against."""
+        tables = [{"use": u} for u in ("identity", "attention", "repos", "sidebar")]
+        tables.append({"use": "chats", "edge": "top", "size": 3})
+        frame = instance.frame_of({"frame": {"component": tables}})
+        self.assertIn("chats", frame["slots"])
+        with mock.patch.dict(config.FRAME, frame):
+            self.assertEqual(layout._size_of("chats"), 3)
+            sizes = layout.slot_sizes(frame["slots"], window_rows=48, content_rows=4)
+            self.assertEqual(sizes["chats"], 3)
+            argvs = layout.panel_argvs(slots=frame["slots"], session="s", socket="k",
+                                       harness_pane="%1", sizes=sizes)
+            bar, = [a for a in argvs if "chats" in a]
+            self.assertEqual(bar[bar.index("-l") + 1], "3")
 
     def test_a_component_with_no_number_to_echo_is_refused_rather_than_raising(self):
         """The third size policy, asked of the one component that really has it.

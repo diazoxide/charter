@@ -1135,15 +1135,151 @@ class TheDocumentedExampleIsRunThroughCharter(unittest.TestCase):
         self.assertIn("`bright` forms", md)
 
 
-#: Every bound `docs/frame.md` writes as a range, in the two spellings the file uses:
-#: `` `0` to `5` `` and the dash form `` `0`–`5` ``. Version numbers (tmux `3.2` to `3.6`)
-#: are dotted and are deliberately not matched — a range in this file is a range of cells,
-#: which is a thing charter enforces, and that is what may not drift.
-_STATED_RANGE = re.compile(r"`(\d+)`\s*(?:to|through|[-–—])\s*`(\d+)`")
+class EveryDocumentedArrangementIsAWholeArrangement(unittest.TestCase):
+    """#690. **`[[frame.component]]` REPLACES the arrangement, so a snippet that lists one
+    table is an instruction to turn everything else off.**
+
+    The reported one was the chat bar: *"Turn one on with a `[[frame.component]]` table"*
+    over a fence naming `chats` and nothing else. Pasted into a plane's `charter.toml`,
+    that resolves to a frame whose entire contents are the chat bar — no identity row, no
+    attention strip, no repo table, no sidebar — because a component list is the whole
+    arrangement (`instance.component_tables`) and not an addition to the shipped one. The
+    caveat existed, seven hundred lines further down in the toggle-keys section, which is
+    not where the reader is being told to write the table.
+
+    The property asked here is the operator's, not the prose's: **paste any fence in this
+    file and you still have charter's four panels.** A sentence of warning above the fence
+    would fix the report and could not be checked, because a reader who stops at the code
+    block never reads it; a fence that lists the whole arrangement cannot be misread and
+    is exactly what this asserts.
+
+    Related and asserted together: #687 — a `size` charter refuses on ANY table in the
+    list takes the whole arrangement out of play in silence, so a documented number is
+    checked here by resolving it, not by reading it.
+    """
+
+    MD = Path(__file__).resolve().parents[1] / "docs" / "frame.md"
+
+    #: Charter's own four, in the vocabulary `use` speaks. Written out rather than read
+    #: from `builtins.SLOT_OF` on purpose: this is what the DOCUMENTATION must show an
+    #: operator, and a fifth built-in becoming placeable by default is a documentation
+    #: change, not something this test should absorb silently.
+    SHIPPED = ("identity", "attention", "repos", "sidebar")
+
+    def _fences(self) -> list[tuple[int, str]]:
+        """Every ```toml fence in `docs/frame.md` that writes a component table, with the
+        line it starts on so a failure says where to look."""
+        md = self.MD.read_text()
+        return [(md[:m.start()].count("\n") + 1, m.group(1))
+                for m in re.finditer(r"```toml\n(.*?)```", md, re.S)
+                if "[[frame.component]]" in m.group(1)]
+
+    def test_the_documentation_carries_arrangements_to_check(self):
+        """The vacuity control: both loops below pass on a file with no examples in it,
+        and a snippet quietly deleted is exactly how this check would stop meaning
+        anything."""
+        self.assertGreaterEqual(len(self._fences()), 7,
+                                "docs/frame.md lost `[[frame.component]]` examples")
+
+    def test_every_documented_arrangement_lists_charters_own_four(self):
+        """#690 itself. Asked of every fence, because the reported one was not special —
+        it was the first of four partial lists in the file."""
+        for line, body in self._fences():
+            import tomllib
+            uses = [t.get("use")
+                    for t in tomllib.loads(body)["frame"]["component"]]
+            with self.subTest(line=line):
+                missing = [c for c in self.SHIPPED if c not in uses]
+                self.assertEqual(
+                    missing, [], f"docs/frame.md:{line} shows a `[[frame.component]]` "
+                    f"arrangement that omits {missing}. An operator who pastes it turns "
+                    f"those panels OFF — the list replaces the frame rather than adding "
+                    f"to it — and the frame they get is {uses}.")
+
+    def test_every_arrangement_of_charters_own_resolves_to_what_it_shows(self):
+        """Stronger than reading the fence: resolved through the real `instance.frame_of`,
+        so a documented `size`, `bg`, `pad`, `edge` or `key` charter would refuse is red
+        here rather than in an operator's terminal.
+
+        A refusal is what makes this worth running. `component_tables` refuses an
+        arrangement WHOLE (#535) and says nothing about it (`instance.py`'s `_HOTKEY_RE`
+        note), so a documented number charter cannot honour does not cost the reader the
+        line they got wrong — it costs them every panel in the file.
+
+        Fences naming a component no installed distribution supplies are skipped: the
+        provider example is about a package that does not exist on this machine, and
+        `frame_of` is right to refuse it. Its SHAPE is still checked by the test above.
+        """
+        import tomllib
+
+        from charter.frame import builtins as _builtins
+        ours = {c.id for c in _builtins.build().all()}
+        checked = 0
+        for line, body in self._fences():
+            cfg = tomllib.loads(body)
+            uses = [t.get("use") for t in cfg["frame"]["component"]]
+            if not set(uses) <= ours:
+                continue
+            checked += 1
+            with self.subTest(line=line):
+                got = [p["use"] for p in instance.frame_of(cfg)["components"]]
+                self.assertEqual(
+                    got, uses, f"docs/frame.md:{line} does not resolve to the arrangement "
+                    f"it prints. An empty list here means charter REFUSED the whole thing "
+                    f"and fell back to `slots`, which is what an operator pasting it would "
+                    f"silently get.")
+        self.assertGreaterEqual(checked, 6, "nothing was resolved — the skip ate the loop")
+
+
+#: A number written as a number of CELLS, and not a component of a version.
+#:
+#: The distinction is the one that matters, and it is a property rather than a markup
+#: spelling: ``3.2`` and ``3.7c`` are tmux versions this file names constantly, and a
+#: digit with a decimal point and another digit on the far side of it is one of those.
+#: Everything else — `` `5` ``, ``5``, ``5.`` at the end of a sentence, ``5,`` in a list —
+#: is a count, and is held to `instance.pane_pad`.
+#:
+#: The two negative lookaheads are not one lookahead, and the lookbehinds mirror them.
+#: ``(?![.\d])`` — which is what #675 shipped inside its backtick-anchored reader —
+#: refuses a number followed by ANY dot, so it silently skips every number that ends a
+#: sentence: "The maximum `pad` is 12." was invisible to it. ``(?!\.\d)`` refuses only a
+#: dot with a digit after it, which is what "this is a version" actually means; ``(?!\d)``
+#: is separately what stops `12` being read out of `120`.
+_CELL_COUNT = r"(?<!\d)(?<!\d\.)(\d+)(?!\d)(?!\.\d)"
+
+#: A bound written as a RANGE, in every spelling this file could plausibly use, with the
+#: backticks OPTIONAL. #689: the backticks were the whole match before, so the same
+#: sentence #669 filed — "a `pad` outside `0`-`8` is refused" — went green the moment its
+#: digits were written bare. Markup is not the property; the pair of numbers is.
+_STATED_RANGE = re.compile(
+    r"(?:(?P<between>between)\s+)?`?" + _CELL_COUNT + r"`?\s*"
+    r"(?:(?(between)and|(?!))|to|through|[-–—])\s*`?" + _CELL_COUNT + r"`?")
+
+#: `pad`, `pads`, `padded`, `padding` — the word, in the forms prose actually uses, and
+#: NOT the literal `` `pad` ``. The leading lookbehind is what keeps ``trackpad`` (which
+#: this file says once, about mouse wheels) out of the reader's scope.
+_PAD_WORD = re.compile(r"(?<![A-Za-z])pad(?:s|ded|ding)?(?![A-Za-z])", re.I)
+
+_NUMBER = re.compile(_CELL_COUNT)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+_FENCE = re.compile(r"```.*?```", re.S)
+_HEADING = re.compile(r"(?m)^#{1,6} .*$")
+
+
+def prose_of(md: str) -> str:
+    """*md* with its fenced blocks and its headings taken out.
+
+    Fences go because `TheDocumentedExampleIsRunThroughCharter` and
+    `EveryDocumentedArrangementIsAWholeArrangement` put every one of them through
+    `instance.frame_of` itself, which is a stronger question than any reader of English.
+    Headings go so that flattening the file cannot glue a heading to the sentence under it.
+    """
+    return _HEADING.sub("", _FENCE.sub("", md))
 
 
 def stated_ranges(prose: str) -> list[tuple[int, int]]:
-    """**Every** range *prose* states — not the first one, and not whether one exists.
+    """**Every** range of cells *prose* states — not the first one, and not whether one
+    exists.
 
     That distinction is the whole of #669. `docs/frame.md` gave `pad` two ranges four
     hundred lines apart — `` `0` to `5` `` and `` `0`–`8` `` — and the test asked
@@ -1151,8 +1287,131 @@ def stated_ranges(prose: str) -> list[tuple[int, int]]:
     An assertion that one occurrence exists cannot see a second, wrong one; the wrong one
     was the sentence about refusal, so `pad = 6` on the documentation's word silently cost
     the operator their whole `[[frame.component]]` block.
+
+    Unscoped on purpose: a range of bare cell counts is a thing this file states about
+    `pad` and about nothing else, so the reader does not have to work out what a sentence
+    is about before it can hold the pair to the constant. A second such bound arriving is
+    a reason to teach this function the second constant.
     """
-    return [(int(a), int(b)) for a, b in _STATED_RANGE.findall(prose)]
+    return [(int(m.group(2)), int(m.group(3)))
+            for m in _STATED_RANGE.finditer(" ".join(prose.split()))]
+
+
+def pad_numbers(prose: str) -> list[tuple[int, str]]:
+    """Every cell count *prose* offers as a `pad`, with the text it was read out of.
+
+    **Scope is the property "this text is about `pad`", and it is two readings unioned**,
+    because #689 is what one narrow reading costs. #675 scoped this to *a sentence
+    containing the literal* `` `pad` ``, so "A pane may carry a `pad`. Charter caps it at
+    `12`." was green: the number and the word were one sentence apart.
+
+    * **the paragraph** that names a `pad` word — the document's own unit of topic, so a
+      bound stated five sentences below the word is still in reach;
+    * **one sentence either side** of each `pad` word, over the file FLATTENED — so a
+      bound stated in the paragraph after the one that names the key is in reach too.
+
+    **What this cannot catch, said plainly rather than implied away.** No reader of English
+    prose is complete, and these are the shapes that get past this one:
+
+    * a bound written in WORDS — "charter caps a `pad` at twelve" has no integer in it;
+    * a bound more than one sentence from any form of the word `pad`, in a paragraph that
+      never says it — "the inset ceiling is 12", alone, under a heading about insets;
+    * anything inside a fenced block, which `prose_of` removes — those are resolved
+      through `instance.frame_of` instead, which is stricter than this;
+    * a wrong bound stated somewhere other than `docs/frame.md`.
+
+    `TheReaderIsAttackedWithTheSpellingsThatBeatTheLastOne` runs the corpus that IS in
+    reach, and `test_the_shapes_this_reader_is_blind_to_are_the_ones_written_down` runs
+    the ones that are not, so both halves of that claim are measured rather than asserted.
+
+    **The cost, accepted knowingly.** Scoping by proximity instead of by markup means an
+    incidental integer near a `pad` sentence is a false red. `docs/frame.md` carries none
+    today (measured), and the rule it puts on the file is writable: an incidental number
+    beside the `pad` prose is spelled in words or moved. The judgement #689 named is that
+    this noise is cheaper than a reader that misses the sentence #669 was filed about.
+    """
+    scoped: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", prose):
+        flat = " ".join(paragraph.split())
+        if flat and _PAD_WORD.search(flat):
+            scoped.append(flat)
+    sentences = _SENTENCE.split(" ".join(prose.split()))
+    near = {i + offset
+            for i, s in enumerate(sentences) if _PAD_WORD.search(s)
+            for offset in (-1, 0, 1)}
+    scoped += [sentences[i] for i in sorted(near) if 0 <= i < len(sentences)]
+    # One entry per NUMBER, quoting the shortest text it was found in: the two readings
+    # overlap by design — a sentence is inside its paragraph — and a caller wants the
+    # number once, with the tightest quotation of where it came from for its message.
+    where: dict[int, str] = {}
+    for text in scoped:
+        for n in (int(x) for x in _NUMBER.findall(text)):
+            if n not in where or len(text) < len(where[n]):
+                where[n] = text
+    return sorted(where.items())
+
+
+#: Restatements of the `pad` bound, one per plausible spelling, with the number left as a
+#: hole. **This tuple is the attack, kept as data so the next person inherits it rather
+#: than repeating it.**
+#:
+#: #689 was measured by appending restatements of a WRONG bound to `docs/frame.md` and
+#: watching the suite stay green. Three of these are that reviewer's own three, verbatim;
+#: the rest are the same defect in the spellings a documentation edit would plausibly
+#: reach for. Each one is run twice — with `FRAME_PANE_PAD_MAX` in the hole, where it must
+#: be GREEN, and with a number charter refuses, where it must be RED — because a reader
+#: that fails everything catches nothing.
+#:
+#: Adding a spelling here is the cheap half of a fix. If one arrives that neither reader
+#: catches, widen the reader; if it cannot be widened without noise, add it to
+#: `_OUT_OF_REACH` instead, so the gap is written down rather than absent.
+_BOUND_RESTATEMENTS = (
+    # The three from #689's own reproduction table.
+    "The `pad` key insets a pane's content. Values from 0 to {n} are accepted.",
+    "A pane may carry a `pad`. Charter caps it at `{n}`.",
+    "Any `pad` outside 0-{n} refuses the whole arrangement.",
+    # #669's own refusal sentence, in the spelling that was caught and the two that were not.
+    "A `pad` outside `0`-`{n}` is refused.",
+    "A `pad` outside `0`–`{n}` is refused.",
+    "a pad outside 0 to {n} is refused",
+    # A cap rather than a range — the phrasing #675 claimed was already red.
+    "pad is capped at {n}",
+    "The maximum `pad` is {n}.",
+    "The pad ceiling is {n}.",
+    "Charter refuses a `pad` over {n}.",
+    "Padding is limited to {n} cells.",
+    "A padded pane may inset by as much as {n} cells.",
+    # The same bound one paragraph away from the word, which sentence scope cannot see.
+    "A pane may carry a `pad`.\n\nCharter caps it at `{n}`.",
+    # And the same bound several sentences BELOW the word inside one paragraph, which the
+    # sentence window cannot see either. This is the line the paragraph reading exists
+    # for: delete that reading and every other line here is still caught.
+    ("A pane may carry a `pad`. It is one number, and it means both sides. "
+     "It comes out of the pane's own width rather than your terminal's. "
+     "Charter caps it at `{n}`."),
+    # Range spellings this file does not use today but an edit could.
+    "`pad` accepts `0` through `{n}`.",
+    "A `pad` between 0 and {n} is honoured.",
+    "Pads run 0—{n}.",
+    # Not a sentence at all.
+    "| `pad` | `0` to `{n}` | how many cells |",
+    "`pad = {n}` is accepted.",
+    "Give the sidebar a `pad` of {n}.",
+)
+
+#: The shapes neither reader catches, kept as data for the same reason the corpus above
+#: is: a limit that is measured cannot quietly stop being true, and a guard that overstates
+#: its reach is the thing this project refuses.
+#:
+#: If a line here starts being caught — because someone widened `pad_numbers` — the test
+#: that runs it goes RED. That is the intended signal, and the fix is to move the line up
+#: into `_BOUND_RESTATEMENTS`, not to re-narrow the reader.
+_OUT_OF_REACH = (
+    # A bound spelled in words has no integer for any of this to hold to the constant.
+    "Charter caps a `pad` at twelve.",
+    # A bound in a paragraph that never names the key, more than one sentence from one.
+    "The inset ceiling is {n}. It is not a round number. It was picked to fit.",
+)
 
 
 class EveryStatementOfThePadBoundIsHeldToTheConstant(unittest.TestCase):
@@ -1180,13 +1439,51 @@ class EveryStatementOfThePadBoundIsHeldToTheConstant(unittest.TestCase):
                 "… and so are a `bg` that is not one of the seventeen words, a `pad` "
                 "outside `0`–`8`, and a `size` charter cannot give the component")
         self.assertEqual(stated_ranges(both), [(0, 5), (0, 8)])
-        self.assertEqual(stated_ranges("On tmux 3.2 to 3.6"), [])
-        self.assertEqual(stated_ranges("On tmux `3.2` to `3.6`"), [])
+
+    def test_a_version_is_not_a_range_of_cells_and_a_full_stop_is_not_a_decimal_point(self):
+        """The two halves of `_CELL_COUNT`, which is where #689's second defect lived.
+
+        Version ranges must stay out: this file says "on tmux 3.2 to 3.6" and dropping the
+        backtick requirement without the dotted-number rule reads that as `2` to `3`. That
+        is the reason #689 gives for why the obvious widening is not a one-character fix,
+        so it is asserted rather than trusted.
+
+        And a number that ENDS a sentence must stay in. #675's reader excluded any digit
+        followed by a dot, which is every count at the end of an English sentence — so
+        "The maximum `pad` is 12." was invisible to it, and that is a spelling a
+        documentation edit reaches for constantly."""
+        for versions in ("On tmux 3.2 to 3.6", "On tmux `3.2` to `3.6`",
+                         "Measured on 3.1c, 3.2 and 3.7c", "at the 3.2 floor"):
+            with self.subTest(versions=versions):
+                self.assertEqual(stated_ranges(versions), [])
+                self.assertEqual(pad_numbers(f"A `pad`. {versions}"), [])
+        self.assertEqual([n for n, _ in pad_numbers("The maximum `pad` is 12.")], [12])
+        self.assertEqual(stated_ranges("Pads run 0—12."), [(0, 12)])
+        # 395 ms is a bare count and IS in reach — the reader excludes versions, not
+        # every number that happens to sit near one. This is the noise `pad_numbers`
+        # documents as the price of scoping by proximity, shown rather than described.
+        self.assertEqual([n for n, _ in pad_numbers("A `pad`. median 395 ms on 3.7c")],
+                         [395])
+
+    def test_the_word_and_not_the_markup_puts_a_sentence_in_scope(self):
+        """`pad` unbackticked, `padding`, `padded`, `pads` — all the same key. And
+        `trackpad`, which this file says once about mouse wheels, is not: the reader is
+        scoped by the WORD, so a lookbehind is what keeps that sentence's numbers out."""
+        for spelling in ("a pad of 12", "padding of 12", "a padded 12", "pads of 12",
+                         "a `pad` of 12"):
+            with self.subTest(spelling=spelling):
+                self.assertEqual([n for n, _ in pad_numbers(spelling)], [12])
+        self.assertEqual(pad_numbers("the horizontal wheel a trackpad reports, 12 of them"),
+                         [])
 
     def test_the_documentation_states_the_bound_at_all(self):
-        """The vacuity control: the assertion below is green on a file that says nothing."""
-        self.assertTrue(stated_ranges(self.md),
+        """The vacuity control: the assertions below are green on a file that says
+        nothing, so the file is asked to still be saying it."""
+        prose = prose_of(self.md)
+        self.assertTrue(stated_ranges(prose),
                         "docs/frame.md states no range — the `pad` bound went missing")
+        self.assertTrue(pad_numbers(prose),
+                        "docs/frame.md prints no number about `pad` any more")
 
     def test_every_range_the_documentation_states_is_the_pad_range(self):
         """The fix. Each copy is checked, so the enforcement sentence at the bottom of the
@@ -1196,7 +1493,7 @@ class EveryStatementOfThePadBoundIsHeldToTheConstant(unittest.TestCase):
         is a reason to teach this test the second constant — never a reason to go back to
         asking whether one of them appears somewhere."""
         want = (0, instance.FRAME_PANE_PAD_MAX)
-        wrong = [r for r in stated_ranges(self.md) if r != want]
+        wrong = [r for r in stated_ranges(prose_of(self.md)) if r != want]
         self.assertEqual(
             wrong, [],
             f"docs/frame.md states {wrong} where charter enforces {want}. #669 was two "
@@ -1205,26 +1502,111 @@ class EveryStatementOfThePadBoundIsHeldToTheConstant(unittest.TestCase):
             "documentation invited costs the operator the entire `[[frame.component]]` "
             "block and the frame falls back to `slots`.")
 
-    def test_no_number_the_documentation_prints_beside_pad_is_one_charter_refuses(self):
-        """The copy that is not written as a range — "a `pad` of `8`", "capped at `8`" —
-        held to `pane_pad` itself rather than to a spelling of the constant.
+    def test_no_number_the_documentation_offers_as_a_pad_is_one_charter_refuses(self):
+        """The copy that is not written as a range — "a `pad` of 8", "capped at 8" — held
+        to `pane_pad` itself rather than to a spelling of the constant.
 
-        The rule this puts on the file: do not print an integer in a sentence about `pad`
-        that charter would refuse. Asked of the enforcing function, so it moves when
-        `FRAME_PANE_PAD_MAX` moves. The fenced examples are excluded because
-        `TheDocumentedExampleIsRunThroughCharter` resolves those through `instance` itself,
-        which is a stronger question than this one."""
-        prose = re.sub(r"```.*?```", "", self.md, flags=re.S)
-        sentences = [s for s in re.split(r"(?<=[.!?])\s+", " ".join(prose.split()))
-                     if "`pad`" in s]
-        self.assertTrue(sentences, "docs/frame.md no longer mentions `pad`")
-        for sentence in sentences:
-            for number in re.findall(r"`(\d+)`", sentence):
-                with self.subTest(number=number):
-                    self.assertIsNotNone(
-                        instance.pane_pad(int(number)),
-                        f"docs/frame.md prints `{number}` as a `pad` and charter refuses it "
-                        f"(the cap is {instance.FRAME_PANE_PAD_MAX}): …{sentence[:140]}")
+        The rule this puts on the file: **do not print a bare integer in prose about
+        `pad` that charter would refuse.** An incidental number that lands there is
+        spelled in words or moved, which is the noise `pad_numbers` documents as the price
+        of scoping by proximity rather than by markup."""
+        refused = [(n, text) for n, text in pad_numbers(prose_of(self.md))
+                   if instance.pane_pad(n) is None]
+        self.assertEqual(
+            refused, [],
+            f"docs/frame.md offers {sorted({n for n, _ in refused})} as a `pad` and charter "
+            f"refuses it (the cap is {instance.FRAME_PANE_PAD_MAX}): "
+            + " | ".join(f"…{t[:120]}" for _, t in refused[:3]))
+
+
+class TheReaderIsAttackedWithTheSpellingsThatBeatTheLastOne(unittest.TestCase):
+    """#689. **The fix for #669 was itself an instance of #669**: a guard that matched a
+    markup spelling where the property was a bound, filed against a defect that was a guard
+    matching a spelling where the property was a bound. Fifth measured instance in this
+    repository of a fix for a class of bug containing that bug.
+
+    So the reader above is not asserted to work — it is ATTACKED, the way the reviewer
+    attacked #675's: a restatement of a wrong bound is appended to the real
+    `docs/frame.md`, the readers are run over the result, and it has to come out red. The
+    corpus is `_BOUND_RESTATEMENTS` and lives beside the readers as data, so the next
+    person inherits the attack rather than repeating it.
+
+    Both directions are run. A reader that fails everything catches nothing, so every
+    spelling is run again with `FRAME_PANE_PAD_MAX` in the hole and must be GREEN — which
+    is also what makes the corpus survive the constant moving.
+    """
+
+    MD = Path(__file__).resolve().parents[1] / "docs" / "frame.md"
+
+    def _verdict(self, appended: str) -> list[str]:
+        """What the two readers say about `docs/frame.md` with *appended* added to it."""
+        prose = prose_of(f"{self.MD.read_text()}\n\n{appended}\n")
+        want = (0, instance.FRAME_PANE_PAD_MAX)
+        found = [f"range {r}" for r in stated_ranges(prose) if r != want]
+        found += [f"number {n}" for n, _ in pad_numbers(prose)
+                  if instance.pane_pad(n) is None]
+        return found
+
+    def test_the_shipped_documentation_is_green(self):
+        """The control the whole class rests on: every red below has to be caused by the
+        appended sentence and not by the file it was appended to."""
+        self.assertEqual(self._verdict(""), [])
+
+    def test_a_wrong_bound_is_caught_in_every_spelling_the_corpus_carries(self):
+        """The attack. Three of these are #689's own reproduction table, which #675 left
+        green; the rest are the same defect in the spellings an edit would reach for.
+
+        Three wrong numbers each, and they are not decoration: `MAX + 1` is the off-by-one
+        an edit makes, and a large one is the copy that came from a different constant."""
+        for template in _BOUND_RESTATEMENTS:
+            for wrong in (instance.FRAME_PANE_PAD_MAX + 1,
+                          instance.FRAME_PANE_PAD_MAX + 7, 97):
+                sentence = template.format(n=wrong)
+                with self.subTest(sentence=sentence):
+                    self.assertTrue(
+                        self._verdict(sentence),
+                        f"docs/frame.md can state a `pad` bound of {wrong} as "
+                        f"{sentence!r} and both readers stay green. That is #689 again: "
+                        "the reader is matching something other than the bound.")
+
+    def test_the_same_spellings_with_the_right_bound_stay_green(self):
+        """The other direction, and the reason the corpus is templated rather than
+        literal. A reader that reds on every sentence containing a number would pass the
+        test above while being useless, and it would make the file uneditable."""
+        for template in _BOUND_RESTATEMENTS:
+            sentence = template.format(n=instance.FRAME_PANE_PAD_MAX)
+            with self.subTest(sentence=sentence):
+                self.assertEqual(
+                    self._verdict(sentence), [],
+                    f"{sentence!r} states the bound charter enforces and the reader "
+                    "called it wrong — a false red makes this check the kind that gets "
+                    "deleted rather than fixed.")
+
+    def test_an_enumeration_is_caught_number_by_number(self):
+        """Not a bound at all: a list of the values that are allowed. Every member is held
+        to `pane_pad`, so the one over the cap is the one that reds — which is the
+        difference between asking the enforcing function and asking about a range."""
+        cap = instance.FRAME_PANE_PAD_MAX
+        listing = "A `pad` may be " + ", ".join(str(i) for i in range(cap + 3)) + "."
+        self.assertTrue(self._verdict(listing))
+        honest = "A `pad` may be " + ", ".join(str(i) for i in range(cap + 1)) + "."
+        self.assertEqual(self._verdict(honest), [])
+
+    def test_the_shapes_this_reader_is_blind_to_are_the_ones_written_down(self):
+        """**The honesty test.** `pad_numbers` says in its docstring what it cannot catch,
+        and this runs those shapes to prove the list is the real one rather than a
+        disclaimer. A guard that overstates its reach is the thing this project refuses.
+
+        Going red here means a shape moved from *out of reach* to *caught* — someone
+        widened the reader. That is good news: move the line into `_BOUND_RESTATEMENTS`.
+        It must never be answered by narrowing the reader back."""
+        for template in _OUT_OF_REACH:
+            sentence = template.format(n=instance.FRAME_PANE_PAD_MAX + 7)
+            with self.subTest(sentence=sentence):
+                self.assertEqual(
+                    self._verdict(sentence), [],
+                    f"{sentence!r} is listed as out of reach and was caught. Move it into "
+                    "_BOUND_RESTATEMENTS and shorten the docstring's list of limits.")
 
 
 class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCase):
