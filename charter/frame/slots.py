@@ -145,16 +145,29 @@ def _sidebar_live(fid: str) -> bool:
     first slot `layout.visible_slots` drops on ANY shortage, so a value decided once at
     launch is wrong the moment the operator presses a key or resizes the window.
 
-    **`state.panes` is the record, and it is the only one that can answer this.** It is
+    **`state.panes` is the record, and it is what a PANEL can answer this from.** It is
     written where a frame's shape is actually DECIDED — by `_draw_panels` at launch and
     again by `cmd_density` after `_relayout` — from the panes tmux really gave back, so a
     slot whose `split-window` failed is absent from it exactly like a slot the density
     dropped. The alternatives are all worse in the same direction: `instance
     .density_slots` is what was *asked for* rather than what is *there*, `[frame] slots`
     is what the operator configured, and an environment variable is whatever was true at
-    launch — the one thing the docstring above says it must not be. tmux itself cannot be
-    asked either: `list-panes` reports ids and geometry and nothing that says which pane
-    charter meant as `right` (see `state.record_panes`).
+    launch — the one thing the docstring above says it must not be.
+
+    **tmux CAN be asked now, and the sentence that used to be here said it could not**
+    (#714). `commands_frame._PANEL_SLOT_OPTION` puts the component's id on each panel pane,
+    so `list-panes` answers which pane charter meant as `right` — which is exactly what a
+    re-layout reconciles against, because a record rewritten whole on every re-layout could
+    not be the authority there.
+
+    It is not what this function should ask, and the reason is the shape of the question
+    rather than the cost. A panel is a `charter panel` PROCESS in a pane of its own: it
+    would be asking the server about a sibling that may not have been split yet. `right` is
+    split last on the shipped frame, so `top`'s first paint can precede that pane
+    EXISTING — no reading of tmux, however authoritative, turns that into `True`. #748 is
+    that race, measured at roughly one launch in six, and its fix is an ordering one: get
+    the shape recorded (or the first paint deferred) before anything can bump the frame.
+    Reading tmux here would move which file the race is against and close nothing.
 
     **The cost is one small JSON read on a slot that is not animated.** `top` is not in
     :data:`ANIMATED`, so it repaints on a version bump, never on `panel.TICK` — and a
