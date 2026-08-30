@@ -413,10 +413,9 @@ def _bar_events(fid: str, command: tuple[str, ...]):
         # `builtin_actions._spawn` and not a `Popen` of this module's own — one answer to
         # "how does a frame surface start work that must outlive it", shared with every
         # palette row and with `commands_frame._start_chat_switch`, which starts this
-        # exact argv for the exact same switch. `start_new_session=True` matters here for
-        # a reason the palette's does not have: a panel pane is torn down and split again
-        # by the switch it just started, and a child in this pane's process group would
-        # take the SIGHUP that arrives with the teardown.
+        # exact argv for the exact same switch. Its `start_new_session=True` and its three
+        # `DEVNULL` streams are its own docstring's argument and are not re-argued here:
+        # what a second copy would buy is a second place for them to stop agreeing.
         _spawn(util.self_relaunch_argv(*command, name), fid=fid)
         return False
 

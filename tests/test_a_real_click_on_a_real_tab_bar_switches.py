@@ -443,6 +443,13 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCas
         self._source_conf(self.WS)
         self.assertEqual(self._tmux("select-window", "-t", self.harness).returncode, 0)
         self.bar = self._split_bar(self.harness, "chats", self.here)
+        # **The bar is recorded as this chat's panel, which is what makes the switch tear
+        # it down** — `cmd_chat`'s step 2 is `_apply_arrangement(<chat being left>,
+        # want=[])`, and `state.panes` is the record it reads to know which pane to kill.
+        # Without this line the teardown is a no-op and the case below measures a switch
+        # that never touched the pane its own click came from, which is the one thing
+        # about this path that is not like the palette's.
+        state.record_panes(self.here, panels={"chats": self.bar})
         self.assertEqual(self._tmux("select-pane", "-t", self.harness).returncode, 0)
         self.fd = self._attach(self.WS)
         self.assertTrue(
@@ -469,6 +476,36 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCas
                    == self._window_of(self.other_harness)))
         self.assertEqual(self._active(), self.other_harness,
                          "clicking the chat bar left the keyboard on a panel")
+
+    def test_the_switch_runs_to_the_end_after_killing_the_pane_it_started_from(self):
+        """**The whole switch, from a click on a pane the switch then destroys.**
+
+        Step 2 of a chat switch is `_apply_arrangement(<chat being left>, want=[])`, and
+        on a frame where a bar is one of the panels that means killing the very pane the
+        click came from — the one whose process started the child. Nothing else in this
+        file reaches past that point: the client has already moved by then. What is
+        asserted here is step THREE, the chat being ENTERED getting its panels, which is
+        the switch having run to its end rather than having stopped when its own parent
+        went away.
+
+        **What this does NOT pin, said rather than implied.** `_spawn`'s
+        `start_new_session=True` looks like the thing that makes this work, and it was
+        written up that way first; measured with `start_new_session=False` the case is
+        still green, so the SIGHUP is not what this case is about and the comment claiming
+        it has been deleted from `_bar_events` rather than left as a story. `_spawn` is
+        used because it is the one answer to how a frame surface starts detached work, not
+        because this case can tell it apart from a bare `Popen`.
+        """
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.there}"))
+        self.assertTrue(
+            _await(lambda: self.bar not in self._tmux(
+                "list-panes", "-a", "-F", "#{pane_id}").stdout.split()),
+            "the chat that was left kept the bar pane, so the teardown this case is "
+            "about did not run and nothing below is measured")
+        self.assertTrue(
+            _await(lambda: bool(state.panes(self.there))),
+            "the switch stopped when the pane that started it was killed — its own "
+            f"teardown took it with it: {state.panes(self.there)!r}")
 
     def test_clicking_the_chat_you_are_in_moves_nothing(self):
         """`chats.check` refuses a switch to the chat you are already in — a teardown and
