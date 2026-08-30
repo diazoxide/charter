@@ -978,10 +978,23 @@ class ThePanelDeliversToCharterSOwnComponent(PersonaIso, unittest.TestCase):
     built-in was the one kind of component that could declare `events` and never receive
     any."""
 
-    def test_only_the_repo_table_gets_an_event_path(self):
+    def test_a_component_that_declared_nothing_pays_for_no_input_path(self):
+        """**This case used to read "only the repo table gets an event path", and #742 and
+        #751 turned that sentence over deliberately** — the four PLACED panels all declare
+        `click` now, and the table is merely the only one that also declares `scroll`.
+
+        What it was actually pinning survives and is the half worth keeping: a component
+        that declared nothing opens no input path at all. `events.Dispatcher.open` leaves
+        such a pane's tty mode alone, writes no `overlay.MOUSE_ON` and takes none of the
+        operator's own drag-select — `slots.ANIMATED`'s rule that a feature costing every
+        panel is a feature every panel pays for. The three that qualify are the sidebar's
+        own parts, and `registry.Registry` refuses a part that declares a kind.
+        """
         reg = builtins.build(FID)
-        self.assertIsNotNone(panel._dispatcher(reg, "repos"))
-        for cid in ("identity", "attention", "sidebar"):
+        for cid in ("repos", "identity", "attention", "sidebar"):
+            self.assertIsNotNone(panel._dispatcher(reg, cid),
+                                 f"{cid} declares an event and gets no path for it")
+        for cid in ("personas", "todos", "changes"):
             self.assertIsNone(panel._dispatcher(reg, cid),
                               f"{cid} pays for an input path it declared nothing for")
 

@@ -422,6 +422,180 @@ def _bar_events(fid: str, command: tuple[str, ...]):
     return on_event
 
 
+#: What a click on the `personas` column starts — the same front door
+#: :data:`_WORKSPACE_SWITCH` opens for the other noun, one option over
+#: (`commands_frame.cmd_switch` takes both). Not `choose.switch_to` called in process, for
+#: :data:`_CHAT_SWITCH`'s two reasons: every refusal `switch.to_persona` can raise reaches
+#: the operator through `_say_on_screen`, which is a `display-message` on the frame's own
+#: client and a surface no panel process has; and a switch re-gathers the plane, which is
+#: not a paint loop's work to sit through.
+_PERSONA_SWITCH = ("frame-switch", "--persona")
+
+#: What a click on a door opens: `F2`'s own action, spelled the way `commands_frame
+#: .conf_text` binds it minus the client name.
+#:
+#: **The client is not passed, and that is a real difference from the bind.** `conf_text`
+#: expands `#{client_name}` because tmux knows which client pressed the key; a panel
+#: process is not a `run-shell` child of a keypress and has no presser to name. What the
+#: client buys is which screen `cmd_palette`'s refusals are drawn on, and without it
+#: `_say_on_screen` falls back to `-t <session>` — the most recently attached client,
+#: measured in that function. On the one-client frame this is drawn for they are the same
+#: screen; on a two-client one a refusal can land on the other operator's status line,
+#: which is the honest cost of a doorway that is a rectangle rather than a keystroke.
+#:
+#: **And no `--chat` either, for `_bar_events`' reason**: `builtin_actions._spawn` sets
+#: `$CHARTER_SESSION_ID` to this panel's own *fid*, which is the chat this pane was
+#: launched for, and `commands_frame._pressers_chat` falls back to exactly that. The
+#: option exists because one `bind` text is shared by every frame on the socket; a panel
+#: was TOLD which frame it draws and has no such ambiguity to resolve.
+_PALETTE = ("frame-palette",)
+
+
+def _strip_events(fid: str):
+    """The identity and attention strips' handler: a click on a door opens the palette.
+
+    **The complaint this answers is that `F2 palette` is the only affordance charter
+    advertises on screen and the one thing on the row that could not be operated the way
+    it is drawn** (#751). A key name beside a noun is a button everywhere else an operator
+    has seen one. It is a button here now, and so are the workspace chip and the persona
+    head beside it — the other two nouns on those rows that the palette already opens by
+    name.
+
+    **All three go to the same place, and that is the design rather than a shortcut.**
+    §4i's rule is that the irreversible half of an interaction never rides on a pointer
+    event, because one can arrive unpaired. `_bar_events` gets out from under it by acting
+    on the PRESS and switching to a tab that is still one click away — a gesture that
+    completes on the pointer. A strip has no such gesture available: `⬢ alpha` names the
+    workspace you are ON and `◆ steward` the persona you ARE, so a click on either can
+    only mean *let me pick another one*, and picking needs a chooser. `key` is in
+    `component.EVENT_KINDS` and deliberately NOT in `events.DELIVERED` — the harness owns
+    the keyboard — so charter cannot grow a second, pointer-driven chooser inside a one-row
+    pane. The palette IS the chooser, it is the surface both nouns are reachable through
+    already, and opening it is a complete gesture: the overlay makes itself the active
+    pane (`overlay.modal_argvs`), so the keyboard reaches the list it just drew.
+
+    **The PRESS is acted on and the release is dropped**, kept word for word from
+    :func:`_repos_events` and :func:`_bar_events`: a drag begun on a pane border delivers
+    exactly one release (`frame/overlay.py` measured it), and a drag that began elsewhere
+    and happens to end over this row never pointed here.
+
+    **It answers falsy even when it opened the palette**, which is :func:`_bar_events`'
+    reading and not the table's: nothing this process draws has changed, and the pane the
+    palette carves comes off the harness rather than out of this rectangle. Truthy would
+    buy one repaint of a byte-identical row.
+
+    **No `ev.kind` test and no `scroll`**, for :func:`_bar_events`' reasons — these two
+    components declare `click` and nothing else, `events.Dispatcher._deliver` drops
+    anything they did not declare before it reaches here, and a one-row strip has nothing
+    a wheel could move.
+
+    *fid* is closed over rather than read back out of `$CHARTER_SESSION_ID`: one tmux
+    server is shared by every frame on the machine, and this process was told which frame
+    it draws.
+    """
+    def on_event(ev):
+        from .. import util
+        from . import slots as _slots
+        from .builtin_actions import _spawn
+        if not ev.pressed or ev.name != _ACT_BUTTON:
+            return False
+        if not _slots.DOORS.opens_palette(ev.col):
+            return False
+        _spawn(util.self_relaunch_argv(*_PALETTE), fid=fid)
+        return False
+
+    return on_event
+
+
+def _persona_events(fid: str):
+    """The sidebar's handler: a persona's NAME switches to it, its BADGES say what they mean.
+
+    **Two meanings on one row, resolved by which CELL the pointer landed in** — which is
+    not a second gesture bolted on, but the layout `slots._persona_rows` already draws
+    being read back. A row is a name cell and a badge cell, and they are asking different
+    questions: the name is *be this persona*, the badges are *what is that glyph*.
+    `slots._Chips.hit` owns the resolution and this branches on what it answers.
+
+    **The complaint is that the sidebar draws the roster as an inverted-row list with a
+    cursor-looking marker on the active one — the visual vocabulary of something you pick
+    from — and handles no events at all** (#742). It picks from now on.
+
+    **A click SWITCHES, exactly as it does on the two tab bars, and the three reasons
+    :func:`_bar_events` states hold here unchanged**: this acts on the PRESS, so the one
+    event that can arrive unpaired (a release from a drag begun elsewhere) switches
+    nothing; a persona switch is reversible by the identical gesture, because the row you
+    left is still in the column one click away and nothing is created, destroyed or
+    started; and there is no chooser a select-then-confirm column could be confirmed with,
+    since `key` is in `component.EVENT_KINDS` and deliberately not in `events.DELIVERED`.
+    A column that merely *selected* would draw a second mark beside `▸` that nothing on
+    the machine could ever act on.
+
+    That is where this deliberately departs from #742's own suggestion, which asked for
+    "selecting, not switching — the same 'a click only ever selects' rule the repo table
+    follows". The table's rule is not "a click never switches", it is `frame/overlay.py`'s
+    "the irreversible half is never driven by an event that can arrive unpaired", and what
+    makes selection the right answer THERE is that the table has a real intermediate state
+    (a highlighted row, a detail on the attention strip) and `Enter` in the palette to
+    choose from it. A persona column has neither: the row in reverse video IS the
+    selection, and a second one would be dead code wearing a feature's name.
+
+    **The rows that answer nothing are `slots._Chips`' to refuse, not this handler's** —
+    the `▪ personas 6` heading, the `…(+N more)` row, the `no personas` sentence, the
+    blank rows between the sidebar's sections, every todo and change row below them, and
+    the persona you are already being. See that class; the last of those is
+    `_Tabs.switch_to`'s rule and is also what stops a double-click switching twice.
+
+    **The badge half deliberately does NOT refuse the persona you are being.** *"What does
+    the flag on my own row mean"* is the commonest form of the question #753 is about, and
+    answering it is not the no-op that re-adopting yourself would be. That asymmetry is
+    `_Chips.hit`'s and is argued there.
+
+    **Falsy even when it started a switch**, for :func:`_bar_events`' reason:
+    `switch.to_persona` ends in a `state.bump` of its own, which is the version this
+    panel's poll is already watching, so truthy would buy one repaint of a row that has
+    not changed yet.
+
+    **It is declared on the `sidebar` COMPOSITE and nowhere else, because
+    `frame/registry.py` refuses a part that declares events** — a part is never placed
+    (`on_edge`), and `panel._dispatcher` asks `wanted()` of the component that WAS placed,
+    so a declaration on `personas` would pass every check, build a handler and receive
+    nothing, ever. That refusal says the composite "is also the only thing that knows
+    which of its parts a pointer would have been over"; here it does not have to work that
+    out, because `slots.persona_section` is the one pass that composes those rows and they
+    are the first thing the pane draws, so `slots.CHIPS` needs no base and no offset.
+
+    The cost is stated at the `personas` registration: a plane that places that component
+    on its own gets the column drawn and inert.
+    """
+    def on_event(ev):
+        from .. import util
+        from . import slots as _slots
+        from . import state
+        from .builtin_actions import _spawn
+        if not ev.pressed or ev.name != _ACT_BUTTON:
+            return False
+        hit = _slots.CHIPS.hit(ev.row, ev.col)
+        if hit is None:
+            return False
+        if hit.explain:
+            # **#729's dwell, used rather than a second surface of its own** — which is
+            # the whole reason this half of #753 is three lines. `state.say` writes the
+            # frame's own notice file and bumps the version, so the ATTENTION pane — a
+            # different process — draws the legend on its next poll and drops it when the
+            # dwell expires. Nothing here draws, and nothing here waits.
+            #
+            # `REFUSAL_SECONDS` and not the default four: that constant is the longer
+            # dwell for the outcome that has to be READ rather than glanced at, and a
+            # legend is exactly that — seven glyphs and what each one stands for, against
+            # a `workspace → gamma` the frame has already confirmed by repainting.
+            state.say(fid, _slots.BADGE_LEGEND, seconds=state.REFUSAL_SECONDS)
+            return False
+        _spawn(util.self_relaunch_argv(*_PERSONA_SWITCH, hit.name), fid=fid)
+        return False
+
+    return on_event
+
+
 def _chats(ctx) -> list[str]:
     """The chat bar — `slots.chats_bar` at this pane's OWN width.
 
@@ -490,19 +664,28 @@ def build(fid: str = "") -> Registry:
     from . import slots
 
     reg = Registry()
+    # **The two one-row strips declare `click` and nothing else** (#751). `scroll` is not
+    # declared for the reason `chats` and `workspaces` do not declare it: a one-row pane
+    # has nothing a wheel could move, so its handler could only ever answer False, and
+    # `events.Dispatcher.open` charges the same `overlay.MOUSE_ON` for one pointer kind as
+    # for two — declaring it would cost nothing and mean nothing, which is exactly what
+    # makes it wrong to declare.
     reg.register(Component(
         id="identity", title="identity", edge="top", size=Fixed(1),
-        needs=(), render=_panel("top")))
+        needs=(), render=_panel("top"),
+        events=("click",), on_event=_strip_events(fid)))
     reg.register(Component(
         id="attention", title="attention", edge="bottom", size=Fixed(1),
-        needs=(), render=_panel("bottom")))
+        needs=(), render=_panel("bottom"),
+        events=("click",), on_event=_strip_events(fid)))
     # `Content()` with no cap, and `layout.repos_rows` is the cap: the table's height is
     # what the plane's repos need, bounded by what the harness may not be charged
     # (`layout.HARNESS_MIN_ROWS`), which is a fact about the WINDOW rather than about the
     # component. A cap here would be a second, weaker copy of that arithmetic.
     #
-    # **The one component that declares events, and it is the first thing in charter that
-    # ever has** (#607 built the path; nothing consumed it). `scroll` and `click` are the
+    # **The first component in charter that ever declared events** (#607 built the path;
+    # nothing consumed it), and still the only one that declares `scroll` — the other five
+    # are one-row strips and a column with nothing under it. `scroll` and `click` are the
     # two `frame/events.py` can carry to a pane the pointer is over without moving the
     # keyboard, and they are declared TOGETHER because `events.Dispatcher.open` asks the
     # terminal for one request that serves both — a component declaring only one of them
@@ -525,6 +708,18 @@ def build(fid: str = "") -> Registry:
     # (`slots._MAX_TODO_LINES`) — `slots._right`'s docstring argues that ordering, and
     # this is the same decision said in the registry's vocabulary rather than a second
     # one.
+    # **`personas` declares no events, and it is not an oversight — `registry.Registry`
+    # refuses one that does.** It is a PART of the `sidebar` composite below, a part is
+    # never placed on the frame (`on_edge`), and `panel._dispatcher` asks `wanted()` of the
+    # component that was placed — so a declaration here would pass every check, build a
+    # handler and receive nothing, ever. That refusal is #607's own defect one level down
+    # and it is deliberate; the composite is what declares, and `slots.CHIPS` is what
+    # tells it which of its parts a click was over.
+    #
+    # The honest cost: a plane that places `personas` on its own through
+    # `[[frame.component]]`, instead of the `sidebar` that ships, gets the column drawn
+    # and inert. Lifting that means letting a composite delegate a kind to one part, which
+    # is a change to the registry's contract and not this one's.
     reg.register(Component(
         id="personas", title="personas", edge="right", size=Fill(),
         needs=(), render=_personas))
@@ -568,7 +763,8 @@ def build(fid: str = "") -> Registry:
     reg.register(Component(
         id="sidebar", title="sidebar", edge="right", size=Fixed(22),
         needs=("gather", "changes"), render=_panel("right"),
-        children=("personas", "todos", "changes")))
+        children=("personas", "todos", "changes"),
+        events=("click",), on_event=_persona_events(fid)))
     # **Phase 5's two bars, and they are REGISTERED but not PLACED** — the same shape
     # `changes` takes above, and for a stronger version of its argument.
     #
