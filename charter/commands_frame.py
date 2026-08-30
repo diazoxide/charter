@@ -4054,6 +4054,9 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
     # and leaves the first's panels alive and recorded, so the first `F2` back has nothing
     # missing. Before the kill loop for `_draw_panels`' reason: `remain-on-exit` is armed
     # ahead of any pane charter creates, and a re-layout creates panes further down.
+    # It costs the kills nothing — measured on 3.7c, `kill-pane` destroys a pane on a
+    # window with `remain-on-exit on` outright, leaving no corpse: the option decides
+    # what happens when a pane's COMMAND exits, not when tmux is told to close it.
     _dress_window(socket, fid=fid, harness_pane=harness_pane, env=None, v=v)
     keep: dict[str, str] = {}
     for slot, pane_id in panels.items():
