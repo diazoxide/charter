@@ -4451,6 +4451,25 @@ def _rule_glyphs(text: str) -> set:
 #: cannot see them and they are asked about by name.
 _INDICATOR_GLYPHS = frozenset("←→↑↓")
 
+#: The mark `_screenshot` types into the frame once the frame's own paint is on its way,
+#: and waits to see come back — the fact that says the whole of that paint has arrived.
+#: See `_screenshot` for why an ordering is the only honest answer to "is this frame
+#: finished" and #719 for what asking "are there rules yet" instead cost.
+#:
+#: **Every character is chosen so the frame it marks still reads exactly as it did.** It
+#: is typed into the HARNESS pane — the one pane charter never paints — so its cells
+#: carry that pane's own background and `_painted`, `_seams`, `_harness_edges` and
+#: `_rule_rows` see what they saw before it. It is outside the Box Drawing block, so
+#: `_rule_glyphs` and `_rule_states` cannot mistake it for chrome, and outside
+#: `_INDICATOR_GLYPHS`. And it is fenced in tildes because a hostname cannot contain one:
+#: `test_the_frame_draws_every_rule_the_same_inside_the_operators_own_tmux` asserts this
+#: machine's name is NOT on the screen, and a mark that could pass for a hostname would
+#: turn that assertion into one about the mark.
+#:
+#: `test_the_paint_mark_arrives_and_reads_as_the_harnesss_own_background` is that
+#: paragraph, asserted rather than promised.
+_PAINT_MARK = "~painted~"
+
 
 class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
     """#514, asked of the SCREEN: charter's own frame must draw every rule the same.
@@ -4574,6 +4593,13 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
           horizontal rule in two colours and is the defect the operator reported third.
         * ``"pane"`` — ``"panel"`` plus `_harness_rule_argvs` on the harness pane, which is
           what charter does above the floor now.
+
+        **The shot carries `_PAINT_MARK`, and every caller here reads a marked frame.**
+        The mark is what says the frame has finished arriving — see the gate at the end of
+        this method, and #719 for the frame this returned before it. Its cells are the
+        harness pane's own, so nothing this class reads off a screenshot can see it;
+        `test_the_paint_mark_arrives_and_reads_as_the_harnesss_own_background` is that
+        claim, measured.
         """
         session = f"f{int(arm)}{int(hostile)}{int(bool(surface))}{design[0]}-{self._pane_counter}"
         self._pane_counter += 1
@@ -4661,8 +4687,46 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         # before there is anything to read, and how long that takes is the machine's
         # business. Gives up quietly — `_control` is what turns "nothing rendered" into a
         # skip that says so.
+        #
+        # **What is polled for is an ORDERING, and #719 is what polling for "are there
+        # rules yet" cost.** The frame is drawn by a client on the inner server writing
+        # into a pty the OUTER server reads, and a redraw goes down that pty borders
+        # first — so the first capture holding a rule is routinely a capture holding the
+        # borders and none of the pane surfaces behind them. Idle, the whole paint lands
+        # between two polls and nothing notices; loaded, the outer server is descheduled
+        # part-way through reading it and the gate is satisfied by the fragment. Measured
+        # on this machine, 600 shots under load: **29 of them stopped at a screen that was
+        # not the screen the frame settled to.** What came back then was a frame with
+        # rules and `default` panes — which every assertion here reads as charter having
+        # changed colour, and none of them as tmux having been interrupted.
+        #
+        # So the gate below asks a question with a yes: a mark is TYPED into the frame
+        # once its paint is demonstrably under way, and the shot is the first capture that
+        # holds the mark. A pty is a stream; the mark's bytes are written after the
+        # redraw's and cannot overtake them, so the mark on the outer pane's screen is
+        # proof the outer server consumed the whole redraw first. It holds through tmux's
+        # one escape from that ordering as well: a client whose terminal cannot keep up
+        # has its pending output DISCARDED, and while it is in that state the mark is
+        # discarded with it — tmux then invalidates and redraws the entire screen, so the
+        # mark still cannot arrive without the frame it marks.
+        #
+        # **A rule is still waited for, and it is now the precondition rather than the
+        # answer.** tmux composes a whole-screen redraw in one pass into one buffer, so a
+        # single border cell reaching the outer server proves the rest of that frame is
+        # already written and ordered ahead of anything typed next. Typed before that, the
+        # mark would be part of the pane content the first redraw is still drawing, and it
+        # would prove only that ONE pane had arrived.
+        #
+        # Not a `sleep` and not a longer deadline (#650's rule, and #713's): the deadline
+        # bounds how long "it never painted" takes to report and is never spent by a
+        # machine that painted. The alternative that looks cheaper — stop when two
+        # captures in a row are identical — is a duration wearing a fact's clothes, and it
+        # measures as one: wrong on 0 of 600 shots at this loop's 0.1s cadence and on 5 of
+        # 600 at 0.01s, because what it really asks is whether a paint stalled for longer
+        # than the gap between two polls.
         deadline = time.time() + 10
         shot = ""
+        typed = False
         while time.time() < deadline:
             # `-N` keeps the trailing spaces on each row, and without it a SURFACE is
             # invisible to this harness: every pane here runs `cat` and writes nothing, so
@@ -4673,8 +4737,19 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
             got = self._outer("capture-pane", "-p", "-e", "-N", "-t", host)
             if got.returncode == 0:
                 shot = got.stdout
-            if _rule_states(shot):
-                break
+            if typed:
+                if _PAINT_MARK in shot:
+                    break
+            elif _rule_states(shot):
+                # Into the harness, whose program is `cat` and whose pty echoes what is
+                # typed at it — the same `cat` every pane in this module runs, so nothing
+                # here needs a pane built differently from the frame's own. `-l` sends the
+                # string as literal characters rather than as key names.
+                self.assertEqual(
+                    self._srv("send-keys", "-l", "-t", harness,
+                              _PAINT_MARK).returncode, 0,
+                    "tmux would not type the paint mark into the frame")
+                typed = True
             time.sleep(0.1)
         self._outer("kill-session", "-t", host)
         self._srv("kill-session", "-t", session)
@@ -4922,6 +4997,151 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                          "a server was rebuilt in the middle of this test, so the next "
                          "`new-session` on it was a client racing a process that had "
                          "already decided to exit")
+
+    def test_the_paint_mark_arrives_and_reads_as_the_harnesss_own_background(self):
+        """`_PAINT_MARK`'s two claims, asked of a real screenshot rather than promised.
+
+        **It arrives.** The gate `_screenshot` ends on waits for this string to come back
+        through the nested client, and it gets there by being typed at the harness pane's
+        `cat`, whose pty echoes it. On a tmux or a pty where that did not hold, every
+        screenshot in this class would spend its whole deadline and hand back whatever the
+        last capture happened to be — which is the reading #719 is about, restored by a
+        different route. So this is red, and loudly, rather than 20 tests going quiet.
+
+        **And it changes nothing this class reads.** Its cells are the harness pane's —
+        the one pane charter never paints — so they carry that pane's own background,
+        which is `default`: the very reading `_harness_edges` uses to find the harness at
+        all. None of its characters is a box-drawing glyph or a `pane-border-indicators`
+        arrow, so `_rule_states`, `_rule_glyphs` and `_rule_rows` cannot mistake it for
+        chrome, and `_painted` still finds exactly one painted background on a surfaced
+        frame — which this asks for first, and skips on if this machine cannot render one.
+
+        **`arm=False`, and that is not laziness** — the same argument
+        `test_neither_server_this_class_uses_is_ever_rebuilt_mid_test` makes. This is
+        about the mark and the harness's own background, and neither is charter's; arming
+        would put charter's chrome argvs on the path, which at `tmuxctl.FLOOR` fail over
+        an option tmux 3.2 does not have (#716) and would make this report somebody else's
+        failure. The panels are still painted either way — `_screenshot` paints a
+        *surface* whether or not the rules are armed — so the reading is the same one.
+        """
+        self.assertEqual(
+            set(_PAINT_MARK) & (_RULE_GLYPHS | _INDICATOR_GLYPHS), set(),
+            "the paint mark is made of characters this class reads as chrome, so every "
+            "screenshot it marks has a rule on it that tmux never drew")
+        shot = self._screenshot(arm=False, surface=self._SURFACE, design="bare")
+        painted = self._painted(shot)
+        cells = _sgr_runs(shot, carry=True)
+        at = "".join(ch for _state, ch in cells).find(_PAINT_MARK)
+        self.assertNotEqual(at, -1,
+                            "the mark `_screenshot` waits for is not on the screen it "
+                            "returned, so the gate gave up on its deadline rather than "
+                            "fired and this shot is not a photograph of a finished frame")
+        self.assertEqual(
+            {dict(cells[i][0])["bg"] for i in range(at, at + len(_PAINT_MARK))},
+            {"default"},
+            "the paint mark is drawn over a background of its own rather than the "
+            f"harness's, so a screenshot carrying it has a background beside {painted} "
+            "on it and `_painted` is reading the mark")
+
+    def test_what_the_frame_drew_before_the_mark_is_on_the_screen_no_later_than_it(self):
+        """The ordering `_screenshot`'s gate rests on, measured on this tmux rather than
+        argued from tmux's source — the whole reason the mark is a FACT and not a wait.
+
+        A frame reaches the outer server down ONE pty, as a stream. The inner client
+        composes a redraw and writes it; anything typed into the frame after that is
+        composed after it and goes into the same stream behind it. So a capture that holds
+        the mark cannot be a capture missing what the frame drew before the mark was
+        typed. That is the whole of the gate, and it is what "some rules have appeared"
+        never said.
+
+        Six rounds, each painting the panel a colour the round before it did not use, so a
+        tmux that answered out of order has six draws to do it in. Each round asserts that
+        the screen carrying that round's mark carries ONE background and that it is a new
+        one: a screen caught between two paints carries both, which is exactly the shape
+        #719 photographed — borders from the new frame, panes still from the old.
+
+        Its own session and its own two panes, at tmux's own border defaults: nothing here
+        is about charter's chrome, and a frame styled by `_chrome_argvs` would put a
+        background on the rules for this to have to reason about.
+        """
+        session = f"ord-{self._pane_counter}"
+        self._pane_counter += 1
+        r = self._srv("new-session", "-d", "-s", session, "-x", "100", "-y", "24",
+                      "-P", "-F", "#{pane_id}", "--", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness = r.stdout.strip()
+        self.assertEqual(self._srv("set", "-t", session, "status", "off").returncode, 0)
+        r = self._srv("split-window", "-t", harness, "-P", "-F", "#{pane_id}",
+                      "--", "cat")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        panel = r.stdout.strip()
+        # The harness holds the keyboard, so the panel is painted from `window-style`
+        # rather than `window-active-style` and one option is enough to move it.
+        self.assertEqual(self._srv("select-pane", "-t", harness).returncode, 0)
+        host = f"host-{session}"
+        r = self._outer("new-session", "-d", "-s", host, "-x", "100", "-y", "24",
+                        "--", "tmux", "-L", self.SOCKET_NAME, "attach", "-t", session)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self._outer("set", "-t", host, "status", "off")
+
+        def outer_screen() -> str:
+            got = self._outer("capture-pane", "-p", "-e", "-N", "-t", host)
+            return got.stdout if got.returncode == 0 else ""
+
+        try:
+            # The client has to be painting before a round can mean anything: until then
+            # a mark typed at the harness is part of the content the FIRST redraw is
+            # still drawing, and would prove only that one pane had arrived. Same
+            # precondition `_screenshot`'s gate arms on, for the same reason.
+            deadline = time.monotonic() + _DEADLINE
+            shot = ""
+            while not _rule_states(shot) and time.monotonic() < deadline:
+                shot = outer_screen()
+                time.sleep(0.05)
+            if not _rule_states(shot):
+                raise unittest.SkipTest(
+                    "this machine rendered no pane border through a nested tmux client "
+                    "at all, so there is no frame here whose arrival to order anything "
+                    "against")
+            was = None
+            for round_, colour in enumerate(("red", "green", "yellow", "blue",
+                                             "magenta", "cyan")):
+                self.assertEqual(
+                    self._srv("set", "-p", "-t", panel, "window-style",
+                              f"bg={colour}").returncode, 0)
+                mark = f"~{round_}~"
+                self.assertEqual(
+                    self._srv("send-keys", "-l", "-t", harness, mark).returncode, 0,
+                    "tmux would not type this round's mark into the frame")
+                deadline = time.monotonic() + _DEADLINE
+                shot = ""
+                while mark not in shot and time.monotonic() < deadline:
+                    shot = outer_screen()
+                    time.sleep(0.05)
+                self.assertIn(mark, shot,
+                              f"round {round_}'s mark never came back through the nested "
+                              "client, so nothing here was ordered against anything")
+                painted = {dict(state)["bg"]
+                           for state, _ch in _sgr_runs(shot, carry=True)} - {"default"}
+                if not painted and was is None:
+                    raise unittest.SkipTest(
+                        "this tmux painted no pane background through a nested client, "
+                        f"so `bg={colour}` is not something this machine can see arrive")
+                self.assertEqual(
+                    len(painted), 1,
+                    f"round {round_} typed its mark after `bg={colour}` and the screen "
+                    f"that came back carrying the mark is painted "
+                    f"{painted or 'nothing at all'} — a screen caught between two "
+                    "paints carries both, which is the frame #719 photographed")
+                self.assertNotEqual(
+                    painted, was,
+                    f"round {round_}'s screen is still painted the colour round "
+                    f"{round_ - 1} left, so `bg={colour}` had not arrived when its own "
+                    "mark did and the mark is not ordered behind the paint")
+                was = painted
+        finally:
+            self._outer("kill-session", "-t", host)
+            self._srv("kill-session", "-t", session)
 
     #: The colour every panel in a surfaced screenshot is painted, and the only
     #: non-default background on the screen — the harness pane is never painted, and every
