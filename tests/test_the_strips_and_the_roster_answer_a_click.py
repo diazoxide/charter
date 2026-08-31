@@ -266,13 +266,41 @@ class TheMapDescribesWhatWasDrawn(_Strip):
     so* — nothing later can.
     """
 
-    def test_terse_keeps_one_field_on_the_attention_strip_and_it_is_not_the_hint(self):
-        """`_fit_fields(limit=1)` keeps the highest-priority field with anything to say,
-        which on a quiet plane is the todo count. So the row has no door at all — and that
-        has to be *published*, not left over from the paint before it."""
+    def test_terse_keeps_the_hint_and_republishes_it_where_it_actually_landed(self):
+        """`_fit_fields(limit=1)` keeps one field of NEWS, and the hint is not news (#743):
+        `minimal` is the arrangement where the palette is the only route to anything, so
+        the one thing that says how to open it is exempt from the density's trim.
+
+        That makes this a case about the map rather than about the field going away. The
+        terse row is shorter — the alert takes the single news slot and the todo count is
+        gone — so the hint lands in a different column than the wide paint put it in, and
+        a map left over from the paint before would open the palette from a cell holding
+        the middle of the alert. Which is this class's whole finding, with the door moving
+        instead of disappearing.
+
+        This case used to assert the opposite, because before #743 `terse` was the
+        cheapest way to make a field stop being drawn. The two rungs that still draw no
+        door — a starved pane and the operator's own tmux — have their own cases below and
+        keep that half covered.
+        """
         self.bottom_row()
-        self.assertTrue(self.doors(), "the wide paint should have published a door")
-        row = self.bottom_row(terse=True)
+        wide = self.doors()
+        self.assertTrue(wide, "the wide paint should have published a door")
+        row = self.bottom_row(terse=True, alerts=["reinit needed"])
+        self.assertEqual(row, "reinit needed · F2 palette")
+        at = row.index("F2 palette")
+        self.assertEqual(self.doors(), set(range(at, at + len("F2 palette"))),
+                         self.under(row, self.doors()))
+        self.assertNotEqual(self.doors(), wide,
+                            "the map did not move when the paint did")
+
+    def test_a_terse_row_too_narrow_for_both_drops_the_hint_and_says_so(self):
+        """The exemption is from the DENSITY and never from the arithmetic, so the rung
+        that draws no door is still reachable at `terse` — and it still has to publish the
+        absence rather than leave the wide paint's door standing."""
+        self.bottom_row()
+        self.assertTrue(self.doors())
+        row = self.bottom_row(terse=True, width=9)
         self.assertEqual(row, "7 todos")
         self.assertEqual(self.doors(), set(), self.under(row, self.doors()))
 
