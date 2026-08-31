@@ -3507,6 +3507,445 @@ def _release_floor_reason(cmd: str, data: dict) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
+# A5: a forge write that PUBLISHES PROSE may not carry a live substitution (#703) #
+# --------------------------------------------------------------------------- #
+# An agent filing an issue wrote `--body "… `env -u PYTHONSAFEPATH` …"`, meaning the
+# backticks as a MARKDOWN CODE SPAN. Inside double quotes they are command substitution,
+# so the shell ran `env` and pasted 64 variables — four 1Password service-account tokens,
+# a GitLab PAT, the session's own variables — into a PUBLIC issue body. Nineteen other
+# issues filed the same night used the same `--body "…"` shape with backticks and were
+# harmless, because the backticked text was not a runnable command. The pattern was wrong
+# in all twenty and nineteen were lucky, which is the whole argument for a guard: the
+# blast radius was decided by what the operator's shell exports, not by what the agent
+# meant to publish.
+#
+# **What this guard claims, exactly.** That the argument list of a forge command which
+# publishes prose contains a command substitution the shell would RUN. Nothing more. It
+# does not claim to keep credentials off a forge, and it must not be described as though
+# it does — the value never passes through here at all. That narrowness is the point:
+# #370's ruling is that a guard which cannot verify what it claims is worse than a
+# documented boundary, and this claim is decidable from the string charter is handed.
+#
+# **Why charter can see this at all**, which was the open question on #703. The expansion
+# happens in the shell, so `charter guard` — a config surface — is nowhere near it, and
+# neither is `gh`. But `PreToolUse` is upstream of the shell: `tool_input["command"]` is
+# the command AS THE MODEL WROTE IT, backticks intact and unexpanded. A guard on the
+# value is not merely undesirable here, it is unbuildable in both directions: at
+# `PreToolUse` the substitution has not run, so there is no value to match, and by
+# `PostToolUse` the issue is already public.
+#
+# **Deny, not ask**, with the rest of this handler: an unattended ask is an allow (see
+# A4), and this is exactly the run with nobody watching that most needs the refusal.
+#
+# **Ungated on `HAS_CONTROL_PLANE`**, unlike A2/A3/A4 and like `_leak_reason`. Those are
+# gated because denying them outside a plane explains a control plane that does not exist
+# on that machine. This one explains a SHELL, which exists everywhere the harness runs;
+# its remedy (`--body-file`) is plain `gh`/`glab` usage and names nothing of charter's.
+
+#: `(tool, noun, verb)` for the forge commands whose PURPOSE is to publish prose somebody
+#: reads. Verified against `gh <noun> --help` and `glab <noun> --help` on this machine
+#: rather than recalled — `glab release` has no `update` and `glab` spells the comment
+#: verb `note`, both of which a guess gets wrong.
+#:
+#: **Deliberately not :data:`_PUBLISH_FORGE`**, which sits ten lines up and looks like the
+#: same table. It answers a different question — "does this publish or land CODE" — and
+#: the difference is not cosmetic: `gh pr create` is *deliberately absent* there (opening
+#: a request is below the release floor) and is the single most likely command to carry
+#: this defect. Merging the two would make one constant answer two questions, which is the
+#: #555 defect this file already has a name for, and it would move denials in both
+#: directions: A4 would start refusing `gh issue comment` unattended, and this guard would
+#: stop covering the shape it was written for.
+#:
+#: `merge` is absent on purpose. Its `--body` is a merge-commit message rather than the
+#: point of the command, and the evidence in #703 is issue and request bodies. Widening on
+#: evidence is cheap; a guard that over-blocks gets switched off once and then covers
+#: nothing (:data:`_BRANCH_MOVERS` makes the same argument).
+_FORGE_PROSE = {
+    ("gh", "issue", "create"), ("gh", "issue", "comment"), ("gh", "issue", "edit"),
+    ("gh", "pr", "create"), ("gh", "pr", "comment"), ("gh", "pr", "edit"),
+    ("gh", "pr", "review"),
+    ("gh", "release", "create"), ("gh", "release", "edit"),
+    ("gh", "gist", "create"), ("gh", "gist", "edit"),
+    ("glab", "issue", "create"), ("glab", "issue", "note"), ("glab", "issue", "update"),
+    ("glab", "mr", "create"), ("glab", "mr", "note"), ("glab", "mr", "update"),
+    ("glab", "release", "create"),
+    ("glab", "snippet", "create"),
+}
+
+# **What the deletion sweep says about the scanner below, written down so it is not
+# re-derived.** Three sharded runs have now mutated these functions, and each one found
+# something the run before it could not reach.
+#
+#   * **Two real defects, both false REFUSALS** — which is why a green suite sat over them:
+#     the empty QUOTED heredoc delimiter (`<<""`), which bash treats as an inert heredoc and
+#     charter was scanning as command text; and a flag filter in `_forge_prose_command` that
+#     paired two flag VALUES into a noun and a verb.
+#   * **Two raises**, which is the outcome this module may least have — `dispatch` runs a
+#     handler as a bare `rc = fn()`, so an exception takes the turn down instead of
+#     producing a verdict. An `IndexError` on a heredoc delimiter ending in a backslash, and
+#     a `TypeError` on a `None` command.
+#   * **Two fail-OPEN holes in the guard's own dispatch**, each hiding behind the fact that
+#     the branch it belongs to was reached by an easier route in every existing test. Both
+#     are the SECOND half of a two-part condition doing the real work: `text.startswith("$'",
+#     i)` is what keeps a bare `$VAR` out of :func:`_ansi_c_end`, which would otherwise skip
+#     to the next single quote and step over a live substitution; `text.startswith("<<", i)`
+#     is what keeps a plain `<` redirection out of :func:`_heredoc_header`, which read a
+#     QUOTED filename as an inert heredoc delimiter and swallowed the rest of the command.
+#     Both were verified against a real bash, which runs the substitution in each.
+#
+# What still survives is **equivalent mutants**, and each was checked rather than argued —
+# every string up to length six over `" ' ` $ ( \ < - B x` and a newline, ~2M of them, plus
+# the edge inputs an alphabet cannot spell, comparing the mutant's verdict against this one:
+#
+#   * the loop and slice boundaries in `_ansi_c_end`, `_heredoc_header` and
+#     `_heredoc_bodies` (`i < n`, `end < 0`, `j + 1 < n` widened) — shifting any of them
+#     changes no verdict, because the character it would skip cannot open a substitution.
+#     The other direction of two of those DOES raise, and that half is pinned;
+#   * the FIRST half of each two-part condition — `c == "$"`, `c == "<"`, `c == "\n" and`
+#     — and the `base not in ("gh", "glab")` early continue, whose work the table lookup
+#     redoes. These are PREFILTERS: what follows them decides, and they only avoid a call.
+#     Kept, and measured rather than asserted — the double-quote one is worth 66 µs against
+#     94 µs on a body carrying 300 bare `$` characters. The others measured as noise and are
+#     kept for symmetry with it. **Do not read a surviving prefilter as an untested guard
+#     without checking which half of the condition was dropped**: one half is a cheap
+#     pre-test and the other is the whole rule, and this section is the record of what
+#     happened when that distinction was not made.
+#   * the `if not any(...)` fast path in `_forge_substitution_hit` — 0.28 µs against 4.45 µs
+#     on an ordinary command, on a per-Bash-call hot path.
+#
+# A survivor that is genuinely equivalent is dead code by this project's rule. These are the
+# exception it allows for: each buys time rather than correctness.
+
+#: The two spellings of command substitution. `$(` covers `$((` arithmetic too, which is
+#: not a substitution — a false DENY on `--body "$((1+2))"`, and the direction to be wrong
+#: in. Separating them would mean deciding `$((x) )` from `$( (x) )`, and a parser that
+#: gets that wrong fails OPEN.
+_SUBSTITUTIONS = ("`", "$(")
+
+def _ansi_c_end(text: str, i: int) -> int:
+    """Index just past the `'` closing a `$'…'` (ANSI-C) quotation opened at *i*.
+
+    Its own scanner because a backslash escapes there and does not inside ordinary single
+    quotes: `$'a\\'b'` ends at the LAST quote, and reading it as a plain `'…'` ends it at
+    the middle one. Getting that wrong consumes more of the line as quoted than a shell
+    would, which hides a later live backtick — the fail-OPEN direction, which is why this
+    exists for a construct that is otherwise vanishingly rare on a forge command line.
+    """
+    n = len(text)
+    while i < n:
+        if text[i] == "\\":
+            i += 2
+        elif text[i] == "'":
+            return i + 1
+        else:
+            i += 1
+    return n
+
+
+def _double_quoted_substitution(text: str, i: int) -> tuple[str | None, int]:
+    """``(the substitution opened inside this double-quoted run, index past its close)``.
+
+    The one state that matters and the reason #703 happened: a backtick is INERT inside
+    single quotes and LIVE inside double quotes, and an apostrophe inside double quotes is
+    an ordinary character rather than the start of a quotation (`"it's `x`"` runs `x` —
+    checked against bash, not remembered).
+
+    **A backslash here consumes the next character unconditionally, and POSIX's shorter
+    double-quote escape set is deliberately not modelled.** Inside double quotes a shell
+    escapes only ``$``, `` ` ``, ``"``, ``\\`` and a newline; every other ``\\x`` is two
+    literal characters. Writing that faithfully was the first version, and the deletion
+    sweep called the extra conjunct a survivor — correctly. The three characters this
+    scanner acts on are ``$``, `` ` `` and ``"``, and **all three are in the escape set**,
+    so a backslash before a significant character is skipped either way and a backslash
+    before an insignificant one cannot change a verdict by swallowing it. Checked rather
+    than argued: both spellings were run over every string up to length six on the alphabet
+    ``" ' ` $ ( \\ x <`` and a newline — 597,871 of them — and they returned the same
+    verdict on all. The faithful version is therefore a branch that reads as though it
+    matters and does not, which is worse than the short one in a guard whose whole risk is
+    being a shell parser somebody has to re-derive. It goes.
+    """
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+        elif c == '"':
+            return None, i + 1
+        elif c == "`":
+            return "`", i
+        elif c == "$" and text.startswith("$(", i):
+            return "$(", i
+        else:
+            i += 1
+    return None, n                      # unterminated: a shell errors, nothing runs
+
+
+def _heredoc_substitution(body: str) -> str | None:
+    """The first live substitution in an EXPANDING heredoc body, or ``None``.
+
+    A body has no quoting rules but the backslash — `'`x`'` inside one still runs `x`,
+    checked against bash — so this is deliberately not :func:`_live_substitution`. Reusing
+    that would apply single-quote protection where a shell offers none, which is the
+    fail-OPEN direction on the exact path the working rule steers agents onto.
+    """
+    i, n = 0, len(body)
+    while i < n:
+        c = body[i]
+        if c == "\\":
+            i += 2
+        elif c == "`":
+            return "`"
+        elif c == "$" and body.startswith("$(", i):
+            return "$("
+        else:
+            i += 1
+    return None
+
+
+def _heredoc_header(text: str, i: int) -> tuple[str, bool, bool, int] | None:
+    """``(delimiter, it expands, `<<-` strips tabs, index past the header)`` for the `<<`
+    at *i*, or ``None`` when no delimiter word follows.
+
+    **Any quoting anywhere in the delimiter makes the whole body literal** — `<<'EOF'`,
+    `<<"EOF"`, `<<\\EOF` and even `<<EO'F'` all stop expansion, verified against bash. That
+    is the distinction the working rule in shared persona memory turns on, and it is why
+    this returns the flag rather than stripping bodies the way `_strip_reader_heredocs`
+    does: an UNQUOTED heredoc expands, so `--body-file -` with `<<BODY` is the same defect
+    as `--body "…"` with one word's less typing. A guard that covered only the `--body`
+    spelling would push agents onto the rule's own path and leave it unguarded.
+    """
+    n = len(text)
+    j = i + 2
+    strip = False
+    if j < n and text[j] == "-":
+        strip = True
+        j += 1
+    while j < n and text[j] in " \t":
+        j += 1
+    parts: list[str] = []
+    quoted = False
+    while j < n:
+        c = text[j]
+        if c in " \t\n;&|<>()":
+            break
+        if c == "\\":
+            quoted = True
+            if j + 1 < n:
+                parts.append(text[j + 1])
+            j += 2
+        elif c in "'\"":
+            end = text.find(c, j + 1)
+            if end < 0:
+                return None             # unterminated: a shell errors, nothing runs
+            quoted = True
+            parts.append(text[j + 1:end])
+            j = end + 1
+        else:
+            parts.append(c)
+            j += 1
+    delim = "".join(parts)
+    # `delim or quoted` — an EMPTY delimiter is a real heredoc when it was written as one.
+    # `<<""` and `<<''` name the empty string, do not expand, and end at the first empty
+    # line; `<<` with no word after it is not a heredoc at all. Testing `delim` alone
+    # collapsed the two, so the quoted-empty form was not tracked and its body was read as
+    # command text — charter refused `<<""` bodies that bash does not expand. Found by the
+    # deletion sweep and settled against bash, which runs neither.
+    return (delim, not quoted, strip, j) if (delim or quoted) else None
+
+
+def _heredoc_bodies(text: str, i: int,
+                    pending: list[tuple[str, bool, bool]]) -> tuple[str | None, int]:
+    """Consume the bodies of the heredocs *pending* on the line that just ended at *i*.
+
+    In order, because a line may open several (`cat <<'A' <<B`) and their bodies follow in
+    the order the headers appeared — checked against bash, since getting the order wrong
+    would read an expanding body as a literal one.
+    """
+    n = len(text)
+    for delim, expands, strip in pending:
+        lines: list[str] = []
+        while i < n:
+            end = text.find("\n", i)
+            line = text[i:] if end < 0 else text[i:end]
+            i = n if end < 0 else end + 1
+            if (line.lstrip("\t") if strip else line) == delim:
+                break
+            lines.append(line)
+        if expands:
+            hit = _heredoc_substitution("\n".join(lines))
+            if hit:
+                return hit, i
+    return None, i
+
+
+def _live_substitution(cmd: str) -> str | None:
+    """The spelling of the first command substitution in *cmd* **that the shell would
+    run**, or ``None`` — the whole of this guard's new judgement.
+
+    **This cannot reuse the module's tokenizer, and that is a finding rather than a
+    preference.** :func:`_segment_argv_parsed` opens with :func:`_unbacktick`, whose own
+    docstring says it rewrites a backtick inside single quotes anyway because the
+    distinction does not matter to the guards it serves. It is the only distinction that
+    matters here. :class:`_Tok` gets one step closer — it records whether a token was
+    quoted AT ALL — and stops exactly short: `'…`x`…'` and `"…`x`…"` are both "not bare",
+    and only one of them runs `x`.
+
+    So this is a plain four-state walk of POSIX 2.2 quoting, and it answers one boolean
+    rather than producing tokens. That bound is deliberate. **A fix for a class of bug is
+    unusually likely to contain that bug**, and a shell parser written to guard shell
+    expansion is the worst case of it — so this stops at the FIRST live substitution and
+    never has to be right about anything after it. Nesting, operator boundaries, argument
+    attribution and word splitting are all outside what it decides.
+
+    Every rule below was verified against a real `bash` — that the double-quoted backtick
+    expands and the single-quoted one does not, that `\\`` inside double quotes is inert,
+    that an apostrophe inside double quotes opens nothing, that `<<EOF` expands and
+    `<<'EOF'`, `<<-'EOF'` and `<<\\EOF` do not, that quotes inside an expanding body are
+    literal, and that `<<<"…`x`…"` expands (a here-STRING is an ordinary double-quoted
+    word, so it is not treated as a heredoc and needs no special case).
+
+    Known divergences from a shell, each in the direction of denying MORE:
+
+    * `$((…))` arithmetic reads as `$(` (:data:`_SUBSTITUTIONS`);
+    * an unterminated quote or heredoc leaves the rest of the string literal, which is
+      what a shell does with the whole command — it refuses to run it;
+    * a substitution's own contents are never scanned, because the verdict is already in.
+    """
+    text = cmd or ""
+    n = len(text)
+    i = 0
+    pending: list[tuple[str, bool, bool]] = []
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2                              # the next character is literal, whatever
+        elif c == "'":
+            end = text.find("'", i + 1)
+            i = n if end < 0 else end + 1
+        elif c == '"':
+            hit, i = _double_quoted_substitution(text, i + 1)
+            if hit:
+                return hit
+        elif c == "`":
+            return "`"
+        elif c == "$" and text.startswith("$(", i):
+            return "$("
+        elif c == "$" and text.startswith("$'", i):
+            i = _ansi_c_end(text, i + 2)
+        elif c == "<" and text.startswith("<<<", i):
+            # A here-STRING, not a heredoc: its word is an ordinary one and the loop must
+            # judge it as such — `<<<"a `x` b"` runs `x`. All THREE characters are stepped
+            # over together, because advancing by one leaves a `<<` for the next iteration
+            # to read as a heredoc header whose "delimiter" is the quoted word — which
+            # classified the live substitution inside it as an inert body. Caught by the
+            # differential check against a real bash, not by review.
+            i += 3
+        elif c == "<" and text.startswith("<<", i):
+            here = _heredoc_header(text, i)
+            if here is None:
+                i += 2
+            else:
+                delim, expands, strip, i = here
+                pending.append((delim, expands, strip))
+        elif c == "\n" and pending:
+            hit, i = _heredoc_bodies(text, i + 1, pending)
+            pending = []
+            if hit:
+                return hit
+        else:
+            i += 1
+    return None
+
+
+def _forge_prose_command(cmd: str) -> str | None:
+    """``"gh issue create"`` — the prose-publishing forge command in *cmd*, or ``None``.
+
+    Adjacent PAIRS rather than the first two words, which is where A4's own reader stops:
+    `gh --repo o/r issue create` puts `o/r` in front, and a guard that read `words[0],
+    words[1]` would see `("gh", "o/r", "issue")` and allow. shlex is what keeps that honest
+    in the other direction — a quoted `--search "pr create"` stays ONE word and can never
+    supply the pair.
+
+    **Pairs over every token, flags included.** Dropping `-…` tokens first was the obvious
+    spelling and it was strictly worse: removing a flag JOINS the words it stood between, so
+    `gh issue list --label issue --state create` paired two flag VALUES into
+    `("gh", "issue", "create")` and refused a command that publishes nothing. It bought
+    nothing back — a global flag's value sits in front of the noun rather than between the
+    noun and the verb, so `gh --repo o/r issue create` still pairs correctly without the
+    filter. The deletion sweep found it: the filter survived deletion because no test
+    distinguished the two, and looking for the test showed the mutant was the better code.
+    """
+    for _toks in _segment_argv(cmd):
+        prog, _env, argv = _split_env(_toks)
+        base = os.path.basename(prog).lower()
+        if base not in ("gh", "glab"):
+            continue
+        words = argv[1:]
+        for noun, verb in zip(words, words[1:]):
+            if (base, noun, verb) in _FORGE_PROSE:
+                return f"{base} {noun} {verb}"
+    return None
+
+
+def _forge_substitution_hit(cmd: str) -> tuple[str, str] | None:
+    """``(the substitution's spelling, the denial)`` for a prose-publishing forge command
+    whose line carries a live substitution — or ``None``.
+
+    Returns the spelling as well as the sentence, following :func:`_single_credential_hit`
+    and for #289's reason: the trace field that says WHICH shape tripped a guard is what
+    makes "what fired this 335 times" answerable from the records, and a denial that only
+    ever returns prose cannot answer it.
+
+    **Scoped to the whole Bash call — not to the body argument, and not even to the
+    segment.** The coarseness is chosen rather than conceded, and it is stated here and in
+    `docs/secrets.md` rather than implied away. Attributing a substitution to the argument
+    it lands in means tracking which token each character of a shell string belongs to;
+    narrowing it to the segment means splitting the string on operators the tokenizer
+    cannot help with, because :func:`_unbacktick` has already erased the distinction this
+    guard turns on. Both are more parser in the direction that fails OPEN when it is
+    wrong, bought for nothing but permission for a command with a one-line remedy.
+
+    So these are refused too, and neither is the #703 defect::
+
+        cd "$(git rev-parse --show-toplevel)" && gh pr create --body-file b.md
+        gh pr create --body-file b.md --head "$(git branch --show-current)"
+
+    The remedy is the same one the denial names: compute the value in a SEPARATE Bash call
+    — each is judged alone — or put the text in a file. What is emphatically NOT refused is
+    the shape the working rule prescribes, `--body-file -` with a quoted heredoc, and that
+    is the calibration that matters: a guard that denied the path it steers agents onto
+    would be switched off within a day.
+
+    Both cheap tests come first because this is a per-Bash-call hot path, and a command
+    with no backtick and no `$(` in it is almost every command.
+    """
+    text = cmd or ""
+    if not any(s in text for s in _SUBSTITUTIONS):
+        return None
+    if "gh" not in text and "glab" not in text:
+        return None
+    spelling = _live_substitution(text)
+    if not spelling:
+        return None
+    where = _forge_prose_command(text)
+    if not where:
+        return None
+    shown = "`…`" if spelling == "`" else "$(…)"
+    return spelling, (
+        f"`{where}` publishes prose a reader sees, and this line carries a LIVE {shown} "
+        f"command substitution. The shell runs it and substitutes its OUTPUT before "
+        f"{where.split()[0]} is started — charter is handed the command, never the value "
+        f"it becomes — and a forge keeps public edit history, so what gets published "
+        f"cannot be withdrawn by editing it. Put the text in a file and pass "
+        f"`--body-file <path>`, or pipe it in with `--body-file -` and a QUOTED heredoc "
+        f"(`<<'BODY'`; an unquoted `<<BODY` expands exactly the same way). If you meant a "
+        f"markdown code span, it is the same character — backticks stay literal only "
+        f"inside single quotes or a quoted heredoc. This guard reads the SHAPE of the "
+        f"line; it does not know what the command would print, and does not claim to keep "
+        f"a credential off a forge.")
+
+
+# --------------------------------------------------------------------------- #
 # B: the clone-commit nudge — REMOVED in #371                                   #
 # --------------------------------------------------------------------------- #
 # It asked before a git write inside a workspace clone, recommending a repo-rooted session.
@@ -3847,6 +4286,19 @@ def pretooluse() -> int:
     if pub:
         rc = _deny("PreToolUse", pub)
         _trace("deny", sid, reason="release-floor", cmd=head)
+        return rc
+    # A5: a forge command that publishes prose may not carry a live command substitution
+    # (#703). Ungated, with `_leak_reason` and for its reason: what this refuses is a fact
+    # about the SHELL, not a policy this plane happens to hold, and its remedy is plain
+    # `gh`/`glab`. It also happens to close, for this one command family, the bypass
+    # `_leak_reason` has always listed as open — a QUOTED substitution, which shlex keeps
+    # as one word and no vault predicate ever looks inside. `gh issue create --body
+    # "$(cat <vault>)"` walks past A and stops here.
+    subst = _forge_substitution_hit(cmd)
+    if subst:
+        spelling, why = subst
+        rc = _deny("PreToolUse", why)
+        _trace("deny", sid, reason="forge-substitution", shape=spelling, cmd=head)
         return rc
     # B WAS HERE: the clone-commit nudge, removed in #371 — see the note where it lived.
     # Nothing on this handler asks any more; every remaining verdict is a deny or an allow.

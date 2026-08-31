@@ -168,6 +168,30 @@ None of that is a reason to switch the guard off, and none of it is a bug report
 the sentence above says *mistakes*. The boundary that does not depend on a name is that
 charter itself never prints the value.
 
+**A leak does not have to come from a vault, and one guard is scoped to that.** Everything
+above assumes the *value* is what escapes — that something read a credential and printed
+it. In [#703](https://github.com/diazoxide/charter/issues/703) nothing read a vault: the
+tokens were already exported in the operator's shell, an agent wrote
+``gh issue create --body "… `env …` …"`` meaning the backticks as a markdown code span, and
+one shell expansion carried sixty-four variables into a **public** issue body. The blast
+radius was not decided by what the agent meant to publish; it was decided by what the
+operator's shell exports, and it was irreversible — a forge keeps public edit history, so
+rotation was the only remedy.
+
+So a `gh`/`glab` command that publishes prose is now refused when a command substitution
+the shell would **run** stands on its line, with `--body-file` (a path, or `-` with a
+quoted heredoc) named as the remedy. Its claim is deliberately small and does not grow into
+the sentences above: **what it reads is the shape of a command line.** The value is out of
+its reach in both directions — at `PreToolUse` the substitution has not run, and by
+`PostToolUse` the body is already published — so this is a refusal of a shape, not a
+promise that a credential stays off a forge; a `--body-file` whose file already holds the
+same text is outside it entirely, as is `git commit -m` — which is out of scope for
+calibration rather than severity, and is filed as its own decision in
+[#711](https://github.com/diazoxide/charter/issues/711). What it removes is the accident:
+the collision between a markdown code span and shell command substitution, in the one
+argument where an agent writes both.
+`docs/hooks.md` states the full scope, including the coarseness it accepts on purpose.
+
 **On opencode the ceiling is lower than that, and it is worth naming.** opencode loads
 every file in its `plugin/` directory into one JavaScript realm with shared globals, so a
 second plugin installed there can redefine what charter's plugin calls and silently disable
