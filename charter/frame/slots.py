@@ -272,6 +272,119 @@ def _height() -> int:
     return _DEFAULT_ROWS if measured is None else measured.lines
 
 
+class _Doors:
+    """Which COLUMNS of a one-row strip are a doorway to the palette.
+
+    The third of the three maps in this module, and the same finding each time: a pointer
+    event arrives as a NUMBER (`frame/events.py`), and the only thing that knows what is
+    at that number is the pass that composed the row. :class:`_Viewport` answers it for
+    the repo table's rows, :class:`_Tabs` for a bar's columns, and this for the two
+    one-row strips — :func:`_top` and :func:`_bottom`.
+
+    **A SET of columns rather than a column→name mapping, and the difference is the whole
+    design of #751.** The two strips have exactly three fields a click can act on — the
+    workspace chip, the persona head, and the `F2 palette` hint — and all three lead to
+    the same place, because the palette is the only chooser charter has and *a click
+    cannot choose*. `key` is in `component.EVENT_KINDS` and deliberately not in
+    `events.DELIVERED` (the harness owns the keyboard), so the select-then-confirm shape
+    `_repos_events` uses on the table is not available on a strip: whatever a click on one
+    of these does, it has to finish on the pointer alone. Opening the chooser is the one
+    thing that does, and it is what the row already advertises.
+
+    So the destination does not vary, and a mapping whose values nothing branches on would
+    be data no input could make observable — the survivor the deletion sweep reports and
+    `_Tabs`' own docstring argues away one axis over. What the field was CALLED is the
+    renderer's business and a test's; what reaches the handler is "is this cell a door".
+
+    **The bounds check is structural for :class:`_Tabs`' reason.** A column nothing
+    published is absent whether it is ``-1``, ``4096``, one of the two cells of a ` · `
+    separator, or the empty space past the last field — `in` has no wrong answer to give
+    the way a tuple indexed with a negative number has.
+
+    **Everything else on both strips answers nothing, and each has a case**: the charter
+    version and the context gauge on `top`, and the todo count, the alert, the in-flight
+    spinner, the news and the selected repo's detail on `bottom`, are READOUTS. They are
+    the frame reporting, not offering; the repo detail is the sharpest of them, because it
+    is the readout of a selection made on another pane and a click on it could only mean
+    "select what is already selected", which is the one gesture `_Tabs.switch_to` and
+    `builtins._repos_events` both already refuse.
+
+    One object at module scope for :class:`_Tabs`' reason: `panel.run` resolves one
+    component and draws it for the life of the process, so "which strip is this" has
+    exactly one answer here.
+    """
+
+    __slots__ = ("_cols",)
+
+    def __init__(self) -> None:
+        self._cols: frozenset[int] = frozenset()
+
+    def forget(self) -> None:
+        """Back to a strip nobody has drawn — for a test, and only a test.
+
+        `_Viewport.forget`'s reason exactly: production never calls it, because a panel
+        process is born here and the object dies with the process.
+        """
+        self.publish(())
+
+    def publish(self, columns) -> None:
+        """Record which columns of the row that was just painted are doors.
+
+        Columns of the component's OWN canvas — the rectangle `ctx.width` describes, which
+        is what `events.Dispatcher._on_canvas` delivers a click in, with `[frame] pad`
+        already subtracted.
+
+        **Every rung of both ladders publishes, including the rungs that draw no door at
+        all.** That is `_Viewport.blank`'s finding and `_bar.row`'s discipline: `_top` has
+        a terse rung and a too-narrow rung, `_bottom` drops whole fields as the row gets
+        starved and keeps exactly one at `terse`, and a strip that kept a stale map
+        through a resize would open the palette from a cell whose field the operator can
+        see is gone.
+        """
+        self._cols = frozenset(columns)
+
+    def opens_palette(self, col: int) -> bool:
+        """Whether a click at canvas column *col* should open this frame's palette."""
+        return col in self._cols
+
+
+#: The one strip this process draws into. See :class:`_Doors` for why there is exactly
+#: one; `frame/builtins._strip_events` is the other half and holds no state of its own,
+#: so the handler and the renderer cannot come to disagree about where the doors are.
+DOORS = _Doors()
+
+
+def _door_columns(limit: int, *fields) -> set[int]:
+    """The columns *fields* occupies, given as ``(start, text)`` pairs, clipped to *limit*.
+
+    Measured with `tui.width` and never `len`, for the reason every other measurement in
+    this module is: the glyphs on these two rows (`⬢`, `◆`, `⚡`) are exactly the ones
+    `statusline._persona_chip_cells`' comment says have broken a column twice, and the
+    strings arrive carrying SGR that `len` would count as cells.
+
+    A field whose text is empty contributes nothing — which is how a `top` with no gauge
+    and a `bottom` whose `hotkey` field was dropped by `_fit_fields` publish the absence
+    rather than a zero-width door at somebody else's column.
+
+    ***limit* is the width the finished row was `tui.truncate`d to, and clipping to it is
+    not tidiness.** Both strips end in a truncate, and a field that ran past the pane is
+    drawn as a `…` or not drawn at all — so a door published at the columns the field
+    WOULD have had is a door on a cell the operator can see is empty. This is
+    `_Viewport.blank`'s rule at the finest grain the row offers: what is published
+    describes what was drawn, never what was composed.
+
+    There is deliberately no lower clamp beside the upper one. Every *start* here is
+    composed out of widths — a `tui.width` sum starting at column 0 — so a negative one is
+    not a case this can be given, and a `max(0, start)` guarding against it would be a line
+    no input could turn red: the survivor the deletion sweep reports and this repository
+    deletes.
+    """
+    cols: set[int] = set()
+    for start, text in fields:
+        cols.update(range(start, min(limit, start + tui.width(text))))
+    return cols
+
+
 def _top(fid: str) -> str:
     """Identity: where you are, pinned or not, and who you are being.
 
@@ -411,10 +524,32 @@ def _top(fid: str) -> str:
         state.harness_session(fid) or ""))
     left = f" ⬢ {ws}{pin}"
     identity = f"{left}  {gauge}  {persona}" if gauge else f"{left}  {persona}"
-    if verbosity(fid) == "terse":
-        return tui.truncate(identity, content_width("top"))
-    build = f"charter {__version__}{statusline._dev_chip()} "
+    # **The two doors on this row, and both are measured from the pieces that were
+    # composed rather than found in the finished string** (#751). `left` is the workspace
+    # chip and starts at column 0; the persona field is `PersonaLine.head` — *identity*,
+    # the `◆ steward` half — which begins after `left`, the two spaces, and the gauge with
+    # its own two spaces when there is one. The ROSTER half that may follow it is left
+    # inert deliberately: `_top` draws it only when the sidebar is not (#530), so a door
+    # there would exist on some frames and not others for a reason no operator can see.
+    #
+    # Composed rather than searched for the reason this function already gives about the
+    # chips: a fact recovered from a rendered row by looking for `◆` in it is a second
+    # reading of what was drawn, free to drift from the first.
+    #
+    # **One publish, above the ladder rather than on each of its three rungs.** All three
+    # draw *identity* from column 0 and differ only in what they put to the RIGHT of it —
+    # nothing, the version, or a `…` — so the doors are at the same columns on every rung
+    # and clipping to *w* is what the difference costs them. `_bar.row` reaches the same
+    # place from the other direction, with a closure, because its rungs draw different
+    # names; here there is nothing for a second call to say differently, and two calls
+    # would be two places for that to stop being true.
     w = content_width("top")
+    head_at = tui.width(left) + 2 + (tui.width(gauge) + 2 if gauge else 0)
+    DOORS.publish(_door_columns(w, (0, left),
+                                (head_at, "" if line is None else line.head)))
+    if verbosity(fid) == "terse":
+        return tui.truncate(identity, w)
+    build = f"charter {__version__}{statusline._dev_chip()} "
     # `+ 1` is the one column that must separate them; without it a full-width identity
     # would butt straight up against the version and read as one word.
     if tui.width(identity) + tui.width(build) + 1 > w:
@@ -1561,6 +1696,44 @@ def _cap_personas(cells: list, keep: int) -> list:
                            hidden)]
 
 
+def _badge_width(cells: list, width: int) -> int:
+    """How many columns the badge column takes on a *width*-wide persona table.
+
+    The widest badge ON SCREEN, measured with `tui.width` and never `len` — `✎ ◌ ⚑ ✗ ⚡`
+    and the vault dot are exactly the glyphs `statusline._persona_chip_cells`' own comment
+    says have broken this layout twice — bounded by :data:`_NAME_MIN_W` so a persona with
+    three dispatches in flight cannot take a 22-column sidebar's names away from it.
+
+    **Extracted because two passes need the same number and must not compute it twice.**
+    :func:`_persona_rows` lays the cell out and :func:`persona_section` publishes the
+    column it starts at, so a click can tell a badge from a name; a second copy of this
+    arithmetic is a second answer to "where does the badge column begin", and the two
+    disagree the first time either is edited. It is the same reason `_Chips` is published
+    by the pass that composed the rows rather than re-derived when a click arrives.
+
+    **The floor is on the OUTSIDE of the `min`, and that position is the deletion sweep's
+    finding rather than a preference.** Written `min(widest, max(0, width - _NAME_MIN_W))`
+    — which is where this arithmetic sat for as long as only `_persona_rows` used it — the
+    clamp is an exact equivalent: measured over 3,280 cell configurations at every width
+    from 0 to 40, dropping it changed not one drawn row and not one resolved click,
+    because a negative width fell into `_persona_rows`' own ``badge_w <= 0`` branch and
+    was treated as zero there. A guard whose effect another branch already provides is a
+    line no input can turn red.
+
+    Outside the `min` it is this function's own contract instead — *a column is never a
+    negative number of cells* — which is one assertion on one call
+    (`_badge_width(cells, 8) == 0`) rather than a property of whatever the caller does
+    next. It also makes :func:`persona_section`'s ``width - badge_w`` honest: a negative
+    badge width published a badge column starting PAST the pane, which no click could
+    reach and which was therefore wrong in the way that only shows up later.
+
+    The two forms are equal wherever the old one was defined — the widest badge is never
+    negative, so `min(widest, 0)` and `max(0, min(widest, negative))` are both zero.
+    """
+    return max(0, min(max((tui.width(c.badges) for c in cells), default=0),
+                      width - _NAME_MIN_W))
+
+
 def _persona_rows(cells: list, width: int) -> list[str]:
     """The persona chips drawn as a TABLE: names down the left, badges in a right-hand
     column of their own (#516).
@@ -1582,8 +1755,7 @@ def _persona_rows(cells: list, width: int) -> list[str]:
     put on themselves, so the cells are joined with no gap and `head + badges` is still
     byte-for-byte what `statusline._persona_chips` renders.
     """
-    badge_w = min(max((tui.width(c.badges) for c in cells), default=0),
-                  max(0, width - _NAME_MIN_W))
+    badge_w = _badge_width(cells, width)
     rows: list[str] = []
     for c in cells:
         if badge_w <= 0 or c.name is None:
@@ -1674,6 +1846,200 @@ def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
     return rows
 
 
+class _Hit(NamedTuple):
+    """What `_Chips.hit` resolved a click to — which of the two things, and about whom.
+
+    A pair rather than two methods, because *which cell did the pointer land in* is one
+    question with one answer and asking it twice is how a renderer and a handler come to
+    disagree. `builtins._persona_events` branches on :attr:`explain` and never re-derives
+    it.
+
+    **A bool rather than a pair of named string kinds, and the deletion sweep is why.**
+    This was ``kind: str`` against two module constants (``SWITCH = "switch"``,
+    ``EXPLAIN = "explain"``), and the sweep reported both spellings as survivors — rightly
+    so: every producer and every consumer went through the constant, so the VALUE was
+    unobservable and any string would have done. That is a literal nothing can turn red.
+    A bool has no spelling to get wrong, and flipping it is caught by the first case that
+    clicks a badge.
+
+    The column matters more than the vocabulary here: there are exactly two things on a
+    persona row, they are decided by which cell the pointer landed in, and a third would
+    be a different question (which cell?) rather than a third value of this one.
+    """
+
+    #: True when the pointer was in the BADGE cell — say what the glyphs mean. False when
+    #: it was in the name cell — adopt this persona.
+    explain: bool
+    name: str
+
+
+#: What a click on the badge column puts on the attention row — #753, answered in the
+#: frame rather than in `charter docs show frame`.
+#:
+#: **One legend for every row, not a readout of the row that was clicked**, and that is a
+#: deliberate limit rather than the first draft of a better version. `PersonaChip.badges`
+#: is a RENDERED string by the time this module sees it; saying what *this* persona's
+#: badges mean would take either decoding those glyphs back out — the drift
+#: `statusline.PersonaChip`'s own docstring exists to prevent — or a handler reading the
+#: plane, which §4f forbids it (`on_event` is handed no ctx, precisely so a handler cannot
+#: grow a second reading of a plane the repaint is about to read anyway). A legend needs
+#: neither, and the question an operator actually has — *what is that glyph* — is the one
+#: it answers.
+#:
+#: Kept to the width of an ordinary frame's attention row on purpose: `state.say` hands
+#: this to `_bottom`, where it is the top-priority field and is still `tui.truncate`d to
+#: the pane. The full table, with the sentence each of these compresses, is
+#: `docs/frame.md`'s — this is the reminder, not the reference.
+BADGE_LEGEND = ("◦ no usable vault · ! vault unhealthy · ⚑ draft charter · "
+                "✗ broken config · ✎ memories · ◌ session notes · ⚡ in flight")
+
+
+class _Chips:
+    """Which persona each ROW of the sidebar's persona column is about, and who you are.
+
+    Also where the BADGE column starts, so a click can tell *be this persona* from *what
+    is that glyph* (#753) — see :meth:`hit`.
+
+    `_Tabs` on the other axis, and the argument for existing is the one that class makes
+    for a bar and `_Viewport` makes for the table: a pointer event arrives as a NUMBER,
+    and the only thing that knows what is at that number is the pass that composed the
+    rows. :func:`persona_section` is that pass.
+
+    **The column needs a published map for `_Tabs`' reason — the ladder is not
+    invertible.** :func:`_cap_personas` drops the tail of an ORDER (the active persona
+    first, then anything carrying a health mark) and replaces it with one `…(+N more)`
+    row, and `terse` caps the list again at :data:`_TERSE_ROWS`; so "which persona is on
+    row 4" cannot be worked back from the roster and the pane's height, and re-deriving it
+    when a click arrives would be a second answer to what is on screen, disagreeing with
+    the first the moment a repaint lands in between.
+
+    **The map and the mark are written by ONE call**, which is `_Tabs.publish`'s rule and
+    `_Viewport.blank`'s finding: a column that published its rows and left a stale *here*
+    would answer "you are already there" for a persona the operator can see is not in
+    reverse video.
+
+    **Rows that name no persona hold ``None``, and rows below the section are out of
+    bounds**: the `▪ personas N` heading and the `…(+N more)` line are the first kind (it
+    stands for personas that are *not* drawn — `_Tabs` refuses its `+14` for the identical
+    reason); the `no personas` sentence, the blank separator rows the sidebar puts between
+    its sections, and every todo and change row below them are the second. Both answer
+    ``None`` out of :meth:`switch_to`, which is where the whole refusal lives.
+
+    **It is `_Viewport`'s sequence rather than `_Tabs`' mapping, and the sweep is what
+    settled that.** The first version filtered the empty rows out of a dict, and the
+    deletion sweep reported the filter as an exact equivalent — an absent key and a
+    ``None`` value were indistinguishable to everything downstream, so the guard was a
+    line no input could turn red. A bar's columns really are sparse (a `_BAR_GAP` belongs
+    to nothing); a column of rows is not. See :meth:`publish`.
+
+    One object at module scope for `_Tabs`' reason. Note that the `sidebar` composite and
+    the standalone `personas` component both reach it through the same
+    :func:`persona_section` call, and the persona rows are the FIRST thing either pane
+    draws — so one base of row 0 is right for both, and neither caller offsets anything.
+    """
+
+    __slots__ = ("_rows", "_here", "_badge_at")
+
+    def __init__(self) -> None:
+        self._rows: tuple[str | None, ...] = ()
+        self._here = ""
+        self._badge_at = 0
+
+    def forget(self) -> None:
+        """Back to a column nobody has drawn — for a test, and only a test."""
+        self.publish((), "", 0)
+
+    def publish(self, rows, here: str, badge_at: int) -> None:
+        """Record which persona the paint that just happened put on each row.
+
+        *rows* is indexed by a row of the component's own canvas — `[frame] pad` insets
+        columns only (`inset_rows`), so a pane row and a composed line are the same number
+        here — and holds the RAW persona name, never the drawn one. `_persona_rows` runs
+        every name through `tui.Cell`, which contains and may truncate it (#472); what
+        goes into `charter frame-switch --persona` has to be the name on disk.
+        `_Tabs.publish` is this decision one axis over.
+
+        **A SEQUENCE with ``None`` in it, which is `_Viewport.publish`'s shape and
+        deliberately not `_Tabs`'.** A bar's columns are sparse — a `_BAR_GAP` is two
+        cells belonging to nothing — so a mapping is right there and absence is the
+        answer. A column of rows is dense: every row of this section was drawn, and the
+        ones that name no persona (the `▪ personas N` heading, the `…(+N more)` line) are
+        rows with nothing on them rather than rows that are not there. `_Viewport.publish`
+        spells exactly this with its leading ``None`` for the table's own heading.
+
+        It also stops "no persona here" having two spellings. A dict with the empty rows
+        filtered out has both an absent key and — if a filter is ever dropped — a ``None``
+        value meaning the same thing, and the deletion sweep found that filter to be
+        precisely equivalent: nothing downstream could tell the two apart, so the guard
+        was a line no input could turn red.
+
+        *here* is the persona this frame is ON, taken from `PersonaChip.active` in the
+        same paint that drew the reverse-video row — data the chips carry, never a search
+        for `▸` or magenta in a rendered head, which is `persona_section`'s own rule for
+        the highlight itself. The map and the mark are written by ONE call for
+        `_Tabs.publish`'s reason.
+
+        *badge_at* is the first column of the badge cell `_persona_rows` laid out, or
+        ``0`` when the pane was too narrow to give the badges a column of their own — the
+        rung where `_badge_width` answers zero and every row is drawn full width. It is
+        the third thing this one call writes, for the same reason the mark is: a paint
+        that moved the badge column and left a stale offset behind would explain a glyph
+        for a cell the operator clicked a NAME in.
+        """
+        self._rows = tuple(rows)
+        self._here = here
+        self._badge_at = badge_at
+
+    def hit(self, row: int, col: int):
+        """What a click at canvas *row*, *col* on this column means, or ``None``.
+
+        **Two answers, because the persona column has two things on it** (#753). A row is
+        a NAME with a BADGE COLUMN to the right of it, and the two are asking different
+        questions: the name is *be this persona*, the badges are *what is that glyph*.
+        `_persona_rows` already draws them as two cells, so resolving a click against
+        which cell it landed in is reading the layout that is on screen rather than
+        inventing a second one.
+
+        A hit with :attr:`_Hit.explain` false is the front door `builtins._persona_events`
+        starts; a true one puts :data:`BADGE_LEGEND` on the attention row through
+        `state.say`, which is the dwell #729 built and the reason this needs no surface of
+        its own.
+
+        **Explaining works on the persona you already are, and switching does not.** *"What does
+        the flag on my own row mean"* is the commonest form of the question this answers,
+        and nothing about it is a no-op — where re-adopting the persona you are being is
+        exactly the nothing `_Tabs.switch_to` refuses, and is also what keeps a
+        double-click from switching twice.
+
+        **The bounds check is spelled out, and `_Viewport.repo_at` is why**: a tuple
+        indexed with a negative number answers the LAST row — a wrong answer that hides a
+        wrong reading — so a row outside what was painted is refused here rather than
+        wrapped around. `_Tabs` gets this structurally from a mapping; a sequence does
+        not, and this is the price of the shape :meth:`publish` argues for.
+
+        **A row that names no persona answers ``None`` for BOTH kinds**, badge column or
+        not: the `▪ personas N` heading and the `…(+N more)` line hold ``None``, and
+        `_persona_rows` draws the second of those full width with no badge cell at all —
+        so a click past where the badges would have been is a click on a sentence about
+        the list, which explains nothing and switches nothing.
+
+        ``_badge_at`` of ``0`` is the rung where the pane was too narrow to give the
+        badges a column (`_badge_width` answered zero); the ``> 0`` test is what keeps
+        every column on such a row a name rather than making column 0 a badge.
+        """
+        name = self._rows[row] if 0 <= row < len(self._rows) else None
+        if name is None:
+            return None
+        if self._badge_at > 0 and col >= self._badge_at:
+            return _Hit(True, name)
+        return None if name == self._here else _Hit(False, name)
+
+
+#: The one persona column this process draws. See :class:`_Chips`;
+#: `frame/builtins._persona_events` is the other half and holds no state of its own.
+CHIPS = _Chips()
+
+
 def persona_section(width: int, height: int, *, terse: bool) -> list[str]:
     """The sidebar's persona rows: the heading, and every chip a *height*-row pane fits.
 
@@ -1714,12 +2080,34 @@ def persona_section(width: int, height: int, *, terse: bool) -> list[str]:
     from .. import statusline as sl
     cells = sl._persona_chip_cells()
     if not cells:
+        # **The rung that draws no persona publishes too**, which is `_Viewport.blank`'s
+        # whole finding and `_bar.row`'s discipline: a pane that said `no personas` while
+        # a map from the paint before it was still standing would switch this frame to a
+        # persona nobody can see on the row that was clicked.
+        CHIPS.publish((), "", 0)
         return [tui.truncate(f"{sl._DIM}no personas{sl._R}", width)]
     keep = height - 1                       # the heading takes a row off the list
     if terse:
         keep = min(keep, _TERSE_ROWS)
     cells = _cap_personas(cells, keep)
     rows = _persona_rows(cells, width)
+    # The leading `None` is the `▪ personas N` heading, which belongs to no persona —
+    # `_Viewport.publish`'s own `(None, *…)` for the table's heading, one section over.
+    # The `…(+N more)` row already carries `name is None` from `_cap_personas`, so it
+    # lands as a row with nothing on it without a filter here: it stands for the personas
+    # that are NOT on screen, which is why `_Tabs` refuses its `+14` too.
+    # `_badge_width` rather than a second copy of its arithmetic: `_persona_rows` lays the
+    # cell out at exactly this column and a click has to resolve against what was DRAWN.
+    #
+    # **Zero when there is no badge column, spelled out rather than left to fall out of
+    # the subtraction.** `width - 0` is `width`, which is a column no click can reach and
+    # would therefore have degraded correctly by accident — the kind of accident that
+    # stops being one the first time either side of it is edited. `_Chips.hit` reads this
+    # as "was a badge cell drawn at all", so it has to be a number that says so.
+    badge_w = _badge_width(cells, width)
+    CHIPS.publish((None, *(c.name for c in cells)),
+                  next((c.name for c in cells if c.active), ""),
+                  width - badge_w if badge_w else 0)
     return [_sidebar_head("personas", _persona_total(cells), width),
             *(chrome.reverse(row, width) if c.active else row
               for c, row in zip(cells, rows))]
@@ -2182,9 +2570,48 @@ def _bottom(fid: str) -> str:
     fields = {"notice": notice_text, "alert": alert_text, "inflight": inflight_text,
               "news": news_text, "todo": todo_text, "hotkey": hotkey_text,
               "repo": repo_text}
-    parts = [fields[n]
-             for n in ("notice", "todo", "alert", "inflight", "news", "hotkey", "repo")
-             if n in keep]
+    order = ("notice", "todo", "alert", "inflight", "news", "hotkey", "repo")
+    parts = [fields[n] for n in order if n in keep]
+    # **The one door on this row is the `F2 palette` hint, and it is the sharpest case in
+    # #751**: it is the only affordance charter advertises on screen, drawn as a key name
+    # beside a noun, which is a button everywhere else an operator has seen one. Clicking
+    # it now does what pressing the key does.
+    #
+    # **Its column is walked out of `parts` rather than searched for in the joined row**,
+    # for `_top`'s reason: the text is `config.FRAME['hotkey']` and an operator on
+    # `hotkey = "F1"` would have a row this function could not find its own field in by
+    # looking — and the alert on an ordinary plane puts several ` · ` on the row, so
+    # "the field after the second separator" is not a thing to search for either.
+    #
+    # **Every rung publishes**, including the ones that draw no door: `_fit_fields` drops
+    # `hotkey` first when the row is starved (it is last in the priority list), `terse`
+    # keeps exactly one field and it is never this one, and a frame inside the operator's
+    # own tmux has no hotkey to advertise at all (`hotkey_text` is empty there, so
+    # `_door_columns` contributes nothing). A strip that kept a stale map through any of
+    # those would open the palette from a cell the operator can see is empty.
+    #
+    # **#729's `notice` is a seventh field and the walk needs no case for it**, which is
+    # the property this shape was chosen for: the loop reads `order`, so a field added at
+    # the head of the row moves the hint's columns by exactly its own width plus a
+    # separator, and the door follows without anything here being told about it. It is
+    # also correctly INERT — a notice is the outcome of something the operator already
+    # chose, dwelling for a few seconds, which is a readout in the same sense the todo
+    # count and the selected repo's detail are.
+    sep_w = tui.width(" · ")
+    at, doors = -sep_w, []
+    for name in order:
+        if name not in keep:
+            continue
+        # Paid at the TOP of the iteration and started one separator behind, which is
+        # `_tab_columns`' own trick for the identical off-by-one: the first field is not
+        # preceded by a separator, and a `if at:` in here would be a branch that could
+        # only ever be observed by a first field of zero width — which `_fit_fields`
+        # already refuses to keep.
+        at += sep_w
+        if name == "hotkey":
+            doors.append((at, fields[name]))
+        at += tui.width(fields[name])
+    DOORS.publish(_door_columns(w, *doors))
     return tui.truncate(" · ".join(parts), w)
 
 

@@ -149,10 +149,12 @@ One consequence of that first column worth knowing, because it is new: a panel w
 component declares `click` or `scroll` asks *its own* terminal to report, so if you select
 that panel's pane (with your tmux prefix, say), your terminal starts reporting and native
 selection goes for as long as it is the active pane. Selecting the harness back — or `F12`
-— ends it. Panels that declare neither ask for nothing and change nothing, which is three
-of the four panels charter ships — and the two bars, if you place one, are not among them.
+— ends it. **All four panels charter ships declare `click` now, and the two bars do too**,
+so that consequence applies to any pane of the frame you make active — where before this
+release it was the repo table alone. A component that declares neither kind still asks for
+nothing and changes nothing; charter simply no longer ships one.
 
-**The repo table is the fourth: it scrolls and it selects.** Roll the wheel over it and the
+**The repo table scrolls and it selects.** Roll the wheel over it and the
 window moves down the list; click a row and that repo is selected, its row drawn in reverse
 video and its state read back in words on the right of the attention row — `▪ charter ·
 fix/x · dirty · 2 ahead · CI failed`. A click only ever *selects*; nothing charter does from
@@ -204,6 +206,46 @@ redraws the same row with the `*` moved and every other tab still where you pres
 is what makes a double-click harmless: the second press lands on the tab you just arrived at,
 and that one does nothing. It also means the names a click can reach are the ones on your
 page; `F2` is what reaches the other pages.
+
+**A persona row's badges explain themselves.** Clicking the badge column puts the glyph
+legend on the attention row (see *Every glyph on a persona row* above). It works on the
+row you are already on, which is where the question usually comes from.
+
+**A persona row's name switches to it**, for the tab bar's three reasons, unchanged:
+charter acts on the press, the row you came from is still in the column one click away, and
+nothing on the machine could finish a two-step gesture, because your typing goes to the
+harness. Click the name `docs` and the frame adopts `docs` — the same thing `charter frame-switch
+--persona docs` does, started the same way, with the same refusals reaching you on the same
+status line. Clicking the *name* of the persona you already are does nothing, which is also
+what stops a double-click switching twice — though clicking its badges still explains them.
+Neither the `▪ personas 6` heading, the `…(+N more)` row (it stands for the personas that
+are *not* drawn), the `no personas` line, nor anything below the column does anything at
+all — the todos and the changes are readouts. On a sidebar too narrow to give the badges a
+column of their own, every cell of a persona row is its name.
+
+**The `F2 palette` hint is a button now, and so are the two nouns on the identity row.**
+Click `F2 palette` on the attention strip and the palette opens; click `⬢ <workspace>` or
+`◆ <persona>` on the identity strip and the same palette opens. All three go to the same
+place on purpose: `⬢ alpha` names the workspace you are *on* and `◆ steward` the persona
+you *are*, so a click on either can only mean *let me pick another*, and picking needs a
+list to pick from. The palette is that list, and opening it finishes on the pointer alone —
+it makes itself the active pane, so your keyboard reaches the rows it just drew.
+
+Everything else on those two rows is inert, and each one is a readout rather than an
+offer: the charter version and the context gauge on the identity row; the todo count, the
+alert, the in-flight spinner, this session's news, and the selected repo's `▪ ledger · main
+· clean` on the attention row. That last one is the sharpest of them — it is the readout of
+a row you selected on *another* pane, so a click on it could only mean "select what is
+already selected", which is the one gesture the repo table and the tab bars both already
+refuse. On a row starved narrow enough to drop the hotkey field, or at `terse` density
+where only one field survives, there is nothing clickable on the attention strip at all —
+and inside your own tmux there is no hint drawn, because charter binds no key there.
+
+**None of this needs a mouse, and none of it is a route that did not already exist.** Every
+one of these clicks is a shortcut to something `F2` reaches: the palette itself, and the
+`workspace:` and `persona:` rows in it. That is the rule charter holds itself to — a
+pointer affordance always has a key or a palette row beside it — and it is why adding these
+added no new obligation.
 
 **Focus events are on inside a frame charter launched, and off inside your own tmux.** tmux
 ships `focus-events` off, and it is a server-wide setting; charter turns it on for its own
@@ -870,6 +912,43 @@ them. The todo list is what `charter ws todo` shows, oldest first, cut to what t
 room for with a `…(+N more)` line saying how many it hid; a workspace with nothing open
 gets no todo section at all rather than a heading over an empty space. The sidebar drops
 itself on a terminal too small for it.
+
+#### Every glyph on a persona row
+
+A glyph only says something to someone who has been told what it says, and the sidebar's
+persona column is the densest thing charter draws — five glyph classes on one 22-column
+row. Here is all of them.
+
+| | where | means |
+|---|---|---|
+| `▪` | heading | a section heading, and the count beside it is the whole section — `▪ personas 6` |
+| `▸` | start of a row | the persona you *are*. Its row is also drawn in reverse video |
+| `▫` | start of a row | a persona you are not. Dispatchable, adoptable, otherwise idle |
+| `◦` | after the name | this persona **declares a vault charter cannot use here** — either this machine has no vault by that name, or it has one whose file does not exist yet. `charter persona create` writes the declaration; nothing writes the vault, so this is the ordinary state of a persona nobody has given credentials to, and it is not an error |
+| `!` | after the name | the vault is registered and **unhealthy** — unreadable, or its provider is misconfigured |
+| `✎N` | badge column | `N` **committed** memories. Green |
+| `◌N` | badge column | `N` **session-scratch** memories, not committed. Yellow |
+| `⚑` | badge column | the persona's **charter is a draft**, so charter generates no sub-agent for it and it cannot be dispatched. `charter persona show <name>` says what it still needs |
+| `✗` | badge column | the persona's **config is broken** — a dangling `extends:`/`uses:`, or an inheritance cycle |
+| `⚡N age` | badge column | `N` dispatches **in flight**, and how long the oldest has been running. A `?` after the age means that record is past the point charter presumes it dead |
+
+Nothing after the name and nothing in the badge column is the healthy, quiet case, and
+silence is deliberate: a column that said *ok* on every row would spend the sidebar's
+width on the rows with nothing to report.
+
+**You do not have to come here to read it.** Click the badge column on any persona row —
+the right-hand column the `⚑`s line up in — and the frame puts the legend on the attention
+row for ten seconds. That is the same dwell a workspace switch uses to say what it did, so
+it costs no extra row and nothing stays on screen. Clicking a persona's *name* still
+switches to it; the badges and the name are two cells of one row and mean two different
+things. It is one legend for every row rather than a reading of the row you clicked —
+short enough for the attention row, with this table as the long version.
+
+**`◦` and `⚑` together on most rows is normal, and it was worth writing down.** A plane
+whose personas came from `charter persona create` and were never given a vault shows `◦`
+on every one of them; a plane whose charters are still drafts shows `⚑` beside it. Six
+personas, five flags, nothing wrong — which is exactly the reading that sent one operator
+into `frame/slots.py` to find out what charter was warning them about.
 
 **The attention strip is last, and the table floats above it.** The table's height is its
 content's, so whichever of the two sits lower moves up and down the screen as repos are
