@@ -137,7 +137,8 @@ def matches(query: str, row: overlay.Row) -> bool:
     identical string and two spellings of it is two places for it to be wrong.
 
     **The id is not folded, and the guard in front of it is why.** `component.usable_id`
-    holds an id to `^[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31})?$` — measured: every
+    holds an id to `component._ID_RE`, which admits lower-case letters, digits and
+    underscores with at most one dot between two such runs — measured: every
     spelling with a capital in it answers False — so an id that reached the comparison
     cannot carry case, and `casefold` on it is a claim that it can. The deletion sweep
     reported that call as a line nothing could go red without, and it was right. What the
