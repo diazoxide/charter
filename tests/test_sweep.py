@@ -1712,6 +1712,37 @@ class AMutantThatEatsTheMachineIsARedAndNotAnOutage(unittest.TestCase):
         self.assertLess(sweep.address_space_cap(4, total=16 * 1024 ** 3) * 4,
                         16 * 1024 ** 3)
 
+    def test_a_machine_that_will_not_say_how_big_it_is_gets_the_floor(self):
+        """Found unpinned by this branch's own sweep, at `tools/sweep.py:1803`.
+
+        `os.sysconf` is not on every platform and does not answer on every platform, and
+        the one thing this must not do is propagate: an unbounded mutant is the failure
+        being fixed, and a sweep that refuses to start because it could not size a cap is a
+        worse one. So the catch is real, and the sweep was right that nothing held it.
+        """
+        real = os.sysconf
+
+        def refuses(_name):
+            raise ValueError("unrecognised configuration name")
+
+        os.sysconf = refuses
+        self.addCleanup(setattr, os, "sysconf", real)
+        self.assertEqual(sweep.total_memory(), 0)
+        self.assertEqual(sweep.address_space_cap(4), sweep.SUITE_ADDRESS_SPACE)
+
+    def test_a_job_count_nobody_validated_does_not_divide_by_zero(self):
+        """Found unpinned by this branch's own sweep, at `tools/sweep.py:1820`.
+
+        `--jobs` is an integer the operator types and nothing checks its sign, and
+        `jobs + 1` is a **divisor** — so `--jobs -1` is a `ZeroDivisionError` raised while
+        sizing a memory cap, which is a sweep that will not start at all, over a typo. The
+        floor is not decoration and it is not dead: it is the only thing between a
+        mistyped flag and a stack trace.
+        """
+        for jobs in (-5, -1, 0):
+            self.assertEqual(sweep.address_space_cap(jobs, total=64 * 1024 ** 3),
+                             64 * 1024 ** 3, f"--jobs {jobs}")
+
     def test_the_floor_is_what_the_suite_measured_and_it_wins_on_a_small_machine(self):
         """The two failures are not symmetrical. Too loose is the status quo — the runner
         dies. Too tight reddens the **unmutated baseline**, and this tool refuses to sweep
