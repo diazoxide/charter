@@ -1685,7 +1685,7 @@ chats was last in front of you.
 
 ```
 charter · 11 to choose from
->   workspace: alpha — pick another
+>   workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
     persona: steward — pick another
     detach — leave the harness running
     repo: select the next row
