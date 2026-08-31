@@ -280,24 +280,29 @@ class MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer(PersonaIso,
 
     `roster` keys on `state.workspace_for` — the pin, the per-session pointer, the launch
     record, a local resolve. `of_workspace` decided membership with the launch record
-    ALONE. `switch.to_workspace` writes the pointer AND the record; `charter workspace
-    use` writes only the pointer. So the pointer was a rung the roster read and
-    membership could not see, and the two halves of one question were asked at two
-    depths.
-
-    The visible cost is an asymmetry rather than a dead end. `F2 → workspace → gamma`
-    inside `alpha.1` takes it out of `alpha.2`'s list; `charter workspace use alpha`
-    typed back inside `alpha.1` repaired `alpha.1`'s own view and **nothing else** —
-    `alpha.2` could never see `alpha.1` again, so the route back existed only from the
-    side that is hardest to reach.
+    ALONE. So the pointer was a rung the roster read and membership could not see, and the
+    two halves of one question were asked at two depths.
 
     The fix is `state.own_workspace`: the same ladder with the two rungs that answer for
     the ASKING PROCESS taken off either end, asked by `of_workspace` and by
     `workspace_for` alike. One ladder asked twice — the shape `workspace.chosen` already
     names — rather than two that agree today.
 
-    **None of this decides what `F2 → workspace` MEANS** (#733's other half: whether that
-    keypress moves the chat or the frame). It stops charter holding both answers at once.
+    **The writer in these fixtures changed and the ladder did not.** They used to reach
+    the pointer rung through `switch.to_workspace`, which wrote it and the record both;
+    §4j has since made that a refusal (`tests/test_a_chat_belongs_to_its_workspace_for_
+    life.py`), so what is left writing a per-session pointer under a chat's id is
+    `workspace.set_active(..., session_id=<chat>)` — which is `charter workspace use`
+    typed at the agent, and `commands_frame._pin_workspace` at launch. That is the
+    production writer these cases now use, and every rung and every ordering below is
+    unchanged.
+
+    **What #733's other half decided, and it was not decided here.** Whether `F2 →
+    workspace` moves the chat or the frame is settled: neither. A chat belongs to its
+    workspace for life (spec §4j), which is why the strand cannot form that way any more.
+    This class is the half that survives it — a chat may still be DRAWING a workspace its
+    record does not name, because a pin or a pointer says so, and it must be in that
+    workspace's roster when it is.
     """
 
     def setUp(self):
@@ -314,28 +319,35 @@ class MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer(PersonaIso,
     def test_a_chat_that_is_drawing_a_workspace_is_in_that_workspaces_roster(self):
         """The incoherence, stated as the invariant it broke.
 
-        After `F2 → workspace → gamma` in `alpha.1` and `charter workspace use alpha`
-        typed back inside it, `alpha.1` draws `alpha` — its panels, its status line and
-        every command it runs say `alpha` — while `of_workspace` still read the record
-        `to_workspace` had left pointing at `gamma`.
-        """
-        self.assertTrue(switch.to_workspace("alpha.1", "gamma").ok)
-        workspace.set_active("alpha", session_id="alpha.1", force=True, terminal_id="")
-        self.assertEqual(state.workspace_for("alpha.1"), "alpha")
-        self.assertIn("alpha.1", chats.of_workspace("alpha"))
-        self.assertNotIn("alpha.1", chats.of_workspace("gamma"))
+        After `charter workspace use gamma` typed inside `alpha.1`, that chat draws
+        `gamma` — its panels, its status line and every command it runs say `gamma` —
+        while `of_workspace` read the launch record and left it in `alpha`.
 
-    def test_the_repair_is_visible_from_the_chat_that_was_left_behind(self):
-        """The asymmetry, which is the defect #733 actually has.
-
-        The issue says the moved chat "has no route back". It has one, and it is one
-        command: `charter workspace use alpha`, typed inside it. What it did not have was
-        any way to become visible AGAIN to the chats it left — the repair writes the
-        pointer, and membership read only the record.
+        Both halves are asserted because either list alone can be right by accident: the
+        chat has to arrive in the roster it is drawing AND leave the one it is not.
         """
-        self.assertTrue(switch.to_workspace("alpha.1", "gamma").ok)
+        workspace.set_active("gamma", session_id="alpha.1", force=True, terminal_id="")
+        self.assertEqual(state.workspace_for("alpha.1"), "gamma")
+        self.assertIn("alpha.1", chats.of_workspace("gamma"))
+        self.assertNotIn("alpha.1", chats.of_workspace("alpha"))
+
+    def test_the_pointer_is_read_from_the_chat_on_the_other_side_too(self):
+        """The asymmetry, which is the defect #733 actually had, restated on the writer
+        that is left.
+
+        The issue says the moved chat "has no route back". It had one — `charter workspace
+        use alpha`, typed inside it — and what it did not have was any way to become
+        visible AGAIN to the chats it left, because the repair writes the pointer and
+        membership read only the record. So the property is that the pointer is read from
+        BOTH sides at once: `alpha.2` sees `alpha.1` leave and sees it come back, with
+        nothing typed inside `alpha.2` either time.
+
+        Was `test_the_repair_is_visible_from_the_chat_that_was_left_behind`, whose fixture
+        opened the strand with `switch.to_workspace` — §4j's refusal now.
+        """
+        workspace.set_active("gamma", session_id="alpha.1", force=True, terminal_id="")
         self.assertEqual(chats.others("alpha.2"), [],
-                         "the strand this test is about did not form")
+                         "the pointer rung this test is about is not being read")
         workspace.set_active("alpha", session_id="alpha.1", force=True, terminal_id="")
         self.assertEqual(chats.others("alpha.2"), ["alpha.1"])
         self.assertTrue(chats.check("alpha.2", "alpha.1").ok,
@@ -389,11 +401,10 @@ class MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer(PersonaIso,
 
         `$CHARTER_WORKSPACE` at launch is in every panel pane's process environment for
         as long as the pane lives, so `charter workspace use gamma` inside a pinned chat
-        writes a pointer nothing draws — `commands_workspace` warns exactly that, and
-        `switch.to_workspace` refuses the same move outright rather than reporting a move
-        that cannot happen. Membership follows the pin because the screen does; a
-        `for_session or frame_workspace` pair would strand a pinned chat in precisely the
-        way #733 describes, on a plane where it is coherent today.
+        writes a pointer nothing draws — `commands_workspace` warns exactly that.
+        Membership follows the pin because the screen does; a `for_session or
+        frame_workspace` pair would strand a pinned chat in precisely the way #733
+        describes, on a plane where it is coherent today.
 
         Read from `state.identity` — the launcher's own record — and never from
         `os.environ`, for `switch._pin`'s reason: this runs as a child of a tmux server
@@ -402,8 +413,6 @@ class MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer(PersonaIso,
         state.record_identity("alpha.1", {"CHARTER_HARNESS": "Claude Code",
                                           "CHARTER_WORKSPACE": "alpha"})
         workspace.set_active("gamma", session_id="alpha.1", force=True, terminal_id="")
-        self.assertFalse(switch.to_workspace("alpha.1", "gamma").ok,
-                         "a pinned frame cannot be moved, so it cannot have moved")
         with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "alpha"}, clear=False):
             self.assertEqual(state.workspace_for("alpha.1"), "alpha")
         self.assertEqual(chats.of_workspace("alpha"), ["alpha.1", "alpha.2"])
@@ -426,17 +435,16 @@ class MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer(PersonaIso,
         answers agree on `""`. Padding on the RIGHT is what an operator who exported
         `CHARTER_WORKSPACE="alpha "` leaves, and there the two diverge: `lstrip` keeps the
         trailing space, `workspace.valid_name` refuses the name, and membership falls
-        through to the pointer — while `switch._pin` strips the same value, sees a pin, and
-        refuses to move the frame at all. That is a chat pinned to `alpha`, unmovable, and
-        in `gamma`'s roster: #733 rebuilt out of one missing character. Stripped here on
-        the same terms as `workspace_for`'s rung 0 and `switch._pin`, because all three are
-        reading one variable.
+        through to the pointer — while `workspace_for`'s own rung 0 strips the same value
+        and reads it as a pin. That is a chat whose panels draw `alpha` sitting in
+        `gamma`'s roster: #733 rebuilt out of one missing character. Stripped here on the
+        same terms as that rung, because both are reading one variable.
         """
         state.record_identity("alpha.1", {"CHARTER_WORKSPACE": "alpha "})
         workspace.set_active("gamma", session_id="alpha.1", force=True, terminal_id="")
-        self.assertFalse(switch.to_workspace("alpha.1", "gamma").ok,
-                         "the pin is a pin to the switcher, so it must be one here")
         self.assertEqual(state.own_workspace("alpha.1"), "alpha")
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "alpha "}, clear=False):
+            self.assertEqual(state.workspace_for("alpha.1"), "alpha")
         self.assertEqual(chats.of_workspace("alpha"), ["alpha.1", "alpha.2"])
         self.assertEqual(chats.of_workspace("gamma"), [])
 
@@ -468,7 +476,7 @@ class MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer(PersonaIso,
         agree today"). A rung added to one is a rung the other asks."""
         for fid in ("alpha.1", "alpha.2"):
             self.assertEqual(state.workspace_for(fid), state.own_workspace(fid))
-        self.assertTrue(switch.to_workspace("alpha.1", "gamma").ok)
+        workspace.set_active("gamma", session_id="alpha.1", force=True, terminal_id="")
         self.assertEqual(state.workspace_for("alpha.1"),
                          state.own_workspace("alpha.1"))
         workspace.set_active("alpha", session_id="alpha.1", force=True, terminal_id="")
@@ -1229,11 +1237,14 @@ class TheSwitchEstablishesTheWindowItIsMovingTo(PersonaIso, unittest.TestCase):
     on screen, having reported a switch that did not happen.
 
     Reachable because membership is a RECORD. `chats.of_workspace` matches
-    `state.own_workspace`, whose rungs `charter workspace use <other>` typed at the agent
-    writes ("it moves the panels too" is a documented promise) and which
-    `switch.to_workspace` writes again — so after one `F2 → workspace → beta` inside
-    chat `api.1`, `of_workspace("beta")` returns `api.1` (a window of tmux session `api`)
-    beside `beta.1`, in one roster, and `chats.check` says ok.
+    `state.own_workspace`, whose pointer rung `charter workspace use <other>` typed at the
+    agent writes ("it moves the panels too" is a documented promise) — so after one
+    `charter workspace use beta` inside chat `api.1`, `of_workspace("beta")` returns
+    `api.1` (a window of tmux session `api`) beside `beta.1`, in one roster, and
+    `chats.check` says ok. §4j closed the other route into this state — `F2 → workspace`
+    is a refusal now (#733, #788) — and this guard is not softened by that: a plane can
+    still arrive here through the pointer, through a migration, or through a record
+    charter did not write.
 
     The fixture is that plane: both chats say workspace `beta`, both are on charter's own
     server, and their windows are in two different tmux sessions — which is the one fact

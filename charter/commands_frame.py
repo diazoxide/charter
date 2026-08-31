@@ -4110,18 +4110,31 @@ def _pin_workspace(ws: str, fid: str, picked: bool) -> None:
     SAID.** `set_active`'s contract is that confirming a workspace locks the session to it,
     and the picker is a confirmation — the alternative would be a launch that writes the
     pointer and leaves the lock off, which is a third behaviour for `charter workspace use`
-    to disagree with. What makes it liveable is that the frame has its own way out: `F2 →
-    workspace` overrides the lock and says so (`frame/switch.py`), so the operator is not
-    sent back to the shell for a choice they just made at a prompt. Printed here rather
-    than in the picker, because it describes what the LAUNCH did with the answer, not what
-    the answer was.
+    to disagree with. What makes it liveable is that the lock has its own way out, named in
+    the sentence that announces it: `charter workspace unlock`, typed in the frame's own
+    shell, so the operator is not stuck with a choice they just made at a prompt. Printed
+    here rather than in the picker, because it describes what the LAUNCH did with the
+    answer, not what the answer was.
+
+    **That sentence used to lead with `F2 → workspace` and no longer can** (§4j). The
+    escape it named was `switch.to_workspace` overriding the lock, and that switch is now
+    a refusal — a chat belongs to its workspace for life. The argument above is unchanged
+    because the OTHER escape was always the one that does the work: `unlock` releases the
+    lock without moving the chat, which is exactly what a lock the operator wants gone
+    needs and all it needs.
+
+    **This write is a lock, not a membership move, which is why §4j leaves it standing.**
+    The pointer lands under a chat whose workspace is *ws* already — this launch is what
+    minted the link (`state.record_workspace`, called by both launch paths) or, on the
+    focus path, is joining a chat `chats.of_workspace(ws)` selected on exactly that
+    predicate. So the value written is the value already there, and what it adds is the
+    lock and the launching terminal's own pointer.
     """
     if not picked:
         return
     workspace.set_active(ws, session_id=fid, force=True)
     util.info(f"Workspace '{contain.one_line(ws)}' — 🔒 locked for this frame's "
-              f"session. F2 → workspace changes it; `charter workspace unlock` "
-              f"releases it.")
+              f"session. `charter workspace unlock` releases it.")
 
 
 def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> int:
@@ -5170,66 +5183,6 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
                     report=False)
 
 
-def resize_to_content(fid: str) -> None:
-    """Re-assert *fid*'s pane heights for the content the frame holds RIGHT NOW.
-
-    **The call `frame/switch.py` was missing, and #730 is its absence.** The repo strip's
-    height is a function of its content (`layout.repos_rows` over
-    `frame_slots.repos_rows_wanted`, which counts the frame's own workspace), and it was
-    computed in exactly two places: at launch, and on every `window-resized`. A workspace
-    switch changes the content and neither of those runs, so the pane keeps the height of
-    the workspace the operator left — eight clones' worth of rows above a two-clone table,
-    with the difference coming out of the agent's session, or a two-clone pane holding an
-    eight-clone table so that real repos are replaced by `…(+2 more)` on a terminal with
-    room for all of them.
-
-    **Not a re-layout, and that is the whole distinction from #714.** Which panes exist
-    has not changed — the arrangement is the same arrangement — so `_relayout` would kill
-    and split nothing and cost a `list-panes` and a version bump to say so. What changed
-    is how tall an existing pane should be, and :func:`_reassert_sizes` is already the one
-    place that answers that, recomputing every height from the frame's current content
-    rather than from anything a caller remembers. This is that function reached from a
-    keypress instead of from a hook.
-
-    **Every refusal :func:`cmd_resize` makes is made here, because they are the same
-    refusals about the same window and not caution.** A harness pane that is not tmux's own
-    `%N` comes off disk and is about to be a `resize-pane -t` target (#475). A frame with
-    no panes recorded has nothing to assert, and handing an empty map to `_reassert_sizes`
-    would still tell the HARNESS a height derived from it. A window tmux will not report a
-    size for is the one #501 removed a fallback from: re-asserting an 80x24 layout over a
-    window that is very probably not 80x24 is destructive, and a keypress has the same
-    option a hook does — do nothing, and let the next resize try again. And the window is
-    re-read before anything is applied, because the sizes are computed from a measurement
-    and a window that has moved since makes them a stale layout asserted with confidence.
-
-    What is deliberately NOT here is `cmd_resize`'s settle wait (`_window_settled`). That
-    exists because a terminal drag fires `window-resized` once per size change and killing
-    and re-splitting panes out of order is not self-correcting; nothing here kills or
-    splits, a keypress does not arrive sixty times a second, and re-applying a size out of
-    order corrects itself on the next event.
-
-    Silent, and returns nothing: this runs inside a switch that has its own outcome to
-    report, and a frame whose strip could not be re-sized is a frame with a pane one size
-    off — not a switch that failed. `_reassert_sizes` already passes `report=False` to
-    every `resize-pane` for the same reason.
-    """
-    where = _relayout_target(fid)
-    if where is None:
-        return
-    socket, harness_pane, _v = where
-    panes = state.panes(fid)
-    if not panes:
-        return
-    measured = _measure_window(socket, harness_pane)
-    if measured is None:
-        return
-    cols, rows = measured
-    if not _window_still(socket, harness_pane, measured):
-        return
-    _reassert_sizes(socket, fid=fid, panes=panes, harness_pane=harness_pane,
-                    window_cols=cols, window_rows=rows)
-
-
 def cmd_resize(args) -> int:
     """`charter frame-resize --frame <fid>` — re-apply this frame's pane sizes for the
     window's CURRENT size. Fired by the `window-resized` hook, never typed.
@@ -5943,8 +5896,8 @@ def _pane_place(socket: str, pane: str | None) -> tuple[str, str] | None:
     **The question `chats.py` cannot ask and `select-window`'s return code does not
     answer.** `chats.of_workspace` decides membership from RECORDS — `state.own_workspace`,
     which reads the pin the launcher wrote down, then the per-session pointer `charter
-    workspace use` writes, then the workspace `switch.to_workspace` records — so two chats
-    can share a roster while their windows are in two different tmux sessions.
+    workspace use` writes, then the workspace the launch recorded — so two chats can share
+    a roster while their windows are in two different tmux sessions.
     The session is where a chat actually lives (`cmd_launch` makes the workspace the
     session), it is not written down anywhere charter can read, and it moves at runtime.
     So it is asked of tmux, at the moment it matters.
@@ -6037,9 +5990,8 @@ def cmd_chat(args) -> int:
        :func:`_pane_place`). Not one of the four, and it is here because every one of them
        assumes something no record on disk can promise: that the target's window is a
        window this client can be moved to. `chats.of_workspace` matches RECORDS
-       (`state.own_workspace`), which `charter workspace use` and `switch.to_workspace`
-       both write to, so two chats can share a roster with their windows in two different
-       tmux sessions — and
+       (`state.own_workspace`), whose pointer rung `charter workspace use` writes, so two
+       chats can share a roster with their windows in two different tmux sessions — and
        `select-window` at another session's pane returns **0**, moves that session, and
        leaves this client exactly where it was. Steps 1 and 2 then reported a switch that
        had not happened and tore down the panels of the chat still on screen.
@@ -6139,10 +6091,11 @@ def cmd_chat(args) -> int:
     # workspace and — since this issue — that both are on one tmux SERVER, and neither of
     # those is "in one tmux session". `cmd_launch` makes the workspace the session, but
     # what membership is read from is RECORDS that move (`state.own_workspace`): `charter
-    # workspace use beta` typed inside chat `api.1` writes its pointer rung,
-    # `switch.to_workspace` writes that one and the launch record both, and after either
-    # of those `of_workspace("beta")` returns `api.1` — a window of session `api` —
-    # beside `beta.1`, in one roster.
+    # workspace use beta` typed inside chat `api.1` writes its pointer rung, and after
+    # that `of_workspace("beta")` returns `api.1` — a window of session `api` — beside
+    # `beta.1`, in one roster. (`switch.to_workspace` wrote that rung and the launch
+    # record both until §4j made it a refusal; this guard is what stood between that and a
+    # `select-window` across sessions, and it is not softened by the writer going away.)
     here_place = _pane_place(socket, chats.pane_of(fid))
     there_place = _pane_place(socket, pane)
     if there_place is None:
@@ -6649,8 +6602,8 @@ def _name_rows(fid: str, opened: list) -> "tuple[overlay.Row, ...]":
     question they asked, and answering it with an empty pane is #512's "no repos" over a
     plane that had them. So the reason goes in the note (`choose.labelled`), the row says
     why before the keypress, and pressing it lands the same sentence on the screen —
-    `choose.pin_reason` and `switch.to_workspace` build it from one read of
-    `state.identity`, so the row and the refusal cannot describe one frame two ways.
+    `choose.pin_reason` and `frame/switch.py` build it from one read, so the row and the
+    refusal cannot describe one frame two ways.
 
     The rosters go into *opened* exactly as a doorway's would, which is what makes
     :func:`_chosen_name` indifferent to how a name row reached the screen.

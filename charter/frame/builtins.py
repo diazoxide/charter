@@ -317,7 +317,8 @@ def _repos_events(fid: str):
 #: **The existing front door for each noun, and neither is a shortcut past it.** A chat
 #: switch is `commands_frame.cmd_chat` — `chats.check`'s five refusals, `_pane_place`'s
 #: cross-session reading (#684), `select-window`, and the two re-layouts — and a workspace
-#: switch is `cmd_switch` over `switch.to_workspace`'s three. Every one of those refusals
+#: switch is `cmd_switch` over `switch.to_workspace`'s one (§4j). Every one of those
+#: refusals
 #: reaches the operator through `_say_on_screen`, which is a `display-message` on the
 #: frame's own client; a panel process has no such surface, and a click that silently did
 #: nothing is exactly the report this feature answers.
@@ -347,8 +348,9 @@ def _bar_events(fid: str, command: tuple[str, ...]):
       they never pointed here.
     * **A switch is reversible by the same gesture that made it.** The tab you left is
       still on the bar, one click away; nothing is created, nothing is destroyed, and no
-      work is started. `switch.to_workspace` moves a lock and says so, and clicking back
-      moves it back. That is the property §4i is actually about, and it holds.
+      work is started. A workspace tab is stronger than reversible since §4j — it moves
+      nothing at all, and puts the reason on the frame's own screen. That is the property
+      §4i is actually about, and it holds.
     * **There is no chooser for a select-then-confirm bar to be confirmed with.** On the
       table, selecting is a real intermediate state (a highlighted row, a detail on the
       attention strip) and `Enter` in the palette is the chooser. A bar has no such
@@ -367,7 +369,7 @@ def _bar_events(fid: str, command: tuple[str, ...]):
     **It answers falsy even when it started a switch**, which is the one place this reads
     differently from the table's handler. Truthy means *repaint me* (§4f), and nothing
     this process can see has changed: the switch happens in another process and ends in a
-    `state.bump` of its own — `switch.to_workspace`'s last line, `_apply_arrangement`'s —
+    `state.bump` of its own — `switch.to_persona`'s last line, `_apply_arrangement`'s —
     which is the version this panel's poll is already watching. Answering truthy would
     buy one immediate repaint of a byte-identical row, which is the cost
     `slots._Viewport.move` refuses in as many words.

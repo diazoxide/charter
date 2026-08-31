@@ -963,9 +963,9 @@ def own_workspace(fid: str) -> str | None:
        rung 0. Read from the record and never from `os.environ`, for `switch._pin`'s
        reason — this runs as a child of a tmux server shared between every frame on the
        machine, so this process's own variable may be another chat's. It is FIRST because
-       a pinned frame cannot be moved off its pin by anything below: `switch.to_workspace`
-       refuses outright, `commands_workspace` warns that `ws use` will not stick, and a
-       pointer written under a pinned chat is one nothing draws. Take this rung away and a
+       a pinned frame cannot be moved off its pin by anything below: `commands_workspace`
+       warns that `ws use` will not stick, and a pointer written under a pinned chat is one
+       nothing draws. Take this rung away and a
        pinned chat that ran `charter workspace use other` is stranded in exactly the shape
        #733 describes, on a plane where it is coherent today.
     2. **What was chosen inside the chat** — `workspace.for_session(fid)`, which takes the

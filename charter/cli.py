@@ -860,8 +860,15 @@ def _add_frame_parsers(sub) -> None:
     # not one operation with a parameter — `frame/switch.py` has different refusals, a
     # different lock story and a different repaint cost for each, and a single flag would
     # have to be dispatched on a second one anyway.
+    #
+    # **`--workspace` is kept, and it refuses** (§4j: a chat belongs to its workspace for
+    # life). It is what a `workspaces` tab click and a workspace name off the palette both
+    # spawn, and it is typeable by hand — so removing the flag would turn a sentence the
+    # operator can read into an argparse error, which is #764's defect one layer up. The
+    # `help=` line names the persona alone because that is what the command can still do,
+    # and a help text advertising a refusal is a worse first answer than the refusal.
     sw = sub.add_parser("frame-switch",
-                        help="Move this frame to another workspace or persona.")
+                        help="Adopt another persona in this frame.")
     sw.add_argument("--workspace", dest="workspace", default=None)
     sw.add_argument("--persona", dest="persona", default=None)
     sw.set_defaults(func=commands_frame.cmd_switch)

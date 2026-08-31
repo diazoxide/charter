@@ -36,7 +36,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config, tui
+from charter import commands_frame, config, persona, tui
 from charter.frame import (builtin_actions, choose, component, overlay, palette, state,
                            switch)
 
@@ -178,8 +178,22 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
         about a row rather than what the operator typed."""
         rows = self._typed("zeb").rows
         self.assertEqual([(r.title, r.note) for r in rows],
-                         [("zeb", "persona"), ("zeb-api", "workspace"),
-                          ("zebra-ui", "workspace")])
+                         [("zeb", "persona"), ("zeb-api", switch.FOR_LIFE),
+                          ("zebra-ui", switch.FOR_LIFE)])
+
+    def test_a_workspace_names_note_is_its_refusal_rather_than_its_kind(self):
+        """**The cost of §4j on this surface, asserted rather than discovered.** The note
+        column holds one thing, and `choose.labelled` gives a refused row its reason
+        instead of its kind — which used to happen only on a pinned frame and now happens
+        on every frame for this one noun. So a workspace name says why it cannot be
+        pressed where it used to say what it is.
+
+        It is still tellable from a persona: exactly one of the two sentences is a kind
+        label, and the rows carry `refused` as a field either way (#732). Restoring the
+        kind label would mean a row that says "workspace" and refuses when pressed, which
+        is the defect that field exists to prevent."""
+        rows = self._typed("zeb").rows
+        self.assertEqual([r.refused for r in rows], [False, True, True])
 
     def test_the_name_in_use_keeps_its_mark_here_too(self):
         """A name row is the picker's own row re-noted, so the `*` that answers "which one
@@ -228,41 +242,61 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
         self.assertIn("frame.detach", ids[:first_name], ids)
 
     def test_typing_a_name_and_pressing_enter_switches_the_frame_and_bumps_it(self):
-        """The whole point, end to end through `_draw_palette`: three keystrokes of name
-        and one Enter, with no Enter on a doorway in between."""
+        """The whole point, end to end through `_draw_palette`: five keystrokes of name
+        and one Enter, with no Enter on a doorway in between.
+
+        Staged on the persona since §4j; it was `zebra` → `zebra-ui` until a workspace
+        stopped being a thing a frame can be moved to, and the route the case is about is
+        the same one either way."""
+        was = state.version(self.FID)
+        with mock.patch.object(palette, "own_the_tty", _pick("forge")):
+            self.assertEqual(commands_frame.cmd_palette(
+                SimpleNamespace(client="/dev/ttys7", pane=True)), 0)
+        self.assertEqual(switch.current_persona(self.FID), "forge")
+        self.assertNotEqual(state.version(self.FID), was)
+        self.assertIn("persona → forge", self.said.call_args[0][1])
+
+    def test_a_workspace_typed_at_the_top_level_takes_the_same_route_and_is_refused(self):
+        """The other end of the same route, and the reason this file is where the typed
+        workspace name is measured at all: `_name_rows` is the only surface a workspace
+        name still reaches, now that its doorway opens no picker.
+
+        What must hold is that the refusal arrives *through the palette* — the row
+        resolves to a name, `choose.switch_to` is asked, and the sentence lands on the
+        frame's own screen. A palette that silently dropped the name would leave the
+        operator pressing a row that does nothing."""
         was = state.version(self.FID)
         with mock.patch.object(palette, "own_the_tty", _pick("zebra")):
             self.assertEqual(commands_frame.cmd_palette(
                 SimpleNamespace(client="/dev/ttys7", pane=True)), 0)
-        self.assertEqual(state.workspace_for(self.FID), "zebra-ui")
-        self.assertNotEqual(state.version(self.FID), was)
-        self.assertIn("workspace → zebra-ui", self.said.call_args[0][1])
-
-    def test_a_persona_typed_at_the_top_level_takes_the_same_route(self):
-        with mock.patch.object(palette, "own_the_tty", _pick("forge")):
-            self.assertEqual(commands_frame.cmd_palette(
-                SimpleNamespace(client="", pane=True)), 0)
-        self.assertEqual(switch.current_persona(self.FID), "forge")
-        self.assertIn("persona → forge", self.said.call_args[0][1])
+        self.assertEqual(state.workspace_for(self.FID), "alpha")
+        self.assertEqual(state.version(self.FID), was)
+        self.said.assert_called_once()
+        self.assertEqual(self.said.call_args[0][1], switch.FOR_LIFE)
+        self.assertIs(self.said.call_args[1]["ok"], False)
 
     def test_the_doorway_still_opens_a_picker_and_switching_from_it_still_works(self):
         """**The constraint that is not negotiable, asserted after the change**: browsing
         without knowing the name is the case the doorways exist for, and the route through
         them is untouched.
 
-        Nothing is typed, and row 0 is pressed twice: with an empty query that is the
-        workspace doorway, and inside the picker it opens it is the first workspace. The
-        frame is moved off `alpha` first so that landing there is a real switch rather than
-        a no-op that a broken doorway would also produce.
+        Nothing is typed, and row 1 is pressed twice: with an empty query that is the
+        persona doorway, and inside the picker it opens it is the second persona, `zeb`.
+        The frame is on no persona to begin with, so landing on one is a real switch
+        rather than a no-op a broken doorway would also produce.
+
+        Row 1 and not row 0 since §4j — row 0 is the workspace doorway, which now opens no
+        picker at all (`choose.pin_reason`), so pressing it would measure the refusal
+        rather than the route. The route itself is unchanged, which is what this asserts.
         """
-        state.record_workspace(self.FID, "zeb-api")
         was = state.version(self.FID)
-        with mock.patch.object(palette, "own_the_tty", _pick("", index=0)):
+        self.assertIsNone(switch.current_persona(self.FID))
+        with mock.patch.object(palette, "own_the_tty", _pick("", index=1)):
             self.assertEqual(commands_frame.cmd_palette(
                 SimpleNamespace(client="", pane=True)), 0)
-        self.assertEqual(state.workspace_for(self.FID), "alpha")
+        self.assertEqual(switch.current_persona(self.FID), "zeb")
         self.assertNotEqual(state.version(self.FID), was)
-        self.assertIn("workspace → alpha", self.said.call_args[0][1])
+        self.assertIn("persona → zeb", self.said.call_args[0][1])
 
 
 class TheRosterIsNeverReadUntilSomethingIsTyped(_Frame, unittest.TestCase):
@@ -439,42 +473,67 @@ class APinnedNounListsItsNamesWithTheReason(_Frame, unittest.TestCase):
     can be switched to is an offer charter knows it cannot honour — but a name that has
     already been typed is a question the operator asked, and an empty pane is the wrong
     answer to it. So the row is listed and it carries the sentence.
+
+    **The pinned noun here is the PERSONA, and it was the workspace until §4j.** That one
+    now carries `switch.FOR_LIFE` on every frame, pinned or not, so a pin-shaped assertion
+    on it would stay green with the pin removed and measure nothing. Both halves are still
+    asserted — the pin's, on the noun a pin still decides, and §4j's, on the noun it
+    decides — because what this class is really about is the mechanism they share.
     """
 
-    PIN = {"CHARTER_WORKSPACE": "alpha", "CHARTER_PERSONA": ""}
+    PIN = {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": "forge"}
 
     def test_the_names_are_listed_and_every_one_says_why_it_cannot_run(self):
+        rows = [r for r in self._typed("zeb").rows if r.id.startswith("persona:")]
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertIn("$CHARTER_PERSONA pins this frame to 'forge'", row.note)
+            self.assertTrue(row.refused)
+
+    def test_the_other_noun_does_not_inherit_this_ones_reason(self):
+        """One pin, one noun. Reading a pin as "this frame cannot switch anything" would
+        take another noun's names away for a reason that is not about it.
+
+        Asserted as "the other rows carry a DIFFERENT sentence" rather than "no sentence":
+        a workspace name carries §4j's, always, and the leak this guards against would
+        show as the persona's variable named on a row that is not about personas."""
         rows = [r for r in self._typed("zeb").rows if r.id.startswith("workspace:")]
         self.assertTrue(rows)
         for row in rows:
-            self.assertIn("$CHARTER_WORKSPACE pins this frame to 'alpha'", row.note)
-
-    def test_the_other_noun_keeps_its_kind_label(self):
-        """One pin, one noun. Reading either as "this frame cannot switch anything" would
-        take the persona names away for a reason that is not about personas."""
-        rows = [r for r in self._typed("zeb").rows if r.id.startswith("persona:")]
-        self.assertEqual([r.note for r in rows], ["persona"])
+            self.assertEqual(row.note, switch.FOR_LIFE)
+            self.assertNotIn("CHARTER_PERSONA", row.note)
 
     def test_pressing_one_says_the_same_sentence_and_moves_nothing(self):
         """The row said why before the keypress; the keypress says it again where the
         operator is looking, because the pane the row was drawn in is about to be killed.
         Both come from one read of `state.identity`, so they cannot disagree."""
-        with mock.patch.object(palette, "own_the_tty", _pick("zebra")):
+        with mock.patch.object(palette, "own_the_tty", _pick("zeb", want=None)):
+            self.assertEqual(commands_frame.cmd_palette(
+                SimpleNamespace(client="", pane=True)), 0)
+        self.assertIsNone(persona.for_session(self.FID))
+        self.said.assert_called_once()
+        self.assertIn("$CHARTER_PERSONA pins this frame", self.said.call_args[0][1])
+
+    def test_pressing_a_workspace_name_says_its_own_sentence_and_moves_nothing(self):
+        """The §4j half of the same property: the note the row carried is the sentence the
+        keypress produces, read from one constant so the two cannot drift apart."""
+        row = [r for r in self._typed("zebra").rows if r.id.startswith("workspace:")][0]
+        with mock.patch.object(palette, "own_the_tty", _pick("zebra", want=row.id)):
             self.assertEqual(commands_frame.cmd_palette(
                 SimpleNamespace(client="", pane=True)), 0)
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         self.said.assert_called_once()
-        self.assertIn("$CHARTER_WORKSPACE pins this frame", self.said.call_args[0][1])
+        self.assertEqual(self.said.call_args[0][1], row.note)
 
     def test_the_pin_is_contained_before_it_becomes_a_note_and_a_status_line(self):
-        """`$CHARTER_WORKSPACE` is whatever the launching environment held, so a newline in
+        """`$CHARTER_PERSONA` is whatever the launching environment held, so a newline in
         it is a committed value on two surfaces: eighty row notes, and one
         `display-message`. `choose.pin_reason` contains it once, for both."""
-        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "al\npha\u2028x"})
+        state.record_identity(self.FID, {"CHARTER_PERSONA": "al\npha\u2028x"})
         for line in self._typed("zeb").render(60, 12):
             for bad in _SEPARATORS:
                 self.assertNotIn(bad, line, repr(line))
-        with mock.patch.object(palette, "own_the_tty", _pick("zebra")):
+        with mock.patch.object(palette, "own_the_tty", _pick("zeb")):
             commands_frame.cmd_palette(SimpleNamespace(client="", pane=True))
         said = self.said.call_args[0][1]
         self.assertEqual(said, "".join(said.splitlines()), repr(said))

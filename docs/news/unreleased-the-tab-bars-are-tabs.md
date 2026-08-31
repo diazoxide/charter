@@ -19,10 +19,11 @@ declared. A bar with no handler is a caption that happens to list names.
 
 A chat tab runs exactly the switch `F2` → `chat` runs — the same command, the same five
 refusals, the same sentence on your own screen when one fires. A workspace tab runs
-`charter frame-switch --workspace <name>`. Neither is a shortcut past those: the click starts
-the command charter already had, which is what puts a refusal somewhere you can read it. A
-panel has no status line of its own, and a click that silently does nothing is the report this
-entry is answering.
+`charter frame-switch --workspace <name>`, which since *A chat belongs to its workspace for
+life* puts one sentence on your screen and moves nothing. Neither is a shortcut past those:
+the click starts the command charter already had, which is what puts a refusal somewhere you
+can read it. A panel has no status line of its own, and a click that silently does nothing is
+the report this entry is answering.
 
 **A click on the repo table only ever *selects*, and a click on a tab *switches*. That is a
 decision, and it is worth the paragraph.** The rule the table keeps is that nothing

@@ -25,7 +25,8 @@ import os
 import unittest
 from unittest import mock
 
-from charter import cli, commands_frame, config, persona, tui, workspace
+from charter import (cli, commands_frame, config, contain, persona, tui,
+                     workspace)
 from charter.frame import (builtin_actions, choose, overlay, palette, picker,
                            state, switch)
 
@@ -44,8 +45,52 @@ def _plane_personas(*names: str) -> None:
         (d / "persona.md").write_text("# p\n")
 
 
-class SwitchingWorkspace(PersonaIso, unittest.TestCase):
-    """`switch.to_workspace` — what moves, what refuses, and what is said either way."""
+class SwitchingWorkspaceIsRefused(PersonaIso, unittest.TestCase):
+    """`switch.to_workspace` — §4j, and what this class used to assert instead.
+
+    **Nine cases were replaced rather than deleted, and here is the accounting**, because
+    they were the specification of a behaviour charter shipped for six days and every one
+    of them passed.
+
+    Two pinned the defect by name and are the reason the strand in #733 and #788 could
+    form at all:
+
+    * `test_a_switch_moves_what_every_frame_surface_asks` asserted
+      `state.workspace_for(fid)` moved from `alpha` to `beta` — which is exactly "the
+      chat's workspace is a property you may set". §4j says it is identity.
+    * `test_the_launch_record_moves_too_so_a_respawned_panel_agrees` asserted the second
+      write, `state.frame_workspace`, on the grounds that a panel respawned later must
+      agree with the panels that are up. They did agree — about a workspace this chat's
+      cwd, files and history were never in.
+
+    Both are replaced by `test_a_switch_moves_nothing_that_any_frame_surface_asks` and
+    `test_the_launch_record_is_not_moved_either` below, which assert the same two rungs at
+    the same depth and in the same order, with the opposite expectation.
+
+    Five described the machinery of a move and have nothing left to describe: the bump
+    (`test_a_switch_bumps_the_frame_so_panels_repaint`), the switcher's own lock
+    (`test_switching_twice_is_not_refused_by_the_first_switchs_own_lock`,
+    `test_overriding_a_lock_is_said_out_loud`), the terminal pointer it must not write
+    (`test_no_terminal_pointer_is_written_for_somebody_elses_terminal`) and the refusal
+    ordering (`test_an_unknown_workspace_is_refused_and_creates_nothing`). The first four
+    are still measured one noun over, in :class:`SwitchingPersona`, which is where the
+    property was always generic; the fifth is now
+    `test_one_refusal_and_not_a_queue_of_them`.
+
+    Two were about the `$CHARTER_WORKSPACE` pin
+    (`test_a_pinned_frame_is_refused_rather_than_told_it_moved`,
+    `test_the_pin_is_read_from_the_frame_not_from_this_process`,
+    `test_an_empty_recorded_pin_is_not_a_pin`). The pin is still a pin — it is
+    `state.own_workspace`'s first rung and
+    `tests/test_frame_chat_switch.MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer`
+    measures all three properties of it there — but it is no longer what refuses a
+    switch, because an unpinned chat is refused identically.
+
+    The behaviour itself is measured in
+    `tests/test_a_chat_belongs_to_its_workspace_for_life.py`, which is where #733 and #788
+    are closed. What is here is the part that belongs beside `SwitchingPersona`: the two
+    functions sit side by side and a change to one is a plausible accident in the other.
+    """
 
     FID = "f-switch"
 
@@ -60,119 +105,48 @@ class SwitchingWorkspace(PersonaIso, unittest.TestCase):
                                          "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
         state.record_workspace(self.FID, "alpha")
 
-    def test_a_switch_moves_what_every_frame_surface_asks(self):
-        """`state.workspace_for` is the one rule every panel, the gather and the status
-        line ask (#512's own docstring says so), so that — not the file the switch
-        happened to write — is what "the frame moved" has to mean. Asserting on the
-        pointer file instead would be this repo's "a test asserting one layer BELOW the
-        code that prints"."""
+    def test_a_switch_moves_nothing_that_any_frame_surface_asks(self):
+        """The replacement for `test_a_switch_moves_what_every_frame_surface_asks`, asked
+        of the same rule for the same reason — `state.workspace_for` is what every panel,
+        the gather and the status line read, so that and not the file underneath it is
+        what "the frame moved" has to mean. Only the expectation is inverted."""
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         out = switch.to_workspace(self.FID, "beta")
-        self.assertTrue(out.ok, out.message)
-        self.assertEqual(state.workspace_for(self.FID), "beta")
+        self.assertFalse(out.ok, out.message)
+        self.assertEqual(state.workspace_for(self.FID), "alpha")
 
-    def test_a_switch_bumps_the_frame_so_panels_repaint(self):
-        """A panel repaints because the version moved (`frame/panel.py`'s contract).
-        Writing the pointer without bumping is exactly the "some panels may or may not
-        read it" failure #411 was filed for — the frame would keep drawing the old plane
-        until something else happened to bump."""
-        before = state.version(self.FID)
+    def test_the_launch_record_is_not_moved_either(self):
+        """The replacement for `test_the_launch_record_moves_too_so_a_respawned_panel_
+        agrees`. Its argument was that rung 1 without rung 2 leaves a frame whose next
+        density change draws the old workspace beside the new one — true, and the answer
+        is that neither moves, so a panel respawned an hour later is born into the
+        workspace the launcher recorded."""
         switch.to_workspace(self.FID, "beta")
-        self.assertNotEqual(state.version(self.FID), before)
-
-    def test_the_launch_record_moves_too_so_a_respawned_panel_agrees(self):
-        """Rung 1 (the pointer) is what live panels read; rung 2 (`record_workspace`) is
-        what `_relayout_pane_env` replays onto panes split LATER and what a panel resolves
-        if the pointer is ever gone. Moving only rung 1 leaves a frame whose next density
-        change draws the old workspace beside the new one."""
-        switch.to_workspace(self.FID, "beta")
-        self.assertEqual(state.frame_workspace(self.FID), "beta")
-
-    def test_switching_twice_is_not_refused_by_the_first_switchs_own_lock(self):
-        """`workspace.set_active` LOCKS the session to what it selected, so the switcher's
-        own first write takes a lock that its second write would hit. A switcher that
-        works exactly once is the "silently fails against a lock" failure #517 names,
-        arrived at by charter's own hand."""
-        self.assertTrue(switch.to_workspace(self.FID, "beta").ok)
-        second = switch.to_workspace(self.FID, "alpha")
-        self.assertTrue(second.ok, second.message)
-        self.assertEqual(state.workspace_for(self.FID), "alpha")
-
-    def test_overriding_a_lock_is_said_out_loud(self):
-        """An agent inside the frame locked it with `charter workspace use`; the operator
-        then picks another off the menu. The switch happens — they are at the keyboard —
-        but the message has to name what was overridden, or the agent's next command acts
-        on a workspace nobody was told about."""
-        workspace.set_active("alpha", session_id=self.FID)
-        out = switch.to_workspace(self.FID, "beta")
-        self.assertTrue(out.ok)
-        self.assertIn("alpha", out.message)
-        self.assertIn("lock", out.message)
-
-    def test_no_terminal_pointer_is_written_for_somebody_elses_terminal(self):
-        """#411, arriving on this command. A switch runs as a `run-shell` child of
-        charter's private tmux server — SHARED between every frame on the machine, and
-        holding the environment of whichever launcher started it, possibly days ago in
-        another terminal. `workspace.set_active` normally writes a per-terminal pointer
-        keyed on `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/`$SSH_TTY`, so without
-        `terminal_id=""` a switch inside frame B moves the workspace of the terminal that
-        launched frame A."""
-        os.environ["TERM_SESSION_ID"] = "someone-elses-terminal"
-        before = sorted(p.name for p in config.TERMINALS_DIR.iterdir()) \
-            if config.TERMINALS_DIR.exists() else []
-        self.assertTrue(switch.to_workspace(self.FID, "beta").ok)
-        after = sorted(p.name for p in config.TERMINALS_DIR.iterdir()) \
-            if config.TERMINALS_DIR.exists() else []
-        self.assertEqual(after, before)
-
-    def test_an_unknown_workspace_is_refused_and_creates_nothing(self):
-        before = sorted(p.name for p in config.WORKSPACES_DIR.iterdir())
-        out = switch.to_workspace(self.FID, "nope")
-        self.assertFalse(out.ok)
-        self.assertIn("nope", out.message)
-        self.assertEqual(sorted(p.name for p in config.WORKSPACES_DIR.iterdir()), before)
-        self.assertEqual(state.workspace_for(self.FID), "alpha")
-
-    def test_a_name_outside_the_alphabet_is_refused(self):
-        out = switch.to_workspace(self.FID, "../escape")
-        self.assertFalse(out.ok)
-        self.assertEqual(state.workspace_for(self.FID), "alpha")
-
-    def test_a_pinned_frame_is_refused_rather_than_told_it_moved(self):
-        """`$CHARTER_WORKSPACE` was set at launch, so every panel pane holds it in its own
-        process environment and no file charter writes can take it out — rung 0 of
-        `state.workspace_for` outranks rungs 1 and 2 both. Reporting "switched" and then
-        drawing the pin is the failure; reporting the pin is the honest answer."""
-        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "alpha"})
-        out = switch.to_workspace(self.FID, "beta")
-        self.assertFalse(out.ok)
-        self.assertIn("alpha", out.message)
-        self.assertIn("CHARTER_WORKSPACE", out.message)
+        self.assertEqual(state.frame_workspace(self.FID), "alpha")
         self.assertIsNone(workspace.for_session(self.FID))
 
-    def test_the_pin_is_read_from_the_frame_not_from_this_process(self):
-        """The switcher runs as a `run-shell` child of a tmux server shared between every
-        frame on the machine, so this process's `$CHARTER_WORKSPACE` may be ANOTHER
-        frame's (`state.record_identity` measures exactly that). Reading the pin from
-        `os.environ` would refuse a switch on a frame that was never pinned."""
-        os.environ["CHARTER_WORKSPACE"] = "someone-elses"
-        self.assertTrue(switch.to_workspace(self.FID, "beta").ok)
+    def test_one_refusal_and_not_a_queue_of_them(self):
+        """`test_an_unknown_workspace_is_refused_and_creates_nothing`'s replacement, and
+        the property is now stronger than "creates nothing": the name is not looked at.
+        A refusal that answered "no workspace 'beta2'" first would name a typo as the
+        thing standing between the operator and a move that cannot happen at any
+        spelling."""
+        before = sorted(p.name for p in config.WORKSPACES_DIR.iterdir())
+        for name in ("beta", "nope", "../escape"):
+            self.assertEqual(switch.to_workspace(self.FID, name).message,
+                             switch.FOR_LIFE)
+        self.assertEqual(sorted(p.name for p in config.WORKSPACES_DIR.iterdir()), before)
 
-    def test_an_empty_recorded_pin_is_not_a_pin(self):
-        """`_frame_identity_env` emits every name, present or not, so a frame that pinned
-        nothing records `CHARTER_WORKSPACE=""`. Treating presence rather than truth as the
-        pin would refuse every switch on every ordinary frame."""
-        self.assertEqual(state.identity(self.FID).get("CHARTER_WORKSPACE"), "")
-        self.assertTrue(switch.to_workspace(self.FID, "beta").ok)
-
-    def test_a_refusal_message_cannot_forge_a_second_line(self):
-        """A workspace name is a committed value and a message is a line of charter's own
-        output (`contain.py`, #453). The name here is refused for its alphabet anyway —
-        what is under test is that the name it ECHOES is contained, since the same echo
-        carries a plane-supplied name on the "no workspace named" path."""
+    def test_the_refusal_cannot_forge_a_second_line(self):
+        """`test_a_refusal_message_cannot_forge_a_second_line`, which used to be about
+        `contain.one_line` over an echoed name and is now about the constant itself: no
+        name is interpolated, so what has to hold is that the one sentence charter wrote
+        is one line. A message is a line of charter's own output (`contain.py`, #453) and
+        this one lands on the attention panel beside others."""
         out = switch.to_workspace(self.FID, "beta\nrefused — everything is fine")
         self.assertFalse(out.ok)
         self.assertNotIn("\n", out.message)
+        self.assertEqual(out.message, contain.one_line(out.message))
 
 
 class SwitchingPersona(PersonaIso, unittest.TestCase):
@@ -386,21 +360,29 @@ class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
         return commands_frame.cmd_switch(mock.Mock(**{"workspace": None, "persona": None,
                                                       **kw}))
 
-    def test_the_mark_moves_with_the_frame(self):
-        # `default` is folded in whether or not its directory exists — `switch.workspaces`
-        # matches `commands_workspace.cmd_workspace_use` there.
+    def test_the_workspace_mark_stays_where_the_chat_was_launched(self):
+        """`test_the_mark_moves_with_the_frame`'s replacement. It asserted the mark
+        following a `frame-switch --workspace`, which §4j now refuses — so what is left to
+        assert is that the list is still resolved when the palette opens (the staleness
+        this class exists for) and that the mark names the workspace the chat belongs to,
+        before and after a keypress that changed nothing.
+
+        `default` is folded in whether or not its directory exists — `switch.workspaces`
+        matches `commands_workspace.cmd_workspace_use` there."""
         self.assertEqual(_names(self.FID, choose.WORKSPACE),
                          ["* alpha", "  beta", "  default"])
         self.assertEqual(self._switch(workspace="beta"), 0)
         self.assertEqual(_names(self.FID, choose.WORKSPACE),
-                         ["  alpha", "* beta", "  default"])
+                         ["* alpha", "  beta", "  default"])
 
-    def test_the_doorway_names_the_workspace_the_frame_moved_to(self):
+    def test_the_doorway_names_the_workspace_the_chat_belongs_to(self):
         """The mark inside the picker and the name on the palette row are one read
-        (`choose.current`), so the two surfaces cannot disagree about where the frame is."""
+        (`choose.current`), so the two surfaces cannot disagree about where the frame is.
+        Was `test_the_doorway_names_the_workspace_the_frame_moved_to`; a frame no longer
+        moves, and the read the two surfaces share is what the case was always about."""
         self._switch(workspace="beta")
         self.assertEqual({r.id: r.title for r in _rows(self.FID)}["pick:workspace"],
-                         "workspace: beta — pick another")
+                         "workspace: alpha — pick another")
 
     def test_a_persona_switch_moves_its_own_mark_too(self):
         self.assertEqual(_names(self.FID, choose.PERSONA), ["  forge", "  scribe"])
@@ -414,20 +396,26 @@ class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
         self.assertIn("  gamma", _names(self.FID, choose.WORKSPACE))
 
     def test_a_pinned_frame_is_offered_the_row_WITH_ITS_REASON(self):
-        """Step 4 of the plan, on the exact example it names. `$CHARTER_WORKSPACE` was set
-        at launch and sits in every panel pane's environment, so nothing charter writes can
-        outrank it — and a palette that silently dropped the row would leave the operator
-        unable to ask why a thing they remember is missing."""
-        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "alpha"})
-        row = {r.id: r for r in _rows(self.FID)}["pick:workspace"]
-        self.assertIn("$CHARTER_WORKSPACE pins this frame", row.note)
-        self.assertIn("'alpha'", row.note)
+        """Step 4 of the plan, moved one noun over because that is where the pin still
+        decides. `$CHARTER_PERSONA` was set at launch and sits in every panel pane's
+        environment, so nothing charter writes can outrank it — and a palette that
+        silently dropped the row would leave the operator unable to ask why a thing they
+        remember is missing.
+
+        It was the WORKSPACE row until §4j: that doorway now carries `switch.FOR_LIFE` on
+        every frame, pinned or not, so a pin-shaped assertion on it would pass without the
+        pin and measure nothing (`choose.PIN` no longer has an entry for it, and
+        `tests/test_a_chat_belongs_to_its_workspace_for_life` is where its one reason is
+        measured)."""
+        state.record_identity(self.FID, {"CHARTER_PERSONA": "forge"})
+        row = {r.id: r for r in _rows(self.FID)}["pick:persona"]
+        self.assertIn("$CHARTER_PERSONA pins this frame", row.note)
+        self.assertIn("'forge'", row.note)
 
     def test_an_unpinned_frames_doorway_carries_no_reason_at_all(self):
         """The other direction, so the reason above cannot pass by always being there:
         `available` and "has no reason" are one decision in `choose.pin_reason`, and a
         non-empty note is what `_draw_palette` refuses the keypress on."""
-        self.assertEqual({r.id: r for r in _rows(self.FID)}["pick:workspace"].note, "")
         self.assertEqual({r.id: r for r in _rows(self.FID)}["pick:persona"].note, "")
 
     def test_the_density_mark_is_read_from_the_frames_own_record(self):

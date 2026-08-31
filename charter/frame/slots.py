@@ -3064,7 +3064,7 @@ class _Tabs:
 
         **RAW names, never the drawn ones.** :func:`_bar` runs `contain.one_line` over
         every name before it measures one (#472), and that is a REPAIR — what comes out
-        is display text and what goes into `switch.to_workspace` or `charter frame-chat`
+        is display text and what goes into `choose.switch_to` or `charter frame-chat`
         has to be the name on disk. The mark is matched on the raw name for the same
         reason one function down; this is that decision arriving at the other end.
         """

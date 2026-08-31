@@ -552,10 +552,14 @@ class TheRepeatIsWiredAndNotMerelyDeclared(PersonaIso, unittest.TestCase):
     def test_a_doorway_still_opens_its_picker_first(self):
         """`_picker` is asked before the repeat, and a doorway is neither an action nor
         repeatable — so a wiring that put the repeat first would answer a doorway with the
-        palette it was already looking at."""
+        palette it was already looking at.
+
+        The persona doorway and not the workspace one since §4j: that one carries a reason
+        on every frame now, and `_picker` opens nothing for a doorway with a reason (#732),
+        so it could not tell the two wirings apart."""
         surface, then = self._then()
-        row = next(r for r in surface.rows if r.id == "pick:workspace")
+        row = next(r for r in surface.rows if r.id == "pick:persona")
         nxt = then(row)
         self.assertIsInstance(nxt, palette.Palette)
         self.assertIsNot(nxt, surface)
-        self.assertEqual(nxt.label, "workspace")
+        self.assertEqual(nxt.label, "persona")
