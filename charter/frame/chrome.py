@@ -166,6 +166,150 @@ def colour_ok() -> bool:
     return pane.is_tty()
 
 
+def dim_ok() -> bool:
+    """Whether the frame may reduce the contrast of its own text — ``[frame] dim``.
+
+    **One question asked in one place**, which is :func:`no_colour`'s discipline said about
+    a different setting and for the same measured reason: :func:`recipes` answers it for a
+    provider that composes with ``ctx.chrome["muted"]`` and `panel._write` answers it for
+    every row charter's own renderers finished, and two readings of one key is how those
+    two come to disagree about a frame nobody can see twice.
+
+    **Why the key exists at all is a correction to this module**, and it is written down
+    here rather than quietly fixed. :func:`_role_values` argues that its three attributes
+    need no gate because "bold, dim and reverse are statements relative to whatever the
+    operator's terminal already is". Bold and reverse survive that argument — bold adds
+    weight and reverse is defined as the operator's own two colours exchanged, so neither
+    can be wrong on a theme charter cannot see. Dim does not: it is relative in ONE
+    direction, toward the background, and the direction is the whole problem. Charter's
+    eight recipes were chosen against a dark terminal, where a dim grey has the whole
+    distance to the background to spend. A plane that paints its panes light spends that
+    distance the other way, and the operator reported the muted rows unreadable on
+    ``bg = "brightblack"`` — a word their theme renders as a light tan.
+
+    Read through `config.FRAME` at call time rather than cached, exactly as
+    `slots.verbosity` and `slots.pad_of` read the keys they need: a panel is a long-lived
+    process and `charter.toml` is re-read when the frame relaunches. The import is
+    function-level for `_role_values`' own reason — this module is on a panel's repaint
+    path and `config` resolves a plane at import.
+    """
+    from .. import config, instance
+    return instance.look_of(config.FRAME).dim
+
+
+#: The SGR parameters that INTRODUCE an extended colour, and therefore the ones whose
+#: following parameters are not attributes at all.
+#:
+#: 38 (foreground), 48 (background) and 58 (underline colour) are each followed by a colour
+#: SPACE and then that space's arguments: ``5;<n>`` for one of the 256, ``2;<r>;<g>;<b>``
+#: for a 24-bit triple. The truecolor spelling is the hazard :func:`undim` exists to not
+#: create — its space parameter is the digit **2**, and a pass that deleted every 2 from a
+#: parameter list would turn ``38;2;255;0;0`` into ``38;255;0;0`` and hand a terminal a
+#: foreground it never asked for.
+#:
+#: **Charter writes none of these** — `instance.FRAME_PANE_COLOURS` argues at length why
+#: charter names the sixteen and never indexes the cube — and that is exactly why the case
+#: is real rather than theoretical: :func:`undim` runs on a row a PROVIDER's component
+#: finished, which is ordinary Python that may write whatever its author's terminal
+#: supports, and `tui.sanitize` passes any ``ESC[<digits and semicolons>m`` through
+#: untouched.
+_EXTENDED_COLOUR = frozenset({38, 48, 58})
+
+#: The SGR parameter that turns dim on. Named for `resets_everything`'s reason: the
+#: property is the NUMBER, and ``ESC[02m`` and ``ESC[1;2m`` are both dim.
+_DIM_PARAM = 2
+
+
+def _without_dim(params: str) -> str | None:
+    """The SGR parameter list *params* with every dim removed — ``None`` when the whole
+    escape should go.
+
+    **The numeric reading again** (:func:`resets_everything`), because this is the same
+    mistake with a different number: "an SGR that turns dim on" is not the string
+    ``\\x1b[2m``. It is a parameter list containing a parameter whose numeric value is two,
+    and leading zeros are legal digits, and a parameter may sit anywhere in the list.
+    Measured against the spellings that reach a pane::
+
+        params        string-match ("2")   numeric, position-aware
+        '2'           True                 dropped
+        '02'          False  <- MISSED     dropped
+        '1;2'         False  <- MISSED     '1'
+        '2;32'        False  <- MISSED     '32'
+        '38;2;255;0;0' False               '38;2;255;0;0'  <- the colour SPACE, kept
+
+    The last row is why this walks the list rather than filtering it
+    (:data:`_EXTENDED_COLOUR`).
+
+    ``None`` rather than ``""`` for a list that emptied, and the difference is the whole
+    correctness of the pass: ``\\x1b[m`` is an SGR with an omitted parameter, and an
+    omitted parameter takes SGR's default of **zero** — so emitting it for a ``\\x1b[2m``
+    that had nothing else in it would replace "turn dim on" with "turn EVERYTHING off",
+    cancelling the colour of whatever span the row was in the middle of. A list that still
+    holds a parameter comes back as a string even when that string is empty, because
+    ``\\x1b[2;m`` really did carry a reset and the reset survives.
+    """
+    kept: list[str] = []
+    pieces = params.split(";")
+    i = 0
+    while i < len(pieces):
+        # Every piece is digits or empty — `_SGR` admits nothing else — so `int` cannot
+        # raise, and an empty piece is spelled as the zero it means.
+        value = int(pieces[i] or "0")
+        if value in _EXTENDED_COLOUR:
+            space = int(pieces[i + 1] or "0") if i + 1 < len(pieces) else -1
+            run = {5: 3, 2: 5}.get(space, 1)
+            kept.extend(pieces[i:i + run])
+            i += run
+            continue
+        if value != _DIM_PARAM:
+            kept.append(pieces[i])
+        i += 1
+    return ";".join(kept) if kept else None
+
+
+def undim(row: str) -> str:
+    """*row* with every dim taken out of it and nothing else touched.
+
+    **A DELETION and never a substitution**, which is what makes it honest to run over a
+    row charter did not write. `plain` already deletes every SGR from a provider's finished
+    row when the operator asked for no colour, and this is the same class of answer about a
+    smaller question: it removes an instruction to reduce contrast and leaves every colour
+    the component chose exactly where it put it. A pass that remapped a provider's green to
+    some other colour would be charter deciding what somebody else's component means, which
+    is not a thing `[frame] dim` was asked for.
+
+    **On the FINISHED row, in `panel._write`, which is the one place anything reaches a
+    pane's screen.** That siting is the whole of why one key reaches the whole frame:
+    charter's own renderers spell `statusline._DIM` at some forty call sites in
+    `frame/slots.py` and a provider's component spells whatever it likes, and neither has
+    to be told. It is the same argument `_write`'s own docstring already makes about
+    `NO_COLOR`.
+
+    Takes a finished row and hands back a string that must not go back through `tui` — the
+    module docstring's ordering rule, unchanged. It changes no cell's width: every SGR
+    costs zero columns, and this only ever makes one shorter or removes it.
+
+    **There is no `if "\\x1b" not in row` shortcut in front of this, and the deletion is a
+    measurement rather than a preference.** One was written first, copying
+    `tui.strip_ansi`'s own, and the mutation sweep found it surviving. Timed on this
+    machine over 200 000 calls each, the two rows a repaint actually carries::
+
+        row with no escape   guard 0.032us   no guard 0.111us   saves 0.079us
+        painted row          guard 1.933us   no guard 1.977us   saves 0.044us
+
+    3.5x on the first row reads like a reason until it is spent: at 0.079us a line, a
+    50-line repaint saves **4us against `render`'s own measured 4816us** — under a tenth of
+    a percent, on a path that only runs at all for a plane that turned `dim` off. And most
+    rows in this frame are not that row: the sidebar and the repo table colour nearly every
+    line they compose. `re.sub` on a string it does not match returns that string, so the
+    guard could not change an outcome either — which makes it the shape #568's sweep
+    deletes, and "equivalent mutant" and "dead code" one finding rather than two.
+    """
+    return _SGR.sub(
+        lambda m: "" if (kept := _without_dim(m.group(1))) is None else f"\x1b[{kept}m",
+        row)
+
+
 def _role_values() -> dict[str, str]:
     """The roles of §5 a RENDERER can write, and the SGR each one is. **The vocabulary.**
 
@@ -184,9 +328,18 @@ def _role_values() -> dict[str, str]:
     **Every value is an attribute or one of the sixteen ANSI names — no cube index, no
     24-bit triple.** That is `instance.FRAME_CHROME`'s rule reaching the one place a
     stranger's code would otherwise have to guess it, and it is why these need no
-    `[frame] chrome` gate: bold, dim and reverse are statements relative to whatever the
+    `[frame] chrome` gate: bold and reverse are statements relative to whatever the
     operator's terminal already is, and ``green``/``yellow``/``red`` are slots in their
     own palette rather than colours charter picked out of the 256.
+
+    **That argument used to name three attributes and it was wrong about one of them.**
+    Dim is relative in exactly one direction — toward the background — and the direction is
+    the defect: these values were chosen against a dark terminal, where a dim grey has the
+    whole distance to the background to spend, and a plane that paints its panes light
+    spends it the other way. The operator reported ``muted`` unreadable on
+    ``bg = "brightblack"``, a word their own theme renders as a light tan. So dim has a
+    gate now and the other two still do not — :func:`dim_ok`, honoured here and in
+    `panel._write`, which is where the rest of that correction is written down.
 
     Composed from `statusline.py`'s OWN constants rather than spelled here, for
     `slots._sidebar_head`'s reason: a second copy of ``\033[1m`` in this module is how a
@@ -242,10 +395,32 @@ def recipes() -> MappingProxyType:
     spec was written about. Empty rather than absent: a provider that wrote
     ``ctx.chrome["ok"] + text`` would otherwise raise inside its own draw and lose its
     pane to honour a request about colour.
+
+    **``[frame] dim = false`` takes the dim out of every role that carries one**
+    (:func:`dim_ok`), which today is ``muted`` alone and is asked as the property rather
+    than by that name: :func:`undim` is run over the values, so a role added to
+    :func:`_role_values` with a dim in it is covered on the day it is added instead of
+    being the one that still reduces contrast on a plane that asked charter not to. It is
+    also the same transform `panel._write` applies to the finished row, so the two cannot
+    come to disagree about what "no dim" means.
+
+    The interaction with the paragraph above is worth stating because it is an ordering:
+    ``NO_COLOR`` empties every SGR role including this one, so a plane that turned dim off
+    and an operator who turned colour off do not fight — the second is a superset of the
+    first and wins by arriving at the same answer, not by being asked first.
+
+    Emptied here rather than only stripped downstream by `panel._write`, even though the
+    strip alone would produce the same pane. A provider handed a live ``\\x1b[2m`` for a
+    role the frame is about to delete would be composing against a promise charter is not
+    keeping — the same "convincing empty" this module refuses everywhere else — and a
+    component that reads the role to decide something other than what to emit would decide
+    it wrongly. It is also the cheaper half: nothing composed is nothing to strip.
     """
     from . import slots
     live = colour_ok()
-    out = {role: (sgr if live else "") for role, sgr in _role_values().items()}
+    dim = dim_ok()
+    out = {role: (sgr if dim else undim(sgr)) if live else ""
+           for role, sgr in _role_values().items()}
     out["inset"] = slots._inset()
     return MappingProxyType(out)
 

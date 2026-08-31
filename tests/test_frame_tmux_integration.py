@@ -5382,7 +5382,10 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         for option in instance.PANE_BORDER_OPTIONS:
             with self.subTest(option=option):
                 got = self._srv("show", "-p", "-t", harness, "-v", option).stdout.strip()
-                self.assertEqual(got, f"{commands_frame._CHROME_STYLE},bg=brightblack",
+                # The SHIPPED rule, which is what these argvs build with no `look=`
+                # passed: `[frame] rules = "hidden"` gives the glyph the surface's own
+                # colour, so the rule and the panes beside it are one surface.
+                self.assertEqual(got, "fg=brightblack,bg=brightblack",
                                  "tmux did not read charter's rule back off the harness")
                 self.assertEqual(
                     got,

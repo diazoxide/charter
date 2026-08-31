@@ -64,6 +64,19 @@ def _pinned_at(v) -> dict[str, str]:
     return {name: value for name, value, floor in commands_frame._CHROME if known >= floor}
 
 
+#: The frame a plane that has written nothing gets — `[frame] rules = "hidden"`, no
+#: `text`, `dim` on. Named rather than spelled at each call site so a test that means "the
+#: shipped frame" cannot come to mean "the frame charter used to ship".
+_SHIPPED = instance.SHIPPED_LOOK
+
+#: The rules a plane asked to keep. Every test below that is about the MECHANISM of a rule
+#: — which options carry it, that both carry the same thing, that no operator string
+#: reaches one — pins this one deliberately: under `hidden` the foreground is derived from
+#: the background, so the two halves of a value are the same word and a test that mixed
+#: them up would still pass. `visible` keeps them distinguishable.
+_VISIBLE = instance.Look(rules="visible", text="default", dim=True)
+
+
 def _frame(*bgs, **rest) -> dict:
     """A `[frame]` mapping whose arrangement names one component per *bgs* entry — `None`
     for a component that names no background of its own.
@@ -213,13 +226,46 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
     """`commands_frame._chrome_argvs` — the five `set-option -w`s, with the surface in
     the two that are styles."""
 
-    def _tails(self, surface=None, v=_EVERY_CHROME_OPTION):
+    #: `_VISIBLE` and not the shipped look, everywhere below except the two cases that
+    #: are about the shipped look. This class is about WHICH of the five options carry a
+    #: surface and which do not, and `hidden` builds a value whose foreground and
+    #: background are the same word — so a case that mixed the two up would still pass.
+    LOOK = _VISIBLE
+
+    def _tails(self, surface=None, look=None, v=_EVERY_CHROME_OPTION):
         return [a[a.index("set-option"):]
                 for a in commands_frame._chrome_argvs(socket="s", harness_pane="%1",
-                                                      v=v, surface=surface)]
+                                                      v=v, surface=surface,
+                                                      look=look or self.LOOK)]
 
-    def _values(self, surface=None, v=_EVERY_CHROME_OPTION):
-        return {a[-2]: a[-1] for a in self._tails(surface, v=v)}
+    def _values(self, surface=None, look=None, v=_EVERY_CHROME_OPTION):
+        return {a[-2]: a[-1] for a in self._tails(surface, look, v=v)}
+
+    def test_the_shipped_frame_hides_the_window_wide_rule_in_the_surface(self):
+        """The default, below `tmuxctl.PANE_BORDER_FLOOR` where this function carries the
+        whole answer: a frame that painted its panes gets its rules painted OUT, which is
+        what `[frame] rules = "hidden"` means and what the operator confirmed on their own
+        frame before it was a key.
+
+        The three options that are not styles are untouched by it — `hidden` decides a
+        colour, not a line weight, and `pane-border-lines` has no `none` to decide."""
+        got = self._values("bg=brightblack", _SHIPPED)
+        for name in _STYLES:
+            with self.subTest(option=name):
+                self.assertEqual(got[name], "fg=brightblack,bg=brightblack")
+        for name, value in _pinned_at(_EVERY_CHROME_OPTION).items():
+            if name not in _STYLES:
+                with self.subTest(option=name):
+                    self.assertEqual(got[name], value)
+
+    def test_the_shipped_frame_leaves_a_surfaceless_window_byte_identical(self):
+        """`hidden` on a plane with no surface is not a silent failure and not a change: a
+        rule has no colour to hide into, so `rule_style` composes the same value it
+        composes for `visible`, which is the string charter has drawn since #514. Stated
+        because it is the half of the default that has to be safe for every plane that
+        never asked for any of this."""
+        self.assertEqual(self._values(None, _SHIPPED), _pinned_at(_EVERY_CHROME_OPTION))
+        self.assertEqual(self._values(None, _SHIPPED), self._values(None, _VISIBLE))
 
     def test_no_surface_is_byte_identical_to_the_frame_charter_shipped(self):
         """The `off` invariant, and the reason the border needs no `-u` where the pane
@@ -288,6 +334,26 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
             self.assertNotEqual(self._values("bg=brightblack"),
                                 commands_frame._chrome_values())
 
+    def test_a_plane_that_turned_dim_off_gets_its_rules_at_full_strength(self):
+        """`[frame] dim` reaches the rules and not only the text, which is one word
+        meaning one thing in both places it is honoured. It is also the only
+        theme-independent way to make the frame's own separation louder: `fg=default` is
+        the operator's own foreground, so there is no terminal it can be wrong on."""
+        loud = instance.Look(rules="visible", text="default", dim=False)
+        self.assertEqual(self._values(None, loud)["pane-border-style"],
+                         commands_frame._CHROME_FG)
+        self.assertEqual(self._values("bg=blue", loud)["pane-border-style"],
+                         f"{commands_frame._CHROME_FG},bg=blue")
+
+    def test_a_planes_own_text_colour_draws_its_rules_too(self):
+        """A frame whose panes carry a foreground draws its rules in it rather than in a
+        colour nothing else on the screen is wearing — the same argument `border_bg` makes
+        about the background, one clause over."""
+        self.assertEqual(
+            self._values("bg=brightblack",
+                         instance.Look("visible", "black", True))["pane-border-style"],
+            "fg=black,dim,bg=brightblack")
+
     def test_no_operator_string_reaches_a_style_value(self):
         """The boundary asserted end to end rather than at the table: whatever a committed
         `bg` says, the value that reaches a `set-option` is `_CHROME_STYLE` plus a clause
@@ -298,6 +364,7 @@ class TheRuleIsDrawnInIt(unittest.TestCase):
         for level in ("dark", hostile):
             argvs = commands_frame._chrome_argvs(
                 socket="s", harness_pane="%1", v=_EVERY_CHROME_OPTION,
+                look=self.LOOK,
                 surface=instance.border_bg(_frame(hostile, hostile), level))
             for argv in argvs:
                 for word in argv:
@@ -391,27 +458,46 @@ class APanelDrawsItsOwnEdgesAndTheHarnessKeepsItsOwn(unittest.TestCase):
         with the rules      harness top ESC[100m  right ESC[100m  panel|panel ESC[100m
     """
 
-    STYLE = "fg=default,dim"
+    #: The base rule FOREGROUND, which is what `pane_border_options` takes now: the `dim`
+    #: beside it and the surface behind it are both `instance.rule_style`'s to decide.
+    STYLE = commands_frame._CHROME_FG
+    LOOK = _VISIBLE
 
     def test_a_pane_with_a_colour_gets_both_of_its_edges_in_that_colour(self):
         self.assertEqual(
-            instance.pane_border_options("brightblack", "dark", self.STYLE),
+            instance.pane_border_options("brightblack", "dark", self.STYLE, self.LOOK),
             (("pane-border-style", "fg=default,dim,bg=brightblack"),
              ("pane-active-border-style", "fg=default,dim,bg=brightblack")))
+
+    def test_the_shipped_frame_hides_that_panes_edges_in_its_own_colour(self):
+        """The same pane, with the word the plane did not have to write. `hidden` is the
+        shipped `[frame] rules`, and on a pane that HAS a surface it gives the glyph that
+        surface's own colour — which is the style the operator hand-applied to their own
+        frame and confirmed, made permanent."""
+        self.assertEqual(
+            instance.pane_border_options("brightblack", "dark", self.STYLE, _SHIPPED),
+            (("pane-border-style", "fg=brightblack,bg=brightblack"),
+             ("pane-active-border-style", "fg=brightblack,bg=brightblack")))
 
     def test_a_pane_with_no_colour_of_its_own_takes_the_frame_wide_one(self):
         """The same `pane_bg_options(bg) or chrome_options(chrome)` its INTERIOR is
         painted from, so a pane and its edges cannot come out two colours."""
         self.assertEqual(
-            [v for _n, v in instance.pane_border_options(None, "dark", self.STYLE)],
-            [f"{self.STYLE},{dict(instance.FRAME_CHROME['dark'])['window-style']}"] * 2)
+            [v for _n, v in instance.pane_border_options(None, "dark", self.STYLE,
+                                                         self.LOOK)],
+            [f"{self.STYLE},dim,"
+             f"{dict(instance.FRAME_CHROME['dark'])['window-style']}"] * 2)
 
     def test_a_pane_with_no_surface_at_all_sets_nothing(self):
         """Not a bare style — the window option already IS that. A pane-scoped copy of the
         window's own value would be a value `off`'s removal has to find and remove, for a
         pane that never needed one."""
-        self.assertEqual(instance.pane_border_options(None, "off", self.STYLE), ())
-        self.assertEqual(instance.pane_border_options("nonsense", "off", self.STYLE), ())
+        for look in (self.LOOK, _SHIPPED):
+            with self.subTest(rules=look.rules):
+                self.assertEqual(
+                    instance.pane_border_options(None, "off", self.STYLE, look), ())
+                self.assertEqual(
+                    instance.pane_border_options("nonsense", "off", self.STYLE, look), ())
 
     def test_both_edges_always_carry_the_identical_value(self):
         """#514 surviving the move to pane scope. tmux picks between the two per border
@@ -419,16 +505,18 @@ class APanelDrawsItsOwnEdgesAndTheHarnessKeepsItsOwn(unittest.TestCase):
         differed would have edges that changed colour at the active pane's corner."""
         for word in (None, *instance.FRAME_PANE_BG):
             for level in instance.FRAME_CHROME:
-                with self.subTest(bg=word, chrome=level):
-                    values = {v for _n, v
-                              in instance.pane_border_options(word, level, self.STYLE)}
-                    self.assertLessEqual(len(values), 1, values)
+                for look in (self.LOOK, _SHIPPED):
+                    with self.subTest(bg=word, chrome=level, rules=look.rules):
+                        values = {v for _n, v in instance.pane_border_options(
+                            word, level, self.STYLE, look)}
+                        self.assertLessEqual(len(values), 1, values)
 
     def test_the_two_option_names_are_the_ones_the_removal_reads(self):
         """One list, read by the setter and by `_resurface_argvs`' unset — so an option
         added to the pair cannot be set by one half and left behind by the other."""
         self.assertEqual(
-            tuple(n for n, _v in instance.pane_border_options("blue", "dark", self.STYLE)),
+            tuple(n for n, _v in instance.pane_border_options("blue", "dark", self.STYLE,
+                                                              self.LOOK)),
             instance.PANE_BORDER_OPTIONS)
 
     def test_no_operator_string_reaches_a_pane_edge(self):
@@ -437,12 +525,21 @@ class APanelDrawsItsOwnEdgesAndTheHarnessKeepsItsOwn(unittest.TestCase):
         ever a key."""
         ours = {v for pairs in instance.FRAME_PANE_BG.values() for _n, v in pairs}
         ours |= {v for pairs in instance.FRAME_CHROME.values() for _n, v in pairs}
+        # Under `hidden` the foreground is DERIVED from the background rather than taken
+        # from *style*, so the containment has to be asserted clause by clause rather than
+        # by stripping a known prefix — which is the point: the derivation is the one place
+        # a rule's foreground is built out of something other than a constant, and it is
+        # built out of another constant.
+        allowed = ours | {self.STYLE, "dim"} | {f"fg={n}" for n in instance.FRAME_PANE_BG}
         for word in (*instance.FRAME_PANE_BG, "colour236", "chartreuse", None, 7,
                      "bg=#{?#{==:1,1},colour196,colour46}", ["blue"], True):
-            with self.subTest(bg=word):
-                for _n, value in instance.pane_border_options(word, "dark", self.STYLE):
-                    self.assertNotIn("#", value)
-                    self.assertIn(value.removeprefix(f"{self.STYLE},"), ours)
+            for look in (self.LOOK, _SHIPPED):
+                with self.subTest(bg=word, rules=look.rules):
+                    for _n, value in instance.pane_border_options(word, "dark",
+                                                                  self.STYLE, look):
+                        self.assertNotIn("#", value)
+                        for clause in value.split(","):
+                            self.assertIn(clause, allowed)
 
 
 class TheRulesAroundTheHarnessAreTheFramesToo(unittest.TestCase):
@@ -472,7 +569,11 @@ class TheRulesAroundTheHarnessAreTheFramesToo(unittest.TestCase):
     is the whole of what naming the harness here costs.
     """
 
-    STYLE = commands_frame._CHROME_STYLE
+    #: `APanelDrawsItsOwnEdgesAndTheHarnessKeepsItsOwn`'s own two, for its own reasons:
+    #: the base rule foreground, and the `visible` rules that keep a value's two halves
+    #: distinguishable while the MECHANISM is what is under test.
+    STYLE = commands_frame._CHROME_FG
+    LOOK = _VISIBLE
 
     def _surface_of(self, word, level):
         """What a PANEL with this component `bg` at this level actually wears — the
@@ -558,18 +659,25 @@ class TheRulesAroundTheHarnessAreTheFramesToo(unittest.TestCase):
             with self.subTest(bg=word):
                 self.assertEqual(
                     instance.rule_options(
-                        instance.agreed_border_bg(_frame(*[word] * 4), "dark"), self.STYLE),
-                    instance.pane_border_options(word, "dark", self.STYLE))
+                        instance.agreed_border_bg(_frame(*[word] * 4), "dark"),
+                        self.STYLE, self.LOOK),
+                    instance.pane_border_options(word, "dark", self.STYLE, self.LOOK))
 
     def test_both_of_the_harness_options_carry_the_identical_value(self):
         """#514, on the pane where it is most visible: a rule whose two options differed
         would change colour where it passed the active pane's corner."""
-        pairs = instance.rule_options("bg=blue", self.STYLE)
+        pairs = instance.rule_options("bg=blue", self.STYLE, self.LOOK)
         self.assertEqual(tuple(n for n, _v in pairs), instance.PANE_BORDER_OPTIONS)
-        self.assertEqual({v for _n, v in pairs}, {f"{self.STYLE},bg=blue"})
+        self.assertEqual({v for _n, v in pairs}, {f"{self.STYLE},dim,bg=blue"})
 
     def test_no_surface_builds_no_pair_at_all(self):
-        self.assertEqual(instance.rule_options(None, self.STYLE), ())
+        """Asked of the SURFACE and not of the assembled style, which is a distinction a
+        `text` colour makes real: `rule_style` answers a value for a frame with no surface
+        (it is what `_chrome_argvs` puts on the window), and a pane with nothing to draw a
+        rule over must still get no command."""
+        for look in (self.LOOK, _SHIPPED, instance.Look("hidden", "black", False)):
+            with self.subTest(look=look):
+                self.assertEqual(instance.rule_options(None, self.STYLE, look), ())
 
     def test_no_operator_string_reaches_the_rules_around_the_harness(self):
         """The containment, on the new path: what comes back is charter's style constant
@@ -581,15 +689,32 @@ class TheRulesAroundTheHarnessAreTheFramesToo(unittest.TestCase):
                      "bg=#{?#{==:1,1},colour196,colour46}", ["blue"], True):
             with self.subTest(bg=word):
                 surface = instance.agreed_border_bg(_frame(word, word), "dark")
-                pairs = instance.rule_options(surface, self.STYLE)
-                self.assertTrue(pairs, "no value was built at all, so nothing was "
-                                       "contained here")
-                for _n, value in pairs:
-                    self.assertNotIn("#", value)
-                    self.assertIn(value.removeprefix(f"{self.STYLE},"), ours)
+                # Both looks, because they build the foreground two different ways and
+                # only one of them takes it from a constant the caller passed in.
+                allowed = (ours | {self.STYLE, "dim"}
+                           | {f"fg={n}" for n in instance.FRAME_PANE_BG})
+                for look in (self.LOOK, _SHIPPED):
+                    pairs = instance.rule_options(surface, self.STYLE, look)
+                    self.assertTrue(pairs, "no value was built at all, so nothing was "
+                                           "contained here")
+                    for _n, value in pairs:
+                        self.assertNotIn("#", value)
+                        for clause in value.split(","):
+                            self.assertIn(clause, allowed)
 
     def _argvs(self, **kw):
+        kw.setdefault("look", self.LOOK)
         return commands_frame._harness_rule_argvs(socket="s", harness_pane="%1", **kw)
+
+    def test_the_shipped_frame_hides_the_harnesss_edges_in_the_agreed_colour(self):
+        """The default, on the pane the report is about. The harness's three edges take
+        the colour its neighbours agree on — and now they take it on the GLYPH as well, so
+        the rule under the identity bar stops being a line and becomes the surface running
+        through. This is the value the operator hand-applied to their own frame."""
+        self.assertEqual(
+            [a[-1] for a in self._argvs(surface="bg=brightblack", pane_borders=True,
+                                        look=_SHIPPED)],
+            ["fg=brightblack,bg=brightblack"] * 2)
 
     def test_above_the_floor_both_options_are_set_on_the_harness_pane_itself(self):
         """`-p`, and `-t <the harness>` — the one place charter targets that pane with a
@@ -597,7 +722,7 @@ class TheRulesAroundTheHarnessAreTheFramesToo(unittest.TestCase):
         self.assertEqual(
             [a[a.index("set-option"):] for a in
              self._argvs(surface="bg=brightblack", pane_borders=True)],
-            [["set-option", "-p", "-t", "%1", n, f"{self.STYLE},bg=brightblack"]
+            [["set-option", "-p", "-t", "%1", n, f"{self.STYLE},dim,bg=brightblack"]
              for n in instance.PANE_BORDER_OPTIONS])
 
     def test_no_surface_is_the_unset_and_never_silence(self):
@@ -716,7 +841,9 @@ class TheFloorCannotHavePerPaneEdgesAndIsNotGivenThem(unittest.TestCase):
         argvs = commands_frame._resurface_argvs(socket="s", pane_id="%3", chrome="off",
                                                 bg="brightblack", pane_borders=True)
         self.assertEqual([a for a in argvs if "-u" in a], [])
-        self.assertIn("fg=default,dim,bg=brightblack", [a[-1] for a in argvs])
+        # The SHIPPED rule, which is `_resurface_argvs`' own default look: the pane keeps
+        # its colour and its edges are hidden in it.
+        self.assertIn("fg=brightblack,bg=brightblack", [a[-1] for a in argvs])
 
     def test_no_colour_takes_the_edges_off_too(self):
         """The fill is tmux's paint either way, so a `NO_COLOR` that stripped the pane and
@@ -790,7 +917,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         frame = _resolved(*["brightblack"] * 4, chrome="dark")
         rules = self._rules(self._issued(frame, ["top", "bottom", "repos", "right"]))
         self.assertEqual(rules["pane-border-style"],
-                         f"{commands_frame._CHROME_STYLE},bg=brightblack")
+                         "fg=brightblack,bg=brightblack")
         self.assertEqual(rules["pane-active-border-style"], rules["pane-border-style"])
 
     def _per_pane(self, issued, names) -> dict[str, list[str]]:
@@ -808,7 +935,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         self.assertEqual(self._rules(issued), commands_frame._chrome_values(),
                          "the window carries a surface above the floor, so a rule is "
                          "being coloured in two places")
-        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        want = "fg=brightblack,bg=brightblack"
         per_pane = self._per_pane(issued, instance.PANE_BORDER_OPTIONS)
         self.assertEqual(len(per_pane), 5,
                          f"not every panel and the harness got edges: {per_pane}")
@@ -827,7 +954,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         rectangle ADR 0018 is about.
         """
         frame = _resolved(*["brightblack"] * 4, chrome="dark")
-        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        want = "fg=brightblack,bg=brightblack"
         for v in (None, (3, 2), (3, 7)):
             with self.subTest(v=v):
                 issued = self._issued(frame, ["top", "right"], v=v)
@@ -860,7 +987,7 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         self.assertEqual(one, whole)
         self.assertEqual(one, whole)
         self.assertEqual(one["pane-border-style"],
-                         f"{commands_frame._CHROME_STYLE},bg=blue")
+                         "fg=blue,bg=blue")
 
     def test_the_live_word_and_not_the_committed_one_decides_the_rules(self):
         """`_split_panels` resolves the level through `_current_chrome`, so a pane split
@@ -871,8 +998,9 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         state.record_chrome("f-live", "dark")
         rules = self._rules(self._issued(frame, ["top"], fid="f-live"))
         self.assertEqual(rules["pane-border-style"],
-                         f"{commands_frame._CHROME_STYLE},"
-                         f"{dict(instance.FRAME_CHROME['dark'])['window-style']}")
+                         "fg=black,bg=black",
+                         "the live word decides the colour, and the shipped `rules` "
+                         "decides that the glyph is drawn in it")
 
 
 class TheVersionReachesTheFunnelFromTheFunctionThatKnowsIt(PersonaIso, unittest.TestCase):
@@ -924,7 +1052,7 @@ class TheVersionReachesTheFunnelFromTheFunctionThatKnowsIt(PersonaIso, unittest.
                          "the version never reached `_split_panels`, so a real frame "
                          f"above the floor took the floor's design: {edges}")
         self.assertEqual(set(edges.values()),
-                         {f"{commands_frame._CHROME_STYLE},bg=brightblack"})
+                         {"fg=brightblack,bg=brightblack"})
         self.assertEqual(self._window_rule(calls), commands_frame._CHROME_STYLE,
                          "the window kept a surface above the floor, so a rule is being "
                          "coloured in two places")
@@ -935,7 +1063,7 @@ class TheVersionReachesTheFunnelFromTheFunctionThatKnowsIt(PersonaIso, unittest.
                          "a frame below the floor wrote a pane-scoped border option, "
                          "which on that tmux lands on the window")
         self.assertEqual(self._window_rule(calls),
-                         f"{commands_frame._CHROME_STYLE},bg=brightblack")
+                         "fg=brightblack,bg=brightblack")
 
     def test_the_harness_is_among_the_panes_given_edges_only_above_the_floor(self):
         """The version has to reach the harness's own rules too, and the direction it can
@@ -944,7 +1072,7 @@ class TheVersionReachesTheFunnelFromTheFunctionThatKnowsIt(PersonaIso, unittest.
         #514 pin with it."""
         self.assertNotIn("%1", self._edges(self._calls((3, 6))))
         self.assertEqual(self._edges(self._calls((3, 7))).get("%1"),
-                         f"{commands_frame._CHROME_STYLE},bg=brightblack",
+                         "fg=brightblack,bg=brightblack",
                          "the rules round the harness are bare while the panels' are "
                          "surfaced, so one rule is two colours")
 
@@ -1091,7 +1219,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         self.assertEqual(
             self._harness_rules(self._live_calls(_resolved(*["blue"] * 4),
                                                  "dark", (3, 7)))[0][-1],
-            f"{commands_frame._CHROME_STYLE},bg=blue",
+            "fg=blue,bg=blue",
             "an agreeing arrangement got no surface either, so the removal above is not "
             "the disagreement's doing")
 
@@ -1100,7 +1228,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         component wrote. The rules stay the panels' colour, because the panels do — on the
         window below the floor, on the pane itself above it."""
         frame = _resolved(*["brightblack"] * 4)
-        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        want = "fg=brightblack,bg=brightblack"
         self.assertEqual(self._live_value(frame, "off", (3, 2))[("-w", "pane-border-style")],
                          want)
         self.assertEqual(self._live_value(frame, "off", (3, 7))[("-p", "pane-border-style")],
@@ -1120,7 +1248,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         the per-pane edges exist to unbox; a pane written below it would land on the
         window anyway and the last panel would decide the frame."""
         frame = _resolved(*["brightblack"] * 4)
-        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        want = "fg=brightblack,bg=brightblack"
         floor = self._live_value(frame, "dark", (3, 2))
         self.assertEqual(floor[("-w", "pane-border-style")], want)
         self.assertNotIn(("-p", "pane-border-style"), floor)
@@ -1227,7 +1355,7 @@ class ARelayoutThatAddsNoPaneStillAssertsTheWindowsOwnOptions(PersonaIso,
         horizontal rule in two colours."""
         panels = {"top": "%3", "bottom": "%4"}
         calls = self._calls(panels=panels, want=list(panels))
-        want = f"{commands_frame._CHROME_STYLE},bg=brightblack"
+        want = "fg=brightblack,bg=brightblack"
         harness = [a for a in calls if "set-option" in a and "-p" in a
                    and a[a.index("-t") + 1] == "%1"]
         self.assertEqual([a[-1] for a in harness], [want, want],
