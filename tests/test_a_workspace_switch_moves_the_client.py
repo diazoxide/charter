@@ -46,7 +46,7 @@ from unittest import mock
 
 from charter import commands_frame, config, workspace
 from charter.frame import chats, state, switch
-from tests import _tmuxreap
+from tests import _tmuxreap, _tmuxsocket
 from tests._isolation import PersonaIso
 
 _HAS_TMUX = shutil.which("tmux") is not None
@@ -332,7 +332,11 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         were already in, whatever workspace it names, so there is no session for another
         workspace to be — and both things `switch-client` could do there are wrong. This
         is asked FIRST, before any reading, because it is about what this frame IS."""
-        state.record_server(self.FID, "/tmp/tmux-1000/default")
+        # `_tmuxsocket.OPERATOR_SOCKET` and never a spelled path (#601): a socket path
+        # with a literal uid in it is one developer's machine written into the suite. What
+        # `is_operator_socket` reads is the leading slash, and this is the real thing tmux
+        # would hand this machine.
+        state.record_server(self.FID, _tmuxsocket.OPERATOR_SOCKET)
         s = self._switch(self._ordinary())
         self.assertEqual(s.calls, [], "a guest frame asked the server anything at all")
         self.laid_out.assert_not_called()
