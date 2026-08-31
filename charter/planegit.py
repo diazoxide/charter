@@ -138,17 +138,43 @@ def _is_protected_rejection(stderr: str) -> bool:
     return any(s.lower() in blob for s in _PROTECTED_SIGNATURES)
 
 
-def _compare_url(https: str, branch: str) -> str | None:
+def _compare_url(https: str, branch: str, root) -> str | None:
     """A one-click "open a pull request for this branch" URL.
 
     A plain HTTPS link, deliberately: charter has no PR-creation capability in any forge
     adapter, and this closes the PR-gated workflow **without** adding one — no API call, no
     extra token scope, no new adapter surface.
+
+    Which form to build is decided by RESOLVING the forge (`registry.resolve_host`, the
+    same call `_origin_https` made one step earlier), never by looking for a hostname
+    inside the URL string. The check here used to be ``"github.com" in base``, which is
+    FINDING 1's bug in the one place FINDING 1 did not reach: a substring of the whole
+    URL matches in the *path* as readily as in the host. A self-hosted GitLab with a
+    ``mirrors/github.com/…`` namespace — an ordinary name for a mirror group — was handed
+    ``https://git.internal/mirrors/github.com/acme/plane/compare/…``, a form GitLab does
+    not serve, which is exactly the case the else-branch exists for. And because the line
+    charter prints is a link an operator clicks, a host that merely *contains* the literal
+    got a charter-blessed GitHub URL pointing at it.
+
+    Resolving also fixes the sibling the substring check could never get right: a declared
+    **GitHub Enterprise** host says nothing about github.com, so it used to be given
+    GitLab's new-MR form. A forge this plane does not recognise gets no link rather than a
+    guessed one — the same refusal `_origin_https` makes about the same URL.
     """
     base = (https or "").removesuffix(".git")
     if not base.startswith("https://"):
         return None
-    if "github.com" in base:
+    from .forge import registry
+    forge = registry.resolve_host(base, root)
+    if forge is None:
+        return None
+    if forge.kind not in ("github", "gitlab"):
+        # A kind registered after this was written. Stated rather than left to fall
+        # through the bottom of the function: falling through is the same `None`, but it
+        # is `None` by accident, and the accident sits one edit away from being the GitLab
+        # form handed to a forge that has no such page.
+        return None
+    if forge.kind == "github":
         return f"{base}/compare/{branch}?expand=1"
     # GitLab, and self-hosted GitLab, use the same new-MR form.
     return (f"{base}/-/merge_requests/new?merge_request%5Bsource_branch%5D={branch}")
@@ -393,7 +419,7 @@ def _land_via_branch(root, https: str, cred: list, default_branch: str,
             for ln in tail.splitlines():
                 util.err("  " + ln)
         return PushResult(STRANDED, default_branch, detail=tail)
-    url = _compare_url(https, branch)
+    url = _compare_url(https, branch, root)
     if announce:
         util.ok(f"'{default_branch}' requires a pull request — pushed {branch} instead.")
         if url:
