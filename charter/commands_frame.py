@@ -5434,10 +5434,21 @@ def outside_a_frame(command: str) -> int:
     started from, one keystroke away, was indistinguishable from success.
 
     **stderr, and never `_say_on_screen`.** There is no frame here by construction, so
-    there is no frame's screen to draw on: `_say_on_screen` with an empty id resolves `-t
-    ""` to whichever session on the SHARED server attached most recently, which is how
-    charter's refusal came to be drawn across somebody else's frame (see `cmd_chat`'s own
-    note). The operator's own stderr is the one surface that is certainly theirs.
+    there is no frame's screen to draw on — and `display-message` would not find one
+    anyway. Measured by hand on tmux 3.7c and at the 3.2 floor, one server, sessions `sa`
+    and `sb`, the only client attached to `sb`::
+
+        $ tmux -L t display-message -t %0 MSG        # %0 is a pane of session sa
+        # the message appears on sb's terminal, and nowhere on sa's
+
+    **`-t` is the target for FORMAT EVALUATION, not the choice of screen.** The screen is
+    `-c`, and with no `-c` tmux draws on its own current client. Charter had this recorded
+    as a property of an EMPTY target (`cmd_chat`'s own note, and `_say_on_screen`'s); it is
+    not — an empty target is merely the loudest case of something true of every target.
+    So on a socket carrying eleven frames, a refusal put on screen without the presser's
+    own `#{client_name}` is a refusal that can land on somebody else's terminal, and this
+    command has no client to pass: nobody pressed a key, somebody typed into a shell. That
+    shell's stderr is the one surface that is certainly theirs.
 
     **Non-zero, and the `run-shell` objection does not reach this branch.** Every one of
     these commands is *also* fired by tmux — a `bind -n`, a window hook, a palette row —
@@ -5996,16 +6007,17 @@ def cmd_chat(args) -> int:
     """
     fid = _pressers_chat(args)
     if not fid:
-        # **Not fired from inside a frame at all.** This guard has always been here — what
-        # it may not do is reach :func:`_say_on_screen`, whose `-t <fid>` with an empty
-        # target resolves to whichever session on the SHARED server was attached most
-        # recently, which is how `charter frame-chat api.2` typed in an ordinary shell drew
-        # charter's refusal across somebody else's frame. Measured by hand against the real
-        # server, which is how it was found. What it does now is say so on the asker's own
-        # stderr instead of returning 0 into their silence (#734), which is the one surface
-        # that is certainly theirs — see :func:`outside_a_frame`. `docs/frame.md` makes
-        # this command the documented fallback when the palette's doorway is refused, so it
-        # is the last one that can afford to answer a typo with a success status.
+        # **Not fired from inside a frame at all.** This guard has always been here —
+        # what it may not do is reach :func:`_say_on_screen`, which is how `charter
+        # frame-chat api.2` typed in an ordinary shell drew charter's refusal across
+        # somebody else's frame. That was recorded as a property of the EMPTY `-t` target;
+        # re-measured for #734 on 3.7c and at the 3.2 floor it is not — `-t` never chooses
+        # the screen at all, `-c` does, and with neither, tmux draws on its own current
+        # client. See :func:`outside_a_frame` for the measurement. What this branch does
+        # now is say so on the asker's own stderr instead of returning 0 into their
+        # silence (#734). `docs/frame.md` makes this command the documented fallback when
+        # the palette's doorway is refused, so it is the last one that can afford to
+        # answer a typo with a success status.
         return outside_a_frame("charter frame-chat")
     target = (getattr(args, "chat_id", None) or "").strip()
     # Asked again rather than trusted from the palette that spawned this: the same
