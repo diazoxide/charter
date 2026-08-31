@@ -86,6 +86,23 @@ def _completed(argv, rc=0, out="", err=""):
     return subprocess.CompletedProcess(argv, rc, stdout=out, stderr=err)
 
 
+#: "the plane this test is standing in", resolved when the row is built rather than when
+#: the module is imported — `config.STATE_DIR` is re-pointed per test by `PersonaIso` and
+#: per plane by `_plane`, which is the whole point of both.
+_MINE = object()
+
+
+def _seat(session: str, pane: str, plane=_MINE) -> str:
+    """One `commands_frame._PANE_SEAT_FORMAT` row, in tmux's own spelling.
+
+    *plane* is `_MINE` for a session this plane's launcher marked (what every launch
+    writes since §4b), ``None`` for one an older charter created and left unmarked, and a
+    string for another plane's.
+    """
+    marker = str(config.STATE_DIR) if plane is _MINE else (plane or "")
+    return f"{session}\t{pane}\t{marker}"
+
+
 class _FakeServer:
     """The three answers a focus decision reads, and a record of everything it asked.
 
@@ -159,7 +176,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         """The ordinary first launch, and the property that keeps this free: with no chat
         directory there is nothing to compare against, so the decision is made on disk and
         the server is never asked anything."""
-        fake = _FakeServer(panes=["$0\t%0"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$0", "%0")], clients=["/dev/ttys001"])
         self.assertIsNone(self._decide(fake))
         self.assertEqual(fake.calls, [])
 
@@ -168,7 +185,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         that could identify it on the server — a chat id would, and a chat id is exactly
         what two planes can both hold (§3.3)."""
         _a_chat("shared.1", ws=SHARED, pane=None)
-        fake = _FakeServer(panes=["$0\t%0"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$0", "%0")], clients=["/dev/ttys001"])
         self.assertIsNone(self._decide(fake))
         self.assertEqual(fake.calls, [])
 
@@ -176,7 +193,8 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         """Every chat of this workspace is cold. There is nothing to focus, and the
         second question is not worth a subprocess."""
         _a_chat("shared.1", ws=SHARED, pane="%4")
-        fake = _FakeServer(panes=["$0\t%0", "$1\t%2"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$0", "%0"), _seat("$1", "%2")],
+                           clients=["/dev/ttys001"])
         self.assertIsNone(self._decide(fake))
         self.assertEqual(fake.asked("list-panes"), 1)
         self.assertEqual(fake.asked("list-clients"), 0)
@@ -186,20 +204,20 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         makes: with no client on the session there is nobody to drag, so the chat is
         added and selected exactly as it shipped."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$0\t%0"], clients=[])
+        fake = _FakeServer(panes=[_seat("$0", "%0")], clients=[])
         self.assertIsNone(self._decide(fake))
         self.assertEqual(fake.asked("list-clients"), 1)
 
     def test_a_live_workspace_somebody_is_looking_at_is_focused(self):
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"])
         self.assertEqual(self._decide(fake), ("$3", "shared.1"))
 
     def test_the_session_is_targeted_by_its_id_and_never_by_its_name(self):
         """#693's rule, and here it is the correctness argument rather than a convenience:
         a session NAME is a name every plane on the machine may have."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"])
         self._decide(fake)
         self.assertEqual(fake.clients_target, "$3")
 
@@ -207,7 +225,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         """`chats.of_workspace` reads each directory's own `workspace` file, so a live
         chat of a DIFFERENT workspace on this same plane focuses nothing."""
         _a_chat("elsewhere.1", ws="elsewhere", pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"])
         self.assertIsNone(self._decide(fake))
         self.assertEqual(fake.calls, [])
 
@@ -222,7 +240,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         open a chat and select it. Pins `.split()`, which is what asks "is there a client"
         in a form a test can go red on (see the comment at the line)."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["", "   "])
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["", "   "])
         self.assertIsNone(self._decide(fake))
 
     def test_a_server_that_will_not_list_that_sessions_clients_focuses_nothing(self):
@@ -230,7 +248,8 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         launch that cannot tell whether anybody is there opens its own chat, which is the
         behaviour that shipped."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"], clients_rc=1)
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
+                           clients_rc=1)
         self.assertIsNone(self._decide(fake))
 
     def test_a_row_with_too_few_fields_is_not_read_as_a_pane(self):
@@ -245,7 +264,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         different servers: a row that is short raises where a row that is long merely
         lies, and only the second can be mistaken for a match."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0\textra"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$3", "%0") + "\textra"], clients=["/dev/ttys001"])
         self.assertIsNone(self._decide(fake))
 
     def test_a_server_that_cannot_be_listed_is_not_reported_on_every_launch(self):
@@ -262,7 +281,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
 
     def test_a_session_whose_clients_cannot_be_listed_is_not_reported_either(self):
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients_rc=1)
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients_rc=1)
         said = io.StringIO()
         with redirect_stderr(said):
             self.assertIsNone(self._decide(fake))
@@ -273,7 +292,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
         a state file holding something that is not a pane id is refused by the comparison
         itself rather than by a shape check that could never fire."""
         _a_chat("shared.1", ws=SHARED, pane="; kill-server")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"])
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"])
         self.assertIsNone(self._decide(fake))
 
 
@@ -330,7 +349,7 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
 
     def test_a_focused_launch_attaches_by_session_id_and_returns_zero(self):
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"],
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
                            sessions=[SHARED], chats=["shared.1"])
         self.assertEqual(self._launch(fake), 0)
         attaches = [c for c in fake.calls if "attach" in c]
@@ -343,7 +362,7 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
         the operator detaches a second later."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
         before = sorted(p.name for p in (config.STATE_DIR / "frame").iterdir())
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"],
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
                            sessions=[SHARED], chats=["shared.1"])
         self._launch(fake)
         after = sorted(p.name for p in (config.STATE_DIR / "frame").iterdir())
@@ -353,7 +372,7 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
         """`new-window` plus `select-window` IS the drag (§2.3). A focus must issue
         neither — that is the whole of what makes it not one."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"],
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
                            sessions=[SHARED], chats=["shared.1"])
         self._launch(fake)
         for verb in ("new-window", "new-session", "select-window", "split-window"):
@@ -363,7 +382,7 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
         """The negative control, and it must be a launch that could have focused: same
         plane, same workspace, same live session — only nobody attached."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=[],
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=[],
                            sessions=[SHARED], chats=["shared.1"])
         with mock.patch("charter.commands_frame._spawn_gather"):
             self._launch(fake)
@@ -375,7 +394,7 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
         the operator typed. Same workspace, same live session, same attached client — the
         only difference is that this launch named something to RUN."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"],
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
                            sessions=[SHARED], chats=["shared.1"])
         with mock.patch("charter.commands_frame._spawn_gather"):
             self._launch(fake, harness=None, rest=["--", "htop"])
@@ -386,7 +405,7 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
         """`charter claude --resume <id>` is the same fact one harness over: `rest` is the
         operator's own flags, `launch_argv` carries them, and a focus would drop them."""
         _a_chat("shared.1", ws=SHARED, pane="%0")
-        fake = _FakeServer(panes=["$3\t%0"], clients=["/dev/ttys001"],
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
                            sessions=[SHARED], chats=["shared.1"])
         with mock.patch("charter.commands_frame._spawn_gather"):
             self._launch(fake, rest=["--resume", "abc123"])
@@ -403,7 +422,7 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
                     return _completed(cmd, 3)
                 return super().__call__(cmd, **kwargs)
 
-        fake = _RefusesToAttach(panes=["$3\t%0"], clients=["/dev/ttys001"],
+        fake = _RefusesToAttach(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
                                sessions=[SHARED], chats=["shared.1"])
         self.assertEqual(self._launch(fake), 3)
 

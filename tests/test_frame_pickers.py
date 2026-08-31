@@ -98,21 +98,22 @@ class AWorkspacePickerListsWorkspaces(_Frame, unittest.TestCase):
         self.assertEqual([(r.title, r.mark) for r in roster.rows],
                          [("alpha", True), ("beta", False), ("default", False)])
 
-    def test_choosing_a_row_is_refused_and_moves_nothing(self):
+    def test_choosing_a_row_is_allowed_and_still_moves_no_chat(self):
         """Was `test_choosing_a_row_switches_the_frame_and_bumps_it_so_panels_repaint`,
         which asserted `state.workspace_for` following the keypress — the defect §4j
-        forbids, stated as a requirement. The rows are still listed (above), because a
-        name the operator typed is a question they asked; what changed is the answer.
+        forbids, stated as a requirement — and then
+        `test_choosing_a_row_is_refused_and_moves_nothing`, which asserted #789's blanket
+        refusal.
 
-        The switch-and-bump property it measured is not lost: it is
-        `test_a_persona_picker_is_the_same_thing_one_noun_over`, which was always the
-        generic half of this pair."""
+        §4b's answer is the third one and it is both: the row is CHOSEN, and the chat's
+        workspace does not move, because what moves is the tmux client. No bump either —
+        the version a workspace switch earns is `_apply_arrangement`'s, after the client
+        has actually gone somewhere, and this call is a decision rather than an effect."""
         roster = choose.roster(choose.WORKSPACE, self.FID)
         was = state.version(self.FID)
         row = next(r for r in roster.rows if roster.name_of(r) == "beta")
         out = choose.switch_to(roster.noun, self.FID, roster.name_of(row))
-        self.assertFalse(out.ok)
-        self.assertEqual(out.message, switch.FOR_LIFE)
+        self.assertTrue(out.ok, out.message)
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         self.assertEqual(state.version(self.FID), was)
 
@@ -349,13 +350,11 @@ class ThePaletteOpensThePickerAndActsOnWhatComesBack(_Frame, unittest.TestCase):
         self.assertEqual(self.said.call_args[0][0], self.FID)
         self.assertIs(self.said.call_args[1]["ok"], True)
 
-    # There is no workspace twin of the case above, and its absence is the change rather
-    # than a gap: the workspace doorway opens no picker at all now (§4j), so there is no
-    # doorway-then-name route to it from here. The two halves that remain are measured
-    # where each one lives — the refused doorway in
-    # `APinnedFrameIsToldBeforeItPressesAnything`, and the typed name that reaches
-    # `switch.FOR_LIFE` without a doorway in `tests/test_frame_palette_names.py`, which is
-    # the module that owns the `query_only` route a name row actually arrives by.
+    # The workspace twin of the case above is `test_choosing_a_row_is_allowed_and_still_
+    # moves_no_chat`, which asserts the half that differs — the chat does not move — and
+    # deliberately not the switch itself: a workspace switch is a tmux client moved
+    # between sessions, and `tests/test_a_workspace_switch_moves_the_client.py` is where
+    # that is measured against a server.
 
     def test_leaving_the_picker_without_choosing_moves_nothing(self):
         """Escape in the picker cancels the whole palette — `Surface.run` answers ``None``
@@ -442,8 +441,7 @@ class ARefusedSwitchSaysSoOnScreen(_Frame, unittest.TestCase):
         roster = choose.roster(choose.WORKSPACE, self.FID)
         row = next(r for r in roster.rows if roster.name_of(r) == "beta")
         out = choose.switch_to(roster.noun, self.FID, roster.name_of(row))
-        self.assertFalse(out.ok)
-        self.assertEqual(out.message, switch.FOR_LIFE)
+        self.assertTrue(out.ok, out.message)
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         self.assertEqual(workspace.is_locked(self.FID), "alpha")
 
@@ -456,12 +454,13 @@ class APinnedFrameIsToldBeforeItPressesAnything(_Frame, unittest.TestCase):
     names none of which can be switched to would be an offer charter already knows it
     cannot honour.
 
-    **It was the WORKSPACE noun until §4j, and had to move rather than be copied.** That
-    doorway now carries `switch.FOR_LIFE` on every frame, pinned or not, so a pin-shaped
-    assertion on it would stay green with the pin taken away — measuring nothing, which
-    is the failure this repository distrusts most. The persona is where a launch pin is
-    still what decides, so it is where the rule is measured; the workspace doorway's one
-    reason has its own case at the end of this class.
+    **It was the WORKSPACE noun until §4j, and had to move rather than be copied.** A
+    workspace doorway carried #789's blanket refusal on every frame, pinned or not, so a
+    pin-shaped assertion on it would have stayed green with the pin taken away — measuring
+    nothing, which is the failure this repository distrusts most. §4b removed that refusal
+    and did **not** put the pin back (`choose.PIN` says why: the pin is about which
+    workspace this CHAT is in, and a switch moves a client), so the workspace doorway now
+    has no reason at all and the persona is the only noun a launch pin still decides.
     """
 
     PIN = {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": "forge"}
@@ -476,13 +475,12 @@ class APinnedFrameIsToldBeforeItPressesAnything(_Frame, unittest.TestCase):
         """One pin per noun. Reading a pin as "this frame cannot switch anything" would
         take another picker away for a reason that is not about it.
 
-        Asserted as "the other row's reason is not this pin" rather than as "the other
-        row has no reason": it has one now, and it is §4j's — which is exactly the
-        distinction a leak would break, by naming the persona's variable on a row that is
-        not about personas."""
+        Both halves, because either alone can be right by accident: the workspace row
+        carries no reason at all, and in particular not one naming the persona's own
+        variable on a row that is not about personas."""
         row = next(r for r in choose.open_rows(self.FID)
                    if choose.noun_of(r) == choose.WORKSPACE)
-        self.assertEqual(row.note, switch.FOR_LIFE)
+        self.assertFalse(row.refused)
         self.assertNotIn("CHARTER_PERSONA", row.note)
 
     def test_the_pin_is_contained_before_it_becomes_a_line_on_a_status_area(self):
@@ -525,23 +523,17 @@ class APinnedFrameIsToldBeforeItPressesAnything(_Frame, unittest.TestCase):
         self.assertIn("$CHARTER_PERSONA pins this frame", self.said.call_args[0][1])
         self.assertIsNone(persona.for_session(self.FID))
 
-    def test_the_workspace_doorway_opens_no_picker_either_and_says_why(self):
-        """The same shape arriving through the same field for a different reason (§4j),
-        asserted here as well as in
-        `tests/test_a_chat_belongs_to_its_workspace_for_life` because THIS is the class
-        that measures the doorway-to-screen path end to end — #732's rule that a doorway
-        with a reason is one `_picker` will not open, and that pressing it lands the note
-        on the operator's screen rather than doing nothing."""
+    def test_the_workspace_doorway_opens_a_picker_even_on_a_pinned_frame(self):
+        """The negative control for the pin, and the case that would have caught #789's
+        cost: a persona pin closes the persona doorway and must not close the workspace
+        one. THIS is the class that measures the doorway path end to end, so the assertion
+        is that `_picker` returns a surface and puts the roster in *opened* — #732's rule
+        read the other way round."""
         row = next(r for r in choose.open_rows(self.FID)
                    if choose.noun_of(r) == choose.WORKSPACE)
         opened = []
-        self.assertIsNone(commands_frame._picker(row, self.FID, opened))
-        self.assertEqual(opened, [])
-        with mock.patch.object(palette, "own_the_tty", _pane(row)):
-            self.assertEqual(commands_frame.cmd_palette(
-                SimpleNamespace(client="/dev/ttys7", pane=True)), 0)
-        self.said.assert_called_once()
-        self.assertEqual(self.said.call_args[0][1], switch.FOR_LIFE)
+        self.assertIsNotNone(commands_frame._picker(row, self.FID, opened))
+        self.assertEqual([r.noun for r in opened], [choose.WORKSPACE])
         self.assertEqual(state.workspace_for(self.FID), "alpha")
 
 

@@ -774,6 +774,11 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "than a fixture provider's, and a mouse report still has to be put on a real "
             "client's terminal for tmux to route it anywhere. `os._exit`s in its "
             "`finally`.",
+        "tests/test_a_workspace_switch_moves_the_client.py:execvp":
+            "The same `tmux attach` inside a `pty.fork` child, for the reason a workspace "
+            "switch is ABOUT: `switch-client -c <client>` moves a CLIENT, and only a real "
+            "one on a real terminal exists to be moved — a detached session has nothing "
+            "for the switch to act on. `os._exit`s in its `finally`.",
         "tests/test_a_real_click_on_a_real_tab_bar_switches.py:execvp":
             "The same `tmux attach` inside a `pty.fork` child, for the sibling reason "
             "again: that file exercises the pointer against the two BARS, whose click "

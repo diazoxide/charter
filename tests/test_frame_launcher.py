@@ -1509,7 +1509,7 @@ class _FakeTmux:
                 kill_rc=0, arm_rc=0, hatch_rc=0, mark_rc=0, chrome_rc=0,
                 resize_hook_rc=0,
                 capture_rc=0,
-                respawn_hook_rc=0, chat_option_rc=0,
+                respawn_hook_rc=0, chat_option_rc=0, plane_option_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
         self.exit_code = exit_code
@@ -1565,6 +1565,12 @@ class _FakeTmux:
         self.capture_rc = capture_rc
         self.respawn_hook_rc = respawn_hook_rc
         self.chat_option_rc = chat_option_rc
+        self.plane_option_rc = plane_option_rc
+        #: Every value the launcher wrote to `@charter_plane`, in order — a list rather
+        #: than a flag because "written once, by the launch that made the session" is a
+        #: COUNT, and the case that would have caught a second write is a launch that
+        #: joins a session it did not create.
+        self.plane_marks: list[str] = []
         # Distinct from every other stderr string in this fake — a test needs to
         # control it independently to exercise the "invalid option" degrade (fix
         # round 3, item 2) separately from an ordinary resize-hook failure.
@@ -1604,6 +1610,16 @@ class _FakeTmux:
             self.fid = cmd[-1]
             return subprocess.CompletedProcess(cmd, self.chat_option_rc, stdout="",
                                                stderr="" if self.chat_option_rc == 0
+                                               else "cannot set")
+        if commands_frame._PLANE_OPTION in cmd:
+            # Which PLANE this session belongs to (§4b) — recorded rather than merely
+            # allowed, because two cases below assert that it is written exactly once and
+            # only by the launch that CREATED the session. Matched on the production
+            # constant and ahead of the generic `set-option` branch, for `_CHAT_OPTION`'s
+            # reason: the value is a plain path another branch could answer for.
+            self.plane_marks.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, self.plane_option_rc, stdout="",
+                                               stderr="" if self.plane_option_rc == 0
                                                else "cannot set")
         if "source-file" in cmd:
             conf_path = cmd[cmd.index("source-file") + 1]
@@ -2138,6 +2154,104 @@ class AWorkspaceIsASessionAndAChatIsAWindow(PersonaIso, unittest.TestCase):
              mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
             _launch(_FakeTmux(exit_code=0, still_live=True))
         self.assertTrue(any("reaped while it is still running" in m for m in buf), buf)
+
+
+class TheSessionIsMarkedWithItsPlane(PersonaIso, unittest.TestCase):
+    """§4b's marker on the launch path — `@charter_plane`, and the two facts about WHEN.
+
+    One tmux server serves every plane on this machine and a session's name is a bare
+    workspace name, so `#{session_name}` cannot say whose session it is. The marker is what
+    can, and `commands_frame._plane_session` reads it as a veto: a candidate session whose
+    marker names another plane is refused however well its pane id matched.
+
+    `PersonaIso` and `_launch`'s own `_refuse_the_real_plane` are what make this safe to
+    run at all: these cases drive the real `cmd_launch`, `state.reap` included, so the plane
+    they mark has to be the test's temporary one and never the operator's.
+    """
+
+    def test_the_launch_that_creates_the_session_marks_it_with_this_planes_state_dir(self):
+        """`config.STATE_DIR` and not `config.ROOT`: what makes two charters one plane, for
+        every read on this path, is sharing the `.charter/frame/` directory the chat
+        records live in."""
+        fake = _FakeTmux(exit_code=0, still_live=True)
+        _launch(fake)
+        self.assertEqual(fake.plane_marks, [str(config.STATE_DIR)])
+
+    def test_it_is_set_on_the_session_and_not_on_the_window_or_a_global(self):
+        """The scope is the whole of what makes this answerable. `-w` would put it on one
+        chat's window, and `-g` would hand every session on this shared server one plane's
+        answer — which is the collision the marker exists to end, made worse."""
+        fake = _FakeTmux(exit_code=0, still_live=True)
+        _launch(fake)
+        cmd = next(c for c in fake.calls if commands_frame._PLANE_OPTION in c)
+        self.assertEqual(cmd[3:6], ["set-option", "-t", fake.pane_id], cmd)
+        self.assertNotIn("-w", cmd)
+        self.assertNotIn("-g", cmd)
+        self.assertNotIn("-p", cmd)
+
+    def test_a_launch_that_JOINS_a_session_marks_nothing(self):
+        """**The case the whole guard rests on, and the one that would make it the defect
+        it prevents.** `session in live_sessions` is a test on the NAME — exactly the
+        cross-plane collision this marker records — so a launch that joined may be standing
+        in another plane's session, and re-marking it there would relabel that plane's
+        frame as this one's."""
+        state.record_server("demo.1", commands_frame.SOCKET)
+        fake = _FakeTmux(exit_code=0, still_live=True,
+                         pre_existing_sessions=("demo",),
+                         pre_existing_chats=("demo.1",))
+        _launch(fake)
+        self.assertEqual(fake.plane_marks, [])
+
+    def test_a_marker_tmux_refused_is_reported_with_what_it_costs(self):
+        """Continuing is right — the harness is already running and the pane records still
+        find this session — but silently is not: without the marker a switch cannot tell
+        this session from another plane's of the same name."""
+        buf = []
+        with mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            rc = _launch(_FakeTmux(exit_code=0, still_live=True, plane_option_rc=1))
+        self.assertEqual(rc, 0, "a refused session option must not fail the launch")
+        self.assertTrue(any("another plane's of the same name" in m for m in buf), buf)
+
+    def test_a_plane_tmux_could_not_carry_is_reported_rather_than_silently_dropped(self):
+        """`_plane_option_argv` refuses a value that would not survive the round trip, and
+        the launch says what that costs rather than carrying on as though the session had
+        been marked."""
+        buf = []
+        with mock.patch.object(commands_frame, "_plane_option_argv", return_value=None), \
+             mock.patch("charter.util.warn", side_effect=lambda m: buf.append(m)):
+            _launch(_FakeTmux(exit_code=0, still_live=True))
+        self.assertTrue(any("another plane's of the same name" in m for m in buf), buf)
+
+
+class ThePlaneOptionIsCheckedWhereItEntersTmux(unittest.TestCase):
+    """`_plane_option_argv`. Unlike a chat id there is no alphabet to hold a filesystem
+    path to, so what is checked is the ROUND TRIP: the value is read back out of
+    `list-panes -F 'a\tb\t#{@charter_plane}'`, and a tab would add a field where a
+    newline would add a row. Either would be read as a server answering some other
+    format."""
+
+    def _argv(self, state_dir: str):
+        with mock.patch.object(commands_frame, "_this_plane", return_value=state_dir):
+            return commands_frame._plane_option_argv(socket="charter", harness_pane="%9")
+
+    def test_an_ordinary_path_is_written_as_a_session_option(self):
+        self.assertEqual(self._argv("/home/a/proj/.charter"),
+                         ["tmux", "-L", "charter", "set-option", "-t", "%9",
+                          "@charter_plane", "/home/a/proj/.charter"])
+
+    def test_a_path_with_a_space_in_it_is_perfectly_fine(self):
+        """A space is not a separator in this format and never reaches a shell — the argv
+        goes to `subprocess.run` as a list. Refusing one would leave every plane under a
+        macOS `~/My Documents` unmarked for no reason."""
+        self.assertIn("/home/a/my plane/.charter", self._argv("/home/a/my plane/.charter"))
+
+    def test_a_path_that_would_not_survive_the_format_is_refused(self):
+        """`None`, never a sanitised spelling — `_chat_option_argv`'s rule: rewriting a
+        value into a safe-looking one invents a second identity for it, and here the two
+        spellings would be two planes."""
+        for hostile in ("/a\tb/.charter", "/a\nb/.charter", "/a\rb/.charter", ""):
+            with self.subTest(hostile=hostile):
+                self.assertIsNone(self._argv(hostile))
 
 
 class TheChatOptionIsCheckedWhereItEntersTmux(unittest.TestCase):
