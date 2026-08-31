@@ -668,6 +668,37 @@ def _add_frame_parsers(sub) -> None:
     cases this docstring just said get different responses.
     """
     def _wire(parser, name):
+        # **How to drive the thing this command opens, on the command that opens it**
+        # (#747). `charter claude --help` and `charter frame --help` described four flags
+        # and never mentioned that the window they are about to hand the operator has a
+        # palette, an escape hatch, and somebody else's scrollback. The only place any of
+        # it was written outside the frame is `charter docs show frame`, and nothing
+        # pointed there; the only place inside it is the attention strip's two-word `F2
+        # palette` field, which `density = minimal` drops.
+        #
+        # Set here rather than at each `add_parser` for the reason this whole function is
+        # generated from `harness.all()`: one launcher per registered harness plus the
+        # escape hatch, and a per-parser epilog is one more thing to remember for a
+        # harness registered next year. It is also what makes `charter claude --help` and
+        # `charter frame --help` identical BY CONSTRUCTION, which is the property #747
+        # observed and wanted kept — they should say the same thing, and what was wrong
+        # was that the thing they both said was silent on the frame.
+        #
+        # Three facts and no more. They are the three an operator hits in the first
+        # minute: the palette is how you reach everything, the hatch is how you get the
+        # keyboard back from a pane that stopped answering, and scrollback is tmux's
+        # copy-mode now — which `docs/frame.md` itself calls "the difference people notice
+        # first", and the one an operator has no reason to connect to charter at all.
+        # `RawDescriptionHelpFormatter` because argparse reflows an epilog otherwise and
+        # a wrapped key name reads as prose. Called rather than read off a module constant:
+        # the sentence names this plane's own palette key, and a value frozen at import is
+        # a second answer to a question `config.FRAME` already answers — the masked-default
+        # shape the sweep is written to catch.
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        _keys = "\n".join(f"  {k}" for k in commands_frame.driving_keys())
+        parser.epilog = (f"Inside the frame:\n{_keys}\n"
+                         f"  charter docs show frame  —  all of it, and what `[frame]` "
+                         f"configures.")
         parser.add_argument("rest", nargs=argparse.REMAINDER,
                             help="Passed to the harness verbatim.")
         parser.add_argument("--no-frame", action="store_true",

@@ -1142,6 +1142,22 @@ class MissingTmux(unittest.TestCase):
         run.assert_not_called()
 
 
+def _ceilings(line: str) -> list[str]:
+    """The capability ceilings `frame_ready` named, and nothing else it printed.
+
+    "No ceiling" used to be spelled `assertNotIn("\\n", line)` — true only for as long as a
+    clean probe was exactly one line. It is not any more: since #747 every probe closes
+    with the three keys the frame is driven by, because `frame-probe` is the closest thing
+    charter has to "tell me about the frame" and it named every limit and no key at all.
+
+    So the assertion asks the question it always meant: `frame_ready` marks a ceiling with
+    `↳` and nothing else in its output carries that character, which makes the count of
+    them the property rather than the shape of the whole message. A probe that started
+    warning about a working machine still fails these, which is what they are for.
+    """
+    return [ln for ln in line.split("\n") if "↳" in ln]
+
+
 class Probe(unittest.TestCase):
     """`--probe` (on `cmd_launch`) and `charter frame-probe` (`cmd_probe`) share one
     read-only gate, `commands_frame.frame_ready` — mirroring `cmd_launch`'s OWN behaviour
@@ -1255,7 +1271,7 @@ class Probe(unittest.TestCase):
              mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
             code, level, line = commands_frame.frame_ready()
         self.assertEqual((code, level), (0, "ok"))
-        self.assertNotIn("\n", line)
+        self.assertEqual(_ceilings(line), [])
 
     def test_an_ordinary_machine_gets_no_ceilings_at_all(self):
         """The other direction, and what stops the two tests above from passing against
@@ -1265,7 +1281,7 @@ class Probe(unittest.TestCase):
              mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
             code, level, line = commands_frame.frame_ready()
         self.assertEqual((code, level), (0, "ok"))
-        self.assertNotIn("\n", line)
+        self.assertEqual(_ceilings(line), [])
 
     def test_cmd_launch_short_circuits_on_probe_before_touching_anything(self):
         """`args.probe` is checked before `harness.all()`, `workspace.resolve()`, or any

@@ -19,6 +19,8 @@ claim about.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import unittest
 from unittest import mock
@@ -827,18 +829,25 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         `-L charter` server was attached most recently — so `charter frame-chat api.2`
         typed in an ordinary shell drew charter's refusal across another operator's frame.
 
-        Unlike `cmd_toggle`'s deleted `if not fid`, this refusal is not free: that command
-        emits nothing with an empty id and its guard was an equivalent mutant, and this
-        one issues a real tmux command aimed at a session it has no business naming.
+        This refusal issues a real tmux command aimed at a session it has no business
+        naming, which is what makes the guard worth having at all.
+
+        **The refusal is now said on the asker's own stderr and the status is non-zero**
+        (#734): rc 0 and zero bytes was indistinguishable from the switch working, and
+        `docs/frame.md` makes this command the documented fallback when the palette's
+        doorway is refused. What must not change, and is what this test is for, is that
+        nothing goes near tmux — stderr is the one surface that is certainly the asker's.
         """
         said = []
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": ""}, clear=False), \
              mock.patch.object(commands_frame, "_say_on_screen",
-                               lambda fid, msg, *a, **k: said.append(msg)):
-            self.assertEqual(
+                               lambda fid, msg, *a, **k: said.append(msg)), \
+             contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertNotEqual(
                 commands_frame.cmd_chat(mock.Mock(chat_id="api.2", chat="")), 0)
         self.assertEqual(self.fake.calls, [])
         self.assertEqual(said, [], "a refusal was aimed at a frame this is not in")
+        self.assertIn("charter frame-chat", stderr.getvalue())
 
     def test_an_absent_or_padded_chat_id_is_refused_rather_than_raising(self):
         """`(… or "").strip()`, both halves. `None` reaches `str.strip` as an
