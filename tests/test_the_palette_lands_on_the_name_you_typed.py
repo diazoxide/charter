@@ -382,6 +382,34 @@ class ARepeatableRowKeepsThePaletteOpen(PersonaIso, unittest.TestCase):
         self.assertIsNone(commands_frame._again(detach, p, reg, fid="f-1", snapshot={}))
         self.assertEqual(self.ran, [])
 
+    def test_a_repeatable_row_that_REFUSES_keeps_the_palette_and_says_why(self):
+        """The other branch of what a repeat reports, and the one a docstring claimed
+        without anything asserting it.
+
+        `repo: select the next row` refuses on a workspace with no clones, and that is an
+        ordinary state rather than an edge: a plane whose gather has not run yet, or one
+        that genuinely has nothing cloned. The palette must not close — nothing was
+        started, and closing would cost the operator the pane for a keypress that did
+        nothing — and the reason must land where a repeat's outcome always lands, because
+        the attention row it would otherwise use is under the zoom.
+
+        The deletion sweep found this: `inv.reason if not inv.started else (inv.note or
+        inv.error)` collapsed to its second branch and no test noticed, because every case
+        here ran an action that starts.
+        """
+        from charter import commands_frame
+        from charter.frame import action
+        reg = actions.ActionRegistry()
+        reg.register(action.Action(
+            id="repo.next", title="repo: select the next row", repeat=True,
+            run=lambda ctx: self.fail("a refused action must not be run"),
+            available=lambda ctx: False,
+            reason_unavailable=lambda ctx: "this workspace has no clones"))
+        p = self._palette()
+        got = commands_frame._again(p.rows[0], p, reg, fid="f-1", snapshot={})
+        self.assertIs(got, p, "a refusal closed the palette")
+        self.assertIn("this workspace has no clones", p.heading)
+
     def test_a_row_that_is_not_an_action_at_all_ends_the_palette(self):
         """A picker row reaches this function too — `_draw_palette` asks `_picker` first,
         and a doorway that opened nothing falls through to here. `ActionRegistry.get`

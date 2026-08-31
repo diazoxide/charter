@@ -969,6 +969,30 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
                          "a targeted mark cannot be chained onto the split that makes "
                          "the pane it would target")
 
+    def test_the_overlay_mark_is_in_tmuxs_user_namespace_and_is_charters_own(self):
+        """What the option's SPELLING has to satisfy, which is not the word itself.
+
+        Two properties, and neither is a change-detector. `@` is tmux's own namespace for
+        a user option, so anything without it is a real tmux option charter would be
+        overwriting. `charter` on the front is because the operator's own tmux may be the
+        server charter is a guest on (`is_operator_socket`), where an unprefixed name is a
+        collision with whatever else that operator has set. And it must not be the hatch's
+        option: one names a pane to kill and the other holds a command line tmux re-parses,
+        so a single name would arm the hatch with a `1` and mark every overlay with a
+        command.
+
+        The deletion sweep asked "would any spelling do?" and no test could say no. This
+        says which spellings do.
+        """
+        self.assertTrue(overlay.OVERLAY_OPTION.startswith("@charter"),
+                        overlay.OVERLAY_OPTION)
+        self.assertNotEqual(overlay.OVERLAY_OPTION, overlay.HATCH_OPTION)
+        self.assertIn(overlay.OVERLAY_OPTION, overlay.mark_argv("charter"))
+        listing = overlay.live_argv("charter", harness="%0")
+        self.assertIn(f"#{{{overlay.OVERLAY_OPTION}}}",
+                      listing[listing.index("-F") + 1],
+                      "the listing does not read the option the mark writes")
+
     def test_only_a_marked_pane_whose_id_is_tmuxs_own_is_swept(self):
         """`live_panes` reads a listing back off tmux, and what the caller builds out of
         one is a `kill-pane`. Three rows, three reasons to drop or keep (#739/#442):
