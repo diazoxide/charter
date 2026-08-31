@@ -1124,9 +1124,12 @@ def _plane_option_argv(*, socket: str, harness_pane: str) -> list[str] | None:
 
     * **No `-w`.** That is the whole of what makes this session-scoped rather than
       window-scoped; the target is still the harness pane, for `_chat_option_argv`'s
-      reason — a pane id resolves to its window and to its session on both versions, where
-      a session NAME is parsed as ``window.pane`` and a workspace with a dot in it would
-      hand this to somebody else's window.
+      reason — a pane id resolves to its window and to its session on both versions, and a
+      workspace NAME is unusable as a target twice over: tmux parses `api.1` as
+      ``window.pane``, and a bare name is matched against WINDOW NAMES before it settles
+      for a session's current window (measured for §4b; `layout.chat_window_argv` carries
+      the reading). Charter's chat windows are named `<workspace>.<n>`, so `-t
+      <workspace>` on charter's own server names one of that workspace's chats.
     * **Written once, by the launch that CREATES the session, and never afterwards.** A
       launch that finds `session in live_sessions` is joining a session it did not
       necessarily make: that test is on the NAME, which is exactly the collision this
