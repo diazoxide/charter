@@ -126,11 +126,12 @@ asserts too little. The harness should surface *what the test asserted* alongsid
 the reviewer's first question is "did my test look closely enough" rather than "can I suppress
 this".
 
-## Five ways a sweep lies, all measured here
+## Six ways a sweep lies, all measured here
 
 The first four make a mutation score **pinned** when it is not — the worst failure this tool can
 have and the hardest to notice, because the report comes back green. The fifth lies in the
-**other** direction, which is why it took longest to find.
+**other** direction, which is why it took longest to find. The sixth does not produce a wrong
+answer at all: it destroys the apparatus, and the wreckage is charged to somebody else.
 
 1. **Exit-code scoring.** Deleting `release.yml`'s `-z "$claimed"` refusal (#558) left the run
    still exiting 1 — the mismatch check below it caught the empty string instead. Same code,
@@ -163,7 +164,30 @@ have and the hardest to notice, because the report comes back green. The fifth l
    **Every mutation must assert that it actually applied.** A verdict from an edit that did not
    happen is not a verdict.
 
-None of the five is visible from outside. Together they are the argument for why this harness
+6. **A mutation that consumes the machine.** #4's answer is a timeout, and a timeout cannot save
+   a runner that has already been eaten: the timer and the process die together. Measured on
+   #710 — of its 118 mutations, **four never terminate and three of those allocate on every
+   pass**, the fastest at **4,274 MB/min**, which exhausts a 16 GB runner in under four minutes
+   against a 900 s cap. The shard reports `exit 143` and *"The runner has received a shutdown
+   signal"*, byte-for-byte a spot reclaim, so the gate charges it to infrastructure and the
+   mutations in that slice are silently never measured. On run 33331151759 the one shard holding
+   a memory-eater is the one shard that died; the shard that drew the mutation which spins
+   **without** allocating survived on the timeout, which is the control.
+
+   This is the only one of the six whose distinguishing property is that the mutant takes the
+   *measuring apparatus* with it rather than producing a wrong answer — and the only one that
+   compounds, because the natural reading of `exit 143` is "flaky pool, re-run it", which
+   reproduces the same failure on the same slice.
+
+   **Bound it, do not predict it.** A static "does this mutant contain a runaway loop" check
+   fails in the fail-open direction and that was measured too: the fastest of the four leaves
+   every loop inside its own function terminating, and corrupts a **cursor returned across a
+   function boundary** so that the *caller* spins. Any scanner, tokenizer or parser is mostly
+   made of functions like that. Every child gets an address-space cap instead, and a mutant that
+   crosses it raises `MemoryError` — a red, on tests that were green unmutated, which is a
+   **pin**, the correct verdict for a mutant that destroys the process.
+
+None of the six is visible from outside. Together they are the argument for why this harness
 needs its own tests and its own sweep rather than being trusted because it is short: a gate that
 silently passes everything is worse than no gate, because it is *believed*.
 
