@@ -943,8 +943,8 @@ row. Here is all of them.
 | `▫` | start of a row | a persona you are not. Dispatchable, adoptable, otherwise idle |
 | `◦` | after the name | this persona **declares a vault charter cannot use here** — either this machine has no vault by that name, or it has one whose file does not exist yet. `charter persona create` writes the declaration; nothing writes the vault, so this is the ordinary state of a persona nobody has given credentials to, and it is not an error |
 | `!` | after the name | the vault is registered and **unhealthy** — unreadable, or its provider is misconfigured |
-| `✎N` | badge column | `N` **committed** memories. Green |
-| `◌N` | badge column | `N` **session-scratch** memories, not committed. Yellow |
+| `✎N` | badge column | `N` **committed** memories. Drawn in `ok` |
+| `◌N` | badge column | `N` **session-scratch** memories, not committed. Drawn in `warn` |
 | `⚑` | badge column | the persona's **charter is a draft**, so charter generates no sub-agent for it and it cannot be dispatched. `charter persona show <name>` says what it still needs |
 | `✗` | badge column | the persona's **config is broken** — a dangling `extends:`/`uses:`, or an inheritance cycle |
 | `⚡N age` | badge column | `N` dispatches **in flight**, and how long the oldest has been running. A `?` after the age means that record is past the point charter presumes it dead |
@@ -952,6 +952,10 @@ row. Here is all of them.
 Nothing after the name and nothing in the badge column is the healthy, quiet case, and
 silence is deliberate: a column that said *ok* on every row would spend the sidebar's
 width on the rows with nothing to report.
+
+`ok` and `warn` above are the [accent words](#the-three-accents) — green and yellow unless
+your plane says otherwise. Named rather than spelled here so this table stays true on a
+plane that changed them.
 
 **You do not have to come here to read it.** Click the badge column on any persona row —
 the right-hand column the `⚑`s line up in — and the frame puts the legend on the attention
@@ -1006,6 +1010,15 @@ are on whatever you write in `charter.toml`:
   whole pane, to its last column — not a marker at the start of it. Reverse video is your
   own foreground and background exchanged, so it is right on every colour scheme,
   including the ones where every grey charter could have picked is somebody's background.
+  **The inverted row carries no colour of charter's own**, and that is what makes the
+  sentence above true rather than nearly true: it used to keep the cells' greens and
+  yellows, which put a colour chosen for your background on top of your *foreground* — a
+  selected repo row drawn yellow-on-light-grey on any dark theme, on the one row charter
+  uses to say "this is the one you picked". They are dropped inside the inversion and
+  nowhere else, so the glyphs and the highlight say it and nothing is drawn on a pair
+  charter cannot check. Bold and dim survive: neither can be wrong on a ground charter
+  cannot see. A pane a *component* draws is its own — charter never inverts somebody else's
+  row, and does not reach into one to delete a colour whose meaning it does not know.
 - **A status you can read without colour.** Every status in the frame carries a glyph or a
   word that says the same thing as its colour: `⚠` on an alert, `⚑`/`✗` on a persona whose
   charter is a draft or broken, a count next to a badge. Colour is the second channel,
@@ -1036,7 +1049,40 @@ chrome = "dark"     # or "light", or "off" — the default
 
 `chrome` gives charter's own panes a background, so the frame reads as chrome around your
 session rather than as more text beside it. The focused panel is one shade off the others,
-which is also how you can see which pane is live.
+which is one of the two ways you can see which pane is live — the other is on the border,
+below, and it is the one that works when you have set no surface at all.
+
+**Each word carries the text that goes on it.** `dark` is `bg=black` *and* `fg=white`;
+`light` is `bg=white` *and* `fg=black`. It did not used to: `chrome` set a background and
+left every cell no renderer coloured drawing in the foreground your terminal picked to sit
+on *its own* background — so `light` on a dark terminal was white text on white, and `dark`
+on a light terminal was black on black. Not "a background that clashes": panels whose text
+is not there, on whichever of the two words was the wrong one for you.
+
+Those two are the only pairing charter makes, and the line is where a measurement stops
+being one. `black` and `white` are the **poles** of the sixteen — a theme is not free to
+render its white darker than its black — so charter can say what goes on them. It cannot say
+what goes on `bg = "blue"`, which is why a pane that names its own background gets no
+foreground it did not ask for; `text`, below, is how that pane is told. And if you set
+`text`, it wins: charter's pairing is the default for its own recipe, not a second opinion.
+
+Two caveats, named rather than papered over.
+
+`dark`'s focused shade is `brightblack`, and `brightblack` is the one word in charter's own
+recipes whose shade a theme really moves — a dark grey on most, a light tan on at least one.
+On such a theme `chrome = "dark"` draws a focused pane that is lighter than the rest and
+still carries `fg=white`. That is the background *pair* straddling the ledger rather than
+the foreground being wrong, it predates this pairing, there is no second dark shade in the
+sixteen to move it to, and `text` overrides it in one line.
+
+And the pairing reaches the panes and not the **rules** between them. With
+`rules = "visible"` and `chrome = "light"` the rules come out `fg=default,dim,bg=white` —
+your terminal's own foreground, dimmed, over charter's white. The shipped `rules = "hidden"`
+gives the glyph the surface's own colour and never reaches that line, and `text` overrides
+it; the reason it is not fixed here is that `bg=black` is both `chrome = "dark"`'s
+background *and* a component's own `bg = "black"`, so pairing a foreground off the surface
+would hand a word you wrote the foreground the paragraph above says charter will not choose
+for you. That is a decision about the per-component half, not a line in the rule assembler.
 
 tmux paints it, not charter: the value sets `window-style` and `window-active-style` on
 charter's panel panes. That is why it costs nothing on a repaint, cannot wrap a line, fills
@@ -1152,13 +1198,14 @@ on tmux 3.7c and at the 3.2 floor.
 **Which case this actually fixes**, stated plainly so you can tell whether it is yours. It
 fixes a pane whose background is *inverted* relative to your terminal's — a dark terminal
 with `bg = "white"`, or a light terminal with `bg = "black"` — where the foreground your
-terminal picked for its own background is now sitting on the opposite one. If your terminal
-is already light and your panes are light, your default foreground was already dark and this
-key has nothing to do; what is hard to read there is the **accent** colours, and `text` does
-not reach those. That gap is real and named rather than papered over: `ok`, `warn` and `bad`
-are still your palette's green, yellow and red, and yellow on a tan surface is exactly the
-combination nobody's palette was designed for. Making those three configurable is the
-obvious next key and is not in this release.
+terminal picked for its own background is now sitting on the opposite one. **If you have
+written `bg = "black"` on a light terminal, this key is the one you want**, and it is easy
+to miss that you are in that case: your panes are dark, your text is your terminal's own
+dark foreground, and nothing but `text = "white"` moves it.
+
+If your terminal is already light and your panes are light, your default foreground was
+already dark and this key has nothing to do. What is hard to read there is the **accent**
+colours, and `text` does not reach those — they are the three keys below.
 
 `dim = false` stops charter reducing the contrast of its own chrome — the `ESC[2m` on muted
 text, and the `dim` on the frame's rules. It is a key of its own rather than one more colour
@@ -1172,24 +1219,61 @@ thing separating muted text from ordinary text in the frame — a tree glyph fro
 a count from a heading — so a frame with it off everywhere is a frame with a flat hierarchy.
 Turn it off when your surface makes it unreadable.
 
-**Why there is no `accent` yet, and no key per colour.** charter draws through eight named
-roles — `heading`, `muted`, `selected`, `ok`, `warn`, `bad`, `reset`, `inset`. Four of them
-are theme-safe by construction: bold, reverse, a reset and two spaces. Three of them —
-`ok`, `warn`, `bad` — are green, yellow and red **as your palette defines them**, so
-renaming them would swap your own green for your own blue, which is a preference and not a
-legibility fix. What is left is the two that are not slots in your palette at all: the
-default foreground, which your terminal chose to sit on *its* background rather than on the
-one charter painted, and dim. Those are the two keys here.
+### The three accents
 
-The argument for stopping there is weaker than it looks, and the honest version is this: it
-holds while the three accents are readable on your surface, and an operator has reported
-that they are not on a light one. Restating them would be three more words in this table —
-`ok`, `warn`, `bad` — and the reason it is not in this release is mechanical rather than
-principled: charter's own panels write those colours directly, so serving new ones means
-routing about forty call sites through the same recipe table a component already reads, and
-that is a change worth making on its own rather than at the end of this one.
+```toml
+[frame]
+ok   = "green"      # any of `bg`'s seventeen words — these three are the defaults
+warn = "yellow"
+bad  = "red"
+```
 
-`NO_COLOR` still wins over both, and over everything else here.
+charter draws through eight named roles — `heading`, `muted`, `selected`, `ok`, `warn`,
+`bad`, `reset`, `inset`. Four are theme-safe by construction: bold, reverse, a reset and two
+spaces. `dim` and the default foreground are the two keys above. These three are the rest.
+
+They shipped un-configurable on the argument that they are slots in **your** palette — your
+green, not a green charter picked out of the 256 — so renaming them is a preference rather
+than a legibility fix. That argument holds exactly while your palette's green, yellow and
+red are readable on the ground they are drawn on, and on a light terminal they are not:
+**yellow on tan is the pair no palette was designed for**, and no amount of it being your
+own yellow makes it legible on your own tan.
+
+Charter still cannot work out which of the sixteen would be — the same three measurements
+as above — so it asks, in the vocabulary you already answer `bg` and `text` in.
+
+`default` is a real answer here and often the best one: it is the pane's **own** foreground,
+which is your `text` where you set one and your terminal's where you did not. `warn =
+"default"` means "stop colouring the warnings", and the frame still says everything it said
+— every status in it carries a glyph or a word, and charter's own suite fails if one stops
+being distinguishable with the escapes stripped.
+
+The three reach charter's own panels *and* the status line, because both are drawn on the
+same terminal, and they reach a component you wrote through `ctx.chrome["warn"]` — one
+answer, so the frame's own attention strip and a provider's pane cannot come out two
+colours. A component that hard-coded its own green is left exactly alone and still shows it:
+charter cannot know what somebody else's green means, so it neither recolours it nor escapes
+it.
+
+**What these three name is charter's own green, yellow and red** — every place the frame
+draws one of those to mean "fine", "look at this" or "broken". They are not a general
+recolouring: a repo's identity colour is its own (charter cycles eight of the sixteen to
+keep neighbouring rows apart, and two of those eight happen to be green and yellow), and the
+marks charter draws in cyan, blue or magenta stay where they are. So a pipeline that is
+`running` keeps its cyan `●` while `⚡3 running` in the attention strip moves with `warn` —
+they are the same word drawn two ways because they were always two colours, and these keys
+rename colours rather than concepts.
+
+If you want a badge uncoloured rather than recoloured, `default` is the word: the glyph
+carries it either way, which charter's own suite asserts by stripping every escape from each
+panel and failing if a status stops being distinguishable.
+
+`charter doctor` is **not** covered, and that is deliberate rather than an oversight: it is a
+one-shot report printed into your shell, not a surface the frame paints, and its `✓`/`!`/`✗`
+are the same three colours by coincidence of meaning rather than by sharing this table. A
+`[frame]` key reaching a command that runs with no frame would be the wrong scope.
+
+`NO_COLOR` still wins over all of these, and over everything else here.
 
 ### Why the frame ships with no surface at all
 
@@ -1297,8 +1381,36 @@ the frame-wide colour, so the rules are too.
 A pane's two edge colours are always identical, and that is deliberate: tmux draws the
 border of the active pane from a second option, and letting the two differ is exactly the
 defect that put charter in charge of these options in the first place — a rule that changes
-colour halfway along, where it passes the active pane's corner. Which pane is live is shown
-on the pane itself (its background is one shade off the others), never on the border.
+colour halfway along, where it passes the active pane's corner. So which pane is live is
+never said with a border **colour**.
+
+**It is said with a glyph.** tmux puts a small arrow on the borders of the active pane —
+`pane-border-indicators arrows` — pointing into it, and charter pins that on. Read off a
+real client, charter's own shape, the same rule with the focus in three places:
+
+```
+harness active   ESC[2m ─↑─────────────────────────────────┴──────────────
+sidebar active   ESC[2m ───────────────────────────────────┴─↑────────────
+footer active    ESC[2m ─↓─────────────────────────────────┴─↓────────────
+```
+
+One escape, at the start of the row, and none anywhere else in it: the rule is the same
+one-colour rule charter has always drawn and the only thing that moved is which cell holds
+an arrow. That is why this is not the two-coloured-rule defect wearing a new hat — a cue
+made of a second *style* does put a seam mid-line, which is measured and is the arrangement
+charter did not take.
+
+It exists because without it there was **no answer at all**. With the shipped `chrome =
+"off"` and no `bg`, every pane has your terminal's background, both rule styles are one
+value, and nothing on screen said where the keyboard was — which matters more than it
+sounds, because `F12` exists for "you are in a pane that has stopped answering".
+
+Over a surface with the shipped `rules = "hidden"` the arrow is drawn in the colour of the
+cell behind it, like the rest of that rule, so it disappears exactly where the pane's own
+one-shade-off background is already telling you. The cue shows up where there is no other
+one, and nowhere else. Below tmux **3.3** the option does not exist, charter does not send
+it, and that plane gets the frame it had.
+
 `chrome = "off"` with no `bg` anywhere puts the rules back to your terminal's own, and
 `NO_COLOR` takes the background off them while leaving the frame's rules drawn.
 

@@ -37,7 +37,7 @@ from unittest import mock
 
 from charter import contain, statusline, tui
 from charter.frame import chrome, component, ctx, registry, slots
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, shipped_frame
 from tests.test_component_providers import CID, ENTRY, MODULE, _SitePackages, _source
 
 #: One SGR escape with its parameter list captured — the shape `chrome._SGR` matches.
@@ -119,9 +119,15 @@ class TheRecipesAreDataAndNothingElse(unittest.TestCase):
 
 class TheRecipesNameNoColourCharterChose(unittest.TestCase):
     """The rule `instance.FRAME_CHROME` keeps, reaching the one place a stranger's code
-    would otherwise have to guess it."""
+    would otherwise have to guess it.
+
+    Pinned against the frame charter SHIPS (`shipped_frame`), because three of these roles
+    are `[frame]` keys now: without it, "``ok`` is green" is a claim about whatever plane
+    the suite is running inside.
+    """
 
     def setUp(self):
+        shipped_frame(self)
         self.env = mock.patch.dict(os.environ, {}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -567,9 +573,15 @@ class TheContainmentAdmitsCharterSVocabularyAndNothingElse(unittest.TestCase):
 
 class TheVocabularyIsTheRolesAndNotASecondListOfThem(unittest.TestCase):
     """`chrome.served_params` is derived from `chrome._role_values`, and #707 is what a
-    second list costs: a role served at one end and unknown at the other."""
+    second list costs: a role served at one end and unknown at the other.
+
+    Against the SHIPPED frame (`shipped_frame`): the vocabulary is a union of charter's own
+    three accents and the plane's, so on a plane that named a fourth colour these numbers
+    are correctly different — and this class is about the ones charter ships.
+    """
 
     def setUp(self):
+        shipped_frame(self)
         self.env = mock.patch.dict(os.environ, {}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)

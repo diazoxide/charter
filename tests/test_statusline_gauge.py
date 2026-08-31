@@ -18,7 +18,7 @@ from unittest import mock
 from charter import config, statusline
 from tests import _envguard
 from tests._isolation import (PersonaIso, isolate_state_dir, no_background_refresh,
-                              pin_update_channel)
+                              pin_update_channel, shipped_frame)
 
 
 def _plain(parts):
@@ -447,6 +447,11 @@ class ThePanelsGaugeReadsTheSameAsTheFooters(unittest.TestCase):
 
     def setUp(self):
         isolate_state_dir(self)
+        # The colours below are `[frame] ok`/`warn`/`bad` now, so "green at 49%" is a
+        # claim about the plane this suite is running inside unless the plane is pinned
+        # to the one charter ships. `shipped_frame` is that pin, and this class is about
+        # the shipped thresholds rather than about what a plane renamed them to.
+        shipped_frame(self)
         import shutil
         import tempfile
         d = tempfile.mkdtemp()

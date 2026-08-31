@@ -310,6 +310,87 @@ def undim(row: str) -> str:
         row)
 
 
+#: Every SGR parameter that names a COLOUR, read as numbers.
+#:
+#: ``30``–``49`` is the whole of the ordinary pair — 30-37 foreground, 38 the extended
+#: foreground introducer, 39 the default foreground, and 40-49 the same four things said
+#: about the background — and ``90``–``97``/``100``–``107`` are the aixterm bright halves
+#: of the first two. ``58``/``59`` are the underline colour and its default, which are a
+#: colour by the same reading and have to be walked anyway: 58 introduces a colour space
+#: exactly as 38 and 48 do (:data:`_EXTENDED_COLOUR`).
+#:
+#: **A range and not a list of the codes charter happens to write.** :func:`reverse` runs
+#: over a row a renderer finished, and the property is "this parameter names a colour", not
+#: "this is one of the six spellings `statusline` uses". That is
+#: :func:`resets_everything`'s own distinction said about a wider question — and it is what
+#: made ``[frame] ok``/``warn``/``bad`` widen charter's palette without widening this.
+#:
+#: 38, 48 and 58 are inside the range and :func:`_without_colour` never reaches them
+#: through it, because :data:`_EXTENDED_COLOUR` claims them one branch earlier. They stay
+#: because the range is the STATEMENT — every parameter from 30 to 49 names a colour — and
+#: carving three holes in it to record which branch happens to catch them would make the
+#: constant a description of the loop rather than of SGR.
+_COLOUR_PARAMS = frozenset({*range(30, 50), 58, 59, *range(90, 98), *range(100, 108)})
+
+
+def _without_colour(params: str) -> str | None:
+    """The SGR parameter list *params* with every colour removed — ``None`` when the whole
+    escape should go.
+
+    :func:`_without_dim`'s walk asked about a different set, and every one of that
+    function's measured hazards is live here for the same reasons: a parameter's numeric
+    value and not its spelling (``\\x1b[032m`` is magenta), a parameter anywhere in the
+    list and not only at its head (``\\x1b[1;32m`` is bold AND green, and only the green
+    goes), and — the one that would hand a terminal a colour nobody asked for —
+    :data:`_EXTENDED_COLOUR`'s space parameter, so ``38;2;255;0;0`` is consumed as one run
+    of five rather than filtered a digit at a time. Measured against the spellings that
+    reach a pane::
+
+        params         string-match ("3x")   numeric, position-aware
+        '32'           True                  dropped
+        '032'          False  <- MISSED      dropped
+        '1;32'         False  <- MISSED      '1'
+        '0;7'          False                 '0;7'      <- an attribute list, kept whole
+        '38;5;236'     False                 dropped    <- the colour SPACE, consumed
+        '2'            False                 '2'
+
+    **It DROPS the introducer where :func:`_without_dim` keeps it, and the two are right to
+    differ.** That function removes one attribute from a list it otherwise leaves alone, so
+    it extends the whole colour run through untouched; this one removes the colour, so the
+    introducer goes with it. Where the two visibly disagree is on a colour space neither
+    recognises — ECMA-48 leaves that undefined and there is no run length to consume — so
+    ``58;7;1`` comes out of `_without_dim` intact and out of this as ``7;1``, reverse and
+    bold. Whatever a terminal made of the original, what is left here is what it would have
+    made of the tail: an unknown space cannot be walked past, and charter does not invent a
+    length for it. `test_a_colour_space_charter_does_not_know_is_taken_as_one_parameter_too`
+    pins the whole answer rather than an absence.
+
+    ``None`` rather than ``""`` for a list that emptied, and it is the same correctness
+    :func:`_without_dim` spells out rather than a copied idiom: ``\\x1b[m`` is an SGR whose
+    omitted parameter takes SGR's default of **zero**, so emitting it for a ``\\x1b[35m``
+    that had nothing else in it would replace "draw this magenta" with "turn EVERYTHING
+    off" — cancelling the reverse video this pass exists to protect, one escape after
+    :func:`reverse` re-asserted it. A list that still holds a parameter comes back as a
+    string even when that string is empty, because ``\\x1b[;35m`` really did carry a reset
+    and the reset survives.
+    """
+    kept: list[str] = []
+    pieces = params.split(";")
+    i = 0
+    while i < len(pieces):
+        # Every piece is digits or empty — `_SGR` admits nothing else — so `int` cannot
+        # raise, and an empty piece is spelled as the zero it means.
+        value = int(pieces[i] or "0")
+        if value in _EXTENDED_COLOUR:
+            space = int(pieces[i + 1] or "0") if i + 1 < len(pieces) else -1
+            i += {5: 3, 2: 5}.get(space, 1)
+            continue
+        if value not in _COLOUR_PARAMS:
+            kept.append(pieces[i])
+        i += 1
+    return ";".join(kept) if kept else None
+
+
 def _role_values() -> dict[str, str]:
     """The roles of §5 a RENDERER can write, and the SGR each one is. **The vocabulary.**
 
@@ -329,8 +410,23 @@ def _role_values() -> dict[str, str]:
     24-bit triple.** That is `instance.FRAME_CHROME`'s rule reaching the one place a
     stranger's code would otherwise have to guess it, and it is why these need no
     `[frame] chrome` gate: bold and reverse are statements relative to whatever the
-    operator's terminal already is, and ``green``/``yellow``/``red`` are slots in their
-    own palette rather than colours charter picked out of the 256.
+    operator's terminal already is, and the three accents are slots in the operator's own
+    palette rather than colours charter picked out of the 256.
+
+    **The three accents are the PLANE's words now** (`instance.FRAME_ACCENTS`,
+    `statusline.accent`), and that is the half of the argument above that did not hold. "A
+    slot in the operator's own palette" says the colour is theirs; it does not say it is
+    legible on the ground charter is drawing it on, and those are different claims. Green,
+    yellow and red are chosen against a dark terminal exactly as `muted`'s dim was — on the
+    machine `[frame] text` was written for, **yellow on tan** is the pair nobody's palette
+    was designed for, and no amount of it being their own yellow makes it readable. Charter
+    still cannot compute which of the sixteen would be (`instance.FRAME_PANE_FG` carries
+    the measurements), so it is told, in the vocabulary the plane already answers ``bg``
+    and ``text`` in.
+
+    So the gate is a role's own word rather than a switch — one asked of `statusline`, the
+    same function charter's own renderers ask, so a provider composing with
+    ``ctx.chrome["warn"]`` and the frame's own attention strip cannot come out two colours.
 
     **That argument used to name three attributes and it was wrong about one of them.**
     Dim is relative in exactly one direction — toward the background — and the direction is
@@ -349,7 +445,7 @@ def _role_values() -> dict[str, str]:
     """
     from .. import statusline as sl
     return {"heading": sl._BOLD, "muted": sl._DIM, "selected": _REVERSE,
-            "ok": sl._GREEN, "warn": sl._YELLOW, "bad": sl._RED, "reset": sl._R}
+            **sl.accents(), "reset": sl._R}
 
 
 def recipes() -> MappingProxyType:
@@ -425,6 +521,16 @@ def recipes() -> MappingProxyType:
     return MappingProxyType(out)
 
 
+def _params_of(*values: str) -> frozenset[int]:
+    """Every SGR parameter in *values*, as numbers — :func:`served_params`' inner walk, said
+    once so the constant below and the live half cannot read a role two ways."""
+    out: set[int] = set()
+    for value in values:
+        for m in _SGR.finditer(value):
+            out.update(int(p or "0") for p in m.group(1).split(";"))
+    return frozenset(out)
+
+
 def served_params() -> frozenset[int]:
     """Every SGR parameter charter's own recipes are made of, read as NUMBERS.
 
@@ -433,12 +539,57 @@ def served_params() -> frozenset[int]:
     handed a colour that is escaped on the way out, which is #707 — or *admitted and not
     served*, which is a vocabulary charter enforces and nobody documents. One source, and
     a role added above widens this on the same commit.
+
+    **And the SHIPPED accents stay admitted whatever the plane said**, which is the half a
+    plain derivation gets wrong now that three of the roles are configurable. `_role_values`
+    answers the plane's colours; a provider's component is ordinary Python that hard-coded
+    ``\x1b[32m`` long before this plane existed, and a green ESCAPED into a pane as the
+    six visible characters of its own SGR is #707 arriving through the new key. So the two
+    are UNIONED: what the plane chose is served and admitted, and what charter has always
+    drawn stays admitted. This is `[frame] dim`'s own decision said about a colour —
+    #768 kept SGR 2 admitted on a plane that turned dim off for exactly this reason, so a
+    provider's dim is deleted by :func:`undim` on the way out rather than escaped into
+    their pane as text.
+
+    The union only ever GROWS the vocabulary, and every parameter in it is one of the
+    sixteen ANSI names or an attribute — `instance.FRAME_PANE_COLOURS`' rule, unchanged.
+    A plane cannot narrow what a provider may write, which is the direction that would
+    have broken somebody else's component.
+
+    **This is asked once per LINE of every foreign pane**, which is :func:`is_recipe`'s own
+    "the vocabulary is on the repaint path" said one function up, and the accents made it
+    cost more. Measured on this machine, per call::
+
+        a `look_of` per role, ten escapes walked   6.69 us
+        one `look_of`, seven escapes walked        5.09 us   <- this
+        before the accents existed                 3.30 us
+
+    The first line's extra came from two places, and both are fixed rather than accepted.
+    `_role_values` asked `statusline.accent` three times and each resolved `config.FRAME`
+    for itself — three readings of one plane inside one expression, which is `no_colour`'s
+    "one question asked in one place" costing time as well as correctness;
+    `statusline.accents` resolves the `Look` once and answers all three (1.77 us -> 0.75).
+    And the union walked three more escapes with a regex, which is the paragraph below.
+
+    What is LEFT is 1.8 us a call and it is not free: a 24-row foreign pane carrying a dozen
+    escapes a row pays 122 us where it paid 79, against `render`'s own measured 4 816 us —
+    2.5% of what that pane already costs, and paid only by a pane charter did not write. It
+    buys the plane's own three words reaching a provider's component, which is the whole
+    point of serving recipes at all, and the alternative is a cached vocabulary that a frame
+    relaunch would have to invalidate.
+
+    **The shipped half arrives as a SET and is never walked here**, which is the other half
+    of the cost. `statusline._SHIPPED_ACCENT_PARAMS` is `frozenset({31, 32, 33})`, computed
+    once at that module's import from its own constants — so this walks the seven roles it
+    always walked rather than ten, and the numbers cannot drift from the escapes they came
+    from. That constant lives there rather than here because `chrome` cannot reach
+    `statusline` at ITS import time: `frame/registry.py` imports this module while
+    `charter.frame` is still initialising, and the reach closes a cycle through `config` ->
+    `instance.frame_of` -> `frame/builtins.build` (measured, as an `AttributeError` on a
+    partially initialised module).
     """
-    out: set[int] = set()
-    for value in _role_values().values():
-        for m in _SGR.finditer(value):
-            out.update(int(p or "0") for p in m.group(1).split(";"))
-    return frozenset(out)
+    from .. import statusline as sl
+    return _params_of(*_role_values().values()) | sl._SHIPPED_ACCENT_PARAMS
 
 
 def is_recipe(params: str, served: frozenset[int]) -> bool:
@@ -712,9 +863,53 @@ def reverse(row: str, width: int) -> str:
     unconditionally keeps the row highlighted just as well and says so three times as
     often — bytes written into a pane on every repaint that change nothing on the screen.
 
+    **And every colour inside the run is DELETED, which is #736 and a correction to the
+    argument above rather than an addition to it.** "Reverse video is your own foreground
+    and background exchanged, so it is right on every colour scheme" holds only for a
+    reversed run that sets no colour of its own — and both surfaces that use this one set
+    an absolute ANSI foreground inside it. Read off the operator's own live frame with
+    ``capture-pane -e``, the sidebar's active row and the repo table's selected row::
+
+        ESC[7m ESC[35m ▸ ESC[1m steward ESC[0;7m        ESC[32m ✎47 ESC[0m
+        ESC[7m   ESC[2m ├─ ESC[0;7m ESC[36m billing       ESC[33m main* ESC[39m
+
+    SGR 7, and then magenta, cyan and **yellow** — colours a renderer chose to sit on the
+    terminal's BACKGROUND, painted onto a cell whose background is now the terminal's
+    FOREGROUND. On a dark theme the selected repo row draws yellow on light grey, which is
+    the worst pair the sixteen can make, on the one row charter uses to say "this is the
+    one you picked". On a light theme it inverts and reads fine, which is why it survived
+    being written.
+
+    **A DELETION and never a substitution**, which is :func:`undim`'s own honesty and the
+    only form this could take: charter cannot know what the operator's magenta looks like
+    on the operator's foreground (:data:`instance.FRAME_PANE_FG` records why), so it cannot
+    choose a replacement — but it can decline to paint a pair it has no way to check. What
+    is lost is nothing the row was saying: `NoStatusIsCarriedByColourAlone` already asserts
+    every status in this frame survives having its escapes stripped, so the glyph column
+    says it and the reverse video says the row is picked. Attributes are untouched — bold
+    is bold and dim is dim on any ground — so `_table_row`'s emphasis and the tree's dim
+    still read.
+
+    **Here rather than at the two call sites**, and the reason is what a renderer can know
+    rather than a third caller: `slots.py`'s sidebar and repo table are the only two rows
+    that reverse today, and neither renderer knows it is about to be highlighted — the
+    highlight goes on after the row is finished, which is this module's whole ordering rule.
+    A colour deleted at the call site would be deleted by the code that has no idea whether
+    the row is the chosen one.
+
+    **This does NOT reach a provider's pane, and that is stated rather than implied.** A
+    component draws its own rectangle; charter never highlights a row a provider wrote, so
+    nothing here runs over one. `contain_row` — the pass that DOES run over a provider's row
+    — admits SGR 33 and passes it through untouched, which is #707's channel working as
+    designed: charter cannot know what somebody else's yellow means, so it neither recolours
+    it nor escapes it into their pane as text. A component that inverts its own row and
+    wants this is served the same three words charter uses (:func:`recipes`) and can delete
+    its own colours; charter deleting them for it would be deciding what its row means.
+
     Applied to the row a renderer has already finished, at the width that renderer
-    measured. It needs no `[frame] chrome` gate: reverse names no colour, so there is no
-    theme it can be wrong on.
+    measured. It needs no `[frame] chrome` gate: what leaves here names no colour at all,
+    so there is no theme it can be wrong on — which is the claim `docs/frame.md` was
+    already making and this is what makes it true.
 
     **The no-columns refusal is live here and it is not in `fill`.** Without it a pane of
     zero width still gets `_OFF` written into it — a bare `\\x1b[0m` where the caller
@@ -724,7 +919,43 @@ def reverse(row: str, width: int) -> str:
     """
     if width <= 0:
         return ""
-    body = _SGR.sub(
-        lambda m: m.group(0) + (_REVERSE if cancels_reverse(m.group(1)) else ""),
-        tui.truncate(row, width))
+    body = _SGR.sub(_restated, tui.truncate(row, width))
     return fill(_REVERSE + body, width) + _OFF
+
+
+def _restated(m: re.Match) -> str:
+    """One SGR inside a reversed run, rewritten: its colours gone and reverse put back if
+    it turned reverse off.
+
+    **"Did this cancel reverse" is asked of what SURVIVED, and that ordering is the whole
+    correctness of the pair.** A colour's ARGUMENTS are not SGR parameters — they are the
+    channels of one — and :func:`cancels_reverse` cannot tell the difference on its own,
+    because by the time it sees a list they are all just numbers. Measured on the spellings
+    that make it matter::
+
+        params           any parameter == 0?   what the escape really says
+        '38;2;255;0;0'   yes  <- GREEN, BLUE   a 24-bit red foreground
+        '38;2;0;0;27'    yes  <- and 27 again  a 24-bit green foreground
+        '0'              yes                   turn everything off
+
+    Read whole, the first two say "reverse was cancelled" and charter writes a ``\\x1b[7m``
+    that changes nothing on the screen — bytes into a pane on every repaint, which is the
+    one thing :func:`reverse`'s "only where it was cancelled" rule exists to prevent.
+    Deleting the colour FIRST is what turns a parameter list into its parameters: the run is
+    consumed whole (:data:`_EXTENDED_COLOUR`), so the channels are gone and what is left is
+    the SGR the escape actually carried. An escape that emptied cancelled nothing at all.
+
+    ``\\x1b[38;m`` is the case that shows these are not one question asked twice: the
+    introducer is consumed, the omitted parameter after it survives, and an omitted
+    parameter is SGR's default of **zero** — so the escape becomes ``\\x1b[m`` and the
+    re-assertion is owed after it. Both answers come from the same surviving list, which is
+    what keeps them from disagreeing.
+
+    The colour goes first and the re-assertion is appended after whatever survived, because
+    an escape that emptied is deleted whole: ``\\x1b[35m\\x1b[7m`` for a row that only ever
+    said magenta would be two escapes where the row needs none.
+    """
+    kept = _without_colour(m.group(1))
+    if kept is None:
+        return ""
+    return f"\x1b[{kept}m" + (_REVERSE if cancels_reverse(kept) else "")

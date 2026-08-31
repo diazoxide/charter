@@ -4796,6 +4796,7 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         writes this machine's hostname into every rule and takes a row the frame's own
         arithmetic never budgeted for."""
         self._control(hostile=True)
+        own = None
         shot = self._screenshot(arm=True, hostile=True)
         states = _rule_states(shot)
         self.assertTrue(states, "the armed frame rendered no rules at all")
@@ -4811,14 +4812,34 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         # charter's — an assertion nobody can read the strength of. Skipping it there is
         # naming what cannot be measured; the tmux that HAS the option still measures it.
         if self._has_option("pane-border-indicators"):
-            self.assertEqual(set(shot) & _INDICATOR_GLYPHS, set(),
-                             "`pane-border-indicators` is still theirs, so charter's "
-                             "frame marks its active pane's borders and not its others")
+            # **The property is that the answer is CHARTER'S, and it stopped being "no
+            # glyph" at #750.** With the shipped `chrome = "off"` there is no surface, so
+            # `window-active-style` had no shade to be one step from and nothing on screen
+            # said which pane the keyboard was in; the pin moved from `off` to `arrows`,
+            # and `commands_frame._CHROME` carries the measurement that a glyph in a rule
+            # is not #514's two-coloured rule. So this asks what it always meant to ask —
+            # that the operator's own `.tmux.conf` did not decide it — by comparing the two
+            # servers rather than by naming the value, which is what keeps the line true on
+            # the day charter picks a different one.
+            own = self._screenshot(arm=True)
+            self.assertEqual(set(shot) & _INDICATOR_GLYPHS,
+                             set(own) & _INDICATOR_GLYPHS,
+                             "`pane-border-indicators` is still theirs: charter's frame "
+                             "marks its panes differently inside their tmux than on its "
+                             "own server")
+            self.assertTrue(set(own) & _INDICATOR_GLYPHS,
+                            "charter's own frame marks no pane as the live one, which is "
+                            "#750 — on the shipped surfaceless frame this glyph is the "
+                            "only thing that does")
         # The whole property in one line: the frame drawn inside their tmux is the same
         # frame, cell for cell of chrome, as the one drawn on charter's own server.
         # Colour alone would not catch a `pane-border-lines double` — every rule would
         # still be one colour, and the frame would still not be charter's.
-        own = self._screenshot(arm=True)
+        # Reused where the indicator check above already took it, taken here where that
+        # check was skipped — one nested-tmux session rather than two, which is a fifteen
+        # second deadline this test does not need to spend twice.
+        if own is None:
+            own = self._screenshot(arm=True)
         self.assertEqual((_rule_glyphs(shot), states),
                          (_rule_glyphs(own), _rule_states(own)),
                          "charter's frame is drawn differently on the operator's server "

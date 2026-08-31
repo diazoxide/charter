@@ -53,12 +53,131 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
-from . import config, tui
+from . import config, instance, tui
 
 # ANSI — status lines render escape codes.
 _R, _DIM, _BOLD, _UNDER = "\033[0m", "\033[2m", "\033[1m", "\033[4m"
 _CYAN, _YELLOW, _MAGENTA, _GREEN = "\033[36m", "\033[33m", "\033[35m", "\033[32m"
 _BLUE, _RED = "\033[34m", "\033[31m"
+
+#: Every word `[frame] ok`/`warn`/`bad` may say, and the SGR each one is.
+#:
+#: **Derived from `instance.FRAME_PANE_COLOURS` rather than spelled**, and the derivation
+#: is the containment: the eight names are in ECMA-48's own order, so the foreground code
+#: is ``30 + index`` and the aixterm bright form is ``90 + index`` (§8.3.118 and the
+#: aixterm extension every terminal charter runs on implements). A hand-written table of
+#: seventeen escapes beside a hand-written table of seventeen tmux clauses is two
+#: vocabularies that come to disagree about which word charter knows, which is
+#: `chrome.served_params`' own argument said about the other side of the boundary.
+#:
+#: ``default`` is **SGR 39**, the pane's own foreground — which is `[frame] text` where the
+#: plane set one and the terminal's own where it did not. That is what makes it a real
+#: answer rather than a hole: a plane that says ``warn = "default"`` has asked for its
+#: warnings uncoloured, and gets text in the colour the rest of its frame is already in.
+#:
+#: **No cube index and no triple**, which is `instance.FRAME_PANE_COLOURS`' rule reaching
+#: the SGR side of the frame: `test_frame_appearance.py`'s
+#: `TheFrameNamesColoursAndNeverIndexes` renders every slot and asserts charter emits
+#: neither, and this table is inside that assertion rather than an exception to it.
+_ACCENT_SGR: dict[str, str] = {
+    "default": "\033[39m",
+    **{name: f"\033[{30 + i}m" for i, name in enumerate(instance.FRAME_PANE_COLOURS)},
+    **{f"bright{name}": f"\033[{90 + i}m"
+       for i, name in enumerate(instance.FRAME_PANE_COLOURS)},
+}
+
+
+#: What charter has ALWAYS drawn each accent in — the three escapes above, named by role.
+#:
+#: **Live on the degradation path rather than kept for symmetry**: :func:`accent` falls
+#: back to it for a role whose word is not one of the seventeen, which `instance.frame_of`
+#: cannot produce and a `frame.state` written by a charter that predates these keys can.
+#:
+#: It is deliberately a SECOND spelling of what :data:`_ACCENT_SGR` says about
+#: `instance.FRAME_DEFAULTS`, and `TheShippedAccentsAreTheOnesCharterAlwaysDrew` asserts
+#: the two agree. That is the shape `FRAME_FIELDS`' own `slots`/`density` pair already
+#: uses: the derivation is what makes the table right, and an assertion is what stops the
+#: default drifting away from the colour this module has drawn since before it had a key.
+_SHIPPED_ACCENT: dict[str, str] = {"ok": _GREEN, "warn": _YELLOW, "bad": _RED}
+
+#: The SGR PARAMETERS of the three above — ``frozenset({31, 32, 33})``.
+#:
+#: **Computed here rather than by `frame/chrome.py`, and that siting is a measured
+#: constraint rather than a preference.** `chrome.served_params` needs these on the repaint
+#: path — once per line of every foreign pane — and walking three more escapes with a regex
+#: there cost 1.3 us a call. It cannot hoist them into a constant of its own: `chrome` is
+#: imported by `frame/registry.py` while `charter.frame` is still initialising, and reaching
+#: `statusline` at that moment closes a cycle through `config` -> `instance.frame_of` ->
+#: `frame/builtins.build` (measured, as an `AttributeError` on a partially initialised
+#: module). This module has no such problem about its own constants, so it answers the
+#: question here and `chrome` reads a set.
+#:
+#: Every value in :data:`_ACCENT_SGR` is one parameter between ``ESC[`` and ``m`` by
+#: construction, so the slice is a property of that table rather than a shape hoped for.
+_SHIPPED_ACCENT_PARAMS: frozenset[int] = frozenset(
+    int(sgr.removeprefix("\033[").removesuffix("m")) for sgr in _SHIPPED_ACCENT.values())
+
+
+def accent(role: str) -> str:
+    """The SGR the plane wants *role* — one of `instance.FRAME_ACCENTS` — drawn in.
+
+    **One question asked in one place**, which is `frame/chrome.py`'s `no_colour` and
+    `dim_ok` discipline said about the third appearance key. Charter's own renderers ask
+    this and `chrome.recipes` asks it for a provider composing with ``ctx.chrome["warn"]``,
+    and two readings of one key is how a frame comes to draw its own warnings in one colour
+    and a component's in another.
+
+    **Read through `config.FRAME` at call time rather than cached**, exactly as
+    `chrome.dim_ok` and `slots.pad_of` read the keys they need: a panel is a long-lived
+    process and `charter.toml` is re-read when the frame relaunches. Measured at 1.4us a
+    call against `render`'s own 4816us, and the frame's densest panel asks it fourteen
+    times a repaint — under half a percent, on the one path that could have justified a
+    module-level constant and the drift that comes with it.
+
+    **What comes back is charter's own constant.** `instance.frame_of` has already refused
+    a word charter does not know, and :data:`_SHIPPED_ACCENT` catches the second door.
+
+    **What actually reaches that door is `instance.look_of` answering a PARTIAL mapping**,
+    stated precisely rather than gestured at: `look_of` reads every key with `.get` and a
+    shipped default exactly so a mapping written before a key existed still yields a whole
+    `Look`, and a `Look` built by hand — which `commands_frame` and this suite both do —
+    carries whatever its caller passed.
+
+    **``isinstance`` before the lookup**, which is `instance.pane_text`'s and
+    `instance.chrome_level`'s guard for their own reason and not defensiveness: ``value in
+    _ACCENT_SGR`` raises ``TypeError`` for an unhashable value, and ``tomllib`` can hand a
+    `[frame]` key a list or a table. `statusline` is what draws every status line charter
+    has, so a raise here is a plane with no status line at all.
+    """
+    return _resolve(instance.look_of(config.FRAME), role)
+
+
+def _resolve(look, role: str) -> str:
+    """*role*'s SGR out of an ALREADY-RESOLVED :class:`instance.Look`.
+
+    The half of :func:`accent` that does not read the plane, so :func:`accents` can ask one
+    `look_of` three questions instead of asking three `look_of`s one each.
+    """
+    word = getattr(look, role)
+    return (_ACCENT_SGR.get(word, "") if isinstance(word, str) else "") \
+        or _SHIPPED_ACCENT[role]
+
+
+def accents() -> dict[str, str]:
+    """``{role: SGR}`` for all three, resolved from ONE reading of the plane.
+
+    **`frame/chrome.py`'s `served_params` is asked once per line of every foreign pane**,
+    and it builds `_role_values()`, and three separate :func:`accent` calls there meant
+    three `instance.look_of(config.FRAME)` per line — measured at 3.1 us of the 7.4 us that
+    function then cost. One plane read, three answers.
+
+    A fresh `dict` and not a cached one: `charter.toml` is re-read when the frame relaunches
+    and a panel is a long-lived process, which is :func:`accent`'s own reason for reading at
+    call time. Keyed by `instance.FRAME_ACCENTS` so a fourth role reaches every caller on
+    the commit that adds it.
+    """
+    look = instance.look_of(config.FRAME)
+    return {role: _resolve(look, role) for role in instance.FRAME_ACCENTS}
 
 # Box-drawing, for an unbroken tree. These are East-Asian *Ambiguous* — a terminal may
 # draw them one cell or two — and unlike the frame and the divider, the count here is NOT
@@ -152,17 +271,25 @@ _BRAND_GAP = 3  # min blank columns between content and the right-aligned brand
 # never be half-rendered, so it alone pays this margin.
 _BRAND_MARGIN = 2
 
-#: GitLab pipeline status → (colour, glyph, label). Glyphs are single-width so
+#: GitLab pipeline status → (role, glyph, label). Glyphs are single-width so
 #: columns stay aligned.
+#:
+#: **A ROLE and not an escape, which is what `[frame] ok`/`warn`/`bad` needed of it.**
+#: This is the one accent site in charter that is a module-level table rather than an
+#: expression, so it is the one that would have resolved its colours at IMPORT — before
+#: any plane is read — and gone on drawing green after the plane said otherwise. The three
+#: words here are `instance.FRAME_ACCENTS`' own; `_DIM` and `_CYAN` stay escapes because
+#: neither is an accent (`manual`/`canceled`/`skipped` are muted rather than good or bad,
+#: and `running` is a state rather than a verdict).
 _CI_MARK = {
-    "success": (_GREEN, "✓", "passed"),
-    "failed": (_RED, "✗", "failed"),
+    "success": ("ok", "✓", "passed"),
+    "failed": ("bad", "✗", "failed"),
     "running": (_CYAN, "●", "running"),
-    "pending": (_YELLOW, "○", "pending"),
-    "created": (_YELLOW, "○", "pending"),
-    "preparing": (_YELLOW, "○", "pending"),
-    "waiting_for_resource": (_YELLOW, "○", "queued"),
-    "scheduled": (_YELLOW, "○", "scheduled"),
+    "pending": ("warn", "○", "pending"),
+    "created": ("warn", "○", "pending"),
+    "preparing": ("warn", "○", "pending"),
+    "waiting_for_resource": ("warn", "○", "queued"),
+    "scheduled": ("warn", "○", "scheduled"),
     "manual": (_DIM, "‖", "manual"),
     "canceled": (_DIM, "⊘", "canceled"),
     "skipped": (_DIM, "»", "skipped"),
@@ -174,7 +301,10 @@ def _ci_part(status: str | None) -> str:
     if not status:
         return ""
     color, glyph, label = _CI_MARK.get(status, (_DIM, "?", status))
-    return f"{color}{glyph} {label}{_R}"
+    # An accent role is resolved here and an escape is already one. Told apart by whether
+    # the table's first field names a role rather than by its shape: a `startswith("\033")`
+    # test would be a check on a spelling in the one module that spells escapes by hand.
+    return f"{accent(color) if color in instance.FRAME_ACCENTS else color}{glyph} {label}{_R}"
 
 #: Distinct colours cycled per repo (magenta, blue, cyan, green, yellow, then
 #: bright variants). Assigned by position so adjacent repos always differ; a
@@ -397,7 +527,7 @@ def _cache_hint(streak: int) -> str | None:
     """One short, actionable line — only once the cache has been cold for several turns."""
     if streak < _COLD_STREAK:
         return None
-    return (f"{_RED}⚠ cache cold {streak} turns{_R}{_DIM} — model/effort switch or MCP toggle "
+    return (f"{accent('bad')}⚠ cache cold {streak} turns{_R}{_DIM} — model/effort switch or MCP toggle "
             f"churns the prefix; prefer {_R}{_BOLD}/rewind{_R}{_DIM} over /compact{_R}")
 
 
@@ -424,7 +554,7 @@ def _ctx_part(pct: int | None) -> str:
     """
     if pct is None:
         return ""
-    col = _GREEN if pct < 50 else (_YELLOW if pct < 80 else _RED)
+    col = accent('ok') if pct < 50 else (accent('warn') if pct < 80 else accent('bad'))
     return f"{_DIM}ctx{_R} {col}{int(pct)}%{_R}"
 
 
@@ -437,7 +567,7 @@ def _cache_part(hit: int | None) -> str:
     """
     if hit is None:
         return ""
-    col = _GREEN if hit >= 80 else (_YELLOW if hit >= 50 else _RED)
+    col = accent('ok') if hit >= 80 else (accent('warn') if hit >= 50 else accent('bad'))
     return f"{_DIM}cache{_R} {col}{hit}%{_R}"
 
 
@@ -524,7 +654,7 @@ def _context_gauge(payload: dict) -> list[str]:
             # cumulatively so the price of a mid-task switch stays on screen.
             n, cost = _rebuilds(_history(sid))
             if n:
-                col = _RED if cost >= _REBUILD_LOUD else _YELLOW
+                col = accent('bad') if cost >= _REBUILD_LOUD else accent('warn')
                 out.append(f"{col}↻{n} {_fmt_tok(cost)}{_R}")
             if cost >= _REBUILD_LOUD:
                 out.append(f"{_DIM}rebuilt prefix — model/effort switch, MCP toggle or a resumed "
@@ -579,7 +709,7 @@ def recorded_context_gauge(sid: str) -> list[str]:
             out.append(_cache_part(hits[-1]))
         n, cost = _rebuilds(_pairs(rows))
         if n:
-            col = _RED if cost >= _REBUILD_LOUD else _YELLOW
+            col = accent('bad') if cost >= _REBUILD_LOUD else accent('warn')
             out.append(f"{col}↻{n} {_fmt_tok(cost)}{_R}")
         return out
     except Exception:
@@ -750,7 +880,7 @@ def _markers(state: dict) -> tuple[str, str, bool]:
     ahead, behind = int(state.get("ahead") or 0), int(state.get("behind") or 0)
     plain = coloured = ""
     if dirty:
-        plain += "*"; coloured += f"{_YELLOW}*{_R}"
+        plain += "*"; coloured += f"{accent('warn')}*{_R}"
     if ahead:
         plain += f"↑{ahead}"; coloured += f"{_CYAN}↑{ahead}{_R}"
     if behind:
@@ -873,7 +1003,7 @@ def _branch_cell_for(branch_text: str, presence: str, marks_plain: str = "",
     # the shape this repo keeps shipping — the second one passes because the first one
     # caught it, and no mutation can turn it red.
     br = tui.truncate(branch_text, room)
-    out = f"{_YELLOW if is_dirty else _DIM}{br}{_R}{marks_col}"
+    out = f"{accent('warn') if is_dirty else _DIM}{br}{_R}{marks_col}"
     if not presence:
         return out
     used = tui.width(br) + tui.width(marks_plain)
@@ -1046,7 +1176,7 @@ def _tree_cells(lead: str, label: str, d, states, branches, gl, branch=None,
     if plan.mr:
         change = info.get("change")
         sigil = info.get("sigil") or "!"   # old caches (pre-forge-protocol) carry no sigil
-        cells.append(tui.Cell(f"{_GREEN}{sigil}{change}{_R}" if change else "", plan.mr))
+        cells.append(tui.Cell(f"{accent('ok')}{sigil}{change}{_R}" if change else "", plan.mr))
 
     return tui.Row(*cells, gap=_GAP)
 
@@ -1194,9 +1324,9 @@ def _piece_summary(ws: str) -> str | None:
 
     parts = [f"{_DIM}pieces{_R} {total}"]
     if done:
-        parts.append(f"{_GREEN}{done} done{_R}")
+        parts.append(f"{accent('ok')}{done} done{_R}")
     if gave_up:
-        parts.append(f"{_YELLOW}{gave_up} abandoned{_R}")
+        parts.append(f"{accent('warn')}{gave_up} abandoned{_R}")
     if quiet:
         parts.append(f"{_DIM}{len(quiet)} silent {max(quiet, key=_silence_rank)}{_R}")
     return " ".join(parts)
@@ -1542,7 +1672,7 @@ def _vault_dot(vault: str | None) -> str:
             return f" {_DIM}◦{_R}"
         ok, detail = _vault_health(vault)
         if not ok:
-            return f" {_YELLOW}!{_R}"
+            return f" {accent('warn')}!{_R}"
         # `plain-file.health()` returns ok=True with "not created yet (<path>)" for a
         # registered vault holding nothing. Reading only `ok` once painted a green ✓ on
         # a vault that did not exist; it now reads as unusable, which it is.
@@ -1578,9 +1708,9 @@ def _health_mark(name: str, known: set[str] | None = None) -> str:
     try:
         from . import persona
         if persona.is_draft(name):
-            return f" {_YELLOW}⚑{_R}"
+            return f" {accent('warn')}⚑{_R}"
         if persona.structural_errors(name, known=known):
-            return f" {_RED}✗{_R}"
+            return f" {accent('bad')}✗{_R}"
         return ""
     except Exception:
         return ""
@@ -1625,9 +1755,9 @@ def _mem_badge(persistent: int, ephemeral: int = 0) -> str:
     ephemeral (yellow, session scratch). '' when both are zero."""
     parts = []
     if persistent:
-        parts.append(f"{_GREEN}✎{persistent}{_R}")
+        parts.append(f"{accent('ok')}✎{persistent}{_R}")
     if ephemeral:
-        parts.append(f"{_YELLOW}◌{ephemeral}{_R}")
+        parts.append(f"{accent('warn')}◌{ephemeral}{_R}")
     return (" " + " ".join(parts)) if parts else ""
 
 
@@ -1692,7 +1822,7 @@ def _inflight_badge(entry: tuple[int, float, bool] | None) -> str:
         age = pieces._presence_age(datetime.fromtimestamp(started, timezone.utc),
                                    datetime.now(timezone.utc))
         mark = "?" if presumed_dead else ""
-        return f" {_YELLOW}⚡{n if n > 1 else ''}{_R} {_DIM}{age}{mark}{_R}"
+        return f" {accent('warn')}⚡{n if n > 1 else ''}{_R} {_DIM}{age}{mark}{_R}"
     except Exception:
         return ""
 
@@ -1866,7 +1996,7 @@ def _session_news(sid: str | None, *, inflight: bool = True) -> list[str]:
             # `_MAX_PERSONA_LINES` and disappears entirely below `_LEFT_W + _RIGHT_MIN_W`,
             # so this is what survives a narrow pane — the same contract `_repo_rows`
             # keeps with its own "(+N more)" row.
-            out.append(f"{_YELLOW}⚡ {len(live)}{_R}")
+            out.append(f"{accent('warn')}⚡ {len(live)}{_R}")
     except Exception:
         pass
 
@@ -1879,9 +2009,9 @@ def _session_news(sid: str | None, *, inflight: bool = True) -> list[str]:
             if k:
                 kinds[k] = kinds.get(k, 0) + 1
         if kinds.get("deny"):
-            out.append(f"{_RED}⛊ {kinds['deny']} denied{_R}")
+            out.append(f"{accent('bad')}⛊ {kinds['deny']} denied{_R}")
         if kinds.get("memory"):
-            out.append(f"{_GREEN}✎ {kinds['memory']}{_R}{_DIM} recorded{_R}")
+            out.append(f"{accent('ok')}✎ {kinds['memory']}{_R}{_DIM} recorded{_R}")
         if kinds.get("dispatch"):
             out.append(f"{_DIM}⇢ {kinds['dispatch']} dispatched{_R}")
     except Exception:
@@ -1919,7 +2049,7 @@ def _alerts(active: str) -> list[str]:
         from . import __version__, config, instance as _instance, workspace as _ws
         locked = _instance.locked_version(_instance.load(config.ROOT))
         if locked and locked != __version__:
-            out.append(f"{_YELLOW}⚠{_R} {_DIM}charter{_R} {__version__} {_DIM}→ pinned{_R} "
+            out.append(f"{accent('warn')}⚠{_R} {_DIM}charter{_R} {__version__} {_DIM}→ pinned{_R} "
                        f"{locked}{_DIM} · charter version sync{_R}")
         # A declared front door that names nothing resolves to no persona at all, and
         # every surface that would have shown one shows nothing instead — including this
@@ -1927,11 +2057,11 @@ def _alerts(active: str) -> list[str]:
         # unreadable; the row is what makes it a message. `doctor` has room to explain.
         declared = _instance.default_persona_of(_instance.load(config.ROOT))
         if declared and not _persona_exists(declared):
-            out.append(f"{_YELLOW}⚠{_R} {_DIM}front door{_R} {declared} {_DIM}— no such "
+            out.append(f"{accent('warn')}⚠{_R} {_DIM}front door{_R} {declared} {_DIM}— no such "
                        f"persona · charter persona default <name>{_R}")
         stale = [w for w in _ws.list_workspaces() if w != active and _ws.needs_reinit(w)]
         if stale:
-            out.append(f"{_YELLOW}⚠{_R} {_DIM}reinit{_R} {len(stale)} {_DIM}ws · "
+            out.append(f"{accent('warn')}⚠{_R} {_DIM}reinit{_R} {len(stale)} {_DIM}ws · "
                        f"charter ws reinit --all{_R}")
         # Fires only when the resolution was OVERRIDDEN into a nested plane — `find_root`
         # now hops outward through `workspaces/`, so reaching here at all means
@@ -1951,7 +2081,7 @@ def _alerts(active: str) -> list[str]:
         outer = _nested_under() if getattr(config, "NESTED_ORIGIN", None) == config.ROOT else None
         if outer is not None:
             from .util import short_path
-            out.append(f"{_RED}⚠{_R} {_DIM}nested plane{_R} — {_DIM}memory and vault go to"
+            out.append(f"{accent('bad')}⚠{_R} {_DIM}nested plane{_R} — {_DIM}memory and vault go to"
                        f"{_R} {short_path(config.ROOT)}{_DIM}, not{_R} {short_path(outer)}"
                        f"{_DIM} · unset CHARTER_ROOT{_R}")
         root_line = _plane_root_alert()
@@ -2094,8 +2224,8 @@ def _unlanded_memory(root: Path) -> str | None:
     if not rec:
         return None
     if rec.get("outcome") == planegit.BRANCHED and rec.get("landed"):
-        return f"{_YELLOW}memory awaiting a pull request{_R}"
-    return f"{_RED}memory commit not pushed{_R}"
+        return f"{accent('warn')}memory awaiting a pull request{_R}"
+    return f"{accent('bad')}memory commit not pushed{_R}"
 
 
 def _plane_root_alert() -> str | None:
@@ -2173,7 +2303,7 @@ def _plane_root_alert() -> str | None:
         if state.get("tracked_dirty"):
             # The word, not the repo table's `*`. A marker reads as a marker beside a
             # column of them; this line has no siblings to be read against.
-            bits.append(f"{_YELLOW}dirty{_R}")
+            bits.append(f"{accent('warn')}dirty{_R}")
         if _head_detached(gitdir):
             # Reported on its own terms and WITHOUT a default to compare against, unlike
             # the branch case below. Detachment is a fact about HEAD alone, it is the
@@ -2182,7 +2312,7 @@ def _plane_root_alert() -> str | None:
             # about it on a plane whose default cannot be discovered would be the wrong
             # way round. `doctor`'s `check_plane_root` reports it the same way and on the
             # same terms; the words match so the two cannot be read as different findings.
-            bits.append(f"{_YELLOW}detached HEAD{_R}")
+            bits.append(f"{accent('warn')}detached HEAD{_R}")
         # `?` is `_branch`'s "HEAD unreadable" — nothing to compare, so nothing to claim.
         # A detached HEAD never reaches here: it is already said above, and saying it
         # again as "on 1a2b3c4, not main" would dress the worst state up as an ordinary
@@ -2200,7 +2330,7 @@ def _plane_root_alert() -> str | None:
         # Nothing but ASCII and `⚠` — the same glyph the alerts above already use, so
         # this adds no character whose width some font gets to disagree about.
         sep = f"{_DIM} · {_R}"
-        return (f"{_YELLOW}⚠{_R} {_DIM}plane root{_R} {root.name}{sep}"
+        return (f"{accent('warn')}⚠{_R} {_DIM}plane root{_R} {root.name}{sep}"
                 + sep.join(bits)
                 + f"{_DIM} · work belongs in a workspace clone{_R}")
     except Exception:
@@ -2321,7 +2451,7 @@ def _brand() -> str:
     except Exception:
         newer = None
     if newer:
-        out += f" {_YELLOW}↑{newer}{_R}"
+        out += f" {accent('warn')}↑{newer}{_R}"
     return out
 
 
@@ -2465,12 +2595,12 @@ def render(payload: dict | None = None) -> str:
         gl = glstate.read_for(scan, branches)
         glstate.maybe_spawn(scan, active)
 
-        pin = f"{_YELLOW}*{_R}" if src == "$CHARTER_WORKSPACE" else ""
+        pin = f"{accent('warn')}*{_R}" if src == "$CHARTER_WORKSPACE" else ""
         # Reinit tip sits right after the name so it survives truncation on narrow panes.
         # Nothing informational goes in front of it: it is the one item on this row that
         # reports something BROKEN, and it carries the command that fixes it. A pane with
         # room for one item and not two must spend that room on the problem.
-        reinit = f"{_YELLOW}⚠ reinit: {_BOLD}charter ws reinit{_R}" if _stale_structure(active) else None
+        reinit = f"{accent('warn')}⚠ reinit: {_BOLD}charter ws reinit{_R}" if _stale_structure(active) else None
         # Zone 1 — WHERE I am. Identity and navigation only: which workspace is active,
         # what it still means to do, and how many others exist to switch to. Everything
         # that used to ride along here (repo count, vault count, ctx/cache) described

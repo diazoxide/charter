@@ -508,8 +508,8 @@ class Chrome(unittest.TestCase):
     def test_the_three_inherited_border_settings_are_pinned_too(self):
         """Colour is not the only thing an operator's own `.tmux.conf` hands charter's
         window. Measured on a real 3.7c with a hostile config: `pane-border-indicators
-        arrows` marks the ACTIVE pane's borders and no others (one rule with a glyph, its
-        neighbour without); `pane-border-lines double` redraws every rule in a different
+        arrows` marks the ACTIVE pane's borders and no others; `pane-border-lines double`
+        redraws every rule in a different
         weight, and `number` writes pane numbers into them; and `pane-border-status top`
         turns every border into a title bar carrying the machine's hostname AND adds a
         border row above the topmost pane — a row `layout._BORDER_ROWS` never budgeted.
@@ -518,7 +518,11 @@ class Chrome(unittest.TestCase):
         `tests/test_frame_tmux_integration.py`, so a border option tmux grows later is
         caught by the second even though this one names today's."""
         pinned = {cmd[-2]: cmd[-1] for cmd in self._argvs()}
-        self.assertEqual(pinned.get("pane-border-indicators"), "off")
+        # `arrows` rather than `off` since #750: with the shipped `chrome = "off"` there
+        # is no surface, so nothing else in the frame said which pane the keyboard was in.
+        # The point of the row is unchanged — the operator's own `.tmux.conf` does not
+        # decide it — and `commands_frame._CHROME` carries the measurement.
+        self.assertEqual(pinned.get("pane-border-indicators"), "arrows")
         self.assertEqual(pinned.get("pane-border-lines"), "single")
         self.assertEqual(pinned.get("pane-border-status"), "off")
 

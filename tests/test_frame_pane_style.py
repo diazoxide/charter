@@ -445,8 +445,13 @@ class ThePaneWearsItsOwnColourAndTheFrameWearsTheRest(unittest.TestCase):
         every plane written before this key existed."""
         argvs = commands_frame._surface_argvs(socket="s", pane_id="%3", chrome="dark",
                                               bg=None)
+        # Against the ASSEMBLER and not against `FRAME_CHROME`'s bare values: #737 pairs a
+        # foreground with charter's own two surfaces, and `instance.surface_options` is the
+        # one place the two halves meet. A test spelling the background table here would be
+        # asserting half of what the pane wears.
         self.assertEqual([a[-1] for a in argvs],
-                         [v for _n, v in instance.FRAME_CHROME["dark"]])
+                         [v for _n, v in instance.surface_options(
+                             None, "dark", instance.SHIPPED_LOOK)])
 
     def test_the_default_parameter_is_no_background(self):
         """Called without `bg` at all — which every existing call site and every test
@@ -471,7 +476,8 @@ class ThePaneWearsItsOwnColourAndTheFrameWearsTheRest(unittest.TestCase):
         argvs = commands_frame._surface_argvs(socket="s", pane_id="%3", chrome="dark",
                                               bg="bg=#{?1,colour196,colour46}")
         self.assertEqual([a[-1] for a in argvs],
-                         [v for _n, v in instance.FRAME_CHROME["dark"]])
+                         [v for _n, v in instance.surface_options(
+                             None, "dark", instance.SHIPPED_LOOK)])
         for a in argvs:
             self.assertNotIn("#", a[-1])
 
@@ -481,6 +487,12 @@ class ThePaneWearsItsOwnColourAndTheFrameWearsTheRest(unittest.TestCase):
         — but "nothing charter did not write can appear here"."""
         ours = {v for pairs in instance.FRAME_PANE_BG.values() for _n, v in pairs}
         ours |= {v for pairs in instance.FRAME_CHROME.values() for _n, v in pairs}
+        # The paired foregrounds (#737) are charter's own constants too, and the property
+        # is "nothing charter did not write can appear here" — so the vocabulary widens
+        # with the table rather than the assertion being loosened. Derived from both
+        # tables, so a surface word added to either is inside this line on the same commit.
+        ours |= {f"{fg},{v}" for fg in instance.FRAME_CHROME_FG.values() if fg
+                 for pairs in instance.FRAME_CHROME.values() for _n, v in pairs}
         for word in (*instance.FRAME_PANE_BG, "chartreuse", "colour236",
                      "bg=#{?1,colour196,colour46}", None, 7, ["black"]):
             with self.subTest(bg=word):
@@ -569,8 +581,9 @@ class TheLauncherActuallyAsksForEachPanesColour(PersonaIso, unittest.TestCase):
         """The other half of the `or`, driven through the funnel rather than the helper."""
         frame = dict(_arrangement(repos={"bg": "blue"}), chrome="dark")
         styles = self._styles(self._issued(frame, ["repos", "right"]))
-        self.assertEqual(list(styles.values()),
-                         [["bg=blue", "bg=brightblue"], ["bg=black", "bg=brightblack"]])
+        dark = [v for _n, v in instance.surface_options(None, "dark",
+                                                        instance.SHIPPED_LOOK)]
+        self.assertEqual(list(styles.values()), [["bg=blue", "bg=brightblue"], dark])
 
     def test_the_harness_pane_is_never_a_target(self):
         """ADR 0018, asked of the funnel: `-p` never names the harness. Its window options
@@ -593,8 +606,10 @@ class TheLauncherActuallyAsksForEachPanesColour(PersonaIso, unittest.TestCase):
         # is not one.
         self.assertEqual(len(styles), 2,
                          f"both panes must have been styled, not {sorted(styles)}")
+        dark = [v for _n, v in instance.surface_options(None, "dark",
+                                                        instance.SHIPPED_LOOK)]
         for values in styles.values():
-            self.assertEqual(values, ["bg=black", "bg=brightblack"])
+            self.assertEqual(values, dark)
 
 
 class ThePadComesOutOfTheBudget(PersonaIso, unittest.TestCase):
@@ -1077,7 +1092,11 @@ class RealTmuxAcceptsEveryWordAndPaintsPerPane(_TmuxServerFixture, PersonaIso):
         _harness, a, b = self._panes()
         self._apply(a, chrome="dark")
         self._apply(b, chrome="dark", bg="default")
-        self.assertEqual(self._style(a), "bg=black")
+        # `fg=white,bg=black` — the frame-wide surface with the foreground #737 pairs with
+        # it. `b` opted out and therefore gets neither half, which is the line
+        # `FRAME_CHROME_FG` draws: the pairing belongs to the background it came with.
+        self.assertEqual(self._style(a), dict(instance.surface_options(
+            None, "dark", instance.SHIPPED_LOOK))["window-style"])
         self.assertEqual(self._style(b), "bg=default")
 
     def test_the_colour_belongs_to_the_pane_and_not_to_the_process_in_it(self):

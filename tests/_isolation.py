@@ -179,6 +179,31 @@ def no_background_refresh(case) -> None:
         case.addCleanup(patcher.stop)
 
 
+def shipped_frame(case) -> None:
+    """Pin this case's ``config.FRAME`` to the frame charter SHIPS.
+
+    **For a case whose subject is a default, and it exists because a default stopped being
+    a constant.** `[frame] ok`/`warn`/`bad` made three of `frame/chrome.py`'s recipes read
+    the plane, so "``ok`` is green" and "the served vocabulary is these seven numbers" are
+    now claims about the plane the suite is running INSIDE — which on a developer's machine
+    is charter's own control plane, and on the machine those keys were written for is a
+    plane actively being tuned. Without this, an operator who writes ``warn = "blue"`` in
+    their own `charter.toml` turns somebody else's test red, and the failure is about their
+    config rather than about charter.
+
+    That is #402/#492's rule — the suite reads the repo, never the machine — arriving
+    through the newest door, and it is the door this whole file was built for.
+
+    **Only for cases about the shipped answer.** A case that is about the keys DOING
+    something patches `config.FRAME` with the words it means and asserts on those; this is
+    for the ones that assert what a plane which said nothing gets. `clear=True`, so a key
+    the ambient plane set and `FRAME_DEFAULTS` does not name cannot survive into the case.
+    """
+    patcher = mock.patch.dict(config.FRAME, instance.FRAME_DEFAULTS, clear=True)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 def child_plane_env(case, **extra: str) -> tuple[Path, dict]:
     """A throwaway plane, and the environment that points a CHILD charter at it.
 

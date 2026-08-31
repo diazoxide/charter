@@ -257,7 +257,8 @@ class TurningTheSurfaceOffIsARemovalAndNotAStyle(unittest.TestCase):
     def test_dark_sets_both_options_and_unsets_nothing(self):
         tails = self._tails("dark")
         self.assertEqual(tails, [["set-option", "-p", "-t", "%3", name, value]
-                                 for name, value in instance.FRAME_CHROME["dark"]])
+                                 for name, value in instance.surface_options(
+                                     None, "dark", instance.SHIPPED_LOOK)])
 
     def test_a_word_charter_does_not_know_is_off_here_too(self):
         """The refusal is named: the argv is the UNSET list, which is `off`'s answer —
@@ -538,8 +539,10 @@ class TheLiveChangeReachesRealTmux(_TmuxServerFixture, PersonaIso):
         state.record_server(self.FID, self.SOCKET_NAME)
 
         self._run("dark")
-        self.assertEqual(self._style(panel), "bg=black")
-        self.assertEqual(self._style(panel, "window-active-style"), "bg=brightblack")
+        dark = dict(instance.surface_options(None, "dark", instance.SHIPPED_LOOK))
+        self.assertEqual(self._style(panel), dark["window-style"])
+        self.assertEqual(self._style(panel, "window-active-style"),
+                         dark["window-active-style"])
         self.assertEqual(self._style(harness), "",
                          "charter styled the pane the operator's harness runs in")
 
@@ -557,8 +560,10 @@ class TheLiveChangeReachesRealTmux(_TmuxServerFixture, PersonaIso):
         state.record_server(self.FID, self.SOCKET_NAME)
         self._run("dark")
         self._run("light")
-        self.assertEqual(self._style(panel), "bg=white")
-        self.assertEqual(self._style(panel, "window-active-style"), "bg=brightwhite")
+        light = dict(instance.surface_options(None, "light", instance.SHIPPED_LOOK))
+        self.assertEqual(self._style(panel), light["window-style"])
+        self.assertEqual(self._style(panel, "window-active-style"),
+                         light["window-active-style"])
 
 
 if __name__ == "__main__":
