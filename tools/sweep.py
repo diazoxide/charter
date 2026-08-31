@@ -1745,6 +1745,128 @@ def _kill_group(proc: subprocess.Popen) -> None:
         proc.kill()
 
 
+# --------------------------------------------------------------------------------------
+# 4a. The sixth way a sweep lies: a mutant that eats the machine (#773)
+# --------------------------------------------------------------------------------------
+#
+# `SUBSET_TIMEOUT` and `FULL_TIMEOUT` bound what a mutation may spend in **time**, and
+# they are the answer to "a mutation that hangs" — the fourth way the spec lists. They do
+# not cover this one, and the reason is exact: **a timeout cannot save a runner that has
+# already been consumed.** The timer and the process it is timing die together.
+#
+# Measured on #710. Enumerating all 118 mutations that branch offers and running each
+# under a wall clock found four that never terminate, three of which append on every
+# iteration. The fastest — `charter/hooks.py`'s `drop-if`, whose deleted guard makes
+# `_heredoc_header` hand its caller a cursor pointing *backwards* — grows at **4,274
+# MB/min**, which exhausts a 16 GB runner in under four minutes against a 900 s subset
+# timeout. Run 33331151759, shard 2 of 5: ten mutations reported, then
+#
+#     ##[error]The runner has received a shutdown signal…
+#     ##[error]Process completed with exit code 143.
+#
+# which is byte-for-byte what a spot reclaim looks like. Shard 2 was the only shard
+# holding a memory-eater and the only shard that died; shard 3 drew the one that spins
+# WITHOUT allocating and survived on the timeout, which is the control that makes it more
+# than a coincidence.
+#
+# **Detection is not the fix, and that was measured too.** The obvious guard — read the
+# mutant and see whether it contains an unbounded loop — fails in the fail-open direction:
+# the fastest of the four leaves every loop in its own function terminating, because what
+# it corrupts is a cursor returned ACROSS a function boundary and the caller is the one
+# that spins. Any scanner, tokenizer or parser is mostly made of functions like that. So
+# the bound is imposed rather than predicted.
+
+#: The floor under :func:`address_space_cap`, in bytes, and it is measured rather than
+#: chosen. The whole suite — 9,581 tests, the real tmux servers it starts and every child
+#: it spawns — peaks at **1,580 MB of address space summed across the process tree** and
+#: 253 MB resident, on a ten-core Linux box where glibc's per-thread arenas are at their
+#: most generous. `RLIMIT_AS` applies to each process on its own, so two GiB is that whole
+#: tree's figure with room over, charged to every process in it.
+#:
+#: The floor exists because the two failures are not symmetrical. A cap too LOOSE is the
+#: status quo: the runner dies and the shard reports nothing. A cap too TIGHT reddens the
+#: **unmutated baseline**, and this tool refuses to sweep a red tree at all — so an
+#: over-tight cap does not mislead anybody, it stops the gate answering for everybody.
+#: Erring loose costs one branch a re-run; erring tight costs every branch the gate.
+SUITE_ADDRESS_SPACE = 2 * 1024 ** 3
+
+
+def total_memory() -> int:
+    """What this machine has, in bytes, or ``0`` when it will not say.
+
+    ``0`` is not an error and is not treated as one — :func:`address_space_cap` has a
+    floor for exactly this, and a machine that will not report its own size is a reason to
+    use the measured figure rather than a reason to leave a mutant unbounded.
+    """
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):    # pragma: no cover - platform
+        return 0
+
+
+def address_space_cap(jobs: int, total: int | None = None) -> int:
+    """How much address space ONE mutant may claim, in bytes.
+
+    One share per sandbox and **one left over**, because the sweep is not the only thing
+    on the box: the parent, the trace cache, the runner's own agent and the operating
+    system all live in the share nobody is given. On a 16 GB runner at `--jobs 4` that is
+    3.2 GiB each, which a 4,274 MB/min runaway reaches in about forty-five seconds —
+    twenty times inside the subset timeout, and with the machine still standing.
+
+    The floor can beat the share on a small machine, and it is allowed to: see
+    :data:`SUITE_ADDRESS_SPACE` for why the loose direction is the safe one.
+    """
+    have = total_memory() if total is None else total
+    return max(SUITE_ADDRESS_SPACE, have // max(1, jobs + 1))
+
+
+def under_cap(argv: list[str], cap: int) -> list[str]:
+    """*argv*, wrapped so the kernel refuses it more than *cap* bytes of address space.
+
+    **A shell and not `preexec_fn`**, and both halves of that were measured rather than
+    reasoned about:
+
+    * On macOS `resource.setrlimit(RLIMIT_AS, …)` raises, and a `preexec_fn` that raises
+      surfaces as `SubprocessError` **in the parent** — so the obvious form of this fix,
+      written as proposed, makes every mutation on the operator's own machine fail to run
+      at all. #572 is the issue about this tool being unusable on macOS; this is that
+      again, from the other end.
+    * `preexec_fn` calls back into Python between `fork` and `exec`, and this sweep runs
+      its sandboxes from a thread pool. The standard library says in as many words that it
+      is not safe in the presence of threads.
+
+    `exec` and not a plain invocation, so the shell is **replaced**: the pid the sweep
+    holds is the interpreter's own, which is what :func:`_kill_group`, the process group
+    and both timeouts depend on.
+    """
+    if cap <= 0:
+        return list(argv)
+    # `|| exit 89` and not `2>/dev/null`. This wrapper is only ever reached once
+    # `cap_holds` has measured that the platform takes the limit, so a refusal here is a
+    # surprise, and a surprise gets a distinctive exit code rather than a run that
+    # silently proceeds uncapped. `ulimit -v` counts KiB.
+    return ["/bin/sh", "-c", 'ulimit -v "$1" || exit 89; shift; exec "$@"',
+            "sweep", str(cap // 1024), *argv]
+
+
+def cap_holds(cap: int) -> bool:
+    """Whether this platform really enforces *cap* on a child. Measured, never assumed.
+
+    macOS accepts neither `ulimit -v` nor `setrlimit(RLIMIT_AS)` — it answers *Invalid
+    argument* — so on the machine this tool is developed on there is no cap to have, and
+    the honest thing is to say so once rather than to wrap every run in a shell that does
+    nothing. One process, at startup, and the answer decides whether anything is wrapped.
+    """
+    if cap <= 0:
+        return False
+    try:
+        done = subprocess.run(under_cap(["/bin/echo", "held"], cap), timeout=60,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):    # pragma: no cover - no /bin/sh
+        return False
+    return done.returncode == 0 and done.stdout.strip() == b"held"
+
+
 #: `FAIL: test_x (tests.test_mod.Class.test_x)` / `ERROR: ...`, and for an import failure
 #: `ERROR: tests.test_mod (unittest.loader._FailedTest.tests.test_mod)`. The parenthesised
 #: id is the stable name; a subtest's trailing `[value]` sits outside it.
@@ -1902,7 +2024,15 @@ class Sandbox:
         # it. `subprocess.run(timeout=…)` kills only the direct child, and this suite
         # starts real tmux servers — a wedged run that left one behind would be inherited
         # by the next mutation and reported as ITS failure.
-        proc = subprocess.Popen([sys.executable, "-m", "unittest", *argv],
+        # And an address-space cap around the whole thing, which is the bound the two
+        # timeouts cannot supply: a mutant that allocates without bound kills the machine
+        # BEFORE either timer fires, because the timer dies with it (#773). Capped, it
+        # raises `MemoryError` inside the child instead — a red, on tests that were green
+        # unmutated, which `decide` reads as a pin. That is the right verdict for a
+        # mutation that destroys the apparatus, and the wrong one is what it replaces:
+        # `exit 143`, indistinguishable from the runner pool taking the machine back.
+        proc = subprocess.Popen(under_cap([sys.executable, "-m", "unittest", *argv],
+                                          self.memory_cap),
                                 cwd=str(self.path), text=True, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 start_new_session=True)
@@ -1925,6 +2055,13 @@ class Sandbox:
     #: measured, at a load average of 100, a five-minute suite ran past 2400 s and two
     #: known-unpinned guards came back "pinned" on the strength of a stopwatch.
     full_timeout: float = FULL_TIMEOUT
+
+    #: Bytes of address space one run may claim, or ``0`` for no cap — the same shape as
+    #: `full_timeout`: a default here so a sandbox built for something other than a sweep
+    #: still works, and the real figure set per box by whoever knows how many of them
+    #: there are. Zero on any platform that will not enforce it (:func:`cap_holds`), which
+    #: is honest rather than decorative: an uncapped run is exactly the run #773 measured.
+    memory_cap: int = 0
 
     def subset(self, modules: list[str]) -> Outcome:
         return self.run(list(modules), SUBSET_TIMEOUT)
@@ -2158,7 +2295,7 @@ def plan_for(root: Path, ref: str, scope: dict[str, set[int]], dirty: dict[str, 
 def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str, list[str]],
           workdir: Path, jobs: int, dirty: dict[str, bytes], second_order: int = 0,
           log=print, full_timeout: float = FULL_TIMEOUT,
-          shard: tuple[int, int] | None = None
+          shard: tuple[int, int] | None = None, cap: int = 0
           ) -> tuple[list[Result], list["Pair"]]:
     """Every mutation, run; every survivor, re-run against the whole suite."""
     plan, sources = plan_for(root, ref, scope, dirty)
@@ -2176,6 +2313,7 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
     boxes = [Sandbox(root, run_dir(workdir) / f"w{i}", ref, dirty) for i in range(jobs)]
     for box in boxes:
         box.full_timeout = full_timeout
+        box.memory_cap = cap
     free: list[Sandbox] = list(boxes)
     import threading
     lock = threading.Lock()
@@ -2378,7 +2516,16 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
         w("")
 
     if not survivors:
-        if unresolved or unapplied:
+        if not results:
+            # The same distinction the check's NAME now carries (#782), in the terminal
+            # report, because the two must not disagree: "every mutation went red" said
+            # over a plan of no mutations is the words for having checked, and the count
+            # two lines above it is zero.
+            w("NOTHING TO SWEEP — not one mutation was applied, so this is a record of a")
+            w("question nobody asked rather than of an answer. Either no file under the")
+            w("swept paths changed, or the lines that did offer no operator anything to")
+            w("mutate. That is legitimate and it is not evidence that this diff is tested.")
+        elif unresolved or unapplied:
             w("No survivor — but see above: not every mutation was measured, so this is")
             w("not the same claim as a clean sweep.")
         else:
@@ -2544,6 +2691,21 @@ class Gate:
     def actionable(self) -> list[Result]:
         """Survivors a person should act on. Platform-deferred ones are not among them."""
         return self.unpinned + self.masked
+
+    @property
+    def measured(self) -> int:
+        """How many mutations were actually put to the suite (#782).
+
+        Zero here is the difference between "I checked and found nothing wrong" and "there
+        was nothing to check", which are the same sentence today and must not be. Every
+        bucket except `withheld` counts, including `unresolved` and `unapplied`: those two
+        reached a sandbox and came back without an answer, which is a fact about a
+        mutation that exists. `withheld` is the one the tool declined to ask, so it never
+        reached anything — and a plan of nothing but withheld mutations measured nothing,
+        which is exactly what this property is for.
+        """
+        return (self.pinned + len(self.unpinned) + len(self.masked) + len(self.platform)
+                + len(self.unresolved) + len(self.unapplied))
 
 
 def classify(results: list[Result]) -> Gate:
@@ -2769,10 +2931,22 @@ SURVIVORS = "survivors"
 #: that never reached the tree — three spellings of the same thing, which is that the
 #: numbers on this page are not an answer about this branch.
 NO_VERDICT = "no-verdict"
+#: Completed, and there was nothing to complete: the plan was empty, so not one mutation
+#: was ever put to the suite. **This is not `CLEAN` and the difference is #782.** A branch
+#: that changed no swept file, or whose added lines offer no operator anything to mutate,
+#: measured nothing — and `no survivors` is the sentence for having measured everything
+#: and found nothing wrong. Measured on #779: `no survivors: pass` beside `mutations
+#: applied: 0`, on a branch whose one added statement no operator touches.
+#:
+#: It is a fourth ANSWER and not a fourth failure. A documentation commit, a config
+#: change, a news entry and a one-line reordering are all legitimate and all land here,
+#: and failing them would teach people to route around the gate — which is the one
+#: outcome worse than a gate that says too little.
+NOTHING = "nothing"
 
 
 def gate_conclusion(gate: Gate, missing: int = 0) -> str:
-    """Which of the three a run found. *missing* is shards that never reported.
+    """Which of the four a run found. *missing* is shards that never reported.
 
     The precedence is :func:`gate_exit_code`'s, deliberately — 4 outranks 1 outranks 3 —
     because the two answers are the same answer in two vocabularies and a branch that
@@ -2783,12 +2957,19 @@ def gate_conclusion(gate: Gate, missing: int = 0) -> str:
     not a severity ranking, it is what each one licenses a reader to believe: "8
     survivors, 2 not measured" is still a true statement about 8 real findings, whereas
     "8 survivors" from two thirds of a plan is a number nobody should quote.
+
+    :data:`NOTHING` is last and it is reached only from the bottom — every count zero AND
+    every shard in. Anything unmeasured has already answered above it, so "nothing to
+    sweep" can never be worn by a run that lost a shard, and `missing` is what keeps
+    `classify([])` from a cancelled sweep saying it.
     """
     if missing or gate.unapplied:
         return NO_VERDICT
     if gate.actionable:
         return SURVIVORS
-    return NO_VERDICT if gate.unresolved else CLEAN
+    if gate.unresolved:
+        return NO_VERDICT
+    return CLEAN if gate.measured else NOTHING
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -2815,6 +2996,13 @@ def headline(gate: Gate, missing: int = 0, shards: int = 1) -> str:
     # into `no verdict` over that would spend the one signal a reviewer must stop on, and
     # #693 is what it costs when `no verdict` stops meaning "look at this".
     aside = f", {len(gate.withheld)} withheld" if gate.withheld else ""
+    # Its own sentence, beside the other three rather than inside `no survivors` (#782).
+    # The two say opposite things about what was done: one is "the guards you added are
+    # tested", the other is "you added nothing this tool knows how to test" — and on a
+    # branch whose whole content is a one-line ordering fix, the second is the more
+    # important of the two, because it is the one that tells a reviewer not to lean here.
+    if conclusion == NOTHING:
+        return f"nothing to sweep{aside}"
     if conclusion == CLEAN:
         return f"no survivors{aside}"
     found = _plural(len(gate.actionable), "survivor", "survivors")
@@ -3071,6 +3259,19 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         for r in gate.unresolved:
             w(f"- `{r.mutation.tag}` in `{r.mutation.symbol}`")
         w("")
+    if gate_conclusion(gate, missing) == NOTHING:
+        w("### Nothing to sweep — and that is not the same as nothing wrong")
+        w("")
+        w("**Not one mutation was applied on this branch**, so this page is a record of a "
+          "question nobody asked rather than of an answer. Either no file under the swept "
+          "paths changed, or the lines that changed offer no operator anything to mutate "
+          "— a docs commit, a news entry, a config key, a one-line reordering. All of "
+          "those are legitimate, none of them fails here, and none of them is evidence "
+          "that what this branch added is tested.")
+        w("")
+        w("If the branch does add a guard, the guard is somewhere this sweep does not "
+          "charge, or in a shape no operator in the table reaches. Say what would break "
+          "if the line were deleted, and show it — by hand is fine. This gate cannot.")
     if gate_conclusion(gate, missing) == CLEAN:
         w("Every mutation this branch offered goes red. Nothing added here is a line the "
           "suite would not miss.")
@@ -3191,6 +3392,19 @@ def base_for(root: Path, ref: str, override: str | None) -> str:
     `origin/main` when the remote is there, `main` when it is not — a fresh clone, a
     worktree, and CI all differ on that. The merge-base and not the tip, because a branch
     is answerable for what IT added and not for what main gained while it was open.
+
+    **This default is also the right answer on a merge commit, and #776 is what it costs
+    to override it.** `refs/pull/N/merge` has the base branch tip as its FIRST parent, and
+    nothing later than that parent is reachable from the merge — so the merge-base of the
+    merge with `origin/main` *is* that parent, exactly. `sweep.yml` used to pass the pull
+    request payload's `base.sha` instead, which is the payload's idea of where the branch
+    started and lags the tree `actions/checkout` produces: measured on run 33331151759,
+    `HEAD is now at 58411a9 Merge 04bf8e6 into c29f3a8` against a payload base of
+    `d40d998`, three main commits earlier, so a branch touching one Python file was
+    charged for three. **A stale explicit base is not a smaller default, it is a different
+    branch's lines**, and the survivors it produces land on an author who cannot judge
+    them. The override stays — it is how a person asks about some other range — and the
+    workflow no longer uses it.
     """
     if override:
         return git("rev-parse", override, cwd=root).strip()
@@ -3381,24 +3595,46 @@ def main(argv: list[str] | None = None) -> int:
         log(f"  diff against {base[:12]}: {len(scope)} file(s), "
             f"{sum(len(v) for v in scope.values())} added line(s)")
     if args.plan or args.warm_map:
-        return _plan_step(args, root, ref, scope, dirty, workdir, cache_dir, log)
+        return _plan_step(args, root, ref, base, scope, dirty, workdir, cache_dir,
+                          log)
     if not scope:
         log("  nothing under the swept paths changed. Nothing to do.")
+        # The same page and the same sentence the merge step publishes, and not a private
+        # paragraph of its own (#782). This branch used to write "there was nothing to
+        # sweep" here while the check on the pull request said `no survivors` — two
+        # readers, two answers, and the affirmative one is the one people read.
+        empty = classify([])
         if args.summary:
-            _append(args.summary, "## Deletion sweep\n\nNothing under the swept paths "
-                                  "changed on this branch, so there was nothing to sweep.\n")
+            _append(args.summary, gate_summary(empty, ref, base, time.time() - started,
+                                               args.enforce))
         # An empty result set and not a missing file. Downstream — the merge step, and
         # anyone reading the artifact — "the sweep ran and found nothing to do" and "the
         # sweep never reported" are the two answers #617 is about, and a shard that
         # writes nothing here is indistinguishable from a shard that was cancelled.
         if args.json:
             Path(args.json).write_text(as_json([]))
+        if args.gate:
+            _say(args, empty, log)
         return 0
+
+    # Decided once, before a sandbox exists, and said out loud either way (#773). The
+    # baseline is capped along with the mutants and not without them: a cap the mutants
+    # run under and the baseline does not can only ever manufacture a red the baseline
+    # never had, which is the one direction this tool must never fail in.
+    cap = address_space_cap(args.jobs)
+    if not cap_holds(cap):
+        cap = 0
+        log("  memory: this platform does not enforce an address-space limit, so a "
+            "mutation that allocates without bound can still take the machine (#773)")
+    else:
+        log(f"  memory: {cap / 1024 ** 3:.1f} GiB of address space per run — a mutant "
+            f"that allocates without bound is a red here, not a dead machine")
 
     # The map is measured on a clean checkout of the ref, so that a mutation is the only
     # thing that ever differs from what was traced.
     log("  preparing the reference sandbox…")
     ref_box = Sandbox(root, run_dir(workdir) / "ref", ref, dirty)
+    ref_box.memory_cap = cap
     selection = load_map(ref_box.path, paths, cache_dir, args.jobs, args.refresh_map, log)
 
     baseline = None
@@ -3431,7 +3667,7 @@ def main(argv: list[str] | None = None) -> int:
 
     results, pairs = sweep(root, ref, scope, selection, workdir, args.jobs, dirty,
                            args.second_order, log, full_timeout,
-                           parse_shard(args.shard) if args.shard else None)
+                           parse_shard(args.shard) if args.shard else None, cap=cap)
     elapsed = time.time() - started
     text = report(results, root, ref, base, baseline, elapsed, pairs)
     log("")
@@ -3494,7 +3730,7 @@ def _write_output(path: str | None, **values: str) -> None:
     _append(path, "\n".join(lines))
 
 
-def _plan_step(args, root: Path, ref: str, scope: dict[str, set[int]],
+def _plan_step(args, root: Path, ref: str, base: str, scope: dict[str, set[int]],
                dirty: dict[str, bytes], workdir: Path, cache_dir: Path,
                log) -> int:
     """Size the sweep, and optionally leave the selection map where the shards will find it.
@@ -3508,6 +3744,14 @@ def _plan_step(args, root: Path, ref: str, scope: dict[str, set[int]],
     plan, _ = plan_for(root, ref, scope, dirty)
     shards = shards_for(len(plan))
     log(f"  {len(plan)} mutations → {shards} shard(s) of at most {per_shard()} each")
+    # Named, so a foreign path is visible on the one job that runs before anything is
+    # spent (#776). A branch charged for another branch's file used to be invisible until
+    # a survivor arrived in it, and by then the reader is being asked to judge a line
+    # they have never seen. Capped, because `--all` puts the whole tree through here.
+    for rel in sorted(scope)[:20]:
+        log(f"    charged: {rel}")
+    if len(scope) > 20:
+        log(f"    charged: … and {len(scope) - 20} more file(s)")
     loud = over_budget(len(plan))
     if loud:
         # An annotation and not a log line. A cap nobody can see is the failure the spec
@@ -3515,8 +3759,14 @@ def _plan_step(args, root: Path, ref: str, scope: dict[str, set[int]],
         # nobody can see.
         log(f"::warning title={_property('The deletion sweep is over its budget')}::"
             + _escape(loud))
+    # `base` travels with the rest (#776). The merge step runs on its own machine, at
+    # `fetch-depth: 1`, where neither `HEAD^` nor `origin/main` is an object it has — so
+    # it cannot work out what was charged, and the value the workflow used to hand it was
+    # the pull request payload's `base.sha`, which is the very thing that issue is about.
+    # One job resolves the base, once, and every page that names it names the same sha the
+    # mutations were read against.
     _write_output(args.github_output, mutations=str(len(plan)), shards=str(shards),
-                  matrix=json.dumps(list(range(1, shards + 1))))
+                  matrix=json.dumps(list(range(1, shards + 1))), base=base)
     if args.warm_map:
         # From a sandbox, for the reason `main` builds it from one: the map is measured on
         # a clean checkout of the ref so that a mutation is the only thing that ever

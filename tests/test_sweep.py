@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import resource
 import subprocess
 import sys
 import tempfile
@@ -566,14 +567,26 @@ class TheStringShape(unittest.TestCase):
     def test_a_withheld_verdict_gets_its_own_bucket_and_fails_nothing(self):
         """Its own bucket and not `unresolved`: the two say opposite things about what
         the tool knows, and a deliberate subtraction that rendered as a timeout is how a
-        branch comes to sit behind a `no verdict` no re-run can clear (#693)."""
+        branch comes to sit behind a `no verdict` no re-run can clear (#693).
+
+        **Beside the verdict and never instead of it** (#698) — so the case needs a
+        measured mutation to sit beside, and it used to have none. A gate holding one
+        withheld mutation and nothing else measured *nothing*, and #782 gives that its own
+        sentence: the aside is the same either way, and the verdict in front of it is the
+        honest one in both.
+        """
         m = sweep.Mutation(path="p.py", line=1, end_line=1, operator="retune-string",
                            question="q", before="a", after="b", symbol="f",
                            withheld="not a pattern")
-        gate = sweep.classify([sweep.Result(m, "withheld", None, None, [], None)])
+        held = sweep.Result(m, "withheld", None, None, [], None)
+        gate = sweep.classify([held, _result("pinned")])
         self.assertEqual(len(gate.withheld), 1)
         self.assertEqual((gate.unresolved, gate.unapplied, gate.actionable), ([], [], []))
         self.assertEqual(sweep.headline(gate), "no survivors, 1 withheld")
+        # And on its own it is not a clean sweep of anything — nothing was measured.
+        alone = sweep.classify([held])
+        self.assertEqual(sweep.gate_conclusion(alone), sweep.NOTHING)
+        self.assertEqual(sweep.headline(alone), "nothing to sweep, 1 withheld")
 
     def test_a_string_with_nothing_to_move_offers_no_mutation(self):
         muts = _mutations("""
@@ -1639,6 +1652,240 @@ class AHangIsNotAPass(unittest.TestCase):
         sweep._kill_group(proc)
 
 
+class AMutantThatEatsTheMachineIsARedAndNotAnOutage(unittest.TestCase):
+    """#773, the sixth way a sweep lies and the one the timeouts cannot reach.
+
+    `SUBSET_TIMEOUT` and `FULL_TIMEOUT` answer "a mutation that hangs". They do not answer
+    this, and the reason is exact: **the timer dies with the process it is timing.** A
+    mutant that allocates without bound exhausts the runner in two to four minutes against
+    a 900 s cap, the host kills the machine, and the shard reports
+
+        ##[error]The runner has received a shutdown signal…
+        ##[error]Process completed with exit code 143.
+
+    which is byte-for-byte a spot reclaim. Measured on #710: four of its 118 mutations
+    never terminate, the fastest growing at 4,274 MB/min, and on run 33331151759 the one
+    shard holding a memory-eater is the one shard that died — while the shard holding the
+    mutation that spins WITHOUT allocating survived on the timeout, which is the control.
+
+    Capped, that becomes a `MemoryError` in the child: a red, on tests that were green
+    unmutated, which `decide` reads as a **pin**. That is the right verdict for a mutant
+    that destroys the apparatus.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-cap-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        (self.tmp / "tests").mkdir()
+        (self.tmp / "tests" / "__init__.py").write_text("")
+        (self.tmp / "tests" / "test_limit.py").write_text(textwrap.dedent("""
+            import os, resource, unittest
+            class T(unittest.TestCase):
+                def test_reports_the_limit_it_was_given(self):
+                    soft, _ = resource.getrlimit(resource.RLIMIT_AS)
+                    self.assertEqual(soft, int(os.environ["WANT_SOFT_LIMIT"]))
+        """))
+        (self.tmp / "tests" / "test_runaway.py").write_text(textwrap.dedent("""
+            import unittest
+            class T(unittest.TestCase):
+                def test_allocates_without_end(self):
+                    held = []
+                    while True:                     # the shape of every #710 runaway
+                        held.append(bytearray(4 * 1024 * 1024))
+        """))
+        self.box = object.__new__(sweep.Sandbox)
+        self.box.path = self.tmp
+        self.box._pristine = {}
+        self.box.memory_cap = 0
+
+    # -- the arithmetic ---------------------------------------------------------------
+
+    def test_one_share_per_sandbox_and_one_left_over_for_everything_else(self):
+        """The sweep is not the only thing on the box: the parent, the trace cache, the
+        runner's own agent and the operating system live in the share nobody is given. A
+        cap of `total // jobs` would let four concurrent runaways add up to the whole
+        machine, which is the failure this exists for."""
+        self.assertEqual(sweep.address_space_cap(4, total=16 * 1024 ** 3),
+                         16 * 1024 ** 3 // 5)
+        self.assertEqual(sweep.address_space_cap(1, total=16 * 1024 ** 3),
+                         8 * 1024 ** 3)
+        self.assertLess(sweep.address_space_cap(4, total=16 * 1024 ** 3) * 4,
+                        16 * 1024 ** 3)
+
+    def test_a_machine_that_will_not_say_how_big_it_is_gets_the_floor(self):
+        """Found unpinned by this branch's own sweep, at `tools/sweep.py:1803`.
+
+        `os.sysconf` is not on every platform and does not answer on every platform, and
+        the one thing this must not do is propagate: an unbounded mutant is the failure
+        being fixed, and a sweep that refuses to start because it could not size a cap is a
+        worse one. So the catch is real, and the sweep was right that nothing held it.
+        """
+        real = os.sysconf
+
+        def refuses(_name):
+            raise ValueError("unrecognised configuration name")
+
+        os.sysconf = refuses
+        self.addCleanup(setattr, os, "sysconf", real)
+        self.assertEqual(sweep.total_memory(), 0)
+        self.assertEqual(sweep.address_space_cap(4), sweep.SUITE_ADDRESS_SPACE)
+
+    def test_a_job_count_nobody_validated_does_not_divide_by_zero(self):
+        """Found unpinned by this branch's own sweep, at `tools/sweep.py:1820`.
+
+        `--jobs` is an integer the operator types and nothing checks its sign, and
+        `jobs + 1` is a **divisor** — so `--jobs -1` is a `ZeroDivisionError` raised while
+        sizing a memory cap, which is a sweep that will not start at all, over a typo. The
+        floor is not decoration and it is not dead: it is the only thing between a
+        mistyped flag and a stack trace.
+        """
+        for jobs in (-5, -1, 0):
+            self.assertEqual(sweep.address_space_cap(jobs, total=64 * 1024 ** 3),
+                             64 * 1024 ** 3, f"--jobs {jobs}")
+
+    def test_the_floor_is_what_the_suite_measured_and_it_wins_on_a_small_machine(self):
+        """The two failures are not symmetrical. Too loose is the status quo — the runner
+        dies. Too tight reddens the **unmutated baseline**, and this tool refuses to sweep
+        a red tree, so the gate stops answering for everybody. Erring loose costs one
+        branch a re-run; erring tight costs every branch the gate."""
+        self.assertEqual(sweep.address_space_cap(4, total=2 * 1024 ** 3),
+                         sweep.SUITE_ADDRESS_SPACE)
+        # And a machine that will not say how big it is gets the measured figure, not none.
+        self.assertEqual(sweep.address_space_cap(4, total=0), sweep.SUITE_ADDRESS_SPACE)
+        # 1,580 MB is the whole process tree's peak on a ten-core Linux box, so the floor
+        # has to be above it — asserted, because a floor below what the suite needs is a
+        # floor that reddens every baseline.
+        self.assertGreater(sweep.SUITE_ADDRESS_SPACE, 1580 * 1024 ** 2)
+
+    # -- the wrapper ------------------------------------------------------------------
+
+    def test_no_cap_means_no_wrapper_at_all(self):
+        """On a platform that will not enforce it there is nothing to gain from a shell in
+        the way, and something to lose: the pid the sweep holds is what `_kill_group` and
+        both timeouts work through."""
+        self.assertEqual(sweep.under_cap(["python", "-m", "unittest"], 0),
+                         ["python", "-m", "unittest"])
+
+    def test_the_wrapper_execs_so_the_pid_the_sweep_holds_is_the_interpreters(self):
+        """A shell that *called* python would leave the sweep holding the shell's pid, and
+        `_kill_group`, the process group and the timeout all reach for that pid."""
+        argv = sweep.under_cap(["python", "-m", "unittest", "tests.test_x"], 3 * 1024 ** 3)
+        self.assertEqual(argv[0], "/bin/sh")
+        self.assertIn("exec", argv[2])
+        self.assertIn("ulimit -v", argv[2])
+        self.assertEqual(argv[-4:], ["python", "-m", "unittest", "tests.test_x"])
+        # `ulimit -v` counts KiB, and getting that wrong by 1024 is a cap that either
+        # never fires or reddens the baseline.
+        self.assertEqual(argv[4], str(3 * 1024 ** 2))
+
+    def test_the_probe_agrees_with_what_the_platform_actually_does(self):
+        """`cap_holds` is the one thing that decides whether anything is wrapped at all, so
+        a probe that disagreed with reality would either leave every run uncapped in
+        silence or fail every mutation on a platform that was fine. Asserted as an
+        equivalence, so it holds on whichever platform runs it — Linux says yes, macOS says
+        no, and both are measured here rather than assumed."""
+        cap = 512 * 1024 ** 2
+        done = subprocess.run(sweep.under_cap([sys.executable, "-c", "pass"], cap),
+                              capture_output=True, timeout=120)
+        self.assertEqual(done.returncode == 0, sweep.cap_holds(cap), done.stderr)
+
+    def test_a_preexec_fn_that_cannot_set_the_limit_takes_the_parent_down_with_it(self):
+        """Why this is a shell rather than `resource.setrlimit` in a `preexec_fn`, which is
+        the form the issue proposed. On macOS that call RAISES — and a `preexec_fn` that
+        raises surfaces as `SubprocessError` **in the parent**, so the proposal as written
+        makes every mutation on the operator's own machine fail to run at all. #572 is the
+        issue about this tool being unusable on macOS.
+
+        (The second reason has no case of its own because it is a hazard rather than a
+        behaviour: `preexec_fn` calls back into Python between `fork` and `exec`, which the
+        standard library says is unsafe in the presence of threads, and this sweep runs its
+        sandboxes from a thread pool.)
+        """
+        def refuses():
+            raise ValueError("[Errno 22] Invalid argument")
+
+        with self.assertRaises(subprocess.SubprocessError):
+            subprocess.run([sys.executable, "-c", "pass"], preexec_fn=refuses,
+                           capture_output=True, timeout=120)
+
+    # -- the cap, measured through the code path a mutation uses ----------------------
+
+    def test_the_cap_the_sandbox_was_given_is_the_cap_the_child_is_run_under(self):
+        """End to end through `Sandbox.run`, and the child is the witness: it reads its own
+        `RLIMIT_AS` back and fails if it is not the number the sweep asked for. A wiring
+        test that only read the argv would agree with itself."""
+        cap = 512 * 1024 ** 2
+        if not sweep.cap_holds(cap):
+            self.skipTest(f"{sys.platform} does not enforce an address-space limit, so "
+                          "there is no cap here to measure — see #773")
+        self.box.memory_cap = cap
+        os.environ["WANT_SOFT_LIMIT"] = str(cap)
+        self.addCleanup(os.environ.pop, "WANT_SOFT_LIMIT", None)
+        outcome = self.box.run(["tests.test_limit"], timeout=120)
+        self.assertTrue(outcome.green, outcome.detail)
+        self.assertEqual(outcome.ran, 1)
+
+    def test_with_no_cap_the_child_is_left_exactly_as_it_was(self):
+        """The other half, and it runs everywhere: an uncapped sandbox must not quietly
+        acquire a limit from somewhere, because a limit nobody chose is a red nobody can
+        explain."""
+        os.environ["WANT_SOFT_LIMIT"] = str(resource.getrlimit(resource.RLIMIT_AS)[0])
+        self.addCleanup(os.environ.pop, "WANT_SOFT_LIMIT", None)
+        outcome = self.box.run(["tests.test_limit"], timeout=120)
+        self.assertTrue(outcome.green, outcome.detail)
+
+    def test_a_mutation_that_allocates_without_end_comes_back_red_and_named(self):
+        """The whole point. Uncapped, this is the run that takes the machine with it and
+        reports `exit 143`; capped, it is a red on a named test — which `decide` compares
+        against the same module-set unmutated and turns into a **pin**."""
+        cap = 512 * 1024 ** 2
+        if not sweep.cap_holds(cap):
+            self.skipTest(f"{sys.platform} does not enforce an address-space limit, so a "
+                          "runaway mutation can still take the machine — see #773")
+        self.box.memory_cap = cap
+        outcome = self.box.run(["tests.test_runaway"], timeout=300)
+        self.assertFalse(outcome.green)
+        # A red, and not a timeout: `conclusive` is what separates "the guard is tested"
+        # from "the machine was busy", and a mutant killed by the cap is the first of those.
+        self.assertTrue(outcome.conclusive, outcome.detail)
+        self.assertEqual(outcome.ran, 1)
+        self.assertEqual(outcome.failing,
+                         frozenset({"tests.test_runaway.T.test_allocates_without_end"}))
+
+    def test_every_sandbox_a_sweep_builds_is_given_the_cap(self):
+        """One uncapped sandbox in a pool of four is a pool that can still lose the
+        machine, and the mutation that did it would be reported as infrastructure."""
+        boxes = []
+        real = sweep.Sandbox
+        # Inside the fixture's own directory, and that is load-bearing: `sweep()` ends by
+        # `shutil.rmtree`-ing every box's `path`. A stub that pointed one at `Path(".")`
+        # deleted the working tree it was being written in — measured, once, the hard way.
+        where = self.tmp / "boxes"
+
+        class _Counted(real):
+            def __init__(self, *a, **k):
+                boxes.append(self)
+                self.path = where / f"w{len(boxes)}"
+                self.path.mkdir(parents=True)
+                self._pristine, self._clean_failures = {}, {}
+
+        sweep.Sandbox = _Counted
+        self.addCleanup(setattr, sweep, "Sandbox", real)
+        plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
+                               "", "f") for n in range(3)]
+        for name, stub in (("plan_for", lambda *a: (plan, {})),
+                           ("decide", lambda box, m, mods:
+                            ("pinned", sweep.Outcome(False, 1, "x"), None))):
+            was = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, was)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {}, self.tmp, 2, {},
+                        0, print, 60.0, None, cap=7 * 1024 ** 2)
+        self.assertEqual(len(boxes), 2)
+        self.assertEqual([b.memory_cap for b in boxes], [7 * 1024 ** 2] * 2)
+
+
 class TheVerdictIsTheSetOfNewlyFailingTests(unittest.TestCase):
     """An exit code cannot say WHY a run died, and this project has measured the confusion
     in both directions.
@@ -2522,8 +2769,13 @@ class TheReportNamesTheMaskingRisk(unittest.TestCase):
         self.assertNotIn("mask each other", text)
 
     def test_a_clean_sweep_says_so_and_lists_nothing(self):
-        text = sweep.report([], Path("."), "abc", "def", None, 1.0)
+        """A sweep that MEASURED something and found nothing wrong. It used to be written
+        with an empty result set, which is a sweep that measured nothing — the same
+        sentence for the two facts #782 exists to tell apart, in the terminal report this
+        time rather than in the check's name."""
+        text = sweep.report([_result("pinned")], Path("."), "abc", "def", None, 1.0)
         self.assertIn("Every mutation this diff offered goes red", text)
+        self.assertNotIn("NOTHING TO SWEEP", text)
 
     def test_the_survivor_line_carries_file_line_operator_and_both_spellings(self):
         text = sweep.report([self._result(291, "_placed_here")],
@@ -3062,6 +3314,79 @@ class TheGateSaysWhichOfThreeThingsItFound(unittest.TestCase):
         self.assertEqual(sweep.verdict_exit_code(gate, missing=1, enforce=True), 1)
 
 
+class NothingToSweepIsNotNoSurvivors(unittest.TestCase):
+    """#782, which is #617 and #630 one level further in.
+
+    Each earlier fix removed one way for silence to read as success: a green tick that was
+    not "no survivors" (#617), a check whose NAME had to carry the verdict because
+    GitHub's conclusions cannot (#630), a run that never happened and therefore had no row
+    at all (#646/#561). This is the last one, and the most misleading of them, because
+    nothing looks wrong: the row is present, the job succeeded, and the sentence is
+    affirmative. Measured on #779 — `no survivors: pass` beside `mutations applied: 0`.
+
+    It is a fourth ANSWER and not a fourth failure. The branches that land here are docs,
+    config, a news entry, a one-line reordering — all legitimate — and failing them would
+    teach people to route around the gate, which is worse than a gate that says too little.
+    """
+
+    def test_a_sweep_that_applied_no_mutation_does_not_say_it_found_none(self):
+        gate = sweep.classify([])
+        self.assertEqual(gate.measured, 0)
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.NOTHING)
+        self.assertEqual(sweep.headline(gate), "nothing to sweep")
+        self.assertNotIn("no survivors", sweep.headline(gate))
+
+    def test_one_mutation_that_went_red_is_a_sweep_that_checked(self):
+        """The other side of the same line, and the one that keeps `no survivors` meaning
+        what it means: a single pinned mutation IS a measurement, and calling that
+        "nothing to sweep" would spend the sentence on the branches that earned the
+        other one."""
+        gate = sweep.classify([_result("pinned")])
+        self.assertEqual(gate.measured, 1)
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.CLEAN)
+        self.assertEqual(sweep.headline(gate), "no survivors")
+
+    def test_every_bucket_that_reached_a_sandbox_counts_as_measured(self):
+        """`unresolved` and `unapplied` are not "nothing to sweep" — they are mutations
+        that exist and came back without an answer, which is `no verdict` and stays there.
+        A run that folded them into the empty case would turn the loudest state this gate
+        has into the quietest."""
+        for verdict in ("pinned", "survived", "unresolved", "unapplied"):
+            gate = sweep.classify([_result(verdict)])
+            self.assertEqual(gate.measured, 1, verdict)
+            self.assertNotEqual(sweep.gate_conclusion(gate), sweep.NOTHING, verdict)
+
+    def test_a_shard_that_vanished_can_never_wear_the_empty_sentence(self):
+        """The dangerous confusion, and the reason `missing` is asked first. A sweep whose
+        every shard was cancelled merges to zero results too, and "nothing to sweep" said
+        over that would be the #617 defect returning under a new name."""
+        gate = sweep.classify([])
+        self.assertEqual(sweep.gate_conclusion(gate, missing=1), sweep.NO_VERDICT)
+        self.assertEqual(sweep.headline(gate, missing=1, shards=2),
+                         "no verdict: 1 of 2 shards did not report")
+
+    def test_it_is_a_verdict_and_not_a_failure_even_once_the_gate_enforces(self):
+        """A docs-only branch is legitimate and common. Failing it would train people to
+        bypass the gate, which is the one outcome worse than a gate that says too little.
+        Asserted under `--enforce`, because that is the flag every other bucket changes
+        behaviour on and this one must not."""
+        gate = sweep.classify([])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=True), 0)
+        self.assertEqual(sweep.verdict_exit_code(gate, missing=0, enforce=True), 0)
+
+    def test_the_page_says_what_did_not_happen_instead_of_congratulating_the_branch(self):
+        page = sweep.gate_summary(sweep.classify([]), "a" * 40, "b" * 40, 12.0, False)
+        self.assertIn("## Deletion sweep — nothing to sweep", page)
+        self.assertIn("Not one mutation was applied on this branch", page)
+        self.assertNotIn("Nothing added here is a line the suite would not miss", page)
+
+    def test_a_page_that_did_measure_something_keeps_the_clean_sentence(self):
+        page = sweep.gate_summary(sweep.classify([_result("pinned")]),
+                                  "a" * 40, "b" * 40, 12.0, False)
+        self.assertIn("Nothing added here is a line the suite would not miss", page)
+        self.assertNotIn("Not one mutation was applied on this branch", page)
+
+
 class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
     """#617's other half: five runs cancelled at `timeout-minutes: 60` across two branches.
 
@@ -3507,7 +3832,14 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
 
     def test_an_empty_sweep_that_ran_is_not_a_sweep_that_did_not(self):
         """A shard with nothing to do writes `[]`, and `[]` is an answer. The directory
-        being empty is the other thing entirely."""
+        being empty is the other thing entirely.
+
+        And `[]` is `NOTHING`, not `CLEAN` (#782). This case asserted `CLEAN` and the
+        assertion was the defect written down: a shard that measured no mutation at all
+        reached the pull request as `no survivors`, which is the sentence for having
+        measured everything. The distinction this case exists for — an answer against no
+        answer — is untouched, and there are now three of them rather than two.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "sweep-results-1.json").write_text(sweep.as_json([]))
             ran, ran_missing = sweep.merge(Path(tmp), 1)
@@ -3516,7 +3848,7 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
         self.assertEqual((ran, ran_missing), ([], 0))
         self.assertEqual(gone_missing, 1)
         self.assertEqual(sweep.gate_conclusion(sweep.classify(ran), ran_missing),
-                         sweep.CLEAN)
+                         sweep.NOTHING)
         self.assertEqual(sweep.gate_conclusion(sweep.classify(gone), gone_missing),
                          sweep.NO_VERDICT)
 
@@ -3604,6 +3936,19 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         self.assertEqual(int(out["mutations"]), 2)      # the two refusals added above
         self.assertEqual(out["shards"], "1")
         self.assertEqual(out["matrix"], "[1]")
+        # And the sha those two mutations were read against, for the merge step's page
+        # header — the one machine that cannot work it out for itself (#776).
+        self.assertEqual(out["base"], self.base)
+
+    def test_the_plan_publishes_the_base_it_resolved_and_not_the_one_it_was_given(self):
+        """No `--base` at all is the shape CI runs, and the output has to carry a real sha
+        even then — an empty `base` reaches the merge step's header as the literal string
+        it falls back to, and the page would stop naming what was charged."""
+        code, said = self._cli("--plan", "--workdir", str(self.workdir),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self._read_outputs()["base"], self.base)
+        self.assertIn(f"diff against {self.base[:12]}", said)
 
     def test_a_diff_past_the_fan_out_ceiling_warns_on_the_pull_request(self):
         """A log line is not loud. `over_budget` reaching the plan's stdout as a workflow
@@ -3709,14 +4054,73 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
 
     def test_a_branch_with_nothing_to_sweep_writes_an_empty_answer_and_not_no_answer(self):
         """A shard that writes nothing is indistinguishable from a shard that was
-        cancelled, which is the whole of #617 arriving one level down."""
+        cancelled, which is the whole of #617 arriving one level down.
+
+        And it says so in the sentence the check is named with (#782). This path used to
+        publish a private paragraph of its own — "there was nothing to sweep" — into the
+        step summary while the check on the pull request said `no survivors`. Two readers,
+        two answers, and the affirmative one is the one people read.
+        """
         code, said = self._cli("--gate", "--base", "HEAD", "--path", "charter",
                                "--workdir", str(self.workdir),
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs),
                                "--json", str(self.tmp / "r.json"))
         self.assertEqual(code, 0, said)
         self.assertEqual((self.tmp / "r.json").read_text(), "[]")
         merged, missing = sweep.merge(self.tmp, 1)
         self.assertEqual((merged, missing), ([], 0))
+        self.assertEqual(self._read_outputs(),
+                         {"conclusion": "nothing", "headline": "nothing to sweep"})
+        self.assertIn("## Deletion sweep — nothing to sweep", self.summary.read_text())
+
+    def test_a_diff_that_offers_no_mutation_is_not_a_branch_that_was_checked(self):
+        """#779's own shape, run end to end, and the half `--base HEAD` cannot reach.
+
+        Here a file DID change and lines WERE added — the scope is not empty — and still
+        not one mutation exists, because no operator has anything to say about
+        `rows.append(1)`. That is the normal result for exactly the changes a reviewer is
+        least able to check by eye, and it published `no survivors: pass` beside
+        `mutations applied: 0`.
+        """
+        was = sweep.git("rev-parse", "HEAD", cwd=self.tmp).strip()
+        source = (self.tmp / "charter" / "m.py").read_text()
+        (self.tmp / "charter" / "m.py").write_text(
+            source + "\n\ndef record(rows):\n    rows.append(1)\n")
+        subprocess.run(("git", "-c", "core.hooksPath=", "commit", "-qam", "one statement"),
+                       cwd=self.tmp, check=True, timeout=60,
+                       env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                                GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1"),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # The fixture repository has no `tests/`, so the trace would refuse to sweep
+        # blind. The plan is what this case is about and `plan_for` is untouched.
+        real = sweep.load_map
+        sweep.load_map = lambda *a, **k: {}
+        self.addCleanup(lambda: setattr(sweep, "load_map", real))
+        code, said = self._cli("--gate", "--base", was, "--no-baseline", "--jobs", "1",
+                               "--workdir", str(self.workdir),
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        # The diff is real. The plan is not.
+        self.assertIn("1 file(s), 4 added line(s)", said)
+        self.assertIn("0 mutations across 1 file(s)", said)
+        self.assertIn("NOTHING TO SWEEP", said)
+        self.assertNotIn("Every mutation this diff offered goes red", said)
+        self.assertEqual(self._read_outputs(),
+                         {"conclusion": "nothing", "headline": "nothing to sweep"})
+        self.assertIn("Not one mutation was applied on this branch",
+                      self.summary.read_text())
+
+    def test_a_merged_sweep_that_measured_nothing_says_so_on_the_pull_request(self):
+        """The same answer through the file every shard writes and the step that adds them
+        up — which is where the pull request actually reads it."""
+        code, said = self._cli("--verdict", str(self._shards([])), "--shards", "1",
+                               "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        self.assertEqual(self._read_outputs(),
+                         {"conclusion": "nothing", "headline": "nothing to sweep"})
 
     def _shards(self, *payloads):
         where = self.tmp / "shards"
@@ -3978,6 +4382,44 @@ class TheWorkflowSaysTheAnswerWhereItCanBeSeen(unittest.TestCase):
         self.assertIn('--github-output "$GITHUB_OUTPUT"', run)
         self.assertEqual(self.jobs["sweep"]["strategy"]["matrix"]["shard"],
                          "${{ fromJSON(needs.plan.outputs.matrix) }}")
+
+    def test_no_step_charges_a_branch_against_the_payloads_idea_of_the_base(self):
+        """#776, and it is refused by NAME because the one-line convenience is exactly
+        what was there. `github.event.pull_request.base.sha` reads like the right thing —
+        it is even called the base — and it is the payload's record of where the branch
+        started, which lags the merge commit `actions/checkout` puts on disk. Measured on
+        run 33331151759: the checkout merged into `c29f3a8`, the payload said `d40d998`,
+        and a branch touching one Python file was swept for three.
+
+        Every value of every `env:` in the file, so a future reader cannot reintroduce it
+        under a different variable name or in a different job.
+        """
+        values = [str(v) for job in self.jobs.values() for step in job["steps"]
+                  for v in (step.get("env") or {}).values()]
+        self.assertTrue(values)     # the reader found the env blocks at all
+        self.assertEqual([v for v in values if "pull_request.base.sha" in v], [])
+
+    def test_the_two_jobs_that_sweep_ask_the_tool_where_the_branch_starts(self):
+        """`base_for` resolves the merge-base of the checked-out merge commit with
+        `origin/main`, which for a merge IS the parent it was merged into. `fetch-depth: 0`
+        on both jobs is what makes `origin/main` an object they have — which is why the
+        depth is asserted here beside the flag it exists for."""
+        for job, step in (("plan", "How many mutations, and how many jobs they need"),
+                          ("sweep", "Sweep the guards this branch adds")):
+            self.assertNotIn("--base", self._run(job, step), job)
+            depths = [s["with"]["fetch-depth"] for s in self.jobs[job]["steps"]
+                      if "checkout@" in s.get("uses", "")]
+            self.assertEqual(depths, ["0"], job)
+
+    def test_the_page_names_the_base_the_sweep_actually_charged(self):
+        """The merge step runs on its own machine at `fetch-depth: 1`, where neither
+        `HEAD^` nor `origin/main` is an object it has — so it cannot work the base out and
+        has to be told. Told by the job that resolved it, and not by the payload, or the
+        header drifts back to naming a sha nobody charged."""
+        self.assertEqual(self.jobs["plan"]["outputs"]["base"],
+                         "${{ steps.size.outputs.base }}")
+        self.assertEqual(self._collect_step("say")["env"]["BASE_SHA"],
+                         "${{ needs.plan.outputs.base }}")
 
     def test_the_shards_restore_the_map_the_plan_measured(self):
         """Otherwise a second machine costs a whole trace, which is the largest fixed cost
@@ -4838,6 +5280,129 @@ class TheBranchIsChargedAgainstItsUpstream(unittest.TestCase):
         side = sweep.git("rev-parse", "HEAD", cwd=tmp).strip()
         self.assertNotEqual(first, second)
         self.assertEqual(sweep.base_for(tmp, side, None), first)
+
+
+class ABranchIsNotChargedForWhatMainGainedWhileItWasOpen(unittest.TestCase):
+    """#776, built as the tree CI actually checks out rather than as a diff of two tips.
+
+    `actions/checkout` puts `refs/pull/N/merge` on disk: a merge commit whose FIRST parent
+    is the base branch tip it was merged into and whose second is the branch head. The
+    workflow used to charge that tree against `github.event.pull_request.base.sha`, which
+    is the payload's idea of where the branch started and lags the merge GitHub computed.
+    Measured on run 33331151759's own log:
+
+        HEAD is now at 58411a9 Merge 04bf8e6 into c29f3a8
+        diff against d40d998e06bd: 3 file(s), 458 added line(s)
+
+    `d40d998` is three main commits and three hours behind `c29f3a8`, so a branch touching
+    exactly one Python file was charged for three. A survivor in a file its author has
+    never opened destroys the one premise the gate runs on — that a survivor is YOUR
+    untested line — and it compounds: the plan grows, so the shard count grows, so #773's
+    runaway mutations are spread across more shards.
+
+    The tool's own default was already right and is what the workflow now uses. The
+    property below is why: **nothing later than a merge's first parent is reachable from
+    the merge**, so the merge-base of the merge with `origin/main` IS that first parent,
+    exactly, however far `main` has moved since.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="sweep-merge-ref-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                   GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=self.tmp, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        def sha(ref="HEAD"):
+            return sweep.git("rev-parse", ref, cwd=self.tmp).strip()
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        (self.tmp / "charter").mkdir()
+        (self.tmp / "charter" / "shared.py").write_text("a = 1\n")
+        run("add", "-A")
+        run("commit", "-qm", "where the branch was cut from")
+        #: What the pull request payload says the base is, recorded when the branch opened.
+        self.payload_base = sha()
+
+        run("checkout", "-q", "-b", "side")
+        (self.tmp / "charter" / "mine.py").write_text(
+            "def close(arm, pane):\n"
+            "    if arm is None:\n"
+            "        return []\n"
+            "    return [arm, pane]\n")
+        run("add", "-A")
+        run("commit", "-qm", "the branch's own file")
+        head = sha()
+
+        # `main` moves on twice while the pull request sits open. Nothing forces a rebase:
+        # `required_status_checks.strict` is false on this repository, so a branch may
+        # merge while behind, which is the mechanism by which the staleness accumulates.
+        run("checkout", "-q", "main")
+        (self.tmp / "charter" / "theirs.py").write_text(
+            "def other(y):\n"
+            "    if y < 3:\n"
+            "        return y - 1\n"
+            "    return y\n")
+        run("add", "-A")
+        run("commit", "-qm", "main gains a file")
+        (self.tmp / "charter" / "theirs_too.py").write_text(
+            "def more(z):\n"
+            "    while z > 0:\n"
+            "        z -= 1\n"
+            "    return z\n")
+        run("add", "-A")
+        run("commit", "-qm", "main gains another")
+        self.main_tip = sha()
+
+        # And GitHub recomputes `refs/pull/N/merge` against the tip it has now.
+        run("checkout", "-q", "--detach", self.main_tip)
+        run("merge", "-q", "--no-ff", "-m", f"Merge {head} into {self.main_tip}", head)
+        self.merge = sha()
+        run("update-ref", "refs/remotes/origin/main", self.main_tip)
+
+    def _charged(self, base):
+        return sweep.added_lines(self.tmp, base, self.merge, ("charter",))
+
+    def test_the_merge_base_of_a_merge_commit_is_the_parent_it_was_merged_into(self):
+        """The property the whole fix rests on, asserted rather than assumed. If this ever
+        stops holding, the default silently starts charging a branch for main again — and
+        it would not fail, it would report."""
+        self.assertEqual(sweep.base_for(self.tmp, self.merge, None), self.main_tip)
+        self.assertEqual(sweep.git("rev-parse", f"{self.merge}^1",
+                                   cwd=self.tmp).strip(), self.main_tip)
+        self.assertNotEqual(self.main_tip, self.payload_base)
+
+    def test_the_default_charges_the_branch_for_its_own_file_and_no_other(self):
+        charged = self._charged(sweep.base_for(self.tmp, self.merge, None))
+        self.assertEqual(sorted(charged), ["charter/mine.py"])
+
+    def test_the_payloads_base_charges_the_branch_for_mains_files_too(self):
+        """The defect, kept as a measurement rather than described in a comment. These are
+        real files, added by real commits on `main`, and every mutation in them would have
+        arrived on this branch's check as this branch's finding."""
+        charged = self._charged(self.payload_base)
+        self.assertEqual(sorted(charged),
+                         ["charter/mine.py", "charter/theirs.py", "charter/theirs_too.py"])
+
+    def test_the_over_charge_is_a_longer_plan_and_therefore_more_shards(self):
+        """Not merely noise. A longer plan is more shards, and more shards spread #773's
+        runaway mutations over more of them — three of six shards died on the over-charged
+        plan where the same branch on a correct one lost one of five."""
+        def plan(base):
+            return sweep.plan_for(self.tmp, self.merge, self._charged(base), {})[0]
+
+        honest = plan(sweep.base_for(self.tmp, self.merge, None))
+        inflated = plan(self.payload_base)
+        self.assertGreater(len(inflated), len(honest))
+        self.assertEqual({m.path for m in honest}, {"charter/mine.py"})
+        self.assertIn("charter/theirs.py", {m.path for m in inflated})
 
 
 if __name__ == "__main__":      # pragma: no cover

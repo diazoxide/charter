@@ -18,11 +18,12 @@ name: deletion sweep
 # repository rather than read out of the documentation:
 #
 #   * **The two events sweep different trees.** On `pull_request`, `github.sha` is the merge
-#     commit and `--base` is the pull request's base sha — the tree that will land. A `push`
-#     run has neither: `BASE_SHA` is empty, so `sweep.py` takes its own default of the
-#     merge-base with `origin/main` and charges the branch TIP. Both answers are defensible.
-#     They are not the same answer, and under `push:` they would arrive on the same pull
-#     request under the same check names.
+#     commit — the tree that will land — and the sweep charges it against its merge-base
+#     with `origin/main`, which for a merge commit is the base branch tip it was merged
+#     into. A `push` run has no merge commit: the same default charges the branch TIP
+#     against where it was cut from. Both answers are defensible. They are not the same
+#     answer, and under `push:` they would arrive on the same pull request under the same
+#     check names.
 #   * **That is what makes it worse rather than better.** The remedy #646 settles on is to
 #     require this workflow's `collect` job, so that a missing row BLOCKS instead of passing
 #     silently. The moment `push:` can also produce that check, its presence stops proving
@@ -102,6 +103,11 @@ jobs:
       mutations: ${{ steps.size.outputs.mutations }}
       shards: ${{ steps.size.outputs.shards }}
       matrix: ${{ steps.size.outputs.matrix }}
+      # The sha the mutations were actually read against, resolved by the tool from the
+      # tree it swept. The merge step runs at `fetch-depth: 1` on its own machine, where
+      # neither `HEAD^` nor `origin/main` is an object it has, so it cannot work this out
+      # and must be told — and the value it used to be told was the one #776 is about.
+      base: ${{ steps.size.outputs.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -129,25 +135,39 @@ jobs:
         with:
           path: ${{ runner.temp }}/sweep/cache
           key: sweep-map-${{ hashFiles('charter/**/*.py', 'tests/**/*.py') }}
+      # **No `--base`, and `github.event.pull_request.base.sha` is refused by name (#776).**
+      #
+      # That field is the payload's idea of where the branch started, and it is not the
+      # tree `actions/checkout` just put on disk. Measured, from run 33331151759's own log
+      # rather than from documentation:
+      #
+      #     HEAD is now at 58411a9 Merge 04bf8e6 into c29f3a8
+      #     diff against d40d998e06bd: 3 file(s), 458 added line(s)
+      #
+      # The checkout merged the branch into `c29f3a8`; the payload said the base was
+      # `d40d998`, three commits and three hours earlier. So the sweep charged that branch
+      # for `d40d998..c29f3a8` — main's own commits, one of them a nine-file `charter
+      # save` — and reported **3 files** for a branch that touches exactly one Python file.
+      # A survivor in a file the author has never opened destroys the one premise this
+      # gate runs on, which is that a survivor is YOUR untested line.
+      #
+      # The tool's own default is already the right answer and always was: the merge-base
+      # of the checked-out merge commit with `origin/main` **is** that merge's first
+      # parent, because nothing later than the first parent is reachable from the merge.
+      # `fetch-depth: 0` above fetches `+refs/heads/*`, so `origin/main` is there to ask.
+      # On a manual dispatch there is no merge commit and no base sha either, and the same
+      # default gives the branch tip's merge-base — which is what that run wants.
+      #
+      # The over-charge also multiplies #773: a longer plan is more shards, and more
+      # shards spread the runaway mutations across more of them. Three of six shards died
+      # on the over-charged plan where the same branch on a correct one lost one of five.
       - name: How many mutations, and how many jobs they need
         id: size
-        env:
-          # Through the environment and not interpolated into the script. A `${{ }}` inside
-          # `run:` is textual substitution before bash ever sees it, which is how a value
-          # somebody else controls becomes a command; the same rule `release.yml` follows.
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          # No --base on a manual dispatch: with no pull request there is no base sha, and
-          # the tool's own default (the merge-base with origin/main) is the right answer.
-          if [ -n "${BASE_SHA:-}" ]; then
-            set -- --base "$BASE_SHA"
-          else
-            set --
-          fi
           python3 tools/sweep.py --plan --warm-map --jobs 4 \
             --workdir "$RUNNER_TEMP/sweep" \
-            --github-output "$GITHUB_OUTPUT" "$@"
+            --github-output "$GITHUB_OUTPUT"
 
   # ------------------------------------------------------------------------------------
   # 2. The sweep itself, on as many machines as the plan asked for.
@@ -183,22 +203,23 @@ jobs:
       # answer and must never write a page that looks like the answer: five partial
       # tables on one pull request is the same defect #617 is about, arriving five times.
       # The merge step below is the only thing that tells this branch anything.
+      # No `--base` here either, and for a stronger reason than in `plan`: a shard's
+      # slice is `shard_of` over the whole plan, so a shard that charged a different base
+      # would deal a different plan and sweep a slice nobody asked for — while the merge
+      # step added the pieces up and reported a complete sweep. The two jobs agree because
+      # they ask the same question of the same tree: `github.sha` is fixed for the run, so
+      # both check out the same merge commit, and its merge-base with a fast-forward-only
+      # `main` cannot move while the run is going.
       - name: Sweep the guards this branch adds
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ needs.plan.outputs.shards }}
         run: |
           set -euo pipefail
-          if [ -n "${BASE_SHA:-}" ]; then
-            set -- --base "$BASE_SHA"
-          else
-            set --
-          fi
           python3 tools/sweep.py --gate --jobs 4 \
             --shard "$SHARD/$SHARDS" \
             --workdir "$RUNNER_TEMP/sweep" \
-            --json "sweep-results-$SHARD.json" "$@"
+            --json "sweep-results-$SHARD.json"
       - name: Keep the result set, whatever the sweep said
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -302,7 +323,12 @@ jobs:
           # is the tree they actually swept. Naming the branch head on a page about the
           # merge result would be one sha out on every run with a moving base.
           SWEPT_SHA: ${{ github.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # From the job that resolved it, and never from the pull request payload (#776).
+          # This step is a page header away from the sweep itself, and a header naming a
+          # base the mutations were not read against is the quietest way for the two to
+          # drift apart again. Empty when `plan` did not finish, which `--base` renders as
+          # "merge-base" rather than as a sha nobody charged.
+          BASE_SHA: ${{ needs.plan.outputs.base }}
         run: |
           set -euo pipefail
           # `--enforce` is the one flag that makes any of this block a merge, and it is
