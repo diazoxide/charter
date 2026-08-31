@@ -3368,6 +3368,23 @@ def _draw_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     # meant as which slot. Slots only: `state.record_harness_pane` already owns the
     # harness pane, and one fact recorded twice is one fact free to disagree with itself.
     state.record_panes(fid, panels=panes)
+    # And SAID so — #748. The panels above are processes, and the ids in that record are
+    # what their own `split-window` calls returned, so the record cannot be written until
+    # after the last of them exists and every one of them may already have painted. A
+    # panel repaints on a version bump and on nothing else (`panel._watch`; `top` is not
+    # in `slots.ANIMATED`), and this launch's own bump happened before the first split, so
+    # a shape written with nothing behind it is a shape the panels that lost the race
+    # never read: `slots._sidebar_live` answered `False` off an empty `state.panes`, `top`
+    # drew the roster the sidebar was already drawing, and it stood for the life of the
+    # frame. Measured on 90 real launches at 200x50 before this line: 16 of them.
+    #
+    # AFTER the write and never before it, which is `notify.plane_changed`'s order and its
+    # reason — a poller that saw the new version must never then read the old record —
+    # and the order `_apply_arrangement` already keeps around the OTHER call to
+    # `record_panes`, for this same question one keypress later. Charging the launch one
+    # `os.replace` and at most one
+    # repaint per panel, both spent before any client is attached or any window selected.
+    state.bump(fid)
     return panes
 
 

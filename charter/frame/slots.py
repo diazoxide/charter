@@ -165,14 +165,26 @@ def _sidebar_live(fid: str) -> bool:
     rather than the cost. A panel is a `charter panel` PROCESS in a pane of its own: it
     would be asking the server about a sibling that may not have been split yet. `right` is
     split last on the shipped frame, so `top`'s first paint can precede that pane
-    EXISTING — no reading of tmux, however authoritative, turns that into `True`. #748 is
-    that race, measured at roughly one launch in six, and its fix is an ordering one: get
-    the shape recorded (or the first paint deferred) before anything can bump the frame.
-    Reading tmux here would move which file the race is against and close nothing.
+    EXISTING — no reading of tmux, however authoritative, turns that into `True`. #748 was
+    that race, and reading tmux here would have moved which file it was against and closed
+    nothing.
+
+    **#748 is closed on the WRITING side, and this function is unchanged by it.**
+    Measured on real launches: 16 of 90 on an idle machine and 16 of 25 on a loaded one
+    drew the roster here and kept it, because the launch recorded the frame's shape
+    without moving the frame's version and `top` — not in :data:`ANIMATED` — had no reason
+    to ask a second time. The pane's own history is the proof rather than the rate: on
+    every one of those launches `top` painted exactly ONCE. Neither of the
+    two remedies #748 proposed shipped: deferring the first paint would have made every
+    panel wait on a file, and making the gather's bump wait on the record would have put
+    the correction behind a detached child that `_spawn_gather` is allowed to fail to
+    spawn. `commands_frame._draw_panels` bumps the frame immediately after
+    `state.record_panes` instead, so a paint that lost the race is followed by one that
+    reads the shape. A `False` here is now always either transient or true.
 
     **The cost is one small JSON read on a slot that is not animated.** `top` is not in
-    :data:`ANIMATED`, so it repaints on a version bump, never on `panel.TICK` — and a
-    density change bumps the version precisely so that surviving panels re-read, which is
+    :data:`ANIMATED`, so it repaints on a version bump, never on `panel.TICK` — and both
+    writers of this record bump the version precisely so that the panels re-read, which is
     exactly when this answer can have changed. It reads the same directory `_top` already
     opens four times over (`_frame_workspace`, `verbosity`, `state.harness_session`, the
     recorded gauge), and nothing on the idle path (`panel._running`, whose one `stat` per

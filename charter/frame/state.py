@@ -1417,6 +1417,18 @@ def record_panes(fid: str, *, panels: dict[str, str]) -> None:
     one fact, written at different moments, free to disagree; `commands_frame.cmd_density`
     reads :func:`harness_pane` for it instead.
 
+    **Both callers :func:`bump` immediately afterwards, and #748 is what that costs when
+    one of them does not.** This record is also read on the repaint path —
+    `slots._sidebar_live` asks it whether the sidebar is drawing the persona roster — and a
+    panel repaints on a version bump and on nothing else. So a shape written in silence is
+    a shape every panel that had already painted goes on contradicting: `top` painted exactly
+    once per launch, so 16 launches in 90 idle — and 16 in 25 loaded — kept a roster the
+    sidebar was drawing too, before `commands_frame._draw_panels` bumped. The bump stays at the call
+    sites rather than moving in here, which is this module's rule throughout (a writer
+    writes; the caller decides the change is worth waking the frame for) — and both of them
+    now say so where they call it: `_draw_panels` for the launch, `_apply_arrangement` for
+    the density keypress.
+
     JSON, read back through :func:`panes` — same atomic write as everything else here, and
     the same silence on failure: a frame whose pane map could not be written simply cannot
     be re-laid-out, which is a palette row doing nothing rather than a launch failing.
