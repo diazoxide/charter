@@ -629,6 +629,66 @@ def chrome_options(level) -> tuple[tuple[str, str], ...]:
     return FRAME_CHROME[lv] if lv else ()
 
 
+#: The foreground that goes with each :data:`FRAME_CHROME` surface — the other half of a
+#: recipe that shipped with only one.
+#:
+#: **A background with no paired foreground is the defect** (#737). ``window-style
+#: bg=white`` leaves every cell no renderer coloured drawing in the TERMINAL's own default
+#: foreground, which the operator's theme picked to sit on the terminal's own background —
+#: and that is no longer the background it is sitting on. So ``chrome = "light"`` on a dark
+#: terminal is light-on-white and ``chrome = "dark"`` on a light terminal is dark-on-black.
+#: Measured from the attention strip's own bytes on a dark-theme terminal::
+#:
+#:     ESC[0m ESC[47m 7 todos · F2 palette · ESC[2m…
+#:            ^^^^^^^ the pane's `bg=white`, and no `SGR 3x` anywhere after it
+#:
+#: Not "a background that clashes" — panels whose text is not there. An operator toggling
+#: `chrome` from the palette to see which of the two words they like finds one of them
+#: blank and reasonably concludes the frame is broken.
+#:
+#: **This is a table of TWO words and it is deliberately not seventeen**, which is the
+#: whole of what makes it a measurement rather than the guess :data:`FRAME_PANE_FG` refuses
+#: to make. Charter cannot compute contrast — the sixteen ANSI names have no fixed RGB, OSC
+#: 11 through tmux answers nothing, and ``$COLORTERM`` inside a pane describes the terminal
+#: that started the SERVER — so it cannot say what goes on ``bg=blue``. It can say what goes
+#: on ``bg=black`` and ``bg=white``, because those two are not colours charter is guessing
+#: about: they are the POLES of the sixteen. A theme is free to render its blue as anything
+#: it likes, and a theme that renders its ``white`` darker than its ``black`` has stopped
+#: being a theme. `dark` and `light` are charter's OWN recipes rather than words an operator
+#: wrote, so completing them is charter finishing a sentence it started.
+#:
+#: **Which is exactly why a component's own ``bg`` is NOT in here.** ``bg = "blue"`` is the
+#: operator's word out of their own palette, and pairing a foreground with it would be
+#: charter deciding a contrast it has already established it cannot see. What that pane has
+#: instead is :data:`FRAME_PANE_FG` — ``[frame] text``, the plane saying it in the same
+#: vocabulary it said the background in. :func:`surface_options` holds that line by
+#: construction: this table is read only where `chrome_options` supplied the background.
+#:
+#: ``off`` is here with an empty clause for :data:`FRAME_PANE_FG`'s ``default`` reason — a
+#: frame with no background needs no foreground to go with it, and the empty string is what
+#: makes a plane that said nothing emit byte-identical options to the frame it had before
+#: this key existed. Keyed on every word of :data:`FRAME_CHROME` so a third surface added
+#: there cannot be the one that ships without its foreground; `TheChromeTableAndItsFore
+#: groundsAreOneVocabulary` asserts the two key sets are equal.
+FRAME_CHROME_FG: dict[str, str] = {"off": "", "dark": "fg=white", "light": "fg=black"}
+
+
+def chrome_fg(level) -> str:
+    """The ``fg=`` clause that goes with the :data:`FRAME_CHROME` surface *level* — ``""``
+    for ``off``, and ``""`` for every word charter does not know.
+
+    :func:`text_fg`'s contract for the frame-wide half, and the same function for the same
+    reason: what comes back is charter's own constant and never the caller's argument, so a
+    committed word charter does not recognise indexes nothing and leaves through neither
+    half of the style.
+
+    Empty is the ANSWER for ``off`` and only incidentally the failure mode, which is
+    :func:`text_fg`'s own note said about the other table.
+    """
+    lv = chrome_level(level)
+    return FRAME_CHROME_FG[lv] if lv else ""
+
+
 #: The eight ANSI colour names, each of which also has a ``bright`` form. The whole
 #: vocabulary a ``[[frame.component]] bg`` may say, doubled to sixteen and given a
 #: seventeenth word by :data:`FRAME_PANE_BG` below.
@@ -990,9 +1050,16 @@ class Look(NamedTuple):
     It carries what the PLANE said and nothing derived from a pane: which pane wears which
     background is `component_style`'s question and stays there.
 
-    ``dim`` is a ``bool`` and the other two are words out of :data:`FRAME_RULES` and
-    :data:`FRAME_PANE_FG`. Nothing here is trusted as a tmux VALUE — `rules` selects a
-    branch, `text` is a key into a table, and `dim` decides whether a constant is appended.
+    ``dim`` is a ``bool`` and every other field is a word out of :data:`FRAME_RULES` or
+    :data:`FRAME_PANE_FG`. Nothing here is trusted as a tmux VALUE or as an SGR — `rules`
+    selects a branch, the four colour words are keys into tables, and `dim` decides whether
+    a constant is appended.
+
+    **The three accents have DEFAULTS on the field and the other three do not**, which is
+    not tidiness: `Look` is built positionally at a hundred call sites and in a dozen tests
+    written before the accents existed, and every one of them means "the shipped green,
+    yellow and red". A field with no default would have made those a syntax error rather
+    than a decision, and the decision they were making has not changed.
     """
 
     #: ``hidden`` or ``visible`` — :data:`FRAME_RULES`.
@@ -1001,6 +1068,14 @@ class Look(NamedTuple):
     text: str
     #: Whether charter may reduce the contrast of its own chrome — ``[frame] dim``.
     dim: bool
+    #: ``[frame] ok`` — what "this is fine" is drawn in. A key into :data:`FRAME_PANE_FG`'s
+    #: seventeen words, resolved to an SGR by `statusline.accent`.
+    ok: str = "green"
+    #: ``[frame] warn`` — what "look at this" is drawn in. **Yellow on a tan surface is the
+    #: pair this key exists for.**
+    warn: str = "yellow"
+    #: ``[frame] bad`` — what "this is broken" is drawn in.
+    bad: str = "red"
 
 
 def look_of(frame: dict) -> Look:
@@ -1020,7 +1095,8 @@ def look_of(frame: dict) -> Look:
     """
     return Look(rules=frame.get("rules", FRAME_DEFAULTS["rules"]),
                 text=frame.get("text", FRAME_DEFAULTS["text"]),
-                dim=frame.get("dim", FRAME_DEFAULTS["dim"]))
+                dim=frame.get("dim", FRAME_DEFAULTS["dim"]),
+                **{r: frame.get(r, FRAME_DEFAULTS[r]) for r in FRAME_ACCENTS})
 
 
 def rule_style(surface: str | None, style: str, look: Look) -> str:
@@ -1046,6 +1122,25 @@ def rule_style(surface: str | None, style: str, look: Look) -> str:
       (:func:`text_fg`) and the caller's *style* where it did not, so a frame that gave its
       panes a foreground draws its rules in it rather than in a colour nothing else on the
       screen is wearing.
+
+      **It does NOT reach for :data:`FRAME_CHROME_FG`, and that is a scope this function
+      does not have rather than an omission it made.** #737 paired a foreground with
+      charter's own two surfaces for the pane's INTERIOR, so a plane on
+      ``rules = "visible"`` with ``chrome = "light"`` gets ``fg=default,dim,bg=white`` on
+      its rules while its panes get ``fg=black,bg=white`` — the rule drawn in the
+      terminal's own foreground over charter's white. Three things bound how much that
+      costs: the shipped ``rules`` is ``hidden``, which returns before this line and gives
+      the glyph the surface's own colour; ``text`` overrides it in one line; and a rule is
+      one dim glyph rather than a pane of text.
+
+      Fixing it properly is not a line here. The surface this is handed is a bare ``bg=``
+      clause and ``bg=black`` is *both* ``chrome = "dark"``'s and a component's own
+      ``bg = "black"`` — so pairing off the surface would give a component's word the
+      foreground :data:`FRAME_CHROME_FG` deliberately refuses it, and pairing off the
+      ``chrome`` word means threading it through :func:`rule_options`,
+      :func:`pane_border_options` and `commands_frame._chrome_argvs`, whose surfaces come
+      from :func:`border_bg` and may be a component's rather than charter's. That is a
+      decision about the per-component half of the pairing, not a bug in this assembly.
     * ``dim`` is appended unless the plane turned it off, and never under ``hidden`` — see
       above.
 
@@ -1158,9 +1253,27 @@ def surface_options(name, chrome, look: Look) -> tuple[tuple[str, str], ...]:
     :data:`FRAME_PANE_BG`/:data:`FRAME_CHROME` as it always did, and the foreground out of
     :data:`FRAME_PANE_FG` through :func:`text_fg`, so a committed word that charter does not
     know indexes nothing and leaves through neither.
+
+    **A pane that took the frame-wide surface takes the foreground that goes with it**
+    (#737, :data:`FRAME_CHROME_FG`). ``chrome = "light"`` is charter's own ``bg=white``, and
+    shipping it without ``fg=black`` left every uncoloured cell drawing in the terminal's
+    default foreground — which on a dark theme is white, on white. The pairing is read off
+    the same ``or`` the background came from, so it reaches a pane exactly when
+    `chrome_options` did: a component that named its own ``bg`` supplied its own background
+    and gets no foreground it did not ask for, which is the line :data:`FRAME_CHROME_FG`
+    draws between charter's two recipes and the operator's seventeen words.
+
+    **``text`` wins, and it wins by being the only ``fg`` in the value rather than by
+    coming last in it.** A plane that named a foreground has said what its frame's text is
+    and charter's default for the surface is not a second opinion — so the two are resolved
+    to ONE clause here, not appended in an order that leaves tmux's last-wins parse to
+    decide. `TheStyleCarriesExactlyOneForeground` pins that over every pairing of the two
+    tables, because a value carrying two ``fg=`` clauses is a frame whose colour depends on
+    a tmux parsing rule nobody wrote down.
     """
-    pairs = pane_bg_options(name) or chrome_options(chrome)
-    fg = text_fg(look.text)
+    own = pane_bg_options(name)
+    pairs = own or chrome_options(chrome)
+    fg = text_fg(look.text) or ("" if own else chrome_fg(chrome))
     if not fg:
         return pairs
     if not pairs:
@@ -1377,6 +1490,20 @@ def verbosity_for(level) -> str:
     lv = density_level(level)
     return FRAME_DENSITY[lv]["verbosity"] if lv else DEFAULT_VERBOSITY
 
+#: The three roles `[frame]` lets a plane recolour, in the order they are documented.
+#:
+#: **A tuple and not three spellings**, for `chrome.served_params`' reason one module over:
+#: :class:`Look`, :func:`look_of`, :func:`frame_of`'s validation and `statusline.accent` all
+#: need the same list, and a fourth role added here reaches every one of them on the same
+#: commit or none of them. `TheAccentRolesAreOneList` asserts this against
+#: :data:`FRAME_FIELDS` and against `frame/chrome.py`'s served vocabulary, so a role that is
+#: configurable and not served — or served and not configurable — is red.
+#:
+#: Declared ABOVE :data:`FRAME_FIELDS` rather than beside it because a ``#:`` block attaches
+#: to the assignment that FOLLOWS it: appended to the end of that table's own comment, this
+#: one silently took the documentation off `FRAME_FIELDS` and wore it.
+FRAME_ACCENTS: tuple[str, ...] = ("ok", "warn", "bad")
+
 #: Every ``[frame]`` setting, keyed by the name :func:`frame_of` returns it under
 #: (underscore — reads better at the call site, e.g. ``frame["history_limit"]``) and
 #: paired with ``(default, toml_key)``: the shipped default, and the name charter.toml
@@ -1553,6 +1680,37 @@ FRAME_FIELDS = {
     #: whose hierarchy is flat. Turning it off is right for a plane whose surface makes it
     #: unreadable and wrong as an answer for every plane, so the plane says it.
     "dim": (True, "dim"),
+    #: The three ACCENT roles — what charter's own "this is fine", "look at this" and
+    #: "this is broken" are drawn in, and what `frame/chrome.py` serves a provider under
+    #: the same three names.
+    #:
+    #: **The gap `[frame] text` named and could not close.** `text` fixes a pane whose
+    #: background is INVERTED relative to the terminal's; on a terminal that is already
+    #: light it has nothing to do, and what is hard to read there is these three. They are
+    #: slots in the operator's own palette, which is why they shipped un-configurable — and
+    #: that argument holds exactly while the palette's green, yellow and red are readable
+    #: on the ground they are drawn on. On the machine `text` was written for they are not:
+    #: **yellow on tan is the combination no palette was designed for.**
+    #:
+    #: **Charter still cannot compute this and still does not try** (:data:`FRAME_PANE_FG`
+    #: carries the measurements). It cannot know which of the sixteen the operator's theme
+    #: renders legibly on their own background, so it asks — in the same seventeen-word
+    #: vocabulary the plane already answers ``bg`` and ``text`` in, checked at this same
+    #: boundary and resolved to an SGR by `statusline.accent`.
+    #:
+    #: ``default`` is a real answer here rather than a hole, and it is the one worth
+    #: reaching for first: it is the pane's OWN foreground (SGR 39), which is `[frame]
+    #: text` where the plane set one and the terminal's own where it did not. So
+    #: ``warn = "default"`` is "stop colouring the warnings", and the frame still says
+    #: everything it said — `NoStatusIsCarriedByColourAlone` asserts every status here
+    #: survives having its escapes stripped, so the glyph carries it.
+    #:
+    #: The shipped values are the three colours charter has always drawn, so a plane that
+    #: says nothing gets a byte-identical frame — `TheShippedAccentsAreTheOnesCharterAlways
+    #: Drew` asserts that against `statusline`'s own constants rather than against a copy.
+    "ok": ("green", "ok"),
+    "warn": ("yellow", "warn"),
+    "bad": ("red", "bad"),
     "hotkey": ("F2", "hotkey"),
     "history_limit": (50000, "history-limit"),
     "min_cols": (100, "min-cols"),
@@ -1769,6 +1927,16 @@ def frame_of(cfg: dict) -> dict:
             # checked against `FRAME_PANE_BG` at the component boundary: what an accepted
             # word buys is an index into charter's own table, and what a refused one costs
             # is the shipped `default`.
+            if pane_text(value):
+                out[key] = value
+            continue
+        if key in FRAME_ACCENTS:
+            # `text`'s check for the three accent roles, and the same table: what an
+            # accepted word buys is an index into charter's own constants and what a
+            # refused one costs is the colour charter has always drawn. These reach an SGR
+            # rather than a tmux style, so no format expansion is at stake — but the
+            # containment is the same one for the same reason, and a second shape for
+            # "is this one of the seventeen" is how the two come to disagree.
             if pane_text(value):
                 out[key] = value
             continue

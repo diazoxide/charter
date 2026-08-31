@@ -2236,15 +2236,48 @@ _CHROME_STYLE = f"{_CHROME_FG},dim"
 #: **Both styles, and that is the whole first half of the fix**: setting one leaves the
 #: other at tmux's default, which is how the two came to disagree in the first place.
 #:
-#: The other three are the same defect wearing different options, and they bite on the
-#: OPERATOR'S server where their own `.tmux.conf` is what charter would otherwise
-#: inherit (measured, with a hostile config on a real 3.7c): `pane-border-indicators
-#: arrows` puts `↑`/`←` glyphs on the active pane's borders and no others, so one rule
-#: carries a glyph its neighbour does not; `pane-border-lines double`/`heavy`/`number`
-#: redraws every rule in a different weight (`number` writes pane NUMBERS into them);
-#: and `pane-border-status top` is the worst of the three — it turns every border into a
-#: title bar carrying `#{pane_title}` (the machine's hostname, by default) AND adds a
-#: border row above the topmost pane, a row `layout._BORDER_ROWS` never budgeted for.
+#: The other two on this list are the same defect wearing different options, and they bite
+#: on the OPERATOR'S server where their own `.tmux.conf` is what charter would otherwise
+#: inherit (measured, with a hostile config on a real 3.7c): `pane-border-lines
+#: double`/`heavy`/`number` redraws every rule in a different weight (`number` writes pane
+#: NUMBERS into them); and `pane-border-status top` is the worst of them — it turns every
+#: border into a title bar carrying `#{pane_title}` (the machine's hostname, by default)
+#: AND adds a border row above the topmost pane, a row `layout._BORDER_ROWS` never
+#: budgeted for.
+#:
+#: **`pane-border-indicators` is pinned to `arrows`, and it used to be pinned to `off`.**
+#: That is #750, and the correction is a measurement rather than a change of taste. With
+#: the shipped `chrome = "off"` there is no surface, so `window-active-style` has no shade
+#: to be one step from and the two rule styles are pinned to one value on purpose — which
+#: left the frame with **nothing at all** saying which pane the keyboard is in. That
+#: matters more than it sounds, because `F12` exists for "you are in a pane that is not
+#: answering" and the frame gave no way to notice you were in one.
+#:
+#: The reason it was `off` was that `arrows` "puts a glyph on the active pane's borders
+#: and no others, so one rule carries a glyph its neighbour does not". That is true, and
+#: read off an attached client's wire through a nested tmux on 3.7c it is not #514's
+#: defect — it is the cue. #514 was a rule whose COLOUR changed mid-line; the arrow is a
+#: glyph substituted into a rule that keeps one style along its whole length. Measured,
+#: charter's own shape (a harness beside a sidebar, a footer under both), the bottom rule
+#: in full::
+#:
+#:     harness active   ESC[2m ─↑─────────────────────────────────┴──────────────
+#:     sidebar active   ESC[2m ───────────────────────────────────┴─↑────────────
+#:     footer active    ESC[2m ─↓─────────────────────────────────┴─↓────────────
+#:
+#: One `ESC[2m` at the start of the row and none anywhere else in it: the rule is the same
+#: dim default-foreground rule charter has drawn since #514, and the only thing that moved
+#: is which cell holds an arrow. The vertical divider carries `←`/`→` the same way.
+#:
+#: **And it costs nothing on the frame that already has an answer.** Over a surface with
+#: the shipped `rules = "hidden"` the rule is `fg=<surface>,bg=<surface>` — the glyph IS
+#: the background — so the arrow disappears exactly where `window-active-style`'s one-shade
+#: step is already saying which pane is live. The cue appears where there is no other, and
+#: nowhere else, without a word being read to decide it.
+#:
+#: What is lost below `tmuxctl.BORDER_INDICATORS_FLOOR` is the cue and not the frame: tmux
+#: 3.2 has no such option, charter does not issue it there, and that plane gets the frame
+#: it has today. Which is the third field's whole job.
 #:
 #: `pane-border-format` is deliberately NOT here: it is inert while `pane-border-status`
 #: is `off`, and pinning a format nothing renders would be pinning a spelling rather than
@@ -2277,7 +2310,7 @@ _CHROME_STYLE = f"{_CHROME_FG},dim"
 _CHROME: tuple[tuple[str, str, tuple[int, int]], ...] = (
     ("pane-border-style", _CHROME_STYLE, tmuxctl.FLOOR),
     ("pane-active-border-style", _CHROME_STYLE, tmuxctl.FLOOR),
-    ("pane-border-indicators", "off", tmuxctl.BORDER_INDICATORS_FLOOR),
+    ("pane-border-indicators", "arrows", tmuxctl.BORDER_INDICATORS_FLOOR),
     ("pane-border-lines", "single", tmuxctl.FLOOR),
     ("pane-border-status", "off", tmuxctl.FLOOR),
 )

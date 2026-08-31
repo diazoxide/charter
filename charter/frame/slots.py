@@ -881,7 +881,7 @@ def _table_row(lead: str, name_markup: str, r: dict, width: int,
 
     change = r.get("change")
     sigil = r.get("sigil") or "!"
-    mr = f"{sl._GREEN}{sigil}{change}{sl._R}" if change else ""
+    mr = f"{sl.accent('ok')}{sigil}{change}{sl._R}" if change else ""
 
     row = tui.Row(tui.Cell(f"{lead}{name_markup}", 2 + 3 + sl._NAME_W),
                   tui.Cell(branch_cell, sl._BRANCH_W),
@@ -1061,7 +1061,15 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
         # — `chrome.reverse`'s whole reason, measured on this exact shape of row: every
         # coloured span here ends in `sl._R`, and a `\x1b[7m` wrapped naively around the
         # outside dies at the first one. Applied to the finished row rather than composed
-        # into it so that the branch, CI and change cells keep their own colours inside it.
+        # into it, so this function composes one row and one function decides what a chosen
+        # row looks like.
+        #
+        # **What it does NOT do is keep the cells' colours, and that line used to say it
+        # did** (#736). The branch cell is `sl._YELLOW` when the repo is dirty and the CI
+        # cell is `sl._GREEN`/`sl._RED`, and inside a reversed run those sit on the
+        # terminal's own FOREGROUND — yellow on light grey, on a dark theme, on the one row
+        # that says which repo you picked. `chrome.reverse` deletes them; the glyphs and
+        # `NoStatusIsCarriedByColourAlone` are what still say what the cells mean.
         lines.append(_Line(r["name"],
                            chrome.reverse(row, width) if r["name"] == selected else row))
 
@@ -2281,7 +2289,7 @@ def _inflight_field() -> str:
     stalled = len(records) - running
     parts = []
     if running:
-        parts.append(f"{sl._YELLOW}{spinner_frame()} {running} running{sl._R}")
+        parts.append(f"{sl.accent('warn')}{spinner_frame()} {running} running{sl._R}")
     if stalled:
         parts.append(f"{sl._DIM}⋯ {stalled} stalled{sl._R}")
     return " ".join(parts)

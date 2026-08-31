@@ -369,13 +369,43 @@ class TheForegroundIsPaintedByTmuxAndNotByARenderer(unittest.TestCase):
     `tests/test_a_planes_frame_really_reads_that_way.py`.
     """
 
-    def test_a_plane_that_named_no_foreground_emits_exactly_what_it_did_before(self):
-        for bg in (None, "brightblack", "nonsense"):
+    def test_a_plane_that_named_no_foreground_still_emits_only_a_background(self):
+        """**Where the background is the OPERATOR'S word, and that qualifier is #737.**
+
+        This used to be asked of every pairing, and the answer for two of them was the
+        defect: `chrome = "dark"` and `chrome = "light"` are charter's OWN recipes, and
+        shipping a `bg` with no `fg` left every uncoloured cell drawing in the terminal's
+        default foreground — light-on-white on a dark theme, and the mirror of that on a
+        light one. `instance.FRAME_CHROME_FG` pairs those two and nothing else, so a pane
+        whose background came from a word the operator wrote is unmoved: charter cannot see
+        what their `brightblack` looks like and does not decide what goes on it.
+        """
+        for bg in ("brightblack", "blue", "default"):
             for level in instance.FRAME_CHROME:
                 with self.subTest(bg=bg, chrome=level):
-                    self.assertEqual(
-                        instance.surface_options(bg, level, _SHIPPED),
-                        instance.pane_bg_options(bg) or instance.chrome_options(level))
+                    self.assertEqual(instance.surface_options(bg, level, _SHIPPED),
+                                     instance.pane_bg_options(bg))
+
+    def test_a_frame_with_no_surface_at_all_is_still_byte_identical(self):
+        """The half that must never move: `chrome = "off"`, no `bg`, no `text` is the
+        frame charter ships, and `_surface_argvs` issues no command at all for it."""
+        for bg in (None, "nonsense"):
+            with self.subTest(bg=bg):
+                self.assertEqual(instance.surface_options(bg, "off", _SHIPPED), ())
+
+    def test_charters_own_two_surfaces_carry_the_foreground_that_goes_with_them(self):
+        """#737, stated as the change rather than as the absence of one. The pairing is
+        charter completing its own recipe: `black` and `white` are the POLES of the sixteen
+        and a theme is not free to render them the same way round, which is exactly what
+        makes this a measurement where a foreground for `bg=blue` would be a guess."""
+        for level, want in (("dark", "fg=white"), ("light", "fg=black")):
+            for bg in (None, "nonsense"):
+                with self.subTest(chrome=level, bg=bg):
+                    got = instance.surface_options(bg, level, _SHIPPED)
+                    self.assertEqual(len(got), len(instance.chrome_options(level)))
+                    for name, value in got:
+                        self.assertTrue(value.startswith(f"{want},"),
+                                        f"{name} = {value!r}")
 
     def test_the_foreground_joins_the_background_on_both_options(self):
         """Both, always — a pane whose two differed would show one colour focused and

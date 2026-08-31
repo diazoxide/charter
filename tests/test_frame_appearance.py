@@ -591,8 +591,11 @@ class TheSurfaceIsSetOnPanelPanesAndNoOther(unittest.TestCase):
             commands_frame._surface_argvs(socket="s", pane_id="%3", chrome=hostile), [])
         argvs = commands_frame._surface_argvs(socket="s", pane_id="%3", chrome="dark")
         values = [a[-1] for a in argvs]
+        # Against the ASSEMBLER: #737 pairs a foreground with charter's own two surfaces,
+        # and `surface_options` is the one place the background and that foreground meet.
         self.assertEqual(set(values),
-                         {v for _n, v in instance.FRAME_CHROME["dark"]})
+                         {v for _n, v in instance.surface_options(
+                             None, "dark", instance.SHIPPED_LOOK)})
         for v in values:
             self.assertNotIn("#", v)
 
@@ -631,8 +634,11 @@ class TheHarnessPaneIsNeverStyled(_TmuxServerFixture, PersonaIso):
     def test_a_surfaced_panel_leaves_the_harness_pane_bare(self):
         harness, panel = self._panes()
         self._apply(panel, "dark")
-        self.assertEqual(self._style(panel), "bg=black")
-        self.assertEqual(self._style(panel, "window-active-style"), "bg=brightblack")
+        self.assertEqual(self._style(panel), dict(instance.surface_options(
+            None, "dark", instance.SHIPPED_LOOK))["window-style"])
+        self.assertEqual(self._style(panel, "window-active-style"),
+                         dict(instance.surface_options(
+                             None, "dark", instance.SHIPPED_LOOK))["window-active-style"])
         self.assertEqual(self._style(harness), "",
                          "charter styled the pane the operator's harness runs in")
         self.assertEqual(self._style(harness, "window-active-style"), "")
@@ -655,8 +661,12 @@ class TheHarnessPaneIsNeverStyled(_TmuxServerFixture, PersonaIso):
         for level in ("dark", "light"):
             with self.subTest(level=level):
                 self._apply(panel, level)
-                self.assertEqual(dict(instance.FRAME_CHROME[level])["window-style"],
-                                 self._style(panel))
+                # `fg=white,bg=black` and `fg=black,bg=white` — this test is the one that
+                # says a real tmux parses what charter sends, so it has to read the whole
+                # style rather than the background half of it (#737).
+                self.assertEqual(dict(instance.surface_options(
+                    None, level, instance.SHIPPED_LOOK))["window-style"],
+                    self._style(panel))
 
     def test_the_surface_belongs_to_the_pane_and_not_to_the_process_in_it(self):
         """`commands_frame`'s `pane-died` hook respawns a dead panel INTO THE SAME PANE,
@@ -668,7 +678,8 @@ class TheHarnessPaneIsNeverStyled(_TmuxServerFixture, PersonaIso):
         self._apply(panel, "dark")
         r = self._srv("respawn-pane", "-k", "-t", panel, "--", "sleep", "600")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self._style(panel), "bg=black")
+        self.assertEqual(self._style(panel), dict(instance.surface_options(
+            None, "dark", instance.SHIPPED_LOOK))["window-style"])
         self.assertEqual(self._style(harness), "")
 
     def test_the_surface_survives_the_window_being_resized(self):
@@ -679,7 +690,8 @@ class TheHarnessPaneIsNeverStyled(_TmuxServerFixture, PersonaIso):
         self._apply(panel, "dark")
         r = self._srv("resize-window", "-t", "h", "-x", "120", "-y", "40")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self._style(panel), "bg=black")
+        self.assertEqual(self._style(panel), dict(instance.surface_options(
+            None, "dark", instance.SHIPPED_LOOK))["window-style"])
 
     def test_a_format_string_would_have_been_stored_verbatim(self):
         """The measurement behind the enum, run here rather than quoted: tmux keeps a

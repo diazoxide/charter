@@ -371,6 +371,198 @@ class NoAttributeInAPaneStyleReachesTheWire(_NestedClient, unittest.TestCase):
                                  f"{params}")
 
 
+#: What `pane-border-indicators arrows` marks the ACTIVE pane's borders with — the same
+#: four `test_frame_tmux_integration.py` names, spelled here for that file's own reason:
+#: they are outside the Box Drawing block, so nothing that looks for a rule can see them.
+_ARROWS = frozenset("←→↑↓")
+
+
+class TheLivePaneIsMarkedOnASurfacelessFrame(_NestedClient, unittest.TestCase):
+    """#750 — with the shipped `chrome = "off"` nothing said which pane the keyboard is in.
+
+    **The whole question is whether a cue can exist without a colour**, and it is the same
+    question `NoAttributeInAPaneStyleReachesTheWire` closed one door on. That measurement
+    stands: a pane's INTERIOR cannot carry an attribute, so there is no theme-independent
+    surface and `chrome` stays `off`. What is left is the BORDER, which tmux draws itself
+    and which does honour an attribute — charter's own rule has carried `dim` since #514.
+
+    `pane-border-indicators arrows` is the answer charter takes, and these are the two
+    properties that make it one rather than #514 arriving through a new door: the glyph
+    MOVES with the focus, and the rule it sits in keeps ONE style along its whole length.
+    A cue made of a second style has the second property false, which is measured here as
+    the control — it is the arrangement #750's own text proposed, and it is the one this
+    rejects.
+
+    Three panes, because two cannot show the defect: a rule has to span two panes for a
+    style that changes at the active pane's corner to change halfway along it.
+    """
+
+    def _frame(self, *, indicators, active, border, active_border):
+        """A harness beside a sidebar with a footer under both — charter's own shape — and
+        the outer client's capture of it."""
+        self._session_seq = getattr(self, "_session_seq", 0) + 1
+        session = f"s{self._session_seq}"
+        r = self._tmux(self._inner, "new-session", "-d", "-s", session, "-x", "70",
+                       "-y", "16", "--", "sh", "-c", 'printf "HARNESS\\r\\n"; cat')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness = self._tmux(self._inner, "list-panes", "-t", session,
+                             "-F", "#{pane_id}").stdout.strip()
+        self._tmux(self._inner, "set", "-t", session, "status", "off")
+        for name, value in (("pane-border-lines", "single"),
+                            ("pane-border-status", "off"),
+                            ("pane-border-style", border),
+                            ("pane-active-border-style", active_border)):
+            self.assertEqual(self._tmux(self._inner, "set", "-w", "-t", harness,
+                                        name, value).returncode, 0, name)
+        got = self._tmux(self._inner, "set", "-w", "-t", harness,
+                         "pane-border-indicators", indicators)
+        if got.returncode != 0:
+            self.skipTest(f"this tmux has no `pane-border-indicators`: {got.stderr.strip()}")
+        side = self._tmux(self._inner, "split-window", "-t", harness, "-h", "-P", "-F",
+                          "#{pane_id}", "-l", "18", "--",
+                          "sh", "-c", 'printf "SIDEBAR\\r\\n"; cat').stdout.strip()
+        foot = self._tmux(self._inner, "split-window", "-t", session, "-v", "-f", "-P",
+                          "-F", "#{pane_id}", "-l", "4", "--",
+                          "sh", "-c", 'printf "FOOTER\\r\\n"; cat').stdout.strip()
+        self._tmux(self._inner, "select-pane",
+                   "-t", {"harness": harness, "sidebar": side, "footer": foot}[active])
+        host = f"h{session}"
+        self.assertEqual(
+            self._tmux(self._outer, "new-session", "-d", "-s", host, "-x", "70", "-y", "16",
+                       "--", self.BIN, "-L", self._inner, "attach", "-t", session
+                       ).returncode, 0)
+        self._tmux(self._outer, "set", "-t", host, "status", "off")
+        shot = ""
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            got = self._tmux(self._outer, "capture-pane", "-p", "-e", "-N", "-t", host)
+            if got.returncode == 0:
+                shot = got.stdout
+            if "FOOTER" in shot and _RULE_GLYPH in shot:
+                break
+            time.sleep(0.1)
+        self._tmux(self._outer, "kill-session", "-t", host)
+        self._tmux(self._inner, "kill-session", "-t", session)
+        if _RULE_GLYPH not in shot:
+            self.skipTest("this machine rendered no pane border through a nested client, "
+                          "so there is nothing here to measure")
+        return shot
+
+    def _shipped(self, active):
+        """Charter's own pins, READ OUT of `_CHROME` rather than spelled here.
+
+        The whole point of these tests is that charter's shipped frame marks its live
+        pane, and a harness that named `arrows` itself would have gone on passing with the
+        pin back at `off` — measuring tmux instead of charter. `_chrome_values` is the one
+        reading of that table, so a value changed there is what these run against.
+        """
+        pins = commands_frame._chrome_values()
+        return self._frame(indicators=pins["pane-border-indicators"], active=active,
+                           border=pins["pane-border-style"],
+                           active_border=pins["pane-active-border-style"])
+
+    def _rule_row(self, shot: str) -> str:
+        """The horizontal rule that spans the whole window — the row a cue would show a
+        seam in. The longest run of rule glyphs on the screen is that row."""
+        rows = [ln for ln in shot.split("\n") if ln.count(_RULE_GLYPH) > 5]
+        self.assertTrue(rows, f"no spanning rule on this screen: {shot!r}")
+        return max(rows, key=lambda ln: ln.count(_RULE_GLYPH))
+
+    def test_the_shipped_frame_marks_a_pane_at_all(self):
+        """#750's headline. Before this the answer to "which pane is live" on a plane that
+        wrote nothing was: nowhere."""
+        shot = self._shipped("harness")
+        self.assertTrue(set(shot) & _ARROWS,
+                        f"nothing on the shipped frame says which pane is live: {shot!r}")
+
+    def test_the_mark_moves_when_the_focus_does(self):
+        """The control that it is a FOCUS cue and not decoration: a mark that read the same
+        whichever pane was live would satisfy the assertion above.
+
+        **Read as (column, glyph) and not as a column**, which is a correction this test
+        needed rather than a precaution. tmux points the arrow INTO the active pane, so a
+        rule with the pane above it live and the same rule with the pane below it live
+        carry their marks in the SAME cell and differ only in direction — measured on CI,
+        where `harness` and `footer` both marked column 5, one `↑` and one `↓`. A
+        column-only reading called that "the mark did not move" about a cue that is doing
+        exactly its job, and it is the reading a dark-terminal fixture would never have
+        caught either.
+        """
+        rows = {who: self._rule_row(self._shipped(who))
+                for who in ("harness", "sidebar", "footer")}
+        marks = {who: tuple((i, ch) for i, ch in enumerate(row) if ch in _ARROWS)
+                 for who, row in rows.items()}
+        for who, at in marks.items():
+            self.assertTrue(at, f"the rule carries no mark with {who} live: {rows[who]!r}")
+        self.assertEqual(len(set(marks.values())), len(marks),
+                         f"the mark did not move with the focus: {marks}")
+
+    def test_the_rule_the_mark_sits_in_is_one_style_along_its_whole_length(self):
+        """**#514 is not reopened, and this is the line that says so.** That defect was a
+        rule whose COLOUR changed where it passed the active pane's corner — measured then
+        as `ESC[32m` for 77 cells and `ESC[39m` for the next 22, in one horizontal rule.
+        The arrow is a glyph substituted into a rule charter still draws one way, so the
+        whole row carries exactly one SGR run: the one that starts it."""
+        for who in ("harness", "sidebar", "footer"):
+            with self.subTest(active=who):
+                row = self._rule_row(self._shipped(who))
+                inside = [m.group(1) for m in _SGR.finditer(row)
+                          if m.start() > row.index(_RULE_GLYPH)]
+                self.assertEqual(inside, [],
+                                 f"the rule changes style partway along it: {row!r}")
+
+    def test_a_cue_made_of_a_second_style_really_would_reopen_it(self):
+        """The control, and it is the arrangement #750's own text proposed — "the active
+        pane's border getting a weight rather than a colour", said there to re-open
+        nothing. It does: with the active rule at full strength and the rest dim, the one
+        spanning rule carries both, and the seam lands mid-line.
+
+        **The two arrangements are compared rather than each asked in turn**, which is a
+        correction to how this was first written: a `skipTest` in front of an `assertTrue`
+        on the same value cannot fail — the skip has already consumed the only case that
+        would — so it passed whatever tmux did and whatever charter did. Asked as a
+        difference, the assertion is about the two styles rather than about this machine,
+        and a machine that renders both identically genuinely has nothing to say.
+        """
+        def seams(border, active_border):
+            row = self._rule_row(self._frame(indicators="off", active="harness",
+                                             border=border, active_border=active_border))
+            return [m.group(1) for m in _SGR.finditer(row)
+                    if m.start() > row.index(_RULE_GLYPH)]
+
+        pinned = seams(commands_frame._CHROME_STYLE, commands_frame._CHROME_STYLE)
+        weight = seams(commands_frame._CHROME_STYLE, commands_frame._CHROME_FG)
+        self.assertEqual(pinned, [],
+                         f"charter's own pinned pair put a seam in the rule: {pinned}")
+        if not weight:
+            self.skipTest("this tmux renders the two weights identically, so there is no "
+                          "difference here to attribute to the styles")
+        self.assertNotEqual(weight, pinned,
+                            "the weight cue put no seam in the rule after all, so charter "
+                            "could have used one")
+
+
+@unittest.skipUnless(_FLOOR_BIN.exists(),
+                     f"no {_FLOOR_BIN.name} built on this machine — `docs/frame.md` says "
+                     "how, and CI installs no tmux at all")
+class TheFloorHasNoSuchCueAndSaysSo(TheLivePaneIsMarkedOnASurfacelessFrame):
+    """`pane-border-indicators` arrived in tmux 3.3 and charter's floor is 3.2, so every
+    test above SKIPS here rather than passing or failing.
+
+    **The skip is the measurement and it is not an assertion about the floor**, which is
+    worth saying because the first version of this docstring claimed it was. What runs here
+    is `tmux set -w pane-border-indicators` against a real 3.2 binary, and what it proves is
+    that the option is absent from that tmux — a fact about tmux, which is the fact
+    `tmuxctl.BORDER_INDICATORS_FLOOR` exists to encode and the one #716 shipped a release
+    without. That charter HONOURS the floor is `AnOptionThisTmuxDoesNotHaveIsNeverIssued`'s
+    job in `test_frame_border_surface.py`, and that the number is 3.3 is pinned in
+    `test_the_frame_reads_on_the_terminal_it_is_on.py`. Three facts, three places, none of
+    them asserting itself.
+    """
+
+    BIN = str(_FLOOR_BIN)
+
+
 @unittest.skipUnless(_FLOOR_BIN.exists(),
                      f"no {_FLOOR_BIN.name} built on this machine — `docs/frame.md` says "
                      "how, and CI installs no tmux at all")
