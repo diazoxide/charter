@@ -974,11 +974,23 @@ def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
     attached to this session must not be dragged to a half-built window. The launcher
     `select-window`s once the frame has actually been drawn.
 
-    **`-a`, and it is not decoration.** `-t <session>` resolves to that session's CURRENT
-    window, and `new-window` reads a resolved window target as the INDEX to create at — so
-    without it tmux answers `create window failed: index 0 in use` for the second chat of
-    a workspace and no chat is ever added. Measured against tmux 3.7c and tmux 3.2, which
-    is also how :func:`window_argv` came to carry it.
+    **`-a`, and it is not decoration.** `-t <session>` resolves to a WINDOW, and
+    `new-window` reads a resolved window target as the INDEX to create at — so without it
+    tmux answers `create window failed: index 0 in use` for the second chat of a workspace
+    and no chat is ever added. Measured against tmux 3.7c and tmux 3.2, which is also how
+    :func:`window_argv` came to carry it.
+
+    **Which window it resolves to is not "the session's current one", and that correction
+    was measured for §4b.** tmux matches a bare target against WINDOW NAMES too, and a
+    name match wins: a session `ws` whose current window is index 0 (`zzz`) resolves `-t
+    ws` to index **1** when index 1 is named `ws.9`, on both versions. Charter names every
+    chat window `<workspace>.<n>` — so on charter's own server a bare `-t <workspace>`
+    names *a chat's window*, chosen by name matching rather than by what is on screen, and
+    which chat that is moves as chats are opened and closed. Nothing in charter relies on
+    it: this call passes `-a`, and every other window-scoped target charter builds is a
+    `%<pane>` id (`_chat_option_argv`, `_plane_option_argv`, `overlay.arm_hatch_argv`,
+    `cmd_chat`'s `select-window`). The claim is corrected here rather than deleted because
+    the next person to write `-t <session>` will reach for the reason this paragraph gives.
 
     ``-P -F '#{pane_id}'`` and NOT the window id, deliberately: `session_argv` reports the
     pane alone, every caller downstream scopes itself to the pane (`split-window`,
