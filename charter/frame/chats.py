@@ -103,7 +103,26 @@ def is_chat(fid: str) -> bool:
 
 
 def of_workspace(workspace: str) -> list[str]:
-    """Every chat id whose record names *workspace*, in ordinal order.
+    """Every chat that says it is in *workspace*, in ordinal order.
+
+    **Membership is `state.own_workspace`, which is `state.workspace_for`'s middle** — and
+    the difference between those two functions is the whole of #733. `workspace_for` is
+    what a frame DRAWS, and its outer rungs answer for the process ASKING:
+    ``$CHARTER_WORKSPACE`` above and a local `workspace.resolve()` below. Asked here they
+    would be catastrophic rather than merely wrong: rung 0 returns the same value for every
+    id on the plane, so one pinned palette process would sweep every chat on the machine
+    into its own pin and out of its own workspace; rung 3 would hand every record-less chat
+    to whatever the asker had chosen. **So membership cannot come from `workspace_for`, and
+    the fix for a chat missing from a roster is never to call it here.**
+
+    What was wrong was the DEPTH, not the direction. This read `state.frame_workspace`
+    alone — the launch record, rung 2 — while `roster` keyed on all four, and
+    `charter workspace use <name>` typed at the agent writes rung 1 and never rung 2. So a
+    chat repaired that way was DRAWING `alpha` and excluded from `alpha`'s roster at the
+    same time, and the chats it had left could never see it again however it was repaired.
+    `state.own_workspace` is those chat-owned rungs — the recorded pin, the pointer, the
+    record — in the ladder's own order, so this and `roster` now ask one question at one
+    depth.
 
     **Ordinal order, and it is not `created`'s.** Spec §3.5 asks for a `created` stamp
     per chat "so tab order and the ordinal allocator do not depend on directory mtime".
@@ -122,17 +141,36 @@ def of_workspace(workspace: str) -> list[str]:
     out of the picker while its window is on screen.
 
     The scan is `os.scandir` over ~30 entries and it is asked when a palette opens and
-    when a bar repaints, not on a tick. `state.reap` is what bounds it.
+    when a bar repaints, not on a tick — `frame/panel.py` polls `state.version`, which is
+    one `stat`, and only renders when it moved. `state.reap` is what bounds the entries.
+
+    **What the ladder costs, measured rather than assumed**: one entry now reads three
+    small files where it read one — the identity record, the per-session pointer, the
+    workspace record — so 30 chats is 90 reads per call instead of 30. That is paid on a
+    repaint and never on a tick, and it is the price of the two halves of one question
+    being asked at one depth. Deliberately NOT cached: a cache here is a second source of
+    truth for a fact `.charter/frame/` already holds and free to disagree with it, which
+    is the #411 shape this module's own opening paragraph refuses.
     """
     try:
-        # **No `is_dir()` filter, and the deletion sweep is what settled that too.** It
-        # reads as the obvious first question and it cannot change the answer: a frame's
-        # workspace is a FILE inside its directory, so `frame_workspace` answers ``None``
-        # for a loose file whatever its name is, and the filter below already refuses it.
-        # A guard that passes only because a different guard caught it is the shape this
-        # repository deletes. What it cost was one `stat` per entry, which the read below
-        # pays anyway.
-        names = [e.name for e in os.scandir(state._root())]
+        # **`is_dir()`, and it came BACK with #733 — measured, not restored on taste.** A
+        # deletion sweep had removed it on the grounds that it could not change the answer:
+        # a frame's workspace was a FILE inside its directory, so `frame_workspace` already
+        # answered ``None`` for a loose file whatever its name was, and a guard that passes
+        # only because a different guard caught it is the shape this repository deletes.
+        #
+        # That stopped being true the moment membership grew a rung that does NOT live in
+        # the frame's directory. `state.own_workspace`'s pointer rung is
+        # `workspace.for_session`, whose file is `SESSIONS_DIR/<id>.workspace` — so an
+        # interrupted `os.replace` leaving a loose FILE called `api.2` under the frame
+        # root, beside a per-session pointer some earlier `api.2` wrote, is a name this
+        # would put on a bar and in a picker: measured, it joins the roster and then
+        # refuses when pressed, because it has no harness pane to aim at.
+        #
+        # `os.DirEntry.is_dir` is answered from `readdir`'s own `d_type` on Linux and macOS,
+        # so on the ~30 entries this scans it is ordinarily not a `stat` at all — and where
+        # it is one, it is the one the pointer read no longer pays on its behalf.
+        names = [e.name for e in os.scandir(state._root()) if e.is_dir()]
     except OSError:
         # No frame root at all is the ordinary answer on a plane that has never launched
         # one, and an unreadable one is the same answer for the caller: no chats to
@@ -140,7 +178,7 @@ def of_workspace(workspace: str) -> list[str]:
         # sentence one layer up.
         return []
     return sorted((n for n in names
-                   if is_chat(n) and state.frame_workspace(n) == workspace),
+                   if is_chat(n) and state.own_workspace(n) == workspace),
                   key=_order)
 
 
@@ -222,6 +260,15 @@ def roster(fid: str) -> list[Chat]:
     **Keyed on the FRAME's workspace, not this process's** (#512) — `state.workspace_for`
     is the one rule every frame surface asks, and resolving locally would list another
     plane's chats on this frame's screen.
+
+    **Two questions, one ladder** (#733). This one is "which workspace is *fid* DRAWING",
+    which is `workspace_for` and includes the rungs that answer for *fid*'s own process —
+    the pin it was launched under, and, for a frame with no records at all, a local
+    resolve. :func:`of_workspace` then asks "which chats say they are in that one", which
+    is `state.own_workspace` and can only be the records. Those are genuinely different
+    questions and they are asked at the same depth: `own_workspace` IS the middle of
+    `workspace_for`, so a chat's own answer moving moves both. It used to be a rung
+    shallower, and a chat could be drawing `alpha` while `alpha`'s roster did not have it.
 
     *fid* itself is folded in whether or not the scan found it, and that is the honest
     answer rather than a convenience: a frame whose `workspace` file could not be read is

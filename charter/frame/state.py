@@ -931,10 +931,71 @@ def frame_workspace(fid: str) -> str | None:
     return val if ws_mod.valid_name(val) else None
 
 
+def own_workspace(fid: str) -> str | None:
+    """The workspace *fid* itself says it is in, or ``None`` when *fid* says nothing.
+
+    **The MEMBERSHIP question, and the reason it is not :func:`workspace_for`** (#733).
+    Every rung here is a record written under *fid*'s own id, so this may be asked about a
+    chat that is not the asking process — which is exactly what a roster does.
+    :func:`workspace_for` is this with the two rungs that answer for the ASKING PROCESS on
+    either end, and that is the whole difference between them:
+
+    * **rung 0** of that ladder is ``$CHARTER_WORKSPACE`` **in this process**. It answers
+      the same value for every *fid* on the plane, so a membership test that reached it
+      would put every chat into whichever workspace the palette happened to be pinned to
+      and take them all out of their own.
+    * **rung 3** is a local `workspace.resolve()`, which walks this process's cwd, session
+      pointer and terminal pointer. A chat that recorded nothing of its own would join
+      whatever the ASKER had chosen and appear on a bar it has never been in.
+
+    That is why `chats.of_workspace` read `frame_workspace` and nothing else before this
+    existed, and why swapping it for `workspace_for(n)` is the wrong fix rather than the
+    obvious one. What was wrong was the DEPTH, not the direction: the roster asked four
+    rungs and membership asked one, so a chat could be drawing `alpha` and be excluded
+    from `alpha`'s roster at the same time — `charter workspace use alpha` writes rung 1
+    and membership could only see rung 2.
+
+    The three rungs, in :func:`workspace_for`'s own order because they ARE its middle:
+
+    1. **The pin the launcher recorded.** `state.identity` holds what the launch put on
+       tmux's ``-e`` (`commands_frame._frame_identity_env`), which is `os.environ` inside
+       every one of that frame's own panes and is therefore the chat-owned reading of
+       rung 0. Read from the record and never from `os.environ`, for `switch._pin`'s
+       reason — this runs as a child of a tmux server shared between every frame on the
+       machine, so this process's own variable may be another chat's. It is FIRST because
+       a pinned frame cannot be moved off its pin by anything below: `switch.to_workspace`
+       refuses outright, `commands_workspace` warns that `ws use` will not stick, and a
+       pointer written under a pinned chat is one nothing draws. Take this rung away and a
+       pinned chat that ran `charter workspace use other` is stranded in exactly the shape
+       #733 describes, on a plane where it is coherent today.
+    2. **What was chosen inside the chat** — `workspace.for_session(fid)`, which takes the
+       id explicitly and reads one file under it. Never `workspace.chosen(session_id=fid)`,
+       which looks like the same thing and is not: its rungs fall through to a cwd read and
+       a terminal pointer that are the ASKER's.
+    3. **What the launcher resolved** — :func:`frame_workspace`, #512's seed.
+
+    ``None`` where every rung is empty, and that is a real answer rather than a failure:
+    "this chat says nothing" belongs in nobody's roster, while :func:`workspace_for` still
+    has to hand a panel a name to draw and falls through to its own last rung for it.
+
+    Name-checked on the pin like every other rung that hands a value to `workspace_dir()`'s
+    join (#442); rungs 2 and 3 are checked by the functions that own them. `valid_name`
+    alone with no truthiness test in front of it — `valid_name("")` is already False, and
+    `_frame_identity_env` emits an empty value for every name a launch did not have, so an
+    unpinned launch falls through here on the name check's own terms.
+    """
+    from .. import workspace as ws_mod
+    pin = identity(fid).get("CHARTER_WORKSPACE", "").strip()
+    if ws_mod.valid_name(pin):
+        return pin
+    return ws_mod.for_session(fid) or frame_workspace(fid)
+
+
 def workspace_for(fid: str) -> str:
     """The workspace this frame is DRAWING — what every surface of the frame asks.
 
-    Four rungs, and the order is the whole of it:
+    Three rungs, the middle of which is a ladder of its own, and the order is the whole of
+    it:
 
     0. **The pin.** ``$CHARTER_WORKSPACE`` outranks everything, because that is what it
        means everywhere else in charter: `workspace.resolve` puts it above every pointer,
@@ -944,27 +1005,42 @@ def workspace_for(fid: str) -> str:
        framed session that also typed `charter workspace use other` draws `other` while
        every command it runs acts on the pinned name — a panel naming a workspace nothing
        in the session touches, wearing `slots`' `*` that says the environment chose it.
-    1. **What was chosen inside this frame.** `charter workspace use <name>` typed at the
-       agent writes the per-session pointer under the FRAME's id, because inside a frame
-       the frame is the charter session (`docs/frame.md`, ADR 0019) — and "it moves the
-       panels too" is a documented promise, not an accident. An explicit choice made while
-       the frame runs outranks anything the launch decided.
-    2. **What the launcher resolved**, :func:`record_workspace`. The seed: the launch's own
-       answer to a question nothing inside the frame can ask (#512).
-    3. **Whatever this process resolves for itself**, for a frame launched by a charter
+    1. **What the frame itself says** — :func:`own_workspace`, which is the recorded pin,
+       then `charter workspace use <name>` typed at the agent (the per-session pointer
+       under the FRAME's id, because inside a frame the frame is the charter session —
+       `docs/frame.md`, ADR 0019 — and "it moves the panels too" is a documented promise),
+       then what the launcher resolved (:func:`record_workspace`, #512's seed: the launch's
+       own answer to a question nothing inside the frame can ask).
+    2. **Whatever this process resolves for itself**, for a frame launched by a charter
        that predates the record and still running across the upgrade — today's behaviour,
        so this is never worse than what it replaces.
 
-    Rungs 1 and 2 are the only two below the pin that can ever disagree, and it is worth
-    saying why the others cannot. `$CHARTER_WORKSPACE` reaches a panel exactly when the
-    launcher had it (`commands_frame._frame_identity_env` carries it, empty when absent),
-    and the launcher resolves it first — so the record holds the same value; rung 0 is
-    therefore invisible on an ordinary pinned launch and only shows itself when something
-    inside the frame tried to move off the pin. The cwd rung is the same story: a panel's
-    cwd is the launcher's, and the launcher asked `from_path` about it before anything
-    else. The per-terminal pointer and the declared default are the two rungs a panel
-    reaches that answer for the PANEL rather than for the frame, and those are exactly the
-    two the record is here to outrank.
+    **The middle is not spelled out here, and that is the point** (#733). It is
+    :func:`own_workspace`, which `chats.of_workspace` asks to decide membership — so the
+    roster and the panels walk ONE ladder rather than two that agree today, which is the
+    shape `workspace.chosen` already warns about in as many words. What #733 cost was
+    exactly that: this function read the per-session pointer, membership read only the
+    record, and `charter workspace use` writes the first and not the second — so a chat
+    could be drawing `alpha` and be excluded from `alpha`'s roster at the same time. A rung
+    added below is now a rung both readers ask.
+
+    Rung 0 and the pin inside :func:`own_workspace` hold the same value on an ordinary
+    launch — `_frame_identity_env` puts the launcher's `$CHARTER_WORKSPACE` on the pane's
+    `-e` and records it — so the recorded one shows itself only where this process's
+    environment is not the frame's, which on a tmux server shared between every frame on
+    the machine is a real case and the one `switch._pin` already reads the record for.
+
+    The pointer and the record inside :func:`own_workspace` are the only two rungs below
+    the pin that can ever disagree, and it is worth saying why the others cannot.
+    `$CHARTER_WORKSPACE` reaches a panel exactly when the launcher had it
+    (`commands_frame._frame_identity_env` carries it, empty when absent), and the launcher
+    resolves it first — so the record holds the same value; rung 0 is therefore invisible
+    on an ordinary pinned launch and only shows itself when something inside the frame
+    tried to move off the pin. The cwd rung is the same story: a panel's cwd is the
+    launcher's, and the launcher asked `from_path` about it before anything else. The
+    per-terminal pointer and the declared default are the two rungs a panel reaches that
+    answer for the PANEL rather than for the frame, and those are exactly the two the
+    record is here to outrank.
 
     **Name-checked, and `valid_name` alone with no `env and` in front of it** — the same
     rule and the same reasoning as :func:`frame_workspace`, since this value ends up in
@@ -973,16 +1049,17 @@ def workspace_for(fid: str) -> str:
     workspace does not get drawn: it falls through, and `slots` withholds the `*` because
     the name on screen is then not the one the environment named.
 
-    Asked through `workspace.for_session` rather than by reading `workspace.source()`'s
-    label: that function returns a sentence written for a status line, and matching the
-    string ``"session"`` would be this repo's own recurring defect — a spelling standing in
-    for a property. Rung 0 reads the variable itself for the same reason.
+    Rung 0 reads the variable itself rather than matching `workspace.source()`'s label,
+    the same reason :func:`own_workspace` asks `workspace.for_session` directly: that
+    function returns a sentence written for a status line, and matching the string
+    ``"session"`` would be this repo's own recurring defect — a spelling standing in for a
+    property.
     """
     from .. import workspace as ws_mod
     env = os.environ.get("CHARTER_WORKSPACE", "").strip()
     if ws_mod.valid_name(env):
         return env
-    return ws_mod.for_session(fid) or frame_workspace(fid) or ws_mod.resolve()
+    return own_workspace(fid) or ws_mod.resolve()
 
 
 def record_density(fid: str, level: str) -> None:
