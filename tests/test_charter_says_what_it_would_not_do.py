@@ -34,14 +34,16 @@ already owns the other kind.
 from __future__ import annotations
 
 import io
+import os
 import unittest
 from contextlib import redirect_stderr
 from types import SimpleNamespace
 from unittest import mock
 
 from charter import cli, commands_frame, doctor, instance
-from charter.frame import component, overlay, tmuxctl
+from charter.frame import component, overlay, state, tmuxctl
 from tests import _envguard
+from tests._isolation import PersonaIso
 from tests.test_component_providers import CID, ENTRY, MODULE, _SitePackages, _source
 
 
@@ -422,6 +424,87 @@ class AFrameCommandOutsideAFrameSaysSo(unittest.TestCase):
                     rc = fn(args)
                 self.assertEqual(rc, 0)
                 self.assertEqual(err.getvalue(), "")
+
+
+class InsideAFrameTheRefusalGoesOnTheFrame(PersonaIso, unittest.TestCase):
+    """The other half of #734's class, and the half that had no affordable surface until
+    #729 built one.
+
+    `outside_a_frame` answers the operator who is not in a frame. These three are the
+    operator who IS, and typed an argument charter does not know: `charter frame-density
+    enormous`, `charter frame-chrome solarized`, `charter frame-toggle reposs`. Each did
+    the same nothing at rc 0 — the same defect, one branch over, and it was left alone in
+    the first pass of this work for two reasons that #729 has since removed.
+
+    The surface was `display-message`, so saying anything meant putting a typed argument
+    through a tmux FORMAT evaluator, and `cmd_toggle`'s guard is the one thing standing
+    between an argv word and a `split-window` target (`test_component_toggle_keys.py`'s
+    hostile-name class). It also meant the message landed on whichever client tmux picked,
+    which on an eleven-frame socket is somebody else's terminal. The attention row is
+    charter's own pane, written through `state.say`'s `contain.one_line` and read by this
+    frame's own panel, so neither objection survives — and the exit status stays 0, which
+    is what a `run-shell` child owes tmux.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fid = "knows-1"
+        self.enterContext(mock.patch.dict(os.environ,
+                                          {"CHARTER_SESSION_ID": self.fid}))
+        self.enterContext(mock.patch("charter.frame.tmuxctl.version",
+                                     return_value=(3, 7)))
+        state.record_harness_pane(self.fid, "%0")
+        state.record_panes(self.fid, panels={"top": "%1", "bottom": "%2"})
+
+    def _tmux_calls(self):
+        """Every `tmuxctl.run` the command made. The row is state plus a version bump, so
+        a refusal that reached tmux at all would be one that moved a pane."""
+        calls = []
+        return calls, mock.patch("charter.frame.tmuxctl.run",
+                                 side_effect=lambda *a, **k: calls.append(a))
+
+    def test_a_density_level_charter_does_not_know_says_which_three_it_does(self):
+        calls, patched = self._tmux_calls()
+        with patched:
+            rc = commands_frame.cmd_density(SimpleNamespace(level="enormous"))
+        self.assertEqual(rc, 0, "a run-shell child still owes tmux a zero")
+        self.assertIn("enormous", state.notice(self.fid))
+        for level in instance.FRAME_DENSITY:
+            self.assertIn(level, state.notice(self.fid))
+        self.assertEqual(calls, [], "a refused level moved something")
+
+    def test_a_chrome_level_charter_does_not_know_says_which_it_does(self):
+        calls, patched = self._tmux_calls()
+        with patched:
+            rc = commands_frame.cmd_chrome(SimpleNamespace(level="solarized"))
+        self.assertEqual(rc, 0)
+        self.assertIn("solarized", state.notice(self.fid))
+        self.assertEqual(calls, [])
+
+    def test_a_component_this_arrangement_does_not_hold_says_which_it_does(self):
+        """It also answers a live frame's dead key. A component's `bind -n` outlives an
+        edit to `charter.toml` that drops the component, so this is the only thing that
+        tells an operator why a key they configured has stopped doing anything."""
+        calls, patched = self._tmux_calls()
+        with patched:
+            rc = commands_frame.cmd_toggle(SimpleNamespace(component="reposs", chat=""))
+        self.assertEqual(rc, 0)
+        self.assertIn("reposs", state.notice(self.fid))
+        self.assertEqual(calls, [])
+
+    def test_a_hostile_component_name_is_contained_and_still_travels_no_further(self):
+        """The guard is unchanged and only its silence went. The name reaches a sentence
+        and nothing else — no `split-window`, no hook action text — and the sentence is one
+        line, because `state.say` runs `contain.one_line` over the assembled row."""
+        calls, patched = self._tmux_calls()
+        with patched:
+            commands_frame.cmd_toggle(
+                SimpleNamespace(component="repos\nkill-server", chat=""))
+        said = state.notice(self.fid)
+        self.assertTrue(said)
+        self.assertNotIn("\n", said)
+        self.assertNotIn("kill-server", said.replace("\\u000akill-server", ""))
+        self.assertEqual(calls, [])
 
 
 class TheHelpSaysHowToDriveIt(unittest.TestCase):

@@ -63,6 +63,15 @@ what makes tmux print into your harness pane. `frame-switch` was not on the orig
 and turned out to be the same defect: it is the one of the six with a `--help` line, so it
 is the one `charter --help` shows you.
 
+**Inside a frame, an argument charter does not know now answers on the attention row.**
+`charter frame-density enormous`, `charter frame-chrome solarized` and `charter frame-toggle
+reposs` were the same silence one branch over — right command, right window, a word charter
+has no meaning for, and nothing back. They each name the closed set they were measured
+against. The exit status stays 0, which is what a `run-shell` child owes tmux; the row is
+where the sentence goes. That last one also answers a live frame's dead key: a component's
+`bind -n` outlives an edit to `charter.toml` that drops the component, and this is the only
+thing that says why a key you configured has stopped doing anything.
+
 **`charter claude --help` now says what the window it opens is.** Three facts, on every
 launcher and on `frame-probe`: your palette key opens everything, `F12` takes the keyboard
 back from a pane that has stopped answering, and scrollback is tmux's copy-mode rather than

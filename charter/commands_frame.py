@@ -5390,12 +5390,17 @@ def cmd_density(args) -> int:
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     if not fid:
         return outside_a_frame("charter frame-density")
-    # Split off the empty *fid* above rather than sharing its `or`, and left a quiet
-    # no-op: a level outside the closed set is a DIFFERENT silence from #734's, on the
-    # `run-shell` side of the line `outside_a_frame`'s docstring draws, and it is not this
-    # change's to make. See that docstring, and the note in `cmd_toggle`.
+    # Split off the empty *fid* above rather than sharing its `or`, because the two are
+    # different silences with different surfaces. That one has no frame and goes to the
+    # asker's stderr; this one HAS a frame, and #729 gave the frame a row to answer on.
+    # A level outside the closed set can only be hand-typed — a palette row carries one of
+    # the three constants — so nothing reaches here but a person who typed a fourth word
+    # and, until now, got a success status and no output.
     level = instance.density_level(getattr(args, "level", None))
     if level is None:
+        _say_on_screen(fid, f"no density level "
+                            f"{contain.readable(getattr(args, 'level', None))} — have: "
+                            f"{', '.join(instance.FRAME_DENSITY)}")
         return 0
     where = _relayout_target(fid)
     if where is None:
@@ -5683,10 +5688,13 @@ def cmd_chrome(args) -> int:
     if not fid:
         return outside_a_frame("charter frame-chrome")
     # `cmd_density`'s split, for its reason: the empty *fid* is #734's silence and is
-    # answered on the operator's own stderr; a word outside the closed set is not, and
-    # stays the quiet no-op it was.
+    # answered on the asker's own stderr, because there is no frame; a word outside the
+    # closed set has a frame, so it is answered on that frame's own attention row.
     level = instance.chrome_level(getattr(args, "level", None))
     if level is None:
+        _say_on_screen(fid, f"no chrome level "
+                            f"{contain.readable(getattr(args, 'level', None))} — have: "
+                            f"{', '.join(instance.FRAME_CHROME)}")
         return 0
     panes = state.panes(fid)
     if not panes:
@@ -5821,14 +5829,23 @@ def cmd_toggle(args) -> int:
     frame = config.FRAME
     arrangement = instance.frame_arrangement(frame)
     if name not in arrangement:
-        # **Still a silent 0, and that is a scope line rather than an oversight.** A name
-        # this arrangement does not hold is the same "did nothing, said nothing" shape
-        # #734 is about, and it is worth its own issue — but every route to it is a
-        # `bind -n` charter wrote from the arrangement itself, and this is the ONE guard
-        # standing between an argv word and a `split-window`/hook action text
-        # (`test_component_toggle_keys.py`'s hostile-name class). Widening it into a
-        # `display-message` is a change to a security-shaped guard and belongs with a
-        # review of its own, not folded into a fix about being outside a frame.
+        # **The refusal stays exactly as strict; only its silence goes.** This is the ONE
+        # guard between an argv word and a `split-window` target and a hook's action text
+        # (`test_component_toggle_keys.py`'s hostile-name class), and *name* still travels
+        # no further than this line — what is added is a sentence about it, on the frame's
+        # own row.
+        #
+        # Saying it was not affordable until #729. The surface was `display-message`, so a
+        # committed or typed name reached a tmux FORMAT evaluator, and the message landed
+        # on whichever client tmux picked. The row is charter's own pane, written through
+        # `state.say`'s `contain.one_line` and read by this frame's own panel, so neither
+        # is true of it any more.
+        #
+        # It also answers a live frame's dead key: a component's `bind -n` outlives an
+        # edit to `charter.toml` that drops the component, so this is the one thing that
+        # tells an operator why a key they configured has stopped doing anything.
+        _say_on_screen(fid, f"no component {contain.readable(name)} in this plane's "
+                            f"arrangement — have: {', '.join(arrangement)}")
         return 0
     where = _relayout_target(fid)
     if where is None:
