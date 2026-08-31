@@ -417,7 +417,18 @@ class TerseSaysLess(PersonaIso, unittest.TestCase):
         terse = self._render("repos", "minimal")
         self.assertEqual(len(normal.split("\n")), 1 + 9)
         self.assertEqual(len(terse.split("\n")), 1 + slots._TERSE_ROWS)
-        self.assertIn("more", terse, "a panel showing less must say how much less")
+        # `6 below` and not `more`: #741 deleted that word, and a test looking for it
+        # would have gone on passing against a line it had stopped being able to read —
+        # the same way `test_every_row_of_the_plane_is_on_screen_and_nothing_admits_
+        # otherwise` searched for `more)` to assert the line's ABSENCE. Asserted as the
+        # real count of what this level hid, so "says how much less" is measured rather
+        # than the presence of any word at all.
+        # `- 1` because the overflow line is reserved OUT of the budget rather than
+        # appended on top of it (`_table_lines`), so a four-row terse table is three repo
+        # rows and the line that admits the other six.
+        hidden = 9 - (slots._TERSE_ROWS - 1)
+        self.assertIn(f"{hidden} below", terse,
+                      "a panel showing less must say how much less")
 
     def test_the_terse_table_still_keeps_the_repo_that_needs_attention(self):
         """The rows that survive are `_pick_rows`' ranked subset, not the first four —

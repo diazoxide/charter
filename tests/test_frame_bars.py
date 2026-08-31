@@ -133,6 +133,72 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
                              "the row does not fill the width it is first drawn at, so "
                              "this measures no boundary")
 
+    def test_the_last_page_is_never_the_tab_you_are_on_alone(self):
+        """**#767, and it is #758 coming back at a WIDER width.**
+
+        Every page but the last is filled to the brim, so the last holds the remainder —
+        and a remainder shrinks as the pages grow. With the marked name sorting last, a
+        fifteen-name plane drew `+14  *workspace-14` at 228 columns: one tab, the one the
+        frame is already on, which `_Tabs.switch_to` correctly refuses. The bar was
+        clickable and reached nothing, at a width wider than the one that fixed it.
+
+        The last page now takes a name back from the page before it rather than standing
+        alone. Asked from 150 columns up, where the room is never the reason.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        here = names[-1]
+        for width in range(150, 281):
+            row = self._row(width, names=names, here=here)
+            drawn = [n for n in names if n in row]
+            self.assertIn(here, drawn, f"{width}: the marked name is not on the row")
+            self.assertGreaterEqual(
+                len(drawn), 2,
+                f"{width} columns drew only the tab the frame is on: {row!r}")
+
+    def test_the_limit_this_cut_does_not_fix_is_ten_widths_of_exactly_one_name(self):
+        """**The stated cost, asserted instead of merely described** (#767).
+
+        `_page`'s docstring says the count is still not monotone — "10 such widths between
+        60 and 280 on a fifteen-name list, down from 12, each of exactly one name" — and a
+        number that lives only in a docstring is a claim nothing can falsify. It was
+        written from a measurement and there was nothing to keep it true.
+
+        Two claims, and the second is the one that matters: **no drop is ever more than a
+        single name.** A cut that started losing three at a time would still be "not
+        monotone" and would be a different, worse thing. The count of ten is pinned beside
+        it so that a change to the cut has to come back here and restate what it costs —
+        which is how the docstring stays honest rather than becoming folklore.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        here = names[-1]
+        drops = []
+        previous = None
+        for width in range(60, 281):
+            row = self._row(width, names=names, here=here)
+            count = len([n for n in names if n in row])
+            if previous is not None and count < previous:
+                drops.append((width, previous - count))
+            previous = count
+        self.assertEqual([step for _w, step in drops], [1] * len(drops),
+                         f"a drop cost more than one name: {drops}")
+        self.assertEqual(len(drops), 10,
+                         f"the ladder's docstring says ten widths and this found "
+                         f"{len(drops)}: {drops}")
+
+    def test_rescuing_the_last_page_costs_the_pages_before_it_nothing_here(self):
+        """The floor is on the LAST page, so it moves one boundary and no other. On this
+        project's own fifteen workspaces — where `harness-wrapper` sorts mid-list and the
+        last page is never the marked one — every width draws exactly what filling each
+        page to the brim drew, which is what makes this free rather than a trade."""
+        ws = ThisPlaneIsWhyTheRungIsWindowed.NAMES
+        drawn = []
+        for width in (100, 120, 160, 200, 240):
+            rows = slots._bar("workspaces", list(ws), "harness-wrapper", width)
+            row = rows[0] if rows else ""
+            drawn.append(len([n for n in ws if n in row]))
+        self.assertEqual(drawn, [4, 6, 8, 10, 13],
+                         "the rescue took a tab off a plane it was not for")
+
     def test_the_page_is_the_same_page_for_every_name_on_it(self):
         """**Why it is a page and not a window centred on the marked name.** The cut is a
         function of the names and the width alone, so switching to a tab that is ON the row
@@ -504,6 +570,35 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self.assertIn(slots.ADD_CHAT, row)
         for col in self._cells(row, slots.ADD_CHAT):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_no_row_at_any_width_ever_draws_or_maps_a_column_left_of_zero(self):
+        """**The property a deleted guard used to protect by accident** (#767).
+
+        `_page` walks the last boundary LEFT to keep the final page from being a lone tab.
+        A `len(cuts) >= 3` conjunct kept that walk away from a single-field list, where the
+        boundary would step to `-1` — and the deletion sweep found it, because on such a
+        list `_bar` refuses the rung on width whatever `_page` answers, so the guard could
+        not change a row. It was deleted rather than suppressed. What was NOT deleted is
+        the property: a `+-1` field is unreadable and a negative column in the strip is the
+        wrong-answer-hiding index `_Tabs` refuses on purpose.
+
+        So this asserts the property where it can be seen, on the drawn row and the
+        published map, rather than trusting a guard whose effect nothing could observe.
+        Singletons and a name far wider than the pane are the shapes that reach the walk.
+        """
+        lists = (["only"], ["a"], ["x" * 60], ["a", "b"], ["x" * 40, "y"],
+                 [f"workspace-{i:02d}" for i in range(15)])
+        for names in lists:
+            for here in names:
+                for width in range(0, 120):
+                    rows = slots._bar("chats", list(names), here, width)
+                    row = rows[0] if rows else ""
+                    self.assertNotIn("+-", row,
+                                     f"{names} at {width}: a count went negative: {row!r}")
+                    for col in range(-4, 0):
+                        self.assertIsNone(
+                            slots.TABS.switch_to(col),
+                            f"{names} at {width}: column {col} is a tab: {row!r}")
 
     def test_a_column_nothing_drew_answers_nothing_however_far_out(self):
         """A mapping has no answer to give for a column outside it — which is where

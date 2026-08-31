@@ -136,7 +136,11 @@ Three things follow that are worth saying plainly rather than leaving you to fin
 - **The wheel does nothing when the table already fits**, which is most of the time — the
   pane is sized to its own content. There is nothing below to scroll to, so nothing moves
   and nothing repaints. It starts moving on any plane with more table ROWS than the pane
-  has, which is the same plane that shows `…(+7 more)`.
+  has, which is the same plane that shows `…(7 below)`.
+- **The last line says which side the rows you cannot see are on** — `…(4 above, 4 below,
+  all clean)`, and just `…(8 above, all clean)` once you have scrolled to the end. It is one
+  window over one list, so the first number is how far down you are. A side with nothing on
+  it is not drawn, and the line is about no repo: clicking it selects nothing.
 - **Rows, not clones.** A worktree gets a row of its own on a plane with a single clone, and
   those rows scroll like any other: a monorepo plane with twenty worktrees is a
   twenty-one-row table however few repos are in it. Scrolling past the clone's own row

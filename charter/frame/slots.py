@@ -34,6 +34,7 @@ rather than a plausible number.
 
 from __future__ import annotations
 
+import bisect
 import os
 import time
 from typing import NamedTuple
@@ -953,6 +954,27 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
                   + pieces[:start] + pieces[start + len(kids):])
         quiet = not any(_needs_attention(r) for r in hidden)
         note = ", all clean" if quiet else ""
+        # **Which SIDE they are on, which `+N more` never said** (#741). The count was
+        # always right — `hidden` is the complement of what was drawn, true at every
+        # offset — but `more` asserts a direction the window has not earned. Driven at
+        # offsets 0, 4 and 8 over twelve repos in five rows, the old line read
+        # `…(+8 more, all clean)` all three times: eight below, four-and-four, and eight
+        # ABOVE are three different places to be standing and the row said one thing.
+        # Scrolled to the bottom it pointed under itself at nothing.
+        #
+        # The window is one window over one list — repo rows then piece rows, the order
+        # the budget above is spent in — so *offset* IS how many rows are above it and
+        # what is left of `hidden` is below. Taken from the numbers the rows were sliced
+        # with rather than re-derived: a second arithmetic for "where is the window" is a
+        # second answer, which is `_Line`'s own reason one column over.
+        above = offset
+        below = len(hidden) - above
+        # **Each count is drawn only for a side that HAS something on it** — `_bar`'s rule
+        # one axis over, where a leading `+3` beside a page starting mid-list is what stops
+        # a lone trailing count claiming the row holds the first names. `0 above` would be
+        # a field that is always false and always drawn.
+        where = ", ".join(f"{n} {side}" for n, side in
+                          ((above, "above"), (below, "below")) if n)
         # **About no repo, so a click here selects nothing.** It stands for the rows that
         # are NOT on screen, and picking one of them because the operator clicked the line
         # that says they exist would be charter answering a question nobody asked.
@@ -962,7 +984,7 @@ def _table_lines(data: dict, width: int, budget: int, *, offset: int = 0,
         # exclusive — they no longer are, and a "there is more below" line with three more
         # rows below it is the note pointing at the wrong place.
         lines.append(_Line(None, tui.truncate(
-            f"  {sl._DIM}…(+{len(hidden)} more{note}){sl._R}", width)))
+            f"  {sl._DIM}…({where}{note}){sl._R}", width)))
     return lines[:budget]
 
 
@@ -2674,16 +2696,89 @@ def _page(fields: list[str], at: int, room: int) -> tuple[int, int]:
     # The widest count either end can carry: every name but one left out. Measured with
     # `tui.width` for this module's own reason, even though charter mints the digits.
     tail = _BAR_GAP + tui.width(f"+{len(fields) - 1}")
-    start = 0
-    while True:
-        budget = room - tail - (_BAR_GAP + tui.width(f"+{start}") if start else 0)
+
+    def room_for(start: int) -> int:
+        """What a page beginning at *start* may spend on names and the gaps between."""
+        return room - tail - (_BAR_GAP + tui.width(f"+{start}") if start else 0)
+
+    def reach(start: int) -> int:
+        """Where a page beginning at *start* ends when it is filled to the brim."""
         used, stop = tui.width(fields[start]), start + 1
+        budget = room_for(start)
         while stop < len(fields) and used + _BAR_GAP + tui.width(fields[stop]) <= budget:
             used += _BAR_GAP + tui.width(fields[stop])
             stop += 1
-        if at < stop:
-            return start, stop
-        start = stop
+        return stop
+
+    cuts = [0]
+    while cuts[-1] < len(fields):
+        cuts.append(reach(cuts[-1]))
+    # **The last page is not allowed to be a lone tab while the boundary can move**, and
+    # that is #767. Every page but the last is filled to the brim, so the last one holds
+    # the REMAINDER — and a remainder shrinks as the pages grow. With the marked name
+    # sorting last that made a WIDER bar draw fewer names, and at 228 columns on a
+    # fifteen-workspace plane it collapsed to a single tab: the one the operator was
+    # already on, which `_Tabs.switch_to` correctly refuses. #758 returning at a width
+    # wider than the one that fixed it.
+    #
+    # Moving the final cut one name left is decided on the NAMES and the WIDTH alone, so
+    # it cannot move a page out from under a click — the property `_Tabs` depends on and
+    # the reason this is not a window centred on the mark. Measured across 82 lists at
+    # every room from 5 to 300: no page moves when the frame switches to a tab drawn on it.
+    #
+    # **Balancing every page instead was measured and is WORSE**, which is why only the
+    # last one is rescued. Equal-sized pages ignore what names actually cost: on this
+    # project's own fifteen workspaces it drew 4/4/5/7/7 tabs at 100/120/160/200/240
+    # columns where filling each page draws 4/6/8/10/13, and across those 82 lists it left
+    # MORE pages holding a single tab (6,969 against 4,775), not fewer. Packing the last
+    # page from the right instead removes the drops and puts them on a middle name: the
+    # same fifteen workspaces then draw 8 tabs at 160 and 6 at 200.
+    #
+    # **One condition, and the two that used to sit beside it were deleted rather than
+    # documented.** They were written as guards against an empty page before the last one
+    # and against a page before it that could not span the gap, and the deletion sweep
+    # reported both as survivors — `<=` to `<` and `<` to `<=` changed nothing. Measured
+    # rather than read, over 1,194,017 pages: `reach(cuts[-3]) < moved` is **never true**,
+    # because `cuts[-3]` never moves and `reach` of it IS the greedy `cuts[-2]` this loop
+    # only ever walks down from; and `moved <= cuts[-3]` is never the only reason to stop
+    # — it is true 11,804 times and the condition below is true at every one of them,
+    # while that condition alone stops the loop 757 times. Dropping both leaves every one
+    # of those 1,194,017 pages identical. An equivalent mutant and dead code are the same
+    # finding, and this repository deletes rather than suppresses.
+    #
+    # **A `len(cuts) >= 3` conjunct went the same way, and it is the more interesting of
+    # the three.** It was not unreachable: with a SINGLE field the cuts are `[0, 1]` and
+    # it is what stops the loop, 665 times in the sweep below. What it is not is
+    # OBSERVABLE. A one-name list reaches this rung only when that name did not fit the
+    # row, and the body composed from it is that same name — so `_bar`'s own measurement
+    # refuses the rung whatever this returns. That is the identical masking already
+    # recorded one function down for `if len(names) > 1`, which the sweep found for the
+    # same reason. Measured over 1,963,800 rows, keeping the conjunct and dropping it draw
+    # byte-identical output, with no runaway loop.
+    #
+    # The property it was informally protecting — that a page never starts left of zero,
+    # so no negative column can reach :data:`TABS` — is not left to a masked guard. It is
+    # asserted directly by `tests/test_frame_bars.AClickResolvesAgainstWhatWasDrawn
+    # .test_no_row_at_any_width_ever_draws_or_maps_a_column_left_of_zero`, which stays
+    # true if the measurement above ever stops masking it.
+    while cuts[-1] - cuts[-2] < 2:
+        moved = cuts[-2] - 1
+        if reach(moved) < cuts[-1]:
+            break
+        cuts[-2] = moved
+    # **What this does NOT restore is a monotone COUNT, and that is a stated limit rather
+    # than an oversight.** The remainder still shrinks as the pages grow, so a name that
+    # sorts late can still lose one tab as the pane widens — 10 such widths between 60 and
+    # 280 on a fifteen-name list, down from 12, each of exactly one name. Those two numbers
+    # are asserted by `tests/test_frame_bars.TheLadderGivesUpWholeThings
+    # .test_the_limit_this_cut_does_not_fix_is_ten_widths_of_exactly_one_name`, so a change
+    # to the cut has to come back and restate its cost rather than leaving this paragraph
+    # to rot into folklore. What it does
+    # guarantee is that the row is never reduced to the tab you are standing on while
+    # there was room for another, which is the harm: at every width from 150 columns up,
+    # the marked page holds at least two names where it used to hold one.
+    i = bisect.bisect_right(cuts, at) - 1
+    return cuts[i], cuts[i + 1]
 
 
 def _bar(head: str, names: list[str], here: str, width: int, *,
