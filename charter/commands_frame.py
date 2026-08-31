@@ -6457,6 +6457,21 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
     deletes.
     """
     socket = state.frame_server(fid) or SOCKET
+    if tmuxctl.is_operator_socket(socket):
+        # **A workspace is a tmux session only on charter's OWN server** (§2.1), and this
+        # frame is not on it. Inside an operator's tmux every chat charter opens is a
+        # `new-window` in the session that operator was already in (`layout.window_argv`,
+        # `_launch_in_operator_tmux`) — whatever workspace it names — so there is no
+        # session for another workspace to be, and the two things `switch-client` could
+        # do there are both wrong: refuse "already in that workspace" for a workspace this
+        # frame is not in, or move the operator's client between two tmux sessions of
+        # their own that charter has no business having an opinion about. Refused by name
+        # instead, with the route that does work — which is `chats.check`'s own
+        # "not on this frame's tmux server" one noun out (#684).
+        _say_on_screen(fid, "cannot switch: this chat is a window in your own tmux, "
+                            "where a workspace is not a session — open the other "
+                            f"workspace with `charter <harness> --workspace {ws}`")
+        return
     here = _pane_place(socket, state.harness_pane(fid))
     if here is None:
         # `cmd_chat`'s own sentence, for its own reason: with no reading of where this

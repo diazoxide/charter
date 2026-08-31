@@ -326,6 +326,20 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         self.laid_out.assert_not_called()
         self.assertIn("no terminal is attached", self.said.call_args[0][1])
 
+    def test_a_frame_inside_the_operators_own_tmux_is_refused_by_name(self):
+        """**A workspace is a tmux session only on charter's own server** (§2.1). Inside
+        an operator's tmux every chat charter opens is a `new-window` in the session they
+        were already in, whatever workspace it names, so there is no session for another
+        workspace to be — and both things `switch-client` could do there are wrong. This
+        is asked FIRST, before any reading, because it is about what this frame IS."""
+        state.record_server(self.FID, "/tmp/tmux-1000/default")
+        s = self._switch(self._ordinary())
+        self.assertEqual(s.calls, [], "a guest frame asked the server anything at all")
+        self.laid_out.assert_not_called()
+        said = self.said.call_args[0][1]
+        self.assertIn("a window in your own tmux", said)
+        self.assertIn("charter <harness> --workspace beta", said)
+
     def test_a_chat_whose_own_window_cannot_be_found_refuses_before_anything_moves(self):
         """`cmd_chat`'s own sentence for its own reason: with no reading of where this
         client is standing there is no way to tell afterwards whether it moved, and a
