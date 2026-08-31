@@ -901,6 +901,24 @@ class MinimalStillSaysHowToDriveTheFrame(PersonaIso, unittest.TestCase):
             out = tui.strip_ansi(slots.render("bottom", "f-min2"))
         self.assertEqual(out, "⚠ reinit needed · F2 palette")
 
+    def test_a_notice_takes_the_one_news_slot_and_the_hint_still_shows(self):
+        """The composition with #763, which landed on this same call while this was open.
+
+        A notice is the outcome of the last thing the operator CHOSE, and it is now the
+        top-priority field — so at `minimal` it is the one piece of news that survives,
+        outranking even an alert for the few seconds it dwells. The hint is not news and
+        does not compete with it: both are on the row. Asserted because two changes met at
+        one line, and "each is right alone" is not the same claim as "the pair is right".
+        """
+        state.record_density("f-min-n", "minimal")
+        state.say("f-min-n", "charter: workspace → gamma")
+        with mock.patch("charter.statusline._alerts", return_value=["⚠ reinit needed"]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=7), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            out = tui.strip_ansi(slots.render("bottom", "f-min-n"))
+        self.assertEqual(out, "charter: workspace → gamma · F2 palette")
+
     def test_the_hint_follows_the_configured_key(self):
         """It is READ, never spelled: a plane on `hotkey = "F1"` must not be told about a
         key that does nothing. The exemption must not become a hardcoded string."""

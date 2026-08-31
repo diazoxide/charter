@@ -6597,6 +6597,15 @@ def _again(row, surface, reg, *, fid: str, snapshot) -> "palette.Palette | None"
     surface the operator IS looking at says what just happened, and the next Enter says
     the next one.
 
+    **And that is why this does not use `state.say`**, which is the frame's own surface
+    for exactly this kind of sentence (#729) and is the right one everywhere else in this
+    function. It is drawn by a panel, on the attention row, in a pane the zoom is covering
+    — so a repeat that wrote a notice would be writing to a surface the operator cannot
+    see, and would then have to wait for a palette that is deliberately not closing before
+    they could. A notice per press would also outlive its own occasion: the dwell is
+    seconds and the presses are faster than that, so the row would settle on whichever
+    move happened to be last. The header is redrawn by the same keystroke that caused it.
+
     A refusal lands in the same place for the same reason, and the palette stays up: the
     row is still listed, still says why in its note, and an operator who pressed it has
     been told without losing the pane. That is `_say_on_screen`'s job for a palette that
