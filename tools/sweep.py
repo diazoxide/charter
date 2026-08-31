@@ -1849,6 +1849,25 @@ def under_cap(argv: list[str], cap: int) -> list[str]:
             "sweep", str(cap // 1024), *argv]
 
 
+def cap_for(jobs: int) -> tuple[int, str]:
+    """The cap this machine will really enforce, and the sentence that says which.
+
+    Out of `main()` for #572's reason, which `base_for`, `timeout_for`, `workdir_for` and
+    `default_jobs` are all out here for: **a rule written inside `main()` is not reachable
+    from a test, so it cannot be swept, so it is a guard this harness is structurally
+    unable to hold itself to.** Written there first, and this branch's own sweep found it
+    unpinned in both directions — the branch, and the format literal in the sentence with
+    it. Zero when the platform will not hold a limit, and said out loud either way: an
+    uncapped run is exactly the run #773 measured, and it must not be the quiet case.
+    """
+    cap = address_space_cap(jobs)
+    if not cap_holds(cap):
+        return 0, ("this platform does not enforce an address-space limit, so a mutation "
+                   "that allocates without bound can still take the machine (#773)")
+    return cap, (f"{cap / 1024 ** 3:.1f} GiB of address space per run — a mutant that "
+                 f"allocates without bound is a red here, not a dead machine")
+
+
 def cap_holds(cap: int) -> bool:
     """Whether this platform really enforces *cap* on a child. Measured, never assumed.
 
@@ -3621,14 +3640,8 @@ def main(argv: list[str] | None = None) -> int:
     # baseline is capped along with the mutants and not without them: a cap the mutants
     # run under and the baseline does not can only ever manufacture a red the baseline
     # never had, which is the one direction this tool must never fail in.
-    cap = address_space_cap(args.jobs)
-    if not cap_holds(cap):
-        cap = 0
-        log("  memory: this platform does not enforce an address-space limit, so a "
-            "mutation that allocates without bound can still take the machine (#773)")
-    else:
-        log(f"  memory: {cap / 1024 ** 3:.1f} GiB of address space per run — a mutant "
-            f"that allocates without bound is a red here, not a dead machine")
+    cap, said = cap_for(args.jobs)
+    log(f"  memory: {said}")
 
     # The map is measured on a clean checkout of the ref, so that a mutation is the only
     # thing that ever differs from what was traced.

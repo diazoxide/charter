@@ -9,6 +9,7 @@ still passes has kept the property those rounds actually measured.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import contextlib
 import dataclasses
@@ -1807,6 +1808,63 @@ class AMutantThatEatsTheMachineIsARedAndNotAnOutage(unittest.TestCase):
         with self.assertRaises(subprocess.SubprocessError):
             subprocess.run([sys.executable, "-c", "pass"], preexec_fn=refuses,
                            capture_output=True, timeout=120)
+
+    def test_no_cap_asked_for_is_not_a_cap_that_holds(self):
+        """Found unpinned by this branch's own sweep, twice over (`drop-if` and
+        `shift-boundary` at `tools/sweep.py:1860`). Without the refusal the probe runs
+        `under_cap(argv, 0)` — which is the bare command, with no limit in it at all — and
+        reports **True**: a cap that is not there, announced as one that is. That is the
+        uncapped run #773 measured, wearing the sentence that says it cannot happen."""
+        self.assertFalse(sweep.cap_holds(0))
+        self.assertFalse(sweep.cap_holds(-1))
+
+    def test_a_platform_with_no_shell_to_ask_is_a_platform_with_no_cap(self):
+        """Found unpinned by this branch's own sweep (`narrow-except` at
+        `tools/sweep.py:1865`). `/bin/sh` is assumed and the assumption is worth an
+        `OSError` rather than a stack trace: a sweep that will not start because it could
+        not ask about a cap is worse than one that runs without it and says so."""
+        real = sweep.under_cap
+        self.addCleanup(setattr, sweep, "under_cap", real)
+        sweep.under_cap = lambda argv, cap: ["/nonexistent/sh", "-c", "true"]
+        self.assertFalse(sweep.cap_holds(512 * 1024 ** 2))
+
+    def test_the_probe_believes_the_child_and_not_the_exit_code_alone(self):
+        """Found unpinned by this branch's own sweep (`retune-string` and `swap-synonym`
+        at `tools/sweep.py:1867`), and unpinned for a reason worth writing down: on macOS
+        the probe refuses at the exit code and never reaches this line, so the check is
+        **unreachable from the machine this tool is written on**. Driven through a stub so
+        it is measured on every platform rather than on the one that happens to run it.
+
+        The check itself is not decoration: a shell that exits 0 without running the
+        command would report a cap that is not there.
+        """
+        real = sweep.under_cap
+        self.addCleanup(setattr, sweep, "under_cap", real)
+        for said, held in (("held", True), ("", False), ("nope", False)):
+            code = f"print({said!r})" if said else "pass"
+            sweep.under_cap = lambda argv, cap, _c=code: [sys.executable, "-c", _c]
+            self.assertEqual(sweep.cap_holds(512 * 1024 ** 2), held, said)
+
+    def test_the_cap_is_zero_and_says_which_where_no_limit_will_be_held(self):
+        """`cap_for` is the rule `main()` used to carry inline, and the sweep found it
+        unpinned in both directions there — which is #572's structural lesson arriving
+        again: a rule inside `main()` cannot be swept."""
+        real_holds, real_size = sweep.cap_holds, sweep.address_space_cap
+        self.addCleanup(setattr, sweep, "cap_holds", real_holds)
+        self.addCleanup(setattr, sweep, "address_space_cap", real_size)
+        sweep.address_space_cap = lambda jobs: int(12.25 * 1024 ** 3)
+
+        sweep.cap_holds = lambda cap: False
+        cap, said = sweep.cap_for(4)
+        self.assertEqual(cap, 0)
+        self.assertIn("does not enforce an address-space limit", said)
+
+        sweep.cap_holds = lambda cap: True
+        cap, said = sweep.cap_for(4)
+        self.assertEqual(cap, int(12.25 * 1024 ** 3))
+        # One decimal place and not two significant figures: `12.2 GiB` is a number a
+        # reader can compare against the machine, and `12 GiB` is the wrong number.
+        self.assertIn("12.2 GiB of address space per run", said)
 
     # -- the cap, measured through the code path a mutation uses ----------------------
 
@@ -4000,6 +4058,45 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
             out = self._read_outputs()
             self.assertEqual((out["mutations"], out["shards"], out["matrix"]),
                              (str(total), shards, matrix), f"{total} mutations")
+
+    def test_the_plan_names_the_files_it_charged_and_says_when_it_stopped_naming(self):
+        """Found unpinned by this branch's own sweep, three times (`swap-synonym`,
+        `drop-if` and `shift-boundary` around `tools/sweep.py:3751`).
+
+        The list is what makes a foreign path visible on the one job that runs before
+        anything is spent (#776) — a branch charged for another branch's file was invisible
+        until a survivor arrived in it, and by then the reader is being asked to judge a
+        line they have never seen. So the order is stable (a list a reader scans), the cap
+        exists (`--all` puts the whole tree through here), and the cap announces itself,
+        which is this repository's rule about silent truncation applied to its own log.
+        """
+        real = sweep.plan_for
+        sweep.plan_for = lambda *a: ([], {})
+        self.addCleanup(lambda: setattr(sweep, "plan_for", real))
+
+        def charged(n):
+            scope = {f"charter/{chr(ord('z') - i)}{i:02d}.py": {1} for i in range(n)}
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                sweep._plan_step(argparse.Namespace(github_output=None, warm_map=False,
+                                                    paths=None, refresh_map=False, jobs=1),
+                                 self.tmp, "HEAD", self.base, scope, {}, self.workdir,
+                                 self.workdir / "cache", print)
+            return [line.split("charged: ", 1)[1]
+                    for line in said.getvalue().splitlines() if "charged: " in line]
+
+        # Sorted, and not whatever order the diff reader happened to build the dict in:
+        # the keys above are deliberately built in reverse.
+        twenty = charged(20)
+        self.assertEqual(twenty, sorted(twenty))
+        self.assertEqual(len(twenty), 20)
+        # Twenty is not "more than twenty", so nothing is elided and nothing says it was.
+        self.assertNotIn("more file(s)", " ".join(twenty))
+        # Twenty-one is, and the line that says so is reserved out of the twenty rather
+        # than being the first thing the cap eats.
+        past = charged(21)
+        self.assertEqual(len(past), 21)
+        self.assertEqual(past[-1], "… and 1 more file(s)")
 
     def test_the_shard_the_workflow_names_is_the_shard_the_sweep_runs(self):
         """`--shard "$SHARD/$SHARDS"` is a string assembled in YAML, and the one thing it
