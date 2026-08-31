@@ -195,6 +195,19 @@ def to_workspace(fid: str, name: str) -> Outcome:
     ws_mod.set_active(name, session_id=fid, force=True, terminal_id="")
     state.record_workspace(fid, name)
     gather.refresh(fid, workspace=name)
+    # And the panes are made the size the arriving workspace's content wants, BEFORE the
+    # bump that repaints them (#730) — the same ordering, for the same reason, as the
+    # cache refresh above: the bump is what makes a panel repaint, so a resize after it
+    # leaves the panel having already drawn its table into the old rectangle with nothing
+    # to make it draw again. It must be after the refresh for the mirror-image reason —
+    # the height is computed from the count that refresh just wrote.
+    #
+    # Deferred import, like every other import in this function: `commands_frame` imports
+    # this module, and the tmux half of a switch is that module's business. This file
+    # decides what a switch MEANS; `resize_to_content` carries `cmd_resize`'s own
+    # refusals, so a frame that cannot be measured is left alone rather than guessed at.
+    from .. import commands_frame
+    commands_frame.resize_to_content(fid)
     state.bump(fid)
     if was and was != name:
         return Outcome(True, f"workspace → {shown}  "

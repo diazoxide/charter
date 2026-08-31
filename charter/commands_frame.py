@@ -5030,6 +5030,66 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
                     report=False)
 
 
+def resize_to_content(fid: str) -> None:
+    """Re-assert *fid*'s pane heights for the content the frame holds RIGHT NOW.
+
+    **The call `frame/switch.py` was missing, and #730 is its absence.** The repo strip's
+    height is a function of its content (`layout.repos_rows` over
+    `frame_slots.repos_rows_wanted`, which counts the frame's own workspace), and it was
+    computed in exactly two places: at launch, and on every `window-resized`. A workspace
+    switch changes the content and neither of those runs, so the pane keeps the height of
+    the workspace the operator left — eight clones' worth of rows above a two-clone table,
+    with the difference coming out of the agent's session, or a two-clone pane holding an
+    eight-clone table so that real repos are replaced by `…(+2 more)` on a terminal with
+    room for all of them.
+
+    **Not a re-layout, and that is the whole distinction from #714.** Which panes exist
+    has not changed — the arrangement is the same arrangement — so `_relayout` would kill
+    and split nothing and cost a `list-panes` and a version bump to say so. What changed
+    is how tall an existing pane should be, and :func:`_reassert_sizes` is already the one
+    place that answers that, recomputing every height from the frame's current content
+    rather than from anything a caller remembers. This is that function reached from a
+    keypress instead of from a hook.
+
+    **Every refusal :func:`cmd_resize` makes is made here, because they are the same
+    refusals about the same window and not caution.** A harness pane that is not tmux's own
+    `%N` comes off disk and is about to be a `resize-pane -t` target (#475). A frame with
+    no panes recorded has nothing to assert, and handing an empty map to `_reassert_sizes`
+    would still tell the HARNESS a height derived from it. A window tmux will not report a
+    size for is the one #501 removed a fallback from: re-asserting an 80x24 layout over a
+    window that is very probably not 80x24 is destructive, and a keypress has the same
+    option a hook does — do nothing, and let the next resize try again. And the window is
+    re-read before anything is applied, because the sizes are computed from a measurement
+    and a window that has moved since makes them a stale layout asserted with confidence.
+
+    What is deliberately NOT here is `cmd_resize`'s settle wait (`_window_settled`). That
+    exists because a terminal drag fires `window-resized` once per size change and killing
+    and re-splitting panes out of order is not self-correcting; nothing here kills or
+    splits, a keypress does not arrive sixty times a second, and re-applying a size out of
+    order corrects itself on the next event.
+
+    Silent, and returns nothing: this runs inside a switch that has its own outcome to
+    report, and a frame whose strip could not be re-sized is a frame with a pane one size
+    off — not a switch that failed. `_reassert_sizes` already passes `report=False` to
+    every `resize-pane` for the same reason.
+    """
+    where = _relayout_target(fid)
+    if where is None:
+        return
+    socket, harness_pane, _v = where
+    panes = state.panes(fid)
+    if not panes:
+        return
+    measured = _measure_window(socket, harness_pane)
+    if measured is None:
+        return
+    cols, rows = measured
+    if not _window_still(socket, harness_pane, measured):
+        return
+    _reassert_sizes(socket, fid=fid, panes=panes, harness_pane=harness_pane,
+                    window_cols=cols, window_rows=rows)
+
+
 def cmd_resize(args) -> int:
     """`charter frame-resize --frame <fid>` — re-apply this frame's pane sizes for the
     window's CURRENT size. Fired by the `window-resized` hook, never typed.
