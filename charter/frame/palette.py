@@ -132,14 +132,37 @@ def matches(query: str, row: overlay.Row) -> bool:
     the question `frame/action.py` already asks of an action id, asked here rather than
     re-spelled, so "can be an action id" and "is matched as one" cannot drift apart.
 
-    `casefold` on both sides rather than `lower`, and applied to the query once per row
-    rather than hoisted, because this is the whole of the case rule and a hoisted copy is
-    a second place for it to be wrong.
+    `casefold` rather than `lower` — see :func:`typed`, which is where the whole of the
+    case rule now lives, because :func:`exact` asks the identical question of the
+    identical string and two spellings of it is two places for it to be wrong.
     """
-    q = contain.one_line(query).casefold()
+    q = typed(query)
     if q in row.title.casefold():
         return True
     return component.usable_id(row.id) and q in row.id.casefold()
+
+
+def typed(query: str) -> str:
+    """What the operator typed, contained and case-folded — the one normalisation.
+
+    **One function because two callers ask the identical question.** :func:`matches`
+    decides which rows survive and :func:`exact` decides which of the survivors goes
+    first, and a palette that filtered case-insensitively and then ranked
+    case-sensitively would find the row and put the cursor somewhere else, which an
+    operator cannot tell from not finding it. Spelled twice, that is two lines to keep in
+    step; spelled once, it is one line with both callers' tests behind it — which is also
+    what the deletion sweep said about the copy, reporting the second `casefold` as a line
+    nothing could go red without.
+
+    `casefold` and not `lower`: `lower` gets Turkish dotless-i and German sharp-s wrong.
+
+    Contained for the reason every display string here is (#472) — the guard belongs at
+    the join rather than at whichever writer happens to exist today. The query cannot hold
+    a newline by the route it is built (`Palette.handle` takes printable single
+    characters), and this function is also reachable from a caller that did not build it
+    that way.
+    """
+    return contain.one_line(query).casefold()
 
 
 def exact(query: str, row: overlay.Row) -> bool:
@@ -162,7 +185,7 @@ def exact(query: str, row: overlay.Row) -> bool:
     nothing typed and would sort to the top of the unfiltered palette — which is the one
     thing the two-bucket sort promises cannot happen.
     """
-    q = contain.one_line(query).casefold()
+    q = typed(query)
     if not q:
         return False
     if q == row.title.casefold():

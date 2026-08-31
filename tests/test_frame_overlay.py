@@ -969,6 +969,29 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
                          "a targeted mark cannot be chained onto the split that makes "
                          "the pane it would target")
 
+    def test_only_a_marked_pane_whose_id_is_tmuxs_own_is_swept(self):
+        """`live_panes` reads a listing back off tmux, and what the caller builds out of
+        one is a `kill-pane`. Three rows, three reasons to drop or keep (#739/#442):
+
+        * the harness formats as its id and nothing else — no mark, not swept;
+        * an overlay formats as its id and the mark — swept;
+        * a first field that is not tmux's own word for a pane never becomes a kill
+          target, however marked it looks. That is not hypothetical tidiness: the value
+          arrives off another process's stdout, and `close_argvs`' own docstring records
+          what an unpredictable `-t` costs.
+        """
+        listing = "%0 \n%1 1\n%2 1\nnot-a-pane 1\n"
+        self.assertEqual(overlay.live_panes(listing), ("%1", "%2"))
+
+    def test_a_sweep_of_nothing_issues_nothing_at_all(self):
+        """An empty target list reaching `kill-pane` is a `kill-pane` with no `-t`, which
+        kills the CURRENT pane — the operator's harness. `None` is the whole answer, and
+        it is `tmuxctl.chain`'s rather than a second guard in front of it."""
+        self.assertIsNone(overlay.sweep_argv("charter", ()))
+        self.assertIsNone(overlay.sweep_argv("charter", ("not-a-pane",)))
+        self.assertEqual(overlay.sweep_argv("charter", ("%4",))[3:],
+                         ["kill-pane", "-t", "%4"])
+
     def test_a_target_that_is_not_a_pane_id_opens_nothing(self):
         self.assertIsNone(overlay.open_argv("charter", harness="0", command=["true"]))
 

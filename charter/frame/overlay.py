@@ -945,12 +945,19 @@ def live_panes(listing: str) -> tuple[str, ...]:
     is build a `kill-pane` around it: this is a value read back off tmux, and #442's rule
     is that a value's shape is checked where it re-enters charter rather than trusted
     because of where it came from.
+
+    **`split()` and not a partition**, which is a smaller claim rather than a tidier one.
+    A partition has an end to pick and a strip has an amount to take, and neither choice
+    is observable on this format — the deletion sweep says so, offering `rpartition` and
+    `lstrip` as passing substitutes. `split()` on whitespace has no such knob: it is "the
+    fields of this line", which is what the format is. `>= 2` rather than `== 2` so a mark
+    somebody set by hand to a value with a space in it still counts as a mark.
     """
     out = []
     for line in listing.splitlines():
-        pid, _, flag = line.strip().partition(" ")
-        if flag.strip() and tmuxctl.PANE_ID_RE.fullmatch(pid):
-            out.append(pid)
+        fields = line.split()
+        if len(fields) >= 2 and tmuxctl.PANE_ID_RE.fullmatch(fields[0]):
+            out.append(fields[0])
     return tuple(out)
 
 
@@ -963,13 +970,16 @@ def sweep_argv(server: str, panes) -> list[str] | None:
     charter has no reason to pay, and the operator's window relayouts once instead of
     once per orphan.
 
-    ``None`` and not an empty chain when there is nothing to kill: an empty target list
+    ``None`` and never an empty chain when there is nothing to kill: an empty target list
     reaching `kill-pane` is the measured failure `close_argvs` records — a `kill-pane`
-    with no `-t` kills the *current* pane, which here is the operator's harness.
+    with no `-t` kills the *current* pane, which here is the operator's harness. That
+    answer is `tmuxctl.chain`'s own (`if not argvs: return None`) and is deliberately not
+    restated here: an `if kills else None` in front of it reads as a second guard and is
+    the same guard, which the deletion sweep correctly reported as a line nothing could
+    go red without.
     """
-    kills = [tmuxctl.server_argv(server, "kill-pane", "-t", p)
-             for p in panes if tmuxctl.PANE_ID_RE.fullmatch(p)]
-    return tmuxctl.chain(kills) if kills else None
+    return tmuxctl.chain([tmuxctl.server_argv(server, "kill-pane", "-t", p)
+                          for p in panes if tmuxctl.PANE_ID_RE.fullmatch(p)])
 
 
 def modal_argvs(server: str, *, harness: str,

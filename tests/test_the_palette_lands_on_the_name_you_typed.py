@@ -52,6 +52,13 @@ from tests._isolation import PersonaIso
 from tests.test_frame_pickers import _plane_personas, _plane_workspaces
 
 
+#: A line separator `str.splitlines` honours, which is the bound #472 settled on: the
+#: property is "renders as one line", not "holds no `\\n`". Spelled with an escape rather
+#: than the character itself, because a U+2028 in this file's own source is a line the
+#: next reader cannot see.
+_SEPARATOR = "\u2028"
+
+
 def _row(rid: str, title: str, note: str = "", *, mark: bool = False,
          refused: bool = False) -> overlay.Row:
     return overlay.Row(id=rid, title=title, note=note, mark=mark, refused=refused)
@@ -180,10 +187,34 @@ class TypingAWholeNameLandsOnIt(unittest.TestCase):
     def test_the_case_rule_reaches_the_ordering_too(self):
         """`casefold` on both sides, the same as `matches`. A palette that filtered
         case-insensitively and then ranked case-sensitively would find the row and still
-        put the cursor somewhere else, which is indistinguishable from not finding it."""
+        put the cursor somewhere else, which is indistinguishable from not finding it.
+
+        **Both sides, in both directions**, because one case each way is what an operator
+        actually produces: a workspace named `Beta` reached by typing `beta`, and one
+        named `beta` reached by a shift key nobody meant to hold. Asserted as two cases in
+        one so that neither half can be dropped as the redundant one — the sweep reported
+        exactly that about the query's own `casefold`, which only the second case reaches.
+        """
         rows = (_row("a.b", "beta — do the thing"), _row("workspace:n0", "Beta"))
         self.assertEqual([r.id for r in palette.narrow(rows, "beta")],
                          ["workspace:n0", "a.b"])
+        rows = (_row("a.b", "beta — do the thing"), _row("workspace:n0", "beta"))
+        self.assertEqual([r.id for r in palette.narrow(rows, "BETA")],
+                         ["workspace:n0", "a.b"])
+
+    def test_the_query_is_contained_and_folded_in_one_place(self):
+        """`typed` is the whole of the case rule and #472's rule, asked once for both the
+        filter and the ordering.
+
+        Two assertions, one per transform, because either alone leaves the other
+        deletable — which is what the sweep reported when `exact` carried its own copy of
+        this line. The palette builds its own query out of printable single characters, so
+        a separator cannot be typed into it; `narrow` and `matches` are functions anything
+        may call, and the guard belongs at the join rather than at whichever writer
+        happens to exist today.
+        """
+        self.assertEqual(palette.typed("ALPHA"), "alpha")
+        self.assertNotIn(_SEPARATOR, palette.typed("al" + _SEPARATOR + "pha"))
 
     def test_an_action_id_typed_in_full_is_exact_too(self):
         """`matches` accepts a provider's documented id (`acme.deploy`) as well as the
@@ -393,11 +424,24 @@ class ARepeatableRowKeepsThePaletteOpen(PersonaIso, unittest.TestCase):
 
     def test_the_next_keystroke_clears_it(self):
         """It is a report about the last keypress, not a second label. Typing is a new
-        question and the answer to the old one must not stand over it."""
+        question and the answer to the old one must not stand over it.
+
+        Asserted as the WHOLE heading rather than as the sentence being absent: an empty
+        report that still emitted its separator would leave `charter /n · ` on screen —
+        a header with a dangling `·` and nothing after it, which "the sentence is gone"
+        cannot tell from the header being right. The sweep reported exactly that gap.
+        """
         p = self._palette()
         p.report("selected auth")
         p.handle(overlay.Event(kind=overlay.KEY, name="n"), 24)
-        self.assertNotIn("selected auth", p.heading)
+        self.assertEqual(p.heading, palette.HEADING + palette.PROMPT + "n")
+
+    def test_an_empty_report_leaves_the_header_exactly_as_it_was(self):
+        """The same property one step earlier: an action that answered nothing has nothing
+        to say, and the header must not gain a separator for it."""
+        p = self._palette()
+        p.report("")
+        self.assertEqual(p.heading, palette.HEADING)
 
     def test_the_query_still_shows_beside_the_report(self):
         """Both, because both are live: what is being filtered, and what the last Enter
