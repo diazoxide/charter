@@ -106,6 +106,12 @@ class Offer:
     #: Empty exactly when :attr:`available`. Never empty when it is not — charter writes
     #: a sentence when the action would not.
     reason: str
+    #: `Action.mark`, carried so the surface drawing this row does not have to hold the
+    #: registry to find out whether it is the state the frame is in.
+    mark: bool = False
+    #: `Action.repeat`, carried for the same reason — and it is what
+    #: `commands_frame._draw_palette` reads to decide whether the palette closes.
+    repeat: bool = False
 
 
 class Invocation:
@@ -339,7 +345,8 @@ class ActionRegistry:
         out = []
         for a in self.all():
             available, reason, _ = self._check(a, fid=fid, snapshot=snapshot)
-            out.append(Offer(id=a.id, title=a.title, available=available, reason=reason))
+            out.append(Offer(id=a.id, title=a.title, available=available, reason=reason,
+                             mark=a.mark, repeat=a.repeat))
         return tuple(out)
 
     def invoke(self, aid: str, *, fid: str, snapshot: Mapping) -> Invocation:

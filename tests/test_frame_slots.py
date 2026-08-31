@@ -863,6 +863,96 @@ class BottomRenderer(PersonaIso, unittest.TestCase):
         self.assertLessEqual(tui.width(out), 3)
 
 
+class MinimalStillSaysHowToDriveTheFrame(PersonaIso, unittest.TestCase):
+    """#743. `density = minimal` is the arrangement with no repo table, no sidebar and no
+    charter version — two one-row strips, with the repo table, the todo list, the
+    workspace switch, the persona switch and the way back to `full` ALL behind `F2`. It
+    was also the one arrangement that stopped saying `F2` anywhere on screen.
+
+    The cause is that the hint was ranked against the other fields, and `terse` keeps one.
+    The hint is a different kind of thing from the other three: an alert, a spinner and a
+    todo count are news about the plane, and the hint is the one piece of chrome that says
+    how to drive the frame. Ranking it against news is what dropped it from the only frame
+    that needed it.
+    """
+
+    def _row(self, fid: str) -> str:
+        with mock.patch("charter.statusline._alerts", return_value=[]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=7), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            return tui.strip_ansi(slots.render("bottom", fid))
+
+    def test_a_minimal_frame_still_advertises_the_palette(self):
+        """The report, exactly: `7 todos · F2 palette` before, `7 todos` after."""
+        state.record_density("f-min", "minimal")
+        self.assertEqual(slots.verbosity("f-min"), "terse")
+        self.assertEqual(self._row("f-min"), "7 todos · F2 palette")
+
+    def test_the_density_still_trims_everything_that_is_news(self):
+        """The exemption is one field, not the end of the trim. With something running and
+        something wrong, a terse row still says exactly one of them — the highest-priority
+        — and still says how to open the palette."""
+        state.record_density("f-min2", "minimal")
+        with mock.patch("charter.statusline._alerts", return_value=["⚠ reinit needed"]), \
+             mock.patch("charter.statusline._session_news", return_value=["⛊ 1 denied"]), \
+             mock.patch("charter.statusline._todo_count", return_value=7), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            out = tui.strip_ansi(slots.render("bottom", "f-min2"))
+        self.assertEqual(out, "⚠ reinit needed · F2 palette")
+
+    def test_a_notice_takes_the_one_news_slot_and_the_hint_still_shows(self):
+        """The composition with #763, which landed on this same call while this was open.
+
+        A notice is the outcome of the last thing the operator CHOSE, and it is now the
+        top-priority field — so at `minimal` it is the one piece of news that survives,
+        outranking even an alert for the few seconds it dwells. The hint is not news and
+        does not compete with it: both are on the row. Asserted because two changes met at
+        one line, and "each is right alone" is not the same claim as "the pair is right".
+        """
+        state.record_density("f-min-n", "minimal")
+        state.say("f-min-n", "charter: workspace → gamma")
+        with mock.patch("charter.statusline._alerts", return_value=["⚠ reinit needed"]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=7), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
+            out = tui.strip_ansi(slots.render("bottom", "f-min-n"))
+        self.assertEqual(out, "charter: workspace → gamma · F2 palette")
+
+    def test_the_hint_follows_the_configured_key(self):
+        """It is READ, never spelled: a plane on `hotkey = "F1"` must not be told about a
+        key that does nothing. The exemption must not become a hardcoded string."""
+        state.record_density("f-min3", "minimal")
+        with mock.patch("charter.statusline._alerts", return_value=[]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=7), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F1"}):
+            out = tui.strip_ansi(slots.render("bottom", "f-min3"))
+        self.assertEqual(out, "7 todos · F1 palette")
+
+    def test_a_starved_pane_still_drops_it(self):
+        """An exemption from the DENSITY, never from the arithmetic. A hint sliced in half
+        is the false-clean failure `_fit_fields` exists to refuse, so a pane with room for
+        one field gets one field — which is width doing its job, not `minimal` doing it.
+        """
+        state.record_density("f-min4", "minimal")
+        with mock.patch("charter.statusline._alerts", return_value=[]), \
+             mock.patch("charter.statusline._session_news", return_value=[]), \
+             mock.patch("charter.statusline._todo_count", return_value=7), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}), \
+             mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((9, 3))), \
+             mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            out = tui.strip_ansi(slots.render("bottom", "f-min4"))
+        self.assertEqual(out, "7 todos")
+
+    def test_a_normal_density_is_unchanged(self):
+        """The control. Nothing about this is a new field or a new order — `normal` drew
+        both already, and an exemption that changed what a full frame says would be a
+        second defect wearing the first one's fix."""
+        self.assertEqual(self._row("f-normal"), "7 todos · F2 palette")
+
+
 class FitFields(unittest.TestCase):
     """`slots._fit_fields` in isolation, free of `_bottom`'s other, always-present
     fields (todo, hotkey) — so a test can construct the exact width pressure it wants
@@ -874,6 +964,44 @@ class FitFields(unittest.TestCase):
     def test_a_later_field_is_dropped_whole_once_the_budget_runs_out(self):
         self.assertEqual(
             slots._fit_fields([("a", "AAA"), ("b", "BBBBBBBBBB")], 6), {"a"})
+
+    def test_an_exempt_field_is_not_counted_by_the_limit_and_not_stopped_by_it(self):
+        """#743's mechanism, in isolation. `limit=1` is what a `terse` density asks for;
+        an exempt name neither consumes that one slot nor is cut off by it — and it is
+        reached even though it is LAST in the priority order, which is where the hotkey
+        hint sits and why the loop `continue`s past a capped field instead of breaking."""
+        fields = [("alert", "AAA"), ("todo", "TTT"), ("hotkey", "HHH")]
+        self.assertEqual(slots._fit_fields(fields, 80, limit=1), {"alert"})
+        self.assertEqual(
+            slots._fit_fields(fields, 80, limit=1, exempt=frozenset({"hotkey"})),
+            {"alert", "hotkey"})
+
+    def test_an_exempt_field_does_not_spend_the_densitys_one_slot(self):
+        """Asked with the exempt field FIRST, which `_bottom` does not do today and which
+        is exactly why it is worth asking here. `hotkey` is last in that caller's priority
+        order, so an implementation that counted an exempt field against the cap would
+        behave identically on the only list charter passes it — and would silently eat the
+        one slot the news fields get the day a second piece of chrome is added above them.
+        A general function's contract does not get to depend on its one current caller.
+        """
+        fields = [("hotkey", "HHH"), ("alert", "AAA"), ("todo", "TTT")]
+        self.assertEqual(
+            slots._fit_fields(fields, 80, limit=1, exempt=frozenset({"hotkey"})),
+            {"hotkey", "alert"})
+
+    def test_an_exempt_field_still_answers_to_the_width(self):
+        """The half that keeps this an exemption from the density rather than from the
+        arithmetic: no budget, no field, exempt or not."""
+        fields = [("todo", "TTTTTTTT"), ("hotkey", "HHHHHHHH")]
+        self.assertEqual(
+            slots._fit_fields(fields, 10, limit=1, exempt=frozenset({"hotkey"})),
+            {"todo"})
+
+    def test_the_row_names_the_hotkey_hint_and_nothing_else(self):
+        """`_ALWAYS` is a set so that "which fields are chrome rather than news" is a
+        question with an answer somebody can read, and so the next field of that kind
+        joins a list rather than an `or` buried in a loop. One entry today."""
+        self.assertEqual(slots._ALWAYS, frozenset({"hotkey"}))
 
     def test_measures_in_display_cells_not_characters(self):
         """`"測"` is one character but TWO display cells. Sized so a `len()`-based

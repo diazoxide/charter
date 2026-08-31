@@ -160,8 +160,16 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
     """The headline, and the worked example from the decision itself."""
 
     def test_a_query_matches_workspace_and_persona_names(self):
+        """All three, and the one the operator typed IN FULL first (#732).
+
+        `zeb` is a persona here and a prefix of two workspaces, which is the shape the
+        decision's own worked example has. It used to answer `zeb-api` first — the
+        catalogue's order, workspaces before personas — so `F2` `z` `e` `b` Enter switched
+        to a workspace nobody had named. `frame/palette.narrow` states the rule; the two
+        partial matches keep the order they had behind it.
+        """
         self.assertEqual(self._titles(self._typed("zeb")),
-                         ["  zeb-api", "  zebra-ui", "  zeb"])
+                         ["zeb", "zeb-api", "zebra-ui"])
 
     def test_each_name_says_which_KIND_it_is_so_two_nouns_are_told_apart(self):
         """`zeb` the persona and `zeb-api` the workspace are one keystroke apart and would
@@ -169,9 +177,9 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
         column — which is where `frame/palette.py` already puts what charter has to say
         about a row rather than what the operator typed."""
         rows = self._typed("zeb").rows
-        self.assertEqual([(r.title.strip(), r.note) for r in rows],
-                         [("zeb-api", "workspace"), ("zebra-ui", "workspace"),
-                          ("zeb", "persona")])
+        self.assertEqual([(r.title, r.note) for r in rows],
+                         [("zeb", "persona"), ("zeb-api", "workspace"),
+                          ("zebra-ui", "workspace")])
 
     def test_the_name_in_use_keeps_its_mark_here_too(self):
         """A name row is the picker's own row re-noted, so the `*` that answers "which one
@@ -181,9 +189,15 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
         The doorway matches `alpha` too — it says `workspace: alpha — pick another`, which
         is Task 6's own reason for putting the name in that title — so this asks the name
         rows rather than the first row.
+
+        **The mark is a FIELD and the title is the bare name** (#749). It used to be two
+        characters on the front of the title, which is what gave the palette two left
+        edges — and what made "did the operator type this row's name" a prefix-strip
+        rather than a comparison. Both properties are asserted here, because dropping
+        either one is what the field exists to stop.
         """
         rows = self._names(self._typed("alpha"))
-        self.assertEqual([r.title for r in rows], [f"{choose.MARK[0]}alpha"])
+        self.assertEqual([(r.title, r.mark) for r in rows], [("alpha", True)])
 
     def test_an_empty_query_is_the_doorways_and_the_actions_and_nothing_else(self):
         """The other half of "the doorways stay": with nothing typed the list is exactly

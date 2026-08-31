@@ -27,7 +27,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, contain, tui
-from charter.frame import action, actions, builtin_actions, overlay, palette, state
+from charter.frame import (action, actions, builtin_actions, component, overlay, palette,
+                           state)
 
 from tests._isolation import PersonaIso
 
@@ -261,18 +262,63 @@ class FilteringIsPinnedInBothDirections(unittest.TestCase):
         p = self._p("one", "two", "three")
         self.assertEqual(len(p.rows), 3)
 
-    def test_the_order_is_never_disturbed_by_filtering(self):
-        """No ranking: a palette that reordered itself as the operator typed would move the
-        row under the cursor out from under it between keystrokes."""
+    def test_a_partial_match_never_disturbs_the_order(self):
+        """The bound on #732's ordering: only a name typed in FULL moves.
+
+        This used to be "no ranking at all", argued from a property the class does not
+        have — that reordering "would move the row under the cursor out from under it
+        between keystrokes", when `_refilter` puts the selection back at the top on every
+        edit and always has. What reordering really costs is that the LIST reads
+        differently, so the sort is two buckets rather than a score: none of these three
+        is `match`, so all three keep the catalogue's order and the screen is unchanged.
+        """
         p = self._p("zzz match", "aaa match", "mmm match", query="match")
         p._refilter()
         self.assertEqual([r.title for r in p.rows],
                          ["zzz match", "aaa match", "mmm match"])
 
+    def test_an_id_that_could_carry_case_is_not_an_id_the_filter_matches(self):
+        """What `matches` and `exact` depend on for not folding an id.
+
+        Both ask `component.usable_id` before comparing against `Row.id`, and neither
+        folds it — a call the deletion sweep correctly reported as one nothing could go
+        red without, because `_ID_RE` admits no capital. This pins that as a property of
+        the PAIR rather than of the regex alone: an id with a capital in it is not matched
+        by either function whatever case the operator types, so the missing `casefold`
+        cannot become a missed row. If the alphabet is ever widened, this reddens.
+        """
+        for rid in ("Acme.Deploy", "ACME", "A_b1"):
+            with self.subTest(id=rid):
+                self.assertFalse(component.usable_id(rid))
+                row = overlay.Row(id=rid, title="nothing like the id")
+                for q in (rid, rid.casefold(), rid.upper()):
+                    self.assertFalse(palette.matches(q, row), (rid, q))
+                    self.assertFalse(palette.exact(q, row), (rid, q))
+
+    def test_an_id_that_is_usable_is_matched_and_ranked_by_the_case_it_has(self):
+        """The counter-control, so the case above cannot pass by nothing ever matching an
+        id at all. A provider's documented id is what somebody types on purpose."""
+        row = overlay.Row(id="acme.deploy", title="Deploy to production")
+        self.assertTrue(palette.matches("acme.dep", row))
+        self.assertTrue(palette.exact("acme.deploy", row))
+        self.assertTrue(palette.exact("ACME.DEPLOY", row),
+                        "the QUERY's case is folded even though the id's cannot differ")
+
+    def test_the_row_whose_whole_title_was_typed_goes_first(self):
+        """The other side of the same bound, here rather than only in the file about
+        #732, so the two cases sit together and neither can be deleted as the odd one."""
+        p = self._p("zzz match", "match", "mmm match", query="match")
+        p._refilter()
+        self.assertEqual([r.title for r in p.rows],
+                         ["match", "zzz match", "mmm match"])
+
     def test_a_hundred_rows_are_a_hundred_rows(self):
         """The cap mutation, from the top: `rows` may not clip, and neither may `narrow`."""
-        offers = [SimpleNamespace(id=f"a.a{i:03d}", title=f"row {i:03d}",
-                                  available=True, reason="") for i in range(100)]
+        # A real `Offer` and not a stand-in: `rows` reads every field of one, and a
+        # namespace holding the four this test happened to think of would go green over a
+        # field added to the contract and never carried across.
+        offers = [actions.Offer(id=f"a.a{i:03d}", title=f"row {i:03d}",
+                                available=True, reason="") for i in range(100)]
         self.assertEqual(len(palette.rows(offers)), 100)
         self.assertEqual(len(palette.narrow(palette.rows(offers), "row")), 100)
 

@@ -2287,8 +2287,22 @@ def _inflight_field() -> str:
     return " ".join(parts)
 
 
+#: The attention row's fields a density may not trim — see :func:`_fit_fields`' *exempt*.
+#:
+#: **One name, and the set is the point rather than the name.** `hotkey` is the only field
+#: on that row that is chrome rather than news, and #743 is what ranking it against news
+#: did: `density = minimal` — the arrangement with no repo table, no sidebar and no
+#: version, where `F2` is the only route to the repo table, the todos, the workspace, the
+#: persona and getting back to `full` — was the one arrangement that stopped saying `F2`
+#: exists. A frozenset rather than a `name == "hotkey"` in the loop so that the question
+#: "which fields are chrome" is one a test can ask directly, and so the next field of this
+#: kind joins a list rather than an `or`.
+_ALWAYS = frozenset({"hotkey"})
+
+
 def _fit_fields(priority: list[tuple[str, str]], width: int,
-                limit: int | None = None) -> set[str]:
+                limit: int | None = None,
+                exempt: frozenset[str] = frozenset()) -> set[str]:
     """Which names among *priority* — an ordered list of ``(name, text)`` pairs, highest
     priority first — fit *width* once joined with `` · ``, decided one at a time in that
     order: each field's FULL text counted against what is left, included whole or
@@ -2308,19 +2322,39 @@ def _fit_fields(priority: list[tuple[str, str]], width: int,
     is one question, and answering it twice is how the two answers come to disagree about
     whether an alert outranks a todo count. ``None`` (the default) is "as many as fit",
     which is exactly what every caller wanted before densities existed.
+
+    *exempt* names fields *limit* does not count and does not stop — **and it is a
+    different KIND of field, not a favoured one** (#743). Every other field on this row is
+    news about the plane: an alert, a spinner, a selection, a todo count. Ranking them
+    against each other is exactly right, and at `terse` keeping only the loudest is the
+    density doing its job. The hotkey hint is not news; it is the one thing on screen that
+    says how to drive the frame — and `minimal` is the arrangement where the palette is
+    the only route to anything, including back to `full`. Ranking it against news is what
+    dropped it from the only frame that needed it, leaving a two-strip frame advertising
+    nothing at all to an operator who closed and reopened their terminal.
+
+    **Width still applies to an exempt field**, which is what keeps this an exemption from
+    the density and not from the arithmetic: a starved pane drops the hint like anything
+    else, because a hint sliced in half is the false-clean failure this whole function
+    refuses. And the loop `continue`s past a capped field rather than breaking out of it,
+    so an exempt field LAST in the priority order is still reached — which the hotkey is,
+    being the one field that is always rediscoverable another way.
     """
     sep_w = tui.width(" · ")
     budget = width
     keep: set[str] = set()
+    capped = 0
     for name, text in priority:
         if not text:
             continue
-        if limit is not None and len(keep) >= limit:
-            break
+        if limit is not None and name not in exempt and capped >= limit:
+            continue          # over the density's budget — but a later exempt field is not
         need = tui.width(text) + (sep_w if keep else 0)
         if need > budget and keep:
             continue          # doesn't fit and something already does — drop it whole
         keep.add(name)
+        if name not in exempt:
+            capped += 1
         budget -= need
     return keep
 
@@ -2507,11 +2541,20 @@ def _bottom(fid: str) -> str:
     could not explain. The status line keeps `⚡ 2` unchanged: it repaints once per turn,
     where a spinner is a still picture of an arbitrary frame.
 
-    **At `terse` exactly one field survives** — the highest-priority one that has anything
-    to say. On a quiet plane that is the todo count, so the row is never blank; the moment
-    something is wrong or something is running, the row is that instead. `_fit_fields`
-    does it through the same priority order it already uses for width, so "less" and
-    "too narrow" cannot disagree about what matters.
+    **At `terse` exactly one field of NEWS survives** — the highest-priority one that has
+    anything to say. On a quiet plane that is the todo count, so the row is never blank;
+    the moment something is wrong or something is running, the row is that instead.
+    `_fit_fields` does it through the same priority order it already uses for width, so
+    "less" and "too narrow" cannot disagree about what matters.
+
+    **The hotkey hint is not news and the density does not trim it** (#743, :data:`_ALWAYS`).
+    It used to be, and the result was that `minimal` — a frame of two one-row strips, with
+    the repo table, the sidebar, the todos, the workspace switch, the persona switch and
+    the way back to `full` all behind `F2` — was the single arrangement that stopped
+    saying `F2` anywhere on screen. An operator who chose it and reopened their terminal
+    had a frame advertising nothing. So `terse` keeps one field of news **and** the hint:
+    `7 todos · F2 palette` rather than `7 todos`. A narrow pane still drops it, because
+    that is width and not density.
 
     The hotkey is READ, not spelled out: `[frame] hotkey` is configurable, and this row
     used to hardcode `F2 palette` — so a plane on `hotkey = "F1"` had its own panel telling
@@ -2561,7 +2604,7 @@ def _bottom(fid: str) -> str:
         [("notice", notice_text), ("alert", alert_text), ("inflight", inflight_text),
          ("repo", repo_text), ("news", news_text), ("todo", todo_text),
          ("hotkey", hotkey_text)], w,
-        limit=1 if verbosity(fid) == "terse" else None)
+        limit=1 if verbosity(fid) == "terse" else None, exempt=_ALWAYS)
 
     # Re-assembled in the original reading order, not priority order — priority decided
     # only who was cut. `repo` is LAST, which is the "right side" the selected row's

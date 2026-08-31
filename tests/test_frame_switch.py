@@ -26,7 +26,8 @@ import unittest
 from unittest import mock
 
 from charter import cli, commands_frame, config, persona, tui, workspace
-from charter.frame import builtin_actions, choose, palette, picker, state, switch
+from charter.frame import (builtin_actions, choose, overlay, palette, picker,
+                           state, switch)
 
 from tests._isolation import PersonaIso
 
@@ -243,17 +244,37 @@ def _rows(fid: str, *, density: str = "normal"):
 def _titles(fid: str, kind: str, *, density: str = "normal") -> list[str]:
     """Every row title whose ID belongs to *kind* (today: `density`).
 
-    Selected by ID and never by what the title says, because the mark charter puts in
-    front of the current one is part of the title — a prefix match on the title would
-    silently drop exactly the row every one of these tests is about.
+    Selected by ID and never by what the title says: the title is what a caller is here to
+    assert about, and a prefix match on it would decide membership from the same string
+    the case is measuring. That was doubly true when the mark was part of the title, and
+    it is still true now that it is `overlay.Row.mark` (#749).
     """
     return [r.title for r in _rows(fid, density=density)
             if r.id.startswith(kind + ".")]
 
 
+def _marked(fid: str, kind: str, *, density: str = "normal") -> list[str]:
+    """The titles of *kind*'s rows carrying the "you are on this one" mark.
+
+    The mark is a FIELD since #749, so "which row is marked" is a question asked of the
+    row rather than of its first two characters. Selected by ID for :func:`_titles`'
+    reason exactly.
+    """
+    return [r.title for r in _rows(fid, density=density)
+            if r.id.startswith(kind + ".") and r.mark]
+
+
 def _names(fid: str, noun: str) -> list[str]:
-    """Every row title inside *noun*'s picker — the list one keypress past the palette."""
-    return [r.title for r in choose.roster(noun, fid).rows]
+    """Every row inside *noun*'s picker, marked — the list one keypress past the palette.
+
+    Rendered here rather than read off `Row.title`, because since #749 the title is the
+    bare name and the mark is `Row.mark`. The two are spelled back together for these
+    cases because what they are about is *which* row is marked, and a pair per row reads
+    worse than the line the operator sees. `overlay.ROW_MARK` and not two characters, so
+    a marker that changes width does not silently change what these cases assert.
+    """
+    return [f"{overlay.ROW_MARK[0] if r.mark else overlay.ROW_MARK[1]}{r.title}"
+            for r in choose.roster(noun, fid).rows]
 
 
 class ThePaletteOffersAPickerForEach(PersonaIso, unittest.TestCase):
@@ -414,9 +435,10 @@ class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
         derived when the palette opens, from `_current_density`."""
         state.record_density(self.FID, "full")
         self._switch(workspace="beta")
-        titles = _titles(self.FID, "density",
-                         density=commands_frame._current_density(self.FID))
-        self.assertIn("* density: full", titles)
+        self.assertEqual(
+            _marked(self.FID, "density",
+                    density=commands_frame._current_density(self.FID)),
+            ["density: full"])
 
 
 class ThePickerDecidesNothingOnItsOwn(unittest.TestCase):

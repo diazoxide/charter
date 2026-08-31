@@ -76,6 +76,14 @@ _DEADLINE = 25.0
 #: cannot drift into a test pressing a key charter does not bind.
 _F2 = b"\x1bOQ"
 
+#: What Escape is on the wire, spelled the way :data:`_F2` is. A lone `\x1b` in a
+#: source file is a byte the next reader cannot see.
+_ESCAPE = b"\x1b"
+
+#: What `overlay.HATCH_KEY` is on the wire. F12 in the same xterm form :data:`_F2` uses —
+#: `\x1b[24~` — spelled beside it so a reader can see the two are the same kind of thing.
+_HATCH = b"\x1b[24~"
+
 _TERM_CANDIDATES = tuple(dict.fromkeys(
     ([os.environ["TERM"]] if os.environ.get("TERM", "dumb") != "dumb" else [])
     + ["xterm-256color", "screen", "vt100"]))
@@ -348,6 +356,32 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         self.assertTrue(_await(lambda: state.version(self.fid) != was),
                         "the frame was never bumped, so no panel repaints")
 
+    def test_a_name_that_the_doorway_also_matches_still_wins_the_cursor(self):
+        """**#732, end to end, on the collision that produced it.** The frame is in
+        `alpha`, so the workspace doorway reads `workspace: alpha — pick another` and holds
+        the typed name inside its own title. The doorway is in the catalogue and the names
+        are gathered after it, so it used to be the row Enter ran — and on the reported
+        plane the colliding row was the `chat:` doorway, which was also *refused*, so Enter
+        opened nothing and switched nothing.
+
+        Asserted on what Enter DOES rather than on the drawn order, because the drawn order
+        is a rendering and this is about the keypress: pressing it must hand the pane back
+        (the row was a name) and must not replace the surface with a picker (the row was a
+        doorway). `zebra` is the tell — it is the other workspace, so it is on the picker
+        and on nothing else.
+        """
+        fd, pane = self._open()
+        self._await_screen(pane, "workspace: alpha")
+        os.write(fd, b"alpha")
+        # Both rows are on screen: the doorway is not hidden, it is outranked.
+        self._await_screen(pane, "detach", present=False)
+        self._await_screen(pane, "workspace: alpha — pick another")
+        os.write(fd, b"\r")
+        self.assertTrue(_await(lambda: self._palette_pane() is None),
+                        f"Enter did not hand the pane back — the doorway took the "
+                        f"keypress and opened a picker:\n{self._screen(pane)}")
+        self.assertEqual(state.frame_workspace(self.fid), "alpha")
+
     def test_nothing_typed_lists_no_names_at_all(self):
         """The other half, and the one a display test cannot fake: the palette that just
         opened is the doorways and the actions, with `zebra` nowhere on it. A palette that
@@ -395,6 +429,203 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
                   overlay.HATCH_OPTION).stdout.strip(),
             overlay.hatch_command(harness=self.harness),
             "the hatch still names the pane the palette was drawn in")
+
+
+class ThereIsNeverMoreThanOnePalettePane(_ThePalette, unittest.TestCase):
+    """#739, and the invariant is stated as a COUNT rather than per route.
+
+    The report is a double `F2`: the second press split a second overlay off the harness,
+    Escape closed the one holding the keyboard, and the other stayed — a blank five-row
+    pane holding a live Python process, six rows off the harness, for the life of the
+    frame. `F12` is `select-pane` and did not clear it; a resize did not; no palette row
+    did. Only tmux's own prefix + `x`, which `charter frame` neither binds nor documents.
+
+    **Counted, not route-checked.** Making the double press safe and calling the class
+    closed is how this repository has three times ended up with an assertion sitting on
+    the path that already satisfied it (#682, #683, #689) — and the double press is not
+    the only route: any second open against a live palette does it. The cases below press
+    the key, run the command by hand, and press the key three times in a row, and each one
+    asks the same question of tmux: how many panes on this window carry the overlay mark.
+    """
+
+    def _overlays(self) -> list[str]:
+        """Every pane on the frame's window that charter marked as an overlay.
+
+        Read back through `overlay.live_argv`'s own format, so this asks the question the
+        production sweep asks. A test that counted "panes that are not the harness" would
+        also count a panel, and would go green over a sweep that killed the mark and left
+        the pane.
+        """
+        argv = overlay.live_argv(SOCKET, harness=self.harness)
+        self.assertIsNotNone(argv)
+        return list(overlay.live_panes(
+            subprocess.run(argv, capture_output=True, text=True, timeout=20).stdout))
+
+    def _await_drawn(self, *, replacing: str = "") -> str:
+        """Wait for exactly one overlay pane — a NEW one when *replacing* names the old —
+        drawn, and answer its id.
+
+        Three halves, and each one cost a red run to learn.
+
+        **Exactly one** is the invariant every case here is about.
+
+        **Not the one before it.** `F2` fires a `run-shell`, so the press returns long
+        before charter has swept, split and drawn; for a measured moment the answer to
+        "which panes are overlays" is still the FIRST palette, alone and correct-looking.
+        A wait that only counted was satisfied by that moment, and the Escape that followed
+        went to a palette charter was in the middle of replacing — which read as a leak and
+        was a race in this test. Measured, with the panes dumped at each step: after the
+        second press the listing still said `%1`, and `%2` did not appear until after the
+        Escape had already been sent.
+
+        **Drawn.** The palette puts its own tty in raw mode on the way in
+        (`palette.own_the_tty`), and until it has, a byte written to the client sits in
+        canonical mode waiting for a newline — so an Escape sent to a pane that exists but
+        has not drawn looks exactly like a palette that ignored Escape.
+        """
+        def replaced() -> bool:
+            found = self._overlays()
+            return len(found) == 1 and found[0] != replacing
+
+        self.assertTrue(_await(replaced),
+                        f"{self._overlays()} — not exactly one palette"
+                        + (f" other than {replacing}" if replacing else ""))
+        pane = self._overlays()[0]
+        self.assertTrue(
+            _await(lambda: "detach" in self._screen(pane)),
+            f"the palette's pane never drew its rows:\n{self._screen(pane)}")
+        return pane
+
+    def test_one_press_marks_exactly_one_pane(self):
+        """The control, and it is load-bearing: every count below is zero for a palette
+        that is never marked at all, so a sweep that found nothing would pass them."""
+        _, pane = self._open()
+        self.assertEqual(self._overlays(), [pane])
+
+    def test_a_second_press_replaces_the_palette_instead_of_stacking_one(self):
+        fd, first = self._open()
+        os.write(fd, _F2)
+        second = self._await_drawn(replacing=first)
+        self.assertNotEqual(second, first, "the first palette is the one still open")
+
+    def test_the_harness_gets_its_rows_back_after_ONE_open_and_close(self):
+        """The control for the case below, and the one that says whose defect a row leak
+        is. If a single open/close already loses rows, the reopen is not what lost them."""
+        def rows() -> int:
+            return int(_tmux("display-message", "-p", "-t", self.harness,
+                             "#{pane_height}").stdout.strip() or 0)
+
+        fd = self._attach()
+        self.assertTrue(_await(lambda: rows() > 0))
+        before = rows()
+        os.write(fd, _F2)
+        self._await_drawn()
+        os.write(fd, _ESCAPE)
+        self.assertTrue(_await(lambda: self._overlays() == []))
+        self.assertTrue(_await(lambda: rows() == before),
+                        f"the harness kept {rows()} rows of the {before} it had")
+
+    def test_the_harness_gets_its_rows_back_when_the_reopened_palette_closes(self):
+        """The half an operator actually sees. The leak was invisible — a blank gap above
+        the repo table's rule reads as empty terminal — so what it cost was rows: the
+        harness went from 24 to 18 and stayed there. Escape must give all of them back.
+        """
+        def rows() -> int:
+            return int(_tmux("display-message", "-p", "-t", self.harness,
+                             "#{pane_height}").stdout.strip() or 0)
+
+        fd = self._attach()
+        self.assertTrue(_await(lambda: rows() > 0))
+        before = rows()
+        os.write(fd, _F2)
+        first = self._await_drawn()
+        os.write(fd, _F2)
+        self._await_drawn(replacing=first)
+        os.write(fd, _ESCAPE)
+        self.assertTrue(_await(lambda: self._overlays() == []),
+                        f"a palette survived Escape: {self._panes()}")
+        self.assertTrue(_await(lambda: rows() == before),
+                        f"the harness kept {rows()} rows of the {before} it had")
+
+    def test_three_presses_still_leave_one(self):
+        """The count is an invariant and not a special case for two. Each press closes
+        what is open and draws a fresh one, so the answer is the same however many times
+        an operator leans on a key that seems not to have registered."""
+        fd, pane = self._open()
+        for _ in range(2):
+            os.write(fd, _F2)
+            pane = self._await_drawn(replacing=pane)
+        self.assertEqual(self._overlays(), [pane])
+
+    def test_the_escape_hatch_still_closes_the_palette_a_reopen_drew(self):
+        """The hatch is armed per palette, and a reopen must leave the LIVE one armed.
+
+        The worry is a swept process running `_close_palette` from its `finally` on the
+        way out: that re-arms the hatch with no overlay, and `F12` would then select the
+        harness and leave the new palette standing — the very leak this is fixing, one
+        keypress later. It cannot happen, because `kill-pane` terminates a Python process
+        without running its `finally` (measured directly, against a process whose
+        `finally` writes a file: the file is never written). This is that fact asserted
+        through the surface rather than restated as a comment.
+        """
+        fd, first = self._open()
+        os.write(fd, _F2)
+        self._await_drawn(replacing=first)
+        os.write(fd, _HATCH)
+        self.assertTrue(_await(lambda: self._overlays() == []),
+                        f"the hatch left the reopened palette standing: {self._panes()}")
+        self.assertTrue(
+            _await(lambda: self._panes().get(self.harness) == "1"),
+            f"the hatch did not put the operator back in the harness: {self._panes()}")
+
+    def test_the_sweep_cannot_reach_another_chats_palette(self):
+        """Scoped to the frame's own window, and this is the case that says so.
+
+        Every chat on charter's socket is a window on one server, and each has its own
+        harness and its own palette. A sweep that asked `list-panes -a` would find a
+        palette another chat has open — a different operator's screen, in the ordinary
+        two-agent case — and kill it. Measured on 3.7c and on the 3.2 floor,
+        `list-panes -t <a pane id>` resolves to that pane's window and lists only its
+        panes; this is that property asserted through the production call rather than
+        through the format string it is spelled with.
+
+        The pane in the other window is marked BY HAND, because what is under test is the
+        reach of the sweep and not how a real palette gets there. A second real frame
+        would put a second `charter frame-palette` between the test and the one question
+        it is asking.
+        """
+        other = _tmux("new-window", "-t", self.fid, "-d", "-P", "-F", "#{pane_id}",
+                      "cat", env=self.env)
+        self.assertEqual(other.returncode, 0, other.stderr)
+        elsewhere = other.stdout.strip()
+        self.addCleanup(lambda: _tmux("kill-pane", "-t", elsewhere))
+        marked = _tmux("set-option", "-p", "-t", elsewhere,
+                       overlay.OVERLAY_OPTION, "1")
+        self.assertEqual(marked.returncode, 0, marked.stderr)
+
+        fd, first = self._open()
+        os.write(fd, _F2)
+        self._await_drawn(replacing=first)
+        alive = _tmux("list-panes", "-a", "-F", "#{pane_id}").stdout.split()
+        self.assertIn(elsewhere, alive,
+                      "the sweep killed a palette open on another chat's window")
+
+    def test_the_route_is_the_open_and_not_the_key(self):
+        """`F2` is the reachable route and it is not the only one: `charter frame-palette`
+        typed in the harness, and a second client attached to the same session pressing
+        the key, open a palette by the same call. Asserted against that call, so the
+        invariant belongs to opening rather than to one key.
+        """
+        _, first = self._open()
+        r = subprocess.run(
+            [sys.executable, "-m", "charter", "frame-palette"],
+            capture_output=True, text=True, timeout=60,
+            env=dict(self.env, CHARTER_SESSION_ID=self.fid,
+                     **{tmuxctl.CHARTER_PY_ENV: sys.executable}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        second = self._await_drawn(replacing=first)
+        self.assertNotEqual(second, first,
+                            "a hand-run palette stacked on the key's")
 
 
 class AnUnavailableActionIsDrawnWithItsReason(_ThePalette, unittest.TestCase):

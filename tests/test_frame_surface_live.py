@@ -447,8 +447,8 @@ class ThePaletteCarriesTheThreeSurfaces(PersonaIso, unittest.TestCase):
 
     def test_the_row_in_effect_is_marked_and_the_others_are_not(self):
         rows = self._rows(current="dark")
-        self.assertTrue(rows["chrome.dark"].title.startswith(builtin_actions.MARK[0]))
-        self.assertTrue(rows["chrome.off"].title.startswith(builtin_actions.MARK[1]))
+        self.assertTrue(rows["chrome.dark"].mark)
+        self.assertFalse(rows["chrome.off"].mark)
 
     def test_the_mark_moves_with_the_frame(self):
         """Marked, never filtered: a list whose rows move around depending on state is a
@@ -457,8 +457,7 @@ class ThePaletteCarriesTheThreeSurfaces(PersonaIso, unittest.TestCase):
             with self.subTest(level=level):
                 rows = self._rows(current=level)
                 marked = [r for r, o in rows.items()
-                          if r.startswith("chrome.")
-                          and o.title.startswith(builtin_actions.MARK[0])]
+                          if r.startswith("chrome.") and o.mark]
                 self.assertEqual(marked, [f"chrome.{level}"])
 
     def test_a_frame_with_no_panes_lists_the_rows_with_a_reason(self):

@@ -27,7 +27,7 @@ import re
 import unittest
 
 from charter import commands_frame, config, tui
-from charter.frame import layout, overlay
+from charter.frame import layout, overlay, tmuxctl
 
 #: The two DEC private modes the overlay turns on and has to turn back off, spelled out
 #: here rather than reached for through `overlay.ENTER`/`overlay.LEAVE`. A constant
@@ -947,7 +947,74 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
         self.assertIn("split-window", argv)
         self.assertEqual(argv[argv.index("-t") + 1], "%0")
         self.assertEqual(argv[argv.index("-F") + 1], "#{pane_id}")
-        self.assertEqual(argv[argv.index("--") + 1:], ["python3", "-m", "x"])
+        # Up to the command SEPARATOR, not to the end: the mark rides on this same
+        # invocation as a second command (below), and everything after `--` and before it
+        # is the pane's program.
+        cmd = argv[argv.index("--") + 1:]
+        self.assertEqual(cmd[:cmd.index(tmuxctl.SEPARATOR)], ["python3", "-m", "x"])
+
+    def test_the_pane_is_marked_in_the_SAME_invocation_that_makes_it(self):
+        """#739. A pane id is not knowable until `split-window` has answered with one, so
+        a targeted mark is necessarily a second round trip — and the gap between the two
+        is exactly the instant a second `F2` arrives in, finding an overlay pane that is
+        open and not yet findable. One command list closes it: tmux runs the whole list
+        server-side and the split makes the new pane current for the rest of it, so an
+        untargeted `set-option -p` lands on the pane just made (measured on 3.7c and on
+        the 3.2 floor).
+        """
+        argv = overlay.open_argv("charter", harness="%0", command=["true"])
+        after = argv[argv.index(tmuxctl.SEPARATOR) + 1:]
+        self.assertEqual(after, overlay.mark_argv("charter")[3:])
+        self.assertNotIn("-t", after,
+                         "a targeted mark cannot be chained onto the split that makes "
+                         "the pane it would target")
+
+    def test_the_overlay_mark_is_in_tmuxs_user_namespace_and_is_charters_own(self):
+        """What the option's SPELLING has to satisfy, which is not the word itself.
+
+        Two properties, and neither is a change-detector. `@` is tmux's own namespace for
+        a user option, so anything without it is a real tmux option charter would be
+        overwriting. `charter` on the front is because the operator's own tmux may be the
+        server charter is a guest on (`is_operator_socket`), where an unprefixed name is a
+        collision with whatever else that operator has set. And it must not be the hatch's
+        option: one names a pane to kill and the other holds a command line tmux re-parses,
+        so a single name would arm the hatch with a `1` and mark every overlay with a
+        command.
+
+        The deletion sweep asked "would any spelling do?" and no test could say no. This
+        says which spellings do.
+        """
+        self.assertTrue(overlay.OVERLAY_OPTION.startswith("@charter"),
+                        overlay.OVERLAY_OPTION)
+        self.assertNotEqual(overlay.OVERLAY_OPTION, overlay.HATCH_OPTION)
+        self.assertIn(overlay.OVERLAY_OPTION, overlay.mark_argv("charter"))
+        listing = overlay.live_argv("charter", harness="%0")
+        self.assertIn(f"#{{{overlay.OVERLAY_OPTION}}}",
+                      listing[listing.index("-F") + 1],
+                      "the listing does not read the option the mark writes")
+
+    def test_only_a_marked_pane_whose_id_is_tmuxs_own_is_swept(self):
+        """`live_panes` reads a listing back off tmux, and what the caller builds out of
+        one is a `kill-pane`. Three rows, three reasons to drop or keep (#739/#442):
+
+        * the harness formats as its id and nothing else — no mark, not swept;
+        * an overlay formats as its id and the mark — swept;
+        * a first field that is not tmux's own word for a pane never becomes a kill
+          target, however marked it looks. That is not hypothetical tidiness: the value
+          arrives off another process's stdout, and `close_argvs`' own docstring records
+          what an unpredictable `-t` costs.
+        """
+        listing = "%0 \n%1 1\n%2 1\nnot-a-pane 1\n"
+        self.assertEqual(overlay.live_panes(listing), ("%1", "%2"))
+
+    def test_a_sweep_of_nothing_issues_nothing_at_all(self):
+        """An empty target list reaching `kill-pane` is a `kill-pane` with no `-t`, which
+        kills the CURRENT pane — the operator's harness. `None` is the whole answer, and
+        it is `tmuxctl.chain`'s rather than a second guard in front of it."""
+        self.assertIsNone(overlay.sweep_argv("charter", ()))
+        self.assertIsNone(overlay.sweep_argv("charter", ("not-a-pane",)))
+        self.assertEqual(overlay.sweep_argv("charter", ("%4",))[3:],
+                         ["kill-pane", "-t", "%4"])
 
     def test_a_target_that_is_not_a_pane_id_opens_nothing(self):
         self.assertIsNone(overlay.open_argv("charter", harness="0", command=["true"]))

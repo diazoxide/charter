@@ -381,16 +381,32 @@ class TerseSaysLess(PersonaIso, unittest.TestCase):
         self.assertIn("dev", normal)
         self.assertNotIn("dev", terse)
 
-    def test_bottom_keeps_exactly_one_field(self):
+    def test_bottom_keeps_exactly_one_field_of_news_and_the_hotkey_hint(self):
+        """The trim is about NEWS, and #743 is where the difference was learned.
+
+        An alert, a spinner, a selection and a todo count are things that happened on the
+        plane, and keeping only the loudest is what `minimal` is for. The hotkey hint is
+        not one of those — it is the one piece of chrome that says how to drive the frame,
+        and `minimal` is the arrangement where the palette is the only route to anything,
+        including back to `full`. Ranking it against news dropped it from the only frame
+        that needed it, and an operator who chose `minimal` and reopened their terminal
+        had a frame advertising nothing at all.
+        """
         with mock.patch("charter.statusline._todo_count", return_value=3), \
              mock.patch("charter.statusline._alerts",
-                        return_value=["⚠ reinit: charter ws reinit needed"]):
+                        return_value=["⚠ reinit: charter ws reinit needed"]), \
+             mock.patch("charter.statusline._session_news",
+                        return_value=["⛊ 1 denied"]), \
+             mock.patch.dict(config.FRAME, {"hotkey": "F2"}):
             normal = self._render("bottom", "normal")
             terse = self._render("bottom", "minimal")
         self.assertIn("·", normal, "a healthy `normal` row carries several fields")
-        self.assertNotIn("·", terse)
         self.assertIn("reinit", terse,
                       "the field that survives must be the highest-priority one")
+        self.assertIn("F2 palette", terse, "minimal stopped saying how to drive the frame")
+        self.assertNotIn("todo", terse, "a second field of news survived the trim")
+        self.assertNotIn("denied", terse, "a second field of news survived the trim")
+        self.assertEqual(terse.count("·"), 1, terse)
 
     def test_bottom_is_never_blank_on_a_quiet_plane(self):
         """The one-field cap must not produce an empty row when nothing is wrong: the
@@ -1328,11 +1344,9 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         reg = builtin_actions.build(
             self.fid, current_density=commands_frame._current_density(self.fid),
             current_chrome=commands_frame._current_chrome(self.fid))
-        titles = [a.title for a in reg.all() if a.id.startswith("density.")]
-        on = builtin_actions.MARK[0]
-        self.assertIn(f"{on}density: full", titles)
-        self.assertEqual([t for t in titles if t.startswith(on)],
-                         [f"{on}density: full"], titles)
+        density = [a for a in reg.all() if a.id.startswith("density.")]
+        self.assertEqual([a.title for a in density if a.mark], ["density: full"],
+                         [(a.title, a.mark) for a in density])
 
     def test_a_terminal_too_small_for_the_level_still_drops_the_side_panel(self):
         """A density change goes through the SAME size floors a launch does — asking for

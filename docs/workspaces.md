@@ -13,6 +13,15 @@ made while working on them, and a written account of what the task is for.
 
 `default` always exists. `charter workspace create <name> --use` starts another.
 
+**"Always exists" is about the name, not about the directory.** `default` is the rung the
+resolution below terminates on, so a plane that has never selected anything is standing in
+it; `charter init` does not create `workspaces/default/`, and the first command that puts
+something in it does (`charter clone -w default`, `charter workspace use default`,
+`charter workspace create default`). `charter workspace list` lists it either way, with
+`—` for its repos, because a table that draws a "you are here" mark has to have a row for
+where you are — and because the `F2` picker inside a frame offers exactly the same names.
+The name is `[workspace] default` if your `charter.toml` sets one.
+
 ## Which workspace am I in
 
 Resolved fresh on every command, in this order. The first rung that answers, wins:

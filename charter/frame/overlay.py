@@ -126,6 +126,36 @@ HATCH_KEY = "F12"
 #: because the operator's own tmux may be the server charter is a guest on.
 HATCH_OPTION = "@charter_hatch"
 
+#: The **pane** option that says "this pane is an overlay" — how charter finds a palette
+#: that is already open, and #739's whole fix.
+#:
+#: **A second `F2` used to leave the first palette running, invisible, forever.** A
+#: `bind -n` is the ROOT key table, so tmux matches the key before any byte reaches the
+#: overlay's pane — the same property that makes the escape hatch work against a wedged
+#: surface, and it is not negotiable. The second press therefore split a second overlay off
+#: the harness; Escape closed the one holding the keyboard and left the other as a blank
+#: five-row pane holding a live Python process, taking six rows off the harness for the
+#: life of the frame. `F12` is `select-pane` and does not clear it, `cmd_resize` has no
+#: opinion about a pane charter does not know, and no palette row closes it. The only cure
+#: was tmux's own prefix + `x`, which is outside what `charter frame` binds or documents.
+#:
+#: **Why a PANE option and not a record charter keeps.** `cmd_palette`'s own docstring
+#: declined to guard this, and its reason was right about the guard it was imagining:
+#: "every cheap test for 'is one already open' is a stale-state problem of its own". A
+#: value charter writes down can outlive the thing it describes — the hatch option
+#: deliberately does, naming a pane that is gone. A pane option cannot: it is tmux's
+#: state, stored on the pane, and it is destroyed with the pane. Measured on 3.7c and on
+#: the 3.2 floor: set with `set-option -p`, read back through `#{@charter_overlay}` in a
+#: `list-panes` format, and absent from every pane after a `kill-pane`.
+#:
+#: **And it is set in the SAME invocation as the split**, so there is no instant in which
+#: an overlay pane exists unmarked. Measured on both versions: `split-window … ;
+#: set-option -p @charter_overlay 1` sent as one command list marks the NEW pane, because
+#: the split makes it current for the rest of the list — see :func:`open_argv`.
+#:
+#: `@`-prefixed and charter-prefixed for :data:`HATCH_OPTION`'s reasons exactly.
+OVERLAY_OPTION = "@charter_overlay"
+
 #: What the overlay writes to its own tty to ask for SGR mouse reporting: 1006 (SGR
 #: encoding, so coordinates past column 223 survive) then 1000 (press/release only —
 #: deliberately NOT 1002/1003, which add motion, because §4f closed the event kinds
@@ -218,6 +248,27 @@ _R, _DIM, _BOLD, _REV = "\033[0m", "\033[2m", "\033[1m", "\033[7m"
 #: ._persona_chips` measured breaking this exact layout twice. Both entries are the same
 #: width by construction, so a selection moving does not move the text beside it.
 _MARK = ("> ", "  ")
+
+#: What marks the row the frame is ON — the workspace it is in, the density it is at, the
+#: chat it is. Held here rather than at each row source, and **reserved on every row this
+#: surface draws**, which is the whole of #749.
+#:
+#: **One inset is a rule of the frame** (`docs/frame.md`: "Every row's text starts in the
+#: same column"), and a mark composed into the TITLE by whoever built the row cannot keep
+#: it: a row source that has a mark to carry writes two columns and one that has none
+#: writes nothing, so the palette drew its thirteen rows down two left edges — text at
+#: column 3 for the doorways and the actions, column 5 for the density and chrome rows the
+#: `*` could land on. The cursor `>` sits at column 1 either way, so the same list put two
+#: columns between cursor and text on one half and four on the other.
+#:
+#: A column reserved HERE cannot be got wrong by a row source, including a provider's:
+#: :attr:`Row.mark` is a flag, and how many cells a flag costs is this module's arithmetic
+#: — the same reason :data:`_MARK` is not something a caller prefixes either.
+#:
+#: ASCII and both entries the same width, for :data:`_MARK`'s reason exactly: `●`, `◆` and
+#: the pointing triangles are East-Asian *Ambiguous*, and `statusline._persona_chips`
+#: measured them breaking this layout twice.
+ROW_MARK = ("* ", "  ")
 
 #: One SGR mouse report: `ESC [ < button ; col ; row (M|m)`, `M` a press and `m` a
 #: release. Anchored at the start because :func:`decode` matches it against the head of
@@ -346,11 +397,17 @@ def _title_width(shown: list[tuple[str, str]], width: int) -> int:
     Half rather than a fixed number of columns because both sides have to scale: a wide
     pane should spend its extra width on whichever column needs it, and only a
     proportional cap does that without a second rule for wide panes. `tui.width` on the
-    marker rather than `len`, because :data:`_MARK`'s two entries are only the same width
-    by construction and the day one of them stops being ASCII this must still be right.
+    markers rather than `len`, because :data:`_MARK`'s and :data:`ROW_MARK`'s entries are
+    only the same width by construction and the day one of them stops being ASCII this
+    must still be right.
+
+    **Both markers, because both are drawn on every row** (#749). Counting only the
+    cursor's would size the title column two cells wider than the row has, which is a
+    note truncated by two columns on the exact panes where the note is the whole reason
+    the row is listed.
     """
     longest = max([tui.width(t) for t, _ in shown] or [0])
-    room = width - tui.width(_MARK[0]) - _GAP
+    room = width - tui.width(_MARK[0]) - tui.width(ROW_MARK[0]) - _GAP
     return min(longest, max(_MIN_TITLE, room // 2))
 
 
@@ -366,6 +423,19 @@ class Row(NamedTuple):
     id: str
     title: str
     note: str = ""
+    #: Whether this row is the one the frame is ON — drawn with :data:`ROW_MARK`. A flag
+    #: and not two characters a caller prefixes, because the column it costs is this
+    #: module's arithmetic and #749 is what happens when it is not: see :data:`ROW_MARK`.
+    mark: bool = False
+    #: Whether this row CANNOT run right now. Not "has a note": a note is any right-hand
+    #: sentence, and `frame/choose.labelled` puts the row's KIND there (`workspace`,
+    #: `persona`) on rows that run perfectly well. The two were one field until #732,
+    #: where the difference decides which row Enter lands on — see `frame/palette.narrow`.
+    #:
+    #: A refused row is still listed, with its reason, which is #512's rule and is not
+    #: what this changes. What it changes is that the cursor does not START on one while a
+    #: row that can run matches the same query just as exactly.
+    refused: bool = False
 
 
 class Event(NamedTuple):
@@ -625,19 +695,25 @@ class Surface:
         it (#472): a committed value is what a picker's rows are made of, and a name
         carrying a newline that reached width arithmetic first would size the column from
         a string that is about to become two rows.
+
+        **Two markers, in a fixed order, on every row**: the cursor, then
+        :data:`ROW_MARK`. Every row pays for both whether or not it carries either, which
+        is what makes "every row's text starts in the same column" a property of this
+        function rather than a convention each row source is trusted to keep (#749).
         """
         top, n = self._window(height)
-        shown = [(contain.one_line(r.title), contain.one_line(r.note))
+        shown = [(contain.one_line(r.title), contain.one_line(r.note), r.mark)
                  for r in self.rows[top:top + n]]
-        title_w = _title_width(shown, width)
+        title_w = _title_width([(t, note) for t, note, _ in shown], width)
         out = [tui.truncate(f"{_BOLD}{contain.one_line(self.heading)}{_R}"
                             f"{_DIM} · {len(self.rows)} to choose from{_R}", width)]
         if not self.rows:
             out.append(tui.truncate(f"  {_DIM}{EMPTY}{_R}", width))
-        for i, (title, note) in enumerate(shown, start=top):
+        for i, (title, note, marked) in enumerate(shown, start=top):
             on = i == self._sel
             mark = _MARK[0] if on else _MARK[1]
-            body = (f"{mark}{tui.pad(title, title_w)}{' ' * _GAP}"
+            here = ROW_MARK[0] if marked else ROW_MARK[1]
+            body = (f"{mark}{here}{tui.pad(title, title_w)}{' ' * _GAP}"
                     f"{_DIM}{note}{_R}")
             out.append(tui.truncate(f"{_REV}{body}{_R}" if on else body, width))
         while len(out) < height - _FOOTER_ROWS:
@@ -817,10 +893,93 @@ def open_argv(server: str, *, harness: str, command: list[str],
     """
     if not tmuxctl.PANE_ID_RE.fullmatch(harness):
         return None
-    return tmuxctl.server_argv(server, "split-window", "-t", harness,
-                               "-v", "-l", str(_SPLIT_ROWS),
-                               *layout._env_argv(env),
-                               "-P", "-F", "#{pane_id}", "--", *command)
+    split = tmuxctl.server_argv(server, "split-window", "-t", harness,
+                                "-v", "-l", str(_SPLIT_ROWS),
+                                *layout._env_argv(env),
+                                "-P", "-F", "#{pane_id}", "--", *command)
+    return tmuxctl.chain([split, mark_argv(server)])
+
+
+def mark_argv(server: str) -> list[str]:
+    """`set-option -p`: stamp :data:`OVERLAY_OPTION` on **the current pane**.
+
+    **No `-t`, and that is the whole of why this can be chained onto the split** (#739).
+    A pane id is not knowable until `split-window` has answered with one, so a targeted
+    mark would have to be a second invocation — leaving an instant in which an overlay
+    pane exists and is not findable, which is exactly the instant a second `F2` arrives
+    in. tmux runs a command list server-side and the split makes the new pane current for
+    the rest of it, so the untargeted form lands on the pane just created. Measured on
+    3.7c and on the 3.2 floor, both: the mark is on the new pane and not on the harness.
+
+    Split out of :func:`open_argv` rather than inlined so the chain can be read as the two
+    things it is, and so a test can assert the mark without parsing an argv for it.
+    """
+    return tmuxctl.server_argv(server, "set-option", "-p", OVERLAY_OPTION, "1")
+
+
+def live_argv(server: str, *, harness: str) -> list[str] | None:
+    """`list-panes`: every pane in the harness's own window, with its overlay mark.
+
+    **Scoped to that window and never `-a`**, which is a property rather than a saving: a
+    chat is a window and every chat on this server shares the socket, so an `-a` sweep
+    would find another chat's open palette and :func:`sweep_argv` would kill it. Measured
+    on 3.7c and 3.2: `list-panes -t <a pane id>` resolves to that pane's window and lists
+    only its panes.
+
+    ``None`` for a harness that is not tmux's own word for a pane, following every other
+    builder here: charter would rather ask nothing than ask about a target it cannot
+    predict the parse of.
+    """
+    if not tmuxctl.PANE_ID_RE.fullmatch(harness):
+        return None
+    return tmuxctl.server_argv(server, "list-panes", "-t", harness, "-F",
+                               f"#{{pane_id}} #{{{OVERLAY_OPTION}}}")
+
+
+def live_panes(listing: str) -> tuple[str, ...]:
+    """The overlay pane ids in :func:`live_argv`'s output.
+
+    A pane with no mark formats as its id, a space, and nothing — so "marked" is "there is
+    a second field", and the harness never qualifies. Every id is held to
+    `tmuxctl.PANE_ID_RE` before it is answered with, because what the caller does with one
+    is build a `kill-pane` around it: this is a value read back off tmux, and #442's rule
+    is that a value's shape is checked where it re-enters charter rather than trusted
+    because of where it came from.
+
+    **`split()` and not a partition**, which is a smaller claim rather than a tidier one.
+    A partition has an end to pick and a strip has an amount to take, and neither choice
+    is observable on this format — the deletion sweep says so, offering `rpartition` and
+    `lstrip` as passing substitutes. `split()` on whitespace has no such knob: it is "the
+    fields of this line", which is what the format is. `>= 2` rather than `== 2` so a mark
+    somebody set by hand to a value with a space in it still counts as a mark.
+    """
+    out = []
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and tmuxctl.PANE_ID_RE.fullmatch(fields[0]):
+            out.append(fields[0])
+    return tuple(out)
+
+
+def sweep_argv(server: str, panes) -> list[str] | None:
+    """One invocation that kills every overlay pane named, or ``None`` for none.
+
+    ONE, for `tmuxctl.chain`'s reason at half strength: this caller is not in the pane
+    being killed, so it would survive sending them separately — but a sweep that killed
+    the first of two and then had its own pane resized under it is a second round trip
+    charter has no reason to pay, and the operator's window relayouts once instead of
+    once per orphan.
+
+    ``None`` and never an empty chain when there is nothing to kill: an empty target list
+    reaching `kill-pane` is the measured failure `close_argvs` records — a `kill-pane`
+    with no `-t` kills the *current* pane, which here is the operator's harness. That
+    answer is `tmuxctl.chain`'s own (`if not argvs: return None`) and is deliberately not
+    restated here: an `if kills else None` in front of it reads as a second guard and is
+    the same guard, which the deletion sweep correctly reported as a line nothing could
+    go red without.
+    """
+    return tmuxctl.chain([tmuxctl.server_argv(server, "kill-pane", "-t", p)
+                          for p in panes if tmuxctl.PANE_ID_RE.fullmatch(p)])
 
 
 def modal_argvs(server: str, *, harness: str,

@@ -22,12 +22,48 @@ from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory
 
 
 def cmd_workspace_list(args) -> int:
+    """Every workspace this plane offers, with the active one marked — #745.
+
+    **The always-present workspace is folded in whether or not its directory exists**,
+    which is `frame/switch.workspaces`' rule asked at the other surface rather than a
+    second one invented here. `workspace.list_workspaces` reads DIRECTORIES, and
+    `config.DEFAULT_WORKSPACE` is the rung `workspace.resolve` terminates on — so a plane
+    where nobody has selected anything resolves to a name this listing did not contain,
+    and the table printed a "you are here" inset with the mark on no row at all:
+
+        Active workspace: default  (via default (nothing selected))
+
+          WORKSPACE  MODE   CLONES  REPOS
+          alpha      local  0       —
+          beta       local  0       —
+
+    That is #745 read from the CLI side. The report came from the frame — the `F2`
+    workspace picker offers `default`, switching to it succeeds, and `charter workspace
+    list` then does not list where the frame is standing — but the picker is not what is
+    wrong: `charter workspace use default` accepts the same name on a plane that has never
+    made one, and says so in as many words, because `workspace.ensure` creates it on
+    demand. The disagreement was between the LISTING and everything else.
+
+    **Not created here, and not by `charter init` either**, which is the other half of the
+    report and the half this declines. `[workspace] default` names it, so `init` would be
+    baking a directory for a value the operator may change in the charter.toml `init`
+    itself just wrote — and every route that puts something IN the workspace (`clone`,
+    `workspace use`, `workspace create`) already calls `ensure`. A row costs nothing and
+    cannot go stale; a directory named after last week's config can.
+
+    A row for it is honest about what it is: `local`, no clones, `—` for repos, which is
+    exactly what it holds.
+    """
     active = workspace.resolve()
     names = workspace.list_workspaces()
-    if not names:
-        util.info(f"No workspaces yet. Active resolves to '{active}'. "
+    fresh = not names
+    if config.DEFAULT_WORKSPACE not in names:
+        names = sorted(names + [config.DEFAULT_WORKSPACE])
+    if fresh:
+        # Still said, because "there is one row and it is the fallback" and "somebody has
+        # made a workspace" are different states and the table cannot tell them apart.
+        util.info(f"No workspaces yet — '{active}' is the one every plane starts on. "
                   "Create one: charter workspace create <name>")
-        return 0
     print(f"Active workspace: {active}  (via {workspace.source()})\n")
     live = workspace.live_workspaces()
     # `{:<22}` was a guess about a name the operator minted, and `{:<7}` twice over about

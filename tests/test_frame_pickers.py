@@ -91,9 +91,12 @@ class AWorkspacePickerListsWorkspaces(_Frame, unittest.TestCase):
     """Step 1, whole: the list, and what choosing off it does to the frame."""
 
     def test_the_picker_lists_every_workspace_with_the_one_in_use_marked(self):
+        """The names, and the mark as a FIELD rather than as two characters on the front
+        of one (#749). The title is what the operator typed to get here, so it has to be
+        the name and nothing else — `frame/palette.exact` compares against it."""
         roster = choose.roster(choose.WORKSPACE, self.FID)
-        self.assertEqual([r.title for r in roster.rows],
-                         ["* alpha", "  beta", "  default"])
+        self.assertEqual([(r.title, r.mark) for r in roster.rows],
+                         [("alpha", True), ("beta", False), ("default", False)])
 
     def test_choosing_a_row_switches_the_frame_and_bumps_it_so_panels_repaint(self):
         roster = choose.roster(choose.WORKSPACE, self.FID)
@@ -106,7 +109,8 @@ class AWorkspacePickerListsWorkspaces(_Frame, unittest.TestCase):
 
     def test_a_persona_picker_is_the_same_thing_one_noun_over(self):
         roster = choose.roster(choose.PERSONA, self.FID)
-        self.assertEqual([r.title for r in roster.rows], ["  forge", "  scribe"])
+        self.assertEqual([(r.title, r.mark) for r in roster.rows],
+                         [("forge", False), ("scribe", False)])
         was = state.version(self.FID)
         out = choose.switch_to(choose.PERSONA, self.FID, "scribe")
         self.assertTrue(out.ok, out.message)
@@ -114,14 +118,22 @@ class AWorkspacePickerListsWorkspaces(_Frame, unittest.TestCase):
         self.assertNotEqual(state.version(self.FID), was)
 
     def test_the_name_a_row_stands_for_is_matched_by_ID_and_never_by_TITLE(self):
-        """The title carries `choose.MARK` and a name `overlay.Surface.render` contains
-        before drawing, so the string on screen is not the string to switch to. A surface
-        that matched on what it drew would switch to a repaired name or to nothing."""
+        """A row resolves through its id, and a row that merely LOOKS the same does not.
+
+        The title is the bare name since #749, so "the string on screen differs from the
+        string to switch to" is no longer the thing that would catch a title match — the
+        difference is containment, and it only shows on a hostile name
+        (`test_a_hostile_name_is_one_row_and_switches_to_the_raw_name`). What still has to
+        hold, and what a title match would lose, is that a row this roster did not build
+        stands for no name however it is spelled: `overlay.Surface.render` draws what it
+        is given, and a foreign row carrying `alpha` must not switch this frame anywhere.
+        """
         roster = choose.roster(choose.WORKSPACE, self.FID)
         for row, name in zip(roster.rows, roster.names):
             self.assertEqual(roster.name_of(row), name)
-            self.assertNotEqual(row.title, name)
         self.assertIsNone(roster.name_of(overlay.Row(id="not:mine", title="alpha")))
+        self.assertIsNone(roster.name_of(
+            overlay.Row(id="workspace:n99", title="alpha", mark=True)))
 
 
 class APickerRowIsNotAnAction(_Frame, unittest.TestCase):

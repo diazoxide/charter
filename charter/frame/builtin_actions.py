@@ -50,6 +50,12 @@ from . import action, actions, choose, state, tmuxctl
 #: `frame/choose.py`'s, which marks the workspace and the persona a frame is on for the
 #: identical reason, and a second copy here would be a second answer to what "the one you
 #: are on" looks like. See that module for why it is ASCII.
+#:
+#: Nothing in this module composes it into a title any more — `action.Action.mark` says
+#: which row is the one in effect and `frame/overlay.py` draws it, which is #749. The
+#: name is kept because it is what a reader looking for "how is the current one marked"
+#: comes here for, and because it is still the width `frame/slots.py` measures its own
+#: rows against.
 MARK = choose.MARK
 
 
@@ -210,7 +216,7 @@ def _register_selection(reg: actions.ActionRegistry) -> None:
     for word, step, start in _SELECT_STEPS:
         reg.register(action.Action(
             id=f"repo.{word}", title=f"repo: select the {word} row",
-            touches=("repos",),
+            touches=("repos",), repeat=True,
             run=(lambda ctx, st=step, sr=start: _select(ctx, st, sr)),
             available=lambda ctx: bool(ctx.repos),
             reason_unavailable=lambda ctx: NO_REPOS))
@@ -258,9 +264,8 @@ def _register_density(reg: actions.ActionRegistry, *, current: str) -> None:
     """
     from .. import instance
     for level in instance.FRAME_DENSITY:
-        on = MARK[0] if level == current else MARK[1]
         reg.register(action.Action(
-            id=f"density.{level}", title=f"{on}density: {level}",
+            id=f"density.{level}", title=f"density: {level}", mark=(level == current),
             run=(lambda ctx, lv=level: _run_density(ctx.fid, lv)),
             available=lambda ctx: _laid_out(ctx.fid),
             reason_unavailable=lambda ctx: NO_LAYOUT))
@@ -295,9 +300,8 @@ def _register_chrome(reg: actions.ActionRegistry, *, current: str) -> None:
     """
     from .. import instance
     for level in instance.FRAME_CHROME:
-        on = MARK[0] if level == current else MARK[1]
         reg.register(action.Action(
-            id=f"chrome.{level}", title=f"{on}chrome: {level}",
+            id=f"chrome.{level}", title=f"chrome: {level}", mark=(level == current),
             run=(lambda ctx, lv=level: _run_chrome(ctx.fid, lv)),
             available=lambda ctx: bool(state.panes(ctx.fid)),
             reason_unavailable=lambda ctx: NO_PANES))

@@ -120,13 +120,21 @@ PIN = {WORKSPACE: "CHARTER_WORKSPACE", PERSONA: "CHARTER_PERSONA"}
 NO_CHANGES = ("no cross-repo change in this workspace — create one with "
               "`charter change create <slug> --why \"…\"`")
 
-#: What marks the name the frame is on right now.
+#: What marks the name the frame is on right now — **`overlay.ROW_MARK`, not a second
+#: pair**, and that is #749's fix seen from this side.
 #:
-#: **ASCII, deliberately** — `overlay._MARK`'s own rule and `statusline._persona_chips`'
-#: measurement behind it: `●`, `◆` and the pointing triangles are East-Asian *Ambiguous*
-#: and have broken this layout twice. Both entries are the same width by construction, so
-#: the mark moving does not move the names beside it.
-MARK = ("* ", "  ")
+#: A row used to arrive here already carrying two characters of mark, which made the width
+#: of the mark column a thing each row source spelled for itself: this module spelled it,
+#: `frame/builtin_actions.py` spelled it through this name, and the doorways and every
+#: other action spelled nothing at all — so the palette drew two left edges. The mark is
+#: now :attr:`overlay.Row.mark`, a flag, and the column is reserved for every row by
+#: `overlay.Surface.render`.
+#:
+#: The name stays because it is charter's "you are here" marker beyond this surface:
+#: `frame/slots.py`'s changes section draws its own rows with it and must not invent a
+#: second spelling of the same idea. Bound to the overlay's pair rather than copied, so
+#: there is one answer to what the mark IS as well as to how wide it is.
+MARK = overlay.ROW_MARK
 
 #: The id of the palette row that OPENS a picker, and of one name row inside one. See the
 #: module docstring for why both carry a `:` — it is what keeps them out of the action
@@ -139,9 +147,15 @@ class Roster(NamedTuple):
     """One picker's rows, and the names they stand for.
 
     The two are carried together and matched by ROW ID rather than by title, because the
-    title carries :data:`MARK` and a committed name that `overlay.Surface.render`
-    contains before drawing — so the string on screen is not the string to switch to, and
-    a surface that matched on what it drew would switch to a repaired name or to nothing.
+    title is a committed name that `overlay.Surface.render` contains before drawing — so
+    the string on screen is not the string to switch to, and a surface that matched on
+    what it drew would switch to a repaired name or to nothing.
+
+    **The title is the bare name now** (#749, where the mark moved to
+    :attr:`overlay.Row.mark`), and that does not soften the rule above by one word:
+    containment is what the two strings differ by, and it is exactly the difference that
+    matters — a name holding a `\\u2028` is one row and one name, and only one of those
+    two is the thing `switch.to_workspace` may be handed.
     """
 
     #: :data:`WORKSPACE` or :data:`PERSONA`. Carried so a caller that opened a picker does
@@ -247,9 +261,9 @@ def pin_reason(noun: str, fid: str) -> str:
 def roster(noun: str, fid: str) -> Roster:
     """Every name *noun* has, as rows, with the one *fid* is on marked.
 
-    No cap and no reordering: `frame/palette.py`'s `narrow` filters this list as the
-    operator types and never reorders it, so the row under the cursor stays under the
-    cursor between keystrokes.
+    No cap, and the order is `switch.py`'s: `frame/palette.py`'s `narrow` filters this
+    list as the operator types and moves only a row whose whole name has been typed
+    (#732), so a picker of forty names reads down its listing order every other time.
 
     The note column is left empty for three of the four nouns. The one refusal a picker
     could carry per row is the launch pin, and that is reported by the row that OPENS the
@@ -265,8 +279,7 @@ def roster(noun: str, fid: str) -> Roster:
     """
     names = tuple(names_of(noun, fid))
     now = current(noun, fid)
-    rows = tuple(overlay.Row(id=NAME_ID.format(noun, i),
-                             title=f"{MARK[0] if n == now else MARK[1]}{n}",
+    rows = tuple(overlay.Row(id=NAME_ID.format(noun, i), title=n, mark=(n == now),
                              note=_note(noun, n))
                  for i, n in enumerate(names))
     return Roster(noun=noun, rows=rows, names=names)
@@ -314,11 +327,19 @@ def labelled(roster: Roster, reason: str = "") -> tuple[overlay.Row, ...]:
     (#512). The reason names `$CHARTER_WORKSPACE` or `$CHARTER_PERSONA`, so the kind is
     still on the row; it is a sentence instead of a word.
 
-    ``_replace`` rather than a fresh `overlay.Row`, so the id is carried over untouched:
-    it is what :meth:`Roster.name_of` matches on, and a labelled row that minted its own
-    would be a row that stands for no name.
+    **A *reason* also makes the row REFUSED**, and that is a second field rather than a
+    re-reading of the first because the note means two different things here. With no
+    reason the note is the kind — `workspace`, `persona` — and the row runs perfectly
+    well; with one, the note is why it cannot. `frame/palette.narrow` has to tell those
+    apart to decide which row the cursor starts on (#732), and "the note is non-empty"
+    would call every labelled row in the palette unavailable.
+
+    ``_replace`` rather than a fresh `overlay.Row`, so the id and the mark are carried
+    over untouched: the id is what :meth:`Roster.name_of` matches on, and a labelled row
+    that minted its own would be a row that stands for no name.
     """
-    return tuple(r._replace(note=reason or roster.noun) for r in roster.rows)
+    return tuple(r._replace(note=reason or roster.noun, refused=bool(reason))
+                 for r in roster.rows)
 
 
 def open_rows(fid: str) -> tuple[overlay.Row, ...]:
@@ -335,14 +356,23 @@ def open_rows(fid: str) -> tuple[overlay.Row, ...]:
     on" without opening anything, and so typing `alpha` still finds the row when `alpha`
     is where the frame is. The note is the pin reason, which is what makes a pinned frame
     say so **before** a keypress — Task 4's rule, unchanged, one row instead of forty.
+
+    **A reason here is a refusal, and the row says so in a field** (#732). A doorway with
+    a reason is one `commands_frame._picker` will not open: it says the note on the
+    operator's screen and nothing else happens. That is the right behaviour for a
+    keypress and the wrong place for a cursor to be resting when the query also matched a
+    name that switches — which is the whole of #732, where `chat: alpha.1 — pick another`
+    outranked the `alpha` workspace row because a substring of a title beat an exact
+    match on a name.
     """
     out = []
     for noun in NOUNS:
         now = current(noun, fid)
+        reason = pin_reason(noun, fid)
         out.append(overlay.Row(
             id=OPEN_ID.format(noun),
             title=(f"{noun}: {now} — pick another" if now else f"{noun} — pick one"),
-            note=pin_reason(noun, fid)))
+            note=reason, refused=bool(reason)))
     return tuple(out)
 
 

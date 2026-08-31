@@ -182,6 +182,13 @@ Three things follow that are worth saying plainly rather than leaving you to fin
   only route on a plane with `mouse = false`, which is the default, and charter will not
   bind a bare arrow key to change it: a `bind -n Up` is server-wide and would take the arrow
   before your harness sees it.
+- **Those two rows repeat, and that is what makes them usable.** Enter on either one moves
+  the selection and **leaves the palette open**, with what you typed and the row you are on
+  exactly where you left them — so three rows down the table is `F2`, `next`, Enter, Enter,
+  Enter, and one palette rather than three. The header says what each press did
+  (`charter /next · selected auth`), because the palette is drawn over the whole window and
+  the table is not on screen behind it. Escape leaves; every other row still closes the
+  palette when it runs.
 
 **The tab bars are the exception to "a click only selects", and they say why.** Click a name
 on the `chats` or `workspaces` bar and the frame *switches* to it — there is no in-between
@@ -818,7 +825,7 @@ There are three levels:
 
 | level | edges | each panel says |
 |---|---|---|
-| `minimal` | `top` and `bottom` | the two one-row strips and nothing else — no repo table, no sidebar, so every row and column the frame is not using is your session's; `top` drops the charter version and `bottom` keeps one field |
+| `minimal` | `top` and `bottom` | the two one-row strips and nothing else — no repo table, no sidebar, so every row and column the frame is not using is your session's; `top` drops the charter version and `bottom` keeps one attention field, plus the hotkey hint |
 | `normal` | `top`, `bottom` and `repos` | both strips saying everything they have, and the repo table between them, as tall as the window can spare |
 | `full` | every edge | the sidebar as well |
 
@@ -840,6 +847,14 @@ remaining panel terser: `top` drops the charter version (the workspace and the p
 what it exists to tell you), and `bottom` keeps only its highest-priority attention field
 — an alert if there is one, the spinner if work is running, otherwise the todo count, so
 the row is never blank.
+
+**The hotkey hint survives `minimal`, and it is the one field that does.** The other three
+are news about your plane and ranking them against each other is what the level is for; the
+hint is not news, it is the one thing on screen that says how to drive the frame — and
+`minimal` is the arrangement where the palette is the only route to the repo table, the
+todos, the workspace, the persona and the way back to `full`. So `bottom` reads
+`7 todos · F2 palette` rather than `7 todos`. A pane too narrow for both still drops it,
+because that is width and not density.
 
 If you want the table but at `minimal`'s verbosity, write the `slots` list by hand and
 declare the level beside it: an explicit `slots` wins over a preset, and the table then
@@ -1668,7 +1683,7 @@ chats was last in front of you.
 
 ```
 charter · 11 to choose from
-> workspace: alpha — pick another
+>   workspace: alpha — pick another
     persona: steward — pick another
     detach — leave the harness running
     repo: select the next row
@@ -1685,7 +1700,14 @@ charter · 11 to choose from
 
 **Everything is listed, including what cannot run right now — with the reason beside it.**
 An option you cannot see is one you cannot ask about, so a row that is refused stays and
-says what would make it available. The reason is the right-hand column.
+says what would make it available. The reason is the right-hand column. A refused row is
+listed lower than a row you typed the whole name of, and never dropped.
+
+**Every row reserves the `*` column, whether or not it has a mark to put in it** — the
+frame's one-inset rule, applied here. Four cells stand in front of every row's text: two
+for the cursor and two for the "you are on this one" mark, in that order, whether or not
+the row has either. So `detach` and `density: full` start in the same column, and the
+distance from the cursor to the text is the same on every row of the list.
 
 **Two of those rows are doorways.** `workspace:` and `persona:` say which one this frame is
 on, and Enter opens the list of the others **in the same pane** — a picker, which is this
@@ -1708,12 +1730,25 @@ with which it is, so `F2` `b` `e` `t` `a` Enter switches without opening anythin
 
 ```
 charter /zeb · 3 to choose from
-> zeb-api                     workspace
+>   zeb                       persona
+    zeb-api                   workspace
     zebra-ui                  workspace
-    zeb                       persona
 
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```
+
+**The name you typed in full is the row Enter runs.** That is the whole of the ordering
+rule and it has two clauses: a row whose name is exactly what you typed comes first, and
+between two of those the one that can actually run comes before the one that cannot.
+Everything else keeps the position the list already gave it — the doorways in their order,
+then the actions in theirs, then the names — so nothing shuffles under you as you type, and
+with nothing typed the list is the one pictured above, unmoved.
+
+It matters because names overlap. `zeb` above is a persona and a prefix of two workspaces.
+A chat id is `<workspace>.<n>`, so on a plane with a workspace `alpha` the `chat:` doorway
+holds `alpha` in its own title — and it used to win, which meant `F2` `a` `l` `p` `h` `a`
+Enter reached a doorway about chats instead of the workspace whose name you had just typed
+in full.
 
 The doorways are for browsing — when you do not know the name — and typing is for
 switching, when you do. Both reach the same rows, and the one you are on keeps its `*`
@@ -1776,11 +1811,19 @@ the lock and names what it overrode: `workspace → beta  (lock moved from 'alph
 would be the wrong answer: an agent inside the frame took that lock, and its next command
 acts on a workspace it was never told had moved.
 
-**Pressing `F2` again while the palette is open opens a second one.** `bind -n` is tmux's
-root key table, so tmux matches the key before any byte reaches the palette's pane — the
-same property that makes `F12` work against a pane that has stopped answering. The second
-palette is the one taking your keys; Escape closes it, and the first is an ordinary pane
-you can select and close the same way.
+**Pressing `F2` again while the palette is open REOPENS it.** `bind -n` is tmux's root key
+table, so tmux matches the key before any byte reaches the palette's pane — the same
+property that makes `F12` work against a pane that has stopped answering — so the second
+press really does run charter again. What it does is close the palette that is open and
+draw a fresh one, which is also the more correct of the two: the list is resolved against
+your plane at the moment it opens, so a reopen re-reads a workspace, persona, density or
+surface that has moved since.
+
+There is never more than one palette pane on a frame's window. charter finds an open one by
+asking tmux — the overlay's pane carries a tmux pane option, so the answer is tmux's and
+disappears with the pane, and there is nothing charter can believe that is out of date.
+A second press therefore never refuses and never does nothing, which matters most on the
+press you make because the first one seemed not to register.
 
 ### What a component can be told about
 
