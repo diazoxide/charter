@@ -492,6 +492,36 @@ class InsideAFrameTheRefusalGoesOnTheFrame(PersonaIso, unittest.TestCase):
         self.assertIn("reposs", state.notice(self.fid))
         self.assertEqual(calls, [])
 
+    def test_a_level_that_renders_as_nothing_is_still_named(self):
+        """`state.say` already runs `contain.one_line`, so the newline half is covered
+        before these ever call it — which is exactly why the sweep found the extra
+        `contain.readable` unpinned and why the difference had to be MEASURED rather than
+        reasoned about.
+
+        The two differ on **invisible codepoints**, and `contain.readable`'s own docstring
+        says why: `one_line` decides on `_INVISIBLE`, a list of five categories, and
+        U+3164 HANGUL FILLER and U+2800 BRAILLE PATTERN BLANK are on none of them, are not
+        `isspace`, and survive `strip`. Measured through this exact path, `charter
+        frame-density <three U+3164>`:
+
+            with    `contain.readable`: charter: no density level \\u3164\\u3164\\u3164 — have: …
+            without it:                 charter: no density level ㅤㅤㅤ — have: …
+
+        The second draws as `no density level    — have: …` — a refusal naming NO level,
+        which is #498's defect one surface over and the precise opposite of what this
+        message exists to do. Both commands, because they are two lines, and the sweep
+        reported them as two survivors."""
+        for name, fn, field in (
+                ("frame-density", commands_frame.cmd_density, "density level"),
+                ("frame-chrome", commands_frame.cmd_chrome, "chrome level")):
+            with self.subTest(name):
+                state.say(self.fid, "", seconds=0.0)
+                fn(SimpleNamespace(level="\u3164\u3164\u3164"))
+                said = state.notice(self.fid)
+                self.assertIn(field, said)
+                self.assertIn("\\u3164", said,
+                              "an invisible level reached the row as nothing at all")
+
     def test_a_hostile_component_name_is_contained_and_still_travels_no_further(self):
         """The guard is unchanged and only its silence went. The name reaches a sentence
         and nothing else — no `split-window`, no hook action text — and the sentence is one
