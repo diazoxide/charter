@@ -25,6 +25,8 @@ frame's window. The choice between "no-op", "toggle shut" and "reopen" comes dow
 double press *is*: it is the press you make because the first one seemed not to register. A
 no-op and a toggle both require charter to believe a palette is open, and being wrong makes
 the key do nothing — which is the complaint that produced the second press, made permanent.
+Opening a palette is a pane split, a Python start and a paint, so it is never instant; a
+faster one makes the double press rarer without making a refusal the right answer to it.
 Reopening answers every press with a palette, and with the *fresher* one: the list resolves
 your density, surface, workspace and persona at the moment it opens.
 

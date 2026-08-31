@@ -6371,12 +6371,16 @@ def _close_open_overlays(socket: str, *, harness: str) -> None:
 
     **Reopen rather than no-op or toggle, and the reason is the double press itself.**
     Both of those require charter to BELIEVE a palette is open, and being wrong makes the
-    key do nothing — the worst possible answer for a key whose response takes a visible
-    moment to appear (#728 measures ~1.8 s of blank terminal on a launch; #729 measures a
-    four-second freeze on the switch path). An operator who presses `F2` twice is
-    precisely an operator who thinks the first press did not register; answering them with
-    no palette at all is the complaint they already had, made permanent. This answers
-    every press with a palette. It is also the *fresher* one: the catalogue resolves the
+    key do nothing — the worst possible answer for a key whose response is not instant.
+    Opening the palette splits a pane, starts a Python process, imports every installed
+    provider and paints; #728 measures the neighbouring launch path at ~1.8 s of blank
+    terminal, and the palette's own open was reported at about three seconds. **The
+    argument does not rest on any particular number, and deliberately not on #729's
+    four-second freeze, which #763 has since removed.** It rests on the shape: an operator
+    who presses `F2` twice is precisely an operator who thinks the first press did not
+    register, and answering them with no palette at all is the complaint they already had,
+    made permanent. A faster palette makes that press rarer; it does not make refusing it
+    the right answer. This answers every press with a palette. It is also the *fresher* one: the catalogue resolves the
     density, the surface, the workspace and the persona at the moment it opens, so a
     reopen re-reads a plane that may have moved under the first.
 
