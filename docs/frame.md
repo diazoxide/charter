@@ -417,17 +417,17 @@ already in.
 
 **On the attention row — the frame's own last row, not tmux's message line.** Whatever you
 choose off `F2`, the outcome appears there for a few seconds and then gives the row back:
-`charter: workspace → gamma`, or `charter: no workspace 'gamm' — have: alpha, beta,
-gamma`. A refusal stays up longer than a success, because a refusal is the only one of the
-two with nothing else confirming it — when a switch takes, the identity row above has
-already changed to say so.
+`charter: persona → forge`, or `charter: no persona 'forg' — have: forge, scribe`. A
+refusal stays up longer than a success, because a refusal is the only one of the two with
+nothing else confirming it — when a switch takes, the identity row above has already
+changed to say so.
 
 **It used to be a `display-message`, and that cost four seconds of frozen screen** (#729).
 A tmux client does not redraw its *panes* while a message is up, and the freeze is exactly
-as long as the message asks for. So every workspace, persona and chat switch put a sentence
-on screen announcing a repaint that the same sentence was hiding: measured with a real
-client, the panes were correct at 0.5 s and the operator went on looking at the previous
-workspace until 4.3 s — on tmux 3.7c and at the 3.2 floor alike, within 0.1 s of each
+as long as the message asks for. So every persona and chat switch put a sentence on screen
+announcing a repaint that the same sentence was hiding — and so did a workspace switch,
+while there was one: measured with a real client, the panes were correct at 0.5 s and the
+operator went on looking at the previous workspace until 4.3 s — on tmux 3.7c and at the 3.2 floor alike, within 0.1 s of each
 other. The same switch now reaches your eyes in **0.33 s**, with no stale window at all.
 
 The row is also the only surface that can be aimed at *your* frame. `display-message -t`
@@ -450,8 +450,10 @@ usually drawing a page. At 120 columns it draws six of them, at 160 eight, at 20
 
 **They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
 exactly what `F2` → `chat` does — the same command, the same five refusals, the same
-sentence on your screen when one fires — and a workspace tab does what `charter frame-switch
---workspace <name>` does. *Mouse is off by default* above has the rules a click follows and
+sentence on your screen when one fires. A **workspace** tab does what `charter frame-switch
+--workspace <name>` does, which since §4j is to put one sentence on your screen and move
+nothing: a chat belongs to its workspace for life, and the tab names the workspace this
+chat is in rather than one it could become. *Mouse is off by default* above has the rules a click follows and
 why a tab switches where a repo row only selects; the short of it is that clicking the tab
 you are on, the `+N`, or anything that is not a drawn name does nothing at all.
 
@@ -1683,7 +1685,7 @@ chats was last in front of you.
 
 ```
 charter · 11 to choose from
->   workspace: alpha — pick another
+>   workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
     persona: steward — pick another
     detach — leave the harness running
     repo: select the next row
@@ -1780,19 +1782,31 @@ neither does the `display-menu` they opened. `F2` was always trying to be a pale
 keeping both would have left two answers to "how do I do a thing", which is how the single
 menu became weird in the first place.
 
-**Switching from the picker moves the frame, and says so.** Choosing a workspace writes
-the choice under the frame's own id — the same pointer `charter workspace use` writes from
-inside the frame, which is what makes the panels follow — records it as the frame's
-workspace, re-gathers the repo table for it, and bumps the frame so every panel repaints
-against the new plane. A persona switch is the same minus the gather. Either way a
+**A chat cannot be switched to another workspace, and the row says so before you press
+it.** A chat belongs to the workspace it was opened in for life: its id is
+`<workspace>.<n>`, and the harness inside it has that workspace's directory as its cwd,
+that workspace's files open and that workspace's work in its history. Moving the label
+would leave all three behind — the tmux window does not move, so the chat would be listed
+in a workspace whose other chats it cannot reach and unreachable from the one it is
+actually in. So the `workspace` row carries `cannot switch: a chat belongs to its
+workspace for life — open a chat in another workspace with `charter <harness> --workspace
+<name>`` and opens no picker. **Opening a chat there is the way to work in another
+workspace**, and it is the honest one: a new conversation, in the right plane, with its own
+cwd and its own history.
+
+The workspace names are still listed and the row still marks the one you are in, because
+that is where you look to answer "which workspace is this chat in" — you just cannot press
+one into a move.
+
+**Switching a persona from the picker moves the frame, and says so.** Choosing one writes
+the choice under the frame's own id and bumps the frame so every panel repaints, and a
 one-line message lands on your own screen saying what happened.
 
 **A pinned frame says so before you press anything.** A frame launched with
-`$CHARTER_WORKSPACE` (or `$CHARTER_PERSONA`) set is *pinned*: that variable is in every
-panel pane's environment for as long as the pane lives, and nothing charter can write
-outranks it — so that noun's row carries `cannot switch: $CHARTER_WORKSPACE pins this
-frame to '<name>'` and opens no picker, rather than offering a list of moves that would not
-happen. The other noun is unaffected: one pin, one noun. Nothing here creates a workspace
+`$CHARTER_PERSONA` set is *pinned*: that variable is in every panel pane's environment for
+as long as the pane lives, and nothing charter can write outranks it — so the persona row
+carries `cannot switch: $CHARTER_PERSONA pins this frame to '<name>'` and opens no picker,
+rather than offering a list of moves that would not happen. Nothing here creates a persona
 either — an unknown name is a refusal with the existing names beside it, never an implicit
 create.
 
@@ -1803,13 +1817,13 @@ before any column is measured (#472), so it is exactly one row on screen; and th
 re-checks it against the same alphabet `charter workspace use` does, so a name charter would
 not accept is refused with a message rather than acted on.
 
-**The session lock moves with you.** `charter workspace use` locks the session to what it
-selected so a workspace cannot be swapped out from under a running task — but a keypress on
-the picker *is* you, and the switcher's own first write would otherwise take a lock that
-its second write hit, leaving a switcher that worked exactly once. So the switch overrides
-the lock and names what it overrode: `workspace → beta  (lock moved from 'alpha')`. Silence
-would be the wrong answer: an agent inside the frame took that lock, and its next command
-acts on a workspace it was never told had moved.
+**The session lock is released by `charter workspace unlock`, and by nothing on the
+palette.** `charter workspace use` locks the session to what it selected so a workspace
+cannot be swapped out from under a running task, and a launch that asked you to pick one
+takes the same lock. `F2 → workspace` used to override it — that was the frame's way out
+while a workspace switch was a thing a frame could do — and now there is nothing to
+override, so the way out is the one the launch names on the line that takes the lock:
+`charter workspace unlock`, typed in the frame's own shell.
 
 **Pressing `F2` again while the palette is open REOPENS it.** `bind -n` is tmux's root key
 table, so tmux matches the key before any byte reaches the palette's pane — the same
@@ -1933,9 +1947,9 @@ closed stdin end the launch having started nothing; the exit code is 130.
 
 **Picking is the confirmation that locks.** That is what selecting a workspace has always
 meant — `charter workspace use` locks the session to what it selected — and the launch
-says so on the line after your answer. The frame has its own way out: `F2 → workspace`
-overrides the lock and tells you it did, so a choice made at the prompt does not send you
-back to a shell to change it.
+says so on the line after your answer, naming the way out in the same sentence: `charter
+workspace unlock`, in the frame's own shell. (It used to name `F2 → workspace` first; that
+route is gone, because a chat belongs to its workspace for life.)
 
 **It never asks twice, and it never asks a script.** Your choice is written as the
 terminal's own pointer, so the next launch from that terminal has an answer and goes

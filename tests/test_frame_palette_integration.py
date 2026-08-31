@@ -37,7 +37,7 @@ import time
 import unittest
 from pathlib import Path
 
-from charter import commands_frame, config, util
+from charter import commands_frame, config, persona, util
 from charter.frame import overlay, state, tmuxctl
 
 from tests import _tmuxreap
@@ -123,6 +123,12 @@ class _ThePalette(PersonaIso):
         (self.tmp / "charter.toml").write_text("")
         for name in ("alpha", "zebra"):
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
+        # Two personas, because the persona is the noun a frame can still be MOVED to
+        # (§4j took the workspace), and three cases below drive a real switch end to end.
+        for name in ("forge", "scribe"):
+            d = config.PERSONAS_DIR / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "persona.md").write_text("# p\n")
 
         self.fid = state.frame_id("palette-integ", os.getpid())
         # `CHARTER_ROOT` has to be in the SERVER's own starting environment: the hotkey
@@ -302,28 +308,33 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
                       "what the operator typed is not on the header")
 
     def test_enter_opens_the_picker_in_this_same_pane_and_choosing_moves_the_frame(self):
-        """**Task 6's step 1, end to end, with real keys.** The palette's workspace row is
+        """**Task 6's step 1, end to end, with real keys.** The palette's persona row is
         a doorway: Enter replaces the surface in the pane the operator is already looking
         at — no second pane, no second charter process, nothing to race
         `_close_palette` — and the name chosen there switches the frame.
 
         Asserted on the frame's own record rather than on anything drawn, because "the
-        frame moved" is `state.workspace_for`'s rungs (#411) and not a repaint.
+        frame moved" is a pointer under the frame's id (#411) and not a repaint.
+
+        **It was the workspace doorway until §4j** and had to move rather than be copied:
+        that one opens no picker on any frame now, so this case would have been measuring
+        the refusal instead of the route. `AnUnavailableActionIsDrawnWithItsReason` is
+        where the refusal is measured, end to end, on this same server.
         """
         fd, pane = self._open()
         self._await_screen(pane, "workspace: alpha")
-        self.assertEqual(state.frame_workspace(self.fid), "alpha")
+        self.assertIsNone(persona.for_session(self.fid))
         self.assertEqual(self._palette_pane(), pane)
-        os.write(fd, b"workspace\r")
-        # The picker: the names alone, no `workspace:` prefix and no `detach` beside them.
+        os.write(fd, b"persona\r")
+        # The picker: the names alone, no `persona:` prefix and no `detach` beside them.
         self._await_screen(pane, "detach", present=False)
-        self._await_screen(pane, "zebra")
+        self._await_screen(pane, "scribe")
         self.assertEqual(self._palette_pane(), pane,
                          "the picker opened a second pane instead of reusing this one")
-        os.write(fd, b"zebra\r")
-        self.assertTrue(_await(lambda: state.frame_workspace(self.fid) == "zebra"),
-                        f"the chosen name never switched the frame: workspace is still "
-                        f"{state.frame_workspace(self.fid)!r}")
+        os.write(fd, b"scribe\r")
+        self.assertTrue(_await(lambda: persona.for_session(self.fid) == "scribe"),
+                        f"the chosen name never switched the frame: persona is still "
+                        f"{persona.for_session(self.fid)!r}")
 
     def test_typing_a_name_switches_the_frame_with_no_doorway_in_between(self):
         """**Task 8, end to end, with real keys, and the keystroke claim is the point.**
@@ -332,27 +343,29 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         `F2`, the name, Enter — one keypress fewer, on the thing an operator does most —
         and it is the same pane, the same surface and the same switch underneath.
 
-        The kind is asserted on the drawn row rather than on the `Row`: `workspace` beside
-        `zebra` is what tells it from a persona of the same name, and it is the note
+        The kind is asserted on the drawn row rather than on the `Row`: `persona` beside
+        `scribe` is what tells it from a workspace of the same name, and it is the note
         column, which `overlay.Surface.render` lays out against the pane's real width.
+
+        Staged on the persona since §4j, for the reason the case above states.
         """
         fd, pane = self._open()
         self._await_screen(pane, "workspace: alpha")
-        self.assertEqual(state.frame_workspace(self.fid), "alpha")
+        self.assertIsNone(persona.for_session(self.fid))
         was = state.version(self.fid)
-        os.write(fd, b"zebra")
+        os.write(fd, b"scribe")
         self._await_screen(pane, "detach", present=False)
         screen = self._screen(pane)
         # Past the header, which carries what was typed and would answer for the row.
-        row = next((ln for ln in screen.splitlines()[1:] if "zebra" in ln), "")
-        self.assertIn("workspace", row,
-                      f"the row does not say what kind of thing `zebra` is:\n{screen}")
+        row = next((ln for ln in screen.splitlines()[1:] if "scribe" in ln), "")
+        self.assertIn("persona", row,
+                      f"the row does not say what kind of thing `scribe` is:\n{screen}")
         self.assertEqual(self._palette_pane(), pane,
                          "typing a name opened a second pane")
         os.write(fd, b"\r")
-        self.assertTrue(_await(lambda: state.frame_workspace(self.fid) == "zebra"),
-                        f"the typed name never switched the frame: workspace is still "
-                        f"{state.frame_workspace(self.fid)!r}")
+        self.assertTrue(_await(lambda: persona.for_session(self.fid) == "scribe"),
+                        f"the typed name never switched the frame: persona is still "
+                        f"{persona.for_session(self.fid)!r}")
         self.assertTrue(_await(lambda: state.version(self.fid) != was),
                         "the frame was never bumped, so no panel repaints")
 
@@ -398,9 +411,9 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         fd, pane = self._open()
         self._await_screen(pane, "workspace: alpha")
         was = state.version(self.fid)
-        os.write(fd, b"workspace\r")
-        self._await_screen(pane, "zebra")
-        os.write(fd, b"zebra\r")
+        os.write(fd, b"persona\r")
+        self._await_screen(pane, "scribe")
+        os.write(fd, b"scribe\r")
         self.assertTrue(_await(lambda: state.version(self.fid) != was),
                         "the frame was never bumped, so no panel repaints")
 
@@ -631,17 +644,22 @@ class ThereIsNeverMoreThanOnePalettePane(_ThePalette, unittest.TestCase):
 class AnUnavailableActionIsDrawnWithItsReason(_ThePalette, unittest.TestCase):
     """Step 4, on the plan's own example, against a real frame.
 
-    `$CHARTER_WORKSPACE` was set at launch, so it is in every panel pane's environment and
-    nothing charter writes can outrank it. The rows stay, and what they carry is the
-    sentence `switch.to_workspace` would have refused with.
-    """
+    The example was a `$CHARTER_WORKSPACE` pin and is now §4j: a chat belongs to its
+    workspace for life, so that doorway carries a reason on every frame rather than on
+    some. The mechanism under test is unchanged and is the whole point of the class — the
+    row stays, it carries the sentence `switch.to_workspace` refuses with, and Enter on it
+    opens nothing and moves nothing.
 
-    PIN = "alpha"
+    Not staged on a pin any more because it no longer decides anything here: with the pin
+    set, `choose.pin_reason` answers §4j's sentence first, so a pinned fixture would have
+    proved only that the frame draws the same row it draws unpinned. The pin's own end of
+    the rule is measured on the persona, in `tests/test_frame_pickers.py`.
+    """
 
     def test_the_row_is_listed_and_says_why_it_cannot_run(self):
         _, pane = self._open()
         self._await_screen(pane, "workspace: alpha")
-        self._await_screen(pane, "cannot switch: $CHARTER_WORKSPACE")
+        self._await_screen(pane, "cannot switch: a chat belongs to its")
 
     def test_choosing_it_opens_no_picker_changes_nothing_and_the_frame_says_so(self):
         """A pinned frame does not get a list of names it cannot switch to. The row is

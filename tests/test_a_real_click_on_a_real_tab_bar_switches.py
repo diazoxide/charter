@@ -50,7 +50,7 @@ import unittest
 from pathlib import Path
 
 from charter import commands_frame, config
-from charter.frame import layout, state, tmuxctl
+from charter.frame import layout, state, switch, tmuxctl
 
 from tests import _tmuxreap
 from tests._isolation import PersonaIso, make_plane
@@ -323,14 +323,22 @@ class _ARealFrameWithBars(PersonaIso):
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
-class ARealClickOnTheWorkspaceBarMovesTheFrame(_ARealFrameWithBars, unittest.TestCase):
-    """The `workspaces` bar: click a name, the frame is on that workspace.
+class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
+                                                  unittest.TestCase):
+    """The `workspaces` bar: click a name, and `charter frame-switch --workspace` runs.
 
     **Three processes and none of them is this one.** The bar is painted by a `charter
     panel workspaces` child, the click is decoded there, and the switch is performed by a
     `charter frame-switch` child that panel starts. The only thing between them and this
     test is the plane on disk — so these passing is the proof that the whole chain is real
     rather than an artefact of one interpreter.
+
+    **The class was `…MovesTheFrame` and the frame no longer moves** (§4j: a chat belongs
+    to its workspace for life). What the click produces is the refusal on the frame's own
+    attention row, and that is what these await — the far end of the same three processes,
+    written by the same child, reached by the same click. Everything this file is really
+    about — the column arithmetic, the keyboard staying on the harness, the page not
+    sliding — is unchanged and is what would still fail if the chain broke.
     """
 
     def setUp(self) -> None:
@@ -357,22 +365,41 @@ class ARealClickOnTheWorkspaceBarMovesTheFrame(_ARealFrameWithBars, unittest.Tes
                          "the harness is not the active pane, so a report reaching the "
                          "bar would prove nothing about `[frame] mouse`")
 
-    def test_clicking_a_tab_moves_the_frame_to_that_workspace(self):
-        """The report, answered end to end. Nothing here writes the frame's workspace and
-        nothing resizes anything, so a frame that moved moved because of the click."""
-        self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
-        self.assertTrue(
-            _await(lambda: state.frame_workspace(self.fid) == self.THERE),
-            f"the click never reached the switch: "
-            f"{state.frame_workspace(self.fid)!r}")
+    def test_clicking_a_tab_reaches_the_switch_and_the_refusal_comes_back(self):
+        """The report, answered end to end — and since §4j the answer is a sentence rather
+        than a move: a chat belongs to its workspace for life.
 
-    def test_the_bar_repaints_with_the_mark_on_the_workspace_it_moved_to(self):
-        """The switch ends in a `state.bump`, which is the version this panel's poll was
-        already watching — so the mark follows with no repaint of this test's own."""
+        **The observable had to change and the chain did not.** This used to await
+        `state.frame_workspace(fid) == THERE`, which is the write §4j removed, so keeping
+        it would have measured nothing this file exists for. `state.notice` is the other
+        end of the same three processes — the panel decodes the click, spawns `charter
+        frame-switch --workspace <name>`, and that child writes the outcome to the frame's
+        attention row — so a sentence arriving there proves the click reached the switch
+        exactly as a moved record used to.
+        """
         self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
         self.assertTrue(
-            _await(lambda: f"*{self.THERE}" in self._bar_row(self.bar)),
-            f"the bar never redrew the mark: {self._bar_row(self.bar)!r}")
+            _await(lambda: switch.FOR_LIFE in state.notice(self.fid)),
+            f"the click never reached the switch: notice is "
+            f"{state.notice(self.fid)!r}")
+        self.assertEqual(state.frame_workspace(self.fid), self.HERE,
+                         "the refusal moved the chat anyway")
+
+    def test_the_bar_repaints_and_the_mark_stays_where_the_chat_is(self):
+        """The switch ends in a `state.bump` — the version this panel's poll was already
+        watching — so the bar redraws without a repaint of this test's own. What it
+        redraws is the same mark: the frame did not move, and a bar that showed it moving
+        would be the lie §4j is about.
+
+        Was `test_the_bar_repaints_with_the_mark_on_the_workspace_it_moved_to`.
+        """
+        was = state.version(self.fid)
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
+        self.assertTrue(_await(lambda: state.version(self.fid) != was),
+                        "the click never bumped the frame, so nothing repaints")
+        row = self._bar_row(self.bar)
+        self.assertIn(f"*{self.HERE}", row, row)
+        self.assertNotIn(f"*{self.THERE}", row, row)
 
     def test_the_click_leaves_the_keyboard_on_the_harness(self):
         """The property `mouse = true` used to take away and #634 gave back, asserted
@@ -380,18 +407,22 @@ class ARealClickOnTheWorkspaceBarMovesTheFrame(_ARealFrameWithBars, unittest.Tes
         your prompt is not a tab an operator will click twice."""
         self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
         self.assertTrue(_await(
-            lambda: state.frame_workspace(self.fid) == self.THERE))
+            lambda: switch.FOR_LIFE in state.notice(self.fid)))
         self.assertEqual(self._active(), self.harness,
                          "clicking the workspace bar moved the keyboard off the harness")
 
-    def test_clicking_the_workspace_you_are_already_on_moves_nothing(self):
-        """Re-switching would re-gather the plane and bump the frame to arrive exactly
-        where it already was. The rule is `slots._Tabs.switch_to`'s; this is it holding
-        through a real terminal, a real pane and a real handler."""
+    def test_clicking_the_workspace_you_are_already_on_starts_nothing(self):
+        """The tab you are on spawns no switch at all — `slots._Tabs.switch_to` refuses
+        before a process is started, which is a different thing from the switch refusing
+        after one is. This is that rule holding through a real terminal, a real pane and a
+        real handler, and the notice is what tells the two apart: an empty attention row
+        means nothing ran."""
         before = self._bar_row(self.bar)
         self._click(self.bar, col=self._column_of(self.bar, f"*{self.HERE}"))
         time.sleep(2.0)
         self.assertEqual(state.frame_workspace(self.fid), self.HERE)
+        self.assertEqual(state.notice(self.fid), "",
+                         "the tab the frame is on started a switch")
         self.assertEqual(self._bar_row(self.bar), before)
 
     def test_clicking_the_heading_moves_nothing(self):
@@ -537,8 +568,8 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCas
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
-class ARealClickOnAWINDOWEDWorkspaceBarMovesTheFrame(_ARealFrameWithBars,
-                                                     unittest.TestCase):
+class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
+                                                       unittest.TestCase):
     """The rung an operator's plane actually draws, clicked on a real terminal.
 
     **Every other case in this file clicks rung 1**, where every name is on the row —
@@ -595,44 +626,51 @@ class ARealClickOnAWINDOWEDWorkspaceBarMovesTheFrame(_ARealFrameWithBars,
                       f"the page does not hold the tab this case clicks: {row!r}")
         self.assertEqual(self._active(), self.harness)
 
-    def test_a_click_on_a_tab_the_old_rung_never_drew_moves_the_frame(self):
+    def test_a_click_on_a_tab_the_old_rung_never_drew_reaches_the_switch(self):
         """The operator's report, at the operator's width. Before the windowed rung this
         row was `workspaces  *harness-wrapper  +14` and this click had nothing to land
-        on."""
+        on.
+
+        What comes back is §4j's sentence rather than a move — see
+        `ARealClickOnTheWorkspaceBarMovesTheFrame` for why the observable moved from the
+        frame's record to its attention row. The column arithmetic this class exists for
+        is untouched: a click that landed on the wrong cell, or on none, produces no
+        notice at all.
+        """
         self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
         self.assertTrue(
-            _await(lambda: state.frame_workspace(self.fid) == self.THERE),
-            f"the click never reached the switch: "
-            f"{state.frame_workspace(self.fid)!r} — row {self._bar_row(self.bar)!r}")
+            _await(lambda: switch.FOR_LIFE in state.notice(self.fid)),
+            f"the click never reached the switch: {state.notice(self.fid)!r} — "
+            f"row {self._bar_row(self.bar)!r}")
 
-    def test_the_page_does_not_move_under_the_pointer_when_the_frame_switches(self):
+    def test_the_page_does_not_move_under_the_pointer_when_the_bar_repaints(self):
         """**The double-click property, through a real terminal.** The cut is made from the
-        names and the width alone, so the row that comes back after the switch holds the
-        same names in the same columns with only the `*` moved — and a second press at the
-        cell that just switched lands on the tab the frame has arrived at, which does
-        nothing.
+        names and the width alone, so the row that comes back after the click holds the
+        same names in the same columns — and a second press at that cell lands on the same
+        tab it did the first time.
 
         A window centred on the marked name would have slid one step here, putting a third
-        workspace under that cell; `slots._Tabs.switch_to` could not refuse it, because the
-        name at that column really would have changed.
+        workspace under that cell. §4j makes that harder to observe, not less true: the
+        mark no longer moves, so what is asserted is that the page is identical and that
+        the second press produces the same answer as the first rather than acting on a
+        name that arrived under the pointer.
         """
         before = self._bar_row(self.bar)
         col = self._column_of(self.bar, f" {self.THERE}")
         self._click(self.bar, col=col)
         self.assertTrue(
-            _await(lambda: state.frame_workspace(self.fid) == self.THERE),
-            "the first click never switched, so there is no repaint to measure")
-        self.assertTrue(
-            _await(lambda: f"*{self.THERE}" in self._bar_row(self.bar)),
-            f"the bar never redrew the mark: {self._bar_row(self.bar)!r}")
+            _await(lambda: switch.FOR_LIFE in state.notice(self.fid)),
+            "the first click never reached the switch, so there is nothing to measure")
         after = self._bar_row(self.bar)
         self.assertEqual([n for n in self.NAMES if n in after],
                          [n for n in self.NAMES if n in before],
                          f"the page moved under the pointer:\n  {before!r}\n  {after!r}")
+        self.assertEqual(self._column_of(self.bar, f" {self.THERE}"), col,
+                         "the tab this test clicked is at a different column now")
         self._click(self.bar, col=col)
         time.sleep(2.0)
-        self.assertEqual(state.frame_workspace(self.fid), self.THERE,
-                         "the second press at the same column switched a second time")
+        self.assertEqual(state.frame_workspace(self.fid), self.HERE,
+                         "the second press at the same column moved the chat")
 
     def test_neither_overflow_count_is_a_tab(self):
         """`+9` stands for names that are not on the row. It is the field an operator is

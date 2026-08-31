@@ -6,37 +6,36 @@ names, contain them, perform the switch, repaint the panels.** The palette
 (`frame/builtin_actions._register_names` → `cmd_switch`) and the launch picker
 (`frame/picker.py` → `cmd_launch`) are two front doors onto the same rooms.
 
+**A WORKSPACE is not one of the things a switch may move, and that is the correction
+this file carries.** Spec §4j settled it on 2026-08-26 — *"a chat belongs to its
+workspace for life; `{workspace}-{hash}` is identity, not a property"* — and Phase 5's
+§3.6 and §8 both reaffirm it. This module was written on 2026-08-25, one day earlier,
+when a frame **was** a workspace one-to-one and moving it was coherent. Phase 5 then made
+a frame a **chat**, nobody re-read the sentence, and "moves the frame" quietly became
+"moves the chat". :func:`to_workspace` therefore refuses, with :data:`FOR_LIFE`, and #733
+and #788 are the two directions of the strand it used to open.
+
 **A switch is a write to the frame's OWN identity, never a pointer somebody might read.**
 #411 is the whole reason this file is not four lines: panels followed `charter ws use`
 only through the `$CHARTER_SESSION_ID` collision, and #412 made that identity explicit on
-tmux's `-e`. `state.workspace_for` is the one rule every frame surface asks, and its rungs
-are, in order: the `$CHARTER_WORKSPACE` pin, `workspace.for_session(fid)`,
-`state.frame_workspace(fid)`, a local resolve. So a workspace switch writes rungs 1 and 2
-— the per-session pointer under the FRAME's id, and the frame's recorded workspace — and
-refuses outright when rung 0 is occupied, because nothing this process can write outranks
-a variable already sitting in a live pane's environment.
+tmux's `-e`. What is left that a switch may move is a persona — who is reading — and a
+change — what one panel is looking at. Neither is a plane the harness's own cwd, files and
+history are about, which is the whole of §4j's argument and the whole of why the workspace
+is the one noun that leaves.
 
-**Which is exactly why the pin is a refusal and not a best effort.** A panel pane was
-started with `-e CHARTER_WORKSPACE=<pin>` (`commands_frame._frame_identity_env`); that
-value is in the pane's process environment for as long as the pane lives, and no file
-charter writes can take it out. Reporting "switched" and drawing the old workspace is the
+**A pin is a refusal and not a best effort**, which is now the persona's rule alone. A
+panel pane was started with `-e CHARTER_PERSONA=<pin>` (`commands_frame._frame_identity_env`);
+that value is in the pane's process environment for as long as the pane lives, and no file
+charter writes can take it out. Reporting "switched" and drawing the old persona is the
 failure mode #411 was filed for. Reporting "this frame is pinned" is the honest one.
 
-**The session lock is overridden, deliberately, and said out loud.** `workspace.set_active`
-locks the session to what it selected, so the switcher's own first write takes the lock and
-a second switch would be refused by the switcher's own doing — a switcher that works once
-is worse than none. The lock exists so a workspace cannot be swapped out from under a
-running task; an operator pressing a key and choosing a name off the palette is not that. So
-:func:`to_workspace` forces, and :data:`Outcome.message` names the workspace the lock was
-taken for, so nothing moves without the operator being told what moved.
-
 **And nothing here writes a TERMINAL pointer**, which is #411 arriving on this command.
-Both `workspace.set_active` and `persona.set_active` normally write one, keyed on
+`persona.set_active` normally writes one, keyed on
 `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/`$SSH_TTY` — and in a `run-shell` child of charter's
 private tmux server those names belong to whichever launcher STARTED that server, which is
 shared between every frame on the machine and may be days old. A switch inside frame B
-would have moved the workspace of the terminal that launched frame A. Both calls below
-pass `terminal_id=""`: this process genuinely has no terminal to speak for.
+would have moved the persona of the terminal that launched frame A. The call below
+passes `terminal_id=""`: this process genuinely has no terminal to speak for.
 
 **Nothing here creates anything.** `charter workspace create` is a real side effect on the
 plane (#518: "a picker that creates on a typo leaves litter"), so an unknown name is a
@@ -130,7 +129,7 @@ def _pin(fid: str, name: str) -> str | None:
 
     Read from `state.identity`, which the launcher wrote, never from `os.environ`: this
     runs as a `run-shell` child of charter's private tmux server, which is shared between
-    every frame on the machine, so this process's own `$CHARTER_WORKSPACE` may be another
+    every frame on the machine, so this process's own `$CHARTER_PERSONA` may be another
     frame's (`state.record_identity` measures exactly that). Empty is what
     `_frame_identity_env` emits for a name the launch did not have, and empty is what
     every charter reader already treats as absent — so an empty value is not a pin.
@@ -139,89 +138,86 @@ def _pin(fid: str, name: str) -> str | None:
     return val or None
 
 
+#: What a workspace keypress inside a chat is answered with — spec §4j, and the whole
+#: operator-facing surface of restoring it.
+#:
+#: **`{workspace}-{hash}` is identity, not a property.** A chat IS its harness session:
+#: the cwd it was started in, the files it has open and the history it is holding are one
+#: workspace's. Re-pointing the record made all three about a different plane while the
+#: tmux window stayed exactly where it was — charter calls `move-window` nowhere — and
+#: #733 and #788 are the two directions that produced. Backward: the moved chat's siblings
+#: could never see it again, so a live window of the session on screen was unreachable
+#: from inside it. Forward: its new neighbours were drawn on its bar, approved by
+#: `chats.check`, and refused by `cmd_chat` every time, because their windows are in
+#: another tmux session.
+#:
+#: **It names the route that exists, because there is no other one to name.** Attaching a
+#: client to another workspace's chat is `switch-client` (spec §4b, delivery stage 9) and
+#: charter makes that call nowhere yet, so until it does there is nothing a workspace
+#: keypress CAN do beyond stopping the frame claiming a workspace it is not in. What works
+#: today is opening a chat there, which is §4j's own answer: *"a conversation wanted
+#: elsewhere is a new chat."*
+#:
+#: **`--workspace` and not `-w`**: the harness launcher's flag has no short form
+#: (`cli.py`'s `_add_frame_parsers`), and a refusal that names a flag the command would
+#: reject is worse than one that names none. `<harness>` rather than `claude` is
+#: `chats.ONLY_CHAT`'s spelling for the same affordance one noun over — a frame may be
+#: running codex or opencode, and this sentence is drawn on both.
+#:
+#: One sentence in one place, read by this refusal and by the palette row that carries it
+#: (`choose.pin_reason`), so the row and the keypress cannot describe one frame two ways.
+#: No name is interpolated into it, which is what lets those two share it: the doorway is
+#: refused before any name has been chosen, and the row it sits on already says which
+#: workspace the frame is in.
+FOR_LIFE = ("cannot switch: a chat belongs to its workspace for life — open a chat in "
+            "another workspace with `charter <harness> --workspace <name>`")
+
+
 def to_workspace(fid: str, name: str) -> Outcome:
-    """Move frame *fid* to workspace *name*, or say why it did not.
+    """Refuse to move chat *fid* to workspace *name*, and name the route that exists.
 
-    Refusals, in the order they are checked, and each of them is a thing the operator can
-    act on:
+    **One refusal and no queue of them, which is a decision rather than a shortcut.**
+    This used to check four things in order — the name's alphabet, whether the workspace
+    exists, a `$CHARTER_WORKSPACE` pin, then the lock — and every one of those is now a
+    narrower and less true reason than the one that always applies. Answering "no
+    workspace 'gamam'" first would teach an operator that a typo is what stands between
+    them and a move that cannot happen at any spelling; answering "pinned" first would
+    say the pin is what forbids it, when an unpinned chat is forbidden identically. So
+    *name* is not looked at: :data:`FOR_LIFE` is the answer for every value of it,
+    including the empty string and a name off a picker charter built itself.
 
-    * **not a workspace name** — `workspace.valid_name`, the one rule
-      (`instance.workspace_name_ok`). A name off a palette charter built cannot fail this;
-      one typed at `charter frame-switch` can.
-    * **no such workspace** — an unknown name is a question, never an implicit create
-      (see the module docstring). The existing names go in the message, which is the same
-      shape `charter workspace use` already answers an unknown name with.
-    * **pinned** — `$CHARTER_WORKSPACE` was set at launch, so it is in every panel pane's
-      environment and outranks anything written here. See the module docstring.
+    **Nothing is read and nothing is written**, and both halves are asserted. A read
+    would be a directory listing for an answer that does not depend on it. A write would
+    be #411's shape arriving through the refusal — a switch reported as refused and half
+    performed — and there were two of them to lose: the per-session pointer under the
+    chat's id (`workspace.set_active(..., session_id=fid)`, `state.own_workspace`'s middle
+    rung) and the launch record (`state.record_workspace`, its last). There is no
+    `state.bump` either: a panel repaints because the version moved, so bumping would make
+    every panel of this chat re-render an identical plane and would be charter agreeing on
+    screen that something happened.
 
-    On success: the per-session pointer under the frame's id
-    (`workspace.set_active(..., session_id=fid)`, rung 1 of `state.workspace_for`), the
-    frame's recorded workspace (`state.record_workspace`, rung 2 — so a panel respawned
-    later, and `commands_frame._relayout_pane_env`, agree with the panels that are up),
-    then the gather cache, then the bump.
-
-    **The cache is refreshed before the bump, not after** — `frame/notify.py` settles the
-    same ordering for the same reason: a panel's poll loop reads the version first and the
-    cache second, so bumping first opens a window where a panel repaints the new
-    workspace's name over the old workspace's repo table. This is a keypress, not a tick,
-    so it does not touch the idle-cost property
-    (`test_an_idle_tick_costs_exactly_one_stat_and_nothing_else`) — nothing here runs per
-    repaint.
-
-    `state.identity` is deliberately NOT rewritten. It records what the LAUNCH put on
-    tmux's `-e`, and `_relayout_pane_env` replays it onto panes split later; an empty
-    `CHARTER_WORKSPACE` there means "resolve locally", which lands on the pointer this
-    just wrote. Writing the new name into it would pin the frame — taking `charter
-    workspace use` away from the agent inside it, which `state.record_workspace`'s own
-    docstring rules out in as many words.
+    *fid* is unused and kept, because `choose.switch_to` dispatches all four nouns through
+    one signature and a refusal that took a different shape from the thing it replaces
+    would move the difference into every caller.
     """
-    from .. import workspace as ws_mod
-    from . import gather
-    shown = contain.one_line(name)
-    if not ws_mod.valid_name(name):
-        return Outcome(False, f"'{shown}' cannot name a workspace")
-    known = workspaces()
-    if name not in known:
-        return Outcome(False, f"no workspace '{shown}' — have: {_some(known)}")
-    pinned = _pin(fid, "CHARTER_WORKSPACE")
-    if pinned:
-        return Outcome(False, "cannot switch: $CHARTER_WORKSPACE pins this frame to "
-                              f"'{contain.one_line(pinned)}'")
-    # `force=True`: see the module docstring. The lock is reported whether or not it was
-    # this switcher's own earlier write that took it, because the operator cannot tell
-    # those apart from the outside and the one that matters — an agent's `charter
-    # workspace use` mid-task — looks identical.
-    was = ws_mod.is_locked(fid)
-    ws_mod.set_active(name, session_id=fid, force=True, terminal_id="")
-    state.record_workspace(fid, name)
-    gather.refresh(fid, workspace=name)
-    # And the panes are made the size the arriving workspace's content wants, BEFORE the
-    # bump that repaints them (#730) — the same ordering, for the same reason, as the
-    # cache refresh above: the bump is what makes a panel repaint, so a resize after it
-    # leaves the panel having already drawn its table into the old rectangle with nothing
-    # to make it draw again. It must be after the refresh for the mirror-image reason —
-    # the height is computed from the count that refresh just wrote.
-    #
-    # Deferred import, like every other import in this function: `commands_frame` imports
-    # this module, and the tmux half of a switch is that module's business. This file
-    # decides what a switch MEANS; `resize_to_content` carries `cmd_resize`'s own
-    # refusals, so a frame that cannot be measured is left alone rather than guessed at.
-    from .. import commands_frame
-    commands_frame.resize_to_content(fid)
-    state.bump(fid)
-    if was and was != name:
-        return Outcome(True, f"workspace → {shown}  "
-                             f"(lock moved from '{contain.one_line(was)}')")
-    return Outcome(True, f"workspace → {shown}")
+    return Outcome(False, FOR_LIFE)
 
 
 def to_persona(fid: str, name: str) -> Outcome:
     """Adopt persona *name* in frame *fid*, or say why it did not.
 
-    The same three refusals as :func:`to_workspace`, one noun over — `persona.valid_name`,
-    an unknown name, and a `$CHARTER_PERSONA` pin carried from the launch. There is no
-    lock: personas have never had one (`persona.set_active` writes and returns a reach),
-    so nothing is forced and nothing is overridden.
+    Three refusals, each a thing the operator can act on: a name that cannot name a
+    persona (`persona.valid_name`, the one rule), an unknown name — a question, never an
+    implicit create, with the existing names beside it — and a `$CHARTER_PERSONA` pin
+    carried from the launch, which is in every panel pane's environment and outranks
+    anything written here. There is no lock: personas have never had one
+    (`persona.set_active` writes and returns a reach), so nothing is forced and nothing is
+    overridden.
+
+    **This noun stays where :func:`to_workspace` leaves, and §4j is why.** A persona is
+    who is reading the plane, not which plane it is: adopting another one changes no
+    cwd, no file and no history, so nothing about the harness's own context stops being
+    true. That is the whole of the argument that removes the workspace and keeps this.
 
     `session_id=fid` is stated rather than inherited, for `_pin`'s reason: this runs as a
     child of a tmux server shared between frames, and `session.current()` would answer
@@ -289,17 +285,18 @@ def current_change(fid: str) -> str | None:
 def to_change(fid: str, name: str) -> Outcome:
     """Point frame *fid* at change *name*, or say why it did not.
 
-    **This moves what the frame is LOOKING at, not what it is.** A workspace switch moves
-    the plane every panel reads and a persona switch moves who is reading; this moves one
-    panel's subject. So there is no `set_active`, no lock, no identity to rewrite and no
-    gather refresh — the change rows are already in the snapshot every panel shares, and
-    re-gathering to choose which of them to draw would be a second reading of a plane
-    that has not moved.
+    **This moves what the frame is LOOKING at, not what it is.** A persona switch moves
+    who is reading the plane; this moves one panel's subject. So there is no `set_active`,
+    no lock, no identity to rewrite and no gather refresh — the change rows are already in
+    the snapshot every panel shares, and re-gathering to choose which of them to draw
+    would be a second reading of a plane that has not moved. A change belongs to one
+    workspace, so pointing at one crosses no plane and §4j has nothing to say about it.
 
     Two refusals, and each is a thing the operator can act on: a slug that cannot name a
     change (`instance.change_name_ok`, the one rule), and a change this workspace does not
-    have. An unknown name is a question, never an implicit create — `to_workspace`'s rule,
-    and the existing names go in the message for its reason.
+    have. An unknown name is a question, never an implicit create — #518's rule ("a picker
+    that creates on a typo leaves litter"), and the existing names go in the message so
+    the refusal answers the question the typo was asking.
     """
     from .. import instance
     shown = contain.one_line(name)

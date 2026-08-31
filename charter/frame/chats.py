@@ -309,8 +309,8 @@ def check(fid: str, chat: str) -> Outcome:
     and `charter frame-chat` ask the same question.** The palette asks it before it
     spawns, so a refusal reaches the pane the operator is still looking at; the command
     asks it again because it is also typeable by hand, on a name nobody drew. Two
-    askers, one rule — the shape `switch.to_workspace` already has for a name off a
-    picker and a name off an argv.
+    askers, one rule — the shape `switch.to_persona` already has for a name off a picker
+    and a name off an argv.
 
     Refusals, in the order they are checked, and each names a thing the operator can act
     on:
@@ -320,7 +320,7 @@ def check(fid: str, chat: str) -> Outcome:
       can, and it is the last point before the name becomes a state path.
     * **not a chat of this workspace** — an unknown name is a question, never an implicit
       create (`switch.py`'s rule, one noun over), and the existing names go in the message
-      the way `switch.to_workspace` already answers an unknown workspace.
+      the way `switch.to_persona` already answers an unknown persona.
     * **already here** — refused rather than performed. A switch to the chat you are in
       would tear down this chat's panels and split them again for no change on screen,
       which is a re-layout an operator did not ask for and ~90 ms of blank panes; and the

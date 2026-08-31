@@ -58,7 +58,7 @@ hostile names instead of restating the call.
 
 **What is NOT display text goes to `frame/switch.py` raw**, which is the other half of the
 same rule. :meth:`Roster.name_of` answers the name a row stood for, un-contained, because
-`switch.to_workspace` is the one place a name is checked against `workspace.valid_name`
+`switch.to_persona` is the one place a name is checked against `persona.valid_name`
 and refused — a name repaired on the way in would be a name charter switched to having
 never looked at.
 
@@ -84,12 +84,18 @@ WORKSPACE, PERSONA, CHANGE, CHAT = "workspace", "persona", "change", "chat"
 #: frame is looking at, a persona is who is looking, and a change is what they are in the
 #: middle of — which is the narrowest of those three and so goes third.
 #:
+#: **Workspace keeps its place in that order and no longer moves anything** (§4j). Its
+#: doorway is refused on every frame (:func:`pin_reason`), and it is still listed for the
+#: reason `_name_rows` lists a pinned noun's names: it is where the operator looks to see
+#: which workspace this chat is in, and a row that says why is worth more than a row that
+#: is missing.
+#:
 #: **`chat` is last, and not because it is narrower still — it is a different KIND of
-#: thing, which is why it does not slot into that ordering at all.** The first three move
+#: thing, which is why it does not slot into that ordering at all.** The middle two move
 #: what THIS frame is looking at, by writing a file the frame's own panels then read
 #: (`frame/switch.py`). A chat is a sibling frame: choosing one moves the tmux client to
 #: another window and leaves this frame exactly as it was, still running, still burning
-#: whatever it was burning. Putting it at the end keeps the three that share a mechanism
+#: whatever it was burning. Putting it at the end keeps the ones that share a mechanism
 #: together and puts the one that does not beside them rather than among them;
 #: :func:`switch_to` says the same thing in code.
 NOUNS = (WORKSPACE, PERSONA, CHANGE, CHAT)
@@ -111,7 +117,14 @@ NOUNS = (WORKSPACE, PERSONA, CHANGE, CHAT)
 #: that is always set and make `pin_reason` refuse the chat doorway on every frame there
 #: has ever been. A launch pin is a thing that stops a frame MOVING; a chat's id is what
 #: the frame is, and moving to another chat does not move it.
-PIN = {WORKSPACE: "CHARTER_WORKSPACE", PERSONA: "CHARTER_PERSONA"}
+#:
+#: **`workspace` is absent because a stronger refusal fires in front of it.**
+#: `$CHARTER_WORKSPACE` is still a pin and still outranks everything
+#: (`state.own_workspace`'s first rung) — but §4j refuses that doorway on every frame,
+#: pinned or not, so an entry here could only ever produce a second sentence for a case
+#: the first one already covers, and a narrower one: it would say the pin is what forbids
+#: the move, when an unpinned chat is forbidden identically. See :func:`pin_reason`.
+PIN = {PERSONA: "CHARTER_PERSONA"}
 
 #: What a doorway says when this workspace has no changes at all. Its own sentence rather
 #: than a borrowed one, and it names the command that fixes it: a picker over nothing is
@@ -155,7 +168,7 @@ class Roster(NamedTuple):
     :attr:`overlay.Row.mark`), and that does not soften the rule above by one word:
     containment is what the two strings differ by, and it is exactly the difference that
     matters — a name holding a `\\u2028` is one row and one name, and only one of those
-    two is the thing `switch.to_workspace` may be handed.
+    two is the thing `switch.to_persona` may be handed.
     """
 
     #: :data:`WORKSPACE` or :data:`PERSONA`. Carried so a caller that opened a picker does
@@ -171,7 +184,7 @@ class Roster(NamedTuple):
         """The name *row* stood for, or ``None`` for a row that is not this roster's.
 
         ``None`` rather than a raise or an empty string: an id that is not here means the
-        surface answered with a row this roster did not build, and `switch.to_workspace`
+        surface answered with a row this roster did not build, and `switch.to_persona`
         would read `""` as a name to check rather than as an absence.
         """
         for r, name in zip(self.rows, self.names):
@@ -226,23 +239,32 @@ def current(noun: str, fid: str) -> str:
 def pin_reason(noun: str, fid: str) -> str:
     """Why *fid* will not offer a picker for *noun*, or `""` when it will.
 
-    For a workspace and a persona that is the launch pin: the same sentence
-    `switch.to_workspace` refuses with, built from the same read (`switch._pin`), so the
-    row and the keypress cannot describe one frame two ways.
+    **For a workspace it is unconditional, and it is §4j** (`switch.FOR_LIFE`): a chat
+    belongs to its workspace for life, so there is no frame on which that picker could
+    honour a keypress. This is the shape a pinned frame already had, arriving through the
+    same field for every frame instead of for some — which is why it is one more answer
+    here rather than a new mechanism beside this one. The sentence is
+    `switch.to_workspace`'s own, read from one constant, so the row and the keypress cannot
+    describe one frame two ways.
+
+    For a persona it is the launch pin: the same sentence `switch.to_persona` refuses
+    with, built from the same read (`switch._pin`), for the same reason.
 
     **For a change it is a different question with the same shape**, and that is why the
-    function is one rather than two. Nothing can pin a change (:data:`PIN` says why), so
+    function is one rather than four. Nothing can pin a change (:data:`PIN` says why), so
     the only thing standing between the doorway and a picker is having no changes at all —
     a pane of no names is the offer charter knows it cannot honour, exactly as a pinned
     frame's list of unswitchable ones is. `""` exactly when the picker would be useful,
     which is what makes "available" and "has no reason" one decision here rather than two
     that can contradict each other on screen.
 
-    **It costs a directory read for `change` and none for the other two**, and that is
-    affordable where it sits: `open_rows` runs once when the palette opens, never on a
-    repaint, and the read is `changes/`'s own listing — the same one the picker would make
-    a keystroke later.
+    **It costs a directory read for `change`, a `stat` for `chat` and nothing for the
+    other two**, and that is affordable where it sits: `open_rows` runs once when the
+    palette opens, never on a repaint, and the read is `changes/`'s own listing — the same
+    one the picker would make a keystroke later.
     """
+    if noun == WORKSPACE:
+        return switch.FOR_LIFE
     if noun == CHANGE:
         return "" if names_of(CHANGE, fid) else NO_CHANGES
     if noun == CHAT:
@@ -395,9 +417,13 @@ def switch_to(noun: str, fid: str, name: str) -> switch.Outcome:
     One call into `frame/switch.py` and nothing else for the first three, which is what
     makes "the switch moves the frame's own identity and bumps it" (#411/#412) a property
     of one function rather than of every surface that switches. The pointer under the
-    frame's id, the frame's recorded workspace, the gather cache and the bump are all that
-    function's, in that order, and a picker that wrote any of them itself would be the
-    second answer #411 is about.
+    frame's id, the recorded change and the bump are all that function's, in that order,
+    and a picker that wrote any of them itself would be the second answer #411 is about.
+
+    **`workspace` performs nothing and is still dispatched here**, which is the point of
+    it keeping a branch too: `switch.to_workspace` is §4j's refusal, and routing it through
+    the same call is what makes the palette's row, `charter frame-switch --workspace` and a
+    typed name give one sentence rather than three surfaces each deciding to refuse.
 
     **`chat` is the one noun this function does not perform, and saying so is the point
     of it having a branch here at all.** A chat switch is not a file write: it is
@@ -410,7 +436,7 @@ def switch_to(noun: str, fid: str, name: str) -> switch.Outcome:
 
     **That split is not a hole**: the check is the whole of the decision, and the command
     asks it again rather than trusting it — one rule, two askers, exactly as
-    `switch.to_workspace` is asked by a picker row and by a hand-typed `charter
+    `switch.to_persona` is asked by a picker row and by a hand-typed `charter
     frame-switch`. What the command adds is the one refusal only tmux can give (the
     chat's window is gone), which the check deliberately does not guess at.
     """
