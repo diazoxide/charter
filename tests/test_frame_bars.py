@@ -155,6 +155,36 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
                 len(drawn), 2,
                 f"{width} columns drew only the tab the frame is on: {row!r}")
 
+    def test_the_limit_this_cut_does_not_fix_is_ten_widths_of_exactly_one_name(self):
+        """**The stated cost, asserted instead of merely described** (#767).
+
+        `_page`'s docstring says the count is still not monotone — "10 such widths between
+        60 and 280 on a fifteen-name list, down from 12, each of exactly one name" — and a
+        number that lives only in a docstring is a claim nothing can falsify. It was
+        written from a measurement and there was nothing to keep it true.
+
+        Two claims, and the second is the one that matters: **no drop is ever more than a
+        single name.** A cut that started losing three at a time would still be "not
+        monotone" and would be a different, worse thing. The count of ten is pinned beside
+        it so that a change to the cut has to come back here and restate what it costs —
+        which is how the docstring stays honest rather than becoming folklore.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        here = names[-1]
+        drops = []
+        previous = None
+        for width in range(60, 281):
+            row = self._row(width, names=names, here=here)
+            count = len([n for n in names if n in row])
+            if previous is not None and count < previous:
+                drops.append((width, previous - count))
+            previous = count
+        self.assertEqual([step for _w, step in drops], [1] * len(drops),
+                         f"a drop cost more than one name: {drops}")
+        self.assertEqual(len(drops), 10,
+                         f"the ladder's docstring says ten widths and this found "
+                         f"{len(drops)}: {drops}")
+
     def test_rescuing_the_last_page_costs_the_pages_before_it_nothing_here(self):
         """The floor is on the LAST page, so it moves one boundary and no other. On this
         project's own fifteen workspaces — where `harness-wrapper` sorts mid-list and the

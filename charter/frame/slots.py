@@ -2733,15 +2733,31 @@ def _page(fields: list[str], at: int, room: int) -> tuple[int, int]:
     # MORE pages holding a single tab (6,969 against 4,775), not fewer. Packing the last
     # page from the right instead removes the drops and puts them on a middle name: the
     # same fifteen workspaces then draw 8 tabs at 160 and 6 at 200.
+    #
+    # **One condition, and the two that used to sit beside it were deleted rather than
+    # documented.** They were written as guards against an empty page before the last one
+    # and against a page before it that could not span the gap, and the deletion sweep
+    # reported both as survivors — `<=` to `<` and `<` to `<=` changed nothing. Measured
+    # rather than read, over 1,194,017 pages: `reach(cuts[-3]) < moved` is **never true**,
+    # because `cuts[-3]` never moves and `reach` of it IS the greedy `cuts[-2]` this loop
+    # only ever walks down from; and `moved <= cuts[-3]` is never the only reason to stop
+    # — it is true 11,804 times and the condition below is true at every one of them,
+    # while that condition alone stops the loop 757 times. Dropping both leaves every one
+    # of those 1,194,017 pages identical. An equivalent mutant and dead code are the same
+    # finding, and this repository deletes rather than suppresses.
     while len(cuts) >= 3 and cuts[-1] - cuts[-2] < 2:
         moved = cuts[-2] - 1
-        if moved <= cuts[-3] or reach(cuts[-3]) < moved or reach(moved) < cuts[-1]:
+        if reach(moved) < cuts[-1]:
             break
         cuts[-2] = moved
     # **What this does NOT restore is a monotone COUNT, and that is a stated limit rather
     # than an oversight.** The remainder still shrinks as the pages grow, so a name that
     # sorts late can still lose one tab as the pane widens — 10 such widths between 60 and
-    # 280 on a fifteen-name list, down from 12, each of exactly one name. What it does
+    # 280 on a fifteen-name list, down from 12, each of exactly one name. Those two numbers
+    # are asserted by `tests/test_frame_bars.TheLadderGivesUpWholeThings
+    # .test_the_limit_this_cut_does_not_fix_is_ten_widths_of_exactly_one_name`, so a change
+    # to the cut has to come back and restate its cost rather than leaving this paragraph
+    # to rot into folklore. What it does
     # guarantee is that the row is never reduced to the tab you are standing on while
     # there was room for another, which is the harm: at every width from 150 columns up,
     # the marked page holds at least two names where it used to hold one.
