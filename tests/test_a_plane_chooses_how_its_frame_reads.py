@@ -485,6 +485,42 @@ class DimIsDeletedFromTheFinishedRow(unittest.TestCase):
             with self.subTest(row=row):
                 self.assertEqual(chrome.undim(row), row)
 
+    def test_an_extended_colour_that_never_says_which_space_is_left_alone(self):
+        """**A truncated introducer, which is a row a provider can really write.** SGR 38,
+        48 and 58 announce a colour space in the parameter that follows them — and there
+        may not BE one. `ESC[38m` is a foreground introducer at the end of its own list;
+        the walk has to notice that `pieces[i + 1]` is off the end rather than reach for
+        it.
+
+        Three of this file's mutation-sweep survivors lived here, and all three were real
+        gaps rather than equivalent mutants: dropping the `i + 1 < len(pieces)` guard, or
+        widening it to `<=`, turns this row into an `IndexError` — raised inside
+        `panel._write`, on the repaint path, in a pane that then shows nothing."""
+        for row in ("\x1b[38m", "\x1b[48mx", "\x1b[58m", "\x1b[1;38m", "\x1b[38;m"):
+            with self.subTest(row=row):
+                self.assertEqual(chrome.undim(row), row)
+
+    def test_an_extended_colour_space_charter_does_not_know_is_left_alone(self):
+        """The other half of the same walk, and the third survivor. `ESC[38;99m` names a
+        colour space that is neither 5 nor 2 — malformed, or from a terminal extension
+        charter has never heard of — and the run length has to fall back to one parameter
+        rather than index a table that has two keys in it.
+
+        `{5: 3, 2: 5}[space]` is a `KeyError` on exactly this row. Charter writes no such
+        escape (`instance.FRAME_PANE_COLOURS` argues why it names the sixteen), which is
+        precisely what makes the case real: this runs over a row a PROVIDER's component
+        finished, and `tui.sanitize` passes any `ESC[<digits and semicolons>m` through
+        untouched."""
+        for row in ("\x1b[38;99mx", "\x1b[48;0m", "\x1b[58;7;1m", "\x1b[38;4;9mx"):
+            with self.subTest(row=row):
+                self.assertEqual(chrome.undim(row), row)
+
+    def test_a_dim_beyond_an_unknown_space_is_still_found(self):
+        """The walk must resume at the right place after a run it could not size, or the
+        parameter after an unknown space is skipped and a dim survives the pass."""
+        self.assertEqual(chrome.undim("\x1b[38;99;2mx"), "\x1b[38;99mx")
+        self.assertEqual(chrome.undim("\x1b[38;2mx"), "\x1b[38;2mx")
+
     def test_a_dim_after_a_true_colour_is_still_deleted(self):
         """The walk has to resume at the right place, or the sub-parameters swallow the
         attribute that follows them."""
@@ -516,9 +552,15 @@ class DimIsDeletedFromTheFinishedRow(unittest.TestCase):
         self.assertNotIn("\x1b[2m", got)
 
     def test_a_row_with_no_escape_at_all_comes_back_unchanged(self):
-        for row in ("", "plain text", "  ⋯ gathering"):
+        """Equality and not identity, which is the second thing the sweep corrected here.
+        This asserted `assertIs` while `undim` still had a `"\\x1b" not in row` shortcut in
+        front of it — and it went on passing when that shortcut was deleted, because
+        `re.sub` hands back the string it was given when nothing matched. So the identity
+        was CPython's answer rather than charter's, and asserting it pinned an
+        implementation detail while leaving the property untested."""
+        for row in ("", "plain text", "  ⋯ gathering", "\t\ttabs", "── ── ──"):
             with self.subTest(row=row):
-                self.assertIs(chrome.undim(row), row)
+                self.assertEqual(chrome.undim(row), row)
 
     def test_it_changes_no_cell_of_width(self):
         """Every SGR costs zero columns, so this only ever makes one shorter or removes

@@ -288,11 +288,23 @@ def undim(row: str) -> str:
     Takes a finished row and hands back a string that must not go back through `tui` — the
     module docstring's ordering rule, unchanged. It changes no cell's width: every SGR
     costs zero columns, and this only ever makes one shorter or removes it.
+
+    **There is no `if "\\x1b" not in row` shortcut in front of this, and the deletion is a
+    measurement rather than a preference.** One was written first, copying
+    `tui.strip_ansi`'s own, and the mutation sweep found it surviving. Timed on this
+    machine over 200 000 calls each, the two rows a repaint actually carries::
+
+        row with no escape   guard 0.032us   no guard 0.111us   saves 0.079us
+        painted row          guard 1.933us   no guard 1.977us   saves 0.044us
+
+    3.5x on the first row reads like a reason until it is spent: at 0.079us a line, a
+    50-line repaint saves **4us against `render`'s own measured 4816us** — under a tenth of
+    a percent, on a path that only runs at all for a plane that turned `dim` off. And most
+    rows in this frame are not that row: the sidebar and the repo table colour nearly every
+    line they compose. `re.sub` on a string it does not match returns that string, so the
+    guard could not change an outcome either — which makes it the shape #568's sweep
+    deletes, and "equivalent mutant" and "dead code" one finding rather than two.
     """
-    # The membership test before the regex, `tui.strip_ansi`'s own shortcut: a row with no
-    # escape in it cannot carry a dim, and most rows in a repaint are that row.
-    if "\x1b" not in row:
-        return row
     return _SGR.sub(
         lambda m: "" if (kept := _without_dim(m.group(1))) is None else f"\x1b[{kept}m",
         row)
