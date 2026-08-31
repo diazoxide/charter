@@ -24,8 +24,10 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from charter import config, planegit
+from charter.forge import registry as planegit_registry
 from tests._isolation import PersonaIso
 
 
@@ -222,6 +224,18 @@ class TestCompareUrls(unittest.TestCase):
                     "https://notgithub.com/x/y.git"):
             with self.subTest(url=url):
                 self.assertIsNone(planegit._compare_url(url, "b", self._root()))
+
+    def test_a_forge_kind_this_function_predates_gets_no_link(self):
+        """Only two kinds are registered today, so the third-kind branch is unreachable
+        from a config file and would otherwise be an untested line that reads as covered.
+        A third kind must not inherit GitLab's URL by being last in the if-chain: that is
+        a link to a page the forge does not have, printed as though charter knew."""
+        class _Later:
+            kind, host = "bitbucket", "bitbucket.example"
+        with mock.patch.object(planegit_registry, "resolve_host", return_value=_Later()):
+            self.assertIsNone(
+                planegit._compare_url("https://bitbucket.example/a/b.git", "x",
+                                      self._root()))
 
     def test_a_declared_github_enterprise_host_gets_the_compare_form(self):
         """The other half of resolving instead of string-matching: GHE is a `github`

@@ -168,12 +168,16 @@ def _compare_url(https: str, branch: str, root) -> str | None:
     forge = registry.resolve_host(base, root)
     if forge is None:
         return None
+    if forge.kind not in ("github", "gitlab"):
+        # A kind registered after this was written. Stated rather than left to fall
+        # through the bottom of the function: falling through is the same `None`, but it
+        # is `None` by accident, and the accident sits one edit away from being the GitLab
+        # form handed to a forge that has no such page.
+        return None
     if forge.kind == "github":
         return f"{base}/compare/{branch}?expand=1"
-    if forge.kind == "gitlab":
-        # GitLab, and self-hosted GitLab, use the same new-MR form.
-        return (f"{base}/-/merge_requests/new?merge_request%5Bsource_branch%5D={branch}")
-    return None  # a kind registered later: no link beats a link to a form it does not have
+    # GitLab, and self-hosted GitLab, use the same new-MR form.
+    return (f"{base}/-/merge_requests/new?merge_request%5Bsource_branch%5D={branch}")
 
 
 #: What a push of the plane root's HEAD did, in one word. Recorded as well as printed —
