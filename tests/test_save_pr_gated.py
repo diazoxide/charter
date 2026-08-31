@@ -18,7 +18,9 @@ only a different *remote* ref for a commit that already exists locally.
 from __future__ import annotations
 
 import io
+import shutil
 import subprocess
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -163,18 +165,73 @@ class TestItOnlyFiresOnARecognisedRefusal(SaveCase):
 
 
 class TestCompareUrls(unittest.TestCase):
+    """FINDING 1's last unfixed site (CodeQL `py/incomplete-url-substring-sanitization`,
+    alert #4). `_compare_url` chose between the GitHub compare form and the GitLab
+    new-MR form with ``"github.com" in base`` — a substring of the WHOLE url, the exact
+    check `registry._host_of` was written to replace after it misresolved
+    ``git@git.internal:gitlab.com-mirror/api.git``. The link is printed for the operator
+    to click, so a self-hosted GitLab whose path merely contains ``github.com`` (a
+    ``mirrors/github.com/…`` namespace is an ordinary thing to call a mirror group) was
+    handed a GitHub URL against a GitLab host: a 404 where the whole point of the
+    else-branch is that self-hosted GitLab keeps working.
+
+    The forge is now RESOLVED, not string-matched — same primitive `_origin_https`
+    already used one call earlier — so there is no hostname literal left for a path to
+    impersonate, and a declared GitHub Enterprise host gets its compare form for the
+    first time."""
+
+    def _root(self, toml: str = "schema = 1\n") -> Path:
+        d = Path(tempfile.mkdtemp(prefix="charter-cmpurl-"))
+        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
+        (d / "charter.toml").write_text(toml)
+        return d
+
     def test_github(self):
         self.assertEqual(
-            planegit._compare_url("https://github.com/acme/plane.git", "charter/abc"),
+            planegit._compare_url("https://github.com/acme/plane.git", "charter/abc",
+                                  self._root()),
             "https://github.com/acme/plane/compare/charter/abc?expand=1")
 
     def test_gitlab(self):
-        url = planegit._compare_url("https://gitlab.com/acme/plane.git", "charter/abc")
+        url = planegit._compare_url("https://gitlab.com/acme/plane.git", "charter/abc",
+                                    self._root())
         self.assertIn("/-/merge_requests/new", url)
         self.assertIn("charter/abc", url)
 
     def test_an_unknown_scheme_yields_nothing_rather_than_a_guess(self):
-        self.assertIsNone(planegit._compare_url("git@github.com:acme/plane.git", "b"))
+        self.assertIsNone(
+            planegit._compare_url("git@github.com:acme/plane.git", "b", self._root()))
+
+    def test_a_self_hosted_gitlab_keeps_the_mr_form_when_its_path_says_github_com(self):
+        """The live reproduction: a mirror namespace called `github.com` on a declared
+        self-hosted GitLab. Substring-matching sent the operator to `<gitlab>/compare/…`,
+        which GitLab does not serve."""
+        root = self._root('schema = 1\n[[forge]]\nkind = "gitlab"\n'
+                          'host = "git.internal"\ngroup = "acme"\n')
+        url = planegit._compare_url(
+            "https://git.internal/mirrors/github.com/acme/plane.git", "charter/abc", root)
+        self.assertIn("/-/merge_requests/new", url)
+        self.assertNotIn("/compare/", url)
+
+    def test_a_host_that_only_ends_with_github_com_is_not_github(self):
+        """`https://github.com.evil.example/…` and `https://evil.example/github.com/…`
+        both matched the substring. Neither is a forge this plane declares, so the honest
+        answer is no link at all — never a charter-blessed one pointing off-host."""
+        for url in ("https://github.com.evil.example/x/y.git",
+                    "https://evil.example/github.com/y.git",
+                    "https://notgithub.com/x/y.git"):
+            with self.subTest(url=url):
+                self.assertIsNone(planegit._compare_url(url, "b", self._root()))
+
+    def test_a_declared_github_enterprise_host_gets_the_compare_form(self):
+        """The other half of resolving instead of string-matching: GHE is a `github`
+        forge whose host says nothing about github.com, and it used to be handed
+        GitLab's new-MR form."""
+        root = self._root('schema = 1\n[[forge]]\nkind = "github"\n'
+                          'host = "ghe.internal"\nowner = "acme"\n')
+        self.assertEqual(
+            planegit._compare_url("https://ghe.internal/acme/plane.git", "charter/abc", root),
+            "https://ghe.internal/acme/plane/compare/charter/abc?expand=1")
 
 
 if __name__ == "__main__":
