@@ -571,6 +571,35 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         for col in self._cells(row, slots.ADD_CHAT):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
 
+    def test_no_row_at_any_width_ever_draws_or_maps_a_column_left_of_zero(self):
+        """**The property a deleted guard used to protect by accident** (#767).
+
+        `_page` walks the last boundary LEFT to keep the final page from being a lone tab.
+        A `len(cuts) >= 3` conjunct kept that walk away from a single-field list, where the
+        boundary would step to `-1` — and the deletion sweep found it, because on such a
+        list `_bar` refuses the rung on width whatever `_page` answers, so the guard could
+        not change a row. It was deleted rather than suppressed. What was NOT deleted is
+        the property: a `+-1` field is unreadable and a negative column in the strip is the
+        wrong-answer-hiding index `_Tabs` refuses on purpose.
+
+        So this asserts the property where it can be seen, on the drawn row and the
+        published map, rather than trusting a guard whose effect nothing could observe.
+        Singletons and a name far wider than the pane are the shapes that reach the walk.
+        """
+        lists = (["only"], ["a"], ["x" * 60], ["a", "b"], ["x" * 40, "y"],
+                 [f"workspace-{i:02d}" for i in range(15)])
+        for names in lists:
+            for here in names:
+                for width in range(0, 120):
+                    rows = slots._bar("chats", list(names), here, width)
+                    row = rows[0] if rows else ""
+                    self.assertNotIn("+-", row,
+                                     f"{names} at {width}: a count went negative: {row!r}")
+                    for col in range(-4, 0):
+                        self.assertIsNone(
+                            slots.TABS.switch_to(col),
+                            f"{names} at {width}: column {col} is a tab: {row!r}")
+
     def test_a_column_nothing_drew_answers_nothing_however_far_out(self):
         """A mapping has no answer to give for a column outside it — which is where
         `_Viewport.repo_at`'s bounds check went. `-1` is the one that matters: a tuple

@@ -2745,7 +2745,23 @@ def _page(fields: list[str], at: int, room: int) -> tuple[int, int]:
     # while that condition alone stops the loop 757 times. Dropping both leaves every one
     # of those 1,194,017 pages identical. An equivalent mutant and dead code are the same
     # finding, and this repository deletes rather than suppresses.
-    while len(cuts) >= 3 and cuts[-1] - cuts[-2] < 2:
+    #
+    # **A `len(cuts) >= 3` conjunct went the same way, and it is the more interesting of
+    # the three.** It was not unreachable: with a SINGLE field the cuts are `[0, 1]` and
+    # it is what stops the loop, 665 times in the sweep below. What it is not is
+    # OBSERVABLE. A one-name list reaches this rung only when that name did not fit the
+    # row, and the body composed from it is that same name — so `_bar`'s own measurement
+    # refuses the rung whatever this returns. That is the identical masking already
+    # recorded one function down for `if len(names) > 1`, which the sweep found for the
+    # same reason. Measured over 1,963,800 rows, keeping the conjunct and dropping it draw
+    # byte-identical output, with no runaway loop.
+    #
+    # The property it was informally protecting — that a page never starts left of zero,
+    # so no negative column can reach :data:`TABS` — is not left to a masked guard. It is
+    # asserted directly by `tests/test_frame_bars.AClickResolvesAgainstWhatWasDrawn
+    # .test_no_row_at_any_width_ever_draws_or_maps_a_column_left_of_zero`, which stays
+    # true if the measurement above ever stops masking it.
+    while cuts[-1] - cuts[-2] < 2:
         moved = cuts[-2] - 1
         if reach(moved) < cuts[-1]:
             break
