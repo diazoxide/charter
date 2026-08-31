@@ -45,51 +45,36 @@ def _plane_personas(*names: str) -> None:
         (d / "persona.md").write_text("# p\n")
 
 
-class SwitchingWorkspaceIsRefused(PersonaIso, unittest.TestCase):
-    """`switch.to_workspace` — §4j, and what this class used to assert instead.
+class SwitchingWorkspaceIsChecked(PersonaIso, unittest.TestCase):
+    """`switch.to_workspace` — §4b's check, and the two behaviours it has been.
 
-    **Nine cases were replaced rather than deleted, and here is the accounting**, because
-    they were the specification of a behaviour charter shipped for six days and every one
-    of them passed.
+    **This class has now specified three different functions and the accounting is worth
+    keeping**, because each one shipped and each one's tests passed.
 
-    Two pinned the defect by name and are the reason the strand in #733 and #788 could
-    form at all:
+    Until #789 it moved the CHAT. Two cases pinned that by name and are the reason the
+    strand in #733 and #788 could form at all:
+    `test_a_switch_moves_what_every_frame_surface_asks` asserted `state.workspace_for`
+    moved from `alpha` to `beta` — "the chat's workspace is a property you may set", where
+    §4j says it is identity — and
+    `test_the_launch_record_moves_too_so_a_respawned_panel_agrees` asserted the second
+    write on the grounds that a panel respawned later must agree with the panels that are
+    up. They did agree, about a workspace this chat's cwd, files and history were never in.
 
-    * `test_a_switch_moves_what_every_frame_surface_asks` asserted
-      `state.workspace_for(fid)` moved from `alpha` to `beta` — which is exactly "the
-      chat's workspace is a property you may set". §4j says it is identity.
-    * `test_the_launch_record_moves_too_so_a_respawned_panel_agrees` asserted the second
-      write, `state.frame_workspace`, on the grounds that a panel respawned later must
-      agree with the panels that are up. They did agree — about a workspace this chat's
-      cwd, files and history were never in.
+    #789 replaced both with an unconditional refusal, and
+    `test_one_refusal_and_not_a_queue_of_them` asserted the strongest form of it: the name
+    is not looked at. That was right about the chat and wrong about the operator — every
+    tab on the `workspaces` bar refused, so the bar was a directory listing with fifteen
+    dead rows.
 
-    Both are replaced by `test_a_switch_moves_nothing_that_any_frame_surface_asks` and
-    `test_the_launch_record_is_not_moved_either` below, which assert the same two rungs at
-    the same depth and in the same order, with the opposite expectation.
+    §4b keeps the first half and replaces the second: **nothing about the chat moves, and
+    the CLIENT does.** So the name is looked at again — a switcher has to know which names
+    it may be aimed at — and the two rungs #733 and #788 were about are asserted here
+    across a check that says **yes**, which is a strictly stronger statement than
+    asserting them across a refusal.
 
-    Five described the machinery of a move and have nothing left to describe: the bump
-    (`test_a_switch_bumps_the_frame_so_panels_repaint`), the switcher's own lock
-    (`test_switching_twice_is_not_refused_by_the_first_switchs_own_lock`,
-    `test_overriding_a_lock_is_said_out_loud`), the terminal pointer it must not write
-    (`test_no_terminal_pointer_is_written_for_somebody_elses_terminal`) and the refusal
-    ordering (`test_an_unknown_workspace_is_refused_and_creates_nothing`). The first four
-    are still measured one noun over, in :class:`SwitchingPersona`, which is where the
-    property was always generic; the fifth is now
-    `test_one_refusal_and_not_a_queue_of_them`.
-
-    Two were about the `$CHARTER_WORKSPACE` pin
-    (`test_a_pinned_frame_is_refused_rather_than_told_it_moved`,
-    `test_the_pin_is_read_from_the_frame_not_from_this_process`,
-    `test_an_empty_recorded_pin_is_not_a_pin`). The pin is still a pin — it is
-    `state.own_workspace`'s first rung and
-    `tests/test_frame_chat_switch.MembershipIsTheChatsOwnAnswerAndNotTheAskersAnswer`
-    measures all three properties of it there — but it is no longer what refuses a
-    switch, because an unpinned chat is refused identically.
-
-    The behaviour itself is measured in
-    `tests/test_a_chat_belongs_to_its_workspace_for_life.py`, which is where #733 and #788
-    are closed. What is here is the part that belongs beside `SwitchingPersona`: the two
-    functions sit side by side and a change to one is a plausible accident in the other.
+    The tmux half is `tests/test_a_workspace_switch_moves_the_client.py`; what is here is
+    the part that belongs beside :class:`SwitchingPersona`, since the two functions sit
+    side by side and a change to one is a plausible accident in the other.
     """
 
     FID = "f-switch"
@@ -105,14 +90,15 @@ class SwitchingWorkspaceIsRefused(PersonaIso, unittest.TestCase):
                                          "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
         state.record_workspace(self.FID, "alpha")
 
-    def test_a_switch_moves_nothing_that_any_frame_surface_asks(self):
+    def test_a_switch_that_is_allowed_still_moves_nothing_any_frame_surface_asks(self):
         """The replacement for `test_a_switch_moves_what_every_frame_surface_asks`, asked
         of the same rule for the same reason — `state.workspace_for` is what every panel,
         the gather and the status line read, so that and not the file underneath it is
-        what "the frame moved" has to mean. Only the expectation is inverted."""
+        what "the frame moved" has to mean. The expectation is inverted AND the outcome is
+        a yes: §4j has to survive a switch that happens, not only one that is refused."""
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         out = switch.to_workspace(self.FID, "beta")
-        self.assertFalse(out.ok, out.message)
+        self.assertTrue(out.ok, out.message)
         self.assertEqual(state.workspace_for(self.FID), "alpha")
 
     def test_the_launch_record_is_not_moved_either(self):
@@ -121,28 +107,53 @@ class SwitchingWorkspaceIsRefused(PersonaIso, unittest.TestCase):
         density change draws the old workspace beside the new one — true, and the answer
         is that neither moves, so a panel respawned an hour later is born into the
         workspace the launcher recorded."""
-        switch.to_workspace(self.FID, "beta")
+        self.assertTrue(switch.to_workspace(self.FID, "beta").ok)
         self.assertEqual(state.frame_workspace(self.FID), "alpha")
         self.assertIsNone(workspace.for_session(self.FID))
 
-    def test_one_refusal_and_not_a_queue_of_them(self):
-        """`test_an_unknown_workspace_is_refused_and_creates_nothing`'s replacement, and
-        the property is now stronger than "creates nothing": the name is not looked at.
-        A refusal that answered "no workspace 'beta2'" first would name a typo as the
-        thing standing between the operator and a move that cannot happen at any
-        spelling."""
+    def test_a_name_that_cannot_name_a_workspace_is_refused_by_the_alphabet(self):
+        """The first rung, and it is `workspace.valid_name` rather than a second regex
+        here — the name is about to be a `workspaces/<name>` join and a `-t` target's
+        neighbour, which is the position #442 already cost this project once."""
+        out = switch.to_workspace(self.FID, "../escape")
+        self.assertFalse(out.ok)
+        self.assertIn("cannot name a workspace", out.message)
+
+    def test_an_unknown_workspace_is_refused_and_creates_nothing(self):
+        """#518's rule, restored with the refusal it names: a picker that creates on a
+        typo leaves litter, so an unknown name is a question with the existing names
+        beside it."""
         before = sorted(p.name for p in config.WORKSPACES_DIR.iterdir())
-        for name in ("beta", "nope", "../escape"):
-            self.assertEqual(switch.to_workspace(self.FID, name).message,
-                             switch.FOR_LIFE)
+        out = switch.to_workspace(self.FID, "gamam")
+        self.assertFalse(out.ok)
+        self.assertIn("no workspace 'gamam'", out.message)
+        self.assertIn("alpha", out.message)
         self.assertEqual(sorted(p.name for p in config.WORKSPACES_DIR.iterdir()), before)
 
+    def test_the_workspace_this_chat_is_already_in_is_refused(self):
+        """`chats.check`'s "already here", one noun out and for its reason: switching a
+        client to the session it is already on would tear this chat's panels down and
+        split them again for no change on screen. The tab is drawn with `choose.MARK`
+        beside it, so the operator can see they are there before they press it."""
+        out = switch.to_workspace(self.FID, "alpha")
+        self.assertFalse(out.ok)
+        self.assertIn("already in workspace 'alpha'", out.message)
+
+    def test_a_pin_is_not_a_refusal_here_because_it_is_about_a_different_noun(self):
+        """`$CHARTER_WORKSPACE` pins which workspace THIS CHAT is in
+        (`state.own_workspace`'s first rung) and still does. A switch that moves a client
+        to another session does not touch it — refusing on it would be refusing to LOOK at
+        another workspace because this chat cannot leave the one it is in."""
+        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "alpha",
+                                         "CHARTER_PERSONA": ""})
+        self.assertTrue(switch.to_workspace(self.FID, "beta").ok)
+        self.assertEqual(state.workspace_for(self.FID), "alpha")
+
     def test_the_refusal_cannot_forge_a_second_line(self):
-        """`test_a_refusal_message_cannot_forge_a_second_line`, which used to be about
-        `contain.one_line` over an echoed name and is now about the constant itself: no
-        name is interpolated, so what has to hold is that the one sentence charter wrote
-        is one line. A message is a line of charter's own output (`contain.py`, #453) and
-        this one lands on the attention panel beside others."""
+        """A name IS interpolated again, so this is `contain.one_line` over an echoed name
+        rather than a property of a constant — the shape it had before #789 and the reason
+        the call is back. A message is a line of charter's own output (`contain.py`, #453)
+        and this one lands on the attention panel beside others."""
         out = switch.to_workspace(self.FID, "beta\nrefused — everything is fine")
         self.assertFalse(out.ok)
         self.assertNotIn("\n", out.message)
@@ -402,11 +413,11 @@ class ThePaletteCannotGoStale(PersonaIso, unittest.TestCase):
         silently dropped the row would leave the operator unable to ask why a thing they
         remember is missing.
 
-        It was the WORKSPACE row until §4j: that doorway now carries `switch.FOR_LIFE` on
-        every frame, pinned or not, so a pin-shaped assertion on it would pass without the
-        pin and measure nothing (`choose.PIN` no longer has an entry for it, and
-        `tests/test_a_chat_belongs_to_its_workspace_for_life` is where its one reason is
-        measured)."""
+        It was the WORKSPACE row until §4j, and it cannot go back: `choose.PIN` has no
+        entry for that noun and §4b explains why — `$CHARTER_WORKSPACE` pins which
+        workspace this CHAT is in, and a workspace switch moves a client. A pin-shaped
+        assertion on that row would now pass with the pin taken away and measure
+        nothing."""
         state.record_identity(self.FID, {"CHARTER_PERSONA": "forge"})
         row = {r.id: r for r in _rows(self.FID)}["pick:persona"]
         self.assertIn("$CHARTER_PERSONA pins this frame", row.note)

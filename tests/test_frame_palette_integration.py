@@ -644,35 +644,41 @@ class ThereIsNeverMoreThanOnePalettePane(_ThePalette, unittest.TestCase):
 class AnUnavailableActionIsDrawnWithItsReason(_ThePalette, unittest.TestCase):
     """Step 4, on the plan's own example, against a real frame.
 
-    The example was a `$CHARTER_WORKSPACE` pin and is now §4j: a chat belongs to its
-    workspace for life, so that doorway carries a reason on every frame rather than on
-    some. The mechanism under test is unchanged and is the whole point of the class — the
-    row stays, it carries the sentence `switch.to_workspace` refuses with, and Enter on it
-    opens nothing and moves nothing.
+    **The noun this is staged on has moved twice and the mechanism has not.** The plan's
+    example was a `$CHARTER_WORKSPACE` pin; #789 made the workspace doorway carry §4j's
+    refusal on every frame and this class moved onto that; §4b removed the refusal, because
+    a workspace switch moves a client and re-points nothing, so the workspace doorway is
+    available again and a `change` is the doorway this plane genuinely cannot open.
 
-    Not staged on a pin any more because it no longer decides anything here: with the pin
-    set, `choose.pin_reason` answers §4j's sentence first, so a pinned fixture would have
-    proved only that the frame draws the same row it draws unpinned. The pin's own end of
-    the rule is measured on the persona, in `tests/test_frame_pickers.py`.
+    That is the closest thing to the original example available without a fixture that
+    pins the frame: nothing can pin a change (`choose.PIN` says why), and what stands
+    between the doorway and a picker is having no names at all — `choose.NO_CHANGES`, and
+    a pane of no names is the offer charter knows it cannot honour, exactly as a pinned
+    frame's list of unswitchable ones was. The mechanism under test is the one this class
+    has always been about: the row stays, it carries the sentence, and Enter on it opens
+    nothing and moves nothing.
+
+    The pin's own end of the rule is measured on the persona, in
+    `tests/test_frame_pickers.py`.
     """
 
     def test_the_row_is_listed_and_says_why_it_cannot_run(self):
         _, pane = self._open()
-        self._await_screen(pane, "workspace: alpha")
-        self._await_screen(pane, "cannot switch: a chat belongs to its")
+        self._await_screen(pane, "change — pick one")
+        self._await_screen(pane, "no cross-repo change in this workspa")
 
     def test_choosing_it_opens_no_picker_changes_nothing_and_the_frame_says_so(self):
-        """A pinned frame does not get a list of names it cannot switch to. The row is
+        """A doorway with a reason does not get a list of names behind it. The row is
         still there, still says why, and Enter on it closes the palette having moved
         nothing — the reason goes to the operator's own screen on the way out."""
         fd, pane = self._open()
-        self._await_screen(pane, "workspace: alpha")
-        os.write(fd, b"workspace\r")
+        self._await_screen(pane, "change — pick one")
+        os.write(fd, b"change\r")
         self.assertTrue(_await(lambda: self._palette_pane() is None),
                         "the palette never closed")
         time.sleep(0.5)
-        self.assertEqual(state.frame_workspace(self.fid), "alpha",
-                         "a refused switch must not move the frame")
+        self.assertIsNone(state.frame_change(self.fid),
+                          "a refused doorway must not point the frame at anything")
 
 
 class ATmuxFormatInAMessageIsInert(_ThePalette, unittest.TestCase):

@@ -12,6 +12,14 @@ written when a frame WAS a workspace, one to one, and `docs/frame.md` honestly s
 "switching from the picker moves the frame". Phase 5 then made a frame a **chat**, and
 "moves the frame" quietly became "moves the chat" — which §4j had already forbidden.
 
+**§4b then made the switch DO something again, and every assertion here is now made
+across a switch that says yes** — which is the stronger statement and the reason this
+module was not simply left alone. What a workspace switch moves is the tmux CLIENT
+(`commands_frame._switch_client`); the chat it leaves keeps its harness, its window, its
+pid and its workspace. A `to_workspace` that answered "yes" and re-pointed one rung on the
+way would put #733 and #788 straight back, and nothing about the refusal it used to be
+would have caught it.
+
 **The two directions of the one strand that produced, both closed here.**
 
 * **#733, backward.** `F2 → workspace → gamma` inside `alpha.1` re-pointed that chat and
@@ -80,9 +88,12 @@ class TheSwitchNoLongerMovesTheChat(PersonaIso, unittest.TestCase):
     def test_the_chat_is_still_in_the_workspace_it_was_launched_for(self):
         """The invariant itself, asked of the one rule every frame surface asks
         (`state.workspace_for`) rather than of the files the switch used to write — which
-        is this repository's rule about asserting a layer below the code that prints."""
+        is this repository's rule about asserting a layer below the code that prints.
+
+        The switch SAYS YES here, and that is what makes this the strong form: the chat
+        stays in `alpha` while the client is cleared to go to `gamma`."""
         out = switch.to_workspace("alpha.1", "gamma")
-        self.assertFalse(out.ok, out.message)
+        self.assertTrue(out.ok, out.message)
         self.assertEqual(state.workspace_for("alpha.1"), "alpha")
         self.assertEqual(state.own_workspace("alpha.1"), "alpha")
 
@@ -90,45 +101,48 @@ class TheSwitchNoLongerMovesTheChat(PersonaIso, unittest.TestCase):
         """Both halves, because they were two writes and either one alone re-creates the
         defect: the per-session pointer under the chat's id (`workspace.for_session`,
         `own_workspace`'s middle rung) and the launch record (`state.frame_workspace`,
-        its last). A refusal that wrote one of them would be #411's shape — a switch
-        reported as refused and half performed."""
+        its last). A switch that wrote one of them would be #411's shape — an outcome
+        reported for one noun and performed on another."""
         switch.to_workspace("alpha.1", "gamma")
         self.assertIsNone(workspace.for_session("alpha.1"))
         self.assertEqual(state.frame_workspace("alpha.1"), "alpha")
 
-    def test_nothing_repaints_for_a_move_that_did_not_happen(self):
-        """A panel repaints because the version moved (`frame/panel.py`'s contract), so
-        bumping here would make every panel of this chat re-render an identical plane —
-        and would be charter agreeing on screen that something happened."""
+    def test_nothing_repaints_because_the_check_alone_moved_nothing(self):
+        """A panel repaints because the version moved (`frame/panel.py`'s contract), and
+        this function is a decision rather than an effect: the bumps a workspace switch
+        earns are `_apply_arrangement`'s, after the client has actually moved and the
+        panels have been re-laid-out. Bumping here would repaint every panel of this chat
+        into an identical plane before anything had happened."""
         before = state.version("alpha.1")
         switch.to_workspace("alpha.1", "gamma")
         self.assertEqual(state.version("alpha.1"), before)
 
-    def test_the_refusal_names_the_route_that_exists(self):
-        """#517's rule — "a menu that silently fails is worse than no menu" — and the
-        whole operator-facing surface of this change. Until §4b's `switch-client` lands
-        there is nothing a workspace keypress CAN do, so the sentence has to carry the
-        thing that works today, spelled the way the launcher's own flag is spelled
-        (`--workspace`, `cli.py`; the harness launcher has no `-w`)."""
+    def test_the_sentence_is_about_the_workspace_and_not_about_the_chat(self):
+        """#517's rule — "a menu that silently fails is worse than no menu". What the
+        operator is told is which workspace they are going to, because that is what
+        happened; a switch that announced the CHAT moving would be describing the defect
+        §4j names."""
         out = switch.to_workspace("alpha.1", "gamma")
-        self.assertIn("--workspace", out.message)
-        self.assertIn("charter", out.message)
+        self.assertIn("gamma", out.message)
+        self.assertNotIn("alpha.1", out.message)
 
-    def test_a_name_that_is_not_a_workspace_gets_the_same_answer(self):
-        """One refusal, not a queue of them. A chat cannot move to a workspace that
-        exists, so "no such workspace" is a narrower and less true reason than the one
-        that applies — and answering the narrower one first would teach an operator that
-        creating the workspace is what is missing."""
-        for name in ("nope", "../escape", ""):
-            out = switch.to_workspace("alpha.1", name)
-            self.assertFalse(out.ok)
-            self.assertEqual(out.message, switch.FOR_LIFE)
+    def test_a_name_that_is_not_a_workspace_is_refused_by_its_own_reason(self):
+        """Each refusal is a thing the operator can act on, which is what #789's single
+        unconditional sentence could not be: a typo now says it is a typo, and a name
+        outside the alphabet says that instead."""
+        self.assertIn("no workspace 'nope'",
+                      switch.to_workspace("alpha.1", "nope").message)
+        self.assertIn("cannot name a workspace",
+                      switch.to_workspace("alpha.1", "../escape").message)
+        self.assertIn("cannot name a workspace",
+                      switch.to_workspace("alpha.1", "").message)
 
-    def test_nothing_is_created_by_the_refusal(self):
+    def test_nothing_is_created_by_a_switch_or_by_a_refusal(self):
         """`switch.py`'s standing rule (#518: "a picker that creates on a typo leaves
         litter"), which a refusal must keep rather than inherit by accident."""
         before = sorted(p.name for p in config.WORKSPACES_DIR.iterdir())
         switch.to_workspace("alpha.1", "nope")
+        switch.to_workspace("alpha.1", "gamma")
         self.assertEqual(sorted(p.name for p in config.WORKSPACES_DIR.iterdir()), before)
 
     def test_a_persona_switch_is_untouched(self):
@@ -180,12 +194,12 @@ class TheChatsItLeftBehindCanStillSeeIt(PersonaIso, unittest.TestCase):
         self.assertEqual(chats.of_workspace("gamma"), ["gamma.1"])
 
 
-class TheDoorwaySaysSoBeforeTheKeypress(PersonaIso, unittest.TestCase):
-    """Task 4's rule, inherited whole: a refusal the palette can see BEFORE the keypress
-    is drawn on the row, so the operator is not offered a list of moves that would not
-    happen. `choose.pin_reason` is where that lives and this is one more reason arriving
-    through it — the same shape a pinned frame and a workspace with no changes already
-    have, rather than a new mechanism beside them."""
+class TheDoorwayOpensAgainAndStillMovesNoChat(PersonaIso, unittest.TestCase):
+    """Task 4's rule, and the direction §4b turns it: a refusal the palette can see BEFORE
+    the keypress is drawn on the row, so the operator is not offered a list of moves that
+    would not happen — and a workspace picker is no longer such a list. #789 closed this
+    doorway on every frame, which was the visible half of the bar's fifteen dead rows.
+    What is asserted here is that it opens and that opening it re-points nothing."""
 
     FID = "alpha.1"
 
@@ -196,19 +210,29 @@ class TheDoorwaySaysSoBeforeTheKeypress(PersonaIso, unittest.TestCase):
             (config.WORKSPACES_DIR / n).mkdir(parents=True, exist_ok=True)
         _plant(self.FID, ws="alpha")
 
-    def test_the_workspace_doorway_carries_the_reason_the_keypress_would_give(self):
-        """One sentence, read once — `switch.to_workspace` and the row cannot describe
-        one frame two ways, which is the rule the pin reason was built to keep."""
-        self.assertEqual(choose.pin_reason(choose.WORKSPACE, self.FID),
-                         switch.to_workspace(self.FID, "gamma").message)
+    def test_the_workspace_doorway_carries_no_reason_at_all(self):
+        """`""` is what `pin_reason` answers when the picker is worth opening, and a
+        workspace picker now always is: the names behind it are names a client can be
+        moved to. The one refusal a row can still earn is a live tmux reading and is
+        deliberately not taken here — see `choose.pin_reason`."""
+        self.assertEqual(choose.pin_reason(choose.WORKSPACE, self.FID), "")
 
-    def test_the_row_is_marked_refused_so_it_opens_no_picker(self):
+    def test_the_row_opens_a_picker_rather_than_a_sentence(self):
         """#732: a doorway with a reason is one `commands_frame._picker` will not open,
-        and `refused` is the field that says so rather than the note being parsed."""
+        and `refused` is the field that says so rather than the note being parsed. Both
+        halves are asserted, because either alone can be right by accident."""
         row = next(r for r in choose.open_rows(self.FID)
                    if choose.noun_of(r) == choose.WORKSPACE)
-        self.assertTrue(row.refused)
-        self.assertEqual(row.note, switch.FOR_LIFE)
+        self.assertFalse(row.refused)
+        self.assertEqual(row.note, "")
+
+    def test_pressing_a_name_still_leaves_this_chat_in_its_own_workspace(self):
+        """The doorway opening is only safe because what is behind it moves a client, so
+        the invariant is re-asserted at the surface that reopened — the palette's own
+        dispatch (`choose.switch_to`), not `switch.to_workspace` directly."""
+        out = choose.switch_to(choose.WORKSPACE, self.FID, "gamma")
+        self.assertTrue(out.ok, out.message)
+        self.assertEqual(state.workspace_for(self.FID), "alpha")
 
     def test_the_other_three_doorways_are_untouched(self):
         """One noun, not four. A chat switch moves the client and leaves every chat where
@@ -218,13 +242,16 @@ class TheDoorwaySaysSoBeforeTheKeypress(PersonaIso, unittest.TestCase):
         self.assertEqual(choose.pin_reason(choose.PERSONA, self.FID), "")
         self.assertEqual(choose.pin_reason(choose.CHAT, self.FID), "")
 
-    def test_the_names_are_still_listed_with_the_reason_beside_them(self):
-        """`_name_rows`' own rule, and it is not softened here: a name the operator has
-        already typed is a question they asked, so the workspaces are still rows — they
-        carry the reason and refuse when pressed, rather than vanishing from the palette
-        and leaving the query answered with an empty pane (#512)."""
+    def test_the_names_are_listed_and_pressable(self):
+        """`_name_rows`' own rule: a name the operator has already typed is a question
+        they asked, so the workspaces are rows. Under #789 every one of them carried a
+        refusal; under §4b none of them does, and a row that still did would be the bar's
+        dead listing arriving through the palette instead. With no reason the note is the
+        KIND rather than empty — `choose.labelled`'s own rule, and the field that says
+        "unavailable" is `refused`."""
         self.assertIn("gamma", choose.names_of(choose.WORKSPACE, self.FID))
         rows = choose.labelled(choose.roster(choose.WORKSPACE, self.FID),
                                choose.pin_reason(choose.WORKSPACE, self.FID))
         self.assertTrue(rows)
-        self.assertTrue(all(r.refused and r.note == switch.FOR_LIFE for r in rows))
+        self.assertTrue(all(not r.refused and r.note == choose.WORKSPACE
+                            for r in rows))

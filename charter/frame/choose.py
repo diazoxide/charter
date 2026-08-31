@@ -84,20 +84,20 @@ WORKSPACE, PERSONA, CHANGE, CHAT = "workspace", "persona", "change", "chat"
 #: frame is looking at, a persona is who is looking, and a change is what they are in the
 #: middle of — which is the narrowest of those three and so goes third.
 #:
-#: **Workspace keeps its place in that order and no longer moves anything** (§4j). Its
-#: doorway is refused on every frame (:func:`pin_reason`), and it is still listed for the
-#: reason `_name_rows` lists a pinned noun's names: it is where the operator looks to see
-#: which workspace this chat is in, and a row that says why is worth more than a row that
-#: is missing.
+#: **Workspace keeps its place in that order and moves the CLIENT rather than the chat**
+#: (§4b). Its doorway opened again with #789's refusal removed, and what it opens onto is
+#: `switch-client`: the chat this frame is is left running in the background, and §4j is
+#: untouched because nothing about it is re-pointed.
 #:
 #: **`chat` is last, and not because it is narrower still — it is a different KIND of
 #: thing, which is why it does not slot into that ordering at all.** The middle two move
 #: what THIS frame is looking at, by writing a file the frame's own panels then read
 #: (`frame/switch.py`). A chat is a sibling frame: choosing one moves the tmux client to
 #: another window and leaves this frame exactly as it was, still running, still burning
-#: whatever it was burning. Putting it at the end keeps the ones that share a mechanism
-#: together and puts the one that does not beside them rather than among them;
-#: :func:`switch_to` says the same thing in code.
+#: whatever it was burning — and a workspace is that same kind of thing one scope out, a
+#: client moved to another SESSION. Putting `chat` at the end keeps the two that write a
+#: file together and puts the one that has no name-shaped sibling beside them rather than
+#: among them; :func:`switch_to` says the same thing in code.
 NOUNS = (WORKSPACE, PERSONA, CHANGE, CHAT)
 
 #: Which launch pin outranks a switch of each noun — the rung nothing charter writes can
@@ -118,12 +118,13 @@ NOUNS = (WORKSPACE, PERSONA, CHANGE, CHAT)
 #: has ever been. A launch pin is a thing that stops a frame MOVING; a chat's id is what
 #: the frame is, and moving to another chat does not move it.
 #:
-#: **`workspace` is absent because a stronger refusal fires in front of it.**
+#: **`workspace` is absent because the pin is about a different noun than the switch.**
 #: `$CHARTER_WORKSPACE` is still a pin and still outranks everything
-#: (`state.own_workspace`'s first rung) — but §4j refuses that doorway on every frame,
-#: pinned or not, so an entry here could only ever produce a second sentence for a case
-#: the first one already covers, and a narrower one: it would say the pin is what forbids
-#: the move, when an unpinned chat is forbidden identically. See :func:`pin_reason`.
+#: (`state.own_workspace`'s first rung) — over which workspace THIS CHAT is in. A
+#: workspace switch moves the tmux client to another session and re-points nothing
+#: (§4b), so the pin is neither contradicted nor relevant, and an entry here would refuse
+#: a look at another workspace on the grounds that this chat cannot leave the one it is
+#: in. See :func:`pin_reason`.
 PIN = {PERSONA: "CHARTER_PERSONA"}
 
 #: What a doorway says when this workspace has no changes at all. Its own sentence rather
@@ -239,13 +240,19 @@ def current(noun: str, fid: str) -> str:
 def pin_reason(noun: str, fid: str) -> str:
     """Why *fid* will not offer a picker for *noun*, or `""` when it will.
 
-    **For a workspace it is unconditional, and it is §4j** (`switch.FOR_LIFE`): a chat
-    belongs to its workspace for life, so there is no frame on which that picker could
-    honour a keypress. This is the shape a pinned frame already had, arriving through the
-    same field for every frame instead of for some — which is why it is one more answer
-    here rather than a new mechanism beside this one. The sentence is
-    `switch.to_workspace`'s own, read from one constant, so the row and the keypress cannot
-    describe one frame two ways.
+    **For a workspace it is `""` on every frame, and that is §4b undoing #789's doorway.**
+    #789 refused this picker unconditionally, because the only thing behind it was a move
+    §4j forbids for life. What is behind it now is `switch-client` — the client moves and
+    the chat stays exactly where it is (`switch.to_workspace`) — so there is no frame on
+    which the picker is dishonest, and a `$CHARTER_WORKSPACE` pin does not make one: it
+    pins which workspace this CHAT is in, and nothing here proposes to change that.
+
+    **The one refusal a workspace row can still earn is not asked here, deliberately.**
+    "That workspace is not open" is a question about live tmux sessions, and `pin_reason`
+    runs when the palette OPENS — so an answer taken here would be a reading of the server
+    from before the operator had chosen anything, drawn as though it were about the name
+    they went on to press. `commands_frame._switch_client` asks it at the instant it
+    matters, which is `cmd_chat`'s own split one noun out.
 
     For a persona it is the launch pin: the same sentence `switch.to_persona` refuses
     with, built from the same read (`switch._pin`), for the same reason.
@@ -264,7 +271,7 @@ def pin_reason(noun: str, fid: str) -> str:
     one the picker would make a keystroke later.
     """
     if noun == WORKSPACE:
-        return switch.FOR_LIFE
+        return ""
     if noun == CHANGE:
         return "" if names_of(CHANGE, fid) else NO_CHANGES
     if noun == CHAT:
@@ -414,18 +421,21 @@ def noun_of(row: overlay.Row) -> str | None:
 def switch_to(noun: str, fid: str, name: str) -> switch.Outcome:
     """Move frame *fid* to *name*, and answer with what happened and what to say.
 
-    One call into `frame/switch.py` and nothing else for the first three, which is what
-    makes "the switch moves the frame's own identity and bumps it" (#411/#412) a property
-    of one function rather than of every surface that switches. The pointer under the
-    frame's id, the recorded change and the bump are all that function's, in that order,
-    and a picker that wrote any of them itself would be the second answer #411 is about.
+    One call into `frame/switch.py` and nothing else for the two that write a file, which
+    is what makes "the switch moves the frame's own identity and bumps it" (#411/#412) a
+    property of one function rather than of every surface that switches. The pointer under
+    the frame's id, the recorded change and the bump are all that function's, in that
+    order, and a picker that wrote any of them itself would be the second answer #411 is
+    about.
 
-    **`workspace` performs nothing and is still dispatched here**, which is the point of
-    it keeping a branch too: `switch.to_workspace` is §4j's refusal, and routing it through
-    the same call is what makes the palette's row, `charter frame-switch --workspace` and a
-    typed name give one sentence rather than three surfaces each deciding to refuse.
+    **`workspace` is a CHECK here and is performed by the caller** (§4b), which is `chat`'s
+    split one scope out and is dispatched here for the same reason: `switch.to_workspace`
+    is the one rule the palette's row, `charter frame-switch --workspace` and a typed name
+    all get, so the three surfaces cannot each decide to refuse a different set of names.
+    What it cannot decide is whether that workspace is open, which is a live tmux reading
+    and belongs where the switch happens (`commands_frame._switch_client`).
 
-    **`chat` is the one noun this function does not perform, and saying so is the point
+    **`chat` is the other noun this function does not perform, and saying so is the point
     of it having a branch here at all.** A chat switch is not a file write: it is
     `select-window` plus a re-layout of the panels into the window tmux has just resized
     (spec §3.7), and no tmux call may be made from this module or from `frame/switch.py`

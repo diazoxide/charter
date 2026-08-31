@@ -317,16 +317,19 @@ def _repos_events(fid: str):
 #: **The existing front door for each noun, and neither is a shortcut past it.** A chat
 #: switch is `commands_frame.cmd_chat` — `chats.check`'s five refusals, `_pane_place`'s
 #: cross-session reading (#684), `select-window`, and the two re-layouts — and a workspace
-#: switch is `cmd_switch` over `switch.to_workspace`'s one (§4j). Every one of those
-#: refusals
-#: reaches the operator through `_say_on_screen`, which is a `display-message` on the
-#: frame's own client; a panel process has no such surface, and a click that silently did
-#: nothing is exactly the report this feature answers.
+#: switch is `cmd_switch` over `switch.to_workspace`'s three plus `_switch_client`'s own
+#: (§4b): which plane's session that name has, whether anybody is attached to move, and
+#: whether the client really moved. Every one of those refusals reaches the operator
+#: through `_say_on_screen`, which writes to the frame's own attention row; a panel process
+#: has no surface of its own, and a click that silently did nothing is exactly the report
+#: this feature answers.
 #:
 #: Spelled as the argv rather than called in-process for a second reason: what these start
 #: is slow and is not this loop's to wait on. A chat switch is 41 tmux invocations and
-#: ~360 ms measured; a workspace switch re-gathers the plane. `panel._watch` is a paint
-#: loop, and a handler that blocked it would freeze the pane it was clicked on.
+#: ~360 ms measured; a workspace switch is a `switch-client` plus a re-layout at each end,
+#: which is the same order of cost. `panel._watch` is a paint loop, and a handler that
+#: blocked it would freeze the pane it was clicked on — and this pane is one of the panels
+#: the switch it starts is about to tear down.
 _CHAT_SWITCH = ("frame-chat",)
 _WORKSPACE_SWITCH = ("frame-switch", "--workspace")
 
@@ -348,9 +351,10 @@ def _bar_events(fid: str, command: tuple[str, ...]):
       they never pointed here.
     * **A switch is reversible by the same gesture that made it.** The tab you left is
       still on the bar, one click away; nothing is created, nothing is destroyed, and no
-      work is started. A workspace tab is stronger than reversible since §4j — it moves
-      nothing at all, and puts the reason on the frame's own screen. That is the property
-      §4i is actually about, and it holds.
+      work is started. That holds for a workspace tab exactly as it does for a chat tab
+      (§4b): the switch moves a tmux client, the workspace it left keeps every harness it
+      had, and clicking the tab you came from puts you back. That is the property §4i is
+      actually about, and it holds.
     * **There is no chooser for a select-then-confirm bar to be confirmed with.** On the
       table, selecting is a real intermediate state (a highlighted row, a detail on the
       attention strip) and `Enter` in the palette is the chooser. A bar has no such

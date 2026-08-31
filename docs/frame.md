@@ -388,6 +388,40 @@ might have opened. Charter matches on the pane id its own launcher wrote down fo
 `.charter/frame/`, which the server minted and only one plane holds. A workspace this plane
 has never opened is never focused, whatever another plane happens to be calling its own.
 
+### Switching workspaces — several open, one on screen
+
+**Your terminal moves; nothing stops.** `F2` → `workspace`, a click on the `workspaces`
+bar, or `charter frame-switch --workspace <name>` puts your client on another workspace's
+tmux session. The chat you were in keeps its harness, its pid, its window and its
+workspace, and so does every chat in the workspace you arrive at — so you can have several
+harnesses working at once and look at one of them. Come back and they are where you left
+them.
+
+Measured on tmux 3.7c and at the 3.2 floor with a real client: `switch-client` moves the
+client, every pane on the server is still there afterwards with the same pid, and the
+`attach` process itself is untouched. The switch itself is about **5 ms** of tmux; what it
+costs beyond that is one re-layout at each end — the panels of the chat you left are torn
+down and the chat you arrive at gets fresh ones, for the same reason a chat switch does it
+(a background window keeps stale geometry). You land on whichever chat that workspace was
+last showing, which is tmux's own answer and not a record charter keeps.
+
+**Switching is restricted to workspaces of this plane, and anything else is refused by
+name.** One tmux server serves every plane on the machine: the operator's own socket had
+eleven sessions from three different projects on it the day this was written, and `default`
+is a name every plane has. Crossing to another plane's session would cross every isolation
+boundary charter has — a different `CHARTER_ROOT`, different personas, different vaults,
+different memory — so charter will not do it by accident and will not do it on purpose.
+
+Which session is yours is decided by two things, and neither is a session name. Charter
+matches the `%<pane>` id **its own launcher wrote down** for a chat in `.charter/frame/`,
+and it refuses any session whose `@charter_plane` marker names another plane. The marker is
+set once, by the launch that creates a workspace's session, and holds that plane's
+`.charter` path. Sessions started by a charter older than this carry no marker; those are
+still found by the pane record, which is what they were always found by.
+
+A workspace with no session yet is **not open**, and the switch says so rather than opening
+one — see *Switching a workspace moves your terminal* below for why.
+
 ### Switching between them
 
 `F2` → `chat` lists this workspace's chats with the one you are typing in marked and the
@@ -450,12 +484,13 @@ usually drawing a page. At 120 columns it draws six of them, at 160 eight, at 20
 
 **They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
 exactly what `F2` → `chat` does — the same command, the same five refusals, the same
-sentence on your screen when one fires. A **workspace** tab does what `charter frame-switch
---workspace <name>` does, which since §4j is to put one sentence on your screen and move
-nothing: a chat belongs to its workspace for life, and the tab names the workspace this
-chat is in rather than one it could become. *Mouse is off by default* above has the rules a click follows and
-why a tab switches where a repo row only selects; the short of it is that clicking the tab
-you are on, the `+N`, or anything that is not a drawn name does nothing at all.
+sentence on your screen when one fires. A **workspace** tab does exactly what `charter
+frame-switch --workspace <name>` does: your terminal moves to that workspace, and the chat
+you were in keeps running behind you. *Mouse is off by default* above has the rules a click
+follows and why a tab switches where a repo row only selects; the short of it is that
+clicking the tab you are on, the `+N`, or anything that is not a drawn name does nothing at
+all. The mark stays on the workspace **this chat** is in, because that is what it names —
+switching does not move the chat.
 
 **Neither is drawn unless a plane places it**, and that is deliberate rather than
 unfinished: on the ordinary plane there is one chat, and a row saying so permanently costs
@@ -1894,21 +1929,21 @@ neither does the `display-menu` they opened. `F2` was always trying to be a pale
 keeping both would have left two answers to "how do I do a thing", which is how the single
 menu became weird in the first place.
 
-**A chat cannot be switched to another workspace, and the row says so before you press
-it.** A chat belongs to the workspace it was opened in for life: its id is
-`<workspace>.<n>`, and the harness inside it has that workspace's directory as its cwd,
-that workspace's files open and that workspace's work in its history. Moving the label
-would leave all three behind — the tmux window does not move, so the chat would be listed
-in a workspace whose other chats it cannot reach and unreachable from the one it is
-actually in. So the `workspace` row carries `cannot switch: a chat belongs to its
-workspace for life — open a chat in another workspace with `charter <harness> --workspace
-<name>`` and opens no picker. **Opening a chat there is the way to work in another
-workspace**, and it is the honest one: a new conversation, in the right plane, with its own
-cwd and its own history.
+**Switching a workspace moves your terminal, not your chat.** `F2` → `workspace` lists
+the workspaces of this plane with the one this chat is in marked; choose another and your
+terminal moves to that workspace's session. **A chat belongs to the workspace it was
+opened in for life** — its id is `<workspace>.<n>`, and the harness inside it has that
+workspace's directory as its cwd, that workspace's files open and that workspace's work in
+its history — so nothing about the chat you left changes. It keeps running, keeps burning
+whatever it was burning, and is still there when you switch back. That is the point:
+several workspaces open at once, one on screen.
 
-The workspace names are still listed and the row still marks the one you are in, because
-that is where you look to answer "which workspace is this chat in" — you just cannot press
-one into a move.
+A switch is refused, with the reason on your own screen, for a name that cannot name a
+workspace, a workspace this plane does not have, the workspace you are already in, and a
+workspace that **is not open** — nothing on this plane has a session for it yet. Charter
+does not open one for you: opening a workspace starts a harness and attaches a terminal,
+and the switch runs detached with no terminal to attach. The refusal names the command that
+does it: `charter <harness> --workspace <name>`.
 
 **Switching a persona from the picker moves the frame, and says so.** Choosing one writes
 the choice under the frame's own id and bumps the frame so every panel repaints, and a
@@ -2061,7 +2096,8 @@ closed stdin end the launch having started nothing; the exit code is 130.
 meant — `charter workspace use` locks the session to what it selected — and the launch
 says so on the line after your answer, naming the way out in the same sentence: `charter
 workspace unlock`, in the frame's own shell. (It used to name `F2 → workspace` first; that
-route is gone, because a chat belongs to its workspace for life.)
+route no longer releases a lock — a workspace switch moves your terminal to another session
+and leaves this one locked to the workspace its commands act on.)
 
 **It never asks twice, and it never asks a script.** Your choice is written as the
 terminal's own pointer, so the next launch from that terminal has an answer and goes

@@ -50,12 +50,25 @@ import unittest
 from pathlib import Path
 
 from charter import commands_frame, config
-from charter.frame import layout, state, switch, tmuxctl
+from charter.frame import layout, state, tmuxctl
 
 from tests import _tmuxreap
 from tests._isolation import PersonaIso, make_plane
 
 _HAS_TMUX = shutil.which("tmux") is not None
+
+
+def _NOT_OPEN(ws: str) -> str:
+    """What `commands_frame._switch_client` says for a workspace with no session on this
+    server — the answer every click in this module gets, because a test fixture builds one
+    workspace session and clicks the tab of another.
+
+    Spelled here rather than imported, deliberately: it is the operator-visible sentence
+    and this module's whole subject is that a click PRODUCES one. A constant read out of
+    the module under test would follow a reworded sentence silently, and the wording is
+    the thing. It carries the name, so a click that landed on the wrong tab fails here.
+    """
+    return f"workspace '{ws}' is not open on this plane"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -144,11 +157,14 @@ class _ARealFrameWithBars(PersonaIso):
         self.env = dict(os.environ, CHARTER_ROOT=str(self.plane),
                         PYTHONPATH=os.pathsep.join(parts))
         self.env.pop("CHARTER_HOME", None)
-        # **`$CHARTER_WORKSPACE` is deliberately absent from the pane environment.** It is
-        # a PIN: `switch.to_workspace` refuses outright when the launch carried one,
-        # because that value sits in every panel pane's process environment and no file
-        # charter writes can take it out. A fixture that set it would make every case here
-        # measure the refusal.
+        # **`$CHARTER_WORKSPACE` is deliberately absent from the pane environment.** It
+        # is a PIN on which workspace this CHAT is in (`state.own_workspace`'s first rung),
+        # and a fixture that set it would be answering half of every case here for
+        # charter: `switch.current_workspace` would come back from the environment rather
+        # than from the record the launcher wrote, so the "already in this workspace"
+        # refusal would fire on a name the test never chose. It no longer refuses a switch
+        # (§4b — a client moves and the chat does not), which is why this comment is about
+        # the fixture rather than about a refusal.
         self.env.pop("CHARTER_WORKSPACE", None)
 
     def _tmux(self, *args: str, env=None) -> subprocess.CompletedProcess:
@@ -365,31 +381,38 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
                          "the harness is not the active pane, so a report reaching the "
                          "bar would prove nothing about `[frame] mouse`")
 
-    def test_clicking_a_tab_reaches_the_switch_and_the_refusal_comes_back(self):
-        """The report, answered end to end — and since §4j the answer is a sentence rather
-        than a move: a chat belongs to its workspace for life.
+    def test_clicking_a_tab_reaches_the_switch_and_the_answer_comes_back(self):
+        """The report, answered end to end.
 
-        **The observable had to change and the chain did not.** This used to await
-        `state.frame_workspace(fid) == THERE`, which is the write §4j removed, so keeping
-        it would have measured nothing this file exists for. `state.notice` is the other
-        end of the same three processes — the panel decodes the click, spawns `charter
-        frame-switch --workspace <name>`, and that child writes the outcome to the frame's
-        attention row — so a sentence arriving there proves the click reached the switch
-        exactly as a moved record used to.
+        **The observable has changed twice and the chain has not.** It was
+        `state.frame_workspace(fid) == THERE` until §4j removed that write, then
+        `switch.FOR_LIFE` while #789 refused every tab. Under §4b the answer names the
+        workspace that was clicked: `THERE` exists on this plane and has no tmux session
+        on this test's server, so the switch has nowhere to move the client and says so.
+        That is a strictly stronger reading than the constant it replaces — it proves the
+        NAME reached the child, which `FOR_LIFE` interpolated nothing to prove.
+
+        `state.notice` is the other end of the same three processes — the panel decodes
+        the click, spawns `charter frame-switch --workspace <name>`, and that child writes
+        the outcome to the frame's attention row.
+
+        A switch that actually lands a client in another workspace needs a second live
+        workspace session and is measured in
+        `tests/test_a_workspace_switch_moves_the_client.py`.
         """
         self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
         self.assertTrue(
-            _await(lambda: switch.FOR_LIFE in state.notice(self.fid)),
+            _await(lambda: _NOT_OPEN(self.THERE) in state.notice(self.fid)),
             f"the click never reached the switch: notice is "
             f"{state.notice(self.fid)!r}")
         self.assertEqual(state.frame_workspace(self.fid), self.HERE,
-                         "the refusal moved the chat anyway")
+                         "the switch moved the chat anyway")
 
     def test_the_bar_repaints_and_the_mark_stays_where_the_chat_is(self):
         """The switch ends in a `state.bump` — the version this panel's poll was already
         watching — so the bar redraws without a repaint of this test's own. What it
-        redraws is the same mark: the frame did not move, and a bar that showed it moving
-        would be the lie §4j is about.
+        redraws is the same mark: the bar marks the workspace this CHAT is in
+        (`switch.current_workspace`), and no switch moves that.
 
         Was `test_the_bar_repaints_with_the_mark_on_the_workspace_it_moved_to`.
         """
@@ -407,7 +430,7 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         your prompt is not a tab an operator will click twice."""
         self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
         self.assertTrue(_await(
-            lambda: switch.FOR_LIFE in state.notice(self.fid)))
+            lambda: _NOT_OPEN(self.THERE) in state.notice(self.fid)))
         self.assertEqual(self._active(), self.harness,
                          "clicking the workspace bar moved the keyboard off the harness")
 
@@ -631,15 +654,16 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         row was `workspaces  *harness-wrapper  +14` and this click had nothing to land
         on.
 
-        What comes back is §4j's sentence rather than a move — see
-        `ARealClickOnTheWorkspaceBarMovesTheFrame` for why the observable moved from the
-        frame's record to its attention row. The column arithmetic this class exists for
-        is untouched: a click that landed on the wrong cell, or on none, produces no
-        notice at all.
+        What comes back names the workspace that was clicked — see
+        `ARealClickOnTheWorkspaceBarMovesTheFrame` for why the observable is the attention
+        row rather than the frame's record. The column arithmetic this class exists for is
+        untouched: a click that landed on the wrong cell, or on none, produces no notice at
+        all — and one that landed on the wrong TAB now names the wrong workspace, which
+        this assertion would catch and the old constant could not.
         """
         self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
         self.assertTrue(
-            _await(lambda: switch.FOR_LIFE in state.notice(self.fid)),
+            _await(lambda: _NOT_OPEN(self.THERE) in state.notice(self.fid)),
             f"the click never reached the switch: {state.notice(self.fid)!r} — "
             f"row {self._bar_row(self.bar)!r}")
 
@@ -650,16 +674,16 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         tab it did the first time.
 
         A window centred on the marked name would have slid one step here, putting a third
-        workspace under that cell. §4j makes that harder to observe, not less true: the
-        mark no longer moves, so what is asserted is that the page is identical and that
-        the second press produces the same answer as the first rather than acting on a
-        name that arrived under the pointer.
+        workspace under that cell. The mark does not move — it marks the workspace this
+        chat is in — so what is asserted is that the page is identical and that the second
+        press produces the same answer as the first rather than acting on a name that
+        arrived under the pointer.
         """
         before = self._bar_row(self.bar)
         col = self._column_of(self.bar, f" {self.THERE}")
         self._click(self.bar, col=col)
         self.assertTrue(
-            _await(lambda: switch.FOR_LIFE in state.notice(self.fid)),
+            _await(lambda: _NOT_OPEN(self.THERE) in state.notice(self.fid)),
             "the first click never reached the switch, so there is nothing to measure")
         after = self._bar_row(self.bar)
         self.assertEqual([n for n in self.NAMES if n in after],

@@ -178,22 +178,18 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
         about a row rather than what the operator typed."""
         rows = self._typed("zeb").rows
         self.assertEqual([(r.title, r.note) for r in rows],
-                         [("zeb", "persona"), ("zeb-api", switch.FOR_LIFE),
-                          ("zebra-ui", switch.FOR_LIFE)])
+                         [("zeb", "persona"), ("zeb-api", "workspace"),
+                          ("zebra-ui", "workspace")])
 
-    def test_a_workspace_names_note_is_its_refusal_rather_than_its_kind(self):
-        """**The cost of §4j on this surface, asserted rather than discovered.** The note
-        column holds one thing, and `choose.labelled` gives a refused row its reason
-        instead of its kind — which used to happen only on a pinned frame and now happens
-        on every frame for this one noun. So a workspace name says why it cannot be
-        pressed where it used to say what it is.
-
-        It is still tellable from a persona: exactly one of the two sentences is a kind
-        label, and the rows carry `refused` as a field either way (#732). Restoring the
-        kind label would mean a row that says "workspace" and refuses when pressed, which
-        is the defect that field exists to prevent."""
+    def test_no_name_on_an_unpinned_frame_is_marked_refused(self):
+        """**What #789 cost on this surface and §4b gave back, asserted rather than
+        discovered.** The note column holds one thing, and `choose.labelled` gives a
+        refused row its reason instead of its kind — so under #789 every workspace name
+        said why it could not be pressed where it should say what it is. Both fields are
+        asserted, here and in the case above, because either alone can be right by
+        accident: the note is the KIND, and `refused` is false."""
         rows = self._typed("zeb").rows
-        self.assertEqual([r.refused for r in rows], [False, True, True])
+        self.assertEqual([r.refused for r in rows], [False, False, False])
 
     def test_the_name_in_use_keeps_its_mark_here_too(self):
         """A name row is the picker's own row re-noted, so the `*` that answers "which one
@@ -257,23 +253,24 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
         self.assertIn("persona → forge", self.said.call_args[0][1])
 
     def test_a_workspace_typed_at_the_top_level_takes_the_same_route_and_is_refused(self):
-        """The other end of the same route, and the reason this file is where the typed
-        workspace name is measured at all: `_name_rows` is the only surface a workspace
-        name still reaches, now that its doorway opens no picker.
+        """The other end of the same route: the row resolves to a name,
+        `choose.switch_to` is asked, and — since §4b — the switch is STARTED rather than
+        answered here. A palette that silently dropped the name would leave the operator
+        pressing a row that does nothing, which is the property this has always asserted;
+        what changed is where the answer comes from.
 
-        What must hold is that the refusal arrives *through the palette* — the row
-        resolves to a name, `choose.switch_to` is asked, and the sentence lands on the
-        frame's own screen. A palette that silently dropped the name would leave the
-        operator pressing a row that does nothing."""
+        `_start_workspace_switch` is what carries the name to `charter frame-switch
+        --workspace`, and nothing is said from this process, because the sentence belongs
+        on the chat the operator lands on and only the switch knows which that is."""
         was = state.version(self.FID)
-        with mock.patch.object(palette, "own_the_tty", _pick("zebra")):
+        with mock.patch.object(palette, "own_the_tty", _pick("zebra")), \
+             mock.patch.object(commands_frame, "_start_workspace_switch") as started:
             self.assertEqual(commands_frame.cmd_palette(
                 SimpleNamespace(client="/dev/ttys7", pane=True)), 0)
+        started.assert_called_once_with(self.FID, "zebra-ui")
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         self.assertEqual(state.version(self.FID), was)
-        self.said.assert_called_once()
-        self.assertEqual(self.said.call_args[0][1], switch.FOR_LIFE)
-        self.assertIs(self.said.call_args[1]["ok"], False)
+        self.said.assert_not_called()
 
     def test_the_doorway_still_opens_a_picker_and_switching_from_it_still_works(self):
         """**The constraint that is not negotiable, asserted after the change**: browsing
@@ -285,9 +282,10 @@ class TypingAtTheTopLevelFindsANameDirectly(_Frame, unittest.TestCase):
         The frame is on no persona to begin with, so landing on one is a real switch
         rather than a no-op a broken doorway would also produce.
 
-        Row 1 and not row 0 since §4j — row 0 is the workspace doorway, which now opens no
-        picker at all (`choose.pin_reason`), so pressing it would measure the refusal
-        rather than the route. The route itself is unchanged, which is what this asserts.
+        Row 1 and not row 0 — row 0 is the workspace doorway, whose route ends in a tmux
+        client rather than in a file, and `tests/test_a_workspace_switch_moves_the_client
+        .py` is where that is measured. The persona is the noun whose whole route is
+        in-process, which is what makes it the one to assert the route with.
         """
         was = state.version(self.FID)
         self.assertIsNone(switch.current_persona(self.FID))
@@ -474,11 +472,12 @@ class APinnedNounListsItsNamesWithTheReason(_Frame, unittest.TestCase):
     already been typed is a question the operator asked, and an empty pane is the wrong
     answer to it. So the row is listed and it carries the sentence.
 
-    **The pinned noun here is the PERSONA, and it was the workspace until §4j.** That one
-    now carries `switch.FOR_LIFE` on every frame, pinned or not, so a pin-shaped assertion
-    on it would stay green with the pin removed and measure nothing. Both halves are still
-    asserted — the pin's, on the noun a pin still decides, and §4j's, on the noun it
-    decides — because what this class is really about is the mechanism they share.
+    **The pinned noun here is the PERSONA, and it was the workspace until §4j.** A
+    workspace name carried #789's blanket refusal on every frame, pinned or not, so a
+    pin-shaped assertion on it would have stayed green with the pin removed and measured
+    nothing. §4b removed that refusal and did not put the pin back (`choose.PIN` says
+    why), so the persona is the only noun a launch pin still decides and the workspace is
+    the negative control for it.
     """
 
     PIN = {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": "forge"}
@@ -494,13 +493,13 @@ class APinnedNounListsItsNamesWithTheReason(_Frame, unittest.TestCase):
         """One pin, one noun. Reading a pin as "this frame cannot switch anything" would
         take another noun's names away for a reason that is not about it.
 
-        Asserted as "the other rows carry a DIFFERENT sentence" rather than "no sentence":
-        a workspace name carries §4j's, always, and the leak this guards against would
-        show as the persona's variable named on a row that is not about personas."""
+        Both halves, because either alone can be right by accident: a workspace name on a
+        persona-pinned frame is not refused at all, and in particular does not name the
+        persona's own variable on a row that is not about personas."""
         rows = [r for r in self._typed("zeb").rows if r.id.startswith("workspace:")]
         self.assertTrue(rows)
         for row in rows:
-            self.assertEqual(row.note, switch.FOR_LIFE)
+            self.assertFalse(row.refused)
             self.assertNotIn("CHARTER_PERSONA", row.note)
 
     def test_pressing_one_says_the_same_sentence_and_moves_nothing(self):
@@ -514,16 +513,18 @@ class APinnedNounListsItsNamesWithTheReason(_Frame, unittest.TestCase):
         self.said.assert_called_once()
         self.assertIn("$CHARTER_PERSONA pins this frame", self.said.call_args[0][1])
 
-    def test_pressing_a_workspace_name_says_its_own_sentence_and_moves_nothing(self):
-        """The §4j half of the same property: the note the row carried is the sentence the
-        keypress produces, read from one constant so the two cannot drift apart."""
+    def test_pressing_a_workspace_name_on_a_pinned_frame_still_starts_a_switch(self):
+        """The negative control's other end: a `$CHARTER_PERSONA` pin must not reach the
+        workspace names either. Pressing one starts the switch and re-points nothing,
+        exactly as it does on an unpinned frame."""
         row = [r for r in self._typed("zebra").rows if r.id.startswith("workspace:")][0]
-        with mock.patch.object(palette, "own_the_tty", _pick("zebra", want=row.id)):
+        with mock.patch.object(palette, "own_the_tty", _pick("zebra", want=row.id)), \
+             mock.patch.object(commands_frame, "_start_workspace_switch") as started:
             self.assertEqual(commands_frame.cmd_palette(
                 SimpleNamespace(client="", pane=True)), 0)
+        started.assert_called_once_with(self.FID, "zebra-ui")
         self.assertEqual(state.workspace_for(self.FID), "alpha")
-        self.said.assert_called_once()
-        self.assertEqual(self.said.call_args[0][1], row.note)
+        self.said.assert_not_called()
 
     def test_the_pin_is_contained_before_it_becomes_a_note_and_a_status_line(self):
         """`$CHARTER_PERSONA` is whatever the launching environment held, so a newline in
@@ -647,12 +648,18 @@ class TheOutcomeIsWrittenToTheFrameTheOperatorEndsUpOn(_Frame, unittest.TestCase
     so it has to be written to the frame the operator will be looking at a moment from
     now — which is not always the frame the switch was computed for.
 
-    A workspace or persona switch moves the frame in place, so that is this one. A chat
-    switch does not move anything: it moves the tmux CLIENT to a sibling frame
-    (`choose.py` — "the frame IS the chat"), and a chat's name IS its frame id. Written to
-    the wrong one, a chat switch's outcome would be filed on the frame the operator just
-    left and never read by anybody, which is exactly the class of silent refusal #517 and
-    #684 exist to prevent — reached, this time, through the fix for #729.
+    A persona switch moves the frame in place, so that is this one. A chat switch does not
+    move anything: it moves the tmux CLIENT to a sibling frame (`choose.py` — "the frame
+    IS the chat"), and a chat's name IS its frame id. Written to the wrong one, a chat
+    switch's outcome would be filed on the frame the operator just left and never read by
+    anybody, which is exactly the class of silent refusal #517 and #684 exist to prevent —
+    reached, this time, through the fix for #729.
+
+    **A workspace switch that TAKES says nothing here at all** (§4b), and that is the
+    third answer rather than a gap: it ends on a chat of another tmux session — whichever
+    window tmux restores — so the frame the operator will be looking at is not known until
+    the switch has happened, and `commands_frame._switch_client` says the sentence there.
+    A refused one still lands here, because a refusal leaves the operator where they are.
 
     `display-message` had no equivalent of this bug and no equivalent of the property
     either: it drew on a CLIENT, which follows the operator by construction, and could not
@@ -671,12 +678,29 @@ class TheOutcomeIsWrittenToTheFrameTheOperatorEndsUpOn(_Frame, unittest.TestCase
         self.enterContext(mock.patch.object(
             choose, "switch_to", return_value=switch.Outcome(ok, message)))
         self.enterContext(mock.patch.object(commands_frame, "_start_chat_switch"))
+        self.started = self.enterContext(
+            mock.patch.object(commands_frame, "_start_workspace_switch"))
         self.assertEqual(
             commands_frame.cmd_palette(SimpleNamespace(client="", pane=True)), 0)
         return self.said.call_args
 
-    def test_a_workspace_switch_is_filed_on_this_frame(self):
-        self.assertEqual(self._picked(choose.WORKSPACE, "gamma")[0][0], self.FID)
+    def test_a_persona_switch_is_filed_on_this_frame(self):
+        self.assertEqual(self._picked(choose.PERSONA, "scribe")[0][0], self.FID)
+
+    def test_a_workspace_switch_that_took_is_started_and_said_by_the_switch_itself(self):
+        """§4b: this process cannot know which chat the client lands on, so it says
+        nothing and hands the name to `charter frame-switch --workspace`."""
+        self._picked(choose.WORKSPACE, "gamma")
+        self.started.assert_called_once_with(self.FID, "gamma")
+        self.said.assert_not_called()
+
+    def test_a_workspace_switch_that_was_REFUSED_stays_on_this_frame(self):
+        """A refusal leaves the operator where they are, so its sentence is filed here —
+        and nothing is started."""
+        args = self._picked(choose.WORKSPACE, "zzz", ok=False,
+                            message="no workspace 'zzz'")
+        self.assertEqual(args[0][0], self.FID)
+        self.started.assert_not_called()
 
     def test_a_chat_switch_that_took_is_filed_on_the_chat_being_switched_TO(self):
         """The client ends up in front of `api.2`'s panels, so `api.2`'s row is the one
@@ -693,8 +717,8 @@ class TheOutcomeIsWrittenToTheFrameTheOperatorEndsUpOn(_Frame, unittest.TestCase
     def test_the_outcome_carries_whether_it_happened(self):
         """`ok` is what picks the dwell, and a caller that dropped it would give every
         refusal a success's shorter one — silently, since both still say something."""
-        self.assertIs(self._picked(choose.WORKSPACE, "gamma", ok=True)[1]["ok"], True)
-        self.assertIs(self._picked(choose.WORKSPACE, "zzz", ok=False)[1]["ok"], False)
+        self.assertIs(self._picked(choose.PERSONA, "scribe", ok=True)[1]["ok"], True)
+        self.assertIs(self._picked(choose.PERSONA, "zzz", ok=False)[1]["ok"], False)
 
 
 if __name__ == "__main__":                          # pragma: no cover

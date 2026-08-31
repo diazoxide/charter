@@ -214,6 +214,42 @@ _EXIT_PATH_ENV = "CHARTER_FRAME_EXIT"
 #: per window.
 _CHAT_OPTION = "@charter_chat"
 
+#: The SESSION option that says which plane a workspace session belongs to — §4b's plane
+#: marker, and the answer to a question `#{session_name}` cannot be asked.
+#:
+#: **One tmux server serves every plane on this machine (`SOCKET`) and a session's name is
+#: a bare workspace name.** Measured on the operator's own socket while this was written:
+#: eleven sessions from three different projects, and `default` — `DEFAULT_WORKSPACE`, a
+#: name every plane has whether anybody chose it or not — is one of them. So a
+#: `switch-client -t default` decided on a name can put an operator in another project's
+#: frame, across every isolation boundary charter has: a different `CHARTER_ROOT`, a
+#: different persona set, different vaults, different memory. That is the correctness
+#: problem §4b's switch is built around, and it is why `_plane_session` never resolves a
+#: name.
+#:
+#: **The value is `config.STATE_DIR` and not `config.ROOT`, which is a narrower claim and
+#: the true one.** What makes two charters one plane, for every read on this path, is
+#: sharing the `.charter/frame/` directory the chat records live in — two roots pointed at
+#: one `$CHARTER_HOME` are one plane by every other question charter asks, and marking
+#: them as two would refuse a switch that is perfectly safe.
+#:
+#: **Session-scoped, and the scope is load-bearing.** A chat is a window and a workspace is
+#: a session (§2.1), so this is the one thing on the server whose lifetime is the
+#: workspace's. Measured on tmux 3.7c and at the 3.2 floor: `set-option -t <a pane id>`
+#: with neither `-w` nor `-p` sets it on that pane's SESSION, another session on the same
+#: server reads it as unset, and `show-options -g` does not have it — so no session can
+#: answer for a plane that is not its own.
+#:
+#: **It is read through a FORMAT and never through `show-options`, and that is measured
+#: rather than preferred.** `#{@charter_plane}` in a `list-panes -a` format resolves the
+#: option hierarchically — pane, then window, then session — so one call answers "which
+#: session, which pane, whose plane" on both versions. `show-options -t <session> -v
+#: @charter_plane` for an option nobody set answers **rc 1 with `invalid option:` on 3.7c
+#: and rc 0 with an empty line on 3.2**: a reader built on it would have to branch on the
+#: tmux version to tell "unmarked" from "would not answer", and the format has no such
+#: split.
+_PLANE_OPTION = "@charter_plane"
+
 #: The second value carried the same out-of-band way, for the same reason: the
 #: interpreter the hotkey bind runs charter with. Owned by `tmuxctl` so every module
 #: that spells the name reaches one definition; see `_charter_py_env_argv` and
@@ -1069,6 +1105,54 @@ def _chat_option_argv(*, socket: str, harness_pane: str, chat: str) -> list[str]
                                _CHAT_OPTION, chat)
 
 
+def _this_plane() -> str:
+    """Which plane this process is acting for, as :data:`_PLANE_OPTION` spells it.
+
+    Asked rather than cached, because `config.use` re-points every charter path at
+    runtime — that seam is how `tests/_isolation.py` gives a test its own plane and how
+    the two-plane tests put two of them in one process. A module-level constant would be
+    the first plane that happened to import this.
+    """
+    return str(config.STATE_DIR)
+
+
+def _plane_option_argv(*, socket: str, harness_pane: str) -> list[str] | None:
+    """`set-option`: write which PLANE this session belongs to. ``None`` to refuse.
+
+    :func:`_chat_option_argv` one scope out, and the differences between them are all
+    that is worth saying:
+
+    * **No `-w`.** That is the whole of what makes this session-scoped rather than
+      window-scoped; the target is still the harness pane, for `_chat_option_argv`'s
+      reason — a pane id resolves to its window and to its session on both versions, and a
+      workspace NAME is unusable as a target twice over: tmux parses `api.1` as
+      ``window.pane``, and a bare name is matched against WINDOW NAMES before it settles
+      for a session's current window (measured for §4b; `layout.chat_window_argv` carries
+      the reading). Charter's chat windows are named `<workspace>.<n>`, so `-t
+      <workspace>` on charter's own server names one of that workspace's chats.
+    * **Written once, by the launch that CREATES the session, and never afterwards.** A
+      launch that finds `session in live_sessions` is joining a session it did not
+      necessarily make: that test is on the NAME, which is exactly the collision this
+      option exists to record, so re-writing the marker there could relabel another
+      plane's session as this one's — turning the guard into the defect. A session an
+      older charter created carries no marker and keeps none; :func:`_plane_session` reads
+      that as "unmarked", which is where the pane records it already relies on still
+      decide.
+    * **The refusal is about the ROUND TRIP, not about an alphabet.** A chat id has one
+      (`_FRAME_ID_RE`); a state directory is a filesystem path and charter does not get to
+      narrow it. What this reader needs is a value that survives
+      `list-panes -F 'a\\tb\\t#{@charter_plane}'`, so the check is exactly that: a tab
+      would add a field and a newline would add a row, and either would be read as a
+      server answering some other format. A plane whose path holds one is left unmarked
+      rather than marked wrongly, which costs it §4b's veto and nothing else.
+    """
+    value = _this_plane()
+    if not value or any(c in value for c in "\t\r\n"):
+        return None
+    return tmuxctl.server_argv(socket, "set-option", "-t", harness_pane,
+                               _PLANE_OPTION, value)
+
+
 def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`pane-died[0]`: writes the harness's real exit status, out of band.
 
@@ -1638,36 +1722,70 @@ def _chat_being_left(socket: str, *, beside: str) -> str:
     option, and it is about to be a state directory's name and the key `state.harness_pane`
     is read under.
     """
-    out = tmuxctl.run("finding the chat this launch is leaving",
-                      tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
-                                          _WINDOW_SEAT_FORMAT),
-                      timeout=5, report=False)
-    # No branch on the return code: a listing that failed has an empty stdout, so it
-    # falls out below as "no seats and therefore no answer" — the same sentence, said
-    # once. Exactly three fields per row, because `#{@charter_chat}` is an option and an
-    # option's value is whatever somebody set: one holding a tab of its own would
-    # otherwise have its first half read as a chat id.
-    seats = [line.split("\t") for line in out.stdout.splitlines()]
-    seats = [s for s in seats if len(s) == 3]
+    seats = _window_seats(socket, "finding the chat this launch is leaving")
     # `None` when *beside*'s own window is not in the listing, and it needs no branch of
     # its own: no session id is ever `None`, so the second lookup below matches nothing
     # and answers "". A sentinel that cannot collide is one guard rather than two.
     session = next((s[0] for s in seats if s[2] == beside), None)
+    # *beside* itself is this function's own case and not :func:`_chat_showing`'s: the
+    # launch that CREATED the session is already on its only window, and there is nothing
+    # for it to leave.
+    chat = _chat_showing(seats, session)
+    return chat if chat != beside else ""
+
+
+def _window_seats(socket: str, why: str) -> list[list[str]]:
+    """Every window on *socket* as a :data:`_WINDOW_SEAT_FORMAT` row, rows charter cannot
+    read dropped.
+
+    One `list-windows -a` for both readers of it — :func:`_chat_being_left`, before a
+    launch takes the client somewhere else, and :func:`_chat_showing`, after a workspace
+    switch has taken it. They ask the same question of the same listing keyed two
+    different ways (by a chat, by a session), and a second call would be a second reading
+    of a server that moves between them.
+
+    **No branch on the return code**, which is the shape both callers had: a listing that
+    failed has an empty stdout and falls out as "no seats and therefore no answer" — the
+    same sentence, said once. **Exactly three fields**, because `#{@charter_chat}` is an
+    option and an option's value is whatever somebody set: one holding a tab of its own
+    would otherwise have its first half read as a chat id.
+    """
+    out = tmuxctl.run(why, tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
+                                               _WINDOW_SEAT_FORMAT),
+                      timeout=5, report=False)
+    return [s for s in (line.split("\t") for line in out.stdout.splitlines())
+            if len(s) == 3]
+
+
+def _chat_showing(seats: list[list[str]], session: str | None) -> str:
+    """Which chat *session*'s current window is drawing, out of *seats* — or ``""``.
+
+    ``""`` for every way this can fail to answer, because both callers do one thing with
+    all of them: leave that window alone. A *session* nothing in the listing is in (a
+    `None` sentinel from `_chat_being_left`, or a session id that went away between two
+    calls), and a session whose current window carries no chat at all — the operator's own
+    shell, on their own server, or a workspace session an older charter left unnamed.
+
+    Held to `_FRAME_ID_RE` on the way out, at #475's boundary: this value came off a tmux
+    option, and it is about to be a state directory's name and the key
+    `state.harness_pane` is read under.
+
+    **Not stripped, and that is the guard rather than a missing one.** `splitlines` has
+    already taken the line terminator and the fields are cut on tabs, so there is no
+    whitespace here tmux put in — only whitespace somebody put in the OPTION, and
+    `_FRAME_ID_RE`'s alphabet holds none. Stripping would turn ` demo.1 ` into a chat
+    charter then re-dresses, which is normalising a value the one rule here is there to
+    refuse. It is also the `strip`/`lstrip` shape `_live_chats`' own docstring names:
+    truthy for exactly the same strings, so no test can tell the two apart — a question
+    with one answer, not asked.
+    """
     chat = next((s[2] for s in seats if s[0] == session and s[1] == "1"), "")
-    # **Not stripped, and that is the guard rather than a missing one.** `splitlines`
-    # has already taken the line terminator and the fields are cut on tabs, so there is
-    # no whitespace here tmux put in — only whitespace somebody put in the OPTION, and
-    # `_FRAME_ID_RE`'s alphabet holds none. Stripping would turn ` demo.1 ` into a chat
-    # charter then tears the panels off, which is normalising a value the one rule below
-    # is there to refuse. It is also the `strip`/`lstrip` shape `_live_chats`' own
-    # docstring names: truthy for exactly the same strings, so no test can tell the two
-    # apart — a question with one answer, not asked.
-    return chat if chat != beside and _FRAME_ID_RE.fullmatch(chat) else ""
+    return chat if _FRAME_ID_RE.fullmatch(chat) else ""
 
 
-#: What :func:`_workspace_to_focus` asks of every pane on a server, in one call.
+#: What :func:`_plane_session` asks of every pane on a server, in one call.
 #:
-#: Two fields, both of them tmux's OWN ids and neither of them a name —
+#: The first two fields are tmux's OWN ids and neither of them is a name —
 #: :data:`_WINDOW_SEAT_FORMAT`'s rule one noun over, and here it is the whole correctness
 #: argument rather than a target-grammar convenience. One tmux server serves every plane
 #: on this machine (:data:`SOCKET`), session names are bare workspace names, and `default`
@@ -1675,9 +1793,83 @@ def _chat_being_left(socket: str, *, beside: str) -> str:
 #: `#{pane_id}` can: a pane id is minted by the server, and the only plane holding one is
 #: the plane whose launcher wrote it down (`state.record_harness_pane`).
 #:
-#: `\t` because neither can contain one: `#{session_id}` is `$<digits>` and `#{pane_id}`
-#: is `%<digits>`, both tmux's own and neither settable by anyone.
-_PANE_SEAT_FORMAT = "#{session_id}\t#{pane_id}"
+#: **The third field is the marker that closes what a pane id alone cannot** — see
+#: :data:`_PLANE_OPTION`, and :func:`_plane_session` for which of the two decides what.
+#: It is read here rather than through a second `show-options` call because a session
+#: option resolves in a PANE's format on both versions (measured on 3.7c and at the 3.2
+#: floor), so this stays one round trip, and because `show-options -v` for an unset user
+#: option answers differently on the two versions where a format does not.
+#:
+#: `\t` between them because none of the three can contain one: `#{session_id}` is
+#: `$<digits>` and `#{pane_id}` is `%<digits>`, both tmux's own and neither settable by
+#: anyone, and `_plane_option_argv` refuses to write a marker holding one.
+_PANE_SEAT_FORMAT = f"#{{session_id}}\t#{{pane_id}}\t#{{{_PLANE_OPTION}}}"
+
+
+def _plane_session(socket: str, *, ws: str) -> tuple[str, str] | None:
+    """``(tmux session id, chat id)`` for THIS PLANE's live *ws* — or ``None``.
+
+    **The one question two surfaces ask**: §4k's open-or-focus
+    (:func:`_workspace_to_focus`) and §4b's workspace switch (:func:`_switch_client`).
+    Both need "which session on this shared server is MY plane's `ws`", both are wrong in
+    the same way if they answer it from a name, and a second implementation would be a
+    second chance to answer it differently.
+
+    **Matched on this plane's own chat directories, never on a live session name, and that
+    inversion is §3.3's.** `cmd_launch` asks `if session in live_sessions:` and that
+    question is unanswerable across planes: `_live_sessions` returns every session on the
+    machine, `default` is `DEFAULT_WORKSPACE_FALLBACK` and therefore a name every plane
+    has, and `config.STATE_DIR` is the only thing that is per-plane. Reading the answer off
+    a name would make an existing collision into ADVERTISED behaviour — `charter -w
+    default` in one plane attaching to another plane's frame, and a workspace tab in one
+    plane switching an operator into another project's harnesses. So the question starts on
+    disk: `chats.of_workspace` is `.charter/frame/` under THIS plane's state directory, and
+    `state.harness_pane` is a `%N` this plane's own launcher wrote down.
+
+    **The marker is a veto and the pane record is the finder, and each covers what the
+    other cannot.** A pane id is unique on a running server but restarts at `%0` when that
+    server does, so a `%3` recorded for a chat that is over can later name a different live
+    pane — on the launch path `cmd_launch`'s reap narrows that to almost nothing, and on
+    the switch path there is no reap in front of it at all. :data:`_PLANE_OPTION` closes it
+    from the other side: a candidate session whose marker names a plane that is not this
+    one is refused however well its pane id matched. What the marker cannot do is find
+    anything, because a session an older charter created carries none — every session on
+    the operator's own socket the day this was written — so an ABSENT marker is read as
+    "unmarked" and decides nothing, and the pane record still answers. The residual is
+    therefore one recycled pane id belonging to a session created by a charter that
+    predates this option, and it ages out with those sessions.
+
+    ``None`` for every way this can fail to answer, because both callers do the same thing
+    with each: a workspace this plane has never opened has no chat directory, reaches no
+    tmux call at all, and can never be confused with anybody's.
+
+    Measured on tmux 3.7c and at the 3.2 floor, identically on both: `list-panes -a` lists
+    every pane on the server with its own session id, and a session-scoped user option
+    resolves in that pane format.
+    """
+    mine: dict[str, str] = {}
+    for chat in chats.of_workspace(ws):
+        pane = state.harness_pane(chat)
+        if pane is not None:
+            mine[pane] = chat
+    if not mine:
+        return None
+    out = tmuxctl.run("finding this plane's live chats in this workspace",
+                      tmuxctl.server_argv(socket, "list-panes", "-a", "-F",
+                                          _PANE_SEAT_FORMAT),
+                      timeout=5, report=False)
+    # No branch on the return code, for `_window_seats`' reason: a listing that failed has
+    # an empty stdout and falls out below as "no seats and therefore no answer". Exactly
+    # three fields per row, so a server answering some other format cannot have half a row
+    # read as a pane id — and `_plane_option_argv` is what guarantees charter's own marker
+    # never adds a fourth.
+    seats = [line.split("\t") for line in out.stdout.splitlines()]
+    ours = _this_plane()
+    seat = next((s for s in seats
+                 if len(s) == 3 and s[1] in mine and s[2] in ("", ours)), None)
+    if seat is None:
+        return None
+    return seat[0], mine[seat[1]]
 
 
 def _workspace_to_focus(socket: str, *, ws: str) -> tuple[str, str] | None:
@@ -1696,31 +1888,10 @@ def _workspace_to_focus(socket: str, *, ws: str) -> tuple[str, str] | None:
     already in is FOCUSED — one more client on the session they are on, looking at the
     window they are on — and a workspace nobody is in opens a chat exactly as before.
 
-    **Matched on this plane's own chat directories, never on a live session name, and
-    that inversion is §3.3's.** `cmd_launch` already asks `if session in live_sessions:`
-    and that question is unanswerable across planes: `_live_sessions` returns every
-    session on the machine, `default` is `DEFAULT_WORKSPACE_FALLBACK` and therefore a name
-    every plane has, and `config.STATE_DIR` is the only thing that is per-plane. Reading
-    the answer off a name would make an existing collision into the ADVERTISED behaviour —
-    `charter -w default` in one plane attaching to another plane's frame. So the question
-    starts on disk: `chats.of_workspace` is `.charter/frame/` under THIS plane's state
-    directory, and `state.harness_pane` is a `%N` this plane's own launcher wrote down.
-
-    **The residual, stated rather than hidden, and it is narrower than it first looks.**
-    A pane id is unique on a running server but restarts at `%0` when that server does, so
-    a `%3` recorded for a chat that is over can later name a different live pane. Within
-    ONE plane that is already closed by the caller: `cmd_launch` reaps immediately above
-    this, and a chat directory whose id tmux no longer reports live is removed — so the
-    only directories reaching here are ones the server still lists. Across two planes it
-    is not, because that liveness list is by CHAT ID and chat ids collide exactly as
-    session names do: `new_chat_id` counts from 1 on each plane's own disk, so `shared.1`
-    is the id both planes mint first. What it costs is one focus of a frame that is not
-    yours, on a machine running two planes, across a tmux server restart, for a workspace
-    both planes have, on a pane id that came back round. Closing it needs a plane marker
-    on the window — a second option written at launch and a schema both halves agree on —
-    which is a stage, not a line. What is closed today is the case §3.3 names: a plane
-    that has never opened `ws` has no directory for it, reaches no tmux call at all, and
-    can never focus anybody.
+    **Which session is this plane's is :func:`_plane_session`'s question and not this
+    one's** — a workspace tab asks it too now (§4b), and one answer is what stops a focus
+    and a switch disagreeing about whose `default` is whose. What is left here is the
+    second half, and it is the half §4k is actually about: **is anybody looking at it.**
 
     **Three answers, and the two tmux calls are asked in the order that makes most
     launches pay for neither.** No chat directory for *ws* on this plane — the ordinary
@@ -1729,40 +1900,16 @@ def _workspace_to_focus(socket: str, *, ws: str) -> tuple[str, str] | None:
     session nobody is attached to returns ``None`` as well, deliberately: with no client
     on it there is nobody to drag, so a launch there SHOULD add its chat and select it,
     which is the behaviour that shipped and the one an operator reopening a detached
-    workspace wants.
+    workspace wants. **§4b's switch takes the opposite view of that same reading and is
+    right to**: it is moving a client rather than avoiding a drag, so a detached workspace
+    is a perfectly good place to move one to and it never asks this question at all.
 
-    Measured on tmux 3.7c and at the 3.2 floor, identically on both: `list-panes -a` lists
-    every pane on the server with its own session id; `list-clients -t $N` takes a session
-    ID as its target, prints one line per attached client, and exits 0 with nothing on
-    stdout when none is attached (rc 1 only for a session id the server does not have).
-
-    **Nothing off tmux is re-checked on the way out and that is deliberate**, unlike
-    `_chat_being_left`, which holds its answer to `_FRAME_ID_RE` because `@charter_chat`
-    is a user OPTION and its value is whatever somebody set. Both fields here are tmux's
-    own built-in ids; a shape check over them would be a guard no input can reach, which
-    is the shape this repository's deletion sweep exists to delete rather than document.
-    The chat id returned is this plane's own directory name and never came from tmux at
-    all. The recorded pane ids are not held to `tmuxctl.PANE_ID_RE` for the mirror-image
-    reason: they are only ever COMPARED against what tmux just said, never sent to it, so
-    a value that is not a pane id matches nothing and is refused by the comparison itself.
+    Measured on tmux 3.7c and at the 3.2 floor, identically on both: `list-clients -t $N`
+    takes a session ID as its target, prints one line per attached client, and exits 0 with
+    nothing on stdout when none is attached (rc 1 only for a session id the server does not
+    have).
     """
-    mine: dict[str, str] = {}
-    for chat in chats.of_workspace(ws):
-        pane = state.harness_pane(chat)
-        if pane is not None:
-            mine[pane] = chat
-    if not mine:
-        return None
-    out = tmuxctl.run("finding this plane's live chats in this workspace",
-                      tmuxctl.server_argv(socket, "list-panes", "-a", "-F",
-                                          _PANE_SEAT_FORMAT),
-                      timeout=5, report=False)
-    # No branch on the return code, for `_chat_being_left`'s reason: a listing that failed
-    # has an empty stdout and falls out below as "no seats and therefore no answer", which
-    # is the same sentence said once. Exactly two fields per row, so a server that answers
-    # something other than this format cannot have half a row read as a pane id.
-    seats = [line.split("\t") for line in out.stdout.splitlines()]
-    seat = next((s for s in seats if len(s) == 2 and s[1] in mine), None)
+    seat = _plane_session(socket, ws=ws)
     if seat is None:
         return None
     clients = tmuxctl.run("asking whether anybody is looking at that workspace",
@@ -1784,7 +1931,7 @@ def _workspace_to_focus(socket: str, *, ws: str) -> tuple[str, str] | None:
     # reads as one client with a blank name.
     if clients.returncode != 0 or not clients.stdout.split():
         return None
-    return seat[0], mine[seat[1]]
+    return seat
 
 
 def _frame_is_live(socket: str, fid: str) -> bool:
@@ -4149,12 +4296,14 @@ def _pin_workspace(ws: str, fid: str, picked: bool) -> None:
     here rather than in the picker, because it describes what the LAUNCH did with the
     answer, not what the answer was.
 
-    **That sentence used to lead with `F2 → workspace` and no longer can** (§4j). The
-    escape it named was `switch.to_workspace` overriding the lock, and that switch is now
-    a refusal — a chat belongs to its workspace for life. The argument above is unchanged
-    because the OTHER escape was always the one that does the work: `unlock` releases the
-    lock without moving the chat, which is exactly what a lock the operator wants gone
-    needs and all it needs.
+    **That sentence used to lead with `F2 → workspace` and no longer can** (§4j/§4b). The
+    escape it named was `switch.to_workspace` overriding the lock — and that switch no
+    longer touches the lock at all, because what it moves is the tmux client rather than
+    the chat: after it the operator is looking at another workspace and this session is
+    still locked to the one its commands act on. The argument above is unchanged because
+    the OTHER escape was always the one that does the work: `unlock` releases the lock
+    without moving the chat, which is exactly what a lock the operator wants gone needs
+    and all it needs.
 
     **This write is a lock, not a membership move, which is why §4j leaves it standing.**
     The pointer lands under a chat whose workspace is *ws* already — this launch is what
@@ -4495,7 +4644,8 @@ def cmd_launch(args) -> int:
     # frame still live across the upgrade, and it stops being reachable at all once the
     # last pre-chat frame on the machine has ended. Telling the two apart would mean
     # asking tmux a second question on every launch to buy a case that expires on its own.
-    if session in live_sessions:
+    joining = session in live_sessions
+    if joining:
         start_cmd = layout.chat_window_argv(
             socket=SOCKET, session=session, chat=fid, cwd=os.getcwd(),
             harness_argv=argv, env=_frame_identity_env(env))
@@ -4532,6 +4682,23 @@ def cmd_launch(args) -> int:
             util.warn("charter frame: continuing without it — this chat's state may be "
                       "reaped while it is still running, and its exit code may not be "
                       "recorded")
+    # And which PLANE the session belongs to — §4b's marker, written by the launch that
+    # CREATED the session and by no other. `joining` is the same NAME test three dozen
+    # lines up, which is exactly the cross-plane collision this marker records: a launch
+    # that joined a session it did not make may be standing in another plane's session,
+    # and re-marking it there would relabel that plane's frame as this one's. A warning
+    # rather than a failure, because what is lost is a veto and not the switch: an
+    # unmarked session is still found by the pane records `_plane_session` starts from.
+    if not joining:
+        marked = _plane_option_argv(socket=SOCKET, harness_pane=harness_pane)
+        if marked is None:
+            util.warn("charter frame: this plane's state directory is not a shape tmux "
+                      "can carry as an option — a workspace switch cannot tell this "
+                      "session from another plane's of the same name")
+        elif tmuxctl.run("marking the workspace session with its plane", marked,
+                         env=env).returncode != 0:
+            util.warn("charter frame: continuing without it — a workspace switch cannot "
+                      "tell this session from another plane's of the same name")
 
     frame = config.FRAME
     config.write_for(conf_path,
@@ -6201,6 +6368,188 @@ def cmd_chat(args) -> int:
     return 0
 
 
+def _clients_on(socket: str, session: str) -> list[str]:
+    """Every client attached to *session*, by `#{client_name}`.
+
+    *session* is `#{session_id}` — held to `_SESSION_ID_RE` by the two things that produce
+    one on this path (`_pane_place`, `_plane_session`) — for `_session_window`'s reason: a
+    session NAME is renameable and `-t api.1` is parsed by tmux as ``window.pane``.
+
+    ``[]`` for a server that would not answer and for a session nobody is on, because the
+    caller does the same thing with both: there is no client to move, so nothing is moved
+    and nothing is torn down. `.split()` rather than `.splitlines()` is
+    `_workspace_to_focus`'s own reading of tmux's output — a client name holds no
+    whitespace, and a server answering a bare newline has told us about no clients rather
+    than about one with a blank name.
+
+    **No branch on the return code, and its absence is a deletion rather than an
+    omission.** This had `if out.returncode != 0: return []` and the deletion sweep
+    reported it as a survivor — correctly: a `list-clients` that failed has an empty
+    stdout, so `"".split()` is already `[]` and the branch could not change an answer.
+    `_window_seats` and `_plane_session` say the same sentence about the same shape, and
+    this repository deletes an equivalent mutant rather than documenting it. What the
+    branch might have caught — output on stdout beside a non-zero status — is safe in the
+    one direction that matters: a name that is not a client makes `switch-client -c`
+    fail, and the reading afterwards then finds nothing of ours on the target and refuses
+    without tearing anything down.
+    """
+    out = tmuxctl.run("asking who is looking at this workspace",
+                      tmuxctl.server_argv(socket, "list-clients", "-t", session,
+                                          "-F", "#{client_name}"),
+                      timeout=5, report=False)
+    return out.stdout.split()
+
+
+def _switch_client(fid: str, ws: str, *, said: str) -> None:
+    """Move the client(s) reading chat *fid* to this plane's workspace *ws* — §4b.
+
+    **The operator's own requirement, and the whole of it**: *"switching workspace means
+    keep the opened chat open in the background, so a user can simultaneously run many
+    harnesses in one charter environment. Changing workspace does not mean stopping the old
+    chat session."* So this kills nothing and starts nothing. Measured on tmux 3.7c and at
+    the 3.2 floor, with a real pty client on a two-window session: after `switch-client -c
+    <client> -t $N` every pane on the server is still there with the same pid and
+    `pane_dead=0`, and the `attach` process itself is still alive. It is `cmd_chat`'s four
+    steps one scope out, and each of them changes in exactly one way:
+
+    0. **Where both ends are, asked of tmux before anything is aimed anywhere** (#684).
+       Here is `_pane_place` on this chat's harness pane; there is :func:`_plane_session`,
+       which answers for THIS PLANE and refuses to resolve a session name — see it for why
+       a name cannot be used, and :data:`_PLANE_OPTION` for what it costs when it is.
+    1. **`switch-client -c <client>`, once per client on this session, and never without
+       `-c`.** tmux picks its own "current client" for a `switch-client` that names none,
+       and on a socket serving eleven sessions from three projects that client is very
+       likely somebody else's — #734 measured exactly that leak for `display-message` and
+       the cost here is higher than a misdrawn line: it would move another operator's
+       terminal off what they were reading. Charter has no presser to name (`cli.py`'s
+       palette `client` positional is accepted and ignored since #729, and a panel process
+       is not a `run-shell` child of a keypress at all), so the clients it moves are the
+       ones it can prove are looking at THIS chat: every client attached to this chat's
+       session. They already share one current window (§2.10), so they were already looking
+       at the same thing, and moving them together keeps them so.
+    2. **`_apply_arrangement(want=[])` on the chat being left**, which is #686's rule
+       unchanged: a background window keeps STALE geometry (§7.4, measured identically on
+       both versions), so panels left running in one are not idle, they are rendering at a
+       width that is no longer their window's. Only this chat has panels to lose — every
+       other chat of the workspace is a background window and lost its own the same way.
+    3. **`_apply_arrangement` on the chat tmux LANDED on**, unconditionally, which is §4b's
+       "#686's treatment one scope out". Which chat that is, charter does not choose:
+       `switch-client` restores the target session's own last active window, so the landing
+       chat is read back off the server (:func:`_chat_showing`) rather than guessed from
+       the seat :func:`_plane_session` happened to match. Re-dressing is not optional and
+       not conditional on the geometry having changed — the panels there were torn down
+       when that workspace went to the background, so they have to be split into a window
+       that tmux has just resized, and that is the same thing `cmd_chat` step 3 does.
+
+    **The teardown is gated on the client having MOVED, not on a command having exited 0**
+    — #684's rule, re-asked here because the failure it names exists here too:
+    `switch-client` against a client that is not attached, or a session that went away
+    between two calls, returns 1, and a partial success across several clients returns 0.
+    So the reading afterwards is `list-clients` on the TARGET, and `display-message -p -c
+    <client>` is deliberately not used for it: measured at the 3.2 floor, that answers an
+    empty string for a client that has demonstrably moved, so a check built on it would
+    refuse every switch on the older tmux and pass on the newer.
+
+    **Nothing on this path writes a record**, which is §4j surviving contact with a switch
+    that now does something: no `record_workspace`, no `workspace.set_active`, no pointer
+    of any kind. The chat left behind is still its workspace's, and the chat arrived at was
+    always its own.
+
+    *said* is `switch.to_workspace`'s own success sentence, carried in rather than spelled
+    again: one switch says one thing, and the sentence belongs beside the refusals it is
+    the alternative to. It is said HERE rather than by the caller because only this
+    function knows which chat the operator ended up on, and a notice is drawn by a panel
+    out of the frame's own state.
+
+    **Called only after `switch.to_workspace` has said yes**, which is what lets every
+    message below interpolate *ws* raw: that check holds it to `workspace.valid_name`,
+    whose alphabet (`instance.WORKSPACE_NAME_RE`) has no whitespace and no control
+    character in it, so a `contain.one_line` here would be a call provably equal to its
+    argument — the shape this repository's deletion sweep reports and this repository
+    deletes.
+    """
+    socket = state.frame_server(fid) or SOCKET
+    if tmuxctl.is_operator_socket(socket):
+        # **A workspace is a tmux session only on charter's OWN server** (§2.1), and this
+        # frame is not on it. Inside an operator's tmux every chat charter opens is a
+        # `new-window` in the session that operator was already in (`layout.window_argv`,
+        # `_launch_in_operator_tmux`) — whatever workspace it names — so there is no
+        # session for another workspace to be, and the two things `switch-client` could
+        # do there are both wrong: refuse "already in that workspace" for a workspace this
+        # frame is not in, or move the operator's client between two tmux sessions of
+        # their own that charter has no business having an opinion about. Refused by name
+        # instead, with the route that does work — which is `chats.check`'s own
+        # "not on this frame's tmux server" one noun out (#684).
+        _say_on_screen(fid, "cannot switch: this chat is a window in your own tmux, "
+                            "where a workspace is not a session — open the other "
+                            f"workspace with `charter <harness> --workspace {ws}`")
+        return
+    here = _pane_place(socket, state.harness_pane(fid))
+    if here is None:
+        # `cmd_chat`'s own sentence, for its own reason: with no reading of where this
+        # client is standing there is no way to tell afterwards whether it moved, and a
+        # switch that cannot establish that must not tear anything down.
+        _say_on_screen(fid, "cannot switch: charter cannot find this chat's own window, "
+                            "so it cannot tell whether a switch would move this client")
+        return
+    there = _plane_session(socket, ws=ws)
+    if there is None:
+        # **What a workspace with no session yet is answered with**, and it is a refusal
+        # rather than a launch. Opening one is `cmd_launch` — a directory, an ordinal, a
+        # harness process and an `attach` — and this runs detached with its streams on
+        # `/dev/null` (`builtin_actions._spawn`), with no terminal to attach anything to.
+        # `switch.py`'s rule is the same one: nothing there creates anything either, and
+        # #518 is why. So the refusal names the command that does.
+        _say_on_screen(fid, f"workspace '{ws}' is not open on this plane — open it with "
+                            f"`charter <harness> --workspace {ws}`")
+        return
+    if there[0] == here[0]:
+        # Records can disagree with tmux: `switch.to_workspace` refused this by NAME a
+        # moment ago, off `state.workspace_for`, and this is the same question asked of
+        # the server. Switching a client to the session it is already on is a no-op that
+        # would then tear this chat's panels down and re-dress them for nothing.
+        _say_on_screen(fid, f"already in workspace '{ws}'")
+        return
+    moving = _clients_on(socket, here[0])
+    if not moving:
+        # Nobody is attached — the operator detached, or this frame is being driven by an
+        # agent with no terminal on it. There is no client to move, and reporting a switch
+        # that moved nothing is #411's shape arriving through a success.
+        _say_on_screen(fid, "cannot switch: no terminal is attached to this workspace, "
+                            "so there is no client to move")
+        return
+    for client in moving:
+        tmuxctl.run("switching this terminal to another workspace",
+                    tmuxctl.server_argv(socket, "switch-client", "-c", client,
+                                        "-t", there[0]),
+                    report=False)
+    if not set(moving) & set(_clients_on(socket, there[0])):
+        _say_on_screen(fid, "cannot switch: tmux did not move this terminal to "
+                            f"'{ws}', so this chat keeps its panels")
+        return
+    landed = _chat_showing(_window_seats(socket, "finding the chat this switch landed on"),
+                           there[0])
+    left = _relayout_target(fid)
+    if left is not None:
+        _apply_arrangement(fid, where=left, want=[])
+    # Both re-layouts are attempted independently and a failure of the first does not
+    # cancel the second — `cmd_chat`'s rule, for its reason: the frame the operator is now
+    # looking at is the one that matters, and abandoning it because the workspace they just
+    # left could not be tidied would leave them on a bare harness pane.
+    arrived = _relayout_target(landed) if landed else None
+    if arrived is not None:
+        _apply_arrangement(landed, where=arrived,
+                           want=_visible_now(landed, config.FRAME))
+    # On the chat the operator is now looking at, for `_draw_palette`'s reason: the notice
+    # is drawn by a panel out of a frame's own state, so it has to be written to the frame
+    # they will be reading a moment from now. A workspace whose landing chat charter could
+    # not name is left unsaid rather than announced on a frame nobody is looking at — the
+    # client visibly moved, which is the report, and `state.say` on the chat being left
+    # would write into panels that are being torn down two lines above.
+    if landed:
+        _say_on_screen(landed, said, ok=True)
+
+
 def _pressers_chat(args) -> str:
     """Which chat the keypress that started this process was fired in.
 
@@ -6481,6 +6830,17 @@ def _draw_palette(args) -> int:
             out = choose.switch_to(noun, fid, name)
             if out.ok and noun == choose.CHAT:
                 _start_chat_switch(fid, name)
+            if out.ok and noun == choose.WORKSPACE:
+                # §4b, and the one row whose outcome this function may not say. A
+                # workspace switch ends on a chat of ANOTHER session — whichever window
+                # tmux restores — and nothing here knows which that is until the switch
+                # has happened. So the sentence goes with the work: `_switch_client` says
+                # it on the chat the operator landed on, out of `switch.to_workspace`'s
+                # own message, and this returns having started it. That is the same
+                # promise a started ACTION makes a few lines below — what it started
+                # surfaces through `inflight`, not through a second clock here.
+                _start_workspace_switch(fid, name)
+                return 0
             # **Which frame's row, and it is not always this one.** The notice is drawn by
             # a panel out of a frame's own state, so it has to be written to the frame the
             # operator will be LOOKING at a moment from now. A chat switch that took moves
@@ -6532,6 +6892,33 @@ def _start_chat_switch(fid: str, chat: str) -> None:
     split `frame-toggle`'s `--chat` already makes.
     """
     builtin_actions._spawn(util.self_relaunch_argv("frame-chat", chat), fid=fid)
+
+
+def _start_workspace_switch(fid: str, ws: str) -> None:
+    """Start :func:`cmd_switch` for workspace *ws*, detached, and return having started it.
+
+    :func:`_start_chat_switch` one noun out, and every word of its argument applies
+    unchanged: the palette closes the instant it has invoked, `kill-pane` hands SIGHUP to
+    that pane's process group, and a switch that ran in this process would be racing its
+    own teardown for the tmux calls that matter. The frame is stated on `_spawn`'s own
+    `$CHARTER_SESSION_ID` rather than inherited, because this is a `run-shell` child of a
+    server shared between every frame on the machine.
+
+    **`frame-switch --workspace`, which is the same front door the `workspaces` bar
+    clicks** (`frame/builtins._WORKSPACE_SWITCH`) and the same one an operator types. One
+    argv rather than a second in-process path is what keeps a click, a palette row and a
+    typed command from drifting into three switches.
+
+    Safe to detach for the measurement `_start_chat_switch` records: `_close_palette` aims
+    `select-pane` at the chat being LEFT, and on 3.7c and at the 3.2 floor `select-pane`
+    on a pane in another window does not move a client — so it cannot pull the operator
+    back off the workspace this is switching them to. What it CAN do is race the teardown
+    of this chat's panels, and that is harmless in the one direction: `_close_palette`
+    kills the overlay pane, `_apply_arrangement(want=[])` kills the panel panes, and
+    neither is the other's.
+    """
+    builtin_actions._spawn(
+        util.self_relaunch_argv("frame-switch", "--workspace", ws), fid=fid)
 
 
 def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
@@ -6722,8 +7109,9 @@ def cmd_switch(args) -> int:
     shared by every frame on `SOCKET`, so the frame a command acts on is resolved at the
     moment it runs, never baked into anything.
 
-    The switch itself is `frame/switch.py`'s — this function is the tmux half and nothing
-    else: which frame, and where the answer is shown.
+    The decision is `frame/switch.py`'s and the tmux half is this function's: which frame,
+    where the answer is shown, and — for a workspace since §4b — the client that actually
+    moves (:func:`_switch_client`).
 
     **Every outcome is put on the operator's screen, and that is the point of the command
     existing at all.** #517: "a menu that silently fails against a lock is worse than no
@@ -6755,7 +7143,16 @@ def cmd_switch(args) -> int:
     ws = getattr(args, "workspace", None)
     persona_name = getattr(args, "persona", None)
     if ws:
+        # **The one noun this command performs itself** (§4b). A persona switch IS
+        # `switch.to_persona` — a file and a bump — so its outcome is complete the moment
+        # that call returns. A workspace switch is a client moved between tmux sessions
+        # and three re-layouts around it (:func:`_switch_client`), which is the same split
+        # `cmd_chat` makes one noun down: the check says which names may be switched to,
+        # and the command owns every reading only a live server can give.
         out = switch.to_workspace(fid, ws)
+        if out.ok:
+            _switch_client(fid, ws, said=out.message)
+            return 0
     elif persona_name:
         out = switch.to_persona(fid, persona_name)
     else:
