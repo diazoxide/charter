@@ -5686,9 +5686,10 @@ def _pane_place(socket: str, pane: str | None) -> tuple[str, str] | None:
     """Which tmux SESSION and WINDOW *pane* is in, as ids — or ``None`` (#684).
 
     **The question `chats.py` cannot ask and `select-window`'s return code does not
-    answer.** `chats.of_workspace` decides membership from a FILE — `state.frame_workspace`,
-    which `charter workspace use` rewrites and `switch.to_workspace` rewrites again — so
-    two chats can share a roster while their windows are in two different tmux sessions.
+    answer.** `chats.of_workspace` decides membership from RECORDS — `state.own_workspace`,
+    which reads the pin the launcher wrote down, then the per-session pointer `charter
+    workspace use` writes, then the workspace `switch.to_workspace` records — so two chats
+    can share a roster while their windows are in two different tmux sessions.
     The session is where a chat actually lives (`cmd_launch` makes the workspace the
     session), it is not written down anywhere charter can read, and it moves at runtime.
     So it is asked of tmux, at the moment it matters.
@@ -5780,9 +5781,10 @@ def cmd_chat(args) -> int:
     0. **Where both chats are, asked of tmux, before anything is aimed anywhere** (#684,
        :func:`_pane_place`). Not one of the four, and it is here because every one of them
        assumes something no record on disk can promise: that the target's window is a
-       window this client can be moved to. `chats.of_workspace` matches a workspace FILE,
-       which `charter workspace use` and `switch.to_workspace` both rewrite, so two chats
-       can share a roster with their windows in two different tmux sessions — and
+       window this client can be moved to. `chats.of_workspace` matches RECORDS
+       (`state.own_workspace`), which `charter workspace use` and `switch.to_workspace`
+       both write to, so two chats can share a roster with their windows in two different
+       tmux sessions — and
        `select-window` at another session's pane returns **0**, moves that session, and
        leaves this client exactly where it was. Steps 1 and 2 then reported a switch that
        had not happened and tore down the panels of the chat still on screen.
@@ -5878,10 +5880,11 @@ def cmd_chat(args) -> int:
     # anything** (#684). `chats.check` has established that both are chats of one
     # workspace and — since this issue — that both are on one tmux SERVER, and neither of
     # those is "in one tmux session". `cmd_launch` makes the workspace the session, but
-    # the record membership is read from is a FILE that moves: `charter workspace use
-    # beta` typed inside chat `api.1` repoints it, `switch.to_workspace` repoints it
-    # again, and after one of those `of_workspace("beta")` returns `api.1` — a window of
-    # session `api` — beside `beta.1`, in one roster.
+    # what membership is read from is RECORDS that move (`state.own_workspace`): `charter
+    # workspace use beta` typed inside chat `api.1` writes its pointer rung,
+    # `switch.to_workspace` writes that one and the launch record both, and after either
+    # of those `of_workspace("beta")` returns `api.1` — a window of session `api` —
+    # beside `beta.1`, in one roster.
     here_place = _pane_place(socket, chats.pane_of(fid))
     there_place = _pane_place(socket, pane)
     if there_place is None:
