@@ -6381,13 +6381,22 @@ def _clients_on(socket: str, session: str) -> list[str]:
     `_workspace_to_focus`'s own reading of tmux's output — a client name holds no
     whitespace, and a server answering a bare newline has told us about no clients rather
     than about one with a blank name.
+
+    **No branch on the return code, and its absence is a deletion rather than an
+    omission.** This had `if out.returncode != 0: return []` and the deletion sweep
+    reported it as a survivor — correctly: a `list-clients` that failed has an empty
+    stdout, so `"".split()` is already `[]` and the branch could not change an answer.
+    `_window_seats` and `_plane_session` say the same sentence about the same shape, and
+    this repository deletes an equivalent mutant rather than documenting it. What the
+    branch might have caught — output on stdout beside a non-zero status — is safe in the
+    one direction that matters: a name that is not a client makes `switch-client -c`
+    fail, and the reading afterwards then finds nothing of ours on the target and refuses
+    without tearing anything down.
     """
     out = tmuxctl.run("asking who is looking at this workspace",
                       tmuxctl.server_argv(socket, "list-clients", "-t", session,
                                           "-F", "#{client_name}"),
                       timeout=5, report=False)
-    if out.returncode != 0:
-        return []
     return out.stdout.split()
 
 
