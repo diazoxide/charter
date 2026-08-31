@@ -27,7 +27,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, contain, tui
-from charter.frame import action, actions, builtin_actions, overlay, palette, state
+from charter.frame import (action, actions, builtin_actions, component, overlay, palette,
+                           state)
 
 from tests._isolation import PersonaIso
 
@@ -275,6 +276,33 @@ class FilteringIsPinnedInBothDirections(unittest.TestCase):
         p._refilter()
         self.assertEqual([r.title for r in p.rows],
                          ["zzz match", "aaa match", "mmm match"])
+
+    def test_an_id_that_could_carry_case_is_not_an_id_the_filter_matches(self):
+        """What `matches` and `exact` depend on for not folding an id.
+
+        Both ask `component.usable_id` before comparing against `Row.id`, and neither
+        folds it — a call the deletion sweep correctly reported as one nothing could go
+        red without, because `_ID_RE` admits no capital. This pins that as a property of
+        the PAIR rather than of the regex alone: an id with a capital in it is not matched
+        by either function whatever case the operator types, so the missing `casefold`
+        cannot become a missed row. If the alphabet is ever widened, this reddens.
+        """
+        for rid in ("Acme.Deploy", "ACME", "A_b1"):
+            with self.subTest(id=rid):
+                self.assertFalse(component.usable_id(rid))
+                row = overlay.Row(id=rid, title="nothing like the id")
+                for q in (rid, rid.casefold(), rid.upper()):
+                    self.assertFalse(palette.matches(q, row), (rid, q))
+                    self.assertFalse(palette.exact(q, row), (rid, q))
+
+    def test_an_id_that_is_usable_is_matched_and_ranked_by_the_case_it_has(self):
+        """The counter-control, so the case above cannot pass by nothing ever matching an
+        id at all. A provider's documented id is what somebody types on purpose."""
+        row = overlay.Row(id="acme.deploy", title="Deploy to production")
+        self.assertTrue(palette.matches("acme.dep", row))
+        self.assertTrue(palette.exact("acme.deploy", row))
+        self.assertTrue(palette.exact("ACME.DEPLOY", row),
+                        "the QUERY's case is folded even though the id's cannot differ")
 
     def test_the_row_whose_whole_title_was_typed_goes_first(self):
         """The other side of the same bound, here rather than only in the file about

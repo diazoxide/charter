@@ -135,11 +135,20 @@ def matches(query: str, row: overlay.Row) -> bool:
     `casefold` rather than `lower` — see :func:`typed`, which is where the whole of the
     case rule now lives, because :func:`exact` asks the identical question of the
     identical string and two spellings of it is two places for it to be wrong.
+
+    **The id is not folded, and the guard in front of it is why.** `component.usable_id`
+    holds an id to `^[a-z][a-z0-9_]{0,31}(\.[a-z][a-z0-9_]{0,31})?$` — measured: every
+    spelling with a capital in it answers False — so an id that reached the comparison
+    cannot carry case, and `casefold` on it is a claim that it can. The deletion sweep
+    reported that call as a line nothing could go red without, and it was right. What the
+    removal depends on is the guard being asked FIRST, which
+    `tests/test_frame_palette.py` pins as a property of the pair rather than of the order
+    they happen to be written in today.
     """
     q = typed(query)
     if q in row.title.casefold():
         return True
-    return component.usable_id(row.id) and q in row.id.casefold()
+    return component.usable_id(row.id) and q in row.id
 
 
 def typed(query: str) -> str:
@@ -190,7 +199,7 @@ def exact(query: str, row: overlay.Row) -> bool:
         return False
     if q == row.title.casefold():
         return True
-    return component.usable_id(row.id) and q == row.id.casefold()
+    return component.usable_id(row.id) and q == row.id
 
 
 def narrow(catalogue: Iterable[overlay.Row], query: str) -> tuple[overlay.Row, ...]:
