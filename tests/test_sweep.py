@@ -3580,8 +3580,31 @@ class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
         self.assertIn("1 of 4 mutation(s) on this branch were measured", page)
         self.assertIn("charter/b.py:2", page)
         self.assertIn("Re-running does not help", page)
+        # The outcome table too, and not only the prose below it. A reader who skims one
+        # skims the other, and the sweep found this row unpinned on this branch: deleting
+        # it left a table whose rows all read zero above a section saying three quarters
+        # of the branch was never measured.
+        self.assertIn("| **out of time** | 3 |", page)
         # And never the sentence that says the branch is covered.
         self.assertNotIn("Nothing added here is a line the suite would not miss", page)
+
+    def test_the_page_lists_twenty_unswept_lines_and_then_says_how_many_more(self):
+        """A long list is not a page anybody reads, and a truncated one that does not say
+        so is the silent-truncation shape this whole tool refuses — so the cap announces
+        itself, exactly as `ANNOTATION_CAP` does. Both halves were found unpinned by the
+        sweep on this branch: the `- …and N more` line, and the boundary that decides
+        when it appears."""
+        def page(n):
+            return sweep.gate_summary(
+                sweep.classify([_result(sweep.OUT_OF_TIME, line=i) for i in range(n)]),
+                "a" * 40, "b" * 40, 12.0, False)
+
+        exactly = page(20)
+        self.assertNotIn("more", exactly.split("Out of time")[1])
+        self.assertEqual(exactly.count("charter/a.py:"), 20)
+        over = page(21)
+        self.assertIn("- …and 1 more", over)
+        self.assertEqual(over.count("charter/a.py:"), 20)
 
     def test_the_lines_nobody_swept_are_marked_in_the_margin_too(self):
         """Annotations are where a reviewer already is. A survivor outranks one of these
@@ -3617,17 +3640,36 @@ class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
         self.assertEqual([r.verdict for r in back], [sweep.OUT_OF_TIME])
         self.assertEqual(len(sweep.classify(back).out_of_time), 1)
 
+    def _report(self, results):
+        return sweep.report(results, Path("/x"), "a" * 40, "b" * 40, None, 1.0)
+
     def test_the_report_says_of_how_many_only_when_some_were_missed(self):
         """`mutations applied : N` is #782's line and a reader knows it. It gains a
         denominator exactly when there is something to be short of, because "0 of 0" on
         a docs branch is a question where "0" was a statement. Found by the sweep:
         `collapse-ifexp` made the denominator unconditional and nothing went red."""
-        whole = sweep.report([_result("pinned")], Path("/x"), "a" * 40, "b" * 40,
-                             None, 1.0)
-        self.assertIn("mutations applied : 1\n", whole)
-        short = sweep.report([_result("pinned"), _result(sweep.OUT_OF_TIME, line=2)],
-                             Path("/x"), "a" * 40, "b" * 40, None, 1.0)
-        self.assertIn("mutations applied : 1 of 2\n", short)
+        self.assertIn("mutations applied : 1\n", self._report([_result("pinned")]))
+        self.assertIn("mutations applied : 1 of 2\n",
+                      self._report([_result("pinned"),
+                                    _result(sweep.OUT_OF_TIME, line=2)]))
+
+    def test_the_report_a_person_reads_counts_and_names_what_was_never_measured(self):
+        """The terminal report, which is the whole answer for anyone running this by
+        hand rather than through a workflow. Its count line and its section were both
+        found unpinned by the sweep on this branch — `drop-if` deleted each and every
+        test stayed green, because the tests above read the check name and the markdown
+        page and nobody read this one."""
+        page = self._report([_result("pinned"),
+                             _result(sweep.OUT_OF_TIME, line=2, path="charter/b.py"),
+                             _result(sweep.OUT_OF_TIME, line=3, path="charter/b.py")])
+        self.assertIn("OUT OF TIME       : 2", page)
+        self.assertIn("OUT OF TIME — these mutations were planned and never measured",
+                      page)
+        self.assertIn("charter/b.py:3", page)
+        # And a run that measured everything says none of it, so the section cannot
+        # become decoration a reader learns to skip.
+        whole = self._report([_result("pinned")])
+        self.assertNotIn("OUT OF TIME", whole)
 
     def test_the_budget_belongs_to_a_shard_and_not_to_a_person_at_a_terminal(self):
         """A local `--gate` has no merge step to say how much of the plan was reached, so

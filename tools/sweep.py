@@ -3954,11 +3954,15 @@ def main(argv: list[str] | None = None) -> int:
 
     shard = parse_shard(args.shard) if args.shard else None
     budget = budget_for(shard is not None, args.budget)
+    # One fact and not two. This line used to also work out how much of the budget was
+    # left after the map and the baseline, and the sweep's own sweep found every piece of
+    # that arithmetic unpinned — a clamp, a format spec, a subtraction, none of it load
+    # bearing and none of it worth a test. "Equivalent mutant" and "dead code" are one
+    # finding here, and the honest answer to three survivors in a log line is a shorter
+    # log line. The deadline is the fact; the reader can subtract.
     if budget:
-        left = budget - (time.time() - started)
-        log(f"  budget: {budget / 60:.0f} min from the start of this run, "
-            f"{max(0.0, left) / 60:.0f} left for mutations. Past it this shard stops and "
-            f"reports what it measured (#803).")
+        log(f"  budget: {budget / 60:.0f} min from the start of this run. Past it this "
+            f"shard stops dealing mutations and reports what it measured (#803).")
     # Written after every answer and not only at the end (#803). The file is the only
     # thing a shard hands anybody: a process killed with the whole result set in memory
     # hands over nothing, which is what made eight cancelled shards on run 33500900581
