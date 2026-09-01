@@ -897,6 +897,25 @@ command that changes it: `no clones in <workspace> · charter clone <repo> -w
 <workspace>`. A panel never gathers on its own — it reads the cache or says it has
 none.
 
+**A cache that exists and cannot be read gets its own line**, because "it has not landed
+yet" and "it will never land" are different facts and a panel that never gathers on its own
+has nothing coming to correct the second one. If `gather.json` is truncated, hand-edited or
+left behind by an older charter, `repos` says so and names the command that rebuilds it:
+
+```
+  unreadable repo cache · charter frame-gather --session <chat> --workspace <workspace>
+```
+
+Both flags are filled in from the frame you are looking at — they are required on the
+command line precisely so a detached gather never guesses which frame it is for, which is
+not a question you can answer from inside a pane. `F2 → refresh — gather this workspace's
+repos, todos and changes again` runs the same thing without the typing. What charter does
+not do is delete the file for you: a repaint reads, and the evidence of whatever wrote it
+stays where it is.
+
+The wait and the failure are told apart by a fact rather than by a clock — the file is
+there and does not parse — so a gather that is merely slow is never called broken.
+
 ## Configuring it
 
 ```toml

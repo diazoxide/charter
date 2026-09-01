@@ -442,6 +442,74 @@ def _run_chrome(fid: str, level: str):
     return f"chrome → {level}"
 
 
+def _register_regather(reg: actions.ActionRegistry) -> None:
+    """One row that re-runs this frame's gather — **#735's route out.**
+
+    `charter frame-gather` already existed and already fixed a broken cache instantly. What
+    it wants is `--session` and `--workspace`, and an operator sitting in front of a repo
+    pane that will not draw can discover neither: the frame id is charter's own
+    `{workspace}-{hash}`, and the flags are required precisely because a detached child
+    must never guess at them (#512, and `cmd_gather`'s own docstring). The palette knows
+    both, so the row is the command with its two answers already filled in.
+
+    **Always available, and it is the one row that has to be.** Every other refusal this
+    module reports is about a record charter lost — a harness pane, a pane map — and this
+    is the action an operator reaches for when a pane has already failed. `cmd_gather`
+    needs nothing but the two names, and a row that refused on somebody else's
+    precondition would be refusing exactly when it is needed.
+
+    **Registered LAST among charter's own**, which is the one thing about it that is a
+    choice. Nearer the top would read better on the day you need it and would move every
+    density and chrome row down one — and `_register_density`'s own note is that a list
+    whose rows move is a list nobody learns. This is a row you reach for once, typed at,
+    by an operator who is already looking for it; the rows above it are pressed by muscle
+    memory.
+
+    **It refreshes the whole snapshot and the title says so.** `gather.refresh` writes
+    repos, worktrees, todos and changes under one timestamp (§4f's clock rule), so a title
+    naming only the repo table would be describing a third of what the row does — and the
+    todo count in `bottom` is drawn from the same file the broken table is.
+    """
+    reg.register(action.Action(
+        id="frame.gather",
+        title="refresh — gather this workspace's repos, todos and changes again",
+        run=lambda ctx: _regather(ctx.fid)))
+
+
+def _regather(fid: str):
+    """Start `charter frame-gather` for *fid*, detached, and say so.
+
+    **`state.workspace_for` and never `workspace.resolve`** — the one rule every frame
+    surface asks (#512). This runs in the palette's process, which is a tmux child with
+    no terminal of the operator's and a cwd that is not theirs, so resolving for itself
+    would refill the cache from whatever workspace THAT process landed on. A gather that
+    answered `default` on a plane that is not on it is the defect this row exists to
+    repair, arriving by a different door.
+
+    Detached through :func:`_spawn` like the density and surface rows, and for the module
+    docstring's reason: the palette closes the instant it has invoked, and a git sweep
+    running in the pane being killed dies with it. The argv is
+    `commands_frame._spawn_gather`'s, verbatim — two ways to start the same gather that
+    must not drift apart.
+
+    **No `contain.one_line` over *ws*, and the sweep is what settled that.** The name is
+    genuinely unchecked — `frame/slots.py`'s `_empty_lines` records that `workspace_for`'s
+    last rung hands back `$CHARTER_WORKSPACE` stripped and otherwise untouched — so both
+    places it reaches were measured rather than assumed. The argv is a LIST, so a name
+    carrying a newline arrives at `cmd_gather` as one argument whatever is in it. The
+    RECEIPT is contained by the contract: `actions.Invocation._work` runs
+    `contain.one_line(str(note), limit=REASON_LIMIT)` over whatever this returns, which is
+    the same reason `_select` hands back a bare repo name. A second call here changed no
+    outcome — the deletion sweep found it surviving, correctly — and `_empty_lines`' own
+    warning is exactly this shape: a guard kept for a reason that is not the true one is
+    how the real one gets deleted later.
+    """
+    ws = state.workspace_for(fid)
+    _spawn(util.self_relaunch_argv("frame-gather", "--session", fid, "--workspace", ws),
+           fid=fid)
+    return f"gathering {ws}…"
+
+
 def build(fid: str, *, current_density: str,
           current_chrome: str) -> actions.ActionRegistry:
     """Charter's own actions, plus every action an installed provider supplies.
@@ -484,6 +552,7 @@ def build(fid: str, *, current_density: str,
     _register_todos(reg)
     _register_density(reg, current=current_density)
     _register_chrome(reg, current=current_chrome)
+    _register_regather(reg)
     for aid in reg.providers.ids():
         reg.add(aid)
     return reg

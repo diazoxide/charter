@@ -431,6 +431,37 @@ def read(fid: str, *, workspace: str | None = None, cwd: str | None = None) -> d
         return _empty(workspace)
 
 
+def _load(fid: str) -> tuple[dict | None, bool]:
+    """*fid*'s cache, and whether the file that holds it is UNREADABLE.
+
+    One reader under :func:`cached` and :func:`unreadable`, so the two cannot answer from
+    two different readings of the same bytes — the defect #735 is at one remove. A panel
+    asks both in the same repaint, and a version that read the file twice through two
+    functions could tell an operator "this cache is broken" about a file the other half
+    had just accepted.
+
+    The bool is **not** "there is no cache". Those are the two states #735 exists to keep
+    apart, and this is the narrower of them: a file that IS there and cannot be read as a
+    scan. No directory and no file are both ``(None, False)`` — a gather that has not
+    landed yet, which is the ordinary cold start.
+
+    An ``OSError`` that is not :class:`FileNotFoundError` — a permission, an ``EISDIR``, a
+    truncated read — counts as unreadable rather than absent, because it is: the path is
+    occupied by something this frame cannot read a scan out of, and a re-gather is still
+    the remedy.
+    """
+    f = _cache_file(fid, create=False)
+    if f is None:
+        return None, False
+    try:
+        data = json.loads(f.read_text())
+    except FileNotFoundError:
+        return None, False
+    except (OSError, ValueError):
+        return None, True
+    return (data, False) if _shaped_like_a_scan(data) else (None, True)
+
+
 def cached(fid: str) -> dict | None:
     """Whatever *fid*'s cache file holds, if it holds something a renderer can index
     into — ``None`` for every way that can fail.
@@ -442,15 +473,45 @@ def cached(fid: str) -> dict | None:
     cache file yet, a file that is not valid JSON (``json.JSONDecodeError``, a
     ``ValueError`` subclass), and — because ``json.loads`` succeeding says nothing about
     what it produced — one that parses to something not :func:`_shaped_like_a_scan`.
+
+    **Still ``None`` for all four, and #735 did not change that.** Five call sites read this
+    — :func:`read`, :func:`row_count`, `slots._repos`, `slots._selected_detail` and
+    `commands_frame`'s palette snapshot — and every one wants a value it can draw or a
+    value it cannot; raising at the two that are corruption would push a ``try`` onto
+    :func:`row_count`'s launch path and into a hook. What #735 added is a SECOND
+    question — :func:`unreadable` — asked only by the one caller that says something
+    different about the answer.
     """
-    f = _cache_file(fid, create=False)
-    if f is None:
-        return None
-    try:
-        data = json.loads(f.read_text())
-    except (OSError, ValueError):
-        return None
-    return data if _shaped_like_a_scan(data) else None
+    return _load(fid)[0]
+
+
+def unreadable(fid: str) -> bool:
+    """Whether *fid* HAS a cache file that cannot be read as a scan.
+
+    The fact `frame/slots.py`'s `_repos` needs and :func:`cached`'s ``None`` throws away.
+    Four different readings collapse into that ``None`` — no frame directory, no cache
+    file, a file that is not JSON, a file that parses to something that is not a scan —
+    and the first two are a gather that has not landed while the last two are a gather
+    that never will. Drawn identically they were the same sentence, so a corrupt
+    ``gather.json`` read as `⋯ gathering this workspace's repos…` forever (#735): a panel
+    "never gathers on its own — it reads the cache or says it has none" (docs/frame.md),
+    so nothing was coming to correct it.
+
+    **A fact at the moment it is asked, never a duration.** The alternative was to
+    time-box the gathering message — after N seconds of no cache, say something else —
+    and that is a guess wearing a fact's clothes: a plane with forty clones on a cold
+    mount crosses any N that a corrupt file crosses, and the pane would call a slow
+    gather broken. This asks the filesystem instead, of the same file the caller has just
+    failed to read, and :func:`save`'s ``os.replace`` is what makes the answer stable —
+    "a reader must never observe a half-written cache", so there is no window in which a
+    gather that IS running looks like this.
+
+    Asked only when :func:`cached` has already answered ``None``, which is where the two
+    compose into three states. It is not the negation of that call and must not be used
+    as one: a cache that reads perfectly well is ``False`` here for the same reason a
+    frame that has never gathered is.
+    """
+    return _load(fid)[1]
 
 
 def row_count(fid: str) -> int:
