@@ -108,19 +108,20 @@ ships.** One residual worth stating: `-s` detaches *every* client of the session
 deliberately-multi-client design is a choice rather than an accident.
 
 **2.12 CI never runs a real tmux.** `.github/workflows/test.yml` installs none, so the 95
-real-tmux tests skip there.
-
-> **AMENDED 2026-09-01 — this is wrong, and it was measured on the branch that shipped §4f.**
-> `test.yml` installs no tmux; `ubuntu-latest` ships one anyway, so `shutil.which("tmux")` is
-> true there and the real-tmux tests RUN. Found because a new one of them failed on 3.11 and
-> 3.13 while passing on 3.14 in the same run — a race no hand-run on this machine had
-> produced. The honest statement is narrower and more useful than the original: **CI answers
-> on whatever tmux the runner image happens to ship, which is neither of the two versions
-> charter promises**, so it is a third machine's opinion on top of the hand-runs rather than a
-> substitute for them. What still holds is the rule this section exists for: a green gate is
-> not evidence for a claim about 3.7c or about the 3.2 floor. **Every tmux claim in this spec has to be hand-verified on this
+real-tmux tests skip there. **Every tmux claim in this spec has to be hand-verified on this
 machine, on both versions**, and a green gate says nothing about any of them. The 3.2 floor
 binary is preserved at `~/.local/share/charter-testing/tmux-3.2`.
+
+> **AMENDED 2026-09-01 — the first sentence is wrong, and it was measured on the branch that
+> shipped §4f.** `test.yml` installs no tmux; `ubuntu-latest` ships one anyway, so
+> `shutil.which("tmux")` is true there and the real-tmux tests RUN. Found because a new one of
+> them failed on 3.11 and 3.13 while passing on 3.14 in the same run — a race no hand-run on
+> this machine had produced. The honest statement is narrower and more useful than the
+> original: **CI answers on whatever tmux the runner image happens to ship, which is neither
+> of the two versions charter promises.** So it is a third machine's opinion on top of the
+> hand-runs rather than a substitute for them — valuable precisely because it is a different
+> machine — and the rest of this section stands unchanged: a green gate is still not evidence
+> for a claim about 3.7c or about the 3.2 floor.
 
 **2.13 One tmux server serves every plane on the machine, and session names carry no plane.**
 `SOCKET = "charter"` (`commands_frame.py:167`), documented as *"one shared tmux server for every
