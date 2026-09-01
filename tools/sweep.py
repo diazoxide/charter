@@ -1049,44 +1049,14 @@ def _docstrings(tree: ast.AST) -> set[int]:
     return out
 
 
-def _module_constants(tree: ast.Module):
-    """``(name, value)`` for every module-level ``NAME = <expr>`` the constant rules own.
-
-    A function rather than an inline loop because the answer is needed twice in
-    :func:`_iter_operators` — once to offer the mutation, and once, before any rule runs,
-    to know which integer nodes the non-decimal rule must keep its hands off (#755). Two
-    hand-rolled copies of "what counts as a module constant" is how the second copy comes
-    to disagree with the first, and a disagreement here is a node offered twice or not at
-    all.
-    """
-    for stmt in tree.body:
-        target = None
-        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 \
-                and isinstance(stmt.targets[0], ast.Name):
-            target = stmt.targets[0].id
-        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-            target = stmt.target.id
-        value = getattr(stmt, "value", None)
-        if target is None or value is None or not target.lstrip("_").isupper():
-            continue
-        yield target, value
-
-
-def _plain_int(node: ast.AST) -> bool:
-    """Is *node* an integer literal — and not a `bool`, which `isinstance` calls one."""
-    return isinstance(node, ast.Constant) and isinstance(node.value, int) \
-        and not isinstance(node.value, bool)
-
-
 def _moved_int(sp: _Spans, node: ast.Constant) -> str:
     """``n + 1``, spelled in the base the source spelled *node* in.
 
-    The retune of an integer is one number however it is written, so the SPELLING is not
-    a second mutation — it is how the one mutation reads in the report. #755: a
-    module-level `0o600` used to be offered twice, `385` by the module-constant rule and
-    `0o601` by the non-decimal rule, and `385` is the spelling the non-decimal rule's own
-    comment says nobody can check at a glance. One rule keeps the better question, this
-    keeps the better spelling, and there is one row.
+    One integer is one mutation however it is written, so the SPELLING is not a second
+    question — it is how the one question reads in a report a person holds. #755: a
+    module-level `0o600` was offered twice, `385` by the module-constant rule and `0o601`
+    by the non-decimal rule, and `385` is the spelling that rule's own comment says nobody
+    can check at a glance. Both callers ask here, so the two cannot drift apart again.
     """
     base = {"0o": oct, "0x": hex, "0b": bin}.get(sp.text(node)[:2].lower())
     return base(node.value + 1) if base else str(node.value + 1)
@@ -1106,12 +1076,6 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
     modules = module_names(tree)
     in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
                   for part in ast.walk(node) if part is not node}
-    # The integer nodes the module-constant rule below already asks about, so the
-    # non-decimal rule can decline to ask the same thing again (#755). Resolved here
-    # rather than accumulated as the loop runs, because this is a GENERATOR: a consumer
-    # that stopped early would leave the set half-built, and a rule reading a half-built
-    # set is a rule whose output depends on how far its caller got.
-    named_ints = {id(v) for _, v in _module_constants(tree) if _plain_int(v)}
 
     # A module-level constant is a guard too, and the spec's shape table has no row for
     # one. Five of round two's eighteen overlay findings are exactly this — `_CHROME_ROWS`,
@@ -1121,14 +1085,27 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
     # this shape used to be a declared gap ("picking 1003 over 1000 for MOUSE_ON is fitting
     # the answer key") and is now `retune-string` below, whose general form is stated at
     # :func:`retune` — the value moved, every structural property held.
-    for target, value in _module_constants(tree):
-        if _plain_int(value):
-            # `_moved_int` and not `str(n + 1)`: a constant written in base 8 or 16 was
-            # written that way because its digits are the point, and this rule's row is
-            # the one that survives for such a node (#755) — so it has to carry the
-            # readable spelling the non-decimal rule below was invented for. The QUESTION
-            # is why this rule is the survivor: it names the constant, which is the whole
-            # of what a reviewer needs to find the line.
+    named_ints: set[int] = set()
+    for stmt in tree.body:
+        target = None
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 \
+                and isinstance(stmt.targets[0], ast.Name):
+            target = stmt.targets[0].id
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            target = stmt.target.id
+        value = getattr(stmt, "value", None)
+        if target is None or value is None or not target.lstrip("_").isupper():
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, int) \
+                and not isinstance(value.value, bool):
+            # Written down for the non-decimal rule below, which declines the nodes this
+            # one has already asked about (#755). This loop runs to completion before that
+            # one begins, and `_iter_operators` has one caller which iterates it whole.
+            named_ints.add(id(value))
+            # `_moved_int` and not `str(n + 1)`: this rule keeps the node when both
+            # recognise it, so its row has to carry the readable spelling the non-decimal
+            # rule was invented for. The QUESTION is why it is the one that keeps it — it
+            # names the constant, which is what a reviewer needs to find the line.
             yield (value, _moved_int(sp, value), "retune-constant",
                    f"is `{target}`'s value pinned, or would any number do?")
         if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
@@ -1309,21 +1286,30 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # in the tree would become a mutation, and the thresholds that matter are reached
         # instead by `shift-boundary`, which asks the same question of `x > 28` without
         # asking it of `xs[0]`.
-        #
-        # A module-level constant in one of those bases satisfies BOTH this rule and the
-        # module-constant rule above, and until #755 was offered by both: two rows, two
-        # sandbox runs, one integer. `n + 1` is `n + 1` whichever base spells it, so the
-        # second row asked nothing — `swap-synonym`'s rule for the mutation that produces
-        # the same program, in integers instead of method names. The rule above keeps the
-        # node because its question NAMES the constant, and `_moved_int` gave it this
-        # rule's spelling on the way out, so nothing about the surviving row is worse.
-        if _plain_int(node) and id(node) not in named_ints \
+        if isinstance(node, ast.Constant) and isinstance(node.value, int) \
+                and not isinstance(node.value, bool) \
                 and sp.text(node)[:2].lower() in ("0o", "0x", "0b"):
             # Re-spelled in its own base, because the report is read by a person: a
             # permission that came back `385` instead of `0o601` is a mutation nobody can
             # check at a glance.
-            yield (node, _moved_int(sp, node), "retune-constant",
-                   "is this value pinned, or would any number do?")
+            #
+            # A nested `if` and not a fourth conjunct above, deliberately: the condition
+            # above is unchanged by #755 and a conjunct added to it would put this guard
+            # inside a `drop-conjunct` group whose other members are the type checks — so
+            # the one thing #755 added would be reported as four questions about a line it
+            # did not change.
+            #
+            # A module-level constant in one of these bases satisfies the rule above as
+            # well, and until #755 was offered by both: two rows, two sandbox runs, one
+            # integer, and the second row in the spelling this comment calls unreadable.
+            # `n + 1` is `n + 1` whichever base writes it, so that row asked nothing —
+            # `swap-synonym`'s rule for a mutation that produces the same program, in
+            # integers instead of method names. The rule above keeps the node because its
+            # question names the constant, and `_moved_int` gave it this rule's spelling on
+            # the way out, so nothing about the surviving row is worse than what went.
+            if id(node) not in named_ints:
+                yield (node, _moved_int(sp, node), "retune-constant",
+                       "is this value pinned, or would any number do?")
 
         # ------------------------------------------------------------------------------
         # Semantic near-synonyms (#569): one axis moved, everything else held.
