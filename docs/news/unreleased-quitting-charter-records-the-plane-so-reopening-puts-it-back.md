@@ -241,9 +241,16 @@ name can have — and quitting one leaves the other's harness running.
   over-determined and is documented as such rather than claimed.
 * **With a real tmux, on 3.7c and at the 3.2 floor:** the capture is real bytes off a real
   pane with its trailing spaces intact; the kill really ends the chats and, with the last
-  window, the session and then the server; and the two-plane case above. Per the design's own
-  §2.12 **none of this runs in CI** — there is no tmux there — so every tmux claim in this
-  entry is a hand-run on a real machine on both versions.
+  window, the session and then the server; the pager window really opens beside the chat; and
+  the two-plane case above.
+* **And a correction to the design's own §2.12, measured on this branch: the real-tmux tests
+  DO run in CI.** `.github/workflows/test.yml` installs no tmux, but `ubuntu-latest` ships
+  one — so they ran there, and one of them failed on 3.11 and 3.13 while passing on 3.14 in
+  the same run. That is a race (a pane's process has not exec'd when `new-window` returns),
+  found by CI and not by this machine. The honest statement is narrower than "no tmux in CI":
+  **CI answers on whatever tmux the runner image happens to ship, which is neither of the two
+  versions charter promises**, so it is a third machine's opinion on top of the hand-runs
+  rather than a substitute for them.
 
 ## What this does not do
 

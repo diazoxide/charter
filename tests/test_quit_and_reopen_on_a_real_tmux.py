@@ -14,10 +14,15 @@ order; none of that needs a server. What needs one:
   chat directories*. `TwoPlanesOnOneServer` is two plane roots with a workspace name in
   common, and it asserts that quitting one leaves the other's window running.
 
-Per §2.12 **none of this runs in CI** — `.github/workflows/test.yml` installs no tmux, so
-every case here skips there and a green gate says nothing about any of them. Hand-verified on
-tmux 3.7c and at the 3.2 floor (`tmuxctl.FLOOR`), which is why nothing here carries a version
-gate.
+**§2.12 says none of this runs in CI, and that is wrong** — measured by this very module.
+`.github/workflows/test.yml` installs no tmux, but `ubuntu-latest` has one, so `_HAS_TMUX` is
+true there and every case here RAN: one of them failed on 3.11 and 3.13 and passed on 3.14 in
+the same run, which is a race CI found and this machine did not. So the useful statement is
+narrower and sharper than the spec's: **CI runs these on whatever tmux the runner image
+happens to ship, which is neither of the two versions charter promises.** The floor and the
+version charter is developed on are still hand-run — 3.7c and the 3.2 floor
+(`tmuxctl.FLOOR`), which is why nothing here carries a version gate — and CI is a third
+machine's answer on top of that, worth having precisely because it is a different one.
 
 **Its own socket, reaped.** `commands_frame.SOCKET` is patched per class: the operator's own
 frame runs on the bare `charter` socket with sessions from several projects on it, and a test
@@ -261,16 +266,37 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
         # A pager, not a dead pane: `less` is what makes `q` close the window, and a dead
         # pane under `remain-on-exit` is a window that does not close in a frame whose
         # prefix key charter hides (§2.14).
-        panes = self._tmux("list-panes", "-t", new[0], "-F",
-                           "#{pane_current_command}\t#{pane_dead}")
-        self.assertEqual(panes.split("\t")[0], commands_frame._PAGER[0])
-        self.assertEqual(panes.split("\t")[1], "0")
+        #
+        # **Polled, and CI is what taught this.** `new-window` returns when tmux has created
+        # the pane, not when the process in it has exec'd — so `#{pane_current_command}` is
+        # still `tmux` for a moment. Asserted immediately it passed on 3.14 and failed on
+        # 3.11 and 3.13 in the same run, which is the signature of a race and not of a
+        # version difference. Same shape as `_chat_with_a_transcript`'s own wait, for the
+        # same reason.
+        self.assertEqual(self._settled(new[0]), (commands_frame._PAGER[0], "0"))
         # And the text really reached it, with the escape sequence rendered rather than
         # printed — which is what `-R` on the pager and `-e` on the capture are both for.
         seen = self._tmux("capture-pane", "-p", "-t", new[0])
         self.assertIn("LINE-ONE", seen)
         self.assertIn("RED", seen)
         self.assertNotIn("\x1b[31m", seen)
+
+    def _settled(self, window):
+        """``(command, dead)`` for *window*'s pane, once its process has exec'd.
+
+        Returns whatever the last reading was when the deadline runs out, so a genuine
+        failure is reported as the value it actually had rather than as a timeout.
+        """
+        deadline = time.time() + 10
+        seen = ("", "")
+        while time.time() < deadline:
+            fields = self._tmux("list-panes", "-t", window, "-F",
+                                "#{pane_current_command}\t#{pane_dead}").split("\t")
+            seen = (fields[0], fields[1] if len(fields) > 1 else "")
+            if seen[0] == commands_frame._PAGER[0]:
+                return seen
+            time.sleep(0.05)
+        return seen
 
     def test_the_chats_own_window_is_left_exactly_as_it_was(self):
         pane = self._chat_with_a_transcript()
@@ -279,7 +305,12 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
             commands_frame.cmd_transcript(SimpleNamespace(chat="alpha_2.1"))
 
         # Nothing is written into the harness's pane — ADR 0018's half that this change
-        # leaves untouched — and its own process is still the one that was there.
+        # leaves untouched — and its own process is still the one that was there. Read after
+        # the new window has settled, so this is not asserting about a moment before
+        # `new-window` had finished doing anything at all.
+        new = [w for w in self._windows() if "transcript" in self._windows()[w]]
+        if new:
+            self._settled(new[0])
         self.assertEqual(self._tmux("display-message", "-p", "-t", pane,
                                     "#{pane_current_command}:#{pane_dead}"), "cat:0")
 
