@@ -482,6 +482,13 @@ def _both_spellings(path) -> tuple[str, ...]:
 #: the ``restore()`` that would silently undo the pin. So the object is kept.
 _TREE_PIN = None
 
+#: What :func:`_pin_the_suite_to_its_own_tree` answered, so a second call answers the same
+#: thing instead of pinning twice. `install` promises idempotence and gives up early on a
+#: machine with no resolvable state directory — which is a return BEFORE :data:`_REAL` is
+#: set, so its own guard would not stop a second call reaching here. Re-entering `in_tree`
+#: would drop the first CM, whose collection runs the ``restore()`` that undoes the pin.
+_PINNED_PLANE: tuple[str, ...] | None = None
+
 
 def _pin_the_suite_to_its_own_tree(config) -> tuple[str, ...]:
     """Point the suite's committed settings at the checkout the suite is IN, and answer with
@@ -527,19 +534,22 @@ def _pin_the_suite_to_its_own_tree(config) -> tuple[str, ...]:
     ``charter.toml`` has no committed settings to pin to, and pinning to it would hand the
     suite a plane-less root — a different wrong answer, not a fix.
     """
-    global _TREE_PIN
+    global _TREE_PIN, _PINNED_PLANE
+    if _PINNED_PLANE is not None:         # idempotent; see :data:`_PINNED_PLANE`
+        return _PINNED_PLANE
     try:
         tree = _root.tree_of(config.ROOT, Path(__file__).resolve().parents[1])
         if tree is not None and not (tree / _root.MARKER).is_file():
             tree = None
     except (OSError, RuntimeError):       # never raise at suite boot; see `install`
-        return ()
+        tree = None
     if tree is None:
-        return ()
-    plane = _both_spellings(config.ROOT)
+        _PINNED_PLANE = ()
+        return _PINNED_PLANE
+    _PINNED_PLANE = _both_spellings(config.ROOT)
     _TREE_PIN = config.in_tree(tree)
     _TREE_PIN.__enter__()
-    return plane
+    return _PINNED_PLANE
 
 
 def _guard_reads(config, *also: str) -> None:
