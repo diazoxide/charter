@@ -462,3 +462,98 @@ class TheReopenPathSuppressesFourThingsInTheLauncher(PersonaIso, unittest.TestCa
 
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()
+
+
+class TheKeypressReachesTheTeardown(PersonaIso, unittest.TestCase):
+    """`F2` → the doorway → the confirming row → the detached command. **The wiring.**
+
+    Everything else in this file tests a function. This tests the four hops between a
+    keypress and `charter frame-quit`, and it is the one part with no other coverage: the
+    doorway's id has to be recognised by `_picker` (which builds the confirmation), the
+    confirming row's id has to be recognised by `_draw_palette` (which must NOT hand it to
+    `ActionRegistry.invoke`, where it is not an action at all), and the per-chat rows have
+    to do nothing when one is clicked.
+
+    `palette.own_the_tty` is replaced by a script rather than a terminal: it is handed the
+    surface and the `then` callback, exactly as the real one is, and it plays the two
+    choices an operator would make. That keeps the hops real — the same `_picker`, the same
+    `_draw_palette` — with no pty and no tmux under either.
+    """
+
+    def setUp(self):
+        super().setUp()
+        state.frame_dir("alpha.1", create=True)
+        state.record_server("alpha.1", SERVER)
+        state.record_workspace("alpha.1", "alpha")
+        state.record_harness_pane("alpha.1", "%1")
+        state.record_identity("alpha.1", {"CHARTER_HARNESS": "claude-code",
+                                          "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+        state.record_harness_session("alpha.1", "conv-1")
+
+    def _press(self, pick_first, pick_second=None):
+        """Drive `_draw_palette` through *pick_first*, then *pick_second* on what it opens."""
+        from charter.frame import palette
+        started = []
+
+        def _own(surface, *, fd=None, out=None, then=None):
+            row = next(r for r in surface.rows if pick_first(r))
+            nxt = then(row) if then is not None else None
+            if pick_second is None:
+                return row
+            self.assertIsNotNone(nxt, "the doorway opened nothing")
+            return next(r for r in nxt.rows if pick_second(r))
+
+        with mock.patch.dict("os.environ", {"CHARTER_SESSION_ID": "alpha.1"}), \
+                mock.patch.object(palette, "own_the_tty", side_effect=_own), \
+                mock.patch.object(commands_frame, "_close_palette"), \
+                mock.patch.object(commands_frame, "_plane_live",
+                                  return_value=({"alpha.1"},
+                                                {SERVER: {"alpha.1": "@0"}},
+                                                {"alpha.1"})), \
+                mock.patch.object(commands_frame, "_start_leaving",
+                                  side_effect=lambda fid, verb: started.append(
+                                      (fid, verb))), \
+                mock.patch.object(commands_frame, "_say_on_screen") as said:
+            rc = commands_frame._draw_palette(SimpleNamespace(chat="alpha.1"))
+        return rc, started, said
+
+    def test_quit_reaches_the_detached_command_it_is_meant_to_start(self):
+        rc, started, _said = self._press(
+            lambda r: leave.verb_of(r) == leave.QUIT,
+            lambda r: leave.goes_through(r, leave.QUIT))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(started, [("alpha.1", leave.QUIT)])
+
+    def test_close_reaches_its_own_command_and_not_quits(self):
+        rc, started, _said = self._press(
+            lambda r: leave.verb_of(r) == leave.CLOSE,
+            lambda r: leave.goes_through(r, leave.CLOSE))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(started, [("alpha.1", leave.CLOSE)])
+
+    def test_a_chat_row_inside_the_confirmation_starts_nothing(self):
+        # It is `refused=True` so Enter never lands on it, but a click still can — and a
+        # click that stopped the plane because it landed on the warning would be the worst
+        # available outcome of this whole surface.
+        rc, started, said = self._press(
+            lambda r: leave.verb_of(r) == leave.QUIT,
+            lambda r: r.refused and not leave.goes_through(r, leave.QUIT))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(started, [])
+        said.assert_not_called()
+
+    def test_the_doorway_row_itself_starts_nothing_if_it_is_chosen_and_refused(self):
+        # A close doorway on a palette that cannot resolve its own chat carries a note and
+        # `_picker` refuses to open it; the note is said and nothing is started.
+        with mock.patch.object(leave, "open_rows",
+                               return_value=leave.open_rows("")):
+            rc, started, said = self._press(
+                lambda r: leave.verb_of(r) == leave.CLOSE)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(started, [])
+        said.assert_called_once()
+        self.assertIn(leave.NO_CHAT_HERE, said.call_args[0][1])
