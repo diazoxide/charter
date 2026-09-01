@@ -176,11 +176,21 @@ jobs:
     name: Sweep shard ${{ matrix.shard }} of ${{ needs.plan.outputs.shards }}
     needs: plan
     runs-on: ubuntu-latest
-    # The backstop and not the budget. `sweep.py` sizes a shard for forty minutes; this is
-    # what catches a box that turned out to be slower than that, and it is deliberately
-    # the same hour the unsharded job had — the fix for running out of time is more
-    # machines, not a longer rope, because a shard cancelled here reports nothing at all
-    # and a longer rope only moves where that happens.
+    # The runner's cap, and `sweep.py` reads it: `SHARD_TIMEOUT` is this number, and
+    # `SHARD_REPORT_AT` is ten minutes short of it — the point at which a shard stops
+    # dealing mutations and writes what it measured (#803). One deadline written in two
+    # files and drifting is #670, so the tool holds the constant and
+    # `test_sweep.TheReportingDeadlineSitsBetweenTheBudgetAndTheBackstop` holds this line
+    # to it. Change one and the suite asks for the other.
+    #
+    # **Do not lower this to `SHARD_BUDGET`'s forty.** #803 reads the twenty-minute gap
+    # as a defect and it was one — a shard that overran its sizing got twenty further
+    # minutes of runway and *then* died with nothing. But the two were never one
+    # deadline: forty sizes the PLAN, from an average mutation, and a shard whose slice
+    # holds five survivors pays a full-suite run for each and legitimately needs longer.
+    # Cutting it off at forty would turn complete answers into partial ones, and cutting
+    # the runner off there would kill the shard at the instant it stops to write. What
+    # closed the gap is the third number, between them.
     timeout-minutes: 60
     strategy:
       # One shard's trouble must not cancel the others: three quarters of an answer, said
@@ -220,13 +230,25 @@ jobs:
             --shard "$SHARD/$SHARDS" \
             --workdir "$RUNNER_TEMP/sweep" \
             --json "sweep-results-$SHARD.json"
+      # **This step already worked, and that is the measurement #803 turns on.** On run
+      # 33500900581 all eight shards were cancelled at `timeout-minutes` and this step
+      # ran on every one of them, concluding `success` — GitHub does run an `always()`
+      # step after a job timeout. It uploaded nothing because `sweep.py` held the whole
+      # result set in memory until its last line, so the killed process took the answer
+      # with it and the run published `no verdict: 8 of 8 shards did not report`.
+      #
+      # `--json` is now written as each answer arrives, so what this finds is whatever
+      # the shard had measured at the instant it died. `if-no-files-found: warn` and no
+      # longer `ignore`: a missing file used to be the ordinary outcome of a long sweep
+      # and is now an anomaly worth a line in the log — the shard died before it reached
+      # its first mutation, during the map or the baseline.
       - name: Keep the result set, whatever the sweep said
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deletion-sweep-${{ matrix.shard }}
           path: sweep-results-${{ matrix.shard }}.json
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
   # ------------------------------------------------------------------------------------
   # 3. One answer, from however many shards came back.

@@ -2190,6 +2190,25 @@ def evidence_for(root: Path, mutation: Mutation, modules: list[str]) -> Evidence
 # 6. The sweep
 # --------------------------------------------------------------------------------------
 
+#: The verdict of a mutation this run never got to. **Not `unresolved` and not
+#: `withheld`**, and #698's argument for keeping those two apart is the same argument
+#: again: the three say different things about what the tool knows, and a reader's next
+#: move differs for each.
+#:
+#: * ``unresolved`` — a sandbox ran it and the run would not resolve. Re-run it, ideally
+#:   on a quieter machine; a second look may well answer.
+#: * ``withheld`` — the tool declined to ask, and can say why. Nothing to re-run.
+#: * ``out_of_time`` — the shard's budget expired before this mutation was dealt to a
+#:   sandbox. Re-running changes nothing on its own: the plan is bigger than the fan-out
+#:   can measure, which is a fact about :data:`MAX_SHARDS` and not about the mutation.
+#:
+#: It exists so that a shard which cannot finish can still say what it *did* measure
+#: (#803). Before it, a shard past its budget was cancelled at the workflow's
+#: `timeout-minutes` and reported nothing at all — the whole plan lost to protect nobody
+#: from a partial answer that was already in hand.
+OUT_OF_TIME = "out_of_time"
+
+
 @dataclasses.dataclass
 class Result:
     mutation: Mutation
@@ -2332,9 +2351,27 @@ def plan_for(root: Path, ref: str, scope: dict[str, set[int]], dirty: dict[str, 
 def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str, list[str]],
           workdir: Path, jobs: int, dirty: dict[str, bytes], second_order: int = 0,
           log=print, full_timeout: float = FULL_TIMEOUT,
-          shard: tuple[int, int] | None = None, cap: int = 0
+          shard: tuple[int, int] | None = None, cap: int = 0,
+          deadline: float | None = None, record=None, now=time.time
           ) -> tuple[list[Result], list["Pair"]]:
-    """Every mutation, run; every survivor, re-run against the whole suite."""
+    """Every mutation, run; every survivor, re-run against the whole suite.
+
+    *deadline* is an absolute :func:`time.time`, past which no further mutation is dealt
+    to a sandbox: the rest come back :data:`OUT_OF_TIME` and the run ends early with what
+    it measured (#803). ``None`` is the old behaviour, which is right for a run nobody is
+    holding a stopwatch on.
+
+    *record* is called with the whole plan every time an answer lands, and once before
+    the first one is measured. **The two together are what makes a shard that cannot
+    finish still able to report.** The deadline is the part that works when the process
+    is allowed to exit; *record* is the part that works when it is not — a killed shard
+    leaves the last call's file on disk, and `sweep.yml` uploads it under `always()`.
+
+    *now* is the clock the deadline is read off, and it is a parameter for one reason: a
+    test of "stops after two of five" written against the wall clock is a test that
+    measures the machine it runs on. A scripted clock makes the boundary exact, which is
+    what a boundary has to be to be worth asserting.
+    """
     plan, sources = plan_for(root, ref, scope, dirty)
     whole = len(plan)
     if shard is not None:
@@ -2354,7 +2391,20 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
     free: list[Sandbox] = list(boxes)
     import threading
     lock = threading.Lock()
-    results: list[Result] = []
+    # The whole plan, written down as :data:`OUT_OF_TIME` before a single mutation is
+    # measured and replaced in place as each answer arrives (#803). Two properties come
+    # from building it this way rather than appending answers to an empty list:
+    #
+    #   * whatever `record` has written at any instant is the COMPLETE plan with holes in
+    #     it, so a reader — the merge step, a person opening the artifact — is told how
+    #     many mutations this shard was dealt and not only how many it managed. A file
+    #     holding 23 answers and nothing about the other 6 is the silent-truncation shape
+    #     this whole tool exists to refuse: it reads as a complete sweep of a short plan.
+    #   * a killed shard's file is honest for the same reason, without the killed process
+    #     getting a chance to write anything.
+    results: list[Result] = [Result(m, OUT_OF_TIME, None, None, []) for m in plan]
+    if record:
+        record(results)
     counter = {"n": 0}
 
     def take() -> Sandbox:
@@ -2368,7 +2418,15 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         with lock:
             free.append(box)
 
-    def run_one(mutation: Mutation) -> Result:
+    def run_one(job: tuple[int, Mutation]) -> None:
+        index, mutation = job
+        # Checked before a sandbox is taken and not after, so that a shard past its
+        # budget spends nothing further: the remaining mutations keep the verdict they
+        # were written down with. Between mutations is the only place this can be asked
+        # — a run in progress is a subprocess this thread is waiting on, and interrupting
+        # one would turn a measurement into an `unresolved`, which says the wrong thing.
+        if deadline is not None and now() >= deadline:
+            return
         modules = select_for(selection, mutation)
         box = take()
         try:
@@ -2376,9 +2434,16 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         finally:
             box.restore()
             give(box)
+        result = Result(mutation, verdict, subset, full, modules)
         with lock:
             counter["n"] += 1
             n = counter["n"]
+            results[index] = result
+            # Under the lock with the assignment, so the file can never be written from
+            # a half-updated list, and after it, so the file always includes the answer
+            # whose log line is about to be printed.
+            if record:
+                record(results)
         # One line per mutation, always. A survivor costs a full suite run, so a sweep
         # can sit silent for a quarter of an hour, and a tool nobody can tell apart from
         # a hung one is a tool that gets killed and then not re-run.
@@ -2388,10 +2453,18 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
         label = {"survived": "SURVIVED", "pinned": "pinned  ",
                  "unresolved": "UNRESOLVED", "unapplied": "NOT APPLIED"}[verdict]
         log(f"    [{n}/{len(plan)}] {label}  {mutation}   ({how})")
-        return Result(mutation, verdict, subset, full, modules)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        results = list(pool.map(run_one, plan))
+        list(pool.map(run_one, enumerate(plan)))
+
+    # Said once and not once per mutation: a shard that ran out of time after four of
+    # thirty-eight would otherwise print thirty-four identical lines, and the number that
+    # matters is the one sentence, not the list.
+    short = sum(1 for r in results if r.verdict == OUT_OF_TIME)
+    if short:
+        log(f"  out of time: {len(plan) - short} of {len(plan)} mutation(s) measured. "
+            f"The remaining {short} were never dealt to a sandbox, and this shard reports "
+            f"what it has rather than nothing at all.")
 
     # A sandbox and not the checkout: the tests that are supposed to hold a guard are the
     # ones that existed AT THE REF. Reading the working tree's `tests/` instead would
@@ -2400,6 +2473,12 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
     for r in results:
         if r.verdict == "survived":
             r.evidence = evidence_for(boxes[0].path, r.mutation, r.modules)
+    # Once more, because `evidence` is what `_summary_rows` prints under every survivor
+    # and it did not exist at the last call. A file written without it round-trips as
+    # `naming: null`, which the merge step reads as "the evidence pass never ran" — true
+    # of a killed shard and a lie about one that finished.
+    if record:
+        record(results)
 
     pairs: list[Pair] = []
     if second_order:
@@ -2481,6 +2560,7 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
            elapsed: float, pairs: list["Pair"] | None = None) -> str:
     survivors = [r for r in results if r.verdict == "survived"]
     unresolved = [r for r in results if r.verdict == "unresolved"]
+    short = [r for r in results if r.verdict == OUT_OF_TIME]
     pinned = [r for r in results if r.verdict == "pinned"]
     unapplied = [r for r in results if r.verdict == "unapplied"]
     withheld = [r for r in results if r.verdict == "withheld"]
@@ -2496,10 +2576,18 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
         w(f"NOT ASKED ABOUT  : {reach()}")
     if baseline is not None:
         w(f"baseline          : Ran {baseline.ran} tests — {'OK' if baseline.green else baseline.detail}")
-    w(f"mutations applied : {len(results)}")
+    # `len(results)` was the plan length and the applied count at once, and since #803 it
+    # is only the first of those: a shard that ran out of time carries the mutations it
+    # never dealt in the same list, so that the plan it was given is legible. Stated as
+    # the difference rather than as a second total, because two totals a reader has to
+    # subtract is how "covered everything" gets read off a short run.
+    w(f"mutations applied : {len(results) - len(short)}"
+      + (f" of {len(results)}" if short else ""))
     w(f"pinned            : {len(pinned)}")
     w(f"SURVIVED          : {len(survivors)}")
     w(f"UNRESOLVED        : {len(unresolved)}")
+    if short:
+        w(f"OUT OF TIME       : {len(short)}  (never measured — the budget ran out)")
     if unapplied:
         w(f"NOT APPLIED       : {len(unapplied)}  (a defect in this tool, not a finding)")
     if withheld:
@@ -2520,6 +2608,20 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
             m = r.mutation
             w(f"  {m.path}:{m.line}  [{m.operator}]  "
               f"{r.subset.detail if r.subset else ''}")
+        w("")
+
+    if short:
+        w("-" * 86)
+        w("OUT OF TIME — these mutations were planned and never measured")
+        w("-" * 86)
+        w("The budget ran out before they were dealt to a sandbox, so nothing above is a")
+        w("statement about them. This is not a timeout on a mutation and not a question")
+        w("declined: they were simply not reached, and a re-run of the same plan on the")
+        w("same number of machines reaches the same point. What answers them is more")
+        w("shards or a smaller diff — not another run.")
+        for r in sorted(short, key=lambda r: (r.mutation.path, r.mutation.line)):
+            m = r.mutation
+            w(f"  {m.path}:{m.line}  [{m.operator}]  {m.question}")
         w("")
 
     if withheld:
@@ -2704,6 +2806,13 @@ class Gate:
     * ``unresolved`` — no verdict. A timeout is not a red and not a survivor. Under load
       this repository hits it repeatedly, and "I could not look" must never render as
       "nothing to see".
+    * ``out_of_time`` — the shard's budget ran out before this mutation was dealt to a
+      sandbox (#803). **Its own bucket and not folded into `unresolved`**, for #698's
+      reason once more: `unresolved` is "I looked and could not tell", and a re-run is
+      the answer to it. This is "I never looked", and a re-run of the same branch on the
+      same fan-out produces the same number — the response is more shards, or a smaller
+      diff, and reading it as a flaky timeout would send a person to re-run a gate that
+      cannot answer.
     * ``unapplied`` — the mutation never reached the tree (#586). A defect in the tool.
     * ``withheld`` — the mutation was never offered, because the mutant was not a program
       (#698). **Its own bucket and not folded into `unresolved`**, because the two say
@@ -2720,6 +2829,7 @@ class Gate:
     masked: list[Result] = dataclasses.field(default_factory=list)
     platform: list[Result] = dataclasses.field(default_factory=list)
     unresolved: list[Result] = dataclasses.field(default_factory=list)
+    out_of_time: list[Result] = dataclasses.field(default_factory=list)
     unapplied: list[Result] = dataclasses.field(default_factory=list)
     withheld: list[Result] = dataclasses.field(default_factory=list)
     pinned: int = 0
@@ -2740,6 +2850,11 @@ class Gate:
         mutation that exists. `withheld` is the one the tool declined to ask, so it never
         reached anything — and a plan of nothing but withheld mutations measured nothing,
         which is exactly what this property is for.
+
+        `out_of_time` is excluded on the same test and for the same reason (#803): the
+        budget ran out before it was dealt to a sandbox, so nothing about it was put to
+        the suite. A shard that measured none of its thirty-eight has `measured == 0`,
+        which is what keeps it from ever wearing :data:`CLEAN`.
         """
         return (self.pinned + len(self.unpinned) + len(self.masked) + len(self.platform)
                 + len(self.unresolved) + len(self.unapplied))
@@ -2758,6 +2873,8 @@ def classify(results: list[Result]) -> Gate:
             gate.pinned += 1
         elif r.verdict == "unresolved":
             gate.unresolved.append(r)
+        elif r.verdict == OUT_OF_TIME:
+            gate.out_of_time.append(r)
         elif r.verdict == "unapplied":
             gate.unapplied.append(r)
         elif r.verdict == "withheld":
@@ -2785,7 +2902,9 @@ def gate_exit_code(gate: Gate, enforce: bool) -> int:
 
     * **1** — an actionable survivor. Write the test, or delete the line.
     * **3** — nothing actionable, but something could not be measured. Re-run it; do not
-      read it as clean.
+      read it as clean. A mutation the budget never reached (#803) is the same 3: what a
+      person does about it differs — more shards rather than another run — but what it
+      licenses a reader to believe is identical, which is nothing.
     * **4** — a mutation never applied. The tool is wrong, and its numbers are not
       evidence about this branch either way.
     """
@@ -2795,7 +2914,7 @@ def gate_exit_code(gate: Gate, enforce: bool) -> int:
         return 4
     if gate.actionable:
         return 1
-    return 3 if gate.unresolved else 0
+    return 3 if gate.unresolved or gate.out_of_time else 0
 
 
 # --------------------------------------------------------------------------------------
@@ -2816,11 +2935,53 @@ def gate_exit_code(gate: Gate, enforce: bool) -> int:
 # complete question is spread across.
 
 #: What one shard is allowed to spend on mutations and fixed costs together, in seconds.
-#: Deliberately under `sweep.yml`'s `timeout-minutes`, because the two failures are not
-#: symmetrical: a shard that finishes with time to spare costs a few runner-minutes, and a
-#: shard cancelled at the cap reports *nothing at all* — not a partial answer, not the
-#: survivors it had already printed, nothing the merge step can read.
+#: **A sizing input and not a deadline** — it is the number :func:`per_shard` divides by,
+#: and what it answers is "how many mutations may this machine be dealt". Deliberately
+#: under :data:`SHARD_TIMEOUT`, because the two failures are not symmetrical: a shard that
+#: finishes with time to spare costs a few runner-minutes, and one that does not is a
+#: machine's worth of work with nothing to show for it.
 SHARD_BUDGET = 40 * 60
+
+#: `sweep.yml`'s `timeout-minutes` for a shard job, in seconds, and the runner's own
+#: backstop: past this the job is cancelled and there is no further negotiation.
+#:
+#: Written here rather than only in the YAML so that :data:`SHARD_REPORT_AT` is derived
+#: from it instead of guessed beside it — the two files disagreeing about one deadline is
+#: #670's defect, and `test_sweep.TheReportingDeadlineSitsBetweenTheBudgetAndTheBackstop`
+#: holds the workflow to this number.
+SHARD_TIMEOUT = 60 * 60
+
+#: How long before :data:`SHARD_TIMEOUT` a shard stops and writes what it measured.
+#:
+#: Enough for the mutations still in flight to come back — a subset run, usually seconds;
+#: a survivor's full-suite confirmation, four to eight minutes — and for the result file
+#: to be written. It is best-effort and not a guarantee: `FULL_TIMEOUT` bounds one run at
+#: forty minutes, so a shard that stops with a slow survivor in flight can still be
+#: cancelled. That case is covered by the OTHER half of #803 rather than by this number —
+#: the result file is written as each answer arrives, so a shard killed here has already
+#: handed over everything it had.
+SHARD_KILL_MARGIN = 10 * 60
+
+#: When a shard stops dealing mutations and reports what it measured (#803).
+#:
+#: **Read off the backstop and not off the budget, and that distinction is the whole
+#: design.** The obvious reading of #803 is that `SHARD_BUDGET` should become the
+#: deadline, since a shard sized for forty minutes ought to stop at forty. It should not:
+#: `SHARD_BUDGET` is a *sizing estimate* built from an average mutation, and a shard whose
+#: slice happens to hold five survivors pays a full-suite run for each and legitimately
+#: needs longer. Stopping such a shard at forty would turn a complete answer that arrives
+#: at forty-eight minutes into a partial one — a regression, dressed as a fix, on exactly
+#: the branches that have something to report.
+#:
+#: So the shard uses every minute the runner will give it and stops just short of being
+#: killed. `SHARD_REPORT_AT > SHARD_BUDGET` is asserted, because that inequality is what
+#: says a correctly sized shard is never cut short by this.
+#:
+#: What run 33500900581 measured is what happens with no such line at all: eight shards
+#: ran to `timeout-minutes: 60`, were cancelled to the second, and reported *nothing* —
+#: not a partial answer, not the survivors they had already printed, nothing the merge
+#: step could read. `no verdict: 8 of 8 shards did not report`, concluding `success`.
+SHARD_REPORT_AT = SHARD_TIMEOUT - SHARD_KILL_MARGIN
 
 #: What a shard pays before it measures its first mutation, itemised, in seconds. Measured
 #: on `ubuntu-latest` and not on a workstation, because that is where the budget has to
@@ -2881,6 +3042,27 @@ def per_shard() -> int:
     return max(1, (SHARD_BUDGET - SHARD_FIXED) // SECONDS_A_MUTATION)
 
 
+def budget_for(sharded: bool, override: float | None = None) -> float:
+    """Seconds this run may spend before it stops dealing mutations, or ``0`` for none.
+
+    A deadline belongs to a **shard** and not to the tool. A shard runs on a machine with
+    a `timeout-minutes` on it and has a merge step downstream whose whole job is to say
+    how much of the plan the fan-out reached, so stopping short is a thing the run knows
+    how to report. A person running `tools/sweep.py --gate` at a terminal has neither: a
+    deadline there would quietly stop a sweep they were waiting for and hand them a
+    partial answer they never asked for, which is the truncation this file refuses
+    everywhere else. So it is off unless the run is a shard, and `--budget` is how a test
+    — or a person reproducing #803 — turns it on anyway.
+
+    Out of :func:`main` for #572's reason: a rule written inside `main()` cannot be
+    reached from a test, so it cannot be swept, so it is a guard this harness is unable
+    to hold itself to.
+    """
+    if override is not None:
+        return max(0.0, float(override))
+    return float(SHARD_REPORT_AT) if sharded else 0.0
+
+
 def shards_for(mutations: int) -> int:
     """How many jobs *mutations* of them need, so that none of them runs out of time.
 
@@ -2895,19 +3077,29 @@ def over_budget(mutations: int) -> str:
     """Why this diff will be slow, said out loud, or ``""`` when it will not be.
 
     :data:`MAX_SHARDS` is a ceiling on machines and never on questions, so a diff past it
-    is still swept whole — its shards simply carry more than the budget and some of them
-    may be cancelled. That is a real risk to the run and it gets said here rather than
-    discovered in a cancelled job: the spec's rule about silent truncation is that a cap
-    the reader cannot see is worse than the cap.
+    is still dealt whole — its shards simply carry more than the budget. That is a real
+    risk to the run and it gets said here rather than discovered afterwards: the spec's
+    rule about silent truncation is that a cap the reader cannot see is worse than the
+    cap.
+
+    **What it says past the ceiling changed with #803, because what happens there did.**
+    It used to warn that a shard "may be cancelled at the job timeout, and a cancelled
+    shard reports no verdict rather than a short one", and run 33500900581 is that
+    sentence coming true on all eight at once: 231 mutations, eight shards cancelled to
+    the second at `timeout-minutes: 60`, and `no verdict: 8 of 8 shards did not report`
+    published as `success`. A shard now stops at its own budget and reports what it
+    measured, so the honest warning is that the ANSWER will be short — which is a thing
+    a reader can act on, where "there may be no answer" was only a thing to dread.
     """
     ceiling = MAX_SHARDS * per_shard()
     if mutations <= ceiling:
         return ""
     return (f"{mutations} mutations is past the {ceiling} that {MAX_SHARDS} shards can "
-            f"measure inside {SHARD_BUDGET // 60} minutes each. Every one of them is "
-            f"still swept — nothing here is dropped — but a shard may be cancelled at "
-            f"the job timeout, and a cancelled shard reports no verdict rather than a "
-            f"short one.")
+            f"measure inside {SHARD_BUDGET // 60} minutes each. Nothing here is dropped "
+            f"and every one of them is dealt to a shard — but a shard stops at its "
+            f"budget and reports what it measured, so this branch gets a PARTIAL answer "
+            f"with the unmeasured mutations named. Split the branch, or read the count "
+            f"as a floor.")
 
 
 def shard_of(plan: list[Mutation], index: int, count: int) -> list[Mutation]:
@@ -2995,12 +3187,20 @@ def gate_conclusion(gate: Gate, missing: int = 0) -> str:
     survivors, 2 not measured" is still a true statement about 8 real findings, whereas
     "8 survivors" from two thirds of a plan is a number nobody should quote.
 
+    :data:`OUT_OF_TIME` joins the missing shard at the top and not the unresolved
+    mutation below it, and getting that wrong would have made #803's fix a step backwards
+    (#803). A missing shard is exactly "two thirds of a plan", and after that fix it is
+    the mutations themselves that carry the fact — the shard now reports, so `missing` is
+    zero and `out_of_time` holds what `missing` used to. Ranked with `unresolved`, a
+    partial sweep that found three survivors would publish `3 survivors`: the true total
+    for the branch, said about a third of it.
+
     :data:`NOTHING` is last and it is reached only from the bottom — every count zero AND
     every shard in. Anything unmeasured has already answered above it, so "nothing to
     sweep" can never be worn by a run that lost a shard, and `missing` is what keeps
     `classify([])` from a cancelled sweep saying it.
     """
-    if missing or gate.unapplied:
+    if missing or gate.unapplied or gate.out_of_time:
         return NO_VERDICT
     if gate.actionable:
         return SURVIVORS
@@ -3052,6 +3252,15 @@ def headline(gate: Gate, missing: int = 0, shards: int = 1) -> str:
                       "applied")
     if gate.unresolved:
         unsure.append(f"{len(gate.unresolved)} not measured")
+    # Said with the count that WAS measured beside it, because that is the sentence #630
+    # argued for and #803 is the branch it was never reached on: "23 of 29 measured" is
+    # worth something and "6 not measured" on its own is not. `measured` is the property
+    # #782 added for exactly this — every bucket that reached a sandbox — so the two
+    # numbers here cannot drift from the table below them.
+    if gate.out_of_time:
+        whole = gate.measured + len(gate.out_of_time)
+        unsure.append(f"{gate.measured} of {whole} measured, "
+                      f"{len(gate.out_of_time)} out of time")
     if conclusion == SURVIVORS:
         return (f"{found}, {'; '.join(unsure)}{aside}" if unsure else f"{found}{aside}")
     if gate.actionable:
@@ -3117,6 +3326,14 @@ def annotations(gate: Gate) -> list[str]:
         ("warning", gate.unresolved, "No verdict — this mutation was never measured",
          "The run timed out rather than failing. That is not a red and it is not a pin; "
          "nothing here has been shown to be tested."),
+        # Last among the warnings, and behind `unresolved`, because it is the family a
+        # reviewer can do least with line by line: the count and the sentence carry it,
+        # and what these mark is which part of the diff the sweep never reached.
+        ("warning", gate.out_of_time, "Out of time — this line was never swept",
+         f"The shard stopped at {SHARD_REPORT_AT // 60} minutes, just short of the "
+         f"runner's own cap, before this mutation "
+         "was measured, so nothing on this branch's sweep is a statement about this "
+         "line. Re-running does not reach it; a smaller branch does."),
         ("notice", gate.platform, "Platform-deferred — never fails this gate",
          f"A narrowed catch on an exception the operating system decides. On "
          f"{sys.platform} the clause may be unreachable rather than untested, and one "
@@ -3213,6 +3430,9 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
     w(f"| platform-deferred | {len(gate.platform)} | the clause may be unreachable on "
       f"{sys.platform}; never fails this gate |")
     w(f"| unresolved | {len(gate.unresolved)} | no verdict — timed out, not measured |")
+    if gate.out_of_time:
+        w(f"| **out of time** | {len(gate.out_of_time)} | planned, never dealt to a "
+          "sandbox — the budget ran out |")
     if gate.withheld:
         w(f"| withheld | {len(gate.withheld)} | the mutant was not a program, so the "
           "question was not asked |")
@@ -3245,11 +3465,13 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         w("### Did not report — this page is not a count")
         w("")
         if shards >= 1:
-            w(f"{missing} of {shards} shard(s) wrote no result. A shard is cancelled at "
-              "the job timeout rather than stopping short, so what it had already "
-              "measured is gone with it — the tables below are the shards that *did* "
-              "answer, and a branch with survivors in the missing slice looks exactly "
-              "like this one. Re-run the sweep; do not read it as clean.")
+            w(f"{missing} of {shards} shard(s) wrote no result at all. A shard that runs "
+              "out of time now stops and reports what it measured (#803), so this is "
+              "the narrower failure that is left: a shard that died before it reached "
+              "its first mutation, or a runner that vanished. The tables below are the "
+              "shards that *did* answer, and a branch with survivors in the missing "
+              "slice looks exactly like this one. Re-run the sweep; do not read it as "
+              "clean.")
         else:
             w("The sweep **never said how many shards it needed**, so nothing here knows "
               "how much of this branch was measured, or whether any of it was. That is "
@@ -3295,6 +3517,27 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
           "as clean.")
         for r in gate.unresolved:
             w(f"- `{r.mutation.tag}` in `{r.mutation.symbol}`")
+        w("")
+    if gate.out_of_time:
+        w("### Out of time — planned, and never measured")
+        w("")
+        w(f"{gate.measured} of {gate.measured + len(gate.out_of_time)} mutation(s) on "
+          "this branch were measured. The rest were dealt to no sandbox at all: a shard "
+          f"stops at {SHARD_REPORT_AT // 60} minutes and reports what it has, which is "
+          "why there are numbers on this page at all — before #803 a shard past its "
+          "budget was cancelled at the job timeout and everything it had already "
+          "measured died with it.")
+        w("")
+        w("**Read the counts above as a floor and not as a total.** A survivor in the "
+          "unmeasured slice looks exactly like this page. Re-running does not help — the "
+          f"plan is larger than {MAX_SHARDS} shards can measure — so either split the "
+          "branch, or raise the fan-out.")
+        w("")
+        for r in sorted(gate.out_of_time,
+                        key=lambda r: (r.mutation.path, r.mutation.line))[:20]:
+            w(f"- `{r.mutation.tag}` in `{r.mutation.symbol}` — _{r.mutation.question}_")
+        if len(gate.out_of_time) > 20:
+            w(f"- …and {len(gate.out_of_time) - 20} more")
         w("")
     if gate_conclusion(gate, missing) == NOTHING:
         w("### Nothing to sweep — and that is not the same as nothing wrong")
@@ -3532,7 +3775,7 @@ def exit_code(results: list[Result]) -> int:
         return 4
     if any(r.verdict == "survived" for r in results):
         return 1
-    return 3 if any(r.verdict == "unresolved" for r in results) else 0
+    return 3 if any(r.verdict in ("unresolved", OUT_OF_TIME) for r in results) else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3584,6 +3827,13 @@ def main(argv: list[str] | None = None) -> int:
                         "jobs. --second-order sees only its own slice and is weaker "
                         "under it; the masked-cluster BUCKET is not, because --verdict "
                         "classifies the merged results and not one shard's.")
+    p.add_argument("--budget", default=None, type=float, metavar="SECONDS",
+                   help="Stop dealing mutations this many seconds after the run started "
+                        "and report what was measured, marking the rest OUT OF TIME "
+                        "(#803). A --shard run gets SHARD_REPORT_AT by default, which "
+                        "is just short of the runner's own cap, because the "
+                        "merge step is there to say how much of the plan was reached; "
+                        "an unsharded run gets none. 0 turns it off.")
     p.add_argument("--verdict", default=None, metavar="DIR",
                    help="Merge every shard's --json from DIR into one answer, and say "
                         "which of the three a run found. Needs --shards.")
@@ -3702,9 +3952,29 @@ def main(argv: list[str] | None = None) -> int:
             # else, and it decides once.
             return 2 if args.enforce or not args.gate else 0
 
+    shard = parse_shard(args.shard) if args.shard else None
+    budget = budget_for(shard is not None, args.budget)
+    if budget:
+        left = budget - (time.time() - started)
+        log(f"  budget: {budget / 60:.0f} min from the start of this run, "
+            f"{max(0.0, left) / 60:.0f} left for mutations. Past it this shard stops and "
+            f"reports what it measured (#803).")
+    # Written after every answer and not only at the end (#803). The file is the only
+    # thing a shard hands anybody: a process killed with the whole result set in memory
+    # hands over nothing, which is what made eight cancelled shards on run 33500900581
+    # read as `no verdict` rather than as 224 measured mutations. `os.replace` because a
+    # reader may be a cancelled job's artifact upload, and a half-written file is a shard
+    # that did not report — `merge()` says so in as many words.
+    record = None
+    if args.json:
+        def record(rows: list[Result], path: Path = Path(args.json)) -> None:
+            part = path.with_name(path.name + ".part")
+            part.write_text(as_json(rows))
+            os.replace(part, path)
+
     results, pairs = sweep(root, ref, scope, selection, workdir, args.jobs, dirty,
-                           args.second_order, log, full_timeout,
-                           parse_shard(args.shard) if args.shard else None, cap=cap)
+                           args.second_order, log, full_timeout, shard, cap=cap,
+                           deadline=started + budget if budget else None, record=record)
     elapsed = time.time() - started
     text = report(results, root, ref, base, baseline, elapsed, pairs)
     log("")
@@ -3736,6 +4006,7 @@ def _say(args, gate: Gate, log, missing: int = 0, shards: int = 1) -> None:
     log("")
     log(f"gate: {len(gate.unpinned)} unpinned, {len(gate.masked)} in masked cluster(s), "
         f"{len(gate.platform)} platform-deferred, {len(gate.unresolved)} unresolved, "
+        f"{len(gate.out_of_time)} out of time, "
         f"{len(gate.unapplied)} not applied, {len(gate.withheld)} withheld, "
         f"{gate.pinned} pinned")
     log(f"gate: {headline(gate, missing, shards)}")

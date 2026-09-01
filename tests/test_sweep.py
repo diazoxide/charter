@@ -3497,6 +3497,207 @@ class NothingToSweepIsNotNoSurvivors(unittest.TestCase):
         self.assertNotIn("Not one mutation was applied on this branch", page)
 
 
+class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
+    """#803, the fourth in the lineage and the first where the sweep actually RAN.
+
+    * **#617** — a green check was not "no survivors"; #630 put the verdict in the NAME.
+    * **#646/#561** — a gate that never ran looked like one that found nothing; the
+      collect job was made required, so a missing row blocks.
+    * **#782** — a sweep that planned nothing still said `no survivors`; `nothing to
+      sweep` was added.
+    * **This** — a sweep that ran, could not finish, and reported `success`.
+
+    Measured on run 33500900581 (PR #796, head `36996e6`): 231 mutations, eight shards,
+    every one cancelled at `timeout-minutes: 60` to the second, and
+    `no verdict: 8 of 8 shards did not report` concluding `success` beside seven real
+    passes. The eight shards between them had measured roughly 224 mutations when they
+    died, and every one of those answers was thrown away.
+
+    The fix is #630's own argument applied to itself: a partial answer honestly labelled
+    beats silence. A shard stops at :data:`sweep.SHARD_BUDGET` and reports what it has,
+    and the mutations it never reached are named rather than absent.
+    """
+
+    def test_out_of_time_is_its_own_bucket_and_not_a_timeout(self):
+        """#698's rule, applied again. `unresolved` is "I looked and could not tell" and
+        a re-run may answer it; this is "I never looked", and a re-run of the same plan
+        on the same fan-out stops at the same place. A reader who cannot tell them apart
+        re-runs a gate that cannot answer."""
+        gate = sweep.classify([_result(sweep.OUT_OF_TIME)])
+        self.assertEqual(len(gate.out_of_time), 1)
+        self.assertEqual(gate.unresolved, [])
+        self.assertEqual(gate.withheld, [])
+
+    def test_a_mutation_nobody_measured_is_not_counted_as_measured(self):
+        """`measured` is #782's property — every bucket that reached a sandbox. This one
+        did not reach anything, so a shard that measured none of its thirty-eight has
+        `measured == 0` and can never wear `no survivors`."""
+        gate = sweep.classify([_result(sweep.OUT_OF_TIME)])
+        self.assertEqual(gate.measured, 0)
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.NO_VERDICT)
+
+    def test_a_plan_of_nothing_but_unreached_mutations_is_not_nothing_to_sweep(self):
+        """The trap #782 left open for this one. `NOTHING` is reached only from the
+        bottom, and a shard whose budget ran out before its first mutation has zero of
+        everything — which without this check reads as a docs-only branch."""
+        gate = sweep.classify([_result(sweep.OUT_OF_TIME) for _ in range(38)])
+        self.assertNotEqual(sweep.gate_conclusion(gate), sweep.NOTHING)
+        self.assertNotIn("nothing to sweep", sweep.headline(gate))
+
+    def test_the_check_name_says_how_much_of_the_plan_was_measured(self):
+        """The sentence #630 argued for and #803 is the branch it was never reached on.
+        "6 not measured" alone tells a reader nothing about how much they may lean on
+        the page; "23 of 29 measured" tells them exactly."""
+        results = [_result("pinned", line=n) for n in range(23)]
+        results += [_result(sweep.OUT_OF_TIME, line=n) for n in range(23, 29)]
+        gate = sweep.classify(results)
+        self.assertEqual(sweep.headline(gate),
+                         "no verdict: 23 of 29 measured, 6 out of time")
+
+    def test_survivors_found_before_the_budget_ran_out_are_still_reported(self):
+        """The whole point. A branch with a survivor in the measured slice must hear
+        about it, and hear in the same breath that the count is a floor."""
+        results = [_result("survived", line=1)]
+        results += [_result(sweep.OUT_OF_TIME, line=n) for n in range(2, 8)]
+        gate = sweep.classify(results)
+        self.assertEqual(sweep.headline(gate),
+                         "no verdict: 1 survivor so far, 1 of 7 measured, 6 out of time")
+
+    def test_it_is_no_verdict_and_not_a_pass_once_the_gate_enforces(self):
+        """Same code as `unresolved` — 3 — because what the two license a reader to
+        believe is identical, which is nothing. What a person DOES about them differs,
+        and that is what the page and the name are for."""
+        gate = sweep.classify([_result(sweep.OUT_OF_TIME)])
+        self.assertEqual(sweep.gate_exit_code(gate, enforce=True), 3)
+        self.assertEqual(sweep.exit_code([_result(sweep.OUT_OF_TIME)]), 3)
+
+    def test_the_page_names_the_lines_nobody_swept_and_says_re_running_will_not_help(self):
+        results = [_result("pinned", line=1)]
+        results += [_result(sweep.OUT_OF_TIME, line=n, path="charter/b.py")
+                    for n in range(2, 5)]
+        page = sweep.gate_summary(sweep.classify(results), "a" * 40, "b" * 40, 12.0, False)
+        self.assertIn("Out of time — planned, and never measured", page)
+        self.assertIn("1 of 4 mutation(s) on this branch were measured", page)
+        self.assertIn("charter/b.py:2", page)
+        self.assertIn("Re-running does not help", page)
+        # And never the sentence that says the branch is covered.
+        self.assertNotIn("Nothing added here is a line the suite would not miss", page)
+
+    def test_the_lines_nobody_swept_are_marked_in_the_margin_too(self):
+        """Annotations are where a reviewer already is. A survivor outranks one of these
+        for the shared warning budget, because a finding beats an absence — but an
+        absence still gets drawn once the findings have had their slots."""
+        drawn = sweep.annotations(sweep.classify([_result(sweep.OUT_OF_TIME, line=7)]))
+        self.assertEqual(len(drawn), 1)
+        self.assertIn("Out of time — this line was never swept", drawn[0])
+        self.assertIn("line=7", drawn[0])
+
+    def test_a_survivor_takes_the_annotation_slot_before_an_unswept_line_does(self):
+        results = [_result("survived", line=n) for n in range(sweep.ANNOTATION_CAP + 5)]
+        results += [_result(sweep.OUT_OF_TIME, line=900)]
+        drawn = "\n".join(sweep.annotations(sweep.classify(results)))
+        self.assertNotIn("line=900", drawn)
+
+    def test_the_verdict_survives_the_trip_through_a_shards_file(self):
+        """A shard writes this and another machine classifies it (#617). A verdict that
+        did not round-trip would arrive at the merge step as something else, and the
+        something else it would most likely arrive as is `pinned`."""
+        back = sweep.results_from_json(sweep.as_json([_result(sweep.OUT_OF_TIME)]))
+        self.assertEqual([r.verdict for r in back], [sweep.OUT_OF_TIME])
+        self.assertEqual(len(sweep.classify(back).out_of_time), 1)
+
+    def test_the_budget_belongs_to_a_shard_and_not_to_a_person_at_a_terminal(self):
+        """A local `--gate` has no merge step to say how much of the plan was reached, so
+        a deadline there would hand somebody a truncated answer they never asked for."""
+        self.assertEqual(sweep.budget_for(sharded=True), float(sweep.SHARD_REPORT_AT))
+        self.assertEqual(sweep.budget_for(sharded=False), 0.0)
+        self.assertEqual(sweep.budget_for(sharded=False, override=90), 90.0)
+        self.assertEqual(sweep.budget_for(sharded=True, override=0), 0.0)
+        self.assertEqual(sweep.budget_for(sharded=True, override=-5), 0.0)
+
+
+class TheReportingDeadlineSitsBetweenTheBudgetAndTheBackstop(unittest.TestCase):
+    """Three numbers, and #803 is what happens when the middle one is missing.
+
+    `SHARD_BUDGET` (40 min) sizes the plan — how many mutations a machine may be dealt.
+    `SHARD_TIMEOUT` (60 min) is the runner's cap, past which the job is cancelled. With
+    nothing between them, a shard that overran its sizing got twenty further minutes of
+    runway and *then* died with nothing, which is the worst of both: the same wall clock
+    spent reporting would have produced a partial answer.
+
+    **The tempting fix is to set the budget and the backstop equal, and it is wrong.**
+    `SHARD_BUDGET` is a sizing estimate built from an AVERAGE mutation, and a shard whose
+    slice holds five survivors pays a full-suite run for each and legitimately needs
+    longer. Stopping it at forty would turn a complete answer arriving at forty-eight
+    minutes into a partial one — a regression on exactly the branches with something to
+    report, dressed as a fix. Setting the backstop to forty is worse still: the runner
+    would kill the shard at the instant it stops to write its answer.
+
+    So `SHARD_REPORT_AT` goes between them, and the two inequalities below are the whole
+    property: late enough that a correctly sized shard is never cut short, early enough
+    that there is room to finish and write.
+    """
+
+    def setUp(self):
+        self.yaml = (Path(__file__).resolve().parent.parent
+                     / ".github" / "workflows" / "sweep.yml").read_text(encoding="utf-8")
+
+    def _timeouts(self):
+        return [int(n) for n in re.findall(r"timeout-minutes:\s*(\d+)", self.yaml)]
+
+    def test_the_workflow_states_a_backstop_at_all(self):
+        """The reader below is green on an empty list, so it is proved first."""
+        self.assertTrue(self._timeouts())
+
+    def test_the_workflow_and_the_tool_agree_on_where_the_runner_gives_up(self):
+        """#670's defect is one measurement written in two files and drifting. The
+        shard job's cap is the longest one in this workflow — `plan` is 30 and `collect`
+        is 10 — and `sweep.py` derives its own deadline from this number."""
+        self.assertEqual(max(self._timeouts()) * 60, sweep.SHARD_TIMEOUT)
+
+    def test_a_shard_reports_before_the_runner_kills_it(self):
+        self.assertLess(sweep.SHARD_REPORT_AT, sweep.SHARD_TIMEOUT)
+        self.assertGreaterEqual(sweep.SHARD_TIMEOUT - sweep.SHARD_REPORT_AT, 5 * 60,
+                                "a mutation still in flight has to come back and the "
+                                "answer still has to be written")
+
+    def test_a_correctly_sized_shard_is_never_cut_short_by_its_own_deadline(self):
+        """The regression this ordering exists to prevent. A shard dealt `per_shard()`
+        mutations is sized for `SHARD_BUDGET`; if the reporting deadline were at or below
+        that, the ordinary slow-but-complete shard would start publishing partial
+        answers, which is worse than what #803 found."""
+        self.assertGreater(sweep.SHARD_REPORT_AT, sweep.SHARD_BUDGET)
+        self.assertEqual(sweep.budget_for(sharded=True), float(sweep.SHARD_REPORT_AT))
+
+    def _step(self, name):
+        """The YAML block of one named step, and nothing of its neighbours.
+
+        Written this way because the obvious assertion is vacuous: `if: always()` appears
+        on the `collect` job as well, so `assertIn` over the whole file is green with the
+        upload step's own condition deleted. Caught by removing the guard and watching
+        the test stay green, which is the only way that kind of assertion is ever found.
+        """
+        lines = self.yaml.splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == f"- name: {name}")
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        out = [lines[start]]
+        for ln in lines[start + 1:]:
+            if ln.strip() and len(ln) - len(ln.lstrip()) <= indent:
+                break
+            out.append(ln)
+        return "\n".join(out)
+
+    def test_the_workflow_keeps_whatever_the_shard_wrote(self):
+        """Measured on run 33500900581: the `always()` upload step DID run on all eight
+        cancelled shards and concluded `success` — the runner was never the problem. It
+        uploaded nothing because `sweep.py` held the whole result set in memory until the
+        end, so there was no file for it to find. The step has to stay unconditional, or
+        the whole of #803's fix arrives on a machine that then throws it away."""
+        step = self._step("Keep the result set, whatever the sweep said")
+        self.assertIn("if: always()", step)
+        self.assertIn("path: sweep-results-", step)
+
+
 class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
     """#617's other half: five runs cancelled at `timeout-minutes: 60` across two branches.
 
@@ -3599,8 +3800,24 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
         self.assertEqual(sweep.over_budget(224), "")
         loud = sweep.over_budget(225)
         self.assertIn("225 mutations", loud)
-        self.assertIn("still swept", loud)
-        self.assertIn("nothing here is dropped", loud)
+        self.assertIn("nothing here is dropped", loud.lower())
+
+    def test_past_the_ceiling_the_warning_promises_a_short_answer_and_not_a_missing_one(
+            self):
+        """#803. The old wording promised the opposite of what now happens, and it was
+        promising it accurately: "a shard may be cancelled at the job timeout, and a
+        cancelled shard reports no verdict rather than a short one" is exactly run
+        33500900581, where 231 mutations produced eight cancelled shards and
+        `no verdict: 8 of 8 shards did not report` concluding `success`.
+
+        A shard now stops at :data:`SHARD_BUDGET` and reports what it measured, so the
+        warning has to tell a reader what they will actually get. The word to look for
+        is the promise of a partial answer; the words that must be GONE are the ones
+        that told them to expect none."""
+        loud = sweep.over_budget(sweep.MAX_SHARDS * sweep.per_shard() + 1)
+        self.assertIn("PARTIAL answer", loud)
+        self.assertNotIn("cancelled", loud)
+        self.assertNotIn("no verdict", loud)
 
 
 #: Every duration a piece of prose quotes in seconds. The shape the workflow's comments
@@ -4074,7 +4291,7 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
                                "--github-output", str(self.outputs))
         self.assertEqual(code, 0, said)
         self.assertIn("::warning title=The deletion sweep is over its budget::", said)
-        self.assertIn("nothing here is dropped", said)
+        self.assertIn("Nothing here is dropped", said)
         # And it still asks about all three hundred, on the eight machines it is allowed.
         self.assertEqual(self._read_outputs()["shards"], "8")
         self.assertEqual(len([m for i in range(1, 9)
@@ -4183,6 +4400,153 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         self.assertEqual(self._read_outputs(),
                          {"conclusion": "nothing", "headline": "nothing to sweep"})
         self.assertIn("## Deletion sweep — nothing to sweep", self.summary.read_text())
+
+    # ----------------------------------------------------------------------------------
+    # #803 — a shard that will not fit, end to end through the CLI the workflow runs.
+    # ----------------------------------------------------------------------------------
+
+    def _five(self):
+        """A five-mutation plan, and the two stubs that make measuring one free."""
+        plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "is it pinned?",
+                               "if x: pass", "", "close") for n in range(1, 6)]
+        for name, stub in (("plan_for", lambda *a, _p=plan: (_p, {})),
+                           ("load_map", lambda *a, **k: {})):
+            real = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, real)
+        return plan
+
+    def test_the_budget_stops_the_sweep_and_the_rest_are_named_out_of_time(self):
+        """The defect, inverted. Before #803 a shard past its budget ran on to the
+        workflow's `timeout-minutes`, was cancelled, and reported nothing; now it stops
+        itself and the answers it has are the answers the branch gets.
+
+        The clock is scripted rather than real: `now` is called once per mutation, so
+        "two of five" is a boundary and not a stopwatch reading."""
+        self._five()
+        ticks = iter([0.0, 0.0, 99.0, 99.0, 99.0])
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said):
+            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0, None,
+                                     deadline=50.0, now=lambda: next(ticks))
+        self.assertEqual([r.verdict == sweep.OUT_OF_TIME for r in results],
+                         [False, False, True, True, True])
+        # The plan is still whole in the result set: five rows, not two.
+        self.assertEqual([r.mutation.line for r in results], [1, 2, 3, 4, 5])
+        self.assertIn("out of time: 2 of 5 mutation(s) measured", said.getvalue())
+
+    def test_a_run_with_no_budget_measures_the_whole_plan(self):
+        """The other side of the same line, and the one the deadline could silently take
+        away: an unsharded local `--gate` has no budget and must still sweep everything.
+        `no_shard_at_all_still_means_the_whole_plan` is the sibling of this for slicing,
+        and it exists because the sweep found the unsharded path untested."""
+        self._five()
+        with contextlib.redirect_stdout(io.StringIO()):
+            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0, None,
+                                     deadline=None, now=lambda: 10.0 ** 9)
+        self.assertNotIn(sweep.OUT_OF_TIME, [r.verdict for r in results])
+        self.assertEqual(len(results), 5)
+
+    def test_a_shard_killed_mid_run_leaves_what_it_measured_on_disk(self):
+        """**The measurement this whole issue turns on.** On run 33500900581 the
+        `if: always()` upload step DID run on every cancelled shard and concluded
+        `success` — the runner was never the obstacle. It uploaded nothing because the
+        result set lived in memory until the last line of the sweep, so a killed process
+        took the whole answer with it and the run published
+        `no verdict: 8 of 8 shards did not report`.
+
+        So the file is written as the answers arrive. This reads it from inside `decide`,
+        which is exactly the instant a cancellation would land."""
+        plan = self._five()
+        out = self.tmp / "r.json"
+        snapshots = []
+        real = sweep.decide
+
+        def spy(box, mutation, modules):
+            snapshots.append([(r["line"], r["verdict"])
+                              for r in json.loads(out.read_text())])
+            return real(box, mutation, modules)
+
+        sweep.decide = spy
+        self.addCleanup(setattr, sweep, "decide", real)
+        with contextlib.redirect_stdout(io.StringIO()):
+            sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {}, self.workdir, 1, {},
+                        0, print, 60.0, None, record=lambda rows:
+                        out.write_text(sweep.as_json(rows)))
+        self.assertEqual(len(snapshots), len(plan))
+        # Before the first answer, the file already names the WHOLE plan. A file holding
+        # only the answers so far would read as a complete sweep of a short plan, which
+        # is the silent truncation this tool exists to refuse.
+        self.assertEqual(snapshots[0],
+                         [(n, sweep.OUT_OF_TIME) for n in range(1, 6)])
+        # And by the last one it is carrying the answers already in hand: four
+        # measured, and only the mutation about to be handed to this very call still
+        # standing at its written-down verdict.
+        self.assertNotIn(sweep.OUT_OF_TIME, [v for _, v in snapshots[-1][:4]])
+        self.assertEqual(snapshots[-1][4], (5, sweep.OUT_OF_TIME))
+
+    def test_a_shard_gets_the_budget_and_an_unsharded_run_does_not(self):
+        """What the workflow actually runs. `sweep.yml` passes `--shard` and no budget,
+        so the default is what decides whether a CI shard stops or is killed."""
+        seen = {}
+
+        def spy(*a, **k):
+            seen.update(k)
+            return [], []
+
+        for name, stub in (("sweep", spy), ("load_map", lambda *a, **k: {})):
+            real = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, real)
+        code, said = self._cli("--gate", "--jobs", "1", "--base", self.base,
+                               "--shard", "2/3", "--no-baseline",
+                               "--workdir", str(self.workdir))
+        self.assertEqual(code, 0, said)
+        self.assertIsNotNone(seen["deadline"])
+        self.assertIn(f"budget: {sweep.SHARD_REPORT_AT // 60} min", said)
+        seen.clear()
+        code, said = self._cli("--gate", "--jobs", "1", "--base", self.base,
+                               "--no-baseline", "--workdir", str(self.workdir))
+        self.assertEqual(code, 0, said)
+        self.assertIsNone(seen["deadline"])
+        self.assertNotIn("budget:", said)
+
+    def test_the_partial_answer_reaches_the_check_name_the_merge_step_publishes(self):
+        """End to end and through the file, because that is how the answer travels: the
+        shard writes JSON, another machine reads it, and the NAME is the deliverable
+        (#630). What must never come back out of that trip is `no survivors`."""
+        self._five()
+        ticks = iter([0.0, 99.0, 99.0, 99.0, 99.0])
+        real = sweep.sweep
+        # The budget below is real and switches the deadline on; the boundary is pinned
+        # here so that "one of five" is a boundary and not a stopwatch reading.
+        sweep.sweep = lambda *a, **k: real(
+            *a, **{**k, "deadline": 50.0, "now": lambda: next(ticks)})
+        self.addCleanup(setattr, sweep, "sweep", real)
+        shards = self.tmp / "shards"
+        shards.mkdir()
+        code, said = self._cli("--gate", "--jobs", "1", "--base", self.base,
+                               "--shard", "1/1", "--no-baseline", "--budget", "50",
+                               "--workdir", str(self.workdir),
+                               "--json", str(shards / "sweep-results-1.json"))
+        self.assertEqual(code, 0, said)
+        self.outputs.unlink(missing_ok=True)
+        code, said = self._cli("--verdict", str(shards), "--shards", "1",
+                               "--ref", "HEAD", "--summary", str(self.summary),
+                               "--github-output", str(self.outputs))
+        self.assertEqual(code, 0, said)
+        out = self._read_outputs()
+        self.assertEqual(out["conclusion"], "no-verdict")
+        self.assertIn("1 of 5 measured, 4 out of time", out["headline"])
+        self.assertNotIn("no survivors", out["headline"])
+        self.assertNotIn("nothing to sweep", out["headline"])
+        # And not the sentence the whole run published before #803, because every shard
+        # DID report — a short answer is an answer.
+        self.assertNotIn("did not report", out["headline"])
+        self.assertIn("Out of time — planned, and never measured",
+                      self.summary.read_text())
 
     def test_a_diff_that_offers_no_mutation_is_not_a_branch_that_was_checked(self):
         """#779's own shape, run end to end, and the half `--base HEAD` cannot reach.
