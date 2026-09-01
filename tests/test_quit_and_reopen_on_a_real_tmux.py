@@ -276,24 +276,55 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
         self.assertEqual(self._settled(new[0]), (commands_frame._PAGER[0], "0"))
         # And the text really reached it, with the escape sequence rendered rather than
         # printed — which is what `-R` on the pager and `-e` on the capture are both for.
-        seen = self._tmux("capture-pane", "-p", "-t", new[0])
+        seen = self._shows(new[0], "LINE-ONE")
         self.assertIn("LINE-ONE", seen)
         self.assertIn("RED", seen)
         self.assertNotIn("\x1b[31m", seen)
 
+    #: How long the two polls below will wait. Generous, because what they are waiting for is
+    #: another process starting and painting on a shared runner, and the cost of a too-short
+    #: wait is a red that says nothing about charter.
+    _WAIT = 15.0
+
     def _settled(self, window):
         """``(command, dead)`` for *window*'s pane, once its process has exec'd.
+
+        **Polled, and CI is what taught this** — twice, in two places. `new-window` returns
+        when tmux has created the pane, not when the process in it has exec'd, so
+        `#{pane_current_command}` is `tmux` for a moment: asserted immediately it passed on
+        3.14 and failed on 3.11 and 3.13 in the same run.
 
         Returns whatever the last reading was when the deadline runs out, so a genuine
         failure is reported as the value it actually had rather than as a timeout.
         """
-        deadline = time.time() + 10
+        deadline = time.time() + self._WAIT
         seen = ("", "")
         while time.time() < deadline:
             fields = self._tmux("list-panes", "-t", window, "-F",
                                 "#{pane_current_command}\t#{pane_dead}").split("\t")
             seen = (fields[0], fields[1] if len(fields) > 1 else "")
             if seen[0] == commands_frame._PAGER[0]:
+                return seen
+            time.sleep(0.05)
+        return seen
+
+    def _shows(self, window, needle):
+        """*window*'s pane contents, once *needle* is in them.
+
+        **The second half of the same lesson, and the one that needed a second CI run to
+        find.** A pager that has exec'd has not necessarily PAINTED: with `_settled` alone,
+        3.11 and 3.13 went green and 3.14 came back with an empty capture. "Has the process
+        started" and "has it drawn" are two facts and neither implies the other on a loaded
+        runner.
+
+        Returns the last capture either way, so the assertion that follows fails on what was
+        actually on screen rather than on a timeout.
+        """
+        deadline = time.time() + self._WAIT
+        seen = ""
+        while time.time() < deadline:
+            seen = self._tmux("capture-pane", "-p", "-t", window)
+            if needle in seen:
                 return seen
             time.sleep(0.05)
         return seen
