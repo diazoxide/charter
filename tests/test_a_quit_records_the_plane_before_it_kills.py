@@ -35,6 +35,7 @@ fixture (#519/#521/#528).
 from __future__ import annotations
 
 import json
+import time
 
 import unittest
 from types import SimpleNamespace
@@ -949,6 +950,96 @@ class AChatThatRecordedNothingIsStillAChat(PersonaIso, unittest.TestCase):
         self.assertNotIn("null", json.dumps(raw["frames"]),
                          "a null where the record type promises text is a shape every "
                          "reader has to handle")
+
+
+class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.TestCase):
+    """Every name and key a quit writes, asserted as the literal it is.
+
+    **The deletion sweep found this whole cluster at once, and the reason is worth stating
+    rather than fixing quietly: a round trip cannot pin a name.** Every other test here
+    writes with `reopen.write` and reads with `reopen.read`, so renaming `reopen.json`, the
+    `.transcript` suffix, the `cwd` file, the `closed` marker or any JSON key moves both
+    sides together and stays green — while on a real plane it silently orphans everything
+    already on disk. The manifest survives `reap` precisely so it can be older than the
+    charter that reads it, which is what makes these names a compatibility surface and not
+    an implementation detail.
+
+    So the literals are spelled out here, once, deliberately — the same reason
+    `test_a_real_click_on_a_real_tab_bar_switches` spells its own refusal sentence instead
+    of importing it. If a rename is wanted, this is the file that says what it costs.
+    """
+
+    def _one(self):
+        return reopen.Frame(workspace="alpha", chats=(reopen.Chat(
+            chat="alpha.1", workspace="alpha", persona="steward", harness="claude-code",
+            cwd="/some/where", resume="conv-1", transcript="alpha.1.transcript",
+            active=True),))
+
+    def test_the_manifest_is_reopen_json_in_the_frame_root(self):
+        reopen.write([self._one()], focus="alpha", at=1700000000)
+
+        self.assertEqual(reopen.MANIFEST, "reopen.json")
+        self.assertTrue((state._root() / "reopen.json").is_file())
+
+    def test_a_transcript_is_the_chat_id_and_a_dot_transcript_suffix(self):
+        self.assertEqual(reopen.TRANSCRIPT_SUFFIX, ".transcript")
+        self.assertEqual(reopen.transcript_path("alpha.1").name, "alpha.1.transcript")
+
+    def test_the_recorded_version_is_one(self):
+        # A manifest carries its version so a much newer charter can refuse a shape it does
+        # not speak. Bumping it is a decision, and reading it back through `VERSION` on both
+        # sides would let the number drift without anyone choosing.
+        reopen.write([self._one()], focus="alpha")
+
+        self.assertEqual(reopen.VERSION, 1)
+        self.assertEqual(json.loads(reopen.path().read_text())["version"], 1)
+
+    def test_the_manifests_keys_are_the_ones_a_later_charter_will_look_for(self):
+        reopen.write([self._one()], focus="alpha", at=1700000000)
+
+        raw = json.loads(reopen.path().read_text())
+        self.assertEqual(sorted(raw), ["at", "focus", "frames", "version"])
+        self.assertEqual(raw["at"], 1700000000)
+        self.assertEqual(raw["focus"], "alpha")
+        self.assertEqual(sorted(raw["frames"][0]), ["chats", "workspace"])
+        self.assertEqual(
+            sorted(raw["frames"][0]["chats"][0]),
+            ["active", "chat", "cwd", "harness", "persona", "resume", "transcript",
+             "workspace"])
+
+    def test_at_is_a_whole_number_of_seconds_and_defaults_to_now(self):
+        # `int(...)`, so a float clock never reaches the file: `at` is read back through an
+        # `isinstance(at, int)` gate, and a float would be discarded as unreadable by the
+        # very charter that wrote it.
+        before = int(time.time())
+        reopen.write([self._one()], focus="alpha")
+
+        got = json.loads(reopen.path().read_text())["at"]
+        self.assertIsInstance(got, int)
+        self.assertGreaterEqual(got, before)
+
+    def test_the_cwd_file_is_called_cwd(self):
+        state.frame_dir("alpha.1", create=True)
+        state.record_cwd("alpha.1", "/some/where")
+
+        self.assertEqual((state.frame_dir("alpha.1") / "cwd").read_text().strip(),
+                         "/some/where")
+
+    def test_the_closed_marker_is_called_closed(self):
+        state.frame_dir("alpha.1", create=True)
+        state.record_closed("alpha.1")
+
+        self.assertTrue((state.frame_dir("alpha.1") / "closed").exists())
+
+    def test_neither_file_hides_from_ls(self):
+        # `state._CLAIM_FILE`'s rule: everything in a frame's directory is charter's own
+        # bookkeeping and none of it is a dotfile.
+        state.frame_dir("alpha.1", create=True)
+        state.record_cwd("alpha.1", "/some/where")
+        state.record_closed("alpha.1")
+
+        for name in (p.name for p in state.frame_dir("alpha.1").iterdir()):
+            self.assertFalse(name.startswith("."), name)
 
 
 if __name__ == "__main__":       # pragma: no cover
