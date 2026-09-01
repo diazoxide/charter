@@ -5027,6 +5027,16 @@ def cmd_launch(args) -> int:
     live_after = after_sessions | (after_chats or set())
     if after_chats is not None or not after_sessions:
         state.reap(live_after, server=SOCKET)
+    # **The one place the operator can be told a quit happened, and it is not the quit.**
+    # `charter: quit` runs detached with its three streams on `/dev/null`
+    # (`builtin_actions._spawn`), so whatever it prints is read by nothing; and by the time
+    # it has finished there is no frame, no attention row and no client left to draw on.
+    # THIS process is where the operator gets their shell back from, so it is the one that
+    # can say what happened and name the command that undoes it. Said before every return
+    # below, because a quit lands on more than one of them: a `kill-window` writes no `exit`
+    # (§2.17), so the ordinary quit reaches the bare `return 0` at the bottom, while a
+    # harness that had already recorded a code reaches the first.
+    _say_it_was_quit(fid)
     if code is not None:
         return code
     if refused_to_attach:
@@ -7729,7 +7739,10 @@ def cmd_quit(args) -> int:
     fid = _pressers_chat(args)
     servers = _plane_servers()
     live, windows = _plane_live(servers)
-    focus = state.own_workspace(fid) or "" if fid else ""
+    # Parenthesised, because the two readings differ and only one is right: `focus` is the
+    # workspace of the chat the quit was PRESSED in, and `""` for a `charter frame-quit`
+    # typed outside a frame — where a reopen falls back to the first frame it recorded.
+    focus = (state.own_workspace(fid) or "") if fid else ""
     p = leave.plan(live=live, focus=focus)
     doomed = leave.stopping(p)
     if not doomed:
@@ -8272,3 +8285,32 @@ def _start_leaving(fid: str, verb: str) -> None:
     """
     builtin_actions._spawn(
         util.self_relaunch_argv(f"frame-{verb}", "--chat", fid), fid=fid)
+
+
+def _say_it_was_quit(fid: str) -> None:
+    """Tell the operator their plane was recorded, on the shell they are back in.
+
+    **The gap this closes was found by asking where the quit's own sentence goes, and the
+    answer was nowhere.** `charter: quit` is started detached with `stdout` and `stderr` on
+    `/dev/null` — that is `builtin_actions._spawn`'s measured requirement, because the
+    palette's pane is killed the instant a row is invoked and a write to a closed pty is an
+    `EIO` in a process that was working correctly. And it cannot use the frame's attention
+    row either (`_say_on_screen`), because the frame it would draw on is the one it just
+    stopped. So the operator pressed a row, their screen went back to a shell, and nothing
+    anywhere named `charter reopen`.
+
+    `cmd_launch` is the process that hands them that shell, so it is the one that can say
+    it. Gated on the MANIFEST naming this chat, which is what makes the sentence true rather
+    than likely: a launcher whose harness merely exited, or whose operator detached, reaches
+    the same lines and says nothing.
+
+    Never raises and never guesses: a manifest charter cannot read is one it says nothing
+    about, exactly as `reopen.read` answers `None` for it.
+    """
+    m = reopen_state.read()
+    if m is None or not any(c.chat == fid for c in m.all_chats()):
+        return
+    n = len(m.all_chats())
+    back = len([c for c in m.all_chats() if c.resume])
+    util.info(f"charter: this plane was quit — {n} chat(s) recorded, {back} with a "
+              f"conversation to resume.\n  put it back with: charter reopen")

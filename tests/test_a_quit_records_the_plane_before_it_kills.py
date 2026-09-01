@@ -364,6 +364,48 @@ class TheTrackerIsPrunedAfterTheKill(PersonaIso, unittest.TestCase):
                          "the record was still there while the kill was attempted")
 
 
+class TheQuitsOwnSentenceIsSaidByTheLauncher(PersonaIso, unittest.TestCase):
+    """The gap found by asking where the quit's own message goes: nowhere.
+
+    `charter: quit` is spawned with its three streams on `/dev/null` — `_spawn`'s measured
+    requirement, since the palette's pane is killed the instant a row is invoked — and by the
+    time it has finished there is no frame left to draw a notice on. `cmd_launch` is the
+    process that hands the operator their shell back, so it is the one that can name
+    `charter reopen`.
+    """
+
+    def _said(self, fid):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            commands_frame._say_it_was_quit(fid)
+        return buf.getvalue()
+
+    def test_a_launcher_whose_chat_was_quit_names_the_command_that_undoes_it(self):
+        reopen.write([reopen.Frame(workspace="alpha", chats=(
+            reopen.Chat(chat="alpha.1", workspace="alpha", persona="",
+                        harness="claude-code", cwd="", resume="conv-1", transcript="",
+                        active=True),))], focus="alpha")
+
+        said = self._said("alpha.1")
+
+        self.assertIn("charter reopen", said)
+        self.assertIn("1 with a conversation to resume", said)
+
+    def test_a_launcher_whose_chat_merely_ended_says_nothing(self):
+        # The gate that makes the sentence true rather than likely: a detach and an ordinary
+        # harness exit reach the same lines of `cmd_launch`.
+        reopen.write([reopen.Frame(workspace="alpha", chats=(
+            reopen.Chat(chat="alpha.2", workspace="alpha", persona="", harness="c",
+                        cwd="", resume="", transcript="", active=True),))], focus="alpha")
+
+        self.assertEqual(self._said("alpha.1"), "")
+
+    def test_no_manifest_at_all_says_nothing(self):
+        self.assertEqual(self._said("alpha.1"), "")
+
+
 class TheManifestRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
     """Every value in it came off disk and is going onto an argv, a `chdir` or a flag."""
 
