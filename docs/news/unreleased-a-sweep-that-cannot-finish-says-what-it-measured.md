@@ -97,6 +97,38 @@ one that says a correctly sized shard is never cut short by this; the runner's c
 written in `sweep.py` and the YAML is held to it, so one deadline no longer lives in two
 files drifting apart (#670).
 
+## The tool was run on itself, three times, and the third one is the clean one
+
+`tools/sweep.py --path tools` over this change, because CI's sweep charges `charter/` and
+this change does not touch it. The rule that produced the table below is this repository's
+own: *after fixing a class of defect, re-run the measurement that found it over the fixed
+tree.*
+
+| run | | measured | pinned | survivors |
+|---|---|---:|---:|---:|
+| 1 | **killed by the machine at 13 of 39** | 13 | 9 | **4** |
+| 2 | complete, over the tree that fixed those 4 | 39 | 32 | **7** |
+| 3 | complete, over the tree that fixed those 7 | **37** | **37** | **0** |
+
+Run 1 is the whole issue arriving unrehearsed. The process was killed mid-sweep by a
+loaded machine, and the file it left behind said
+
+```
+no verdict: 4 survivors so far, 13 of 39 measured, 26 out of time
+```
+
+Under the old code that file would not have existed and the four findings would have gone
+with the process.
+
+**All eleven survivors were real, and every one of them was in this change's own reporting
+code** — the terminal report's count line and its section, the summary table's row, the
+twenty-line cap and its boundary, the verdict's wire spelling, the `>=` in the deadline,
+the file rewrite after the evidence pass, and the report's conditional denominator. Eight
+were pinned. Three were **deleted**: a clamp, a format spec and a subtraction inside one
+log line, none load bearing and none worth a test — *"equivalent mutant" and "dead code"
+are one finding*, and the honest answer to three survivors in a log line is a shorter log
+line.
+
 ## The lineage, and what is still open
 
 Each of these removed one way for a silent gate to read as a passing one:
