@@ -15,10 +15,25 @@ Add up what the shards found                success
 no verdict: 8 of 8 shards did not report    success      ← reports SUCCESS
 ```
 
-231 mutations, eight shards, every one killed at `timeout-minutes: 60`. Between them those
-eight had measured something close to 224 mutations by the time they died, and **every one
-of those answers was thrown away** — the result set lived in memory until the last line of
-the sweep, so a killed process took the whole thing with it.
+231 mutations, eight shards, every one killed at `timeout-minutes: 60`. How much answer that
+threw away is countable, from the shards' own logs — they print a line per mutation:
+
+```
+Sweep shard 1 of 8:  17 of 29 measured, 10 survived
+Sweep shard 2 of 8:  22 of 29 measured,  8 survived
+Sweep shard 3 of 8:  27 of 29 measured, 12 survived
+Sweep shard 4 of 8:  19 of 29 measured,  8 survived
+Sweep shard 5 of 8:  12 of 29 measured, 10 survived
+Sweep shard 6 of 8:  21 of 29 measured,  7 survived
+Sweep shard 7 of 8:  16 of 29 measured,  9 survived
+Sweep shard 8 of 8:  18 of 28 measured,  7 survived
+
+TOTAL: 152 of 231 mutations measured, 71 survivors printed
+```
+
+**Two thirds of the branch had been answered, and 71 survivors had been printed, when the
+eight processes were killed.** All of it went with them, because the result set lived in
+memory until the last line of the sweep. The pull request was told `success`.
 
 The plan job had predicted it in the same run and proceeded:
 
