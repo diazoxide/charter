@@ -36,6 +36,17 @@ from tests._isolation import PersonaIso
 SERVER = commands_frame.SOCKET
 
 
+def _seats(windows, active):
+    """`commands_frame._chat_seats`' answer, built from what a case means to say.
+
+    One listing answers three questions — which chats are live, which window each is in, and
+    which was its session's current — so a fake for it is one value rather than three
+    patches. Written as a helper rather than spelled per case so a case says
+    ``{"alpha.1": "@0"}`` and ``{"alpha.1"}`` and nothing about tuple order.
+    """
+    return [(chat, window, chat in active) for chat, window in windows.items()]
+
+
 def _plant(fid: str, *, ws: str, pane: str = "%1") -> None:
     state.frame_dir(fid, create=True)
     state.record_server(fid, SERVER)
@@ -61,11 +72,10 @@ class ClosingMarksAndQuittingSkipsTheMark(PersonaIso, unittest.TestCase):
         _plant("alpha.2", ws="alpha")
 
         with mock.patch.multiple(commands_frame,
-                                 _chat_windows=mock.DEFAULT, _active_chats=mock.DEFAULT,
+                                 _chat_seats=mock.DEFAULT,
                                  _capture_transcript=mock.DEFAULT,
                                  _stop_chats=mock.DEFAULT) as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0", "alpha.2": "@1"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "alpha.2": "@1"}, set())
             m["_capture_transcript"].return_value = False
             m["_stop_chats"].return_value = 1
             self.assertEqual(commands_frame.cmd_close(
@@ -82,12 +92,11 @@ class ClosingMarksAndQuittingSkipsTheMark(PersonaIso, unittest.TestCase):
         _plant("alpha.2", ws="alpha")
 
         with mock.patch.multiple(commands_frame,
-                                 _chat_windows=mock.DEFAULT, _active_chats=mock.DEFAULT,
+                                 _chat_seats=mock.DEFAULT,
                                  _capture_transcript=mock.DEFAULT,
                                  _stop_chats=mock.DEFAULT) as m, \
                 mock.patch.object(state, "record_closed"):
-            m["_chat_windows"].return_value = {"alpha.1": "@0", "alpha.2": "@1"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "alpha.2": "@1"}, set())
             m["_capture_transcript"].return_value = False
             m["_stop_chats"].return_value = 1
             commands_frame.cmd_close(SimpleNamespace(chat="alpha.1", chat_id="alpha.2"))
@@ -108,10 +117,9 @@ class CloseDropsWhatQuitKeeps(PersonaIso, unittest.TestCase):
 
     def _close(self, target):
         with mock.patch.multiple(commands_frame,
-                                 _chat_windows=mock.DEFAULT, _active_chats=mock.DEFAULT,
+                                 _chat_seats=mock.DEFAULT,
                                  _stop_chats=mock.DEFAULT) as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0", "alpha.2": "@1"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "alpha.2": "@1"}, set())
             m["_stop_chats"].return_value = 1
             return commands_frame.cmd_close(
                 SimpleNamespace(chat="alpha.1", chat_id=target))
@@ -171,10 +179,8 @@ class WhatCloseRefusesAndWhatItDoesNot(PersonaIso, unittest.TestCase):
     def test_an_unknown_chat_is_refused_rather_than_marked(self):
         _plant("alpha.1", ws="alpha")
 
-        with mock.patch.multiple(commands_frame, _chat_windows=mock.DEFAULT,
-                                 _active_chats=mock.DEFAULT) as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0"}
-            m["_active_chats"].return_value = set()
+        with mock.patch.multiple(commands_frame, _chat_seats=mock.DEFAULT) as m:
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0"}, set())
             rc = commands_frame.cmd_close(
                 SimpleNamespace(chat="alpha.1", chat_id="beta.4"))
 
@@ -187,11 +193,9 @@ class WhatCloseRefusesAndWhatItDoesNot(PersonaIso, unittest.TestCase):
         _plant("alpha.1", ws="alpha")
         state.record_exit("alpha.1", 0)
 
-        with mock.patch.multiple(commands_frame, _chat_windows=mock.DEFAULT,
-                                 _active_chats=mock.DEFAULT,
+        with mock.patch.multiple(commands_frame, _chat_seats=mock.DEFAULT,
                                  _stop_chats=mock.DEFAULT) as m:
-            m["_chat_windows"].return_value = {}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = []
             rc = commands_frame.cmd_close(
                 SimpleNamespace(chat="alpha.1", chat_id="alpha.1"))
             m["_stop_chats"].assert_not_called()
@@ -202,11 +206,9 @@ class WhatCloseRefusesAndWhatItDoesNot(PersonaIso, unittest.TestCase):
     def test_the_bare_command_closes_the_chat_it_was_pressed_in(self):
         _plant("alpha.1", ws="alpha")
 
-        with mock.patch.multiple(commands_frame, _chat_windows=mock.DEFAULT,
-                                 _active_chats=mock.DEFAULT,
+        with mock.patch.multiple(commands_frame, _chat_seats=mock.DEFAULT,
                                  _stop_chats=mock.DEFAULT) as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0"}, set())
             m["_stop_chats"].return_value = 1
             self.assertEqual(commands_frame.cmd_close(
                 SimpleNamespace(chat="alpha.1", chat_id="")), 0)

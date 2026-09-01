@@ -131,18 +131,19 @@ class ARealQuitStopsRealChats(PersonaIso, unittest.TestCase):
         self._chat("alpha.1", ws="alpha", session="alpha", first=True, says="ONE")
         self._chat("alpha.2", ws="alpha", session="alpha", first=False, says="TWO")
 
-        found = commands_frame._chat_windows(self.socket)
+        seats = commands_frame._chat_seats(self.socket)
 
-        self.assertEqual(sorted(found), ["alpha.1", "alpha.2"])
-        self.assertTrue(all(w.startswith("@") for w in found.values()))
+        self.assertEqual(sorted(c for c, _w, _a in seats), ["alpha.1", "alpha.2"])
+        self.assertTrue(all(w.startswith("@") for _c, w, _a in seats))
         # `new-window -d` did not move the session's current window, so the first chat is
-        # still the one on screen — which is what a reopen puts the operator back on.
-        self.assertEqual(commands_frame._active_chats(self.socket), {"alpha.1"})
+        # still the one on screen — which is what a reopen puts the operator back on. One
+        # listing answers all three, which is why there is one call rather than two.
+        self.assertEqual({c for c, _w, showing in seats if showing}, {"alpha.1"})
 
     def test_a_server_that_is_not_running_answers_none_rather_than_empty(self):
         self._kill_server()
 
-        self.assertIsNone(commands_frame._chat_windows(self.socket))
+        self.assertIsNone(commands_frame._chat_seats(self.socket))
 
     def test_quit_stops_both_chats_records_both_and_ends_the_session(self):
         self._chat("alpha.1", ws="alpha", session="alpha", first=True, says="ONE")
@@ -152,10 +153,10 @@ class ARealQuitStopsRealChats(PersonaIso, unittest.TestCase):
 
         # The kill: both windows gone, and with the last one the session — and with the
         # last session the SERVER, which is measured here rather than assumed. It is why
-        # `_chat_windows` comes back `None` and not `{}`: there is nothing left to answer,
+        # `_chat_seats` comes back `None` and not `[]`: there is nothing left to answer,
         # which is the same tri-state `_live_chats` documents and the right one, because
         # "charter could not ask" and "the server is empty" are different facts.
-        self.assertIsNone(commands_frame._chat_windows(self.socket))
+        self.assertIsNone(commands_frame._chat_seats(self.socket))
         self.assertEqual(self._tmux("list-sessions", "-F", "#{session_name}",
                                     check=False), "")
         # The record: both chats, both resumable, both with a captured transcript.
@@ -260,7 +261,7 @@ class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
             self.assertEqual(commands_frame.cmd_quit(
                 SimpleNamespace(chat=f"{ws}.1")), 0)
 
-            found = commands_frame._chat_windows(self.socket)
+            found = {c for c, _w, _a in commands_frame._chat_seats(self.socket) or []}
 
         self.assertNotIn(f"{ws}.1", found, "plane A's chat was stopped")
         self.assertIn(f"{ws}.2", found, "plane B's chat is still running")

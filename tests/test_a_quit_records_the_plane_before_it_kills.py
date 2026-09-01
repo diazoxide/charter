@@ -48,6 +48,17 @@ from tests._isolation import PersonaIso
 SERVER = commands_frame.SOCKET
 
 
+def _seats(windows, active):
+    """`commands_frame._chat_seats`' answer, built from what a case means to say.
+
+    One listing answers three questions — which chats are live, which window each is in, and
+    which was its session's current — so a fake for it is one value rather than three
+    patches. Written as a helper rather than spelled per case so a case says
+    ``{"alpha.1": "@0"}`` and ``{"alpha.1"}`` and nothing about tuple order.
+    """
+    return [(chat, window, chat in active) for chat, window in windows.items()]
+
+
 def _plant(fid: str, *, ws: str, harness: str = "claude-code", pane: str = "%1",
            sid: str = "", cwd: str = "", persona: str = "") -> None:
     """Make *fid* look like a chat charter launched — through the production writers.
@@ -201,11 +212,10 @@ class WhatAQuitWritesDown(PersonaIso, unittest.TestCase):
         state.record_harness_pane("alpha.9", "%9")
 
         with mock.patch.multiple(commands_frame,
-                                 _chat_windows=mock.DEFAULT, _active_chats=mock.DEFAULT,
+                                 _chat_seats=mock.DEFAULT,
                                  _capture_transcript=mock.DEFAULT,
                                  _stop_chats=mock.DEFAULT) as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0", "alpha.9": "@1"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "alpha.9": "@1"}, set())
             m["_capture_transcript"].return_value = False
             m["_stop_chats"].return_value = 2
             self.assertEqual(commands_frame.cmd_quit(
@@ -248,13 +258,13 @@ class TheOrderIsRecordThenKill(PersonaIso, unittest.TestCase):
     def _no_tmux(self):
         """Answer every tmux question the way a server with this one chat on it would.
 
-        Patched at `_chat_windows`/`_active_chats` rather than at `tmuxctl.run`, because
+        Patched at `_chat_seats` rather than at `tmuxctl.run`, because
         what these tests are about is the ORDER of charter's own writes — and a fake at the
         subprocess boundary would make every one of them depend on a format string.
         """
         return mock.patch.multiple(
             commands_frame,
-            _chat_windows=mock.DEFAULT, _active_chats=mock.DEFAULT,
+            _chat_seats=mock.DEFAULT,
             _capture_transcript=mock.DEFAULT, _stop_chats=mock.DEFAULT)
 
     def test_the_manifest_is_on_disk_before_anything_is_stopped(self):
@@ -265,8 +275,7 @@ class TheOrderIsRecordThenKill(PersonaIso, unittest.TestCase):
             return len(doomed)
 
         with self._no_tmux() as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0"}
-            m["_active_chats"].return_value = {"alpha.1"}
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0"}, {"alpha.1"})
             m["_capture_transcript"].return_value = False
             m["_stop_chats"].side_effect = _stop
             self.assertEqual(commands_frame.cmd_quit(self.args), 0)
@@ -276,8 +285,7 @@ class TheOrderIsRecordThenKill(PersonaIso, unittest.TestCase):
 
     def test_a_record_that_will_not_land_refuses_the_quit_and_kills_nothing(self):
         with self._no_tmux() as m, mock.patch.object(reopen, "write", return_value=False):
-            m["_chat_windows"].return_value = {"alpha.1": "@0"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0"}, set())
             m["_capture_transcript"].return_value = False
             self.assertEqual(commands_frame.cmd_quit(self.args), 1)
             m["_stop_chats"].assert_not_called()
@@ -285,8 +293,7 @@ class TheOrderIsRecordThenKill(PersonaIso, unittest.TestCase):
     def test_the_focus_is_the_workspace_the_quit_was_pressed_in(self):
         _plant("beta.1", ws="beta")
         with self._no_tmux() as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0", "beta.1": "@1"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "beta.1": "@1"}, set())
             m["_capture_transcript"].return_value = False
             m["_stop_chats"].return_value = 2
             commands_frame.cmd_quit(SimpleNamespace(chat="beta.1"))
@@ -297,9 +304,8 @@ class TheOrderIsRecordThenKill(PersonaIso, unittest.TestCase):
         _plant("alpha.2", ws="alpha")
         _plant("beta.1", ws="beta")
         with self._no_tmux() as m:
-            m["_chat_windows"].return_value = {"alpha.1": "@0", "alpha.2": "@1",
-                                               "beta.1": "@2"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "alpha.2": "@1",
+                                               "beta.1": "@2"}, set())
             m["_capture_transcript"].return_value = False
             m["_stop_chats"].return_value = 3
             commands_frame.cmd_quit(self.args)
@@ -315,8 +321,7 @@ class TheOrderIsRecordThenKill(PersonaIso, unittest.TestCase):
                 import shutil
                 shutil.rmtree(d)
         with self._no_tmux() as m:
-            m["_chat_windows"].return_value = {}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = []
             m["_capture_transcript"].return_value = False
             self.assertEqual(commands_frame.cmd_quit(self.args), 0)
             m["_stop_chats"].assert_not_called()
@@ -350,12 +355,11 @@ class TheTrackerIsPrunedAfterTheKill(PersonaIso, unittest.TestCase):
             return 1
 
         with mock.patch.multiple(commands_frame,
-                                 _chat_windows=mock.DEFAULT, _active_chats=mock.DEFAULT,
+                                 _chat_seats=mock.DEFAULT,
                                  _capture_transcript=mock.DEFAULT) as m, \
                 mock.patch.object(commands_frame, "_stop_chats", side_effect=_stop), \
                 mock.patch.object(inflight, "prune_all", side_effect=_prune):
-            m["_chat_windows"].return_value = {"alpha.1": "@0"}
-            m["_active_chats"].return_value = set()
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0"}, set())
             m["_capture_transcript"].return_value = False
             commands_frame.cmd_quit(SimpleNamespace(chat="alpha.1"))
 

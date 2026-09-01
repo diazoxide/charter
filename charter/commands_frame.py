@@ -7108,7 +7108,7 @@ def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
         # scan of the frame root. The confirming row is the last one, under the list it is
         # about, and every chat row above it is `refused` (see `frame/leave.py`).
         servers = _plane_servers()
-        live, _windows = _plane_live(servers)
+        live, _windows, _active = _plane_live(servers)
         p = leave.plan(live=live, focus=state.own_workspace(fid) or "",
                        only=fid if verb == leave.CLOSE else "")
         return palette.Palette(catalogue=leave.confirm_rows(p, verb=verb),
@@ -7574,18 +7574,25 @@ def _capture_transcript(socket: str, pane_id: str, dest) -> bool:
 _CHAT_WINDOW_FORMAT = f"#{{{_CHAT_OPTION}}}\t#{{window_id}}\t#{{window_active}}"
 
 
-def _chat_windows(socket: str) -> dict[str, str] | None:
-    """Every chat id *socket* reports, mapped to the window it is drawn in.
+def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
+    """Every chat *socket* reports, as ``(chat id, window id, is its session's current)``.
 
     ``None`` when the server would not answer at all, which is `_live_chats`' tri-state and
-    is carried for the same reason: a server that answers "no windows" because it was
-    wedged is not a server with nothing on it, and a quit that read the two the same would
-    record nothing and kill nothing while reporting that it had done both.
+    is carried for the same reason: a server that answers "no windows" because it was wedged
+    is not a server with nothing on it, and a quit that read the two the same would record
+    nothing and kill nothing while reporting that it had done both.
+
+    **One listing for all three questions, because it is one listing.** An earlier version
+    of this asked twice — once for the window map a kill is aimed at, once for which chat was
+    on screen — on the grounds that the two answers have different lifetimes. They do not
+    have different SOURCES, and `cmd_launch`'s own note about asking `tmux -V` twice applies
+    unchanged: *two subprocesses for one unchanging fact*. The three fields arrive together
+    or not at all.
 
     Rows charter cannot read are dropped rather than guessed at, and the chat id is held to
-    :data:`_FRAME_ID_RE` and the window id to :data:`_WINDOW_ID_RE` on the way out — this
-    value came off a tmux option and is about to be a `-t` target, which is #475's boundary
-    exactly.
+    :data:`_FRAME_ID_RE` and the window id to :data:`_WINDOW_ID_RE` on the way out — these
+    values came off a tmux option and are about to be a `-t` target and a state directory's
+    name, which is #475's boundary exactly.
     """
     out = tmuxctl.run("listing the chats this plane has open",
                       tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
@@ -7593,51 +7600,24 @@ def _chat_windows(socket: str) -> dict[str, str] | None:
                       timeout=5, report=False)
     if out.returncode != 0:
         return None
-    found: dict[str, str] = {}
+    seats: list[tuple[str, str, bool]] = []
     for line in out.stdout.splitlines():
         fields = line.split("\t")
         if len(fields) != 3:
             continue
-        chat, window, _active = fields
+        chat, window, active = fields
         if _FRAME_ID_RE.fullmatch(chat) and _WINDOW_ID_RE.fullmatch(window):
-            found[chat] = window
-    return found
+            seats.append((chat, window, active == "1"))
+    return seats
 
 
-def _active_chats(socket: str) -> set[str]:
-    """The chats that are the CURRENT window of their own tmux session.
-
-    Read in the same listing shape as :func:`_chat_windows` rather than folded into it,
-    because the two answers have different lifetimes: the window map is what a kill is
-    aimed at and must be as fresh as possible, while "which one was on screen" is a note
-    for the manifest and is allowed to be a moment old. Keeping them apart also keeps the
-    tuple `_CHAT_WINDOW_FORMAT` returns readable — three fields, three questions.
-
-    An empty set for a server that would not answer: what is lost is which chat a reopen
-    puts the operator back on, and the fallback (the first chat of the focused workspace)
-    is a place they can get to in one keypress.
-    """
-    out = tmuxctl.run("asking which chat each workspace was showing",
-                      tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
-                                          _CHAT_WINDOW_FORMAT),
-                      timeout=5, report=False)
-    if out.returncode != 0:
-        return set()
-    seen = set()
-    for line in out.stdout.splitlines():
-        fields = line.split("\t")
-        if len(fields) == 3 and fields[2] == "1" and _FRAME_ID_RE.fullmatch(fields[0]):
-            seen.add(fields[0])
-    return seen
-
-
-def _plane_live(servers) -> tuple[set[str] | None, dict[str, dict[str, str]]]:
-    """Which of this plane's chats are live, and where each one's window is.
+def _plane_live(servers) -> tuple[set[str] | None, dict[str, dict[str, str]], set[str]]:
+    """Which of this plane's chats are live, where each one's window is, and which was shown.
 
     *servers* is every tmux server this plane's chats record. Asked once per server rather
-    than once per chat, because that is one round trip against a list charter already has
-    to read whole: a chat's liveness is not a question about the chat, it is a question
-    about its server's window list.
+    than once per chat, because that is one round trip against a list charter has to read
+    whole anyway: a chat's liveness is not a question about the chat, it is a question about
+    its server's window list.
 
     The set is ``None`` when **any** server refused to answer, and that is the conservative
     direction rather than a shortcut. `_live_chats` documents why a wedged server must not
@@ -7645,18 +7625,25 @@ def _plane_live(servers) -> tuple[set[str] | None, dict[str, dict[str, str]]]:
     answered would record only the chats of one server and kill only those — and then tell
     the operator it had stopped the plane. ``None`` makes `leave.plan` mark every chat
     "charter could not ask", which the warning says out loud.
+
+    The third value is which chats were their session's CURRENT window, so a reopen can put
+    the operator back on the tab they were looking at rather than on whichever window it
+    created first. An empty set costs that and nothing else: the fallback is the first chat
+    of the focused workspace, which is one keypress away.
     """
     windows: dict[str, dict[str, str]] = {}
     known: set[str] = set()
+    active: set[str] = set()
     unknown = False
     for server in servers:
-        found = _chat_windows(server)
-        if found is None:
+        seats = _chat_seats(server)
+        if seats is None:
             unknown = True
             continue
-        windows[server] = found
-        known |= set(found)
-    return (None if unknown else known), windows
+        windows[server] = {chat: window for chat, window, _ in seats}
+        known |= set(windows[server])
+        active |= {chat for chat, _, showing in seats if showing}
+    return (None if unknown else known), windows, active
 
 
 def _plane_servers() -> list[str]:
@@ -7676,7 +7663,7 @@ def _plane_servers() -> list[str]:
     return found
 
 
-def _warn_about(p, *, on: str) -> None:
+def _warn_about(p, *, on: str, verb: str) -> None:
     """Put the per-chat warning where whoever asked for the quit can read it.
 
     **§4f's rule is that the warning names, per chat, what will and will not come back — at
@@ -7694,11 +7681,11 @@ def _warn_about(p, *, on: str) -> None:
     frame. It is only used for the summary: the per-chat lines go to stderr either way,
     because the attention row is one line and this is one line per chat.
     """
-    util.warn(leave.summary(p))
+    util.warn(leave.summary(p, verb=verb))
     for c in leave.stopping(p):
         util.warn(f"  {leave.title(c)} — {leave.note(c)}")
     if on:
-        _say_on_screen(on, leave.summary(p))
+        _say_on_screen(on, leave.summary(p, verb=verb))
 
 
 def cmd_quit(args) -> int:
@@ -7738,7 +7725,7 @@ def cmd_quit(args) -> int:
     """
     fid = _pressers_chat(args)
     servers = _plane_servers()
-    live, windows = _plane_live(servers)
+    live, windows, active = _plane_live(servers)
     # Parenthesised, because the two readings differ and only one is right: `focus` is the
     # workspace of the chat the quit was PRESSED in, and `""` for a `charter frame-quit`
     # typed outside a frame — where a reopen falls back to the first frame it recorded.
@@ -7748,10 +7735,7 @@ def cmd_quit(args) -> int:
     if not doomed:
         util.warn(leave.NOTHING_OPEN)
         return 0
-    _warn_about(p, on=fid)
-    active = set()
-    for server in servers:
-        active |= _active_chats(server)
+    _warn_about(p, on=fid, verb=leave.QUIT)
     kept = _record_the_plane(doomed, focus=focus, active=active, windows=windows)
     if kept is None:
         util.err("charter frame: refusing to quit — this plane could not be recorded, so "
@@ -7886,7 +7870,7 @@ def cmd_close(args) -> int:
         util.err(f"charter frame-close: '{contain.one_line(target)}' cannot name a chat")
         return 1
     servers = _plane_servers()
-    live, windows = _plane_live(servers)
+    live, windows, _active = _plane_live(servers)
     p = leave.plan(live=live, focus="", only=target)
     if not p.chats:
         util.err(f"charter frame-close: no open chat '{contain.one_line(target)}' on this "
@@ -7903,7 +7887,7 @@ def cmd_close(args) -> int:
         util.ok(f"charter: chat {target} was already stopped — marked closed, so it will "
                 "not come back")
         return 0
-    _warn_about(p, on=fid if fid != target else "")
+    _warn_about(p, on=fid if fid != target else "", verb=leave.CLOSE)
     # The mark FIRST, for `cmd_quit`'s ordering reason turned around: this is the record,
     # and a record written after the kill it describes is one a crash in between loses.
     # Losing it here is not merely untidy — it is the chat coming back after the operator

@@ -41,6 +41,12 @@ NOTHING_OPEN = "no chats are open on this plane — nothing to quit"
 #: `overlay.Row` has exactly one note.
 JOIN = " · "
 
+#: The two things this module offers, as the words their rows and their commands are
+#: spelled with. One constant per verb rather than a literal at each of the four places
+#: (the doorway id, the confirm id, the command name, the sentence) so a rename cannot
+#: half-land.
+QUIT, CLOSE = "quit", "close"
+
 
 class Doomed(NamedTuple):
     """One chat a quit is about to stop, with everything the warning needs about it.
@@ -198,8 +204,19 @@ def plane_chats() -> list[str]:
     # the migration and truncation case (`plane_chats`' whole reason for existing), and a
     # nameless group at the end reads as the leftovers it is rather than as a workspace
     # called "".
-    return sorted(inside, key=lambda n: (0, state.own_workspace(n))
-                  if state.own_workspace(n) else (1, ""))
+    return sorted(inside, key=_group)
+
+
+def _group(fid: str) -> tuple[int, str]:
+    """Which workspace group *fid* sorts into, asked once.
+
+    Its own function rather than an inline lambda because `state.own_workspace` reads three
+    files per call (the identity record, the per-session pointer, the workspace record —
+    `chats.of_workspace` measures it), and a lambda that tested it and then returned it
+    would read all three twice for every chat on the plane.
+    """
+    ws = state.own_workspace(fid)
+    return (0, ws) if ws else (1, "")
 
 
 def stopping(p: Plan) -> tuple[Doomed, ...]:
@@ -215,15 +232,24 @@ def stopping(p: Plan) -> tuple[Doomed, ...]:
     return tuple(c for c in p.chats if c.live is not False)
 
 
-def summary(p: Plan) -> str:
+def summary(p: Plan, *, verb: str = QUIT) -> str:
     """The one line above the rows: what stops, and how much of it comes back.
 
     Counted from the plan rather than composed by the caller, so the number in the
-    confirmation's heading and the rows under it are one reading of the plane.
+    confirmation's heading, the rows under it and the line `commands_frame` prints on stderr
+    are one reading of the plane.
+
+    *verb* decides which sentence, and it has a default because `confirm_rows` asks for
+    quit's by name while the stderr warning asks for whichever verb it is running — a
+    `chat: close` that printed *"quit — stop 1 chat"* above its own row would be describing
+    the wrong command, which is exactly the confusion `_close_summary` exists to prevent one
+    surface over.
     """
     doomed = stopping(p)
     if not doomed:
         return NOTHING_OPEN
+    if verb == CLOSE:
+        return _close_summary(doomed)
     wss = p.workspaces()
     back = len([c for c in doomed if c.resume])
     return (f"quit — stop {_count(len(doomed), 'chat')} in "
@@ -371,12 +397,6 @@ def transcript_of(c: Doomed) -> str:
     return p.name if p is not None else ""
 
 
-#: The two things this module offers, as the words their rows and their commands are
-#: spelled with. One constant per verb rather than a literal at each of the four places
-#: (the doorway id, the confirm id, the command name, the sentence) so a rename cannot
-#: half-land.
-QUIT, CLOSE = "quit", "close"
-
 #: The row that OPENS the confirmation, the row that goes through with it, and one row per
 #: chat in between. All three carry a `:`, which is `frame/choose.py`'s trick and the whole
 #: of why these cannot collide with an action: `frame/action.py` holds every action id to
@@ -500,8 +520,7 @@ def confirm_rows(p: Plan, *, verb: str) -> tuple:
     if not doomed:
         return (overlay.Row(id=CHAT_ID.format(verb, 0), title=NOTHING_OPEN,
                             refused=True),)
-    go = overlay.Row(id=GO_ID.format(verb),
-                     title=summary(p) if verb == QUIT else _close_summary(doomed))
+    go = overlay.Row(id=GO_ID.format(verb), title=summary(p, verb=verb))
     return (go, *(overlay.Row(id=CHAT_ID.format(verb, i), title=title(c), note=note(c),
                               refused=True, mark=c.active)
                   for i, c in enumerate(doomed)))

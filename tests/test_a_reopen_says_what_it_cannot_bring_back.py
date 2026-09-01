@@ -170,6 +170,17 @@ class TheConfirmationIsAWarningNotAMenu(PersonaIso, unittest.TestCase):
         self.assertIn("not come back", rows[0].title)
         self.assertTrue(leave.goes_through(rows[0], leave.CLOSE))
 
+    def test_the_summary_a_close_prints_is_closes_and_not_quits(self):
+        # The stderr warning and the confirming row share one function, so a close that
+        # printed "quit — stop 1 chat" above its own row would be describing the wrong
+        # command — the exact confusion the two titles exist to keep apart.
+        p = self._plan(_doomed(resume="c"))
+
+        self.assertTrue(leave.summary(p, verb=leave.QUIT).startswith("quit —"))
+        self.assertTrue(leave.summary(p, verb=leave.CLOSE).startswith("close alpha.1 —"))
+        self.assertEqual(leave.summary(p), leave.summary(p, verb=leave.QUIT),
+                         "quit is the default, because it is the caller with no verb")
+
     def test_close_is_listed_with_its_reason_when_there_is_no_chat_to_close(self):
         # #512's rule: an option you cannot see is one you cannot ask about. Quit needs no
         # target and stays available; close does, and says so.
