@@ -330,9 +330,17 @@ Nothing visible changes. Everything underneath does.
 > pid is dead, and after a restart every launcher pid is dead, so `session.durable` does not
 > survive to be read. A reopen therefore mints a FRESH chat id and seeds it from a
 > plane-scoped manifest (`.charter/frame/reopen.json`, a file, which `reap` does not collect).
-> One consequence worth stating: because the id is fresh, the stale
-> `.charter/sessions/<fid>.workspace` rung #791 removes cannot decide a reopened chat's
-> membership — **except** where the ordinal is recycled onto the same name, which is common.
+>
+> One consequence worth stating, and **#791 is what settles it.** A fresh id is not on its
+> own enough: `new_chat_id` walks upward from 1 and `reap` frees the ordinals a quit's chats
+> held, so a reopen very often gets the same NAME back. While
+> `.charter/sessions/<fid>.workspace` was a rung of `state.own_workspace`, a
+> `charter workspace use gamma` typed in the OLD `alpha.1` would have decided the NEW
+> `alpha.1`'s membership over the manifest and over the launcher's own record. #791 removed
+> that rung, so the manifest is authoritative; pinned by
+> `tests/test_a_reopen_says_what_it_cannot_bring_back.WhatAReopenPutsBack.
+> test_the_manifest_outranks_a_stale_pointer_left_on_a_recycled_ordinal`, which goes red
+> against a `state.py` with the rung put back.
 >
 > **Step 4 stands unchanged and is now load-bearing.** `Harness.launch_argv` is
 > `[self.binary, *extra]` with no override anywhere in the registry, so the pass-through IS

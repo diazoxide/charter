@@ -89,9 +89,14 @@ class Chat(NamedTuple):
     #: screen, never a directory a reopen writes into.
     chat: str
     #: The workspace it belonged to — `state.own_workspace`, the membership question
-    #: (#733), never `workspace_for`. It is the authoritative answer on the way back:
-    #: #791 drops the stale `.charter/sessions/<fid>.workspace` rung that would otherwise
-    #: have decided a reopened chat's membership over this.
+    #: (#733), never `workspace_for`. **It is the authoritative answer on the way back, and
+    #: #791 is what makes that true rather than hopeful**: that change took the per-session
+    #: `.charter/sessions/<fid>.workspace` pointer out of `own_workspace`'s ladder, which
+    #: matters here for a reason that is easy to miss — a reopen gets a FRESH ordinal, but
+    #: `new_chat_id` walks upward from 1 and `reap` frees the ordinals a quit's chats held,
+    #: so it very often gets the same NAME back. While the pointer was a rung, a previous
+    #: chat's `charter workspace use` would have outranked this record for the chat that
+    #: inherited its ordinal.
     workspace: str
     #: The persona resolved for it, or ``""``. Its own per-session pointer, which a reopen
     #: re-writes under the NEW id — an unpinned chat's persona lives nowhere else, and the

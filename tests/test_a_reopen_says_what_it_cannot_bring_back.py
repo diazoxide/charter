@@ -370,6 +370,34 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.harness_session(newest))
         self.assertIsNone(state.kept_harness_session(newest))
 
+    def test_the_manifest_outranks_a_stale_pointer_left_on_a_recycled_ordinal(self):
+        """The dependency this design was written around, closed by #791 and pinned here.
+
+        **A reopen mints a FRESH chat id — and very often the SAME one.** `new_chat_id`
+        walks upward from 1 and `reap` frees the ordinals a quit's chats held, so
+        `alpha.1` quit and reopened is `alpha.1` again. That made the per-session pointer a
+        live hazard rather than a theoretical one: while `.charter/sessions/<fid>.workspace`
+        was a rung of `state.own_workspace`, a `charter workspace use gamma` typed inside
+        the OLD `alpha.1` would have decided the NEW `alpha.1`'s membership, over the
+        workspace the manifest recorded and the launcher wrote.
+
+        #791 took that rung out (`own_workspace` is now the launch pin, then the record), so
+        the manifest is authoritative. This plants exactly that stale pointer and asserts the
+        chat comes back in the workspace it was recorded in.
+        """
+        from charter import workspace as ws_mod
+        # The pointer the previous chat left behind, under the id the new one will inherit.
+        ws_mod.set_active("gamma", session_id="alpha.1", terminal_id="", force=True)
+        self.assertEqual(ws_mod.for_session("alpha.1"), "gamma")
+        self._record(self._chat(chat="alpha.1", workspace="alpha"))
+
+        self.assertEqual(self._reopen(), 0)
+
+        self.assertEqual(self.calls[0].workspace, "alpha")
+        self.assertEqual(state.own_workspace("alpha.1"), "alpha",
+                         "a pointer from the chat that held this ordinal must not decide "
+                         "the membership of the chat that inherited it")
+
     def test_the_record_is_consumed_so_a_second_reopen_does_not_double_the_tabs(self):
         self._record(self._chat())
 

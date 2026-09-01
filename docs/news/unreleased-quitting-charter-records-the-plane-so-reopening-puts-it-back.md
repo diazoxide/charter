@@ -135,6 +135,14 @@ reader discards is a record that looks like a promise and is not. Its warning ro
 `charter has no record of its workspace — it cannot be reopened`, and the quit's own summary
 says how many of how many were kept.
 
+**The workspace a chat comes back in is the one recorded, and #791 is what makes that a
+fact.** A reopen mints a fresh chat id — but `new_chat_id` counts up from 1 and `reap` frees
+the ordinals a quit's chats held, so it very often gets the same *name* back. While the
+per-session `.charter/sessions/<id>.workspace` pointer was a rung of `state.own_workspace`, a
+`charter workspace use` typed in the chat that previously held that ordinal would have
+outranked the manifest for the chat that inherited it. That rung is gone, and the case is
+pinned with the stale pointer deliberately planted.
+
 **`cwd` had nowhere to live and now has a file.** `os.getcwd()` was read on both launch paths,
 handed to tmux, and dropped. It could not join the identity record: every value in that record
 goes onto a tmux `-e NAME=VALUE` argv, measured as world-readable in `/proc/<pid>/cmdline`,

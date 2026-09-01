@@ -205,10 +205,16 @@ def plane_chats() -> list[str]:
 def _group(fid: str) -> tuple[int, str]:
     """Which workspace group *fid* sorts into, asked once.
 
-    Its own function rather than an inline lambda because `state.own_workspace` reads three
-    files per call (the identity record, the per-session pointer, the workspace record —
-    `chats.of_workspace` measures it), and a lambda that tested it and then returned it
-    would read all three twice for every chat on the plane.
+    Its own function rather than an inline lambda because `state.own_workspace` reads two
+    files per call — the identity record and the workspace record — and a lambda that tested
+    the answer and then returned it would read both twice for every chat on the plane.
+
+    It was three until #791 took the per-session pointer out of that ladder, which is the
+    same change that makes this module's whole design work: a reopened chat gets a FRESH
+    ordinal, `new_chat_id` walks upward from 1, and `reap` frees the ordinals a quit's chats
+    held — so a reopen very often gets the same NAME back, and while the pointer was a rung
+    the previous chat's `charter workspace use` would have decided the reopened chat's
+    membership over the manifest. It cannot now.
     """
     ws = state.own_workspace(fid)
     return (0, ws) if ws else (1, "")
