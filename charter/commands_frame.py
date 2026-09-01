@@ -5036,7 +5036,15 @@ def cmd_launch(args) -> int:
     # below, because a quit lands on more than one of them: a `kill-window` writes no `exit`
     # (§2.17), so the ordinary quit reaches the bare `return 0` at the bottom, while a
     # harness that had already recorded a code reaches the first.
-    _say_it_was_quit(fid)
+    #
+    # **Only for a launch that WAS the operator's terminal**, and this gate is a defect fix
+    # rather than a tidiness. `new_chat_id` walks upward from 1 and `reap` frees the ordinals
+    # a quit's chats held, so a reopen very often gets the SAME ids back — and every one of
+    # its own launches would then find itself named in the manifest it is in the middle of
+    # acting on, and print "this plane was quit; put it back with `charter reopen`" while
+    # `charter reopen` was putting it back.
+    if _wants_attach(args):
+        _say_it_was_quit(fid)
     if code is not None:
         return code
     if refused_to_attach:

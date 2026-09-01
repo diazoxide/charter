@@ -399,8 +399,26 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         self.assertEqual(self.calls[0].harness, "claude")
 
 
-class TheReopenPathSuppressesThreeThingsInTheLauncher(PersonaIso, unittest.TestCase):
-    """`Reopening` is the whole of the difference, and it is asked for by name."""
+class TheReopenPathSuppressesFourThingsInTheLauncher(PersonaIso, unittest.TestCase):
+    """`Reopening` is the whole of the difference, and it is asked for by name.
+
+    Four things in `cmd_launch` turn on it: open-or-focus (§4k) would swallow every chat
+    after the first of a workspace, `select-window` would move a client that does not exist
+    yet, `_drop_panels` would strip the panels off the sibling this same reopen had just
+    drawn, and `attach` would block on the first chat and never build the second.
+
+    **A fifth is gated on `_wants_attach` and is worth naming because the trap is common
+    rather than exotic:** `cmd_launch` says *"this plane was quit — put it back with
+    `charter reopen`"* when the manifest names its own chat, and `new_chat_id` walks upward
+    from 1 while `reap` frees the ordinals a quit's chats held — so a reopen usually gets the
+    SAME ids back, and every one of its own launches is named in the manifest it is in the
+    middle of acting on. The sentence belongs to a launch that WAS the operator's terminal,
+    which is what `_wants_attach` answers and what the two cases below pin.
+
+    The tail those five sit in cannot be reached without a real tmux session and a real
+    `attach`, so what is asserted here is the predicate the launcher branches on. The rest is
+    exercised on a real server in `tests/test_quit_and_reopen_on_a_real_tmux.py`.
+    """
 
     def test_an_ordinary_launch_is_not_a_reopen_and_does_attach(self):
         args = SimpleNamespace()
