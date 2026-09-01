@@ -32,12 +32,19 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tomllib
 import unittest
 from unittest import mock
 
 from charter import commands_frame, config, instance
 from charter.frame import state, tmuxctl
 from tests._isolation import PersonaIso
+# This repo's own committed `charter.toml`, IMPORTED rather than recomputed. Cross-module
+# test imports are this suite's ordinary way of sharing a fixture, and the thing worth
+# sharing here is not the one-line path — it is the *reason* that path is not `config.ROOT`
+# (`root._plane_of` redirects a worktree, #785), which should exist in one comment rather
+# than in two that can drift apart. `test_frame_config` is where it already lives.
+from tests.test_frame_config import _COMMITTED
 
 _STYLES = ("pane-border-style", "pane-active-border-style")
 
@@ -212,14 +219,42 @@ class TheRuleTakesTheSurfaceTheComponentsAgreeOn(unittest.TestCase):
                          "bg=brightblack")
 
     def test_this_planes_own_committed_frame_answers_the_report(self):
-        """The operator's charter.toml, asked directly. Four components, one word, and
-        their own comment for it: "charter's chrome is grey, the work area is the
-        terminal's own". Grey is `brightblack`, and until this key existed the rules
-        between those grey panes were the terminal's black."""
-        if not (config.FRAME.get("components") or ()):
+        """THIS checkout's committed `charter.toml`, read off disk. Every component one
+        word, and the file's own comment for it: "charter's chrome is grey, the work area
+        is the terminal's own". Until this key existed the rules between those panes were
+        the terminal's black, which is the report.
+
+        **Off disk, and not through `config` — #785.** `root._plane_of` redirects a linked
+        worktree's plane to the tree it was cut from, deliberately and correctly: a
+        worktree of your plane is still your plane. But `config.FRAME` then answers with
+        the *operator's* file, so this case asserted against a machine's uncommitted state
+        rather than against the branch it was running on. It failed in every worktree of
+        this repo and passed on CI, naming a file the branch never touched — and the same
+        mechanism can make a case PASS because an operator's own config happens to satisfy
+        it, which is the half nothing reports. `test_frame_config._COMMITTED` had already
+        made this call for the two cases next door; this one had not.
+
+        **And the word is READ, not written down, which is the other half of the same
+        defect.** `bg = "brightblack"` was spelled here as the expectation, so the day this
+        plane's operator painted their panels `black` — a legal choice out of the same
+        seventeen words, made through the key charter gave them for it — this case went red
+        on a colour. That is #661's shape exactly: a config read turning an operator's own
+        choice into a failure. The claim the class name makes is *the rule takes the surface
+        the components agree on*, so what is asserted is the agreement: one word across the
+        arrangement, and the rule answering that word. Which word is the plane's business.
+        """
+        frame = instance.frame_of(tomllib.loads(_COMMITTED.read_text(encoding="utf-8")))
+        placed = frame.get("components") or ()
+        if not placed:
             self.skipTest("this plane's charter.toml writes no arrangement")
-        self.assertEqual(instance.border_bg(config.FRAME, config.FRAME.get("chrome")),
-                         "bg=brightblack")
+        agreed = {c.get("bg") for c in placed}
+        self.assertEqual(len(agreed), 1,
+                         f"this plane paints its panels {sorted(agreed)}, so there is no "
+                         f"one surface for the rules between them to take — the frame-wide "
+                         f"`chrome` fallback is what it gets, and this case is about the "
+                         f"other branch")
+        self.assertEqual(instance.border_bg(frame, frame.get("chrome")),
+                         f"bg={agreed.pop()}")
 
 
 class TheRuleIsDrawnInIt(unittest.TestCase):

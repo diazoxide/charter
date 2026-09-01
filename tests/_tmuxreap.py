@@ -90,8 +90,30 @@ def name(slug: str) -> str:
     ``f"charter-…-{os.getpid()}"``. Four spellings of a rule is four chances for the fifth
     to be spelled in a way the reaper does not recognise — and a socket the reaper does not
     recognise is exactly the leak this exists to end.
+
+    **And the producer CHECKS, because going through it was not enough (#770).** One
+    producer only helps if what comes out is reapable, and a *slug* the caller computed can
+    take a name out of the namespace as thoroughly as a hand-rolled f-string does. Measured
+    on this tree, from a module that does call this function:
+    ``test_a_planes_frame_really_reads_that_way`` builds its slug from the tmux binary's own
+    filename, which at the 3.2 floor is ``tmux-3.2`` — and ``charter-frame-reads-in-tmux-3.
+    2-<pid>`` has a ``.`` in it, which :data:`_OURS` does not accept. Two live servers per
+    test at the floor, invisible to `owns` and so to every reap after them, from a caller
+    that had followed the rule. So the rule is enforced HERE, where it is stated, rather
+    than left to a scan that by construction cannot see a computed slug.
+
+    A refusal rather than a repair: ``tmux-3.2`` and ``tmux-3-2`` are one socket if this
+    normalised them, and a name is read by a human in `ps` output. The caller says what its
+    slug is; this says whether the reaper will ever see it.
     """
-    return f"charter-{slug}-{os.getpid()}"
+    made = f"charter-{slug}-{os.getpid()}"
+    if not owns(made):
+        raise ValueError(
+            f"{made!r} is not a name the reaper recognises, so a run killed before its "
+            f"cleanup would leave its tmux server running with nothing able to find it "
+            f"(#564, #770). A slug is lowercase letters, digits and single hyphens: "
+            f"{slug!r} is not. Spell it as one — a `.` becomes a `-`.")
+    return made
 
 
 def owns(candidate: str) -> bool:

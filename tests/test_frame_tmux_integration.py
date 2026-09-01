@@ -4470,6 +4470,20 @@ _INDICATOR_GLYPHS = frozenset("←→↑↓")
 #: paragraph, asserted rather than promised.
 _PAINT_MARK = "~painted~"
 
+#: `ChromeIsOneColour`'s OUTER server — the one whose single pane holds a client attached
+#: to the frame, which is what makes the frame's borders capturable at all.
+#:
+#: Asked of `_tmuxreap.name` like every other server this suite starts, and it was not:
+#: this used to be `f"{SOCKET}-host"`, decorating a name the helper had already made. The
+#: helper's rule puts the pid LAST, so a suffix took the result out of the reaper's
+#: namespace entirely — `owns("charter-integration-test-1474-host")` is False — and #770
+#: counted **six live tmux servers** on this machine from interrupted campaign runs of this
+#: class, each holding the `keep` session #713 gives it on purpose, each with its owning
+#: python long gone. The inner socket of every one of those runs had been reaped correctly:
+#: half of each run's mess cleaned, half invisible. A caller that needs a SECOND socket asks
+#: for one.
+HOST_SOCKET = _tmuxreap.name("integration-test-host")
+
 
 class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
     """#514, asked of the SCREEN: charter's own frame must draw every rule the same.
@@ -4506,7 +4520,7 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self._outer_socket = f"{self.SOCKET_NAME}-host"
+        self._outer_socket = HOST_SOCKET
         self.addCleanup(self._teardown_outer)
         # **Both servers are held for the whole test, and #713 is what the version that
         # held neither cost.** This is the one class in this module that kills its own

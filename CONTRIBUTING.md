@@ -29,7 +29,15 @@ command.
   that fails without the fix. The suite is plain `unittest` — no fixtures framework, no
   network, no writing outside a tempdir. That last one is enforced rather than asked for:
   a checkout inside a control plane resolves to *that* plane, so `tests/_planeguard.py`
-  refuses any write into the real `.charter/` and fails the test that tried. The same file
+  refuses any write into the real `.charter/` — and into the real `charter.toml`, the one
+  file outside that directory whose loss changes what your next launch draws (#726) — and
+  fails the test that tried. Working in a **linked worktree** the same file pins the suite
+  to the checkout it was loaded from, because `root._plane_of` sends a worktree's plane back
+  to the clone it was cut from: right for charter, wrong for a suite, whose assertions would
+  otherwise read the operator's uncommitted `charter.toml` instead of the branch's committed
+  one (#785). A case that wants this repository's own committed config reads the file off
+  disk from the repository root, as `test_frame_config._COMMITTED` does, never through
+  `config`. The same file
   refuses one kind of *read*: a setting your own `charter.toml` declares — today
   `[update] channel` — because a test that reads it is asserting against a fixture written
   by whoever happens to run the suite. `tests/_envguard.py` is the third of the same
@@ -67,7 +75,10 @@ command.
   `tests._isolation.no_background_refresh(self)`; if it is *about* the child, call
   `tests._planeguard.allow_background_children(self)`. A test that starts a real tmux
   server names its socket with `tests._tmuxreap.name("<slug>")`, so the next run can reap
-  it when this one is killed before its cleanup runs. **Nor does it spend a credential.**
+  it when this one is killed before its cleanup runs — **every** socket it starts, including
+  a second one, and never by decorating a name that helper already produced (#770). The slug
+  is lowercase letters, digits and single hyphens; `name()` refuses anything else rather than
+  handing back a socket the reaper cannot see. **Nor does it spend a credential.**
   `doctor`'s preflight asks a forge whether your token is still good, and eighteen modules
   reach that line — 28 authenticated round trips to github.com and gitlab.com per run, and
   the sweep gate spends that again per mutation. `tests/_forgeprobe.py` answers the probe

@@ -16,11 +16,29 @@ the `tests` package — before any test module is collected, so no test can opt 
 forgetting a base class. A test that reaches the real plane now fails, by name, on the
 line that reached it, having changed nothing.
 
-**Only the state directory, for writes.** ``.charter/`` is per-developer, gitignored, and
-holds live session state — frame directories, the vault registry, session pointers. The
-rest of the plane (``personas/``, ``docs/``, ``workspaces/``) is committed content some
-tests do legitimately generate into a tmp root, and guarding the real copies of those
-would trade this defect for a stream of false alarms.
+**Only the state directory, for writes — and one file.** ``.charter/`` is per-developer,
+gitignored, and holds live session state — frame directories, the vault registry, session
+pointers. The rest of the plane (``personas/``, ``docs/``, ``workspaces/``) is committed
+content some tests do legitimately generate into a tmp root, and guarding the real copies of
+those would trade this defect for a stream of false alarms.
+
+The exception is ``charter.toml`` itself, and #726 is why: a running plane was observed
+rewriting it inside sibling *worktrees* of its own clone — the ``workspaces`` and ``chats``
+strips gone from a file the agent had never opened — and a ``git add -A`` committed the
+deletion under a message about something else. It is one file rather than a tree, it is what
+makes the directory a plane at all, and a lost ``[[frame.component]]`` changes what the next
+launch draws. No test has business writing the real one; the fixtures write
+``config.ROOT / "charter.toml"`` with `PersonaIso`'s tmp root under them.
+
+**Which plane the suite reads, when the suite is in a worktree.** `root._plane_of` sends a
+linked worktree's plane back to the tree it was cut from, which is right for identity and
+wrong for a test suite: the assertions then read the operator's own uncommitted
+``charter.toml`` instead of the branch's committed one — loudly in one direction (a case that
+fails in every worktree and passes on CI) and silently in the other (a case that passes
+because that machine's configuration happens to satisfy it). See
+:func:`_pin_the_suite_to_its_own_tree`, which hands the committed half back to the checkout
+the suite is in through `config.in_tree`, leaves the state directory with the plane, and
+widens the spawn refusal to cover both roots rather than swapping one for the other (#785).
 
 **Reads of the state directory stay untouched**, for the same reason: a test may
 legitimately look at the real plane (that `render()` survives a real environment, say),
@@ -231,6 +249,12 @@ from pathlib import Path
 # `install()` would have given it one line later.
 from charter import hooks as _hooks      # noqa: E402
 
+# `charter.root` for the same reason and with more room: it imports `os`, `pathlib` and
+# nothing else — in particular not `charter.config` — so asking it where a plane is cannot
+# pull a plane resolution in ahead of `_envguard`'s scrub. It is the module that owns both
+# halves of the worktree question this file now asks (`tree_of`, `MARKER`).
+from charter import root as _root        # noqa: E402
+
 #: The state directory of the plane this test PROCESS resolved at import — before any
 #: `setUp` could repoint `charter.config`, so unavoidably the developer's real one.
 #:
@@ -247,6 +271,18 @@ class RealPlaneWrite(BaseException):
 
 
 def _explain(op: str, path) -> str:
+    # The BASENAME, not a suffix: `.charter/x-charter.toml` is a file inside the state
+    # directory and gets the state directory's message, which is the one that helps.
+    if os.path.basename(str(path)) == _root.MARKER:
+        return (
+            f"REFUSED: {op} {path}\n"
+            f"This test is writing the file that MAKES that directory a control plane — "
+            f"the developer's own committed `{_root.MARKER}`, which decides what their "
+            f"next `charter` launch draws. A rewrite of it is silent, is not a file the "
+            f"test opened, and gets swept into a commit by a `git add -A` under a message "
+            f"about something else (#726). Derive the test case from "
+            f"`tests._isolation.PersonaIso`, whose `config.ROOT` is a tmp plane, and write "
+            f"THAT root's marker.")
     return (
         f"REFUSED: {op} {path}\n"
         f"This test is writing into the developer's REAL control-plane state directory "
@@ -420,17 +456,112 @@ class _RefusesToBeRead(dict):
 
 #: The control-plane root this test PROCESS resolved at import, in both spellings, for the
 #: same reason :data:`_REAL` carries two.
+#:
+#: PLURAL in a second sense since #785: run from a linked worktree, the suite reads its own
+#: checkout (:func:`_pin_the_suite_to_its_own_tree`) and the plane it was redirected away
+#: from is still a real plane a spawned child would resolve — so both are in here, and the
+#: refusals below reach a child aimed at either.
 _REAL_ROOT: tuple[str, ...] = ()
 
 
-def _guard_reads(config) -> None:
-    """Arm :data:`_GUARDED_SETTINGS` on every derivation that lands on the real plane."""
+def _both_spellings(path) -> tuple[str, ...]:
+    """*path* as written and with every symlink resolved, deduplicated.
+
+    :data:`_REAL`'s own rule, factored out once it had three callers: a checkout under a
+    symlinked home (or under macOS's ``/tmp`` → ``/private/tmp``) makes the two differ, and
+    a guard that knew only one spelling would wave through everything spelled the other way.
+    """
+    written = os.path.abspath(str(path))
+    resolved = os.path.realpath(written)
+    return (written,) if written == resolved else (written, resolved)
+
+
+#: Held for the life of the process. `config.in_tree` is a context manager and this one is
+#: entered and never exited — deliberately, like every other wrapper `install` puts in — but
+#: a generator-based CM that gets garbage collected runs its own ``finally``, which here is
+#: the ``restore()`` that would silently undo the pin. So the object is kept.
+_TREE_PIN = None
+
+#: What :func:`_pin_the_suite_to_its_own_tree` answered, so a second call answers the same
+#: thing instead of pinning twice. `install` promises idempotence and gives up early on a
+#: machine with no resolvable state directory — which is a return BEFORE :data:`_REAL` is
+#: set, so its own guard would not stop a second call reaching here. Re-entering `in_tree`
+#: would drop the first CM, whose collection runs the ``restore()`` that undoes the pin.
+_PINNED_PLANE: tuple[str, ...] | None = None
+
+
+def _pin_the_suite_to_its_own_tree(config) -> tuple[str, ...]:
+    """Point the suite's committed settings at the checkout the suite is IN, and answer with
+    the plane it was reading before — or ``()`` when there was nothing to move.
+
+    **#785.** `root._plane_of` redirects a linked worktree's plane to the tree it was cut
+    from, and for the PRODUCT that is right and load-bearing: a worktree of your plane is
+    still your plane, so personas, the vault and every written memory must not fork per
+    worktree. What it means for the SUITE is that a run in a worktree asserts against the
+    operator's own ``charter.toml`` — the file on their disk, uncommitted edits and all —
+    while the same tree on CI asserts against the branch. Measured from a pristine detached
+    worktree of `origin/main`: ``config.ROOT`` is the operator's clone, and
+    ``test_frame_border_surface.test_this_planes_own_committed_frame_answers_the_report``
+    fails there and passes on CI, naming a file the branch never touched. Three agents hit
+    it independently in one day from three directions.
+
+    The false RED is the loud half. The quiet half is a case that PASSES because the
+    operator's uncommitted configuration happens to satisfy it, and a third cost is that two
+    agents on one machine get different answers from the same tree.
+
+    **Production's own seam, not a second copy of it.** `config.in_tree` exists for exactly
+    this distinction — everything `derive` computes from the root follows the *tree*, and the
+    per-developer state directory stays with the *plane* — and `root.tree_of` is the question
+    "is this a linked worktree of that plane". Asking those two rather than re-deriving them
+    is what keeps this from drifting away from the walk it is standing on. It also means the
+    state directory does not move, so :data:`_REAL` still names the operator's real
+    ``.charter/`` and the write tripwire is untouched.
+
+    **What must NOT weaken is the spawn tripwire.** A child charter resolves its own plane
+    from its own environment, so in a worktree it resolves the operator's clone — which,
+    once this pin has moved ``config.ROOT``, is no longer what `_REAL_ROOT` would name. That
+    is #527's hole reopened (131 detached children landing on the operator's live plane in
+    one run), so the plane is returned here and folded into :data:`_REAL_ROOT` beside the
+    worktree. Both are refused; the guard gets wider, never narrower.
+
+    Asked of THIS FILE's location rather than of the cwd: which checkout the suite is is a
+    fact about where these modules were loaded from, and `unittest discover` can be run from
+    anywhere.
+
+    **And only when the worktree carries the marker**, which is `_plane_of`'s own condition
+    read the other way round: "if it is not present there too, this is not one plane seen
+    from two directories". A worktree cut from a branch that predates the committed
+    ``charter.toml`` has no committed settings to pin to, and pinning to it would hand the
+    suite a plane-less root — a different wrong answer, not a fix.
+    """
+    global _TREE_PIN, _PINNED_PLANE
+    if _PINNED_PLANE is not None:         # idempotent; see :data:`_PINNED_PLANE`
+        return _PINNED_PLANE
+    try:
+        tree = _root.tree_of(config.ROOT, Path(__file__).resolve().parents[1])
+        if tree is not None and not (tree / _root.MARKER).is_file():
+            tree = None
+    except (OSError, RuntimeError):       # never raise at suite boot; see `install`
+        tree = None
+    if tree is None:
+        _PINNED_PLANE = ()
+        return _PINNED_PLANE
+    _PINNED_PLANE = _both_spellings(config.ROOT)
+    _TREE_PIN = config.in_tree(tree)
+    _TREE_PIN.__enter__()
+    return _PINNED_PLANE
+
+
+def _guard_reads(config, *also: str) -> None:
+    """Arm :data:`_GUARDED_SETTINGS` on every derivation that lands on the real plane.
+
+    *also* names further roots that count as real — the plane a worktree pin redirected the
+    suite away from, which nothing else would put back.
+    """
     global _REAL_ROOT
     if _REAL_ROOT:                        # idempotent: never wrap `derive` twice
         return
-    written = os.path.abspath(str(config.ROOT))
-    resolved = os.path.realpath(written)
-    _REAL_ROOT = (written,) if written == resolved else (written, resolved)
+    _REAL_ROOT = tuple(dict.fromkeys(_both_spellings(config.ROOT) + also))
 
     def _is_real(where) -> bool:
         try:
@@ -1463,14 +1594,37 @@ def install() -> None:
     if _REAL:
         return
     from charter import config
-    _guard_reads(config)
+    # BEFORE `_guard_reads`, which snapshots `config.ROOT`, and before `_REAL` below, which
+    # snapshots `config.STATE_DIR` — the pin moves the first and deliberately not the second.
+    plane = _pin_the_suite_to_its_own_tree(config)
+    _guard_reads(config, *plane)
     _guard_spawns()
     try:
         written = os.path.abspath(str(config.STATE_DIR))
         resolved = os.path.realpath(written)
     except (OSError, ValueError):         # no resolvable plane: nothing to protect
         return
-    _REAL = (written,) if written == resolved else (written, resolved)
+    # The state directory, and the one FILE outside it no test may replace: the plane's own
+    # `charter.toml`.
+    #
+    # A deliberate exception to "only the state directory", and #726 is the measurement. A
+    # running plane was observed rewriting `charter.toml` inside sibling worktrees of its own
+    # clone — the `workspaces` and `chats` strips gone from a file the agent never opened —
+    # and a `git add -A` committed the deletion under a message about something else. This
+    # repo's own history carries the same shape landing on `main`: `3935987`, "charter save: 1
+    # file(s)", deleted the entire 57-line `[[frame.component]]` arrangement.
+    #
+    # It is not `personas/` or `docs/`, which tests legitimately generate into a tmp root and
+    # whose real copies this refuses to guard for that reason. It is ONE file, it is what
+    # makes the directory a plane at all, a lost `[[frame.component]]` changes what the next
+    # launch draws, and no test has any business writing the real one — the fixtures write
+    # `config.ROOT / "charter.toml"` under `PersonaIso`, where `config.ROOT` is a tmp dir.
+    # Both markers, because in a worktree the two are different files and the wrong one to
+    # write is the one nobody is looking at.
+    markers = tuple(dict.fromkeys(
+        m for r in (str(config.ROOT), *plane)
+        for m in _both_spellings(Path(r) / _root.MARKER)))
+    _REAL = ((written,) if written == resolved else (written, resolved)) + markers
 
     # `os.mkdir` covers `Path.mkdir` AND `os.makedirs` (which calls the module global by
     # name, so it goes through this wrapper too) — one wrapper, both spellings.
