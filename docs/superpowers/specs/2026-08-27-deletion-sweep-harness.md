@@ -174,7 +174,7 @@ answer at all: it destroys the apparatus, and the wreckage is charged to somebod
    a memory-eater is the one shard that died; the shard that drew the mutation which spins
    **without** allocating survived on the timeout, which is the control.
 
-   This is the only one of the six whose distinguishing property is that the mutant takes the
+   This is the only one of the seven whose distinguishing property is that the mutant takes the
    *measuring apparatus* with it rather than producing a wrong answer — and the only one that
    compounds, because the natural reading of `exit 143` is "flaky pool, re-run it", which
    reproduces the same failure on the same slice.
@@ -187,7 +187,29 @@ answer at all: it destroys the apparatus, and the wreckage is charged to somebod
    crosses it raises `MemoryError` — a red, on tests that were green unmutated, which is a
    **pin**, the correct verdict for a mutant that destroys the process.
 
-None of the six is visible from outside. Together they are the argument for why this harness
+7. **A run that cannot finish inside the machine it was given.** #4 and #6 are one mutation
+   taking the apparatus with it; this is the *plan* being larger than the fan-out can measure,
+   and it needs no mutant to misbehave at all. `MAX_SHARDS x per_shard()` is a real ceiling —
+   224 as this is written — and past it every shard carries more than it can measure. Measured
+   on run 33500900581: 231 mutations, **eight of eight shards cancelled at the job timeout to
+   the second**, and the merge step publishing `no verdict: 8 of 8 shards did not report` with
+   a conclusion of `success`. The eight had between them measured something close to 224
+   mutations, and all of it was thrown away, because the result set lived in memory until the
+   sweep's last line.
+
+   It is the only one of the seven where **the tool already had the answer and lost it**, which
+   is why the remedy is not a bigger machine. *Write the answer down as it arrives, and stop
+   before being killed.* The result file is the whole plan from the outset, every row marked
+   `out of time`, rewritten as each verdict lands; a shard killed at any instant leaves the
+   complete plan with holes in it rather than nothing, and a shard allowed to exit stops short
+   of the runner's cap on purpose.
+
+   **`out of time` is its own outcome and not a timeout**, for the reason #4 gives about
+   folding: a timeout is *I looked and could not tell*, and a re-run may answer it; this is *I
+   never looked*, and a re-run of the same plan on the same fan-out stops at the same place. A
+   reader who cannot tell them apart re-runs a gate that cannot answer.
+
+None of the seven is visible from outside. Together they are the argument for why this harness
 needs its own tests and its own sweep rather than being trusted because it is short: a gate that
 silently passes everything is worse than no gate, because it is *believed*.
 
