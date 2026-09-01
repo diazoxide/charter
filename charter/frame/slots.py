@@ -1178,6 +1178,51 @@ def _unknown_lines(width: int) -> list[str]:
     return [tui.truncate(f"  {sl._DIM}⋯ gathering this workspace's repos…{sl._R}", width)]
 
 
+def _unreadable_lines(fid: str, ws: str, width: int) -> list[str]:
+    """What the `repos` pane draws when this frame HAS a cache file and cannot read it.
+
+    **The third state, and #735 is the cost of not having had one.** `gather.cached`
+    answers ``None`` four ways — no frame directory, no cache file, a file that is not
+    JSON, a file that parses to something that is not a scan — and :func:`_unknown_lines`
+    was drawn for all four. The first two are a gather that has not landed yet, which is
+    a five-second wait; the last two are a gather that will never land, because a panel
+    "never gathers on its own — it reads the cache or says it has none"
+    (`docs/frame.md`). Spelled identically, `⋯ gathering this workspace's repos…` was
+    permanent on a pane with nothing else on it.
+
+    **What separates them is a fact, not a duration** — `gather.unreadable`, which asks
+    the filesystem about the same file the caller has just failed to read. The rejected
+    alternative was to time-box the gathering message, and that is a guess wearing a
+    fact's clothes: a plane with forty clones on a cold mount crosses any N that a corrupt
+    file crosses, and this pane would then call a slow gather broken, which is worse than
+    calling a broken one slow. `gather.save` replaces the file atomically, so there is no
+    half-written moment for this line to appear in either.
+
+    **It names the command, because the operator inside a stuck frame cannot derive it.**
+    `charter frame-gather` requires `--session` and `--workspace` — required on purpose, so
+    a detached child never guesses a frame's workspace (#512) — and neither is discoverable
+    from a pane. Both are filled in here from the frame being drawn, which is the shape
+    :func:`_empty_lines` already has and the reason it has it: a line that names a problem
+    and not its fix costs a row and settles nothing. The palette carries the same command as
+    a row (`frame/builtin_actions._register_regather`); this line is what an operator who
+    has not opened the palette reads, and it does not name a key because a frame running
+    as a window in an operator's own tmux has no `F2` of charter's to name.
+
+    **Nothing is repaired here.** A renderer that deleted the file would put a write on the
+    repaint path #387 pinned at one `stat`, and would destroy the evidence of whatever wrote
+    it. The pane says what is true and the operator decides.
+
+    One line, bounded through `tui.truncate` like every other line in this module — *fid*
+    and *ws* are both arbitrary length, and `tui.sanitize` under that truncate is what
+    contains a `$CHARTER_WORKSPACE` no rung ever checked (see :func:`_empty_lines`).
+    """
+    from .. import statusline as sl
+
+    return [tui.truncate(
+        f"  {sl._DIM}unreadable repo cache · charter frame-gather --session{sl._R} "
+        f"{fid}{sl._DIM} --workspace{sl._R} {ws}", width)]
+
+
 def _empty_lines(ws: str, width: int) -> list[str]:
     """What the `repos` pane draws once the gather HAS run and found no clones.
 
@@ -2804,6 +2849,15 @@ def _repos(fid: str) -> str:
     data = gather.cached(fid)
     if data is None:
         VIEWPORT.blank()
+        # **Two states, not one** (#735). `cached` collapses "nothing has been written
+        # yet" and "what was written cannot be read" into the same `None`, and drawing
+        # both as :func:`_unknown_lines` made a permanent failure indistinguishable from a
+        # five-second wait — on a pane that has no other route out, because nothing
+        # repaints its way back to a readable cache. `gather.unreadable` is the second
+        # question, asked ONLY here and only once `cached` has already said `None`: it is
+        # a fact about a file on disk at the moment this line is drawn, never a timeout.
+        if gather.unreadable(fid):
+            return "\n".join(_unreadable_lines(fid, _frame_workspace(fid), w))
         return "\n".join(_unknown_lines(w))
     repos = data.get("repos") or []
     if not repos:
