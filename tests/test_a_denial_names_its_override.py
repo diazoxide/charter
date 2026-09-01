@@ -23,9 +23,12 @@ the agent — and there is deliberately no switch charter can read. That is not 
 * A `PreToolUse` hook governs the harness's tools. The operator's own shell was never on
   that side of the line, so running it there works around nothing.
 
-**Appended in `_deny`, not at the six call sites**, which is the assertion with the most
-value here: a seventh guard added tomorrow carries the override without anyone remembering to,
+**Appended in `_deny`, not at the call sites**, which is the assertion with the most
+value here: the next guard added carries the override without anyone remembering to,
 and the trace tally keys — computed from the reason BEFORE it reaches `_deny` — cannot drift.
+That is not a hypothetical any more: #710 and #778 each added a guard without a row in
+`DENIALS` below, and each carried the note regardless. The rows were added afterwards, so
+the enumeration says what it claims to.
 """
 
 from __future__ import annotations
@@ -58,6 +61,15 @@ DENIALS = {
     "release-floor": (hooks.pretooluse,
                       {"tool_input": {"command": "gh release create v9.9.9"},
                        "permission_mode": "bypassPermissions"}),
+    # The two substitution guards. Added late — #710 shipped the first without a row here,
+    # which is the omission this enumeration exists to make impossible: `_deny` gave it the
+    # override note anyway, so nothing was broken and nothing said so either.
+    "forge-substitution": (hooks.pretooluse,
+                           {"tool_input": {"command":
+                                           'gh issue create --body "a `id -un` span"'}}),
+    "charter-substitution": (hooks.pretooluse,
+                             {"tool_input": {"command":
+                                             'charter persona remember "a `id -un` span"'}}),
 }
 
 
@@ -112,9 +124,9 @@ class DenialCase(InAControlPlane):
 
 
 class TestEveryDenialNamesTheOverride(DenialCase):
-    def test_all_six_of_them(self):
-        """The precondition is the count: six guards deny, and all six must say it."""
-        self.assertEqual(6, len(DENIALS))
+    def test_all_eight_of_them(self):
+        """The precondition is the count: eight guards deny, and all eight must say it."""
+        self.assertEqual(8, len(DENIALS))
         for name in DENIALS:
             with self.subTest(guard=name):
                 self.assertIn(hooks._OVERRIDE_NOTE, self.reason(name))

@@ -3946,6 +3946,257 @@ def _forge_substitution_hit(cmd: str) -> tuple[str, str] | None:
 
 
 # --------------------------------------------------------------------------- #
+# A6: charter's OWN text-taking commands, same rule, different remedy (#778)     #
+# --------------------------------------------------------------------------- #
+# A5 covers somebody else's tools. The same defect reaches a committed file through
+# charter's own commands, and it did so immediately: while writing up A5's findings the
+# coordinating agent ran `charter persona remember "… `pending` …"`. zsh ran the word,
+# printed `command not found`, spliced its empty output, and the saved memory read
+# "appending to  each pass" with the word silently gone. That file is under
+# `personas/_shared/memory/`, which this plane commits and pushes — the same defect
+# reaching a public repository by an INDIRECT route, which is why nobody saw it. The blast
+# radius that day was one word; the identical slip in a `--body` published sixty-four
+# environment variables (#703).
+#
+# **What made this a guard rather than a third documented limit is a measurement, and it
+# came out the opposite way from the one #778 predicted.** #778 expected charter's own
+# prose to be "similar or worse" than the commit-message figure that keeps #711 out. Over
+# the 284 committed memory bodies on `main`:
+#
+#   * **13 would meet a liveness-keyed guard — 5%**, not the 87% #778 assumed. 9 carry a
+#     backtick, 4 carry `$(`. **254 of the 284 predate the working rule** that tells agents
+#     to avoid the shape, so this is charter's natural prose and not an effect of the rule.
+#   * The reason is structural rather than lucky. A commit message is rendered as markdown
+#     by a forge, so agents write code spans in them; a memory body is read back by
+#     `charter recall` in a terminal, so agents write *"the $( branch"* and *"a backtick"*
+#     as words. Two corpora, two conventions, and the guard's calibration follows the
+#     corpus rather than the character.
+#   * **And the 13 are not false positives.** 283 of the 284 bodies are single-line, so
+#     none came through the `"$(cat <<'EOF' …)"` spelling that makes a backtick inert. A
+#     live backtick in a single-line double-quoted operand is a command that was going to
+#     corrupt its own text — refusing it is the correct answer, not a cost.
+#
+# **The remedy is not A5's, and that had to be measured too.** 221 of the 284 bodies
+# contain an apostrophe — and *all nine* of the backtick-carrying ones do — so "use single
+# quotes", the obvious answer, fails on exactly the population this refuses. What works is
+# **one backslash per backtick**: inside double quotes `` \` `` is a literal backtick and
+# the apostrophes keep working, verified against a real bash. `report bug|gap` additionally
+# has `--from-file`/`--stdin`, which is A5's `--body-file` by another name; the memory
+# commands have no file input at all, so a denial that named one would send the reader to a
+# usage error. The remedy is therefore **per row**, and the table carries it.
+#
+# **`git commit` and charter's own commit-message commands stay out** — that is #711, whose
+# measurement runs the other way: 29 of the last 30 messages on `main` carry a backtick,
+# all 30 of the last 30 are multi-line, and the spelling that writes them,
+# `-m "$(cat <<'EOF' … EOF)"`, is itself a live `$(`. A guard there would refuse the very
+# form that makes the backticks inside it harmless — its trigger would be the prescribed
+# workflow, which is the inversion #371 deleted a guard for. `charter save`,
+# `workspace save -m` and `workspace rename -m` write commit messages, so they are out for
+# that reason and not by oversight.
+
+#: `workspace`/`ws` and `worktree`/`wt` are the same command word to argparse. Written here
+#: once and applied below, because a hand-copied second half of the table is a row that
+#: drifts the day somebody adds a verb to one of them.
+_CHARTER_NOUN_ALIASES = {"workspace": "ws", "worktree": "wt"}
+
+#: `(noun, verb) -> (what charter does with the text, the file input it accepts or None)`.
+#:
+#: **Verified against `charter.cli.build_parser()` itself**, which is stronger than the
+#: `--help` #710 had to read by hand — the parser is the thing that generates the help.
+#: `tests/test_the_text_you_typed_is_the_text_charter_saves.py` re-derives every row from
+#: it, so a renamed verb fails a test rather than silently emptying the guard.
+#:
+#: **The line for inclusion is #710's own**, which kept `gh pr merge --body` out because
+#: "its `--body` is a merge-commit message rather than the point of the command": the free
+#: text has to be **required or the primary operand**, and what holds it has to be read back
+#: as prose by a later reader. That keeps out `workspace create --vision`,
+#: `workspace snapshot --description`, `persona create --role/--delegate-when` and
+#: `vault add`, where the prose is a secondary attribute of creating a thing. Widening on
+#: evidence is cheap; a guard that over-blocks gets switched off once and then covers
+#: nothing (:data:`_BRANCH_MOVERS`, #371).
+#:
+#: The second element is the remedy the denial may name, and it is per row because it is
+#: not uniform: only `report bug|gap` has a file input. Offering `--from-file` on
+#: `persona remember`, which has none, would answer a refusal with a usage error.
+_CHARTER_PROSE_ROWS = {
+    ("persona", "remember"): (
+        "a memory file under `personas/`, which this plane commits and pushes", None),
+    ("persona", "log"): (
+        "the persona's activity log under `personas/`, committed with it", None),
+    ("workspace", "remember"): (
+        "a memory file under `workspaces/`, committed once the workspace is LIVE", None),
+    ("workspace", "note"): (
+        "a memory file under `workspaces/` (`note` is `remember`)", None),
+    ("workspace", "todo"): (
+        "the workspace's todo list under `workspaces/`", None),
+    ("workspace", "vision"): (
+        "the workspace's Vision in `workspace.md`, committed once it is LIVE", None),
+    ("worktree", "abandon"): (
+        "the worktree's history — what whoever picks the piece up reads first", None),
+    ("change", "create"): (
+        "the change record's `why`, which `charter change push` writes into every "
+        "request body on the forge", None),
+    ("change", "drop"): (
+        "the exclusion's `why`, which `charter change push` writes into every "
+        "request body on the forge", None),
+    ("report", "bug"): (
+        "a report draft that `charter report send` publishes as a PUBLIC issue on "
+        "charter's own tracker", "--from-file"),
+    ("report", "gap"): (
+        "a report draft that `charter report send` publishes as a PUBLIC issue on "
+        "charter's own tracker", "--from-file"),
+}
+
+_CHARTER_PROSE = {
+    **_CHARTER_PROSE_ROWS,
+    **{(_CHARTER_NOUN_ALIASES[noun], verb): facts
+       for (noun, verb), facts in _CHARTER_PROSE_ROWS.items()
+       if noun in _CHARTER_NOUN_ALIASES},
+}
+
+
+def _charter_words(prog: str, argv: list[str]) -> list[str] | None:
+    """The words after `charter` on this segment, or ``None`` if it is not charter.
+
+    **Two spellings, and the second is not exotic in this repository — it is the one an
+    agent working ON charter types all day.** `CONTRIBUTING.md` and shared persona memory
+    both say to live-test a checkout with `python3 -m charter …`, and on that line
+    `os.path.basename(prog)` is `python3`, so :func:`_forge_prose_command`'s reader would
+    see no `charter` at all. `-B`, `-u` and an `env -u …` prefix all sit between the
+    interpreter and `-m`, which is why the module is looked for by scanning rather than at a
+    fixed index (`_split_env` has already removed the `VAR=value` prefix).
+
+    **`-m` as its own word, and no getopt behind it.** Python accepts `-mcharter` and
+    `-Bm charter`, and neither is matched here. That is a fail-OPEN hole and it is named
+    rather than closed: taking it would mean a short-option cluster parser inside a guard
+    whose whole stated risk is being a parser somebody has to re-derive, bought for a
+    spelling `CONTRIBUTING.md` does not use and nothing in this repository writes. It sits
+    with the holes the forge guard lists — `sh -c '…'`, an alias, a program name arriving in
+    a variable — and, like those, it is a reason this is a guard against a mistake rather
+    than a boundary.
+    """
+    # `prog` is never None: `_split_env_chdir` returns `toks[0] if toks else ""`, and the
+    # eight other readers in this file all write this line without a fallback. An `or ""`
+    # here was a survivor the sweep could not kill in either direction, which is this
+    # project's definition of dead code — and defensive code that reads as though it
+    # matters is worse than none in a guard somebody has to re-derive.
+    base = os.path.basename(prog).lower()
+    if base == "charter":
+        return argv[1:]
+    if base.startswith("python"):
+        for k in range(1, len(argv) - 1):
+            if argv[k] == "-m":
+                return argv[k + 2:] if argv[k + 1] == "charter" else None
+    return None
+
+
+def _charter_prose_command(cmd: str | None) -> tuple[str, str, str | None] | None:
+    """``("charter persona remember", what it does with the text, its file input)`` — or
+    ``None`` when no segment of *cmd* is one.
+
+    **The FIRST two words, where :func:`_forge_prose_command` has to walk adjacent pairs.**
+    That difference is a measured fact about charter rather than a shortcut: `gh --repo o/r
+    issue create` puts a flag's value in front of the noun, and charter's root parser has
+    **no option that takes a value** — only `-h` and `--version`. Reading two words is
+    strictly narrower, and what it buys is real: `charter recall --scope persona remember`
+    is a search whose `persona` and `remember` genuinely are adjacent argv words, and every
+    pair walker refuses it. A test asserts the root parser stays that way, so if a
+    value-taking global option is ever added this goes red instead of quietly under-reading.
+
+    No `cmd or ""` here, matching :func:`_forge_prose_command`: the hit function normalises
+    before it calls, and `_segment_argv(None)` yields nothing anyway. The sweep called that
+    fallback a survivor, correctly — the one at the hot-path filter below is load-bearing
+    and is pinned, this one was not.
+    """
+    for _toks in _segment_argv(cmd):
+        prog, _env, argv = _split_env(_toks)
+        words = _charter_words(prog, argv)
+        # BOTH halves decide, and they fail differently — which is why two tests pin this
+        # one line. Without `not words`, `charter "…"` with a single operand reaches
+        # `words[1]` and raises **IndexError**, the outcome this module may least have:
+        # `dispatch` runs the handler as a bare `rc = fn()`, so a raise takes the turn down
+        # instead of producing a verdict. With `< 2` widened to `<= 2`, a bare
+        # `charter ws note` on a line whose substitution sits in another segment is
+        # **allowed** — a fail-open on exactly the two-word form the table is keyed on.
+        if not words or len(words) < 2:
+            continue
+        facts = _CHARTER_PROSE.get((words[0], words[1]))
+        if facts:
+            dest, from_file = facts
+            return f"charter {words[0]} {words[1]}", dest, from_file
+    return None
+
+
+def _charter_substitution_hit(cmd: str | None) -> tuple[str, str] | None:
+    """``(the substitution's spelling, the denial)`` for a charter command that persists
+    prose whose line carries a live substitution — or ``None``.
+
+    Shares :func:`_live_substitution` with A5 rather than re-deciding what a shell would
+    run: that walk is the part checked against a real bash, and a second copy of it is a
+    second thing to be wrong. What differs is the table, the destination named, and the
+    remedy — which is why this is a separate guard and not two questions asked of one
+    constant (the #555 defect this file has a name for).
+
+    **Scoped to the whole Bash call**, with A5 and for its reason. So
+    `cd "$(git rev-parse --show-toplevel)" && charter persona remember 'x'` is refused too,
+    and the remedy the denial names covers it: compute the value in a SEPARATE Bash call and
+    pass `"$VAR"` — a parameter expansion is not a substitution and a shell does not
+    re-expand a parameter's value.
+
+    Both cheap tests come first because this is a per-Bash-call hot path — but **in the
+    opposite order to A5's, and that is measured rather than copied.** A5 tests for a
+    substitution first because its own name test is weak: `gh` and `glab` are two- and
+    four-character substrings that fall inside ordinary English (`through`, `night`), so
+    they reject almost nothing. `charter` is seven characters and rare, so it rejects
+    essentially every command:
+
+    ======================================  ============  ==============
+    command                                 `$` first     `charter` first
+    ======================================  ============  ==============
+    `git status --porcelain`                0.197 µs      **0.056 µs**
+    a long ordinary pipeline                0.256 µs      **0.063 µs**
+    `echo "$(git rev-parse HEAD)"`          0.210 µs      **0.057 µs**
+    `charter workspace list --json`         0.205 µs      0.208 µs
+    the denial path                         24.9 µs       25.4 µs
+    ======================================  ============  ==============
+
+    Three and a half times cheaper on everything that is not a charter command, which is
+    almost every Bash call, and inside the noise on the two that are. Both filters survive
+    the deletion sweep — neither can change a verdict, the table lookup and
+    :func:`_live_substitution` decide — and both are kept on those numbers, which is the
+    rule A5's own section states for a surviving prefilter.
+    """
+    text = cmd or ""
+    if "charter" not in text:
+        return None
+    if not any(s in text for s in _SUBSTITUTIONS):
+        return None
+    spelling = _live_substitution(text)
+    if not spelling:
+        return None
+    found = _charter_prose_command(text)
+    if not found:
+        return None
+    where, dest, from_file = found
+    shown = "`…`" if spelling == "`" else "$(…)"
+    fix = (f", or pass `{from_file} <path>` (or `--stdin`) and keep the text out of argv "
+           f"altogether" if from_file else "")
+    return spelling, (
+        f"`{where}` takes text charter PERSISTS — {dest} — and this line carries a LIVE "
+        f"{shown} command substitution. The shell runs it and splices its OUTPUT in before "
+        f"charter is started, so what gets saved is not what you typed: charter is handed "
+        f"the command, never the value it becomes. This is #778 — the memory that read "
+        f"\"appending to  each pass\" with the word gone — and #703, where the same slip on "
+        f"a forge body published sixty-four environment variables. Keep the character "
+        f"literal instead: backslash-escape each one (`\\`code\\``), which leaves "
+        f"apostrophes working, or single-quote the whole argument when it holds none{fix}. "
+        f"If you meant to interpolate a computed value, compute it in a SEPARATE Bash call "
+        f"and pass it as \"$VAR\" — a parameter expansion is not a substitution. This guard "
+        f"reads the SHAPE of the line; it does not know what the command would print, and "
+        f"does not claim to keep a credential out of a file.")
+
+
+# --------------------------------------------------------------------------- #
 # B: the clone-commit nudge — REMOVED in #371                                   #
 # --------------------------------------------------------------------------- #
 # It asked before a git write inside a workspace clone, recommending a repo-rooted session.
@@ -4299,6 +4550,18 @@ def pretooluse() -> int:
         spelling, why = subst
         rc = _deny("PreToolUse", why)
         _trace("deny", sid, reason="forge-substitution", shape=spelling, cmd=head)
+        return rc
+    # A6: and the same rule on charter's OWN text-taking commands (#778). Separate from A5
+    # rather than folded into it: the table, the destination the denial names and the remedy
+    # it offers are all different, and one constant answering two questions is the #555
+    # defect this file already has a name for. Ungated for A5's reason. It runs AFTER A5 so
+    # that a line which is both — `charter …` piped into `gh issue create` — is explained by
+    # the one that publishes to a forge.
+    own = _charter_substitution_hit(cmd)
+    if own:
+        spelling, why = own
+        rc = _deny("PreToolUse", why)
+        _trace("deny", sid, reason="charter-substitution", shape=spelling, cmd=head)
         return rc
     # B WAS HERE: the clone-commit nudge, removed in #371 — see the note where it lived.
     # Nothing on this handler asks any more; every remaining verdict is a deny or an allow.
