@@ -578,9 +578,9 @@ class TheParserAnswersForEveryShapeAJsonFileCanHold(PersonaIso, unittest.TestCas
     CONTAINER, so no type guard was ever handed the wrong container.** A bad version, a
     chat id with a semicolon in it, a workspace that is `../etc` — all of them arrive as
     the dict-of-lists-of-dicts charter itself writes. Nothing fed a top level that is a
-    list, a frame that is not a dict, a `chats` that is not a list, a chat entry that is
-    not a dict, an `at` that is a string or a `focus` that is a number, and the deletion
-    sweep reddened one guard for each of those.
+    list, a `frames` that is absent, a frame that is not a dict, a `chats` that is not a
+    list, a chat entry that is not a dict, an `at` that is a string or a `focus` that is a
+    number, and the deletion sweep reddened one guard for each of those.
 
     **This is the #442/#475 position, and on this branch it is the only cluster whose blast
     radius leaves the frame.** `cwd` reaches `os.chdir` and `workspace` reaches a tmux `-t`
@@ -610,6 +610,20 @@ class TheParserAnswersForEveryShapeAJsonFileCanHold(PersonaIso, unittest.TestCas
 
     def test_a_top_level_that_is_a_list_is_nothing_to_reopen(self):
         self._on_disk([self._wrapping([{"workspace": "alpha", "chats": [self.GOOD]}])])
+
+        self.assertIsNone(reopen.read())
+
+    def test_a_manifest_with_no_frames_key_at_all_is_nothing_to_reopen(self):
+        # The `frames` gate and the per-frame gate below it mask each other for every
+        # shape that is ITERABLE — a string or a dict walks into the frame loop and is
+        # refused there instead, with the same answer. What tells them apart is a `frames`
+        # that cannot be iterated at all, which is what an absent key is: `None`.
+        self._on_disk({"version": reopen.VERSION, "at": 1, "focus": "alpha"})
+
+        self.assertIsNone(reopen.read())
+
+    def test_a_frames_field_that_is_not_even_a_sequence_is_nothing_to_reopen(self):
+        self._on_disk(self._wrapping(7))
 
         self.assertIsNone(reopen.read())
 
