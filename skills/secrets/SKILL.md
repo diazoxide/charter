@@ -154,6 +154,24 @@ vaults' own lines — never a line from a value you supplied.
   text sitting in a file it never expands is yours to get right. A published body cannot be
   withdrawn — a forge keeps public edit history — so rotation, not redaction, is the
   remedy, and that is the operator's work rather than yours.
+- **The same rule on charter's own commands, where the remedy is different.**
+  `charter persona remember`, `workspace remember|note|todo|vision`, `change create|drop`,
+  `worktree abandon` and `report bug|gap` all take prose charter persists, and this plane
+  commits and pushes it. A backtick in a double-quoted argument corrupted a committed memory
+  file this way, silently — the shell ran the word, spliced its empty output, and the saved
+  sentence read *"appending to  each pass"* with the word gone
+  ([#778](https://github.com/diazoxide/charter/issues/778)). These commands take a positional
+  string rather than a body file, so **backslash-escape each backtick**; single-quoting is
+  the shorter fix but it fails the moment your prose contains an apostrophe, which most of
+  it does.
+
+  ```bash
+  charter persona remember "the flag's default is \`id -un\` here"
+  ```
+
+  charter refuses the live shape on those commands. If you really want a computed value in
+  the text, assign it in a **separate** Bash call and pass `"$VAR"` — a parameter expansion
+  is not a substitution.
 - If the vault or key does not exist, say so and ask for it to be added — do not work
   around it with a value pasted into the conversation.
 

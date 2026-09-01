@@ -17,7 +17,7 @@ one thing a hook is allowed to shout about.
 | --- | --- | --- |
 | `SessionStart` | — | reconcile workspace state, GC persona scratch, inject context, run `doctor`, refresh forge state |
 | `UserPromptSubmit` | — | the commitment gate (below) |
-| `PreToolUse` | `Bash` | four of the five guards (below) |
+| `PreToolUse` | `Bash` | every guard below except the vault read |
 | `PreToolUse` | `Read\|Grep` | keeps a vault file from being read into context |
 | `PreToolUse` | `Task\|Agent` | notes a dispatch about to happen |
 | `PostToolUse` | `Write\|Edit\|MultiEdit` | the record-memory nudge |
@@ -207,17 +207,39 @@ rule while one who reads a bare refusal files an issue.
   which means putting a shell inside the guard — the failure the leak guard already
   documents. Run the substitution in a **separate** Bash call instead; each is judged alone.
 
-  The commit-message limit is worth one more sentence, because the obvious reason for it is
-  wrong. It is **not** that a commit matters less. On the axis #703 turns on — *can this be
-  undone* — a commit message is **worse** than an issue body: a body is replaced in one
-  call, while a pushed commit needs a history rewrite, and a rewrite reaches neither forks
-  nor existing clones nor the forge's caches. Visibility is not reversibility. It is out of
-  scope because the commit surface has not been verified the way the `gh`/`glab` verbs
-  were, and because it is dense with the character the guard keys on: **most commit
-  messages on charter's own `main` carry a backtick** — 26 of 30 consecutive ones when
-  this was measured, nineteen of them around text that reads as a command — and inside
-  `-m "…"` every one of those is live. A guard that fires
-  constantly on legitimate work is one that gets switched off, and then it covers nothing.
+  The commit-message limit is worth its own paragraphs, because the obvious reason for it is
+  wrong and the real one took a measurement. It is **not** that a commit matters less. On
+  the axis #703 turns on — *can this be undone* — a commit message is **worse** than an
+  issue body: a body is replaced in one call, while a pushed commit needs a history rewrite,
+  and a rewrite reaches neither forks nor existing clones nor the forge's caches. Visibility
+  is not reversibility.
+
+  **The commit surface has since been enumerated**, against real `git … --help` output
+  rather than recalled, so the gap #711 opened with is closed. These write a message: `commit`
+  (`-m`, which repeats and concatenates; `-F`; `-t`; `-C`/`--reuse-message`;
+  `-c`/`--reedit-message`; `--squash`; `--fixup`), `tag` (`-m`, `-F`), `merge` (`-m`, `-F`),
+  `notes add|append|edit` (`-m`, `-F`, `-C`, `-c`) and `stash push|store` (`-m`). `revert`
+  and `cherry-pick` have a `-m`, and it is `--mainline` — a parent number, not prose, which
+  is the kind of thing a recalled list gets wrong.
+
+  **It stays out anyway, and the reason is calibration.** Measured on `main`:
+
+  - **29 of the last 30 commit messages carry a backtick** (160 of 200), and inside
+    `-m "…"` every one of those is live;
+  - **all 30 of the last 30 are multi-line**, which a single `-m "…"` cannot produce. The
+    spelling that writes them is `-m "$(cat <<'EOF' … EOF)"` — and that line **is itself a
+    live `$(`**, while the backticks inside the quoted heredoc are inert.
+
+  So a liveness-keyed guard on `git commit` would refuse the exact form that makes those
+  backticks harmless: its trigger would be the prescribed workflow, which is not a
+  miscalibrated guard but an inverted one — and that is the argument which deleted the
+  clone-commit nudge outright rather than narrowing it (see *What charter stopped asking*).
+  Exempting `$(cat <<'QUOTED')` by name
+  would mean the guard deciding which substitutions are *safe* rather than which are *live*,
+  and a parser that gets that wrong fails open. `charter save`, `charter workspace save -m`
+  and `charter workspace rename -m` write commit messages too, so they are out for the same
+  reason rather than by oversight. `git commit` is therefore a **stated limit, not an open
+  question** ([#711](https://github.com/diazoxide/charter/issues/711)).
 
   **What it does not reach, checked rather than assumed.** The guard matches a
   `(tool, noun, verb)` triple, so every route that publishes without spelling one is
@@ -242,7 +264,63 @@ rule while one who reads a bare refusal files an issue.
   and its remedy is plain `gh`/`glab` usage — the same reason the secret-leak guard is
   ungated.
 
-A seventh path is not a guard but an allowance: a program the **active persona** declares in
+- **charter's own text substitution.** The same rule on charter's own text-taking commands
+  ([#778](https://github.com/diazoxide/charter/issues/778)). The guard above covers somebody
+  else's tools; these persist prose that this plane commits and pushes, so the same defect
+  reaches a public repository by an indirect route:
+
+  ```bash
+  charter persona remember "the marker is appended to `pending` each pass"   # DENIED
+  charter persona remember "the marker is appended to \`pending\` each pass"  # allowed
+  ```
+
+  That is not a constructed example. It happened while #710's own findings were being
+  written up: zsh ran the word, printed `command not found`, spliced its empty output, and
+  the saved memory read *"appending to  each pass"* with the word silently gone — into
+  `personas/_shared/memory/`, which is committed and pushed.
+
+  **The rows, verified against `charter`'s own parser rather than its rendered help:**
+  `persona remember|log`, `workspace remember|note|todo|vision` (and the `ws` alias),
+  `worktree abandon` (`wt`), `change create|drop` — whose `--why` is written into every
+  request body by `charter change push` — and `report bug|gap`, whose text
+  `charter report send` publishes as a **public** issue on charter's own tracker. The line
+  for inclusion is the one that keeps `gh pr merge --body` out above: the free text has to be
+  required or the primary operand, and what holds it has to be read back as prose. So
+  `workspace create --vision`, `workspace snapshot --description` and
+  `persona create --role` are outside it, where the prose is a secondary attribute of
+  creating a thing.
+
+  **The remedy is not the forge guard's, and that took measuring.** Of the 284 committed
+  memory bodies on `main`, **221 contain an apostrophe** — and *all nine* of the
+  backtick-carrying ones do — so "single-quote it", the obvious answer, fails on exactly the
+  text this refuses. **Backslash-escape each backtick** instead: inside double quotes
+  `` \` `` is a literal backtick and the apostrophes keep working. `report bug|gap`
+  additionally takes `--from-file` and `--stdin`, which is `--body-file` by another name;
+  the memory commands have no file input, so the denial names a flag only where one exists.
+  And if you *meant* to interpolate a computed value, compute it in a **separate** Bash call
+  and pass `"$VAR"` — a parameter expansion is not a substitution, and a shell does not
+  re-expand a parameter's value.
+
+  **Why this one is a guard where `git commit` is a limit** is the same question answered by
+  two different corpora. 13 of those 284 bodies would meet this guard — **5%**, not the
+  87% the issue predicted, and 254 of the 284 predate the working rule that warns against
+  the shape, so that is charter's natural prose. The reason is structural: a commit message
+  is rendered as markdown by a forge, so agents write code spans in them, while a memory
+  body is read back by `charter recall` in a terminal, so they write *"the `$(` branch"* as
+  words. And **283 of the 284 bodies are single-line**, so none came through the
+  `"$(cat <<'EOF' …)"` spelling that makes a backtick inert — a live backtick in a
+  single-line double-quoted operand is a command that was going to corrupt its own text.
+
+  **What it does not reach**, on the same terms as the guard above: `python3 -m charter …`
+  is covered, because that is how `CONTRIBUTING.md` says to run a checkout, but a shell
+  wrapper (`sh -c 'charter …'`), an alias, and a program name arriving in a variable are
+  not — nor is `python3 -mcharter`, a fail-open hole named in the guard rather than closed
+  with a short-option parser inside it. It reads the first two words after `charter`, which
+  is exact only because charter's root parser has no option that takes a value — a test
+  asserts that, so if one is ever added the guard is told rather than quietly
+  under-reading. Ungated on there being a control plane, for the reason above.
+
+An eighth path is not a guard but an allowance: a program the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the
 **program**, so every argument rides along — which is why seven things are not smoothed
 whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`,
@@ -384,13 +462,15 @@ fd digit. That pattern is the finding. Deciding what a shell will execute, witho
 it, is not winnable in a Python tokeniser, so the honest move is to say what is open:
 
 - **a quoted command substitution** — the example above, and `` "`cat <vault>`" ``,
-  `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`. One command family is the
-  exception, and it is an exception for a different reason rather than a fix for this one:
-  a `gh`/`glab` command that publishes prose is refused whenever a live substitution stands
-  on its line, so `gh issue create --body "$(cat <vault>)"` stops — see *Forge body
-  substitution* above. That guard never looks inside the substitution and knows nothing
-  about vaults; it refuses the shape. Everywhere else on this page, a quoted substitution
-  is still open;
+  `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`. Two command families are the
+  exception, and they are an exception for a different reason rather than a fix for this
+  one: a `gh`/`glab` command that publishes prose, and a charter command that persists it,
+  are refused whenever a live substitution stands on the line — so
+  `gh issue create --body "$(cat <vault>)"` and
+  `charter persona remember "$(cat <vault>)"` both stop. See *Forge body substitution* and
+  *charter's own text substitution* above. Neither guard looks inside the substitution or
+  knows anything about vaults; they refuse the shape. Everywhere else on this page, a quoted
+  substitution is still open;
 - **any expansion between the guard and `open()`** — globs (`.charter/vault?/x.json`,
   `.charter/*/x.json`), brace expansion (`.charter/{vaults,}/x.json`), `$'\x73'` quoting,
   and a path that arrives in a variable (`V=<vault>; cat $V`). The path check matches text,
@@ -427,11 +507,14 @@ the harness's tools — they govern what an agent does with your authority insid
 Your own shell is on the other side of that boundary and always was. Open a terminal and run
 it. Nothing is being worked around: the rule never applied to you.
 
-Four guards name a narrower move first, and it is usually the one you want:
+Five guards name a narrower move first, and it is usually the one you want:
 
 - **Forge body substitution** — `--body-file <path>`, or `--body-file -` with a quoted
   heredoc. This one is rarely wrong about the shape and often wrong about the intent: the
   body you meant is exactly the body you get, and it is the shorter line to type anyway.
+- **charter's own text substitution** — backslash-escape each backtick, which is one
+  character and leaves the apostrophes in your prose working. Where the command takes a
+  file (`report bug|gap`), `--from-file` or `--stdin` keeps the text out of argv entirely.
 - **Release floor** — re-run the step **attended**. This is a mode, and it is yours to set.
 - **One credential** — `charter git-policy --apply` configures every clone for the token
   transport, which is what most denials of it are actually asking for.

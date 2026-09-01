@@ -278,10 +278,17 @@ shell history**, while still letting an agent *use* the credential:
   ([#703](https://github.com/diazoxide/charter/issues/703)). A separate guard refuses that
   shape now, and its limits are its own: it sees the command line, never the value; a
   `--body-file` whose file already holds the text is outside it; and so is
-  `git commit -m` ([#711](https://github.com/diazoxide/charter/issues/711)).
+  `git commit -m` — a **stated** limit rather than an open question, because the spelling
+  that writes this repository's own multi-line messages,
+  `-m "$(cat <<'EOF' … EOF)"`, is itself a live substitution, so a guard there would refuse
+  the safe form ([#711](https://github.com/diazoxide/charter/issues/711)).
+  **charter's own text-taking commands are covered** — `persona remember`,
+  `workspace remember|note|todo|vision`, `change create|drop`, `report bug|gap` and the
+  rest — because the same slip corrupted a committed memory file
+  ([#778](https://github.com/diazoxide/charter/issues/778)).
   The rule that covers what no guard can see is to write bodies with `--body-file -` and a
-  **quoted** heredoc (`<<'BODY'`), never `--body "…"` with backticks in it. See
-  [hooks.md](hooks.md) for the full scope.
+  **quoted** heredoc (`<<'BODY'`), never `--body "…"` with backticks in it; in a charter
+  argument, backslash-escape them. See [hooks.md](hooks.md) for the full scope.
 
 ## Setting one up
 
