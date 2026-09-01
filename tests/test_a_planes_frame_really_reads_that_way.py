@@ -52,7 +52,9 @@ _FLOOR_BIN = Path.home() / ".local/share/charter-testing" / f"tmux-{tmuxctl.FLOO
 
 #: Everything a `tests._tmuxreap.name` slug may not contain, in one class. The socket name
 #: is what the reaper matches on, so a tag built from a filename has to be folded into the
-#: namespace before it goes in — see `setUp`.
+#: namespace before it goes in — see `setUp`. Written as a run (``+``) so a `3.2` folds to
+#: one hyphen and not two, and applied to a lowercased name with the ends stripped, because
+#: the two shapes `_OURS` refuses either side of a fold are a doubled and a trailing hyphen.
 _SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
 
 #: One SGR escape as it comes back out of `capture-pane -e`.
@@ -135,7 +137,7 @@ class _NestedClient(PersonaIso):
         # went through the one producer and came out UNREAPABLE anyway, leaving two live
         # servers per floor test that no later reap could see (#770). `_tmuxreap.name` now
         # refuses such a slug at the source; this is the slug it wants.
-        tag = _SLUG_UNSAFE.sub("-", Path(self.BIN).name)
+        tag = _SLUG_UNSAFE.sub("-", Path(self.BIN).name.lower()).strip("-")
         self._inner = _tmuxreap.name(f"frame-reads-in-{tag}")
         self._outer = _tmuxreap.name(f"frame-reads-out-{tag}")
         self.addCleanup(self._teardown)
