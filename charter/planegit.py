@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from . import config, util
+from . import root as _root      # `root` is a PARAMETER name throughout this module
 
 
 def _git(args, cwd=None):
@@ -545,6 +546,72 @@ def push_head(root, announce: bool = True) -> PushResult:
     return record_push(PushResult(FAILED, branch, detail=tail), head)
 
 
+#: Pathspecs that name the whole repository rather than a path inside it. ``git add .`` run
+#: with ``-C <root>`` is ``git add -A`` wearing a different spelling, and ``:/`` says so
+#: outright.
+_WHOLE_TREE_PATHSPECS = {".", "./", ":/", ":/:"}
+
+#: Flags that, with NO pathspec, make git operate on the whole tree instead of on nothing.
+#: ``-u`` is here with ``-A``: it stages only tracked modifications, which is precisely the
+#: operator's mid-edit ``charter.toml`` that #806 is about.
+_WHOLE_TREE_FLAGS = {"-A", "--all", "--no-ignore-removal", "-u", "--update"}
+
+
+def stages_the_whole_tree(add_cmd: list) -> bool:
+    """Would *add_cmd* stage EVERYTHING under the root it is run in?
+
+    The property that makes a call dangerous is not which command issued it — it is that it
+    sweeps up files the caller never named and, from another working tree, cannot see. So
+    :func:`commit_push`'s worktree refusal is keyed on this rather than on ``charter save``,
+    and the next caller to copy that shape inherits the guard instead of re-deriving #806.
+
+    A named pathspec bounds the call, however wide the flags: ``["add", "-A", "--",
+    "workspaces/x", ".gitignore"]`` — `commands_workspace`'s shape — is scoped, because the
+    ``-A`` widens what happens *to* those paths (it includes deletions) rather than widening
+    the paths.
+
+    **With no pathspec, the flags decide, and they are not interchangeable.** Measured
+    against git 2.x on a repo with one edited tracked file and one untracked file:
+
+    ==================  ==========================
+    ``git add``         stages nothing
+    ``git add --``      stages nothing
+    ``git add -A``      stages both
+    ``git add -A --``   stages both
+    ``git add -u``      stages the tracked edit
+    ==================  ==========================
+
+    So a bare ``--`` does **not** bound anything — the first draft of this treated
+    ``["add", "-A", "--"]`` as scoped, and it stages the operator's whole tree. And a
+    pathspec-less ``add`` with no widening flag stages nothing, which every scoped caller
+    here can produce by splatting an empty list (``["add", "--", *paths]``); reading that as
+    "the whole tree" would turn a harmless no-op into a refusal, from a worktree only, on
+    the one path nobody would think to test.
+    """
+    args = list(add_cmd[1:])
+    if "--" in args:
+        # Everything past the separator is a pathspec, even one that starts with a dash: a
+        # file really can be called ``-A``, and past ``--`` git stages that file rather than
+        # reading the flag (measured). This is the ONLY shape in which the split is
+        # observable, which is why the deletion sweep reported this branch as a survivor
+        # until a case for it existed.
+        i = args.index("--")
+        flags, paths = args[:i], args[i + 1:]
+    else:
+        # No separator, so git reads a leading dash as an option. ``flags`` is deliberately
+        # unfiltered: it is only ever consulted when ``paths`` is empty, and when nothing in
+        # *args* lacks a leading dash the two lists are the same. Filtering it as well was a
+        # line the suite could not tell apart from its own absence, which the sweep reported
+        # and this repository treats as dead code rather than as an equivalent mutant.
+        flags, paths = args, [a for a in args if not a.startswith("-")]
+    if paths:
+        # `any`, not `all`: measured, `git add -- . u.txt` stages the whole tree. One
+        # whole-tree spelling anywhere in the list widens the call, and the named paths
+        # beside it change nothing. The deletion sweep found this one.
+        return any(p in _WHOLE_TREE_PATHSPECS for p in paths)
+    return any(f in _WHOLE_TREE_FLAGS for f in flags)
+
+
 def commit_push(root, add_cmd: list, message: str | None,
                 sign: bool = False, no_push: bool = False, background: bool = False) -> int:
     """Stage (``add_cmd``) → secret-scan staged memory/refs → commit → push via the
@@ -561,6 +628,38 @@ def commit_push(root, add_cmd: list, message: str | None,
     if add_cmd and add_cmd[0] == "git":
         raise ValueError(f"commit_push(add_cmd=…) takes git's arguments, not a command "
                          f"line — drop the leading 'git' from {add_cmd!r}")
+
+    # #806: an UNBOUNDED add, run from a linked worktree of *root*, commits a tree the
+    # caller is not standing in. `root._plane_of` sends a worktree's plane back to the clone
+    # it was cut from — right for identity, and it makes `charter save` typed in a worktree
+    # run `git -C <the plane's clone> add -A`. Measured on a throwaway plane in both layouts
+    # (beside the plane, and `<plane>/.claude/worktrees/<agent>`): it committed the
+    # operator's half-finished `charter.toml` and an untracked scratch file under the
+    # agent's message, and did not commit the agent's own work at all. Nothing announced any
+    # of it, because the success line named a sha and a count and no path.
+    #
+    # BEFORE the git-repo check and before any staging: a refusal that has already run `git
+    # add -A` has done the damage and merely declined to name it.
+    #
+    # Scoped adds are deliberately still allowed from a worktree — reactive memory, the
+    # dispatch tally, the workspace manifest and the version pin all name plane-state files,
+    # which belong to the plane and have no worktree copy that would be right. Refusing
+    # those would stop every agent working in a worktree from recording memory, a larger
+    # harm than this one. `$CHARTER_ROOT=<worktree>` is honoured for free and on purpose:
+    # `tree_of` asks whether the caller is in a worktree OF THE TREE BEING COMMITTED, and
+    # under that override the tree being committed is the caller's own.
+    if stages_the_whole_tree(add_cmd):
+        tree = _root.tree_of(root)
+        if tree is not None:
+            util.err(f"Refusing to stage all of {root} — you are standing in {tree}, a "
+                     f"linked worktree of it. Committing every change in a tree you are not "
+                     f"in would take that tree's uncommitted work under your message, and "
+                     f"leave your own work here unsaved.")
+            util.info(f"  your own work:   git -C {tree} add -A && git -C {tree} commit")
+            util.info(f"  the plane's own: run `charter save` from {root}")
+            util.info(f"  you really do mean this tree: "
+                      f"{_root.ENV_VAR}={tree} charter save")
+            return 1
 
     # A plane is not always a git repo: `charter init` in a fresh directory does not run
     # `git init`, and that is exactly the README's 60-second path. Every git call below
@@ -615,7 +714,11 @@ def commit_push(root, add_cmd: list, message: str | None,
                   .format(root))
         return 1
     short = _git(["rev-parse", "--short", "HEAD"], cwd=root).stdout.strip()
-    util.ok(f"Committed {short}: {msg}  ({len(staged)} file(s))")
+    # Names the TREE. #806 lived for months because it did not: a commit landing in the
+    # plane's clone while the operator stood in a worktree read exactly like a commit
+    # landing where they meant, and the only evidence was in `git log` in a directory
+    # nobody was looking at.
+    util.ok(f"Committed {short} in {root}: {msg}  ({len(staged)} file(s))")
 
     if no_push:
         util.info("Skipped push (--no-push).")
