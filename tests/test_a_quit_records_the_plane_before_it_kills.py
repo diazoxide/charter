@@ -571,6 +571,124 @@ class TheManifestRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
                          ("", "", "", "", "", False))
 
 
+class TheParserAnswersForEveryShapeAJsonFileCanHold(PersonaIso, unittest.TestCase):
+    """Every type guard in `reopen.read`, fed the type it was written to refuse.
+
+    **The cause, in one line: every case above feeds a bad VALUE inside the right
+    CONTAINER, so no type guard was ever handed the wrong container.** A bad version, a
+    chat id with a semicolon in it, a workspace that is `../etc` — all of them arrive as
+    the dict-of-lists-of-dicts charter itself writes. Nothing fed a top level that is a
+    list, a frame that is not a dict, a `chats` that is not a list, a chat entry that is
+    not a dict, an `at` that is a string or a `focus` that is a number, and the deletion
+    sweep reddened one guard for each of those.
+
+    **This is the #442/#475 position, and on this branch it is the only cluster whose blast
+    radius leaves the frame.** `cwd` reaches `os.chdir` and `workspace` reaches a tmux `-t`
+    argv (`_reopen_one`, `_attach_after_reopen`); the manifest is a plain file that outlives
+    the process it was written by and may be OLDER than the charter reading it, or hand
+    edited, or half written by a machine that went down; and `read()` sits on the path of
+    every `charter` launch, because `cmd_launch` asks it whether this chat was named by a
+    quit. A guard missing here is therefore not a wrong answer that degrades — it is an
+    `AttributeError` or a `KeyError` out of a function whose entire contract is that it
+    degrades, raised in the process that hands the operator their shell back.
+
+    Written against files rather than through `reopen.write`, for
+    `WhatIsOnDiskIsAFormatAndNotAnImplementationDetail`'s reason one step on: a writer
+    cannot produce these shapes at all, so a round trip cannot ask the question.
+    """
+
+    #: One chat entry that IS readable, so each case is about the shape around it rather
+    #: than about whether anything survives the read at all.
+    GOOD = {"chat": "alpha.1", "workspace": "alpha"}
+
+    def _on_disk(self, raw) -> None:
+        config.private_mkdir(state._root())
+        config.write_for(reopen.path(), json.dumps(raw) + "\n")
+
+    def _wrapping(self, frames) -> dict:
+        return {"version": reopen.VERSION, "at": 1, "focus": "alpha", "frames": frames}
+
+    def test_a_top_level_that_is_a_list_is_nothing_to_reopen(self):
+        self._on_disk([self._wrapping([{"workspace": "alpha", "chats": [self.GOOD]}])])
+
+        self.assertIsNone(reopen.read())
+
+    def test_a_frame_that_is_not_a_dict_takes_the_whole_manifest_down(self):
+        self._on_disk(self._wrapping(["alpha"]))
+
+        self.assertIsNone(reopen.read())
+
+    def test_a_chats_field_that_is_not_a_list_takes_the_whole_manifest_down(self):
+        # A string is iterable, so without the second half of the guard this reads as seven
+        # one-character chats, drops all seven as unusable, and answers with an EMPTY
+        # manifest — "nothing was recorded" — instead of refusing a shape it cannot read.
+        self._on_disk(self._wrapping([{"workspace": "alpha", "chats": "alpha.1"}]))
+
+        self.assertIsNone(reopen.read())
+
+    def test_a_chat_entry_that_is_not_a_dict_is_dropped_and_the_rest_is_read(self):
+        # Refused per ENTRY rather than per manifest, because a chat is the unit a reopen
+        # can honestly skip: `cmd_reopen` reports the difference between what was recorded
+        # and what came back, so a dropped one is a sentence rather than a silence.
+        self._on_disk(self._wrapping([{"workspace": "alpha", "chats": [
+            "alpha.2", ["alpha.3"], 4, None, dict(self.GOOD, chat="alpha.5")]}]))
+
+        m = reopen.read()
+
+        self.assertEqual([c.chat for c in m.all_chats()], ["alpha.5"])
+
+    def test_a_frame_that_never_recorded_a_workspace_is_read_as_an_unnamed_frame(self):
+        # The migration case — a manifest written by a charter one field older — and the
+        # one the missing fallback turns into a `KeyError` on the launch path.
+        self._on_disk(self._wrapping([{"chats": [self.GOOD]}]))
+
+        self.assertEqual([f.workspace for f in reopen.read().frames], [""])
+
+    def test_a_frame_whose_workspace_is_null_is_read_as_an_unnamed_frame(self):
+        # And `null` rather than absent, because `str()` around it would otherwise make the
+        # frame's name the four characters `None`.
+        self._on_disk(self._wrapping([{"workspace": None, "chats": [self.GOOD]}]))
+
+        self.assertEqual([f.workspace for f in reopen.read().frames], [""])
+
+    def test_the_recorded_at_is_the_number_that_comes_back(self):
+        # The read side of `at`, spelled as a literal on both ends: the key is looked up by
+        # name and the value comes back whole. Nothing else here reads it, because
+        # everything else writes with `reopen.write` and reads with `reopen.read`.
+        raw = self._wrapping([{"workspace": "alpha", "chats": [self.GOOD]}])
+        self._on_disk(dict(raw, at=1700000000))
+
+        self.assertEqual(reopen.read().at, 1700000000)
+
+    def test_an_at_that_is_not_a_number_reads_as_no_time_at_all(self):
+        raw = self._wrapping([{"workspace": "alpha", "chats": [self.GOOD]}])
+        self._on_disk(dict(raw, at="yesterday"))
+
+        self.assertEqual(reopen.read().at, 0)
+
+    def test_a_focus_that_is_not_a_name_reads_as_no_focus(self):
+        # `focus` decides which reopened chat the operator is put back ON
+        # (`_attach_after_reopen`), and `_consume` writes it straight back out again, so a
+        # number kept here would outlive the reopen that read it.
+        raw = self._wrapping([{"workspace": "alpha", "chats": [self.GOOD]}])
+        self._on_disk(dict(raw, focus=7))
+
+        self.assertEqual(reopen.read().focus, "")
+
+    def test_a_record_whose_chat_id_is_not_even_text_is_refused_not_raised_on(self):
+        # `_usable` called directly, and deliberately: no shipped caller can hand it a
+        # non-string, because `_chat` normalises all seven text fields on the way in. The
+        # fallback is there so the predicate is TOTAL over `Chat` — it is the last gate
+        # before a recorded name becomes a transcript path and a tmux target, and a gate
+        # that raises on the one input it was written to refuse is not a gate. Pinned here
+        # rather than deleted for that reason.
+        blank = reopen.Chat(chat="", workspace="alpha", persona="", harness="", cwd="",
+                            resume="", transcript="", active=False)
+
+        self.assertFalse(reopen._usable(blank))
+        self.assertFalse(reopen._usable(blank._replace(chat=None)))
+
+
 class TranscriptsAreBounded(PersonaIso, unittest.TestCase):
     """A file in the frame root has no collector but the thing that writes it."""
 
