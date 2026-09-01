@@ -255,9 +255,24 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
                                   return_value=True), \
                 mock.patch.object(commands_frame.tmuxctl, "version",
                                   return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "operator_server",
+                                  return_value=None), \
                 mock.patch.object(commands_frame, "_attach_after_reopen",
                                   return_value=0):
             return commands_frame.cmd_reopen(SimpleNamespace())
+
+    def test_inside_the_operators_own_tmux_it_refuses_rather_than_half_reopening(self):
+        self._record(self._chat())
+        with mock.patch.object(commands_frame.sys.stdout, "isatty",
+                               return_value=True), \
+                mock.patch.object(commands_frame.tmuxctl, "version",
+                                  return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "operator_server",
+                                  return_value=("/tmp/sock", "s0")), \
+                mock.patch.object(commands_frame, "cmd_launch") as launch:
+            self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 1)
+            launch.assert_not_called()
+        self.assertIsNotNone(reopen.read(), "and the record is left to try again")
 
     def test_resume_is_appended_to_the_harness_argv_for_claude_with_an_id(self):
         self._record(self._chat(resume="conv-1"))

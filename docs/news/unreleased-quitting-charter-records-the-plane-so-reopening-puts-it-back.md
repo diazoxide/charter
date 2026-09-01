@@ -238,6 +238,13 @@ name can have — and quitting one leaves the other's harness running.
 * **Restore a selection, a pane map, or live scrollback.** The first two are destroyed on
   purpose; the third is offered as a file.
 * **Refuse a close while that chat is working** — `inflight` cannot say which chat is.
+* **Reopen from inside a tmux you already have.** Charter builds a frame there as a window on
+  your own server, and that launcher stays awake for the life of each frame — it reads the
+  harness's exit status itself instead of installing the `pane-died` hooks, which is what
+  makes it correct there and what makes it block exactly as `attach` does. A reopen driving
+  it would stop at the first chat, so `charter reopen` refuses with that sentence and leaves
+  the record in place. Suppressing that wait is its own change, on a path whose exit-code
+  contract depends on it.
 
 ## Adopting it
 

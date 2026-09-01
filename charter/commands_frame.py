@@ -8041,6 +8041,24 @@ def cmd_reopen(args) -> int:
     if tmuxctl.version() is None:
         util.err(tmuxctl.absent_message())
         return 1
+    # **Refused inside a tmux the operator already has, and stated rather than half-done.**
+    # `cmd_launch` builds a frame there as a WINDOW on THEIR server
+    # (`_launch_in_operator_tmux`), and that path is awake for the whole life of the frame —
+    # it reads the harness's exit status itself instead of installing the `pane-died` hooks,
+    # which is what makes it correct there and what makes it BLOCK exactly as `attach` does.
+    # A reopen driving it would stop on the first chat and never build the second, and the
+    # `Reopening` seam is not wired through it either: `restoring.fid` would stay ``""`` and
+    # every chat would be reported as "did not come back" having actually come back. Two
+    # honest options existed and this is the smaller one — the alternative is suppressing
+    # `_wait_for_harness` on a path whose exit-code contract depends on it, which is its own
+    # change with its own two-version verification.
+    if tmuxctl.operator_server() is not None:
+        util.err("charter reopen: not from inside a tmux you already have — charter builds "
+                 "a frame there as a window on your own server, and that launcher stays "
+                 "awake for the life of each frame, so reopening several chats would stop "
+                 "at the first. Run it from an ordinary shell. Nothing was reopened, and "
+                 "the record is left in place.")
+        return 1
     back: list[Reopening] = []
     for f in m.frames:
         for c in f.chats:

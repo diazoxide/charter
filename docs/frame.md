@@ -673,6 +673,11 @@ resuming it. It attaches you to the workspace you pressed quit in, on the chat t
 front of you. The record describes one quit and is consumed by one reopen, so running it
 twice does not double your tabs.
 
+Run it from an ordinary shell. **Inside a tmux you already have it refuses**, because charter
+builds a frame there as a window on your own server and that launcher stays awake for the
+life of each frame — so reopening several chats would stop at the first. It says so and
+leaves the record alone.
+
 **Resume is Claude Code only, and the warning says so per chat.** Charter records a harness's
 own session id from Claude Code's status-line hook, which is the only harness that supplies
 one — so it is the only harness whose conversation charter can ask for back. A chat that
