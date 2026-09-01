@@ -413,6 +413,13 @@ class TheReaperEndsWhatAKilledRunLeftRunning(unittest.TestCase):
     else on this machine is looking at, which makes every `reap()` here EXACT rather than
     merely tolerant.
 
+    Reproduced cold before it was fixed rather than inferred from the report: six runs of
+    this class, two at a time, without the directory — **five failed**, and in BOTH
+    directions ("a sibling reaped my plant" and "I reaped a sibling's"). Six for six with
+    it, including a pair run beside a full second suite. The second direction only appears
+    once the claims are the equalities below, which is the argument for the directory rather
+    than for narrowing them: a shared directory makes the exact claim unstateable.
+
     `NothingReapableSurvivesOnThisMachine` keeps the real directory, deliberately: that
     claim is about the machine, and a private directory would make it true by having nothing
     in it.
@@ -429,10 +436,11 @@ class TheReaperEndsWhatAKilledRunLeftRunning(unittest.TestCase):
         # umask here makes one at 0o755. The two scan classes above create the same
         # directory without it and are unaffected, because they never start a server in it.
         (tmp / f"tmux-{os.getuid()}").mkdir(mode=0o700)
-        # Through `os.environ`, not a `tmux` argument: the reaper reads the variable and so
-        # does every `tmux` this class spawns, which is the only way the two agree about
-        # where the socket is. `_envguard` treats a set as a declaration, so this is also
-        # what tells it the read below is deliberate.
+        # Through `os.environ` rather than a `tmux` argument, and there is no argument that
+        # would do: `-L` names a socket, not a directory, and tmux computes the directory
+        # from this variable — the same rule `_tmuxreap.socket_dir` copies. Setting it is
+        # the only thing that makes the reaper and every `tmux` this class spawns agree
+        # about where the socket is.
         self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": str(tmp)}))
 
     def _plant(self, pid: int) -> tuple[str, Path]:
