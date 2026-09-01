@@ -31,7 +31,6 @@ rule takes ONE colour, set `-w`, exactly as `_chrome_argvs` already sets the oth
 from __future__ import annotations
 
 import os
-import pathlib
 import subprocess
 import tomllib
 import unittest
@@ -40,17 +39,14 @@ from unittest import mock
 from charter import commands_frame, config, instance
 from charter.frame import state, tmuxctl
 from tests._isolation import PersonaIso
+# This repo's own committed `charter.toml`, IMPORTED rather than recomputed. Cross-module
+# test imports are this suite's ordinary way of sharing a fixture, and the thing worth
+# sharing here is not the one-line path — it is the *reason* that path is not `config.ROOT`
+# (`root._plane_of` redirects a worktree, #785), which should exist in one comment rather
+# than in two that can drift apart. `test_frame_config` is where it already lives.
+from tests.test_frame_config import _COMMITTED
 
 _STYLES = ("pane-border-style", "pane-active-border-style")
-
-#: This checkout's own `charter.toml`, read off disk — `test_frame_config._COMMITTED`'s
-#: idiom, imported by spelling rather than by import because the two files claim different
-#: things about the same bytes and neither should be able to break the other's reading.
-#:
-#: `config.ROOT` is deliberately NOT this path: `root._plane_of` redirects a linked
-#: worktree's plane to the tree it was cut from, so through `config` this would be the
-#: operator's checkout and not the branch under test (#785).
-_COMMITTED = pathlib.Path(__file__).resolve().parents[1] / "charter.toml"
 
 #: A tmux old enough to have every option `_CHROME` names — the version the cases that are
 #: about the SURFACE are asked at, so a row dropped for its own floor cannot quietly change

@@ -25,6 +25,11 @@ from tests import _envguard
 #: :class:`CharterOwnPlaneDrawsEveryEdgeItShips`. Read off disk rather than through
 #: `config`, which resolves a WORKTREE back to the main tree it was cut from
 #: (`root._plane_of`) and would therefore test the operator's checkout, not this one.
+#:
+#: That paragraph is why this is the one place the path is written and
+#: `test_frame_border_surface` imports it: the same case reading through `config.FRAME`
+#: instead failed in every worktree of this repo and passed on CI, and would have gone on
+#: passing on a machine whose own configuration happened to satisfy it (#785).
 _COMMITTED = pathlib.Path(__file__).resolve().parents[1] / "charter.toml"
 
 
