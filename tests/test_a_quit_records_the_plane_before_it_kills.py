@@ -863,5 +863,93 @@ class TheCaptureIsBoundedAndNeverRaises(PersonaIso, unittest.TestCase):
             self.assertFalse(commands_frame._capture_transcript(SERVER, "%1", self.dest))
 
 
+class AChatThatRecordedNothingIsStillAChat(PersonaIso, unittest.TestCase):
+    """The fixture that lies, and the cluster the deletion sweep found with it.
+
+    **`_plant` above always writes a server, a workspace, a harness pane and an identity**,
+    because that is what a launch writes — so every `X or ""` in `leave.plan` read a truthy
+    value in every test on this branch, and the sweep found the whole block unpinned at once.
+    That is not six separate gaps; it is one fixture that never lies.
+
+    A chat CAN have recorded nothing: `new_chat_id` makes the directory before anything is
+    written into it, a launch can die between the `mkdir` and its first record, and a chat
+    launched by a charter that predates any one of these files has that file missing for
+    good. `plane_chats` exists precisely so those are stopped and reported rather than
+    skipped, so what they read back has to be the empty string the record type declares —
+    not `None`, which would reach `json.dumps` and put a `null` in the manifest where
+    `Chat.persona: str` promises text.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Everything `new_chat_id` guarantees, and not one byte more.
+        state.frame_dir("alpha.1", create=True)
+
+    def test_every_field_reads_back_as_the_empty_string_it_declares(self):
+        p = leave.plan(live={"alpha.1"}, focus="")
+
+        self.assertEqual([c.chat for c in p.chats], ["alpha.1"])
+        c = p.chats[0]
+        self.assertEqual(
+            (c.workspace, c.persona, c.harness, c.cwd, c.resume, c.server),
+            ("", "", "", "", "", ""))
+        for name, value in zip(
+                ("workspace", "persona", "harness", "cwd", "resume", "server"),
+                (c.workspace, c.persona, c.harness, c.cwd, c.resume, c.server)):
+            self.assertIsInstance(value, str, name)
+
+    def test_it_is_neither_homeless_nor_missing_a_directory(self):
+        # Both are `bool(x) and …`: a chat that recorded no workspace is not a chat whose
+        # workspace has been DELETED, and a chat that recorded no cwd is not one whose
+        # directory has gone. Reporting either would be charter inventing a loss.
+        c = leave.plan(live={"alpha.1"}, focus="").chats[0]
+
+        self.assertFalse(c.homeless)
+        self.assertFalse(c.cwd_gone)
+
+    def test_a_harness_recorded_as_whitespace_reads_as_no_harness(self):
+        # `.strip()` and not `.lstrip()`: `_frame_identity_env` emits every name present or
+        # absent, so a truncated or padded value is a real shape here — and a harness of
+        # `"  "` must not become a chat that says it was running a harness called nothing.
+        state.record_identity("alpha.1", {"CHARTER_HARNESS": "  \t ",
+                                          "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+
+        state.record_workspace("alpha.1", "alpha")
+
+        c = leave.plan(live={"alpha.1"}, focus="").chats[0]
+
+        self.assertEqual(c.harness, "")
+        self.assertTrue(leave.note(c).startswith(leave.NO_RESUME_UNKNOWN),
+                        "a chat charter cannot identify says so, rather than naming a "
+                        f"harness called nothing — got {leave.note(c)!r}")
+
+    def test_a_harness_with_trailing_space_is_the_harness_it_names(self):
+        # The other half, and the one `lstrip` gets wrong: a trailing space is what a
+        # truncated write leaves, and `claude-code ` is Claude Code.
+        state.record_identity("alpha.1", {"CHARTER_HARNESS": "claude-code ",
+                                          "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+
+        c = leave.plan(live={"alpha.1"}, focus="").chats[0]
+
+        self.assertEqual(c.harness, "claude-code")
+        self.assertTrue(leave.resumable_harness(c.harness))
+
+    def test_it_is_recorded_by_a_quit_with_no_nulls_in_the_manifest(self):
+        # The whole point of the empty strings: they are what reaches `json.dumps`.
+        _plant("beta.1", ws="beta")
+        with mock.patch.multiple(commands_frame, _chat_seats=mock.DEFAULT,
+                                 _capture_transcript=mock.DEFAULT,
+                                 _stop_chats=mock.DEFAULT) as m:
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "beta.1": "@1"}, set())
+            m["_capture_transcript"].return_value = False
+            m["_stop_chats"].return_value = 2
+            commands_frame.cmd_quit(SimpleNamespace(chat="beta.1"))
+
+        raw = json.loads(reopen.path().read_text())
+        self.assertNotIn("null", json.dumps(raw["frames"]),
+                         "a null where the record type promises text is a shape every "
+                         "reader has to handle")
+
+
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()
