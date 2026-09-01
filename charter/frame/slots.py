@@ -70,6 +70,33 @@ SPINNER_PERIOD = 0.2
 #: actually has rows to give.
 _TERSE_ROWS = 4
 
+#: Rows a bordered section spends on its own `▪ <label> N` heading before it has said
+#: anything about its content — `_sidebar_head`, one row.
+#:
+#: **One constant because three places did this arithmetic and one of them is in another
+#: module** (#740). :func:`repos_rows_wanted` adds it to the rows the table wants,
+#: :func:`_repos` subtracts it from the pane it measures, and `layout._table_min_rows`
+#: reads :data:`_TABLE_MIN_ROWS` below to decide whether a pane is worth splitting at all.
+#: Spelled as `1 +` and `- 1` in the first two and as a literal in the third, the day the
+#: heading gains a row is the day the launcher sizes a pane the renderer then overflows —
+#: which is the sizer-and-renderer disagreement #500 shipped twice on the other axis.
+_HEAD_ROWS = 1
+
+#: The shortest `repos` pane that can say anything about a repo — its heading plus one
+#: table row.
+#:
+#: **Read by `layout.visible_slots` (through `layout._table_min_rows`), which is what
+#: stops a shorter one being split at all.** #740: at 120x10 the frame spent three rows
+#: — two tmux rules and `▪ repos 8` — on a count, having just decided it could not afford
+#: the one row that names the workspace and the persona. `_table_lines` answers `[]` on a
+#: budget of zero, so that pane was a label for content there was no room for; below this
+#: the slot now goes the way `right` and the two bars go.
+#:
+#: The other axis of `layout._table_min_cols`, which reads `statusline._LEFT_W` for the
+#: identical reason: the number the RENDERER stops drawing at and the number the LAUNCHER
+#: stops splitting at must be one number.
+_TABLE_MIN_ROWS = _HEAD_ROWS + 1
+
 
 def spinner_frame(now: float | None = None) -> str:
     """Which frame of :data:`SPINNER` this instant shows.
@@ -1340,10 +1367,10 @@ def repos_rows_wanted(fid: str, *, pane_cols: int) -> int:
     a frame with six blank rows in it — the same discipline `window_cols=` already
     applies one level up.
 
-    **The `+ 1` is the pane's own heading, and it is no longer the attention row.** This
-    used to add that row, because `bottom` drew it and the table into one pane; they are
-    two panes now (`bottom` is the one-row strip it was before #488, and
-    `layout.SLOT_SIZE` states its height as the constant it is). What the row buys here
+    **The :data:`_HEAD_ROWS` added is the pane's own heading, and it is no longer the
+    attention row.** This used to add that row, because `bottom` drew it and the table
+    into one pane; they are two panes now (`bottom` is the one-row strip it was before
+    #488, and `layout.SLOT_SIZE` states its height as the constant it is). What the row buys here
     is `▪ repos N` — the same heading `_right` gained in #516, from the same
     `_sidebar_head`, so the frame's two bordered components are labelled the same way and
     the tree beneath it has something to hang from. Chrome the density does not buy back,
@@ -1376,7 +1403,7 @@ def repos_rows_wanted(fid: str, *, pane_cols: int) -> int:
     if cap <= 0:
         return 0
     rows = gather.row_count(fid)
-    return 1 + min(rows, cap) if rows else 0
+    return _HEAD_ROWS + min(rows, cap) if rows else 0
 
 
 #: Columns the persona NAME cell is never squeezed below once the badges have a column
@@ -1777,6 +1804,33 @@ def _persona_rows(cells: list, width: int) -> list[str]:
     return rows
 
 
+def todo_total(data: dict) -> int:
+    """How many todos this workspace has OPEN, unclipped — the number the `▪ todos N`
+    heading carries and the number the palette's reader counts against.
+
+    `gather._MAX_TODOS` bounds the LIST the cache holds; `todo_count` is the count of what
+    was there before the bound. A cache written by an older charter has the items and no
+    count, so this falls back to what it can actually see rather than reporting zero hidden
+    todos it cannot name — and it refuses a count SMALLER than the list, which is a cache
+    whose two halves disagree.
+
+    **Named because two surfaces read it** (#742). The sidebar's heading is one, and
+    `frame/builtin_actions._read_todo` — the palette row that reads the todos the sidebar
+    had no rows for — is the other. Spelled twice, the reader would have said `3/20` under
+    a heading saying `todos 400`, which is the drift a shared answer cannot have. Takes the
+    snapshot rather than a fid: the sidebar has `gather.read`'s and an action has its
+    `ctx.gather`, and neither should reach for the other's.
+    """
+    items = [t for t in (data.get("todos") or []) if isinstance(t, dict)]
+    raw = data.get("todo_count")
+    # `max` and not `raw if raw >= len(items) else len(items)`, which is what this said
+    # while it lived inside `_todo_rows`. The two are the same function — at `raw ==
+    # len(items)` both arms answer the same number — so `>=` there could be flipped to `>`
+    # by the deletion sweep and nothing downstream could tell, which is a comparison no
+    # test can turn red. Written as the bound it is, there is no branch left to get wrong.
+    return max(raw, len(items)) if isinstance(raw, int) else len(items)
+
+
 def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
     """This workspace's open todos, heading included, in at most *budget* lines.
 
@@ -1795,6 +1849,17 @@ def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
     of the budget rather than appended and trimmed off the end. A budget of exactly two
     therefore says the count and how much is hidden, because "there is more here than
     fits" outranks "here is an arbitrary one of them".
+
+    **The `…(+N more)` line has a route beside it now, and it is a keypress** (#742). It
+    used to advertise hidden content that nothing on the machine could reach: no click, no
+    key, no palette row — only `charter workspace todo` typed into the harness, which is
+    the surface the frame exists to replace. `frame/builtin_actions._register_todos` is
+    that route — one repeatable palette row that reads the open todos out, in full, on the
+    palette's own header. It is deliberately a KEY and not a wheel: `[frame] mouse` is off
+    on most planes, so a pointer-only answer would be inert on exactly the frames this was
+    reported from, and the row itself must go on answering nothing (`_Chips.hit`'s rule for
+    the persona column's own overflow line — a row that stands for items it does not name
+    cannot resolve to one).
 
     **Nothing at all when there is nothing open**, unlike `_bottom`'s `0 todos`. That row
     is one row on a strip that is never blank anyway; this is a heading plus an empty
@@ -1815,14 +1880,14 @@ def _todo_rows(data: dict, width: int, budget: int) -> list[str]:
     """
     from .. import contain, statusline as sl
     items = [t for t in (data.get("todos") or []) if isinstance(t, dict)]
-    if not items or budget < 2:
+    # `_HEAD_ROWS` for the heading, and one row under it: a heading with nothing beneath
+    # claims this workspace has no todos, which is the false-clean reading this module
+    # refuses everywhere. The constant rather than a literal `2` for :data:`_HEAD_ROWS`'
+    # own reason.
+    if not items or budget <= _HEAD_ROWS:
         return []
-    # `todo_count` is the UNCLIPPED total (`gather._MAX_TODOS` bounds only the list), so a
-    # cache written by an older charter — which has the items and no count — falls back to
-    # what it can actually see rather than reporting zero hidden todos it cannot name.
-    raw = data.get("todo_count")
-    total = raw if isinstance(raw, int) and raw >= len(items) else len(items)
-    room = budget - 1                       # the heading is not negotiable
+    total = todo_total(data)
+    room = budget - _HEAD_ROWS              # the heading is not negotiable
     shown = items[:room]
     if total > len(shown):
         shown = items[:max(0, room - 1)]    # reserve the line that says how many are left
@@ -2700,9 +2765,9 @@ def _repos(fid: str) -> str:
     the sidebar has narrowed. So on an untouched frame the two agree exactly and no row
     is either blank or cut, at every width the frame is drawn at, at every level the
     palette offers, and in whatever order the operator's `[frame] slots` puts the
-    edges in. The `- 1` is the heading and nothing else — the attention row is another
-    pane's now, and a budget still reserving a row for THAT would lose the lowest-ranked
-    repo row to nothing.
+    edges in. The :data:`_HEAD_ROWS` taken off is the heading and nothing else — the
+    attention row is another pane's now, and a budget still reserving a row for THAT
+    would lose the lowest-ranked repo row to nothing.
 
     A pane that is shorter anyway — a transient mid-resize size, or a window with no rows
     to spare — costs the table its lowest-priority rows through `_pick_rows`' ranking,
@@ -2817,7 +2882,7 @@ def _repos(fid: str) -> str:
     # resize starved) is still `_pick_rows`' ranked subset — the repo you are standing
     # in, the ones with something on them — rather than whichever happened to come
     # first, the same discipline the `terse` chip list in `_right` keeps.
-    budget = min(_height() - 1, cap)
+    budget = min(_height() - _HEAD_ROWS, cap)
     # **`settle` is unconditional, and the `if budget > 0` that used to guard the call
     # below went with it.** `_table_lines` already answers `[]` for a non-positive budget
     # (its first line), so the conditional could not change an outcome — the sweep's own

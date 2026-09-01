@@ -255,6 +255,128 @@ def _select(ctx, step: int, start: int):
     return f"selected {name}"
 
 
+#: What a workspace with nothing open is told instead of a row that does nothing.
+#: :data:`NO_REPOS`' shape and its argument — the row carries the fix, because a refusal
+#: that names no way out is a row an operator reads once and never again. `charter
+#: workspace todo "…"` with a quoted argument RECORDS one; bare it lists (`cli._wire`),
+#: which is why the sentence quotes the recording form and not the reading one.
+NO_TODOS = ("this workspace has nothing open to read out — "
+            "charter workspace todo \"<what to do>\"")
+
+
+def _register_todos(reg: actions.ActionRegistry) -> None:
+    """One row that reads this workspace's open todos out, one press at a time — **the
+    keyboard route to the sidebar's `…(+N more)`** (#742).
+
+    **The defect this closes is a row with no route beside it.** `slots._todo_rows` draws
+    `…(+5 more)` on a sidebar too short for seven todos, and until this row those five were
+    reachable only by typing `charter workspace todo` into the harness — the surface the
+    frame exists to replace. The sidebar's persona column got its route in #765 (a click
+    switches, a click on the badges explains); the todo list had no gesture at all, and its
+    own overflow line must go on having none, because a row standing for items it does not
+    name cannot resolve to one (`slots._Chips.hit`'s rule).
+
+    **A KEY and not a wheel, and that ordering is the whole design.** `[frame] mouse` ships
+    off, so a pointer-only answer is inert on exactly the planes this was reported from —
+    and `docs/frame.md`'s rule runs the other way anyway: a pointer affordance always has a
+    key or a palette row beside it, so the keyboard route is the half that must exist. A
+    wheel over the section can be added on top of this later; it cannot stand in for it.
+
+    **Why the palette's HEADER rather than a list surface of its own.** `commands_frame
+    ._again` argues this in full for the repo-selection rows and every word applies: the
+    overlay pane is zoomed over the whole window, so the sidebar is not on screen behind
+    the palette, and `Invocation.note` on the header is the surface the operator is
+    actually looking at. A read-only list surface would be the nicer answer and is a real
+    change — a fifth `frame/choose.py` noun breaks that module's "a noun is a thing you
+    switch to" contract at the point where picking a row tries to switch to it.
+
+    **`repeat=True`, so five hidden todos cost five keypresses and one palette.** Without
+    it each Enter closes the pane, kills the process and re-splits for the next — the
+    fourteen-keystroke, three-cycle cost #746 measured on the repo rows.
+
+    **The cursor lives in a CELL closed over here, and that is not laziness about state.**
+    `_select` records the repo selection through `state` because a PANE has to redraw from
+    it: two processes, one fact. Nothing redraws from this — the answer is the sentence
+    `run` returns — so a `state` write plus the `state.bump` that wakes every panel would
+    be four panels repainting per keypress to move a number nobody else reads. The
+    registry is rebuilt per palette (`build`'s "a fresh registry per call") and
+    `commands_frame._again` invokes through that same registry, so the cell lives exactly
+    as long as the palette the operator is reading and starts again at the top next time —
+    which is what an operator who opened `F2` to read their todos means.
+
+    A list rather than an `itertools.count`: :func:`_read_todo` needs the value it is
+    about to report, wrapped against a list whose length it only learns from `ctx`.
+    """
+    seen = [0]
+    reg.register(action.Action(
+        id="todo.next", title="todo: read the next open todo",
+        touches=("todos", "gather"), repeat=True,
+        run=(lambda ctx: _read_todo(ctx, seen)),
+        available=lambda ctx: bool(_open_todos(ctx)),
+        reason_unavailable=lambda ctx: NO_TODOS))
+
+
+def _open_todos(ctx) -> list[dict]:
+    """The todos on *ctx* that are actually rows — `slots._todo_rows`' own filter.
+
+    A gather cache is a JSON file written by another process and may hold anything;
+    `ctx.todos` contains it no further than making the list a tuple (`ctx.SERVES` says the
+    containment is shallow in as many words). Asked in one place so `available` and
+    :func:`_read_todo` cannot disagree about whether there is a row to read — a row listed
+    as available that then answers "nothing" is the shape `ActionRegistry._check` builds one
+    ctx to prevent.
+    """
+    return [t for t in ctx.todos if isinstance(t, dict)]
+
+
+def _read_todo(ctx, seen: list[int]) -> str:
+    """The next open todo, as one sentence for the palette's header.
+
+    Split out of the row above for :func:`_select`'s reason: the walk is exercised against
+    a list of titles with no palette, no tmux server and no frame directory under it.
+
+    **The total is `slots.todo_total`, READ rather than counted here**, and #742 is why it
+    is worth a shared function: `gather._MAX_TODOS` bounds the LIST the cache holds while
+    `todo_count` records what was there before the bound, so counting `ctx.todos` would
+    report `3/20` under a sidebar heading saying `todos 400`. One answer, two surfaces.
+
+    **It wraps, and the position is what makes the wrap readable.** `_select`'s argument
+    for wrapping holds — a row that visibly does nothing at the end of a list reads as
+    broken and costs a whole `F2` to find out — and `3/7` is what stops a wrap looking like
+    a repeat. The clip is stated too: on a plane whose cache holds twenty of four hundred,
+    `3/400` over twenty readable titles would be a promise the cache cannot keep, so the
+    sentence says which list it is walking.
+
+    `open_todos` is oldest-first and that ordering is the point of it (`slots._todo_rows`),
+    so this reads in the same order the sidebar draws — the row after the last one on
+    screen is the next press, not a fresh sample.
+
+    Not contained here. `Palette.report` puts this on `Palette.heading` through
+    `_headline`, which runs `contain.one_line` over it before `tui.width` sees it, and
+    `frame/choose.py` records what a second containment on the way in costs: a line no test
+    can turn red.
+    """
+    from . import slots
+    items = _open_todos(ctx)
+    if not items:
+        # `available` refuses this row on a plane with nothing open, so the palette never
+        # reaches here — but `run` is callable without that check (a provider's own
+        # surface, and `tests.test_frame_palette` drives every built-in's `run` directly),
+        # and `% 0` is the one way this could raise instead of answering. An empty answer
+        # is `Palette.report`'s own "an action that answered nothing has nothing to
+        # report", which clears the header rather than inventing a sentence about a list
+        # that is not there. Unlike `_select`'s deliberately absent guard, this one is
+        # reachable: the modulo needs a length and the ctx is what carries it.
+        return ""
+    total = slots.todo_total(ctx.gather)
+    at = seen[0] % len(items)
+    seen[0] = at + 1
+    where = f"{at + 1}/{len(items)}"
+    if total > len(items):
+        where += f" of {total}"
+    return f"todo {where}: {items[at].get('title') or ''}"
+
+
 def _register_density(reg: actions.ActionRegistry, *, current: str) -> None:
     """One row per density level, with the level in effect marked rather than dropped.
 
@@ -359,6 +481,7 @@ def build(fid: str, *, current_density: str,
     reg = actions.ActionRegistry()
     _register_detach(reg)
     _register_selection(reg)
+    _register_todos(reg)
     _register_density(reg, current=current_density)
     _register_chrome(reg, current=current_chrome)
     for aid in reg.providers.ids():

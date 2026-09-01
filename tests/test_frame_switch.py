@@ -295,7 +295,13 @@ class ThePaletteOffersAPickerForEach(PersonaIso, unittest.TestCase):
         ids = [r.id for r in _rows(self.FID)]
         self.assertEqual(ids[:5], ["pick:workspace", "pick:persona", "pick:change",
                                    "pick:chat", "frame.detach"])
-        self.assertTrue(any(i.startswith("density.") for i in ids[5:8]), ids)
+        # The list rows (`repo.next`, `repo.previous`, `todo.next` — #742) sit between
+        # `detach` and the densities, so the densities are named by prefix rather than by
+        # index: what this test is about is the four doorways coming first.
+        self.assertTrue(any(i.startswith("density.") for i in ids[5:]), ids)
+        self.assertLess([i for i, v in enumerate(ids) if v == "frame.detach"][0],
+                        [i for i, v in enumerate(ids)
+                         if v.startswith("density.")][0], ids)
 
     def test_each_doorway_says_which_name_the_frame_is_on(self):
         """So the palette still answers "which workspace am I on" without opening

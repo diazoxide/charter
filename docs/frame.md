@@ -230,6 +230,17 @@ are *not* drawn), the `no personas` line, nor anything below the column does any
 all — the todos and the changes are readouts. On a sidebar too narrow to give the badges a
 column of their own, every cell of a persona row is its name.
 
+**The todos below the personas have a keyboard route, and that is all they have.** A short
+sidebar draws `…(+5 more)` under the two or three todos it has room for, and `F2` → `todo:
+read the next open todo` reads the whole list out from there, one press per todo, on the
+palette's own header — it repeats like the two repo rows, so five hidden todos are five
+Enters and one palette. It says where you are (`todo 3/7: Cut 0.55.0`), it wraps at the end
+rather than pressing nothing, and on a plane whose cache holds only part of a very long list
+it says that too (`todo 3/20 of 400: …`). Your `▪ todos N` heading is that same total, so
+the header and the pane can never disagree. The `…(+5 more)` row itself still does nothing
+when clicked: it stands for todos it does not name, so there is no todo for a click on it to
+be about — the same case the persona column's own overflow row carries.
+
 **The `F2 palette` hint is a button now, and so are the two nouns on the identity row.**
 Click `F2 palette` on the attention strip and the palette opens; click `⬢ <workspace>` or
 `◆ <persona>` on the identity strip and the same palette opens. All three go to the same
@@ -526,8 +537,8 @@ Those first four are the shipped frame written out longhand, and
 [Writing the arrangement out](#writing-the-arrangement-out) says what each of them is. File
 order is split order, so the bar named last is split off last.
 
-Both are the first things a short terminal gives up — before the identity row, because the
-palette reaches everything they show and nothing is lost but the reminder.
+Both are given up by a short terminal well before the identity row, because the palette
+reaches everything they show and nothing is lost but the reminder.
 
 **You can edit the arrangement while the frame is running**, which is when you can see what
 you are arranging. The file is re-read at the next re-layout — a density row or a
@@ -687,13 +698,42 @@ already have, the tmux WINDOW the frame gets, which is what charter asks tmux fo
 than measuring the pane it was typed in.
 
 Below `[frame]`'s `min-cols`/`min-rows`, the side panel (`right`) is the first to drop —
-any shortage costs it, since it cannot spare its own divider. A further shortage in rows
-drops `top` too. Below half of either floor, every panel drops and the harness simply gets
-the whole terminal, the same choice `charter`'s own status line makes when it runs out of
-width. So a narrow terminal degrades to the two strips on its own; nothing has to be
-configured for it. A density change goes through the same floors, so choosing `full` in a
-terminal with no room for a side panel gives you the edges that fit rather than a failed
-split.
+any shortage costs it, since it cannot spare its own divider. Then the repo table, on
+either axis: a pane too narrow to draw a table, or too short to draw one repo row under its
+`▪ repos N` heading. Then the two tab bars, if you have placed them. The identity row goes
+**last**, with everything else, below half of either floor — where every panel drops and
+the harness simply gets the whole terminal, the same choice `charter`'s own status line
+makes when it runs out of width. So a narrow terminal degrades to the two strips on its
+own; nothing has to be configured for it. A density change goes through the same floors, so
+choosing `full` in a terminal with no room for a side panel gives you the edges that fit
+rather than a failed split.
+
+**A rung drops when the pane it would get cannot carry what the rung is for**, and among
+rungs that still can, the ones whose facts something else reaches go first. That is why
+`top` is last above `bottom`: it is one row saying which workspace you are in and which
+persona you are being, and on a terminal with no sidebar it is also the plane's only
+roster, while the bars are reminders `F2` replaces in two keystrokes and the table needs
+two rows before it can name a single repo.
+
+**This ordering changed, and the change costs the harness nothing.** A 120x10 terminal used
+to spend three rows — two pane rules and `▪ repos 8` — on a repo count, having just decided
+it could not afford the one row that names your workspace. Measured on tmux 3.7c and the
+3.2 floor, at 120 columns on a plane with eight clones:
+
+| rows | before | now |
+|---|---|---|
+| 20 | identity 1 · harness 12 · sidebar 12 · table 3 · attention 1 | *unchanged* |
+| 19 | harness 12 · table 4 · attention 1 | identity 1 · harness 12 · table 2 · attention 1 |
+| 18 | harness 12 · table 3 · attention 1 | identity 1 · **harness 14** · attention 1 |
+| 17 | harness 12 · table 2 · attention 1 | identity 1 · **harness 13** · attention 1 |
+| 16 | harness 12 · table 1 · attention 1 | identity 1 · harness 12 · attention 1 |
+| 15 | harness 11 · table 1 · attention 1 | identity 1 · harness 11 · attention 1 |
+| 10 | harness 6 · table 1 · attention 1 | identity 1 · harness 6 · attention 1 |
+
+A table pane the rows cannot afford was floored at one row and still paid for its rule, so
+from 16 rows down the exchange is exactly even — a count for a name — and at 17 and 18 the
+harness gains the rows the table was spending on two repos. Above 19 nothing about your
+frame moves.
 
 A resize goes through them too, so a *running* frame degrades and recovers the same way a
 launch would — with one exception. Dragging below half the floors does not take the last
@@ -1847,12 +1887,13 @@ remember the flags. The workspace is the session; tmux puts you back on whicheve
 chats was last in front of you.
 
 ```
-charter · 11 to choose from
+charter · 12 to choose from
 >   workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
     persona: steward — pick another
     detach — leave the harness running
     repo: select the next row
     repo: select the previous row
+    todo: read the next open todo
     density: minimal
     density: normal
   * density: full
