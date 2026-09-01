@@ -116,11 +116,6 @@ class Plan(NamedTuple):
                 seen.append(c.workspace)
         return tuple(seen)
 
-    def resumable(self) -> tuple[Doomed, ...]:
-        """The chats whose conversation charter can actually ask for back."""
-        return tuple(c for c in self.chats if c.resume)
-
-
 def plan(*, live, focus: str, only: str = "") -> Plan:
     """Every chat on THIS PLANE that a quit would stop, read off disk.
 
@@ -294,9 +289,11 @@ def note(c: Doomed) -> str:
 
     Every clause is a fact charter has already read off disk, and none of them is a
     prediction it cannot check: whether an id exists, whether the workspace directory is
-    there, whether the recorded directory is there, and whether a transcript was captured
-    is decided by the caller and appended, because only the quit knows if its capture
-    landed.
+    there, whether the recorded directory is there. **The capture is deliberately NOT one of
+    them**: whether a transcript landed is only known after the pane has been read, which is
+    after this row was drawn — so promising one here would be promising something charter has
+    not done yet, and `chat: previous transcript` is refused with its own reason on the way
+    back if it did not.
     """
     if not c.workspace:
         # **The one chat this design cannot bring back, and the note says so instead of
@@ -383,18 +380,6 @@ def title(c: Doomed) -> str:
     it).
     """
     return f"{c.chat} · {c.harness}" if c.harness else c.chat
-
-
-def transcript_of(c: Doomed) -> str:
-    """The file name a capture of *c* would be written under, or ``""``.
-
-    Through `reopen.transcript_path` so the name is minted in exactly one place, and
-    answered as a bare name rather than a path because that is what the manifest carries:
-    a path recorded today and read on a plane whose `STATE_DIR` has moved would name a
-    directory that is not this plane's.
-    """
-    p = reopen.transcript_path(c.chat)
-    return p.name if p is not None else ""
 
 
 #: The row that OPENS the confirmation, the row that goes through with it, and one row per
