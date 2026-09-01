@@ -50,6 +50,11 @@ _HAS_TMUX = shutil.which("tmux") is not None
 #: installs no tmux at all, so every floor test here skips there and says so.
 _FLOOR_BIN = Path.home() / ".local/share/charter-testing" / f"tmux-{tmuxctl.FLOOR[0]}.{tmuxctl.FLOOR[1]}"
 
+#: Everything a `tests._tmuxreap.name` slug may not contain, in one class. The socket name
+#: is what the reaper matches on, so a tag built from a filename has to be folded into the
+#: namespace before it goes in — see `setUp`.
+_SLUG_UNSAFE = re.compile(r"[^a-z0-9]+")
+
 #: One SGR escape as it comes back out of `capture-pane -e`.
 _SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
@@ -124,7 +129,13 @@ class _NestedClient(PersonaIso):
         # eight of fifteen failing on one run and none on the next, which is the signature
         # `#713` and `#719` both chased in the neighbouring harness. One socket per
         # binary per process, so the two versions never meet.
-        tag = Path(self.BIN).name
+        #
+        # Hyphenated, not spelled: the floor's filename is `tmux-3.2`, and a `.` is not a
+        # character `_tmuxreap._OURS` accepts — so `charter-frame-reads-in-tmux-3.2-<pid>`
+        # went through the one producer and came out UNREAPABLE anyway, leaving two live
+        # servers per floor test that no later reap could see (#770). `_tmuxreap.name` now
+        # refuses such a slug at the source; this is the slug it wants.
+        tag = _SLUG_UNSAFE.sub("-", Path(self.BIN).name)
         self._inner = _tmuxreap.name(f"frame-reads-in-{tag}")
         self._outer = _tmuxreap.name(f"frame-reads-out-{tag}")
         self.addCleanup(self._teardown)

@@ -96,11 +96,32 @@ class TheNameIsWhatMakesASocketReapable(unittest.TestCase):
     def test_what_the_helper_produces_is_what_the_reaper_recognises(self):
         """The derivation, not its contents: a slug nobody has invented yet is reapable on
         the commit that invents it, because the producer and the pattern live together."""
-        for slug in ("integration-test", "overlay-hatch", "palette-integ", "a", "x9-y7"):
+        for slug in ("integration-test", "overlay-hatch", "palette-integ", "a", "x9-y7",
+                     "integration-test-host", "frame-reads-in-tmux-3-2"):
             with self.subTest(slug=slug):
                 made = _tmuxreap.name(slug)
                 self.assertTrue(_tmuxreap.owns(made), made)
                 self.assertTrue(made.endswith(f"-{os.getpid()}"))
+
+    def test_a_slug_the_reaper_could_not_recognise_is_refused_at_the_source(self):
+        """#770's second half, and the one a scan cannot reach: the slug was COMPUTED.
+
+        `test_a_planes_frame_really_reads_that_way` builds its slug from the tmux binary's
+        filename, which at the 3.2 floor is ``tmux-3.2`` — so it called this helper, as the
+        rule says, and got ``charter-frame-reads-in-tmux-3.2-<pid>``: a `.`, which
+        :data:`_tmuxreap._OURS` does not accept, and therefore two live servers per floor
+        test that no later reap can see. Going through the one producer is not the property;
+        the property is that what comes out is reapable, so the producer checks.
+
+        The last two are what a caller reaches for without thinking: an empty slug collapses
+        the name to ``charter--<pid>``, and a trailing hyphen to ``charter-x--<pid>``.
+        """
+        for slug in ("tmux-3.2", "frame-reads-in-tmux-3.2", "Integration-Test",
+                     "integration_test", "has space", "", "x-"):
+            with self.subTest(slug=slug):
+                with self.assertRaises(ValueError) as caught:
+                    _tmuxreap.name(slug)
+                self.assertIn("#770", str(caught.exception))
 
     def test_the_operators_own_frame_socket_is_not_ours(self):
         """`commands_frame.SOCKET` — asked of production, not spelled — is the socket the
@@ -373,7 +394,46 @@ class WhereTmuxPutsItsSockets(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
 class TheReaperEndsWhatAKilledRunLeftRunning(unittest.TestCase):
-    """A real server on a real socket, killed and unlinked — or deliberately not."""
+    """A real server on a real socket, killed and unlinked — or deliberately not.
+
+    **In a socket directory of this class's own, and #781 is why.** ``reap()`` is a scan of
+    a SHARED directory: ``/tmp/tmux-<uid>/`` is per-user, not per-run. Every case here
+    plants a socket and then asks *this* run's `reap()` what it removed — and a second copy
+    of the suite reaching its own `reap()` a moment earlier removes this one's plant too, so
+    the victim sees ``[]`` and reports that the reaper did nothing. That is the opposite of
+    what happened: the socket was reaped twice as eagerly as the test expected, and the
+    failure accuses the reaper of the exact defect (#564) these cases exist to prevent.
+    Measured with three other `unittest` processes live and 204 sockets in the directory:
+    one failure, here, on a tree whose `main` is clean.
+
+    Three of the cases below are exposed to it and not one — ``assertIn(name, removed)``
+    twice, and a ``reap() == []`` that a sibling's unrelated stale socket also breaks. So it
+    is fixed for the class rather than assertion by assertion, the way the two scan classes
+    above already do it: ``$TMUX_TMPDIR`` points tmux and the reaper at a directory nothing
+    else on this machine is looking at, which makes every `reap()` here EXACT rather than
+    merely tolerant.
+
+    `NothingReapableSurvivesOnThisMachine` keeps the real directory, deliberately: that
+    claim is about the machine, and a private directory would make it true by having nothing
+    in it.
+    """
+
+    def setUp(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="charter-reapkill-", dir=_SHORT_TMP))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        # Created rather than left to tmux: `reapable()` needs to be able to LIST it before
+        # anything has been planted, and a case that asserts a refusal never starts a server.
+        #
+        # `0o700` is not tidiness — tmux REFUSES a socket directory anyone else can reach
+        # ("directory … has unsafe permissions", rc 1, measured on 3.7c), and the default
+        # umask here makes one at 0o755. The two scan classes above create the same
+        # directory without it and are unaffected, because they never start a server in it.
+        (tmp / f"tmux-{os.getuid()}").mkdir(mode=0o700)
+        # Through `os.environ`, not a `tmux` argument: the reaper reads the variable and so
+        # does every `tmux` this class spawns, which is the only way the two agree about
+        # where the socket is. `_envguard` treats a set as a declaration, so this is also
+        # what tells it the read below is deliberate.
+        self.enterContext(mock.patch.dict(os.environ, {"TMUX_TMPDIR": str(tmp)}))
 
     def _plant(self, pid: int) -> tuple[str, Path]:
         """Start a real tmux server on a socket named for *pid*, and return both."""
@@ -430,7 +490,7 @@ class TheReaperEndsWhatAKilledRunLeftRunning(unittest.TestCase):
 
         removed = _tmuxreap.reap()
 
-        self.assertIn(name, removed)
+        self.assertEqual(removed, [name])
         self.assertFalse(path.exists(), f"{path} survived the reap")
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline and _tmuxreap._alive(server):
@@ -460,8 +520,8 @@ class TheReaperEndsWhatAKilledRunLeftRunning(unittest.TestCase):
         self.addCleanup(lambda: path.unlink(missing_ok=True))
         sock.bind(str(path))
 
-        self.assertNotIn(path, _tmuxreap.reapable())
-        self.assertNotIn(path.name, _tmuxreap.reap())
+        self.assertEqual(_tmuxreap.reapable(), [])
+        self.assertEqual(_tmuxreap.reap(), [])
         self.assertTrue(path.exists(), f"{path} is not a name this suite hands out, and "
                                        f"the reaper deleted it anyway")
 
@@ -500,27 +560,39 @@ class TheReaperEndsWhatAKilledRunLeftRunning(unittest.TestCase):
 
         removed = _tmuxreap.reap()
 
-        self.assertNotIn(name, removed)
+        self.assertEqual(removed, [])
         self.assertTrue(path.exists(), f"{path} was reaped out from under a live run")
         self.assertTrue(_tmuxreap._listening(path), "a live run's server was killed")
 
+    def test_reaping_twice_removes_nothing_the_second_time(self):
+        pid = _a_pid_that_is_gone(self)
+        name, _ = self._plant(pid)
+        self.assertEqual(_tmuxreap.reap(), [name])
+        self.assertEqual(_tmuxreap.reap(), [])
+
+
+@unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
+class NothingReapableSurvivesOnThisMachine(unittest.TestCase):
+    """The zero, asked of the directory every tmux on this machine shares.
+
+    The one claim here that is about the MACHINE rather than about the reaper's rules, so
+    the one that keeps the real socket directory while
+    `TheReaperEndsWhatAKilledRunLeftRunning` moved to a private one (#781). Given a
+    directory of its own this case would assert nothing at all: `before` would be empty and
+    the intersection empty for free.
+    """
+
     def test_nothing_that_was_reapable_survives_the_reap(self):
-        """The zero, and it is stated against what was there BEFORE rather than against
-        the directory afterwards. Several suites run on this machine at once and one of
-        them can be killed while this case is between two calls; a socket that arrived
-        after the reap is not something the reap failed to remove, and asserting an empty
-        directory would make this case fail for the very event it exists to describe."""
+        """Stated against what was there BEFORE rather than against the directory
+        afterwards. Several suites run on this machine at once and one of them can be
+        killed while this case is between two calls; a socket that arrived after the reap
+        is not something the reap failed to remove, and asserting an empty directory would
+        make this case fail for the very event it exists to describe."""
         before = {p.name for p in _tmuxreap.reapable()}
         _tmuxreap.reap()
         survived = before & {p.name for p in _tmuxreap.reapable()}
         self.assertEqual(survived, set(),
                          f"{sorted(survived)} was reapable before the reap and still is")
-
-    def test_reaping_twice_removes_nothing_the_second_time(self):
-        pid = _a_pid_that_is_gone(self)
-        name, _ = self._plant(pid)
-        self.assertIn(name, _tmuxreap.reap())
-        self.assertNotIn(name, _tmuxreap.reap())
 
 
 class EverySocketTheSuiteStartsGoesThroughTheHelper(unittest.TestCase):
@@ -538,6 +610,7 @@ class EverySocketTheSuiteStartsGoesThroughTheHelper(unittest.TestCase):
                            test_frame_tmux_integration)
         for module, attr in ((test_frame_tmux_integration, "SOCKET"),
                              (test_frame_tmux_integration, "OP_SOCKET"),
+                             (test_frame_tmux_integration, "HOST_SOCKET"),
                              (test_frame_overlay_escape_hatch, "SOCKET"),
                              (test_frame_palette_integration, "SOCKET")):
             with self.subTest(module=module.__name__, attribute=attr):
@@ -545,12 +618,22 @@ class EverySocketTheSuiteStartsGoesThroughTheHelper(unittest.TestCase):
 
     @staticmethod
     def _hand_built(source: str) -> list[str]:
-        """``NAME`` for every module-level ``*SOCKET`` bound to an f-string in *source*.
+        """``NAME`` for every ``*socket`` in *source* bound to an f-string, at any scope.
 
         Parsed, not grepped: a `mock.patch("...SOCKET")` in a docstring is a string. An
         f-string is what "built by hand" looks like — `f"charter-overlay-hatch-{os.getpid()}"`
         is how all four of the leaking modules spelled it — and `SOCKET_PATH` is exempt
-        because that is a PATH derived from a name, and the name is what this is about.
+        because that is a PATH derived from a name, and the name is what this is about (it
+        falls out of the rule rather than being listed: it does not END in ``socket``).
+
+        **At any scope, and to an ATTRIBUTE as readily as to a name, because the first cut
+        read only module-level `ast.Name` targets and #770 was neither.**
+        `ChromeIsOneColour.setUp` said ``self._outer_socket = f"{self.SOCKET_NAME}-host"`` —
+        inside a method, onto an attribute, decorating a name the helper had already made.
+        `_tmuxreap._OURS` wants the pid LAST, so the suffix took the whole server out of the
+        reaper's namespace, and #770 found six live tmux servers from interrupted runs of
+        that one class, each with a dead owner. The scan that was supposed to prevent
+        exactly this looked straight past it for three months.
 
         A function of its own so that :meth:`test_it_recognises_a_hand_built_name` can hand
         it one and watch it answer. Without that control, a reader that quietly stopped
@@ -559,32 +642,52 @@ class EverySocketTheSuiteStartsGoesThroughTheHelper(unittest.TestCase):
         this case that only ever ran the reader over a clean tree.
         """
         found = []
-        for node in ast.parse(source).body:
+        for node in ast.walk(ast.parse(source)):
             if not isinstance(node, ast.Assign):
                 continue
+            if not isinstance(node.value, ast.JoinedStr):
+                continue
             for target in node.targets:
-                if (isinstance(target, ast.Name) and target.id.endswith("SOCKET")
-                        and isinstance(node.value, ast.JoinedStr)):
-                    found.append(target.id)
+                for part in ast.walk(target):
+                    if isinstance(part, ast.Name):
+                        written = part.id
+                    elif isinstance(part, ast.Attribute):
+                        written = part.attr
+                    else:
+                        continue
+                    if written.upper().endswith("SOCKET"):
+                        found.append(written)
         return found
 
     def test_it_recognises_a_hand_built_name(self):
-        """The control, and the one shape it must see: exactly what the four modules that
-        leaked used to say."""
+        """The control, and the shapes it must see: what the four modules that leaked used
+        to say, and what #770 said — a socket name assembled inside a method, onto an
+        attribute, out of a name the helper had already produced."""
         self.assertEqual(
             self._hand_built('import os\nSOCKET = f"charter-overlay-hatch-{os.getpid()}"\n'),
             ["SOCKET"])
         self.assertEqual(
             self._hand_built('OP_SOCKET = f"charter-integration-operator-{PID}"\n'),
             ["OP_SOCKET"])
+        self.assertEqual(
+            self._hand_built('class C:\n    def setUp(self):\n'
+                             '        self._outer_socket = f"{self.SOCKET_NAME}-host"\n'),
+            ["_outer_socket"])
 
     def test_it_passes_over_the_shapes_that_are_not_one(self):
         """The other half of the control: a reader that answered "offender" to everything
-        would satisfy the case above and fail every module in the tree."""
+        would satisfy the case above and fail every module in the tree.
+
+        The last two are the boundary this rule draws now that scope is not part of it. A
+        PATH built from a name is not a name — that is `SOCKET_PATH`, and it is what half
+        the real-tmux modules teardown through — and a local that is not a socket at all
+        may be any f-string it likes."""
         for benign in ('from tests import _tmuxreap\nSOCKET = _tmuxreap.name("x")\n',
                        'SOCKET = "charter"\n',
+                       'def f():\n    s = _tmuxreap.name(f"tabbar{next(_SERVERS)}")\n',
                        'SOCKET_PATH = f"/tmp/tmux-{UID}/{SOCKET}"\n',
-                       'def f():\n    SOCKET = f"charter-x-{1}"\n'):
+                       'def f(self):\n    self.socket_path = f"/tmp/tmux-{UID}/{S}"\n',
+                       'def f():\n    session = f"probe-{os.getpid()}"\n'):
             with self.subTest(source=benign):
                 self.assertEqual(self._hand_built(benign), [])
 

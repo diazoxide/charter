@@ -42,6 +42,50 @@ class WhatIsGuarded(unittest.TestCase):
         self.assertIn(os.path.abspath(state), _planeguard._REAL,
                       "the guard is watching a directory that is not this plane's state")
 
+    def test_the_guarded_file_is_this_planes_own_marker(self):
+        """The one file outside the state directory the guard refuses, and #726 is the
+        measurement: a running plane rewriting `charter.toml` inside a sibling worktree of
+        its own clone, the strips gone from a file nobody had opened, and a `git add -A`
+        committing the deletion. Both markers when the suite is in a worktree — the two are
+        different files, and the wrong one to write is the one nobody is looking at."""
+        for real in _planeguard._REAL_ROOT:
+            with self.subTest(plane=real):
+                self.assertIn(os.path.join(real, root.MARKER), _planeguard._REAL,
+                              "a test could rewrite the file that makes that directory a "
+                              "control plane")
+
+    def test_the_suite_reads_the_checkout_these_modules_were_loaded_from(self):
+        """#785. `root._plane_of` sends a linked worktree's plane back to the tree it was
+        cut from, so without the pin in `_planeguard.install` a run in a worktree asserts
+        against the operator's own `charter.toml` — their uncommitted edits included —
+        while the same tree on CI asserts against the branch.
+
+        Stated as one claim that holds in all three places rather than as a case that
+        skips outside a worktree: the checkout these modules were imported from is a root
+        the guard treats as real. In the main clone and on CI that is true because the
+        checkout IS the plane; in a worktree it is true only because the pin ran.
+        """
+        tree = Path(_planeguard.__file__).resolve().parents[1]
+        if not (tree / root.MARKER).is_file():
+            # `_plane_of`'s own condition, read the other way: a checkout with no marker is
+            # not this plane seen from a second directory, and there are no committed
+            # settings there to pin to. The pin declines, and so does this.
+            self.skipTest(f"this checkout carries no committed {root.MARKER}")
+        self.assertIn(os.path.abspath(str(tree)), _planeguard._REAL_ROOT,
+                      "the suite is asserting against a checkout that is not the one it "
+                      "was loaded from")
+
+    def test_the_plane_a_worktree_redirects_to_is_still_one_the_guard_refuses(self):
+        """The half the pin must not cost, and #527 is what it costs if it does. A child
+        charter resolves its own plane from its own environment, so in a worktree it
+        resolves the operator's clone — and if moving `config.ROOT` merely *swapped* which
+        root counted as real, every spawned child would land on the operator's live plane
+        unrefused. That was 131 detached children in one run, refreshing forge state and
+        rewriting caches. The pin widens the refusal; it does not move it."""
+        tree = Path(_planeguard.__file__).resolve().parents[1]
+        self.assertIn(os.path.abspath(str(root._plane_of(tree))),
+                      _planeguard._REAL_ROOT)
+
     def test_every_write_primitive_is_wrapped_at_package_import(self):
         """No test can opt out by forgetting a base class, because nothing opted IN.
 
@@ -153,6 +197,57 @@ class WritesAreRefused(_FakePlane):
             os.link(self.plane / "vaults.json", self.plane / "hard")
         self.assertFalse((self.plane / "planted").is_symlink())
         self.assertFalse((self.plane / "hard").exists())
+
+    def _a_guarded_marker(self) -> Path:
+        """A `charter.toml` in a directory that is otherwise NOT guarded, so the cases below
+        can tell a guarded path from a guarded prefix — which is the whole shape of this
+        entry: the plane's tracked content stays writable and one file does not."""
+        marker = self.elsewhere / root.MARKER
+        marker.write_text("schema = 1\n")
+        self.enterContext(mock.patch.object(
+            _planeguard, "_REAL", (*_planeguard._REAL, str(marker))))
+        return marker
+
+    def test_the_planes_own_marker_cannot_be_rewritten(self):
+        """#726, contained. Every spelling a rewrite arrives as: `charter.toml` is
+        hand-maintained, so a writer that means to keep the comments reads it, edits the
+        text and writes it back (`instance._set_key`), and one that does not truncates it or
+        renames a new file over it."""
+        marker = self._a_guarded_marker()
+        for mode in ("w", "a", "r+"):
+            with self.subTest(mode=mode), self.assertRaises(_planeguard.RealPlaneWrite):
+                builtins.open(marker, mode)
+        with self.assertRaises(_planeguard.RealPlaneWrite):
+            marker.write_text("")
+        with self.assertRaises(_planeguard.RealPlaneWrite):
+            os.truncate(marker, 0)
+        with self.assertRaises(_planeguard.RealPlaneWrite):
+            os.unlink(marker)
+        (self.elsewhere / "spare").write_text("new file")
+        with self.assertRaises(_planeguard.RealPlaneWrite):
+            os.replace(self.elsewhere / "spare", marker)
+        self.assertEqual(marker.read_text(), "schema = 1\n")
+
+    def test_it_is_that_one_file_and_not_the_directory_holding_it(self):
+        """The boundary this entry has to keep, or it becomes the "stream of false alarms"
+        the module docstring refuses: `personas/`, `docs/` and `workspaces/` are committed
+        content tests do legitimately generate, and only the marker is refused."""
+        marker = self._a_guarded_marker()
+        (self.elsewhere / "personas").mkdir()
+        (self.elsewhere / "personas" / "x.md").write_text("generated")
+        (self.elsewhere / "charter.toml.bak").write_text("a backup is not the marker")
+        self.assertEqual(marker.read_text(), "schema = 1\n")
+
+    def test_the_message_for_the_marker_names_the_marker(self):
+        """A refusal that read "you are writing into the state directory" while pointing at
+        `charter.toml` would send its reader looking in the wrong place — and this refusal
+        arrives on a line whose author did not think they were touching a plane at all."""
+        with self.assertRaises(_planeguard.RealPlaneWrite) as caught:
+            self._a_guarded_marker().write_text("x")
+        said = str(caught.exception)
+        self.assertIn(root.MARKER, said)
+        self.assertIn("#726", said)
+        self.assertNotIn("state directory", said)
 
     def test_a_relative_path_reaches_the_plane_too(self):
         """A test that `chdir`s into the plane writes with no plane prefix in the string
