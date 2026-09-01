@@ -46,10 +46,19 @@ from .. import util
 
 #: The order slots are dropped in as the terminal shrinks. The side first — a side panel
 #: costs the harness columns, so it goes as soon as space is tight in EITHER dimension,
-#: not only when columns themselves are the short one — then `repos`, whose table simply
-#: cannot be drawn in a pane narrower than `statusline._LEFT_W`, then the top, whose row
-#: is worth less than the status strip's alerts and which only goes when rows are the
-#: tight dimension.
+#: not only when columns themselves are the short one — then `repos`, whose table cannot
+#: be drawn in a pane narrower than `statusline._LEFT_W` or shorter than
+#: :func:`_table_min_rows`, then the two bars, then the top, whose row is worth less than
+#: the status strip's alerts and more than everything above it.
+#:
+#: **The rule the tail of this list encodes: a rung is dropped when the pane it would get
+#: cannot carry the thing the rung exists for, and among rungs that can, the ones whose
+#: facts another surface already reaches go first** (#740). That is what puts `top` last:
+#: it is one row carrying two facts nothing else on a short terminal says — which
+#: workspace you are in and which persona you are being — while `repos` spends a border
+#: and a heading before its first repo row, and the bars are reminders `F2` replaces in
+#: two keystrokes. `bottom` is past the end of the list for the same reason, one step
+#: further.
 #:
 #: **`bottom` is not here, and it is the one slot that never is.** It is the attention
 #: strip — the one alert and the command that fixes it — which is the whole reason a
@@ -70,8 +79,8 @@ from .. import util
 #: the reminder and nothing else, which is exactly what `top` cannot say for itself.
 _DROP_ORDER = ("right", "repos", "chats", "workspaces", "top")
 
-#: The entries of :data:`_DROP_ORDER` that go when ROWS are the tight dimension — its
-#: tail, after the two that answer to columns and have thresholds of their own.
+#: The entries of :data:`_DROP_ORDER` that go at `min_rows` itself — the ones with no
+#: threshold of their own, dropped whole the moment rows are the tight dimension.
 #:
 #: **This is what makes :data:`_DROP_ORDER` a constant rather than a comment.** Until
 #: Phase 5 nothing read that list: `visible_slots` spelled `s != "right"` and `s != "top"`
@@ -79,16 +88,22 @@ _DROP_ORDER = ("right", "repos", "chats", "workspaces", "top")
 #: entry added to it changed nothing at all. Derived, deleting an entry changes what a
 #: short terminal draws — which is the property the deletion sweep can see.
 #:
-#: `right` and `repos` are named as the exceptions rather than the members being listed,
-#: so a component added to `_DROP_ORDER` joins the row drops by default. That is the safe
-#: direction: a new readout that a short terminal keeps is a frame with less harness in
-#: it, and a new one it drops is a reminder the palette already replaces.
+#: The three exceptions are NAMED rather than the members being listed, so a component
+#: added to `_DROP_ORDER` joins the row drops by default. That is the safe direction: a
+#: new readout that a short terminal keeps is a frame with less harness in it, and a new
+#: one it drops is a reminder the palette already replaces.
 #:
-#: All at once and not one per threshold, because `visible_slots` has two thresholds and
-#: not five. The ORDER still decides which of them survives a future third — it is not
-#: decoration — but inventing one now to space these out would be arithmetic no
-#: measurement asked for.
-_ROW_DROPS = tuple(s for s in _DROP_ORDER if s not in ("right", "repos"))
+#: **`top` became the third exception in #740, and that is the whole of that issue's
+#: "the ladder is inverted at the bottom".** Every entry here is a reminder `F2` reaches
+#: in two keystrokes; `top`'s two facts — the workspace and the persona — are reached by
+#: nothing else on a terminal with no sidebar, so dropping it in the same breath as the
+#: bars was ranking it below a `repos` pane that had room for its heading and no repo. It
+#: now goes only at the floor below which every panel goes (`visible_slots`' last
+#: clause), and `repos` has a rows threshold of its own (:func:`repos_fits_rows`) —
+#: measured, that trade never costs the harness a row at any height between the two
+#: floors, because a `repos` pane starved to its floor costs the same border-plus-one-row
+#: that `top` does. See `visible_slots`.
+_ROW_DROPS = tuple(s for s in _DROP_ORDER if s not in ("right", "repos", "top"))
 
 #: The frame charter itself draws, as components — `frame/builtins.py`, asked ONCE at
 #: import for the edges and sizes every constant below is derived from.
@@ -467,6 +482,80 @@ def _table_min_cols() -> int:
     return sl._LEFT_W
 
 
+def _table_min_rows() -> int:
+    """The shortest `repos` pane that can say anything about a repo at all —
+    `slots._TABLE_MIN_ROWS`, READ rather than copied.
+
+    :func:`_table_min_cols`' argument on the other axis, and #740 is the measurement that
+    asked for it. `_repos` spends its first row on the `▪ repos N` heading and hands what
+    is left to `_table_lines`, which draws nothing at all on a budget of zero — so a
+    one-row pane is three rows of terminal (two tmux rules and the row itself) saying the
+    number 8, on a terminal that has just been judged too short for the one row naming the
+    workspace. Measured on tmux 3.7c and the 3.2 floor at 120 columns, on the ladder as it
+    was: at 20 rows the table pane came back 3 rows and drew two repos, at 19 it was 4 and
+    drew three, and from **16 down it was 1 and drew none** — a heading, and the two pane
+    rules around it, at every height the operator's report was written from.
+
+    Read from the renderer for the reason :func:`_table_min_cols` gives in full: the
+    height at which the table stops saying anything and the height at which the launcher
+    stops splitting a pane for it must be ONE number, or the two come apart the first time
+    the heading gains a row.
+
+    Imported inside the call, like :func:`_table_min_cols` and for the same reason.
+    """
+    from . import slots
+    return slots._TABLE_MIN_ROWS
+
+
+def repos_row_cap(slots: list[str] | tuple[str, ...], *, window_rows: int) -> int:
+    """The most rows a `repos` pane may have in a *window_rows*-row window drawing
+    *slots* — what is left after every other horizontal strip and after the harness's own
+    floor.
+
+    **One function because two decisions read it** (#740). :func:`repos_rows` applies it
+    as the cap on what the table's content wants, and :func:`repos_fits_rows` asks whether
+    it leaves room for a repo row at all. Spelled twice, the launcher would have decided
+    the pane was worth splitting from one arithmetic and sized it from another — which is
+    exactly the sizer-and-renderer disagreement `_table_min_cols` exists to prevent one
+    axis over.
+
+    Every horizontal strip in :data:`_FIXED_ROW_SLOTS` costs its own height plus
+    :data:`_BORDER_ROWS`; `right` costs columns and is not counted. `repos` itself is not
+    counted either — it is the variable-height slot this is the budget FOR — so a caller
+    may pass the whole slot list including it, which is what both callers do.
+
+    Can come out at or below zero: a 16-row window has no rows to spare at all.
+    :func:`repos_rows` floors the pane at 1 there because `panel_argvs` cannot split a
+    zero-row pane, and :func:`repos_fits_rows` is what stops one being split.
+    """
+    other = sum(_size_of(s) + _BORDER_ROWS for s in slots if _is_fixed_row(s))
+    return window_rows - other - _BORDER_ROWS - HARNESS_MIN_ROWS
+
+
+def repos_fits_rows(slots: list[str] | tuple[str, ...], *, window_rows: int) -> bool:
+    """Would a `repos` pane in a *window_rows*-row window drawing *slots* be tall enough
+    to draw a repo row in?
+
+    :func:`repos_fits` on the other axis, and the drop #740 is about. Below this the pane
+    is its heading and nothing else — `▪ repos 8` between two tmux rules, three rows of a
+    ten-row terminal spent on a number — and the slot goes the way `right` and the bars
+    go, rather than existing as a label for content there is no room for.
+
+    **Asked with the slots that SURVIVED the rungs above it**, which is what makes this
+    the precedence #740 asked for rather than a second opinion: `top` is tested after this
+    one and is not dropped by rows at all any more, so its two rows are already spent when
+    this asks what is left. A `repos` pane and the identity strip both cost a border plus
+    one row at the bottom of the ladder, so the trade is exactly even in rows and
+    lopsided in facts — one count against a workspace name and a persona.
+
+    Rows do not depend on the split ORDER the way columns do (a horizontal strip costs the
+    same rows wherever it was split), so unlike :func:`repos_fits` this needs no
+    order-of-panes caller beside `visible_slots`: `commands_frame._relayout` re-splits a
+    permutation of the same slot list, which this answers identically.
+    """
+    return repos_row_cap(slots, window_rows=window_rows) >= _table_min_rows()
+
+
 def repos_cols(slots: list[str] | tuple[str, ...], *, window_cols: int) -> int:
     """How wide the `repos` pane actually is, in a *window_cols*-column window whose
     slots were split in *slots*' order — **not the window's own width** (#500).
@@ -539,8 +628,34 @@ def visible_slots(slots: list[str], cols: int, rows: int,
     which is the same choice `statusline.render` makes when it runs out of width. Follows
     `_DROP_ORDER`: `right` is the first to go, on ANY shortage — a terminal that is short
     on rows cannot spare a side panel's own divider any more than a narrow one can spare
-    its columns — then `repos`, and then `top`, only when rows specifically are the tight
-    dimension.
+    its columns — then `repos`, on either axis, then the bars, and `top` last of all.
+
+    **What this drops LAST, which is #740's question.** A rung goes when the pane it would
+    get cannot carry the thing the rung exists for, and among rungs that still can, the
+    ones whose facts another surface reaches go first. That ordering is `_DROP_ORDER`'s and
+    it is now honoured on the rows axis as well as the columns one:
+
+    * `right` — any shortage. It costs columns AND a divider.
+    * `repos` — a pane too narrow for a table (:func:`repos_fits`) or too short for one
+      repo row (:func:`repos_fits_rows`). Both read the renderer's own numbers.
+    * `chats`, `workspaces` (:data:`_ROW_DROPS`) — at `min_rows`, whole. Readouts `F2`
+      replaces in two keystrokes.
+    * `top` — only at the floor in the last clause, with everything else. One row, two
+      facts, and on a terminal with no sidebar it is the plane's only roster (`slots._top`,
+      #530).
+    * `bottom` — never. The one alert and the command that fixes it.
+
+    **Until #740 that ladder was a cliff with `repos` standing outside it.** `_ROW_DROPS`
+    took `top` the instant rows fell below `min_rows` while `repos` had no rows test at
+    all, so at 120x10 the frame spent three rows (two tmux rules and `▪ repos 8`) on a
+    count having just decided it could not afford the one row that names the workspace.
+    A `repos` pane starved to its floor and the identity strip cost the same two rows —
+    `_BORDER_ROWS` plus one — so the harness pays nothing for the exchange. Measured on
+    tmux 3.7c and the 3.2 floor at 120 columns, eight clones, at every height from 19 down
+    to 10: the harness pane keeps exactly what it kept at 19 and from 16 down, and GAINS a
+    row at 17 and two at 18, where the table had been drawing one or two repos. Those one
+    or two repo rows are what this costs, and they are the trade `_DROP_ORDER` always
+    named.
 
     **`repos` goes on a width its own renderer cannot draw in, and that width is read
     from the renderer** (:func:`_table_min_cols`). This is the drop `bottom` did not need
@@ -570,8 +685,21 @@ def visible_slots(slots: list[str], cols: int, rows: int,
         keep = [s for s in keep if s != "right"]
     if rows < min_rows:
         keep = [s for s in keep if s not in _ROW_DROPS]
-    if "repos" in keep and not repos_fits(keep, window_cols=cols):
-        keep = [s for s in keep if s != "repos"]
+    # **One drop, two reasons** — a pane too narrow to draw a table, or too short to draw
+    # a repo row in one. Written as two `if`s with the same body, the second one's
+    # `"repos" in keep` was a conjunct nothing could ever turn red (the deletion sweep
+    # reported exactly that): a re-filter for a name that is not in the list rebuilds the
+    # identical list, so the membership half could not change an outcome. `remove` is what
+    # makes it load-bearing — it raises on a frame with no table rather than quietly doing
+    # nothing — and it says "take the table out" instead of "rebuild the list without it".
+    #
+    # Both questions are asked about `keep` rather than about *slots*: these run after the
+    # two filters above, so the width is the one this pane is actually inset to and the
+    # rows are what is left with `top` already holding its own. That ordering is the
+    # precedence #740 asked for — see :func:`repos_fits_rows`.
+    if "repos" in keep and not (repos_fits(keep, window_cols=cols)
+                                and repos_fits_rows(keep, window_rows=rows)):
+        keep.remove("repos")
     if cols < min_cols // 2 or rows < min_rows // 2:
         keep = []
     return [s for s in slots if s in keep]
@@ -601,12 +729,12 @@ def repos_rows(*, content_rows: int, window_rows: int,
       line to draw — that it has none, and the command that gets it one
       (`slots._empty_lines`). Never zero: a zero-row pane is one tmux refuses to split at
       all.
-    * **The cap leaves the harness :data:`HARNESS_MIN_ROWS`.** *window_rows* is the whole
-      window, *slots* is what else is being drawn in it, and every horizontal strip in
-      :data:`_FIXED_ROW_SLOTS` costs its own height plus :data:`_BORDER_ROWS`. `right`
-      costs columns, not rows, so it is not counted here — asking for the whole slot list
-      rather than a pre-computed number is what keeps that decision in one place instead
-      of at each call site.
+    * **The cap leaves the harness :data:`HARNESS_MIN_ROWS`**, and it is
+      :func:`repos_row_cap` — the same arithmetic :func:`repos_fits_rows` asks before the
+      pane is split at all (#740), rather than a second copy of it here. *window_rows* is
+      the whole window and *slots* is what else is being drawn in it; asking for the whole
+      slot list rather than a pre-computed number is what keeps that decision in one place
+      instead of at each call site.
     * **Between the two, the content wins — unless the plane pinned a height.**
       *content_rows* is what `slots._repos` would actually fill
       (`slots.repos_rows_wanted`), so a two-repo plane gets a two-row strip rather than a
@@ -627,14 +755,16 @@ def repos_rows(*, content_rows: int, window_rows: int,
 
     The cap can come out below the floor — a 16-row window has no rows to spare at all —
     and the floor wins then, because `panel_argvs` has to be able to split the pane at
-    all. What protects the harness in that terminal is :func:`visible_slots`, which drops
-    every slot below half the size floors.
+    all. **Since #740 no LAUNCH reaches that**: :func:`repos_fits_rows` drops the slot
+    rather than splitting a pane with room for a heading and no repo, so the floor is now
+    reached only by `cmd_resize`, which re-sizes panes and neither creates nor destroys
+    them — the same asymmetry `slots._too_narrow_lines` exists for one axis over. What
+    protects the harness at the very bottom is :func:`visible_slots`' last clause, which
+    drops every slot below half the size floors.
     """
     floor = SLOT_SIZE["repos"]
     wanted = content_rows if pinned_rows is None else pinned_rows
-    other = sum(_size_of(s) + _BORDER_ROWS for s in slots if _is_fixed_row(s))
-    cap = window_rows - other - _BORDER_ROWS - HARNESS_MIN_ROWS
-    return max(floor, min(wanted, cap))
+    return max(floor, min(wanted, repos_row_cap(slots, window_rows=window_rows)))
 
 
 def column_sizes(slots: list[str] | tuple[str, ...]) -> dict[str, int]:

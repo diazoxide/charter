@@ -852,6 +852,11 @@ class BothBarsGoWhenTheRowsRunOut(unittest.TestCase):
     the palette makes redundant. `layout._ROW_DROPS` derives the row-edge half from it, so
     the list is now the mechanism and these assertions are about behaviour rather than
     about a tuple.
+
+    **`top` left `_ROW_DROPS` in #740 and the bars stayed**, which is the same argument
+    carried one step further: the bars go at `min_rows` because `F2` reaches every chat
+    and every workspace at every width, and `top` does not go there because nothing
+    reaches the workspace and the persona it names. See `layout.visible_slots`.
     """
 
     ALL = ["chats", "workspaces", "top", "bottom", "repos", "right"]
@@ -864,10 +869,17 @@ class BothBarsGoWhenTheRowsRunOut(unittest.TestCase):
     def test_a_roomy_terminal_keeps_both_bars(self):
         self.assertEqual(self._kept(200, 50), self.ALL)
 
-    def test_a_short_terminal_gives_up_both_bars_with_the_identity_row(self):
+    def test_a_short_terminal_gives_up_both_bars_and_keeps_the_identity_row(self):
+        """**The identity row's half of this reversed in #740**, and the bars' half did
+        not. A bar is a readout the palette reaches in two keystrokes at every width, so a
+        short terminal loses the reminder and nothing else; `top`'s workspace and persona
+        are reached by nothing else once the sidebar has gone, which is why ranking it
+        beside them was the inversion that issue is about."""
         kept = self._kept(200, 16)
-        for gone in ("chats", "workspaces", "top", "right"):
+        for gone in ("chats", "workspaces", "right"):
             self.assertNotIn(gone, kept)
+        self.assertIn("top", kept,
+                      "the identity row is above both bars in _DROP_ORDER")
         self.assertIn("bottom", kept,
                       "the attention strip is the one slot that never goes")
 
@@ -877,4 +889,7 @@ class BothBarsGoWhenTheRowsRunOut(unittest.TestCase):
         kept = self._kept(200, 16)
         for name in layout._ROW_DROPS:
             self.assertNotIn(name, kept, f"{name} is in _ROW_DROPS and survived")
-        self.assertEqual(layout._ROW_DROPS, ("chats", "workspaces", "top"))
+        self.assertEqual(layout._ROW_DROPS, ("chats", "workspaces"))
+        self.assertEqual(layout._DROP_ORDER[-1], "top",
+                         "`top` left _ROW_DROPS and must still be last in the order it "
+                         "is derived from — see layout.visible_slots (#740)")

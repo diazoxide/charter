@@ -51,10 +51,102 @@ class VisibleSlots(unittest.TestCase):
             layout.visible_slots(["top", "bottom", "right"], 80, 50, 100, 20),
             ["top", "bottom"])
 
-    def test_the_top_goes_next_when_the_terminal_is_short(self):
+    def test_the_identity_row_outlives_every_row_drop_but_the_floor(self):
+        """**#740, and this test used to assert the opposite.** `top` went in the same
+        breath as the two bars, the instant rows fell below `min_rows` — while `repos` had
+        no rows test at all and so kept a pane with room for its heading and no repo. One
+        row carrying the workspace and the persona is the last thing above `bottom` worth
+        keeping (on a short terminal it is also the plane's only roster, `slots._top`), so
+        it now goes only where everything goes: below half the floors.
+
+        Both sides, because the absence assertion alone is satisfied by a `visible_slots`
+        that keeps `top` at every size and then keeps it below the floor too."""
         self.assertEqual(
             layout.visible_slots(["top", "bottom", "right"], 200, 12, 100, 20),
-            ["bottom"])
+            ["top", "bottom"])
+        self.assertEqual(
+            layout.visible_slots(["top", "bottom", "right"], 200, 9, 100, 20), [])
+
+    def test_the_table_goes_when_its_pane_would_be_too_short_for_a_repo_row(self):
+        """#740's own drop, and the other axis of the width one below. `slots._repos`
+        spends its first row on `▪ repos N` and `_table_lines` draws nothing on what is
+        left of a one-row pane, so the pane was two tmux rules and a count — three rows
+        of a ten-row terminal, on a terminal that had just been judged too short for the
+        one row naming the workspace.
+
+        Asserted at the boundary from both sides. With `top` and `bottom` on screen the
+        cap `layout.repos_row_cap` answers reaches `_table_min_rows` at 19 rows and falls
+        below it at 18, which is `19 - 4 - 1 - 12 = 2` against `18 - 4 - 1 - 12 = 1`."""
+        slots_ = ["top", "bottom", "repos"]
+        self.assertEqual(layout.repos_row_cap(slots_, window_rows=19), 2)
+        self.assertIn("repos", layout.visible_slots(slots_, 200, 19, 100, 20))
+        self.assertNotIn("repos", layout.visible_slots(slots_, 200, 18, 100, 20))
+
+    def test_the_identity_row_gets_its_row_before_the_table_does(self):
+        """The precedence #740 asks for, and the reason the rows test is asked about the
+        slots that SURVIVED rather than about the configured list. At ten rows the table
+        is asked what is left after `top` has its row — nothing — so what the frame draws
+        is the workspace and the persona, not the number 8."""
+        self.assertEqual(
+            layout.visible_slots(["top", "bottom", "repos"], 200, 10, 100, 20),
+            ["top", "bottom"])
+
+    #: What the HARNESS pane gets at each height between the two floors, before #740 and
+    #: after it — the measurement the drop-order choice rests on rather than a preference
+    #: between two panels. 120 columns, a nine-row table's worth of content, the shipped
+    #: `[frame] slots`, `min-cols`/`min-rows` at their defaults.
+    #:
+    #: **The harness never loses a row and gains one at 17 and two at 18**, because a
+    #: `repos` pane the rows cannot afford was floored at `SLOT_SIZE["repos"]` and still
+    #: paid `_BORDER_ROWS` — two rows to draw `▪ repos 8` between two tmux rules. At 19
+    #: the table survives its new rows test with two rows (its heading and one repo), so
+    #: the harness is unchanged there and the trade is two repo rows for the workspace and
+    #: the persona.
+    #:
+    #: Literals, not a formula: a table computed from the thing under test is the shape
+    #: that survives every mutation of it.
+    _HARNESS_BEFORE_AND_AFTER = {
+        10: (6, 6), 11: (7, 7), 12: (8, 8), 13: (9, 9), 14: (10, 10),
+        15: (11, 11), 16: (12, 12), 17: (12, 13), 18: (12, 14), 19: (12, 12),
+    }
+
+    def test_the_swap_never_costs_the_harness_a_row(self):
+        """#740's own justification, at every height between the floors."""
+        for rows, (was, now) in self._HARNESS_BEFORE_AND_AFTER.items():
+            with self.subTest(rows=rows):
+                # Before: `top` went with the bars and `repos` kept whatever the rows left
+                # it — its own floor from 16 down, where it could draw no repo at all.
+                before = {"bottom": 1,
+                          "repos": layout.repos_rows(content_rows=9, window_rows=rows,
+                                                     slots=["bottom", "repos"])}
+                self.assertEqual(layout.harness_rows(before, window_rows=rows), was)
+                kept = layout.visible_slots(["top", "bottom", "repos", "right"],
+                                            200, rows, 100, 20)
+                self.assertIn("top", kept, "the identity row is what this buys")
+                sizes = layout.slot_sizes(kept, window_rows=rows, content_rows=9)
+                self.assertEqual(layout.harness_rows(sizes, window_rows=rows), now)
+                self.assertGreaterEqual(now, was, "the harness paid for this")
+
+    def test_the_table_is_the_one_that_survives_at_the_top_of_the_band(self):
+        """The other end of the same table: at 19 rows both fit, so the ladder keeps both
+        and the table draws its heading and one repo rather than four rows of table with no
+        identity strip above it."""
+        self.assertEqual(
+            layout.visible_slots(["top", "bottom", "repos", "right"], 200, 19, 100, 20),
+            ["top", "bottom", "repos"])
+        self.assertEqual(
+            layout.slot_sizes(["top", "bottom", "repos"], window_rows=19,
+                              content_rows=9)["repos"], 2)
+
+    def test_the_height_the_table_needs_is_read_from_the_renderer_not_copied(self):
+        """`test_the_width_the_table_needs_is_read_from_the_renderer_not_copied`'s
+        argument on the other axis, and the constant is MOVED for the same reason: read
+        where it stands, a `_table_min_rows` whose body is `return 2` is indistinguishable
+        from one that asks the renderer."""
+        from charter.frame import slots as frame_slots
+        with mock.patch.object(frame_slots, "_TABLE_MIN_ROWS",
+                               frame_slots._TABLE_MIN_ROWS + 5):
+            self.assertEqual(layout._table_min_rows(), frame_slots._TABLE_MIN_ROWS)
 
     def test_the_bottom_is_never_dropped_whatever_the_shortage(self):
         """The reason `bottom` is absent from every filter above. It is the attention
