@@ -488,9 +488,6 @@ class TheReopenPathSuppressesFourThingsInTheLauncher(PersonaIso, unittest.TestCa
         self.assertEqual(r.fid, "", "empty until a launcher claims one")
 
 
-if __name__ == "__main__":       # pragma: no cover
-    unittest.main()
-
 
 class TheKeypressReachesTheTeardown(PersonaIso, unittest.TestCase):
     """`F2` → the doorway → the confirming row → the detached command. **The wiring.**
@@ -585,3 +582,7 @@ class TheKeypressReachesTheTeardown(PersonaIso, unittest.TestCase):
         self.assertEqual(started, [])
         said.assert_called_once()
         self.assertIn(leave.NO_CHAT_HERE, said.call_args[0][1])
+
+
+if __name__ == "__main__":       # pragma: no cover
+    unittest.main()
