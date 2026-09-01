@@ -8020,10 +8020,13 @@ def cmd_reopen(args) -> int:
     whichever session tmux happened to make current would put the operator somewhere they
     did not leave.
 
-    **The manifest is consumed.** A record describes one quit, and a second `charter reopen`
-    against the same file would open every chat a second time with nothing on screen to tell
-    the duplicates apart. It is dropped after the launches and before the attach, because
-    the attach does not return until the operator leaves.
+    **The manifest is consumed, chat by chat.** A record describes one quit, and a second
+    `charter reopen` against the same file would open every chat a second time with nothing
+    on screen to tell the duplicates apart — but deleting it whole would throw away the
+    record of the chats that did NOT come back, which is exactly the state an operator would
+    want to retry. So what is left behind is precisely the retry (:func:`_consume`), and it
+    is written after the launches and before the attach, because the attach does not return
+    until the operator leaves.
     """
     m = reopen_state.read()
     if m is None or not m.frames:
@@ -8070,8 +8073,34 @@ def cmd_reopen(args) -> int:
                  "record is left in place so this can be tried again.")
         return 1
     util.ok(f"charter: reopened {len(back)} of {len(m.all_chats())} chats")
-    reopen_state.forget()
+    _consume(m, {r.chat.chat for r in back})
     return _attach_after_reopen(m, back)
+
+
+def _consume(m, done) -> None:
+    """Take the chats in *done* out of the manifest, and drop it when nothing is left.
+
+    **Consumed rather than deleted, because a partial reopen has two halves and only one of
+    them is over.** A record describes one quit: leaving it whole would open every chat a
+    second time on the next `charter reopen`, with nothing on screen to tell the duplicates
+    apart — but deleting it whole would throw away the record of the chats that did *not*
+    come back, which is exactly the state an operator would want to retry. So what is left
+    behind is precisely the retry: the chats still owed, in their own frames, with the same
+    focus.
+
+    Called after the launches and before the attach, because the attach does not return
+    until the operator leaves.
+    """
+    left = [reopen_state.Frame(workspace=f.workspace,
+                               chats=tuple(c for c in f.chats if c.chat not in done))
+            for f in m.frames]
+    left = [f for f in left if f.chats]
+    if not left:
+        reopen_state.forget()
+        return
+    if reopen_state.write(left, focus=m.focus, at=m.at):
+        util.warn(f"charter reopen: {sum(len(f.chats) for f in left)} chat(s) still "
+                  "recorded — `charter reopen` again to retry just those")
 
 
 def _reopen_one(c) -> "Reopening | None":

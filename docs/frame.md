@@ -670,8 +670,9 @@ nothing.
 **`charter reopen` puts the recorded plane back.** Every workspace, every chat, each one's
 persona and the directory it was started in — and, for Claude Code, the conversation, by
 resuming it. It attaches you to the workspace you pressed quit in, on the chat that was in
-front of you. The record describes one quit and is consumed by one reopen, so running it
-twice does not double your tabs.
+front of you. The record describes one quit and is consumed chat by chat, so running it
+twice does not double your tabs — and if some chat could not be started, exactly that chat
+stays recorded, so a second `charter reopen` retries just it.
 
 Run it from an ordinary shell. **Inside a tmux you already have it refuses**, because charter
 builds a frame there as a window on your own server and that launcher stays awake for the

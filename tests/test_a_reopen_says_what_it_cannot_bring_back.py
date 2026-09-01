@@ -377,6 +377,34 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
 
         self.assertIsNone(reopen.read())
 
+    def test_a_partial_reopen_leaves_behind_exactly_the_retry(self):
+        # Deleting the record whole would throw away the chats that did NOT come back,
+        # which is precisely the state an operator would want to try again; leaving it whole
+        # would open the ones that did a second time.
+        self._record(self._chat(chat="alpha.1", workspace="alpha"),
+                     self._chat(chat="beta.1", workspace="beta"))
+        real = self._launch
+
+        def _launch(args):
+            if args.workspace == "beta":
+                return 1
+            return real(args)
+
+        with mock.patch.object(commands_frame, "cmd_launch", side_effect=_launch), \
+                mock.patch.object(commands_frame.sys.stdout, "isatty",
+                                  return_value=True), \
+                mock.patch.object(commands_frame.tmuxctl, "version",
+                                  return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "operator_server",
+                                  return_value=None), \
+                mock.patch.object(commands_frame, "_attach_after_reopen",
+                                  return_value=0):
+            self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 0)
+
+        m = reopen.read()
+        self.assertEqual([c.chat for c in m.all_chats()], ["beta.1"])
+        self.assertEqual(m.focus, "alpha", "and the focus is the one the quit recorded")
+
     def test_several_workspaces_all_come_back(self):
         self._record(self._chat(chat="alpha.1", workspace="alpha"),
                      self._chat(chat="alpha.2", workspace="alpha"),
