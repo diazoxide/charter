@@ -125,10 +125,21 @@ worth more there than two extra rows are to a sidebar that is already truncating
 
 The frame launcher exports the frame id under `$CHARTER_SESSION_ID` — the variable
 `charter.session.current()` already owns. That collision was load-bearing and
-undocumented: panels follow `charter ws use` **only** because of it, since
-`workspace.set_active` writes a per-session pointer under `session.current()` and a panel
-reads it back under the same name. (The per-*terminal* pointer cannot do this job: it is
-keyed by `$TMUX_PANE`, and the harness and each panel are different panes.)
+undocumented: a choice made inside the frame is recorded under `session.current()`, and
+every panel reads it back under the same name — the frame's persona
+(`persona.set_active`), its workspace lock, the harness-session mapping the `ctx` gauge
+needs, and `workspace.for_frame`'s ability to find the frame's own directory at all. (The
+per-*terminal* pointer cannot do this job: it is keyed by `$TMUX_PANE`, and the harness and
+each panel are different panes.)
+
+**Corrected by #791.** This paragraph used to say that panels follow `charter ws use`
+*only* because of the collision, and that was true when it was written. It is no longer:
+the pointer `workspace.set_active` writes lands under the CHAT's id, and while the panels
+read that pointer the command also re-homed the chat — the ladder the panels read is the
+one that decides which chats a workspace has (`frame/state.own_workspace`), which spec §4j
+forbids a typed command from moving. So membership and the panels now read the launch's
+own records, and `ws use` moves what the session's commands act on. The collision itself is
+unchanged and still load-bearing for everything above.
 
 **Kept, deliberately: one variable, one meaning — "the charter session this process
 belongs to". Inside a frame, that is the frame.** Every process the frame contains — the
@@ -156,7 +167,10 @@ has a consequence the comfortable version hides:
   environment**: the token-usage history this ADR keeps alive, and the session trace.
 
 Pinned by `tests/test_frame_owns_the_surface.py`, which asserts that a panel follows a
-`ws use` made under the frame's id and does *not* follow one made under any other.
+`ws use` made under the frame's id and does *not* follow one made under any other — on a
+frame that recorded no workspace of its own, which since #791 is the only frame whose
+panels a pointer reaches. The class is named for that, and its last case pins the boundary:
+write the launch record and the same switch moves nothing.
 
 That rule sends a bill, and #411 was it: charter's private tmux server is shared by every
 frame on the machine, so only the first launch's `new-session` starts it, and tmux builds

@@ -449,34 +449,62 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.frame_workspace("f-1"))
         self.assertIn(config.DEFAULT_WORKSPACE, self._render("top"))
 
-    def test_a_workspace_chosen_inside_the_frame_still_moves_the_panels(self):
-        """`docs/frame.md`'s own promise, and the regression #512's first cut shipped:
-        "`charter workspace use <name>` typed at the agent moves the panels too — the
-        pointer is written under the frame's id and the panels read it back under the same
-        one." The launcher's recorded answer is a SEED, not an override; a choice made
-        while the frame is running outranks it.
+    def test_a_workspace_chosen_inside_the_frame_no_longer_moves_the_panels(self):
+        """**This case was the inverse until #791, and `docs/frame.md` is corrected with
+        it.** The promise it used to assert was: "`charter workspace use <name>` typed at
+        the agent moves the panels too — the pointer is written under the frame's id and
+        the panels read it back under the same one."
 
-        Through the real `workspace.set_active`, with the frame's id in the environment,
-        because that is exactly what `charter workspace use` does — a hand-written pointer
-        file would prove that `state.workspace_for` reads a file, not that the two ends of
-        this promise still meet."""
+        What that made the pointer was a rung of `state.own_workspace`, which since #733
+        is also what decides MEMBERSHIP — so the command re-homed the chat. Measured on
+        three chat directories: `charter workspace use gamma` typed inside `alpha.1` left
+        `alpha.2` unable to see it (`chats.others` empty, `frame-chat alpha.1` answering
+        `no chat 'alpha.1' here`) and put `gamma`'s chats on `alpha.1`'s bar, where
+        `cmd_chat` refuses every one of them. That is #733 and #788 verbatim, and §4j
+        forbids it: `{workspace}-{hash}` is identity, not a property.
+
+        So the panels draw what the LAUNCH recorded, and only a launch can move it. Same
+        writer as before — the real `workspace.set_active` with the frame's id in the
+        environment, because that is exactly what `charter workspace use` does — and the
+        assertion is the one that is now true.
+        """
         state.record_workspace("f-1", self.OTHER)
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
             self.assertNotEqual(workspace.set_active("chosen-later"), "locked")
         out = self._render("top")
-        self.assertIn("chosen-later", out)
-        self.assertNotIn(self.OTHER, out,
-                         "the panel ignored a workspace chosen inside the running frame")
+        self.assertIn(self.OTHER, out)
+        self.assertNotIn("chosen-later", out,
+                         "a pointer typed inside the frame moved the chat's own workspace")
 
-    def test_the_frames_repo_table_follows_that_choice_too(self):
+    def test_the_command_still_moves_what_the_frames_own_shell_acts_on(self):
+        """**The other half, and without it the case above would be satisfied by deleting
+        the write.** `charter workspace use` answers "which workspace is this session
+        working in", and that is a live question inside a frame: it is what every
+        `charter clone`, `charter repos` and `charter ws current` in the agent's own shell
+        then acts on.
+
+        Refusing the command inside a frame was the alternative and it is rejected on
+        evidence: the only test for "inside a frame" is `session.current()`, and every
+        agent spawned from a frame inherits `$CHARTER_SESSION_ID` — so the refusal would
+        fire on agents doing ordinary CLI work in isolated worktrees. The pointer is
+        written, the panels ignore it, and those are two different questions rather than
+        one broken answer."""
+        state.record_workspace("f-1", self.OTHER)
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
+            workspace.set_active("chosen-later")
+            self.assertEqual(workspace.resolve(cwd=config.ROOT), "chosen-later")
+        self.assertEqual(workspace.for_session("f-1"), "chosen-later")
+
+    def test_the_frames_repo_table_does_not_follow_that_choice_either(self):
         """The same rung, on the surface #512 is actually about — a header that moved and
-        a table that did not would be the disagreement this class exists to prevent."""
+        a table that did not would be the disagreement this class exists to prevent, and
+        that is as true of the direction #791 turned it as of the old one."""
         clone = config.WORKSPACES_DIR / "chosen-later" / "arepo"
         (clone / ".git").mkdir(parents=True)
         state.record_workspace("f-1", self.OTHER)
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
             workspace.set_active("chosen-later")
-        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 1 + 1)
+        self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 0)
 
     def test_the_pane_is_sized_from_the_frames_workspace_too(self):
         """`gather.row_count`'s no-cache path is the third surface that used to resolve
@@ -539,9 +567,15 @@ class TheChipAndItsStarNameTheSameWorkspace(PersonaIso, unittest.TestCase):
         """Through the real `workspace.set_active` with the frame's id in the
         environment, because that is what `charter workspace use` does — a hand-written
         pointer file would prove the reader reads a file, not that a real in-frame command
-        can no longer move the header off the pin."""
+        can no longer move the header off the pin.
+
+        **The launch record names a THIRD workspace, and since #791 it has to.** The
+        fixture used to record the pin's own name and let the pointer be the only
+        disagreeing rung; with the pointer no longer a rung, `state.workspace_for` would
+        have answered `zeta` from the record whether the pin was read or not, and this case
+        would have gone on passing while measuring neither the pin nor the star."""
         os.environ["CHARTER_WORKSPACE"] = "zeta"
-        state.record_workspace("f-1", "zeta")
+        state.record_workspace("f-1", "recorded-at-launch")
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
             workspace.set_active("other", force=True)
         self.assertEqual(workspace.for_session("f-1"), "other",
@@ -550,6 +584,8 @@ class TheChipAndItsStarNameTheSameWorkspace(PersonaIso, unittest.TestCase):
         self.assertIn("⬢ zeta*", out)
         self.assertNotIn("other", out,
                          "the header named a workspace no command in the session acts on")
+        self.assertNotIn("recorded-at-launch", out,
+                         "the header named the launch record over the pin above it")
         self.assertEqual(workspace.resolve(), "zeta",
                          "the header and the session's own commands disagree")
 

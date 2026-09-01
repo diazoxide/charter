@@ -116,13 +116,21 @@ def of_workspace(workspace: str) -> list[str]:
     the fix for a chat missing from a roster is never to call it here.**
 
     What was wrong was the DEPTH, not the direction. This read `state.frame_workspace`
-    alone — the launch record, rung 2 — while `roster` keyed on all four, and
-    `charter workspace use <name>` typed at the agent writes rung 1 and never rung 2. So a
-    chat repaired that way was DRAWING `alpha` and excluded from `alpha`'s roster at the
-    same time, and the chats it had left could never see it again however it was repaired.
-    `state.own_workspace` is those chat-owned rungs — the recorded pin, the pointer, the
-    record — in the ladder's own order, so this and `roster` now ask one question at one
-    depth.
+    alone — the launch record — while `roster` keyed on every rung above it, so a chat
+    could be DRAWING `alpha` and excluded from `alpha`'s roster at the same time, and the
+    chats it had left could never see it again however it was repaired.
+    `state.own_workspace` is the chat-owned rungs — the recorded pin, then the record — in
+    the ladder's own order, so this and `roster` now ask one question at one depth.
+
+    **The per-session pointer is NOT one of those rungs, and #791 is why.** It was, for
+    one release. `charter workspace use <name>` typed at the agent writes it under the
+    CHAT's id (inside a frame `session.current()` is the chat — ADR 0019), so while it was
+    a rung that command re-homed the chat: measured, `charter workspace use gamma` inside
+    `alpha.1` took it out of `alpha`'s roster and put `gamma`'s chats on its bar, where
+    `check` approved rows `cmd_chat` then refuses. That is #733 and #788 through a door
+    neither issue named, and §4j settles it — a chat's workspace is its identity, and a
+    pointer written by whoever last typed a command is a property. Both rungs left are
+    written by the LAUNCH, so nothing after a launch moves a chat between workspaces.
 
     **Ordinal order, and it is not `created`'s.** Spec §3.5 asks for a `created` stamp
     per chat "so tab order and the ordinal allocator do not depend on directory mtime".
@@ -144,32 +152,38 @@ def of_workspace(workspace: str) -> list[str]:
     when a bar repaints, not on a tick — `frame/panel.py` polls `state.version`, which is
     one `stat`, and only renders when it moved. `state.reap` is what bounds the entries.
 
-    **What the ladder costs, measured rather than assumed**: one entry now reads three
-    small files where it read one — the identity record, the per-session pointer, the
-    workspace record — so 30 chats is 90 reads per call instead of 30. That is paid on a
-    repaint and never on a tick, and it is the price of the two halves of one question
-    being asked at one depth. Deliberately NOT cached: a cache here is a second source of
-    truth for a fact `.charter/frame/` already holds and free to disagree with it, which
-    is the #411 shape this module's own opening paragraph refuses.
+    **What the ladder costs, measured rather than assumed**: one entry reads two small
+    files where it read one — the identity record and the workspace record — so 30 chats is
+    60 reads per call instead of 30 (it was 90 while the per-session pointer was a rung,
+    and #791 gave that one back). That is paid on a repaint and never on a tick, and it is
+    the price of the two halves of one question being asked at one depth. Deliberately NOT
+    cached: a cache here is a second source of truth for a fact `.charter/frame/` already
+    holds and free to disagree with it, which is the #411 shape this module's own opening
+    paragraph refuses.
     """
     try:
-        # **`is_dir()`, and it came BACK with #733 — measured, not restored on taste.** A
-        # deletion sweep had removed it on the grounds that it could not change the answer:
-        # a frame's workspace was a FILE inside its directory, so `frame_workspace` already
-        # answered ``None`` for a loose file whatever its name was, and a guard that passes
-        # only because a different guard caught it is the shape this repository deletes.
+        # **`is_dir()` — kept, and honestly no longer measurable from out here.** A
+        # deletion sweep once removed it on the grounds that it could not change the
+        # answer: a frame's workspace was a FILE inside its directory, so
+        # `frame_workspace` already answered ``None`` for a loose file whatever the filter
+        # did, and a guard that passes only because a different guard caught it is the
+        # shape this repository deletes. #733 brought it back with a measurement, because
+        # membership had grown a rung that did NOT live in the frame's directory — the
+        # per-session pointer under `SESSIONS_DIR/<id>.workspace`, which knows nothing
+        # about whether the frame root holds a directory or a stray byte of a half-written
+        # temp file. With that rung planted, a loose FILE called `api.2` joined the roster
+        # and then refused when pressed, having no harness pane to aim at.
         #
-        # That stopped being true the moment membership grew a rung that does NOT live in
-        # the frame's directory. `state.own_workspace`'s pointer rung is
-        # `workspace.for_session`, whose file is `SESSIONS_DIR/<id>.workspace` — so an
-        # interrupted `os.replace` leaving a loose FILE called `api.2` under the frame
-        # root, beside a per-session pointer some earlier `api.2` wrote, is a name this
-        # would put on a bar and in a picker: measured, it joins the roster and then
-        # refuses when pressed, because it has no harness pane to aim at.
-        #
-        # `os.DirEntry.is_dir` is answered from `readdir`'s own `d_type` on Linux and macOS,
-        # so on the ~30 entries this scans it is ordinarily not a `stat` at all — and where
-        # it is one, it is the one the pointer read no longer pays on its behalf.
+        # **#791 removed that rung, so the measurement is gone again**: every rung of
+        # `state.own_workspace` now reads a file inside the frame's own directory, and a
+        # loose file answers ``None`` through the read whatever this filter does — checked,
+        # nothing in the suite goes red without it. It stays because it is the correct
+        # predicate rather than a second guard for the same fact (a chat IS a directory;
+        # this is the scan deciding what it is looking at, not a membership rule), and
+        # because it is free: `os.DirEntry.is_dir` is answered from `readdir`'s own
+        # `d_type` on Linux and macOS, so on the ~30 entries this scans it is ordinarily
+        # not a `stat` at all. A reader deleting it should know it costs nothing and
+        # protects the next out-of-directory rung, not that a test is watching it.
         names = [e.name for e in os.scandir(state._root()) if e.is_dir()]
     except OSError:
         # No frame root at all is the ordinary answer on a plane that has never launched

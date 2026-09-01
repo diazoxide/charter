@@ -1149,11 +1149,24 @@ class ThePinOutranksTheFramesOwnRungs(PersonaIso, unittest.TestCase):
     def _pin(self, name: str) -> None:
         os.environ["CHARTER_WORKSPACE"] = name
 
-    def test_the_pin_beats_a_workspace_chosen_inside_the_frame(self):
-        """The regression. Both rungs answer, they disagree, and the pin wins — the same
-        way `workspace.resolve` decides it for every command the session runs."""
+    def test_a_workspace_chosen_inside_the_frame_reaches_neither_it_nor_its_commands(self):
+        """The regression, and since #791 it is a statement about the pointer rather than
+        about the pin's rank over it.
+
+        A pin is set, `charter workspace use other` is typed inside the frame, and neither
+        the frame's own answer nor the session's own commands move: the pointer is not a
+        rung of `state.own_workspace` at all any more, and `workspace.resolve` ranks
+        `$CHARTER_WORKSPACE` above it — which is what `commands_workspace` warns about in as
+        many words when it says `ws use` will not stick while the variable is set.
+
+        **The launch record names a third workspace deliberately.** Without that the pin
+        rung is unmeasurable here: `frame_workspace` would answer `zeta` too, and this case
+        would pass whether or not anything read the pin. Was
+        `test_the_pin_beats_a_workspace_chosen_inside_the_frame`, whose fixture leaned on
+        the pointer being the disagreeing rung."""
         from charter import workspace as ws
         self._pin("zeta")
+        state.record_workspace("f-1", "recorded-at-launch")
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
             ws.set_active("other", force=True)
         self.assertEqual(ws.for_session("f-1"), "other",

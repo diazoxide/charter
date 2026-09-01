@@ -63,14 +63,29 @@ def for_session(sid: str) -> str | None:
     necessarily this process's — which is the whole reason it is public. Inside a charter
     frame the frame **is** the charter session (`docs/frame.md`, ADR 0019), so
     `charter workspace use <name>` typed at the agent writes this file under the FRAME's
-    id, and that is the documented mechanism by which it "moves the panels too".
+    id — and that decides what every `charter` command in that frame's own shell acts on.
 
-    A panel needs to tell that choice apart from the frame's launch-time answer
-    (`frame/state.py`'s `record_workspace`, #512): the launcher's answer is a SEED, and an
-    operator choosing inside the running frame outranks it. Asking this directly is what
-    keeps that distinction a property rather than a spelling — the alternative was reading
-    :func:`source`'s human-facing label and matching the string ``"session"``, which is a
-    sentence written for a status line, not an API.
+    **It does NOT decide what the frame's panels draw, and it did until #791.** That was
+    the documented mechanism behind "it moves the panels too", and what made it work was
+    this file being a rung of `frame/state.own_workspace` — which since #733 is also what
+    decides a chat's MEMBERSHIP of a workspace. So the command re-homed the chat:
+    measured, `charter workspace use gamma` typed inside `alpha.1` took it out of `alpha`'s
+    roster, made it invisible to the chat beside it in the same tmux session, and put
+    `gamma`'s chats on its bar where `cmd_chat` refuses them. Spec §4j settles which of the
+    two has to give: a chat belongs to its workspace for life, so what a pointer moves is
+    the session's work and never the chat's identity.
+
+    **Refusing the command inside a frame was the alternative and it was rejected on
+    evidence**: the only test for "inside a frame" is `session.current()`, and every agent
+    spawned from a frame inherits `$CHARTER_SESSION_ID` — so the refusal would fire on
+    agents doing ordinary CLI work in isolated worktrees. Nothing here changed; the reader
+    that stopped asking was `own_workspace`.
+
+    Still public, still read by :func:`chosen` and :func:`source`, and still keyed on an id
+    handed in rather than resolved — the caller is not always the session being described.
+    Asking this directly is what keeps that a property rather than a spelling: the
+    alternative was reading :func:`source`'s human-facing label and matching the string
+    ``"session"``, which is a sentence written for a status line, not an API.
 
     Name-checked like every other rung that hands a value to :func:`workspace_dir`'s join.
     The ``val and`` in front of it is a None-guard rather than a second name check —
@@ -106,10 +121,14 @@ def for_frame(sid: str | None) -> str | None:
 
     * **Below the per-session pointer.** `charter workspace use <name>` typed inside the
       frame writes that pointer under the frame's id, so an operator's explicit choice
-      still wins and the panels still follow it — the direction #517 asks for, and the
-      documented promise that `ws use` "moves the panels too". The launcher's answer is a
-      SEED, never a pin; nothing here takes `ws use` away from a framed session, which is
-      exactly what handing the harness `$CHARTER_WORKSPACE` would have done.
+      still wins **for this session's own commands** — the direction #517 asks for. The
+      launcher's answer is a SEED, never a pin; nothing here takes `ws use` away from a
+      framed session, which is exactly what handing the harness `$CHARTER_WORKSPACE` would
+      have done. What the pointer no longer moves is the frame's PANELS (#791): that read
+      goes through `frame/state.own_workspace`, which is also what decides a chat's
+      membership of a workspace, and a command deciding a chat's identity is what §4j
+      forbids. This rung's position is unaffected — the two readers were always different
+      functions, and only one of them stopped asking.
     * **Above the per-terminal pointer.** That rung is not merely absent inside a frame,
       it is *wrong*: it is keyed on `$TMUX_PANE`, and the harness's pane is one charter
       created — not the operator's terminal, whose pointer it would otherwise read or

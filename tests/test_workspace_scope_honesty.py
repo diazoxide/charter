@@ -88,13 +88,19 @@ class TestAskingWhatOneSessionChose(ScopeBase):
     """`workspace.for_session` — the per-session pointer rung, asked about a session that
     is not this process's.
 
-    Public since #512, for one caller that genuinely has to distinguish it from the rest of
-    the chain: a frame panel. Inside a frame the frame IS the charter session, so `charter
-    workspace use` writes this pointer under the FRAME's id and `docs/frame.md` promises
-    that "moves the panels too". The panels also carry a launch-time answer the launcher
-    recorded for them, and an operator's live choice has to outrank it — which is only
-    askable if this rung can be asked ON ITS OWN. `resolve()` cannot answer it: it returns
-    a workspace whatever happened, and `source()`'s label is a sentence for a status line.
+    Public since #512, for callers that genuinely have to distinguish it from the rest of
+    the chain: inside a frame the frame IS the charter session, so `charter workspace use`
+    writes this pointer under the FRAME's id, and a reader has to be able to tell "this
+    session chose it" apart from "the launcher resolved it" without reading `source()`'s
+    human-facing label and matching a string. `resolve()` cannot answer it either: it
+    returns a workspace whatever happened.
+
+    **The frame's panels were the original caller and are no longer a caller at all
+    (#791).** They read this rung through `frame/state.own_workspace`, which is also what
+    decides a chat's membership of a workspace — so `charter workspace use` typed at the
+    agent re-homed the chat, which spec §4j forbids. The panels now read the launch's own
+    records; this function still answers for `resolve`, for `source`, and for anything
+    asking what one session chose, which is what the cases below measure.
     """
 
     def test_it_names_the_workspace_that_session_chose(self):

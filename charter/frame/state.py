@@ -952,10 +952,10 @@ def own_workspace(fid: str) -> str | None:
     existed, and why swapping it for `workspace_for(n)` is the wrong fix rather than the
     obvious one. What was wrong was the DEPTH, not the direction: the roster asked four
     rungs and membership asked one, so a chat could be drawing `alpha` and be excluded
-    from `alpha`'s roster at the same time — `charter workspace use alpha` writes rung 1
-    and membership could only see rung 2.
+    from `alpha`'s roster at the same time.
 
-    The three rungs, in :func:`workspace_for`'s own order because they ARE its middle:
+    **Both rungs are written at LAUNCH, and #791 is why there is no third** (see below).
+    They are given in :func:`workspace_for`'s own order because they ARE its middle:
 
     1. **The pin the launcher recorded.** `state.identity` holds what the launch put on
        tmux's ``-e`` (`commands_frame._frame_identity_env`), which is `os.environ` inside
@@ -968,18 +968,45 @@ def own_workspace(fid: str) -> str | None:
        nothing draws. Take this rung away and a
        pinned chat that ran `charter workspace use other` is stranded in exactly the shape
        #733 describes, on a plane where it is coherent today.
-    2. **What was chosen inside the chat** — `workspace.for_session(fid)`, which takes the
-       id explicitly and reads one file under it. Never `workspace.chosen(session_id=fid)`,
-       which looks like the same thing and is not: its rungs fall through to a cwd read and
-       a terminal pointer that are the ASKER's.
-    3. **What the launcher resolved** — :func:`frame_workspace`, #512's seed.
+    2. **What the launcher resolved** — :func:`frame_workspace`, #512's seed.
 
-    ``None`` where every rung is empty, and that is a real answer rather than a failure:
+    **The per-session pointer used to sit between them and #791 took it out.** That rung
+    was `workspace.for_session(fid)`, and the writer that reaches it is
+    `workspace.set_active(..., session_id=session.current())` — which is
+    `charter workspace use <name>` typed at the agent, because inside a frame
+    `session.current()` is the CHAT's id (ADR 0019). So a command whose whole subject is
+    "which workspace is this session working in" was also answering "which workspace does
+    this chat belong to", and the measured outcome was #733 and #788 verbatim: two chats
+    in one tmux session, `charter workspace use gamma` typed in the first, and the second
+    could no longer see it (`chats.others` empty, `frame-chat alpha.1` answering `no chat
+    'alpha.1' here`) while the first was offered `gamma`'s chats, which `cmd_chat` then
+    refuses. #789 closed that shape through `switch.to_workspace`; this door stayed open
+    because both issues named the switch as the cause.
+
+    **Refusing the command inside a frame was the alternative and it is rejected on
+    evidence.** The only available test for "inside a frame" is `session.current()`, and
+    every agent spawned from a frame inherits `$CHARTER_SESSION_ID` — measured, a subagent
+    shell three levels down still reports the frame's id. A refusal keyed on that fires on
+    agents doing ordinary CLI work in isolated worktrees, none of which is in a frame in
+    any meaningful sense. Dropping the rung needs no detection and breaks no command:
+    `set_active` still writes the pointer and the lock, `workspace.resolve` still reads
+    them, so every `charter` command in that session still acts on the name that was
+    typed. What it stops is a pointer deciding a chat's IDENTITY, which §4j settles —
+    ``{workspace}-{hash}`` is identity, not a property, and a pointer written by whoever
+    last typed a command is the definition of a property.
+
+    Two consequences, both deliberate. `docs/frame.md` no longer promises that `ws use`
+    "moves the panels too", because it no longer does. And a chat with a pointer used to
+    follow a workspace RENAME (#752) while a chat without one was orphaned; every chat now
+    behaves like the second kind — more uniform, and a behaviour change rather than a
+    repair.
+
+    ``None`` where both rungs are empty, and that is a real answer rather than a failure:
     "this chat says nothing" belongs in nobody's roster, while :func:`workspace_for` still
     has to hand a panel a name to draw and falls through to its own last rung for it.
 
     Name-checked on the pin like every other rung that hands a value to `workspace_dir()`'s
-    join (#442); rungs 2 and 3 are checked by the functions that own them. `valid_name`
+    join (#442); the record below it is checked by the function that owns it. `valid_name`
     alone with no truthiness test in front of it — `valid_name("")` is already False, and
     `_frame_identity_env` emits an empty value for every name a launch did not have, so an
     unpinned launch falls through here on the name check's own terms.
@@ -988,7 +1015,7 @@ def own_workspace(fid: str) -> str | None:
     pin = identity(fid).get("CHARTER_WORKSPACE", "").strip()
     if ws_mod.valid_name(pin):
         return pin
-    return ws_mod.for_session(fid) or frame_workspace(fid)
+    return frame_workspace(fid)
 
 
 def workspace_for(fid: str) -> str:
@@ -1006,11 +1033,10 @@ def workspace_for(fid: str) -> str:
        every command it runs acts on the pinned name — a panel naming a workspace nothing
        in the session touches, wearing `slots`' `*` that says the environment chose it.
     1. **What the frame itself says** — :func:`own_workspace`, which is the recorded pin,
-       then `charter workspace use <name>` typed at the agent (the per-session pointer
-       under the FRAME's id, because inside a frame the frame is the charter session —
-       `docs/frame.md`, ADR 0019 — and "it moves the panels too" is a documented promise),
        then what the launcher resolved (:func:`record_workspace`, #512's seed: the launch's
-       own answer to a question nothing inside the frame can ask).
+       own answer to a question nothing inside the frame can ask). Both are written by the
+       LAUNCH, which is what makes a chat's workspace a fact about the chat rather than
+       about whoever typed last (§4j, #791).
     2. **Whatever this process resolves for itself**, for a frame launched by a charter
        that predates the record and still running across the upgrade — today's behaviour,
        so this is never worse than what it replaces.
@@ -1024,23 +1050,34 @@ def workspace_for(fid: str) -> str:
     could be drawing `alpha` and be excluded from `alpha`'s roster at the same time. A rung
     added below is now a rung both readers ask.
 
+    **`charter workspace use <name>` typed at the agent no longer moves the panels, and
+    that is #791 rather than an oversight.** It wrote the per-session pointer under the
+    CHAT's id, so the rung it moved was a membership rung and the command re-homed the
+    chat — #733 and #788 line for line, through a door neither issue named. The pointer is
+    still written and every `charter` command in that session still acts on the new name;
+    the panels draw the chat's own workspace, which is the one thing about a chat that does
+    not move. `docs/frame.md` is corrected to say so. See :func:`own_workspace` for why a
+    refusal was rejected instead.
+
     Rung 0 and the pin inside :func:`own_workspace` hold the same value on an ordinary
     launch — `_frame_identity_env` puts the launcher's `$CHARTER_WORKSPACE` on the pane's
     `-e` and records it — so the recorded one shows itself only where this process's
     environment is not the frame's, which on a tmux server shared between every frame on
     the machine is a real case and the one `switch._pin` already reads the record for.
 
-    The pointer and the record inside :func:`own_workspace` are the only two rungs below
-    the pin that can ever disagree, and it is worth saying why the others cannot.
-    `$CHARTER_WORKSPACE` reaches a panel exactly when the launcher had it
-    (`commands_frame._frame_identity_env` carries it, empty when absent), and the launcher
-    resolves it first — so the record holds the same value; rung 0 is therefore invisible
-    on an ordinary pinned launch and only shows itself when something inside the frame
-    tried to move off the pin. The cwd rung is the same story: a panel's cwd is the
-    launcher's, and the launcher asked `from_path` about it before anything else. The
-    per-terminal pointer and the declared default are the two rungs a panel reaches that
-    answer for the PANEL rather than for the frame, and those are exactly the two the
-    record is here to outrank.
+    **Since #791 the two rungs inside :func:`own_workspace` cannot disagree at all** —
+    they are one launch's two records, so rung 0, the recorded pin and the recorded
+    workspace hold one value on every ordinary launch and the whole ladder above rung 2 is
+    invisible. It is still worth saying why the rungs BELOW cannot be trusted, because
+    that is why rung 2 is the last one and not the first. `$CHARTER_WORKSPACE` reaches a
+    panel exactly when the launcher had it (`commands_frame._frame_identity_env` carries
+    it, empty when absent), and the launcher resolves it first — so the record holds the
+    same value. The cwd rung is the same story: a panel's cwd is the launcher's, and the
+    launcher asked `from_path` about it before anything else. The per-session pointer, the
+    per-terminal pointer and the declared default are the three rungs a panel reaches that
+    answer for the PANEL or for whoever typed last rather than for the frame, and those are
+    exactly the ones the record is here to outrank — the first of them by having stopped
+    being a rung of the middle at all.
 
     **Name-checked, and `valid_name` alone with no `env and` in front of it** — the same
     rule and the same reasoning as :func:`frame_workspace`, since this value ends up in
