@@ -3580,8 +3580,31 @@ class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
         self.assertIn("1 of 4 mutation(s) on this branch were measured", page)
         self.assertIn("charter/b.py:2", page)
         self.assertIn("Re-running does not help", page)
+        # The outcome table too, and not only the prose below it. A reader who skims one
+        # skims the other, and the sweep found this row unpinned on this branch: deleting
+        # it left a table whose rows all read zero above a section saying three quarters
+        # of the branch was never measured.
+        self.assertIn("| **out of time** | 3 |", page)
         # And never the sentence that says the branch is covered.
         self.assertNotIn("Nothing added here is a line the suite would not miss", page)
+
+    def test_the_page_lists_twenty_unswept_lines_and_then_says_how_many_more(self):
+        """A long list is not a page anybody reads, and a truncated one that does not say
+        so is the silent-truncation shape this whole tool refuses — so the cap announces
+        itself, exactly as `ANNOTATION_CAP` does. Both halves were found unpinned by the
+        sweep on this branch: the `- …and N more` line, and the boundary that decides
+        when it appears."""
+        def page(n):
+            return sweep.gate_summary(
+                sweep.classify([_result(sweep.OUT_OF_TIME, line=i) for i in range(n)]),
+                "a" * 40, "b" * 40, 12.0, False)
+
+        exactly = page(20)
+        self.assertNotIn("more", exactly.split("Out of time")[1])
+        self.assertEqual(exactly.count("charter/a.py:"), 20)
+        over = page(21)
+        self.assertIn("- …and 1 more", over)
+        self.assertEqual(over.count("charter/a.py:"), 20)
 
     def test_the_lines_nobody_swept_are_marked_in_the_margin_too(self):
         """Annotations are where a reviewer already is. A survivor outranks one of these
@@ -3601,10 +3624,52 @@ class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
     def test_the_verdict_survives_the_trip_through_a_shards_file(self):
         """A shard writes this and another machine classifies it (#617). A verdict that
         did not round-trip would arrive at the merge step as something else, and the
-        something else it would most likely arrive as is `pinned`."""
-        back = sweep.results_from_json(sweep.as_json([_result(sweep.OUT_OF_TIME)]))
+        something else it would most likely arrive as is `pinned`.
+
+        **The spelling is asserted and not only the symbol.** This string is a wire
+        format: it is written into a file by one process and read back by another, and
+        `results_from_json` takes `row["verdict"]` verbatim. `results_from_json`'s own
+        note about `withheld` is the precedent — a shard built by an older sweep than the
+        merge is a real situation, and the two agree on this literal or they do not agree
+        at all. Found by the sweep on this very branch: `retune-string` renamed it and
+        every test stayed green, because every one of them said `sweep.OUT_OF_TIME`."""
+        self.assertEqual(sweep.OUT_OF_TIME, "out_of_time")
+        written = sweep.as_json([_result(sweep.OUT_OF_TIME)])
+        self.assertIn('"verdict": "out_of_time"', written)
+        back = sweep.results_from_json(written)
         self.assertEqual([r.verdict for r in back], [sweep.OUT_OF_TIME])
         self.assertEqual(len(sweep.classify(back).out_of_time), 1)
+
+    def _report(self, results):
+        return sweep.report(results, Path("/x"), "a" * 40, "b" * 40, None, 1.0)
+
+    def test_the_report_says_of_how_many_only_when_some_were_missed(self):
+        """`mutations applied : N` is #782's line and a reader knows it. It gains a
+        denominator exactly when there is something to be short of, because "0 of 0" on
+        a docs branch is a question where "0" was a statement. Found by the sweep:
+        `collapse-ifexp` made the denominator unconditional and nothing went red."""
+        self.assertIn("mutations applied : 1\n", self._report([_result("pinned")]))
+        self.assertIn("mutations applied : 1 of 2\n",
+                      self._report([_result("pinned"),
+                                    _result(sweep.OUT_OF_TIME, line=2)]))
+
+    def test_the_report_a_person_reads_counts_and_names_what_was_never_measured(self):
+        """The terminal report, which is the whole answer for anyone running this by
+        hand rather than through a workflow. Its count line and its section were both
+        found unpinned by the sweep on this branch — `drop-if` deleted each and every
+        test stayed green, because the tests above read the check name and the markdown
+        page and nobody read this one."""
+        page = self._report([_result("pinned"),
+                             _result(sweep.OUT_OF_TIME, line=2, path="charter/b.py"),
+                             _result(sweep.OUT_OF_TIME, line=3, path="charter/b.py")])
+        self.assertIn("OUT OF TIME       : 2", page)
+        self.assertIn("OUT OF TIME — these mutations were planned and never measured",
+                      page)
+        self.assertIn("charter/b.py:3", page)
+        # And a run that measured everything says none of it, so the section cannot
+        # become decoration a reader learns to skip.
+        whole = self._report([_result("pinned")])
+        self.assertNotIn("OUT OF TIME", whole)
 
     def test_the_budget_belongs_to_a_shard_and_not_to_a_person_at_a_terminal(self):
         """A local `--gate` has no merge step to say how much of the plan was reached, so
@@ -4435,6 +4500,42 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         # The plan is still whole in the result set: five rows, not two.
         self.assertEqual([r.mutation.line for r in results], [1, 2, 3, 4, 5])
         self.assertIn("out of time: 2 of 5 mutation(s) measured", said.getvalue())
+
+    def test_the_deadline_is_a_deadline_and_not_a_grace_period(self):
+        """The boundary, on the clock exactly. `>` and `>=` differ by one mutation, and
+        the one they differ by is the one dealt at the instant the budget expires — which
+        `>` would send to a sandbox for a full-suite run, on a machine that is about to
+        be killed. Found by the sweep on this branch: `shift-boundary` swapped them and
+        nothing went red, because the scripted clocks elsewhere step over the boundary
+        rather than landing on it."""
+        self._five()
+        ticks = iter([49.0, 50.0, 50.0, 50.0, 50.0])
+        with contextlib.redirect_stdout(io.StringIO()):
+            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0, None,
+                                     deadline=50.0, now=lambda: next(ticks))
+        self.assertEqual([r.verdict == sweep.OUT_OF_TIME for r in results],
+                         [False, True, True, True, True])
+
+    def test_the_last_thing_written_is_written_after_the_evidence_pass(self):
+        """Three occasions, and the third is the one a spy inside `decide` cannot see:
+        the plan before the first mutation, each answer as it lands, and once more after
+        `evidence_for` has run — because `evidence` is what `_summary_rows` prints under
+        every survivor and it does not exist at the second of those. A file written
+        without it round-trips as `naming: null`, which the merge step reads as "the
+        evidence pass never ran": true of a killed shard, and a lie about a finished one.
+
+        Found by the sweep on this branch: dropping the third call left every test green,
+        because the test that watches the file watches it from inside `decide`."""
+        plan = self._five()
+        calls = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {}, self.workdir, 1, {},
+                        0, print, 60.0, None,
+                        record=lambda rows: calls.append([r.verdict for r in rows]))
+        self.assertEqual(len(calls), len(plan) + 2)
+        self.assertEqual(calls[0], [sweep.OUT_OF_TIME] * len(plan))
+        self.assertNotIn(sweep.OUT_OF_TIME, calls[-1])
 
     def test_a_run_with_no_budget_measures_the_whole_plan(self):
         """The other side of the same line, and the one the deadline could silently take
