@@ -141,7 +141,7 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
     from .. import persona as p_mod
     from .. import workspace as ws_mod
     out: list[Doomed] = []
-    for fid in _plane_chats():
+    for fid in plane_chats():
         if only and fid != only:
             continue
         if state.was_closed(fid):
@@ -167,7 +167,7 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
     return Plan(chats=tuple(out), focus=focus)
 
 
-def _plane_chats() -> list[str]:
+def plane_chats() -> list[str]:
     """Every chat directory on this plane, in tab order, whatever workspace it says.
 
     **`chats.of_workspace` cannot answer this**, and the difference is the point: that
@@ -195,7 +195,7 @@ def _plane_chats() -> list[str]:
     # a second `sorted` on a stable sort buys: `sorted` is guaranteed stable, so this
     # re-orders the groups and leaves each group's chats exactly as `chats._order` left
     # them. A chat that says nothing about its workspace sorts last, deliberately — it is
-    # the migration and truncation case (`_plane_chats`' whole reason for existing), and a
+    # the migration and truncation case (`plane_chats`' whole reason for existing), and a
     # nameless group at the end reads as the leftovers it is rather than as a workspace
     # called "".
     return sorted(inside, key=lambda n: (0, state.own_workspace(n))
@@ -272,18 +272,41 @@ def note(c: Doomed) -> str:
     is decided by the caller and appended, because only the quit knows if its capture
     landed.
     """
-    parts = [_resume_clause(c)]
     if not c.workspace:
-        parts.append("charter has no record of its workspace — reopens unplaced")
-    elif c.homeless:
+        # **The one chat this design cannot bring back, and the note says so instead of
+        # promising anything.** A reopen rebuilds a tmux session per workspace and hands the
+        # launcher a `--workspace`; a chat that says nothing about its workspace has nothing
+        # to be rebuilt into, and inventing one would be the re-homing §4j forbids arriving
+        # as a convenience. So `reopen.read` refuses the record and this row promises no
+        # resume, whatever id the chat happens to hold. It is the migration and truncation
+        # case (`plane_chats`' own reason for scanning the frame root) rather than a state
+        # charter mints.
+        return JOIN.join([NOT_REOPENED] + _ended(c))
+    parts = [_resume_clause(c)]
+    if c.homeless:
         parts.append(f"workspace '{c.workspace}' is gone — reopens saying so")
     if c.cwd_gone:
         parts.append(f"its directory {c.cwd} is gone — reopens in the plane root")
     elif not c.cwd:
         parts.append("no directory recorded — reopens in the plane root")
-    if c.exit_code is not None:
-        parts.append(f"already ended on its own ({c.exit_code})")
-    return JOIN.join(parts)
+    return JOIN.join(parts + _ended(c))
+
+
+#: What a chat charter cannot place is told. Its own constant because two callers need the
+#: same words — the note, and `commands_frame._record_the_plane`, which is what actually
+#: leaves it out of the manifest.
+NOT_REOPENED = "charter has no record of its workspace — it cannot be reopened"
+
+
+def _ended(c: Doomed) -> list[str]:
+    """The clause a chat that already finished carries, or nothing.
+
+    Its own function because both branches of :func:`note` end with it and a chat that
+    cannot be reopened is still a chat whose exit code is worth reading — §2.17's file means
+    precisely *"this harness ended on its own"*, which is the one ending charter can
+    distinguish and the one an operator most often wants to know about.
+    """
+    return [] if c.exit_code is None else [f"already ended on its own ({c.exit_code})"]
 
 
 def _resume_clause(c: Doomed) -> str:
@@ -447,32 +470,41 @@ def is_row(row) -> bool:
 
 
 def confirm_rows(p: Plan, *, verb: str) -> tuple:
-    """The confirmation surface: one row per chat, then the row that goes through.
+    """The confirmation surface: the row that goes through, then one row per chat.
 
     **The per-chat rows are `refused=True`, and that is what makes them a warning rather
     than a menu.** `overlay.Row.refused` means "this row cannot run right now" (#732) —
     which is exactly true of them: they are the sentence §4f asks for, and pressing one
-    does nothing. It is also what puts the cursor on the row that CAN run, so the operator
-    is never left with Enter bound to nothing.
+    does nothing.
 
-    **The confirming row is last**, under the list it is about. A confirmation whose button
-    is above the thing being confirmed is one an operator can press before reading, and
-    this is the one surface in charter where that matters.
+    **The confirming row is FIRST, and an earlier draft had it last.** Under the list it is
+    about reads better and was measured to be wrong: `frame/palette.narrow` puts the cursor
+    on the first row when nothing has been typed, refused or not, so the surface opened with
+    `> alpha.1 · claude-code` selected and Enter bound to nothing at all. *"A palette row
+    that visibly does nothing reads as broken and costs the operator a whole `F2` to find
+    out"* is `builtin_actions._register_selection`'s own finding, and it applies here more
+    than anywhere: the one surface where the operator has just asked a question and is
+    waiting for the keypress that answers it.
 
-    A plan with nothing to stop gets one refused row saying so and no confirming row at
-    all, so there is no keypress that quietly succeeds at nothing.
+    So the shape is the shape of every confirmation an operator has ever used: the thing you
+    press at the top, what it will do underneath it, and the whole list on screen before the
+    first keypress that commits anything. §4f's requirement is that the warning is drawn *at
+    the moment of deciding*, and it is — the doorway's Enter draws this surface and nothing
+    else.
+
+    A plan with nothing to stop gets one refused row saying so and **no confirming row at
+    all**, so there is no keypress that quietly succeeds at nothing.
     """
     from . import overlay
     doomed = stopping(p)
     if not doomed:
         return (overlay.Row(id=CHAT_ID.format(verb, 0), title=NOTHING_OPEN,
                             refused=True),)
-    rows = [overlay.Row(id=CHAT_ID.format(verb, i), title=title(c), note=note(c),
-                        refused=True, mark=c.active)
-            for i, c in enumerate(doomed)]
-    rows.append(overlay.Row(id=GO_ID.format(verb), title=summary(p)
-                            if verb == QUIT else _close_summary(doomed)))
-    return tuple(rows)
+    go = overlay.Row(id=GO_ID.format(verb),
+                     title=summary(p) if verb == QUIT else _close_summary(doomed))
+    return (go, *(overlay.Row(id=CHAT_ID.format(verb, i), title=title(c), note=note(c),
+                              refused=True, mark=c.active)
+                  for i, c in enumerate(doomed)))
 
 
 def _close_summary(doomed) -> str:

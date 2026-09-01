@@ -643,19 +643,23 @@ the same thing without needing to know tmux's prefix key.
 
 **`F2 → charter: quit` stops everything on this plane, and records it first.** It is the only
 route — never a signal, never a closing terminal. Enter on that row opens a confirmation
-rather than doing anything: one row per chat, saying what that chat will and will not get
-back, with the row that goes through at the bottom.
+rather than doing anything: the row that goes through, and under it one row per chat saying
+what that chat will and will not get back.
 
 ```
 quit · 5 to choose from
+>   quit — stop 4 chats in 3 workspaces; 2 of 4 can resume the conversation
     alpha.1 · claude-code       conversation resumes
   * alpha.2 · claude-code       reopens empty — no session id recorded for this chat yet
     api.1 · opencode            reopens empty — opencode records no session id to resume …
     gone.3 · claude-code        conversation resumes · workspace 'gone' is gone — reopen…
->   quit — stop 4 chats in 3 workspaces; 2 of 4 can resume the conversation
 
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```
+
+The chat rows are listed refused — they are the warning, and pressing one does nothing. The
+row that runs is where the cursor lands, because the palette puts the cursor on the first
+row and a confirmation whose Enter does nothing reads as broken.
 
 It **warns and proceeds** — it does not refuse. Refusing would leave you unable to quit
 while any agent was working, which on a control plane is most of the time. The one thing that

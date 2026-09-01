@@ -88,18 +88,24 @@ have written one. A genuinely per-frame quit could not prune at all.
 
 ## The warning is per chat, and it is drawn before the keypress commits anything
 
-`F2 → charter: quit` opens a confirmation, not an action. One row per chat, each carrying that
-chat's own sentence; the row that goes through is last, under the list it is about; and every
-chat row is marked refused, so the cursor lands on the row that runs and pressing a chat row
-does nothing.
+`F2 → charter: quit` opens a confirmation, not an action. The row that goes through, and
+under it one row per chat carrying that chat's own sentence — every chat row marked refused,
+because it is the warning and pressing it does nothing.
 
 ```
+> quit — stop 4 chats in 3 workspaces; 2 of 4 can resume the conversation
   alpha.1 · claude-code    conversation resumes
   alpha.2 · claude-code    reopens empty — no session id recorded for this chat yet
   api.1 · opencode         reopens empty — opencode records no session id to resume from
   gone.3 · claude-code     conversation resumes · workspace 'gone' is gone — reopens saying so
-quit — stop 4 chats in 3 workspaces; 2 of 4 can resume the conversation
 ```
+
+*An earlier draft put the confirming row at the bottom, under the list it is about, which
+reads better and was measured to be wrong:* `palette.narrow` puts the cursor on the first row
+when nothing has been typed, refused or not, so the surface opened with a chat row selected
+and Enter bound to nothing at all. A palette row that visibly does nothing reads as broken,
+and this is the one surface where the operator has just asked a question and is waiting for
+the keypress that answers it.
 
 **Four sentences and not one**, because "reopens empty" on its own would reasonably be filed
 as a bug. Charter can resume Claude Code and nothing else: `record_harness_session` has
@@ -116,9 +122,18 @@ working, which on a control plane is most of the time.
 
 Its directory, its workspace and its persona return either way; only the conversation is gone.
 Silently not reopening it would make a chat vanish across a restart, which is the opposite of
-what was asked for. A chat whose **workspace** has been deleted comes back too, and says the
+what was asked for. A chat whose **workspace has been deleted** comes back too, and says the
 workspace is missing — it is never quietly re-homed, which is the rule §4j sets and #789
 enforced.
+
+**One chat cannot come back, and it says so rather than promising.** A chat with no
+*workspace record at all* — the migration and truncation case, which is exactly why the quit
+scans the frame root rather than asking any workspace's roster — has no session to be rebuilt
+into. It is stopped like the rest and deliberately not recorded, because choosing a workspace
+for it would be the re-homing §4j forbids arriving as a convenience, and a manifest line every
+reader discards is a record that looks like a promise and is not. Its warning row says
+`charter has no record of its workspace — it cannot be reopened`, and the quit's own summary
+says how many of how many were kept.
 
 **`cwd` had nowhere to live and now has a file.** `os.getcwd()` was read on both launch paths,
 handed to tmux, and dropped. It could not join the identity record: every value in that record

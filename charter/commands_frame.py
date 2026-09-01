@@ -7659,7 +7659,7 @@ def _plane_servers() -> list[str]:
     live there" by the caller.
     """
     found = [SOCKET]
-    for fid in leave._plane_chats():
+    for fid in leave.plane_chats():
         server = state.frame_server(fid) or SOCKET
         if server not in found:
             found.append(server)
@@ -7774,6 +7774,17 @@ def _record_the_plane(doomed, *, focus: str, active, windows) -> int | None:
     entries: dict[str, list] = {}
     order: list[str] = []
     for c in doomed:
+        if not c.workspace:
+            # **Stopped, and honestly not recorded.** A reopen rebuilds one tmux session per
+            # workspace and hands the launcher a `--workspace`; there is nothing to rebuild a
+            # chat into that says nothing about its workspace, and choosing one for it would
+            # be §4j's re-homing arriving as a convenience. `reopen.read` refuses such a
+            # record anyway (`_usable` holds the workspace to `valid_name`), so writing one
+            # would put a line in the manifest that every reader discards — a record that
+            # looks like a promise and is not. The warning already told the operator
+            # (`leave.NOT_REOPENED`), and `cmd_quit`'s own line says how many of how many
+            # were kept.
+            continue
         server = state.frame_server(c.chat) or SOCKET
         transcript = ""
         dest = reopen_state.transcript_path(c.chat)
@@ -7793,7 +7804,10 @@ def _record_the_plane(doomed, *, focus: str, active, windows) -> int | None:
         frames.append(reopen_state.Frame(workspace=ws, chats=tuple(entries[ws])))
     if not reopen_state.write(frames, focus=focus):
         return None
-    reopen_state.prune_transcripts({c.chat for c in doomed})
+    # Keyed on what was RECORDED and not on what was stopped: a transcript is a file in the
+    # frame root, and the only collector it has is this call. Keeping one for a chat no
+    # manifest names would leave it there for good.
+    reopen_state.prune_transcripts({c.chat for f in frames for c in f.chats})
     return sum(len(f.chats) for f in frames)
 
 

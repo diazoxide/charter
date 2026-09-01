@@ -81,8 +81,18 @@ class TheWarningNamesWhatEachChatLoses(PersonaIso, unittest.TestCase):
         self.assertIn("gone", note)
         self.assertIn(leave.RESUMES, note)
 
-    def test_a_chat_with_no_workspace_record_says_it_reopens_unplaced(self):
-        self.assertIn("unplaced", leave.note(_doomed(resume="c", workspace="")))
+    def test_a_chat_with_no_workspace_record_is_told_it_cannot_be_reopened(self):
+        # The one chat this design cannot bring back, and the note promises nothing —
+        # not even the resume it has an id for, because there is no session to rebuild it
+        # into and choosing one would be §4j's re-homing arriving as a convenience.
+        note = leave.note(_doomed(resume="c", workspace=""))
+
+        self.assertEqual(note, leave.NOT_REOPENED)
+        self.assertNotIn(leave.RESUMES, note)
+
+    def test_a_chat_it_cannot_place_still_reports_the_code_it_ended_with(self):
+        self.assertEqual(leave.note(_doomed(workspace="", exit_code=3)),
+                         f"{leave.NOT_REOPENED} · already ended on its own (3)")
 
     def test_a_directory_that_has_gone_names_the_fallback(self):
         note = leave.note(_doomed(resume="c", cwd="/nowhere", cwd_gone=True))
@@ -103,14 +113,28 @@ class TheConfirmationIsAWarningNotAMenu(PersonaIso, unittest.TestCase):
     def _plan(self, *chats_):
         return leave.Plan(chats=tuple(chats_), focus="alpha")
 
-    def test_every_chat_row_is_refused_and_the_only_row_that_runs_is_last(self):
+    def test_every_chat_row_is_refused_and_the_row_that_runs_is_where_the_cursor_lands(self):
+        # `palette.narrow` puts the cursor on the FIRST row when nothing has been typed,
+        # refused or not — so the confirming row has to be first or the surface opens with
+        # Enter bound to nothing. Measured, with the earlier last-row ordering.
         rows = leave.confirm_rows(
             self._plan(_doomed(chat="alpha.1", resume="c"),
                        _doomed(chat="alpha.2", harness="opencode")),
             verb=leave.QUIT)
 
-        self.assertEqual([r.refused for r in rows], [True, True, False])
-        self.assertTrue(leave.goes_through(rows[-1], leave.QUIT))
+        self.assertEqual([r.refused for r in rows], [False, True, True])
+        self.assertTrue(leave.goes_through(rows[0], leave.QUIT))
+
+    def test_the_cursor_really_lands_on_the_row_that_runs(self):
+        # The property the ordering exists for, asserted through the surface rather than
+        # through the list: this is what an operator sees selected when it opens.
+        from charter.frame import palette
+        p = self._plan(_doomed(chat="alpha.1", resume="c", active=True))
+        surface = palette.Palette(catalogue=leave.confirm_rows(p, verb=leave.QUIT),
+                                  label=leave.QUIT)
+        surface.render(80, 12)
+
+        self.assertTrue(leave.goes_through(surface.selected, leave.QUIT))
 
     def test_each_chat_row_carries_that_chats_own_sentence(self):
         rows = leave.confirm_rows(
@@ -118,13 +142,13 @@ class TheConfirmationIsAWarningNotAMenu(PersonaIso, unittest.TestCase):
                        _doomed(chat="alpha.2", harness="opencode")),
             verb=leave.QUIT)
 
-        self.assertEqual(rows[0].note, leave.RESUMES)
-        self.assertIn("opencode", rows[1].note)
+        self.assertEqual(rows[1].note, leave.RESUMES)
+        self.assertIn("opencode", rows[2].note)
 
     def test_the_chat_you_are_looking_at_is_marked(self):
         rows = leave.confirm_rows(self._plan(_doomed(active=True)), verb=leave.QUIT)
 
-        self.assertTrue(rows[0].mark)
+        self.assertTrue(rows[1].mark)
 
     def test_a_plane_with_nothing_open_gets_no_row_that_runs(self):
         rows = leave.confirm_rows(self._plan(), verb=leave.QUIT)
@@ -143,8 +167,8 @@ class TheConfirmationIsAWarningNotAMenu(PersonaIso, unittest.TestCase):
     def test_closes_summary_says_forget_where_quits_says_resume(self):
         rows = leave.confirm_rows(self._plan(_doomed(resume="c")), verb=leave.CLOSE)
 
-        self.assertIn("not come back", rows[-1].title)
-        self.assertTrue(leave.goes_through(rows[-1], leave.CLOSE))
+        self.assertIn("not come back", rows[0].title)
+        self.assertTrue(leave.goes_through(rows[0], leave.CLOSE))
 
     def test_close_is_listed_with_its_reason_when_there_is_no_chat_to_close(self):
         # #512's rule: an option you cannot see is one you cannot ask about. Quit needs no

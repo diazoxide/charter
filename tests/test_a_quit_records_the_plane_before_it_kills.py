@@ -138,7 +138,7 @@ class TheRecordOutlivesTheChatItDescribes(PersonaIso, unittest.TestCase):
         # Both scans filter on `is_dir()`, and this is the assertion that says so rather
         # than the comment that claims it.
         self.assertEqual(chats.of_workspace("alpha"), ["alpha.1"])
-        self.assertEqual(leave._plane_chats(), ["alpha.1"])
+        self.assertEqual(leave.plane_chats(), ["alpha.1"])
 
 
 class WhatAQuitWritesDown(PersonaIso, unittest.TestCase):
@@ -189,6 +189,33 @@ class WhatAQuitWritesDown(PersonaIso, unittest.TestCase):
 
         self.assertEqual([c.chat for c in p.chats], ["alpha.9"])
         self.assertEqual(p.chats[0].workspace, "")
+
+    def test_a_chat_with_no_workspace_is_stopped_and_honestly_not_recorded(self):
+        # Recorded would be a lie: `reopen.read` holds a manifest entry's workspace to
+        # `valid_name`, so a line written for a chat that says nothing would be discarded by
+        # every reader — a record that looks like a promise and is not. The warning names it
+        # (`leave.NOT_REOPENED`) and the quit's own line says how many of how many were kept.
+        _plant("alpha.1", ws="alpha")
+        state.frame_dir("alpha.9", create=True)
+        state.record_server("alpha.9", SERVER)
+        state.record_harness_pane("alpha.9", "%9")
+
+        with mock.patch.multiple(commands_frame,
+                                 _chat_windows=mock.DEFAULT, _active_chats=mock.DEFAULT,
+                                 _capture_transcript=mock.DEFAULT,
+                                 _stop_chats=mock.DEFAULT) as m:
+            m["_chat_windows"].return_value = {"alpha.1": "@0", "alpha.9": "@1"}
+            m["_active_chats"].return_value = set()
+            m["_capture_transcript"].return_value = False
+            m["_stop_chats"].return_value = 2
+            self.assertEqual(commands_frame.cmd_quit(
+                SimpleNamespace(chat="alpha.1")), 0)
+            # Both were aimed at — it is the RECORD that leaves one out, not the teardown.
+            self.assertEqual(
+                sorted(c.chat for c in m["_stop_chats"].call_args[0][0]),
+                ["alpha.1", "alpha.9"])
+
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
 
     def test_a_wedged_server_is_not_an_empty_one(self):
         _plant("alpha.1", ws="alpha")
