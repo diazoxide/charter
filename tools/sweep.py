@@ -1139,17 +1139,36 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # happen and a mutation that reddens the suite for that reason is a false pin —
         # the one outcome worse than no signal.
         if isinstance(node, ast.If) and node.orelse:
+            # One direction of this pair is `drop-isinstance`'s when the test IS an
+            # `isinstance` call, and forcing that test to a constant is one edit however
+            # it is tagged — the same span, the same replacement, the same program, and
+            # two rows in a report a person reads (#797). The rule that keeps the row is
+            # the one whose question is about THIS node: "is the type filter pinned?"
+            # names what the mutant deleted, where "is the rest of the chain pinned?" is
+            # true of any condition at all. So the row stays, the pair stays a pair — one
+            # row per direction on the same line — and only the tag and the question on
+            # the forced-`True` half change. #755 is the same trade made the same way, and
+            # #655 is the rule both rest on: a mutation that produces a program another
+            # mutation already produces is not offered rather than given a verdict of its
+            # own.
+            #
+            # Structural and local, not a set built by an earlier pass: the shape is
+            # readable off this node, so `_isinstance_forced_to` decides it for both rules
+            # and neither has to run first.
+            owned = _isinstance_forced_to(node.test)
             # "this" and "the other" are two different questions and they are also not
             # self-locating: which is which is knowable only by reading this file, and the
             # reviewer holding the report does not have it open. Naming the direction the
             # condition was forced makes each one checkable against the printed line,
             # which is what #721 asks of a question that has to carry the disambiguation.
-            yield (node.test, "False", "disable-branch",
-                   "is this branch pinned, or does nothing change when its condition "
-                   "never holds?")
-            yield (node.test, "True", "disable-branch",
-                   "is the rest of the chain pinned, or does nothing change when this "
-                   "condition always holds?")
+            if owned != "False":
+                yield (node.test, "False", "disable-branch",
+                       "is this branch pinned, or does nothing change when its condition "
+                       "never holds?")
+            if owned != "True":
+                yield (node.test, "True", "disable-branch",
+                       "is the rest of the chain pinned, or does nothing change when this "
+                       "condition always holds?")
 
         # The same refusal in expression clothes: `[x for x in xs if C]`. Round two's
         # first finding, `harness_rows`' `if _edge_of(slot) not in _COLUMN_EDGES`, lives
@@ -1179,13 +1198,14 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
                        f"is the `{_oneline(sp.text(part), 48)}` half pinned?")
 
         # `if isinstance(x, str)` as the whole condition — the type filter, dropped.
-        if isinstance(node, (ast.If, ast.While)) and _is_isinstance(node.test):
-            yield (node.test, "True", "drop-isinstance",
-                   "is the type filter pinned?")
-        if isinstance(node, (ast.If, ast.While)) and isinstance(node.test, ast.UnaryOp) \
-                and isinstance(node.test.op, ast.Not) and _is_isinstance(node.test.operand):
-            yield (node.test, "False", "drop-isinstance",
-                   "is the type filter pinned?")
+        # `not isinstance(…)` is the same shape forced the other way, and both spellings
+        # are read off one helper so that the `disable-branch` rule above can decline
+        # precisely what this one claims and no more (#797).
+        if isinstance(node, (ast.If, ast.While)):
+            forced = _isinstance_forced_to(node.test)
+            if forced is not None:
+                yield (node.test, forced, "drop-isinstance",
+                       "is the type filter pinned?")
 
         # `x = max(a, b)` / `min(…)` — dropped to each operand in turn. `_window`'s
         # `n = max(1, height - _CHROME_ROWS)` and its `_top` clamp are both this shape.
@@ -1420,6 +1440,26 @@ def span_is_sound(sp: _Spans, node: ast.AST) -> bool:
 def _is_isinstance(node: ast.AST) -> bool:
     return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
             and node.func.id == "isinstance")
+
+
+def _isinstance_forced_to(test: ast.AST) -> str | None:
+    """The constant `drop-isinstance` forces *test* to, or ``None`` if it declines it.
+
+    Both rules that can force an `if`'s test to a constant read this one function, so the
+    two cannot drift apart into a shape only one of them recognises. `drop-isinstance`
+    yields exactly this; `disable-branch` declines exactly this direction and keeps the
+    other (#797).
+
+    The two spellings are one shape and not two: `isinstance(x, str)` is dropped by
+    forcing the test `True`, and `not isinstance(x, str)` by forcing it `False`, and in
+    both cases what the mutant deletes is the type filter and nothing else.
+    """
+    if _is_isinstance(test):
+        return "True"
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not) \
+            and _is_isinstance(test.operand):
+        return "False"
+    return None
 
 
 def _is_get(node: ast.AST) -> bool:

@@ -485,6 +485,178 @@ class AConstantIsOfferedOnceHoweverItIsSpelled(unittest.TestCase):
         self.assertEqual(_afters(muts, "retune-constant"), ["0o701", "0o71"])
 
 
+class ATypeFilterThatIsAWholeBranchIsAskedAboutOnce(unittest.TestCase):
+    """#797: an `isinstance` call that IS the `test` of an `if` with somewhere else to go.
+
+    `disable-branch` forces such a test both ways and `drop-isinstance` forces it one way,
+    and when the test is the call the two are one span with one replacement — so one of
+    the three rows was a second copy of another. It is #755's class in a different pair of
+    rules: not an ambiguity (the tags and the questions are perfectly distinct, which is
+    why `TwoMutantsOfOneNodeAreNeverReportedAlike` could not see it) but **one question
+    asked twice** — an extra sandbox run per site, and a second row in a report a person
+    reads, where the reviewer has to work out that the two rows are one edit.
+
+    **The row that stays is `drop-isinstance`'s, because its question is about this node.**
+    "is the type filter pinned?" names what the mutant deleted; "is the rest of the chain
+    pinned, or does nothing change when this condition always holds?" is true of any
+    condition whatever, and says nothing a reviewer could not have read off the line. So
+    `disable-branch` stands down for that one direction and keeps the other — which is
+    #755's trade made the same way, one half of each rule, and leaves the pair still a
+    pair: two rows on the line, one per direction, each with a distinct question.
+
+    The rule both fixes rest on is `swap-synonym`'s, from #655: a mutation that produces a
+    program another mutation already produces is *not offered* rather than given a verdict
+    of its own.
+    """
+
+    #: Both spellings of the shape, and the direction `drop-isinstance` forces each to.
+    #: The negated one is the half the tree had no instance of on `main` — the collision
+    #: is `disable-branch`'s `False` there rather than its `True` — and writing the fix
+    #: from the two sites that were MEASURED rather than from the shape would have left it.
+    BOTH_WAYS = (("isinstance(node, dict)", "True", "False"),
+                 ("not isinstance(node, dict)", "False", "True"))
+
+    def _branch(self, test: str):
+        return _mutations(f"""
+            def walk(node):
+                if {test}:
+                    return 1
+                else:
+                    return 2
+        """)
+
+    def test_the_forced_test_is_offered_once_in_each_direction(self):
+        """The whole issue, as counted rows: three mutants of one node became two, and
+        the two that remain are the two directions the node can be forced."""
+        for test, _, _ in self.BOTH_WAYS:
+            with self.subTest(test=test):
+                on_test = [m for m in self._branch(test)
+                           if m.operator in ("disable-branch", "drop-isinstance")]
+                self.assertEqual(sorted(m.after for m in on_test), ["False", "True"])
+
+    def test_the_row_that_keeps_the_forced_direction_asks_about_the_type_filter(self):
+        """Which of the two rules kept it, and that it kept the specific question. A fix
+        that dropped `drop-isinstance` at these sites would satisfy the count above and
+        lose the only question that names what the edit removed."""
+        for test, drops, _ in self.BOTH_WAYS:
+            with self.subTest(test=test):
+                muts = _by(self._branch(test), "drop-isinstance")
+                self.assertEqual([(m.after, m.question) for m in muts],
+                                 [(drops, "is the type filter pinned?")])
+
+    def test_the_other_direction_is_still_asked_and_still_disable_branchs(self):
+        """Nothing that was ever a distinct question is dropped. `disable-branch` declines
+        exactly the direction the other rule already produces and keeps the opposite one,
+        so the chain question is still on the line."""
+        chain = {"False": "is this branch pinned, or does nothing change when its "
+                          "condition never holds?",
+                 "True": "is the rest of the chain pinned, or does nothing change when "
+                         "this condition always holds?"}
+        for test, _, kept in self.BOTH_WAYS:
+            with self.subTest(test=test):
+                muts = _by(self._branch(test), "disable-branch")
+                self.assertEqual([(m.after, m.question) for m in muts],
+                                 [(kept, chain[kept])])
+
+    def test_a_branch_whose_test_is_not_a_type_filter_keeps_both_directions(self):
+        """The exclusion is narrow. `disable-branch` is a pair by design and stays one
+        everywhere the other rule does not already own a direction — which is every `if`
+        chain in the tree but the handful this issue is about."""
+        muts = _by(_mutations("""
+            def f(y):
+                if y:
+                    return 1
+                else:
+                    return 2
+        """), "disable-branch")
+        self.assertEqual(sorted(m.after for m in muts), ["False", "True"])
+
+    def test_a_type_filter_that_is_only_half_the_condition_declines_nothing(self):
+        """`if isinstance(x, str) and x:` is not this shape: the test is the `and`, so
+        forcing it `True` is not the same edit as dropping the type filter — indeed
+        `drop-isinstance` does not fire here at all, and a `disable-branch` that stood
+        down for it would leave the direction unasked by anybody."""
+        muts = _mutations("""
+            def f(x):
+                if isinstance(x, str) and x:
+                    return 1
+                else:
+                    return 2
+        """)
+        self.assertEqual(_by(muts, "drop-isinstance"), [])
+        self.assertEqual(_afters(muts, "disable-branch"), ["False", "True"])
+
+    def test_a_bare_type_filter_still_gets_its_row(self):
+        """A withheld node with no rule left to ask about it is a guard silently
+        uncovered. `disable-branch` never fires on a chain with no `else`, so nothing is
+        declined here and the type filter is asked about exactly as before."""
+        muts = _mutations("""
+            def f(name):
+                if isinstance(name, str):
+                    use(name)
+        """)
+        self.assertEqual(_afters(muts, "drop-isinstance"), ["True"])
+
+    def test_a_type_filter_on_a_while_still_gets_its_row(self):
+        """`drop-isinstance` reaches `while` and `disable-branch` does not, so the two
+        rules do not overlap here either — and the shared helper must not narrow the rule
+        that keeps the row to the `if` the other one cares about."""
+        muts = _mutations("""
+            def f(node):
+                while isinstance(node, list):
+                    node = node[0]
+                return node
+        """)
+        self.assertEqual(_afters(muts, "drop-isinstance"), ["True"])
+
+    def test_the_two_sites_the_issue_measured_plan_two_mutants_and_not_three(self):
+        """The tree's own instances, transcribed: `charter/hooks.py`'s `walk` and this
+        file's own `annotation_positions`. Both are `if isinstance(…): … elif …`, which is
+        an `if` with an `orelse` and so the shape exactly."""
+        for source in ("""
+            def walk(node):
+                if isinstance(node, dict):
+                    for k, v in node.items():
+                        walk(v)
+                elif isinstance(node, list):
+                    for item in node:
+                        walk(item)
+        """, """
+            def annotations(node):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    annotation = node.returns
+                elif isinstance(node, (ast.arg, ast.AnnAssign)):
+                    annotation = node.annotation
+                else:
+                    annotation = None
+                return annotation
+        """):
+            with self.subTest(source=source.split("\n")[1].strip()):
+                muts = [m for m in _mutations(source)
+                        if m.operator in ("disable-branch", "drop-isinstance")]
+                by_span: dict[tuple, list] = {}
+                for m in muts:
+                    by_span.setdefault(m.span, []).append(m)
+                # Keyed on the span, because a chain's `elif` is its own `ast.If` with its
+                # own test — and one with no `else` of its own, where `disable-branch`
+                # never fires and there is nothing to decline. So the count differs
+                # between the two tests of one chain, and what does not differ is that no
+                # direction is offered twice.
+                for _, ms in by_span.items():
+                    afters = sorted(m.after for m in ms)
+                    self.assertEqual(
+                        afters, sorted(set(afters)),
+                        f"{ms[0].before!r} at line {ms[0].line} is forced the same way "
+                        "by two rules: " + ", ".join(f"{m.operator} -> {m.after}"
+                                                     for m in ms))
+                # The chain's OWN test is the one both rules reach, and it keeps both
+                # directions — one row each, which is the whole of what the fix preserves.
+                head = by_span[min(by_span)]
+                self.assertEqual(sorted(m.after for m in head), ["False", "True"])
+                self.assertEqual({m.operator for m in head},
+                                 {"disable-branch", "drop-isinstance"})
+
+
 # ======================================================================================
 # Splicing — line numbers are the whole output of this tool
 # ======================================================================================
@@ -2281,6 +2453,13 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
     #: measured over all of them and not over the ones somebody remembered. The seven
     #: shapes that yield siblings for one node are all here; the rest are here so that an
     #: operator added to `_iter_operators` without a line here fails the coverage test.
+    #:
+    #: **It also has to hold the shapes where two RULES meet on one node**, which is a
+    #: different thing from one rule yielding siblings and is not implied by the coverage
+    #: test — `MODE = 0o600` is #755's and the two `isinstance` chains are #797's. That
+    #: issue was found by re-enumerating the whole tree and not by this fixture, precisely
+    #: because the fixture had every operator and not every MEETING: its one `isinstance`
+    #: was a bare `if` with no `else`, where the two rules do not overlap.
     FIXTURE = """
         LIMIT = 28
         MODE = 0o600
@@ -2296,6 +2475,14 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
                 return []
             if text.startswith("focus:"):
                 return []
+            if isinstance(d, dict):
+                keys = 1
+            else:
+                keys = 2
+            if not isinstance(rows, list):
+                keys = 3
+            else:
+                keys = 4
             if x == 1:
                 head = 1
             else:
@@ -2358,6 +2545,14 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
         strings in every field it reads. That was #755, live in this fixture on `MODE =
         0o600` for as long as the class existed: two rows, two sandbox runs, one integer,
         and the second row spelled the way the tool's own comment says nobody can read.
+
+        #797 is the same class in a different pair of rules and it was NOT live in this
+        fixture, which is how it survived the guard's first day: `disable-branch` and
+        `drop-isinstance` both force an `isinstance` test to a constant, and the fixture's
+        only `isinstance` was a bare `if` where `disable-branch` does not fire at all. Both
+        chains are here now, in both spellings — the plain call, where the collision is on
+        `True`, and the negated one, where it is on `False` and the tree happened to have
+        no instance.
 
         Keyed on the span alone and not on the operator, because "the same program" is not
         an operator's business — two rules recognising one node is exactly how the
