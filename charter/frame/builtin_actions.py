@@ -43,7 +43,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-from .. import contain, util
+from .. import util
 from . import action, actions, choose, state, tmuxctl
 
 #: What marks the density a frame is currently on. **One constant, not two**: it is
@@ -370,16 +370,22 @@ def _regather(fid: str):
     `commands_frame._spawn_gather`'s, verbatim — two ways to start the same gather that
     must not drift apart.
 
-    `contain.one_line` on the way back and not on the way out. The argv is a list, so a
-    name carrying a newline reaches `cmd_gather` as one argument whatever is in it; the
-    RECEIPT is text drawn on the operator's screen, and `frame/slots.py`'s `_empty_lines`
-    records that `workspace_for`'s last rung hands back `$CHARTER_WORKSPACE` stripped and
-    otherwise unchecked.
+    **No `contain.one_line` over *ws*, and the sweep is what settled that.** The name is
+    genuinely unchecked — `frame/slots.py`'s `_empty_lines` records that `workspace_for`'s
+    last rung hands back `$CHARTER_WORKSPACE` stripped and otherwise untouched — so both
+    places it reaches were measured rather than assumed. The argv is a LIST, so a name
+    carrying a newline arrives at `cmd_gather` as one argument whatever is in it. The
+    RECEIPT is contained by the contract: `actions.Invocation._work` runs
+    `contain.one_line(str(note), limit=REASON_LIMIT)` over whatever this returns, which is
+    the same reason `_select` hands back a bare repo name. A second call here changed no
+    outcome — the deletion sweep found it surviving, correctly — and `_empty_lines`' own
+    warning is exactly this shape: a guard kept for a reason that is not the true one is
+    how the real one gets deleted later.
     """
     ws = state.workspace_for(fid)
     _spawn(util.self_relaunch_argv("frame-gather", "--session", fid, "--workspace", ws),
            fid=fid)
-    return f"gathering {contain.one_line(ws)}…"
+    return f"gathering {ws}…"
 
 
 def build(fid: str, *, current_density: str,

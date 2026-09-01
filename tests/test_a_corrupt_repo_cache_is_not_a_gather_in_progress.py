@@ -313,6 +313,30 @@ class ThePaletteCanReGather(PersonaIso, unittest.TestCase):
             a.run(faction.build(a.touches, fid=self.FID, snapshot={}))
         self.assertIn("alpha", spawn.call_args.args[0])
 
+    def test_the_receipt_is_one_line_whatever_the_workspace_is_called(self):
+        """`_regather` hands back `gathering <ws>…` with no `contain.one_line` of its own,
+        and this is the measurement that says it does not need one. `state.workspace_for`'s
+        last rung returns `$CHARTER_WORKSPACE` stripped and otherwise unchecked, so a name
+        with a newline in it really does reach the receipt — and `actions.Invocation._work`
+        contains every receipt on the way to the surface, which is why `_select` hands back
+        a bare repo name too.
+
+        Asserted through the real `registry.invoke`, not by calling `run` directly: the
+        containment lives on the path between the two, so a test that stopped at `run`
+        would be measuring the string this function composes rather than the line an
+        operator reads. The hostile value is asserted to have got THROUGH as well as to
+        have been contained — containment alone would pass on a build where a rung had
+        rejected the name."""
+        hostile = "ev\nil-ws"
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": hostile}, clear=True), \
+             mock.patch.object(builtin_actions, "_spawn"):
+            self.assertEqual(state.workspace_for(self.FID), hostile)
+            inv = self._reg().invoke("frame.gather", fid=self.FID, snapshot={})
+            self.assertTrue(inv.join(5))
+        self.assertEqual(inv.error, "")
+        self.assertIn("il-ws", inv.note)
+        self.assertEqual(len(inv.note.split("\n")), 1, repr(inv.note))
+
     def test_listing_the_row_starts_nothing(self):
         """`Action.run` is what spawns. Building the registry and reading the row must
         not — a palette that gathered on open would sweep git every `F2`."""
