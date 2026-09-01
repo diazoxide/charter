@@ -176,20 +176,21 @@ jobs:
     name: Sweep shard ${{ matrix.shard }} of ${{ needs.plan.outputs.shards }}
     needs: plan
     runs-on: ubuntu-latest
-    # **The backstop, and since #803 nothing but the backstop.** `sweep.py` sizes a shard
-    # for `SHARD_BUDGET` — forty minutes — and now STOPS there and writes what it
-    # measured, so this number is only what catches a shard that could not keep its own
-    # deadline: a hung subprocess, a mutant that took the machine (#773).
+    # The runner's cap, and `sweep.py` reads it: `SHARD_TIMEOUT` is this number, and
+    # `SHARD_REPORT_AT` is ten minutes short of it — the point at which a shard stops
+    # dealing mutations and writes what it measured (#803). One deadline written in two
+    # files and drifting is #670, so the tool holds the constant and
+    # `test_sweep.TheReportingDeadlineSitsBetweenTheBudgetAndTheBackstop` holds this line
+    # to it. Change one and the suite asks for the other.
     #
-    # Twenty minutes behind the budget, and the gap is asserted by
-    # `test_sweep.TheWorkflowsBackstopIsBehindTheBudget` rather than left to two files
-    # agreeing by habit. **Do not close the gap by lowering this to forty.** #803 reads
-    # the mismatch as a defect and it was one — a shard that overran its budget used to
-    # get twenty further minutes of runway and *then* die with nothing — but the two
-    # numbers no longer describe one deadline, and setting them equal would have the
-    # runner kill the shard at the exact moment it stops to write its answer. The room
-    # is for the mutation still in flight when the budget expires (`FULL_TIMEOUT` bounds
-    # it) and for the file to be written and uploaded.
+    # **Do not lower this to `SHARD_BUDGET`'s forty.** #803 reads the twenty-minute gap
+    # as a defect and it was one — a shard that overran its sizing got twenty further
+    # minutes of runway and *then* died with nothing. But the two were never one
+    # deadline: forty sizes the PLAN, from an average mutation, and a shard whose slice
+    # holds five survivors pays a full-suite run for each and legitimately needs longer.
+    # Cutting it off at forty would turn complete answers into partial ones, and cutting
+    # the runner off there would kill the shard at the instant it stops to write. What
+    # closed the gap is the third number, between them.
     timeout-minutes: 60
     strategy:
       # One shard's trouble must not cancel the others: three quarters of an answer, said

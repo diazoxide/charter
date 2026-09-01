@@ -2581,7 +2581,8 @@ def report(results: list[Result], root: Path, ref: str, base: str, baseline: Out
     # never dealt in the same list, so that the plan it was given is legible. Stated as
     # the difference rather than as a second total, because two totals a reader has to
     # subtract is how "covered everything" gets read off a short run.
-    w(f"mutations applied : {len(results) - len(short)} of {len(results)}")
+    w(f"mutations applied : {len(results) - len(short)}"
+      + (f" of {len(results)}" if short else ""))
     w(f"pinned            : {len(pinned)}")
     w(f"SURVIVED          : {len(survivors)}")
     w(f"UNRESOLVED        : {len(unresolved)}")
@@ -2934,23 +2935,53 @@ def gate_exit_code(gate: Gate, enforce: bool) -> int:
 # complete question is spread across.
 
 #: What one shard is allowed to spend on mutations and fixed costs together, in seconds.
-#:
-#: **A deadline the shard keeps for itself, and no longer only a sizing input (#803).** It
-#: was written as the number `per_shard()` divides by, with `sweep.yml`'s
-#: `timeout-minutes: 60` twenty minutes behind it as a backstop — and on any plan past
-#: `MAX_SHARDS * per_shard()` the two combined produced the worst of both: a shard ran
-#: twenty minutes past the budget it was sized for, was cancelled by the runner, and
-#: reported *nothing at all* — not a partial answer, not the survivors it had already
-#: printed, nothing the merge step could read. Measured on run 33500900581: eight of eight
-#: shards cancelled to the second, and `no verdict: 8 of 8 shards did not report`
-#: concluding `success`.
-#:
-#: Now :func:`sweep` stops dealing mutations at `started + SHARD_BUDGET` and writes what
-#: it has, so the same wall clock buys a short answer instead of a silent one, and
-#: `timeout-minutes` goes back to being a backstop for a process that hung rather than a
-#: second deadline racing this one. The gap between them is deliberate and asserted:
-#: see `test_sweep.TheWorkflowsBackstopIsBehindTheBudget`.
+#: **A sizing input and not a deadline** — it is the number :func:`per_shard` divides by,
+#: and what it answers is "how many mutations may this machine be dealt". Deliberately
+#: under :data:`SHARD_TIMEOUT`, because the two failures are not symmetrical: a shard that
+#: finishes with time to spare costs a few runner-minutes, and one that does not is a
+#: machine's worth of work with nothing to show for it.
 SHARD_BUDGET = 40 * 60
+
+#: `sweep.yml`'s `timeout-minutes` for a shard job, in seconds, and the runner's own
+#: backstop: past this the job is cancelled and there is no further negotiation.
+#:
+#: Written here rather than only in the YAML so that :data:`SHARD_REPORT_AT` is derived
+#: from it instead of guessed beside it — the two files disagreeing about one deadline is
+#: #670's defect, and `test_sweep.TheReportingDeadlineSitsBetweenTheBudgetAndTheBackstop`
+#: holds the workflow to this number.
+SHARD_TIMEOUT = 60 * 60
+
+#: How long before :data:`SHARD_TIMEOUT` a shard stops and writes what it measured.
+#:
+#: Enough for the mutations still in flight to come back — a subset run, usually seconds;
+#: a survivor's full-suite confirmation, four to eight minutes — and for the result file
+#: to be written. It is best-effort and not a guarantee: `FULL_TIMEOUT` bounds one run at
+#: forty minutes, so a shard that stops with a slow survivor in flight can still be
+#: cancelled. That case is covered by the OTHER half of #803 rather than by this number —
+#: the result file is written as each answer arrives, so a shard killed here has already
+#: handed over everything it had.
+SHARD_KILL_MARGIN = 10 * 60
+
+#: When a shard stops dealing mutations and reports what it measured (#803).
+#:
+#: **Read off the backstop and not off the budget, and that distinction is the whole
+#: design.** The obvious reading of #803 is that `SHARD_BUDGET` should become the
+#: deadline, since a shard sized for forty minutes ought to stop at forty. It should not:
+#: `SHARD_BUDGET` is a *sizing estimate* built from an average mutation, and a shard whose
+#: slice happens to hold five survivors pays a full-suite run for each and legitimately
+#: needs longer. Stopping such a shard at forty would turn a complete answer that arrives
+#: at forty-eight minutes into a partial one — a regression, dressed as a fix, on exactly
+#: the branches that have something to report.
+#:
+#: So the shard uses every minute the runner will give it and stops just short of being
+#: killed. `SHARD_REPORT_AT > SHARD_BUDGET` is asserted, because that inequality is what
+#: says a correctly sized shard is never cut short by this.
+#:
+#: What run 33500900581 measured is what happens with no such line at all: eight shards
+#: ran to `timeout-minutes: 60`, were cancelled to the second, and reported *nothing* —
+#: not a partial answer, not the survivors they had already printed, nothing the merge
+#: step could read. `no verdict: 8 of 8 shards did not report`, concluding `success`.
+SHARD_REPORT_AT = SHARD_TIMEOUT - SHARD_KILL_MARGIN
 
 #: What a shard pays before it measures its first mutation, itemised, in seconds. Measured
 #: on `ubuntu-latest` and not on a workstation, because that is where the budget has to
@@ -3014,14 +3045,14 @@ def per_shard() -> int:
 def budget_for(sharded: bool, override: float | None = None) -> float:
     """Seconds this run may spend before it stops dealing mutations, or ``0`` for none.
 
-    A budget belongs to a **shard** and not to the tool: :data:`SHARD_BUDGET` is what one
-    machine in a fan-out is allowed to spend, and it is meaningful because the merge step
-    is there to say how much of the plan the fan-out reached. A person running
-    `tools/sweep.py --gate` at a terminal has no merge step and no second machine, so a
+    A deadline belongs to a **shard** and not to the tool. A shard runs on a machine with
+    a `timeout-minutes` on it and has a merge step downstream whose whole job is to say
+    how much of the plan the fan-out reached, so stopping short is a thing the run knows
+    how to report. A person running `tools/sweep.py --gate` at a terminal has neither: a
     deadline there would quietly stop a sweep they were waiting for and hand them a
-    partial answer they never asked for — which is the truncation this file refuses
+    partial answer they never asked for, which is the truncation this file refuses
     everywhere else. So it is off unless the run is a shard, and `--budget` is how a test
-    (or a person reproducing #803) turns it on anyway.
+    — or a person reproducing #803 — turns it on anyway.
 
     Out of :func:`main` for #572's reason: a rule written inside `main()` cannot be
     reached from a test, so it cannot be swept, so it is a guard this harness is unable
@@ -3029,7 +3060,7 @@ def budget_for(sharded: bool, override: float | None = None) -> float:
     """
     if override is not None:
         return max(0.0, float(override))
-    return float(SHARD_BUDGET) if sharded else 0.0
+    return float(SHARD_REPORT_AT) if sharded else 0.0
 
 
 def shards_for(mutations: int) -> int:
@@ -3299,7 +3330,8 @@ def annotations(gate: Gate) -> list[str]:
         # reviewer can do least with line by line: the count and the sentence carry it,
         # and what these mark is which part of the diff the sweep never reached.
         ("warning", gate.out_of_time, "Out of time — this line was never swept",
-         f"The shard's {SHARD_BUDGET // 60}-minute budget ran out before this mutation "
+         f"The shard stopped at {SHARD_REPORT_AT // 60} minutes, just short of the "
+         f"runner's own cap, before this mutation "
          "was measured, so nothing on this branch's sweep is a statement about this "
          "line. Re-running does not reach it; a smaller branch does."),
         ("notice", gate.platform, "Platform-deferred — never fails this gate",
@@ -3491,7 +3523,7 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         w("")
         w(f"{gate.measured} of {gate.measured + len(gate.out_of_time)} mutation(s) on "
           "this branch were measured. The rest were dealt to no sandbox at all: a shard "
-          f"stops after {SHARD_BUDGET // 60} minutes and reports what it has, which is "
+          f"stops at {SHARD_REPORT_AT // 60} minutes and reports what it has, which is "
           "why there are numbers on this page at all — before #803 a shard past its "
           "budget was cancelled at the job timeout and everything it had already "
           "measured died with it.")
@@ -3798,7 +3830,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--budget", default=None, type=float, metavar="SECONDS",
                    help="Stop dealing mutations this many seconds after the run started "
                         "and report what was measured, marking the rest OUT OF TIME "
-                        "(#803). A --shard run gets SHARD_BUDGET by default because the "
+                        "(#803). A --shard run gets SHARD_REPORT_AT by default, which "
+                        "is just short of the runner's own cap, because the "
                         "merge step is there to say how much of the plan was reached; "
                         "an unsharded run gets none. 0 turns it off.")
     p.add_argument("--verdict", default=None, metavar="DIR",

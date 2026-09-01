@@ -3609,29 +3609,33 @@ class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
     def test_the_budget_belongs_to_a_shard_and_not_to_a_person_at_a_terminal(self):
         """A local `--gate` has no merge step to say how much of the plan was reached, so
         a deadline there would hand somebody a truncated answer they never asked for."""
-        self.assertEqual(sweep.budget_for(sharded=True), float(sweep.SHARD_BUDGET))
+        self.assertEqual(sweep.budget_for(sharded=True), float(sweep.SHARD_REPORT_AT))
         self.assertEqual(sweep.budget_for(sharded=False), 0.0)
         self.assertEqual(sweep.budget_for(sharded=False, override=90), 90.0)
         self.assertEqual(sweep.budget_for(sharded=True, override=0), 0.0)
         self.assertEqual(sweep.budget_for(sharded=True, override=-5), 0.0)
 
 
-class TheWorkflowsBackstopIsBehindTheBudget(unittest.TestCase):
-    """`sweep.py` sizes a shard to forty minutes; `sweep.yml` used to kill it at sixty.
+class TheReportingDeadlineSitsBetweenTheBudgetAndTheBackstop(unittest.TestCase):
+    """Three numbers, and #803 is what happens when the middle one is missing.
 
-    #803 calls that mismatch a defect on its own, and it was: a shard that overran its
-    own budget got twenty further minutes of runway and *then* died with nothing, which
-    is the worst of both — the same wall clock spent inside the budget would have
-    produced a partial answer.
+    `SHARD_BUDGET` (40 min) sizes the plan — how many mutations a machine may be dealt.
+    `SHARD_TIMEOUT` (60 min) is the runner's cap, past which the job is cancelled. With
+    nothing between them, a shard that overran its sizing got twenty further minutes of
+    runway and *then* died with nothing, which is the worst of both: the same wall clock
+    spent reporting would have produced a partial answer.
 
-    **The fix is not to make the two numbers equal.** They no longer describe one
-    deadline. `SHARD_BUDGET` is the deadline the shard keeps for itself and reports at;
-    `timeout-minutes` is the backstop for a shard that could not keep it — a hung
-    subprocess, a mutant that took the machine (#773). Setting them equal would have the
-    runner kill the shard at the exact moment it stops to write its answer, which
-    destroys the fix. What has to hold is that the backstop is strictly BEHIND the
-    budget, with room for the mutation still in flight to finish and for the file to be
-    written, and that is what this asserts — against the YAML, so the two cannot drift.
+    **The tempting fix is to set the budget and the backstop equal, and it is wrong.**
+    `SHARD_BUDGET` is a sizing estimate built from an AVERAGE mutation, and a shard whose
+    slice holds five survivors pays a full-suite run for each and legitimately needs
+    longer. Stopping it at forty would turn a complete answer arriving at forty-eight
+    minutes into a partial one — a regression on exactly the branches with something to
+    report, dressed as a fix. Setting the backstop to forty is worse still: the runner
+    would kill the shard at the instant it stops to write its answer.
+
+    So `SHARD_REPORT_AT` goes between them, and the two inequalities below are the whole
+    property: late enough that a correctly sized shard is never cut short, early enough
+    that there is room to finish and write.
     """
 
     def setUp(self):
@@ -3645,24 +3649,53 @@ class TheWorkflowsBackstopIsBehindTheBudget(unittest.TestCase):
         """The reader below is green on an empty list, so it is proved first."""
         self.assertTrue(self._timeouts())
 
-    def test_the_shard_backstop_is_behind_the_budget_with_room_to_report(self):
-        backstop = max(self._timeouts()) * 60
-        self.assertIn(f"timeout-minutes: {backstop // 60}", self.yaml)
-        self.assertGreater(backstop, sweep.SHARD_BUDGET,
-                           "the runner would kill a shard at the moment it stops to "
-                           "write what it measured")
-        self.assertGreaterEqual(backstop - sweep.SHARD_BUDGET, 10 * 60,
-                                "a mutation in flight when the budget expires still has "
-                                "to finish, and the answer still has to be written")
+    def test_the_workflow_and_the_tool_agree_on_where_the_runner_gives_up(self):
+        """#670's defect is one measurement written in two files and drifting. The
+        shard job's cap is the longest one in this workflow — `plan` is 30 and `collect`
+        is 10 — and `sweep.py` derives its own deadline from this number."""
+        self.assertEqual(max(self._timeouts()) * 60, sweep.SHARD_TIMEOUT)
+
+    def test_a_shard_reports_before_the_runner_kills_it(self):
+        self.assertLess(sweep.SHARD_REPORT_AT, sweep.SHARD_TIMEOUT)
+        self.assertGreaterEqual(sweep.SHARD_TIMEOUT - sweep.SHARD_REPORT_AT, 5 * 60,
+                                "a mutation still in flight has to come back and the "
+                                "answer still has to be written")
+
+    def test_a_correctly_sized_shard_is_never_cut_short_by_its_own_deadline(self):
+        """The regression this ordering exists to prevent. A shard dealt `per_shard()`
+        mutations is sized for `SHARD_BUDGET`; if the reporting deadline were at or below
+        that, the ordinary slow-but-complete shard would start publishing partial
+        answers, which is worse than what #803 found."""
+        self.assertGreater(sweep.SHARD_REPORT_AT, sweep.SHARD_BUDGET)
+        self.assertEqual(sweep.budget_for(sharded=True), float(sweep.SHARD_REPORT_AT))
+
+    def _step(self, name):
+        """The YAML block of one named step, and nothing of its neighbours.
+
+        Written this way because the obvious assertion is vacuous: `if: always()` appears
+        on the `collect` job as well, so `assertIn` over the whole file is green with the
+        upload step's own condition deleted. Caught by removing the guard and watching
+        the test stay green, which is the only way that kind of assertion is ever found.
+        """
+        lines = self.yaml.splitlines()
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == f"- name: {name}")
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        out = [lines[start]]
+        for ln in lines[start + 1:]:
+            if ln.strip() and len(ln) - len(ln.lstrip()) <= indent:
+                break
+            out.append(ln)
+        return "\n".join(out)
 
     def test_the_workflow_keeps_whatever_the_shard_wrote(self):
         """Measured on run 33500900581: the `always()` upload step DID run on all eight
         cancelled shards and concluded `success` — the runner was never the problem. It
         uploaded nothing because `sweep.py` held the whole result set in memory until the
-        end, so `if-no-files-found` decided what a cancelled shard says, and it said
-        nothing. The step has to stay unconditional."""
-        self.assertIn("if: always()", self.yaml)
-        self.assertIn("Keep the result set, whatever the sweep said", self.yaml)
+        end, so there was no file for it to find. The step has to stay unconditional, or
+        the whole of #803's fix arrives on a machine that then throws it away."""
+        step = self._step("Keep the result set, whatever the sweep said")
+        self.assertIn("if: always()", step)
+        self.assertIn("path: sweep-results-", step)
 
 
 class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
@@ -4472,7 +4505,7 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
                                "--workdir", str(self.workdir))
         self.assertEqual(code, 0, said)
         self.assertIsNotNone(seen["deadline"])
-        self.assertIn(f"budget: {sweep.SHARD_BUDGET // 60} min", said)
+        self.assertIn(f"budget: {sweep.SHARD_REPORT_AT // 60} min", said)
         seen.clear()
         code, said = self._cli("--gate", "--jobs", "1", "--base", self.base,
                                "--no-baseline", "--workdir", str(self.workdir))

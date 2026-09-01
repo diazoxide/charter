@@ -33,8 +33,8 @@ result regardless of what was in it**. It is not a signal about the branch.
 
 ## What was fixed, and what was deliberately not
 
-**A shard now stops at its own budget and reports what it measured.** Forty minutes after
-the run started it deals no further mutation; the ones it never reached come back
+**A shard now stops short of being killed and reports what it measured.** Ten minutes before
+the runner's own cap it deals no further mutation; the ones it never reached come back
 `out of time`, named, in the same result set as the answers. The check on the pull request
 reads
 
@@ -65,14 +65,22 @@ on questions, so it is the number written to be raised — but raising it moves 
 without removing it, and the next large diff hits the same wall having burned more runners
 on the way. The ceiling is now survivable, which is the property that was missing.
 
-**`timeout-minutes` was not lowered to match `SHARD_BUDGET` either**, and the issue is right
+**And `timeout-minutes` was not lowered to match `SHARD_BUDGET`,** though the issue is right
 that the two disagreeing by twenty minutes was a defect on its own: a shard that overran its
-budget got twenty further minutes of runway and *then* died with nothing, which is the worst
-of both. But the two no longer describe one deadline. `SHARD_BUDGET` is the deadline the
-shard keeps and reports at; `timeout-minutes` is the backstop for a shard that could not
-keep it — a hung subprocess, a mutant that took the machine. Setting them equal would have
-the runner kill the shard at the exact moment it stops to write its answer. The gap is now
-asserted against the YAML rather than left to two files agreeing by habit.
+sizing got twenty further minutes of runway and *then* died with nothing, which is the worst
+of both. The two were never one deadline. Forty minutes sizes the **plan** — how many
+mutations a machine may be dealt, computed from an average mutation — and sixty is the
+runner's cap. A shard whose slice happens to hold five survivors pays a full-suite run for
+each and legitimately needs longer than forty; stopping it there would turn a complete answer
+arriving at forty-eight minutes into a partial one, which is a regression on exactly the
+branches that have something to report, dressed as a fix.
+
+So what closed the gap is a **third** number between them, `SHARD_REPORT_AT`, ten minutes
+short of the cap. A shard uses every minute the runner will give it and stops just before
+being killed. `SHARD_REPORT_AT > SHARD_BUDGET` is asserted, because that inequality is the
+one that says a correctly sized shard is never cut short by this; the runner's cap is now
+written in `sweep.py` and the YAML is held to it, so one deadline no longer lives in two
+files drifting apart (#670).
 
 ## The lineage, and what is still open
 
