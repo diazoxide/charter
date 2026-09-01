@@ -612,5 +612,140 @@ class TheKeypressReachesTheTeardown(PersonaIso, unittest.TestCase):
         self.assertIn(leave.NO_CHAT_HERE, said.call_args[0][1])
 
 
+class TheDoorwayScopesAndRefusesWhereItSaysItDoes(PersonaIso, unittest.TestCase):
+    """`_picker`'s two `leave` branches, and `_draw_palette`'s note.
+
+    **Every case here was asked for by the deletion sweep.** `TheKeypressReachesTheTeardown`
+    drives the four hops end to end and that is what it is for — but it only ever walks the
+    path where everything works, so five refusals underneath it were unpinned: dropping
+    `verb is not None` from the refusal, dropping the refusal itself, collapsing the
+    `only=` scoping either way, and dropping the `own_workspace` fallback all left the whole
+    9,895-test suite green.
+
+    They are asked here at `_picker`'s own seam rather than through the palette, because
+    what each one decides is a property of the surface it builds: which chats the
+    confirmation lists, and whether it opens at all.
+    """
+
+    def setUp(self):
+        super().setUp()
+        for fid, ws in (("alpha.1", "alpha"), ("alpha.2", "alpha"), ("beta.1", "beta")):
+            state.frame_dir(fid, create=True)
+            state.record_server(fid, SERVER)
+            state.record_workspace(fid, ws)
+            state.record_harness_pane(fid, "%1")
+            state.record_identity(fid, {"CHARTER_HARNESS": "claude-code",
+                                        "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+        self.live = ({"alpha.1", "alpha.2", "beta.1"},
+                     {SERVER: {"alpha.1": "@0", "alpha.2": "@1", "beta.1": "@2"}},
+                     set())
+
+    def _open(self, row, fid="alpha.1"):
+        with mock.patch.object(commands_frame, "_plane_live", return_value=self.live):
+            return commands_frame._picker(row, fid, [])
+
+    def _titles(self, surface):
+        return [r.title for r in surface.rows]
+
+    def test_quits_confirmation_lists_every_chat_on_the_plane(self):
+        surface = self._open(leave.open_rows("alpha.1")[0])
+
+        self.assertIsNotNone(surface)
+        listed = " ".join(self._titles(surface))
+        for fid in ("alpha.1", "alpha.2", "beta.1"):
+            self.assertIn(fid, listed)
+
+    def test_closes_confirmation_lists_only_the_chat_it_was_opened_in(self):
+        # The `only=` scoping. Collapsed either way this becomes quit wearing close's title,
+        # or a close that can never name a chat.
+        surface = self._open(leave.open_rows("alpha.2")[1], fid="alpha.2")
+
+        self.assertIsNotNone(surface)
+        listed = " ".join(self._titles(surface))
+        self.assertIn("alpha.2", listed)
+        self.assertNotIn("alpha.1", listed)
+        self.assertNotIn("beta.1", listed)
+
+    def test_a_refused_doorway_opens_nothing(self):
+        # `leave.open_rows("")` refuses the close row, because there is no chat to close.
+        # Without the refusal the surface would open over every chat on the plane under a
+        # title that says it is about one.
+        refused = leave.open_rows("")[1]
+        self.assertTrue(refused.note)
+
+        self.assertIsNone(self._open(refused))
+
+    def test_an_action_row_is_not_a_doorway_and_opens_nothing_here(self):
+        from charter.frame import overlay
+        self.assertIsNone(self._open(overlay.Row(id="frame.detach", title="detach")))
+
+    def test_a_chat_with_no_workspace_of_its_own_still_gets_a_confirmation(self):
+        # `state.own_workspace(fid) or ""` — the fallback the sweep dropped. `leave.plan`
+        # takes `focus` as text, and `None` would reach the manifest as the workspace a
+        # reopen attaches to.
+        state.frame_dir("ghost.9", create=True)
+        state.record_server("ghost.9", SERVER)
+        self.assertIsNone(state.own_workspace("ghost.9"))
+
+        surface = self._open(leave.open_rows("ghost.9")[0], fid="ghost.9")
+
+        self.assertIsNotNone(surface)
+
+
+class ARefusedDoorwaySaysItsReasonOnScreen(PersonaIso, unittest.TestCase):
+    """`_draw_palette`'s `if chosen.note and leave.verb_of(chosen) is not None`.
+
+    The sweep found the `chosen.note` half unpinned: without it, choosing one of the
+    warning's own per-chat rows — which are `refused=True`, so a click can still land on one
+    — would put that chat's note on the frame's attention row as though something had been
+    refused. Nothing was refused; the row is the warning.
+    """
+
+    def setUp(self):
+        super().setUp()
+        state.frame_dir("alpha.1", create=True)
+        state.record_server("alpha.1", SERVER)
+        state.record_workspace("alpha.1", "alpha")
+        state.record_harness_pane("alpha.1", "%1")
+        state.record_identity("alpha.1", {"CHARTER_HARNESS": "claude-code",
+                                          "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+
+    def _choose(self, pick_first, pick_second=None):
+        from charter.frame import palette
+
+        def _own(surface, *, fd=None, out=None, then=None):
+            row = next(r for r in surface.rows if pick_first(r))
+            nxt = then(row) if then is not None else None
+            if pick_second is None:
+                return row
+            self.assertIsNotNone(nxt)
+            return next(r for r in nxt.rows if pick_second(r))
+
+        with mock.patch.dict("os.environ", {"CHARTER_SESSION_ID": "alpha.1"}), \
+                mock.patch.object(palette, "own_the_tty", side_effect=_own), \
+                mock.patch.object(commands_frame, "_close_palette"), \
+                mock.patch.object(commands_frame, "_plane_live",
+                                  return_value=({"alpha.1"},
+                                                {SERVER: {"alpha.1": "@0"}},
+                                                {"alpha.1"})), \
+                mock.patch.object(commands_frame, "_start_leaving"), \
+                mock.patch.object(commands_frame, "_say_on_screen") as said:
+            commands_frame._draw_palette(SimpleNamespace(chat="alpha.1"))
+        return said
+
+    def test_a_refused_doorway_puts_its_reason_on_the_attention_row(self):
+        with mock.patch.object(leave, "open_rows", return_value=leave.open_rows("")):
+            said = self._choose(lambda r: leave.verb_of(r) == leave.CLOSE)
+
+        said.assert_called_once()
+        self.assertEqual(said.call_args[0][1], leave.NO_CHAT_HERE)
+
+    def test_a_per_chat_warning_row_says_nothing_because_nothing_was_refused(self):
+        said = self._choose(lambda r: leave.verb_of(r) == leave.QUIT,
+                            lambda r: r.refused)
+
+        said.assert_not_called()
+
+
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()

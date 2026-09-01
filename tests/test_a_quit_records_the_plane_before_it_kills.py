@@ -410,6 +410,53 @@ class TheQuitsOwnSentenceIsSaidByTheLauncher(PersonaIso, unittest.TestCase):
         self.assertEqual(self._said("alpha.1"), "")
 
 
+class TheWarningIsSaidOnStderrAndOnTheScreenTheOperatorHas(PersonaIso, unittest.TestCase):
+    """`_warn_about`'s two surfaces, and the `if on:` the sweep found unpinned.
+
+    §4i is explicit that quit *warns and proceeds*, so the record of what was lost has to
+    survive the keypress — and once the frame's panes are about to stop existing, stderr is
+    the only surface left. The attention row is the OTHER caller's, and it is written only
+    when there is a frame to write it to: `charter frame-quit` typed in an ordinary shell has
+    no chat, and `state.say("")` would be a notice under a frame id that names nothing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        _plant("alpha.1", ws="alpha", sid="conv-1")
+        self.plan = leave.plan(live={"alpha.1"}, focus="alpha")
+
+    def _warn(self, on):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+        with redirect_stderr(buf), \
+                mock.patch.object(commands_frame, "_say_on_screen") as said:
+            commands_frame._warn_about(self.plan, on=on, verb=leave.QUIT)
+        return buf.getvalue(), said
+
+    def test_every_chat_gets_its_own_line_on_stderr(self):
+        out, _said = self._warn("alpha.1")
+
+        self.assertIn(leave.summary(self.plan), out)
+        self.assertIn("alpha.1", out)
+        self.assertIn(leave.RESUMES, out)
+
+    def test_the_summary_also_lands_on_the_frame_that_asked(self):
+        _out, said = self._warn("alpha.1")
+
+        said.assert_called_once()
+        self.assertEqual(said.call_args[0][0], "alpha.1")
+        self.assertEqual(said.call_args[0][1], leave.summary(self.plan))
+
+    def test_a_quit_typed_outside_a_frame_writes_no_notice_anywhere(self):
+        # The `if on:` guard. There is no frame to draw on, and a notice written under an
+        # empty id is one nothing can ever show.
+        out, said = self._warn("")
+
+        said.assert_not_called()
+        self.assertIn("alpha.1", out, "and stderr still carries the whole warning")
+
+
 class TheManifestRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
     """Every value in it came off disk and is going onto an argv, a `chdir` or a flag."""
 
@@ -505,6 +552,251 @@ class TranscriptsAreBounded(PersonaIso, unittest.TestCase):
         text = dest.read_text()
         self.assertTrue(text.endswith("TAIL"))
         self.assertLessEqual(len(text.encode()), commands_frame._TRANSCRIPT_BYTES)
+
+
+class _Answered:
+    """One `tmuxctl.run` answer, so a parser can be driven without a server.
+
+    The three fields `tmuxctl.run` callers actually read. A class rather than a
+    `SimpleNamespace` so a field nobody set is an `AttributeError` here rather than a
+    silently-`None` somewhere downstream.
+    """
+
+    def __init__(self, stdout="", returncode=0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+def _answers(stdout="", returncode=0):
+    """A `tmuxctl.run` stand-in that always gives the same answer, and records the argv."""
+    seen = []
+
+    def _run(why, argv, **kw):
+        seen.append(argv)
+        return _Answered(stdout, returncode)
+
+    return _run, seen
+
+
+class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
+    """`_chat_seats`, driven against fabricated tmux output rather than a server.
+
+    **Every assertion here exists because the deletion sweep asked for it.** The real-tmux
+    module drives this function against a real `list-windows`, which only ever produces
+    well-formed rows — so the three refusals below were unpinned, and the sweep said so:
+    dropping the field-count guard, and dropping either half of the regex pair, all left the
+    whole 9,895-test suite green.
+
+    They are #475's boundary: these values come off a tmux option and go on to be a `-t`
+    target and a state directory's name. `%1;kill-server` in that position is the shape that
+    already cost this project a `kill-server` armed on every window resize.
+    """
+
+    def _seats_from(self, stdout):
+        run, _seen = _answers(stdout)
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
+            return commands_frame._chat_seats(SERVER)
+
+    def test_a_well_formed_listing_is_read_whole(self):
+        seats = self._seats_from("alpha.1\t@0\t1\nalpha.2\t@3\t0\n")
+
+        self.assertEqual(seats, [("alpha.1", "@0", True), ("alpha.2", "@3", False)])
+
+    def test_a_row_with_the_wrong_number_of_fields_is_dropped(self):
+        # A window with no `@charter_chat` prints an empty first field, and a format that
+        # ever changed shape would arrive here as a row of the wrong width. Neither is a
+        # seat, and neither may be read as one by index.
+        seats = self._seats_from("alpha.1\t@0\t1\n"
+                                 "only-two\t@1\n"
+                                 "a\tb\tc\td\n"
+                                 "\n")
+
+        self.assertEqual(seats, [("alpha.1", "@0", True)])
+
+    def test_a_chat_id_outside_the_alphabet_is_dropped(self):
+        seats = self._seats_from("alpha.1;kill-server\t@0\t1\nalpha.2\t@1\t0\n")
+
+        self.assertEqual(seats, [("alpha.2", "@1", False)])
+
+    def test_a_window_id_that_is_not_tmuxs_own_shape_is_dropped(self):
+        # The window id is what `_stop_chats` aims `kill-window` at. Anything that is not
+        # `@<digits>` is a target charter did not get from tmux.
+        seats = self._seats_from("alpha.1\t$0\t1\n"
+                                 "alpha.2\tnot-a-window\t1\n"
+                                 "alpha.3\t@7\t1\n")
+
+        self.assertEqual(seats, [("alpha.3", "@7", True)])
+
+    def test_only_the_exact_active_flag_means_active(self):
+        # `#{window_active}` is `0` or `1`. Anything else is not a claim charter may read as
+        # "this is the chat the operator was looking at" — that answer decides which tab a
+        # reopen puts them back on.
+        seats = self._seats_from("alpha.1\t@0\t1\nalpha.2\t@1\t0\nalpha.3\t@2\ttrue\n")
+
+        self.assertEqual([c for c, _w, showing in seats if showing], ["alpha.1"])
+
+    def test_a_server_that_would_not_answer_is_none_and_not_empty(self):
+        run, _seen = _answers("", returncode=1)
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
+            self.assertIsNone(commands_frame._chat_seats(SERVER))
+
+    def test_a_live_server_with_no_chats_is_an_empty_list(self):
+        # The opposite fact from the line above, and the whole reason the tri-state exists.
+        self.assertEqual(self._seats_from(""), [])
+
+    def test_the_listing_is_one_call_asking_for_all_three_fields(self):
+        run, seen = _answers("")
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
+            commands_frame._chat_seats(SERVER)
+
+        self.assertEqual(len(seen), 1, "two calls for one listing is two answers")
+        self.assertIn("list-windows", seen[0])
+        self.assertIn(commands_frame._CHAT_WINDOW_FORMAT, seen[0])
+
+
+class OneServerRefusingMakesTheWholePlaneUnknown(PersonaIso, unittest.TestCase):
+    """`_plane_live`'s tri-state, which the sweep found unpinned in both directions.
+
+    With two servers in play, a quit that trusted the half that answered would record only
+    one server's chats and kill only those — and then tell the operator it had stopped the
+    plane. So ``None`` is the answer when **any** server refuses, and the sweep's mutations
+    (collapse the conditional either way) both have to go red.
+    """
+
+    def _live(self, answers):
+        """Drive `_plane_live` over servers whose answers are stated per server."""
+        def _seats(server):
+            return answers[server]
+
+        with mock.patch.object(commands_frame, "_chat_seats", side_effect=_seats):
+            return commands_frame._plane_live(list(answers))
+
+    def test_every_server_answering_gives_the_union_and_never_none(self):
+        live, windows, active = self._live({
+            "s1": [("alpha.1", "@0", True)],
+            "s2": [("beta.1", "@5", False)]})
+
+        self.assertEqual(live, {"alpha.1", "beta.1"})
+        self.assertEqual(windows, {"s1": {"alpha.1": "@0"}, "s2": {"beta.1": "@5"}})
+        self.assertEqual(active, {"alpha.1"})
+
+    def test_one_server_refusing_makes_the_liveness_answer_none(self):
+        live, windows, _active = self._live({
+            "s1": [("alpha.1", "@0", True)],
+            "s2": None})
+
+        self.assertIsNone(live, "the half that answered is not the plane")
+        self.assertEqual(windows, {"s1": {"alpha.1": "@0"}},
+                         "and what did answer is still aimed at")
+
+    def test_every_server_refusing_is_also_none(self):
+        live, windows, active = self._live({"s1": None, "s2": None})
+
+        self.assertIsNone(live)
+        self.assertEqual((windows, active), ({}, set()))
+
+    def test_only_the_shown_chat_is_reported_active(self):
+        # The `showing` filter the sweep dropped: without it every chat would be marked as
+        # the one on screen, and a reopen would pick whichever came first.
+        _live, _windows, active = self._live({
+            "s1": [("alpha.1", "@0", False), ("alpha.2", "@1", True),
+                   ("alpha.3", "@2", False)]})
+
+        self.assertEqual(active, {"alpha.2"})
+
+
+class TheCaptureIsBoundedAndNeverRaises(PersonaIso, unittest.TestCase):
+    """`_capture_transcript`'s four refusals, each unpinned until the sweep asked."""
+
+    def setUp(self):
+        super().setUp()
+        config.private_mkdir(state._root())
+        self.dest = reopen.transcript_path("alpha.1")
+
+    def _capture(self, stdout, returncode=0):
+        run, seen = _answers(stdout, returncode)
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
+            return commands_frame._capture_transcript(SERVER, "%1", self.dest), seen
+
+    def test_the_line_bound_is_the_shipped_number_and_it_is_asked_of_tmux(self):
+        # Asserted as the LITERAL, not as an f-string over the constant: the sweep retunes
+        # the constant, and an assertion that reads the constant follows it and stays green.
+        # The bound belongs where the memory is (one 200-column pane at `history_limit =
+        # 50000` took a tmux server from 3.7 MB to 130 MB), so what matters is that tmux is
+        # asked for a bounded window at all — and which one.
+        self.assertEqual(commands_frame._TRANSCRIPT_LINES, 2000)
+        _ok, seen = self._capture("something\n")
+        self.assertIn("-2000", seen[0])
+        self.assertIn("-S", seen[0])
+
+    def test_a_capture_at_the_byte_cap_is_kept_whole(self):
+        text = "x" * commands_frame._TRANSCRIPT_BYTES
+        ok, _seen = self._capture(text)
+
+        self.assertTrue(ok)
+        self.assertEqual(self.dest.read_bytes(), text.encode(),
+                         "exactly at the cap loses nothing")
+
+    def test_one_byte_over_the_cap_is_trimmed_from_the_front(self):
+        text = "HEAD" + "x" * commands_frame._TRANSCRIPT_BYTES + "TAIL"
+        ok, _seen = self._capture(text)
+
+        self.assertTrue(ok)
+        got = self.dest.read_text()
+        self.assertTrue(got.endswith("TAIL"), "the end is what was on screen")
+        self.assertNotIn("HEAD", got)
+        self.assertLessEqual(len(got.encode()), commands_frame._TRANSCRIPT_BYTES)
+
+    def test_the_cap_holds_for_multi_byte_text_too(self):
+        """The defect the sweep led to, and the reason the comparison is gone.
+
+        The first version measured BYTES and then trimmed CHARACTERS, so a capture made of
+        two-byte characters was left at twice the cap — measured at a cap of 16, `"é" * 16`
+        is 16 characters and 32 bytes and the old line answered 32. It is byte-exact now.
+        """
+        ok, _seen = self._capture("é" * commands_frame._TRANSCRIPT_BYTES)
+
+        self.assertTrue(ok)
+        self.assertLessEqual(len(self.dest.read_bytes()),
+                             commands_frame._TRANSCRIPT_BYTES)
+
+    def test_the_cut_never_writes_half_a_character(self):
+        # A byte cut can land inside a character, and the only edge it can land inside is
+        # the leading one. That partial character is dropped rather than written as a
+        # replacement glyph the pager would show as noise.
+        ok, _seen = self._capture("é" * commands_frame._TRANSCRIPT_BYTES)
+
+        self.assertTrue(ok)
+        got = self.dest.read_text()    # would raise if the cut split a character
+        self.assertNotIn("\ufffd", got)
+        self.assertTrue(got.startswith("é"))
+
+    def test_a_pane_that_answered_nothing_writes_no_file(self):
+        for empty in ("", "   \n\n"):
+            self.dest.unlink(missing_ok=True)
+            ok, _seen = self._capture(empty)
+            self.assertFalse(ok, repr(empty))
+            self.assertFalse(self.dest.exists(), repr(empty))
+
+    def test_a_server_that_would_not_answer_writes_no_file(self):
+        ok, _seen = self._capture("text\n", returncode=1)
+
+        self.assertFalse(ok)
+        self.assertFalse(self.dest.exists())
+
+    def test_a_frame_root_that_cannot_be_made_is_reported_not_raised(self):
+        run, _seen = _answers("text\n")
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run), \
+                mock.patch.object(commands_frame.config, "private_mkdir",
+                                  side_effect=OSError("no")):
+            self.assertFalse(commands_frame._capture_transcript(SERVER, "%1", self.dest))
+
+    def test_a_write_that_cannot_land_is_reported_not_raised(self):
+        run, _seen = _answers("text\n")
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run), \
+                mock.patch.object(commands_frame.config, "write_for",
+                                  side_effect=OSError("full")):
+            self.assertFalse(commands_frame._capture_transcript(SERVER, "%1", self.dest))
 
 
 if __name__ == "__main__":       # pragma: no cover

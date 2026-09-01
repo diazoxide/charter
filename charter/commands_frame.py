@@ -7012,8 +7012,13 @@ def _draw_palette(args) -> int:
         if leave.is_row(chosen):
             # A doorway `_picker` refused (its note says why) or one of the warning's own
             # per-chat rows, which are `refused=True` and describe rather than do. The note
-            # is said in the first case and there is nothing to say in the second.
-            if chosen.note and leave.verb_of(chosen) is not None:
+            # is said in the first case and there is nothing to say in the second — and
+            # `verb_of` alone tells them apart, because a per-chat row's id is
+            # `leave:<verb>:c<n>` and only a DOORWAY's is `leave:<verb>`. A `chosen.note and`
+            # in front of this was the sweep's finding and its own answer: a doorway that
+            # `_picker` refused always carries the note that says why, so the conjunct could
+            # never decide anything.
+            if leave.verb_of(chosen) is not None:
                 _say_on_screen(fid, chosen.note)
             return 0
         inv = reg.invoke(chosen.id, fid=fid, snapshot=snapshot)
@@ -7102,13 +7107,19 @@ def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
     from there rather than from `choose.roster` directly, so a noun the operator already
     typed against is not listed a second time — see that function.
     """
-    verb = leave.verb_of(row)
-    if verb is not None and row.note:
-        # A refused doorway does not open — `choose.open_rows`' rule, and the same one: a
-        # confirmation over a target charter cannot name would be an offer it already knows
-        # it cannot honour. `None` sends the row back to :func:`_draw_palette`, which says
-        # the note on the operator's own screen.
+    # **A refused row does not open, whichever doorway it is** — `choose.open_rows`' rule,
+    # and the same one: a surface over a target charter cannot name would be an offer it
+    # already knows it cannot honour. `None` sends the row back to :func:`_draw_palette`,
+    # which says the note on the operator's own screen.
+    #
+    # `row.note` alone, and the `verb is not None and` that used to be in front of it is
+    # gone: the deletion sweep could not turn it red, and it was right — the branch below
+    # already answers `None` for every noun row with a note, so the conjunct only ever
+    # restated a decision the next four lines make. A guard that passes because a DIFFERENT
+    # guard caught the case is the shape this repository deletes rather than documents.
+    if row.note:
         return None
+    verb = leave.verb_of(row)
     if verb is not None:
         # **§4f's warning, drawn at the moment the operator is deciding.** The plan is built
         # HERE and not when the palette opened, so the rows describe the plane as it is
@@ -7117,12 +7128,16 @@ def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
         # about, and every chat row above it is `refused` (see `frame/leave.py`).
         servers = _plane_servers()
         live, _windows, _active = _plane_live(servers)
-        p = leave.plan(live=live, focus=state.own_workspace(fid) or "",
+        # `focus` is not read on this path — the confirmation draws rows and writes no
+        # manifest — so the `or ""` that used to be here was a fallback nothing could
+        # observe, and the sweep said so. The one caller that DOES record a focus is
+        # `cmd_quit`, which spells its own.
+        p = leave.plan(live=live, focus=state.own_workspace(fid),
                        only=fid if verb == leave.CLOSE else "")
         return palette.Palette(catalogue=leave.confirm_rows(p, verb=verb),
                                label=verb, mouse=True)
     noun = choose.noun_of(row)
-    if noun is None or row.note:
+    if noun is None:
         return None
     return palette.Palette(catalogue=_roster(noun, fid, opened).rows,
                            label=noun, mouse=True)
@@ -7558,11 +7573,22 @@ def _capture_transcript(socket: str, pane_id: str, dest) -> bool:
         config.private_mkdir(dest.parent)
     except OSError:
         return False
-    if len(text.encode("utf-8", "replace")) > _TRANSCRIPT_BYTES:
-        # Cut from the END, on a character boundary, because the end is what the operator
-        # was looking at. Encoding first and slicing bytes would be able to split a
-        # multi-byte character; slicing the string and re-measuring cannot.
-        text = text[-_TRANSCRIPT_BYTES:]
+    # **Cut from the END, in BYTES, with no comparison to get the boundary wrong in.** The
+    # end is what the operator was looking at, so that is the half that is kept.
+    #
+    # This was `if len(text.encode(...)) > _TRANSCRIPT_BYTES: text = text[-_TRANSCRIPT_BYTES:]`
+    # and the deletion sweep found the comparison unpinnable — `>` and `>=` cannot differ,
+    # because at exactly the cap `text[-N:]` returns the whole string either way. Chasing
+    # that found the real defect underneath it: **it measured BYTES and then trimmed
+    # CHARACTERS**, so a capture of two-byte characters was left at twice the cap. Measured
+    # at a cap of 16: `"é" * 16` is 16 characters and 32 bytes, and the old line answered 32.
+    #
+    # Slicing the encoded form is byte-exact, and `errors="ignore"` on the way back is what
+    # makes it safe: the only place a byte cut can land inside a character is the leading
+    # edge, and a partial character there is dropped rather than written as a replacement
+    # glyph the pager would show as noise. It is also cheaper than what it replaces — one
+    # encode rather than an encode for the length plus a slice.
+    text = text.encode("utf-8", "replace")[-_TRANSCRIPT_BYTES:].decode("utf-8", "ignore")
     try:
         config.write_for(dest, text)
     except OSError:

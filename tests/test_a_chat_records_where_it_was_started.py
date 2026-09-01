@@ -25,7 +25,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config
-from charter.frame import state
+from charter.frame import reopen, state
 
 from tests._isolation import PersonaIso
 
@@ -154,6 +154,191 @@ class BothLaunchPathsRecordIt(PersonaIso, unittest.TestCase):
         recorded = [state.chat_cwd(d.name) for d in state._root().iterdir()
                     if d.is_dir()]
         self.assertEqual(recorded, [os.getcwd()])
+
+
+class _Answered:
+    """One `tmuxctl.run` answer. `stdout` is a pane id, because that is what the launcher
+    reads back from the call that starts the session."""
+
+    def __init__(self, stdout="%0", returncode=0):
+        self.stdout = stdout
+        self.returncode = returncode
+
+
+class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
+    """`cmd_launch` driven all the way to its return, on both paths.
+
+    **Written because the deletion sweep asked for it.** Three branches in that tail are the
+    whole of what `Reopening` changes, and every one of them was unpinned: open-or-focus,
+    the `attach`, and the sentence `cmd_launch` says on the operator's behalf when their
+    plane was quit. `TheReopenPathSuppressesFourThingsInTheLauncher` asserts the PREDICATE
+    those branch on and says in its own docstring that the tail "cannot be reached without a
+    real tmux session and a real `attach`". The sweep disagreed, and it was right: the tail
+    is reachable with every tmux call answered and `attach` stubbed, which is what this does.
+
+    Nothing here starts a server. `tmuxctl.run` answers `%0` to everything and
+    `tmuxctl.interact` is the attach — so what is under test is charter's own branching,
+    which is exactly what the mutations were about.
+    """
+
+    def _launch(self, *, reopening=None, live_workspace=False, rest=()):
+        """Run `cmd_launch` to its return. Answers what it asked, and records the calls."""
+        calls = {"attached": False, "focused": False, "said": []}
+
+        def _interact(argv, **kw):
+            calls["attached"] = True
+            return _Answered(stdout="", returncode=0)
+
+        def _focus(socket, *, ws):
+            calls["focused"] = True
+            return None            # never actually focus; the call is the observation
+
+        args = SimpleNamespace(harness="claude", rest=list(rest), no_frame=False,
+                               workspace="alpha", pick=False)
+        if reopening is not None:
+            args.reopening = reopening
+        sessions = {"alpha"} if live_workspace else set()
+
+        def _live_chats(_socket):
+            """What a real server says: the chats that exist, asked when it is asked.
+
+            A fixed empty set here is not a cheaper fake, it is a different plane — the
+            launcher reaps on this answer twice, and the closing reap would collect the very
+            chat it had just built (`state.clear_claim` has already run by then, so nothing
+            else is holding it). That is correct behaviour against a server with nothing on
+            it, and it is not the server this test means.
+            """
+            try:
+                return {d.name for d in state._root().iterdir() if d.is_dir()}
+            except OSError:
+                return set()
+
+        with mock.patch.object(commands_frame.tmuxctl, "version", return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "operator_server",
+                                  return_value=None), \
+                mock.patch.object(commands_frame.shutil, "which",
+                                  return_value="/bin/true"), \
+                mock.patch.object(commands_frame.sys.stdout, "isatty",
+                                  return_value=True), \
+                mock.patch("sys.stdin.isatty", return_value=False), \
+                mock.patch.object(commands_frame, "_live_sessions",
+                                  return_value=sessions), \
+                mock.patch.object(commands_frame, "_live_chats",
+                                  side_effect=_live_chats), \
+                mock.patch.object(commands_frame, "_spawn_gather"), \
+                mock.patch.object(commands_frame, "_workspace_to_focus",
+                                  side_effect=_focus), \
+                mock.patch.object(commands_frame, "_draw_panels", return_value={}), \
+                mock.patch.object(commands_frame, "_arm_panel_respawn"), \
+                mock.patch.object(commands_frame, "_query_pane_dead_status",
+                                  return_value=None), \
+                mock.patch.object(commands_frame, "_chat_being_left", return_value=""), \
+                mock.patch.object(commands_frame, "_drop_panels"), \
+                mock.patch.object(commands_frame.tmuxctl, "run",
+                                  return_value=_Answered()), \
+                mock.patch.object(commands_frame.tmuxctl, "interact",
+                                  side_effect=_interact):
+            calls["rc"] = commands_frame.cmd_launch(args)
+        return calls
+
+    def _reopening(self, chat="alpha.9", workspace="alpha"):
+        rec = reopen.Chat(chat=chat, workspace=workspace, persona="", harness="claude-code",
+                          cwd="", resume="", transcript="", active=False)
+        return commands_frame.Reopening(rec)
+
+    def test_an_ordinary_launch_attaches_and_asks_about_open_or_focus(self):
+        calls = self._launch()
+
+        self.assertTrue(calls["attached"], "a launch IS the operator's terminal")
+        self.assertTrue(calls["focused"], "§4k is asked on every launch with no argv")
+
+    def test_a_reopen_never_attaches(self):
+        # The sweep's `if _wants_attach(args):` mutation. Without it a reopen blocks on its
+        # first chat and never builds the second.
+        calls = self._launch(reopening=self._reopening())
+
+        self.assertFalse(calls["attached"])
+        self.assertEqual(calls["rc"], 0)
+
+    def test_a_reopen_never_takes_the_open_or_focus_branch(self):
+        # The sweep's `not rest and _reopening(args) is None` mutation. With a live
+        # workspace and no argv, an ordinary launch focuses; a reopen must still open a
+        # chat, or every chat after the first of a workspace is swallowed.
+        ordinary = self._launch(live_workspace=True)
+        self.assertTrue(ordinary["focused"])
+
+        reopened = self._launch(reopening=self._reopening(), live_workspace=True)
+
+        self.assertFalse(reopened["focused"])
+
+    def test_a_reopen_hands_the_new_chat_id_back_to_its_driver(self):
+        r = self._reopening()
+
+        self._launch(reopening=r)
+
+        self.assertTrue(r.fid, "the driver needs the id to attach and to report")
+        self.assertEqual(state.chat_cwd(r.fid), os.getcwd())
+
+    def test_an_ordinary_detach_says_how_to_get_back_in(self):
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            self._launch()
+
+        said = buf.getvalue()
+        self.assertIn("detached", said)
+        self.assertIn("attach -t alpha", said,
+                      "the reattach line names the WORKSPACE, because that is the session")
+
+    def test_a_reopens_own_launch_says_nothing_about_detaching(self):
+        # It was never the operator's terminal, so "detached — the harness is still running"
+        # would be describing something that did not happen — once per chat, in front of
+        # `cmd_reopen`'s own summary. The sweep found this branch unpinned because both
+        # halves of it return 0 and only the sentence differs.
+        import io
+        from contextlib import redirect_stderr
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            self._launch(reopening=self._reopening())
+
+        self.assertNotIn("detached", buf.getvalue())
+
+    def test_a_launch_whose_plane_was_quit_names_the_command_that_undoes_it(self):
+        # `if _wants_attach(args): _say_it_was_quit(fid)`. The chat this launch is about has
+        # to BE in the manifest, which for an ordinary launch means the ordinal it is handed
+        # is one a quit recorded — the recycled-ordinal case, which is the common one.
+        import io
+        from contextlib import redirect_stderr
+        reopen.write([reopen.Frame(workspace="alpha", chats=(
+            reopen.Chat(chat="alpha.1", workspace="alpha", persona="",
+                        harness="claude-code", cwd="", resume="conv-1", transcript="",
+                        active=True),))], focus="alpha")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            self._launch()
+
+        self.assertIn("charter reopen", buf.getvalue())
+
+    def test_a_reopens_own_launch_stays_silent_about_the_quit_it_is_undoing(self):
+        # The other half, and the reason that call is gated: a reopen usually gets the same
+        # ordinals back, so every one of its launches is named in the manifest it is acting
+        # on and would announce the quit it is in the middle of reversing.
+        import io
+        from contextlib import redirect_stderr
+        reopen.write([reopen.Frame(workspace="alpha", chats=(
+            reopen.Chat(chat="alpha.1", workspace="alpha", persona="",
+                        harness="claude-code", cwd="", resume="conv-1", transcript="",
+                        active=True),))], focus="alpha")
+        buf = io.StringIO()
+
+        with redirect_stderr(buf):
+            self._launch(reopening=self._reopening())
+
+        self.assertNotIn("charter reopen", buf.getvalue())
 
 
 if __name__ == "__main__":       # pragma: no cover

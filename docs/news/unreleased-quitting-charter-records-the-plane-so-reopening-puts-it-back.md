@@ -263,6 +263,35 @@ name can have — and quitting one leaves the other's harness running.
   versions charter promises**, so it is a third machine's opinion on top of the hand-runs
   rather than a substitute for them.
 
+## What the deletion sweep found, and the defect it led to
+
+CI's sweep could not answer this branch at all — 231 mutations against a gate that tops out
+near 224 at eight shards, so all eight hit their 60-minute timeout and it reported `no
+verdict: 8 of 8 shards did not report`, exactly the third state it exists to be able to
+report. Run locally without that cap, it found **22 survivors in the first 38 mutations**, and
+every one was the same shape: a guard whose happy path was tested and whose refusal was not.
+The window listing was only ever driven against a real `list-windows`, which never produces a
+malformed row or a hostile chat id; the tri-state was only ever asked of servers that
+answered; the capture was only ever handed text that fitted.
+
+**One of them was a real defect.** The transcript's byte cap measured BYTES and then trimmed
+CHARACTERS, so a capture made of two-byte characters was left at twice the cap — measured at a
+cap of 16, `"é" * 16` is 16 characters and 32 bytes and the old line answered 32. The sweep did
+not find that directly; it found that the `>` in front of it could not be turned red, because
+at exactly the cap `text[-N:]` returns the whole string either way. Chasing an unpinnable
+comparison is what surfaced the thing underneath it. It is byte-exact now, in one expression
+with no comparison to get the boundary wrong in, and cheaper than what it replaced.
+
+**Three more were guards that only passed because another guard had already caught the
+case** — `verb is not None and row.note`, an `or ""` on a value no reader of that plan can
+observe, and a `chosen.note and` in front of a test that already excluded every row with no
+note. Deleted rather than documented, which is what this repository does with them.
+
+The rest are pinned: the listing's field-count and both regex guards, the "one server refused
+means the whole plane is unknown" tri-state in both directions, which chat was on screen, the
+capture's four refusals and its two bounds, the launcher's three reopen gates, and the two
+surfaces the warning is said on.
+
 ## What this does not do
 
 * **Make the chat directory durable.** Stage 4, six edits, unchanged here — which is why a
