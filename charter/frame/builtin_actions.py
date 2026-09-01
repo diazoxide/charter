@@ -508,6 +508,49 @@ def _regather(fid: str):
     _spawn(util.self_relaunch_argv("frame-gather", "--session", fid, "--workspace", ws),
            fid=fid)
     return f"gathering {ws}…"
+def _register_transcript(reg: actions.ActionRegistry) -> None:
+    """One row: open what this chat had on screen before it was last stopped — §4f.
+
+    **The only row charter offers that reads the harness's pane, and it reads a FILE.** The
+    pane itself was read once, by the quit that captured it, at the moment it was about to be
+    destroyed; this row opens the result in a pager in a window of its own. Nothing is ever
+    written back into the harness's pane, which is the half of ADR 0018 that this change
+    leaves exactly as it was.
+
+    Availability is one `is_file`, which is `builtin_actions`' own rule — *availability is
+    read off state, never off a subprocess* — and it is honest in both directions: a chat
+    that has never been quit has no capture, and that is the ordinary state of a chat that is
+    running normally rather than a fault.
+
+    `_spawn` like the density and surface rows, and for the same measured reason: the palette
+    closes the instant it has invoked, `kill-pane` hands SIGHUP to that pane's process group,
+    and `new-window` is a tmux round trip this process would not survive to make.
+    """
+    reg.register(action.Action(
+        id="chat.transcript", title="chat: previous transcript",
+        run=lambda ctx: _run_transcript(ctx.fid),
+        available=lambda ctx: _has_transcript(ctx.fid),
+        reason_unavailable=lambda ctx: NO_TRANSCRIPT))
+
+
+def _has_transcript(fid: str) -> bool:
+    """Whether a capture exists for *fid*. One `is_file`, no subprocess."""
+    from . import reopen
+    path = reopen.transcript_path(fid)
+    return path is not None and path.is_file()
+
+
+def _run_transcript(fid: str):
+    _spawn(util.self_relaunch_argv("frame-transcript", "--chat", fid), fid=fid)
+    return "opening this chat's previous transcript"
+
+
+#: What a chat with no captured transcript is told instead of nothing happening. Its own
+#: sentence rather than `NO_LAYOUT`'s or `NO_PANES`': those are about records charter LOST,
+#: and this is about a capture that was never taken — which is the ordinary state of a chat
+#: nobody has quit, so the row says when one appears rather than sending anyone to relaunch.
+NO_TRANSCRIPT = ("no previous transcript for this chat — one is captured when a plane is "
+                 "quit (`F2 → charter: quit`) and offered on the chat that comes back")
 
 
 def build(fid: str, *, current_density: str,
@@ -552,6 +595,17 @@ def build(fid: str, *, current_density: str,
     _register_todos(reg)
     _register_density(reg, current=current_density)
     _register_chrome(reg, current=current_chrome)
+    # **After the rows pressed by muscle memory, and before `refresh`.** A transcript is a
+    # row you reach for once, deliberately, about the chat you are in — so it does not
+    # belong among the densities and surfaces, which `_register_density` notes must not
+    # move. `_register_regather` keeps the bottom of charter's own list, which its own
+    # docstring argues for and which this does not disturb.
+    #
+    # The two DESTRUCTIVE rows (`charter: quit`, `chat: close`) are deliberately not here
+    # at all: they are doorways onto a confirmation, they are appended after every action by
+    # `commands_frame._draw_palette`, and `frame/leave.open_rows` records why that placement
+    # is a guard rather than a taste.
+    _register_transcript(reg)
     _register_regather(reg)
     for aid in reg.providers.ids():
         reg.add(aid)

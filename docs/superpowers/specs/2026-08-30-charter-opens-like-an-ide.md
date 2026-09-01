@@ -112,6 +112,17 @@ real-tmux tests skip there. **Every tmux claim in this spec has to be hand-verif
 machine, on both versions**, and a green gate says nothing about any of them. The 3.2 floor
 binary is preserved at `~/.local/share/charter-testing/tmux-3.2`.
 
+> **AMENDED 2026-09-01 — the first sentence is wrong, and it was measured on the branch that
+> shipped §4f.** `test.yml` installs no tmux; `ubuntu-latest` ships one anyway, so
+> `shutil.which("tmux")` is true there and the real-tmux tests RUN. Found because a new one of
+> them failed on 3.11 and 3.13 while passing on 3.14 in the same run — a race no hand-run on
+> this machine had produced. The honest statement is narrower and more useful than the
+> original: **CI answers on whatever tmux the runner image happens to ship, which is neither
+> of the two versions charter promises.** So it is a third machine's opinion on top of the
+> hand-runs rather than a substitute for them — valuable precisely because it is a different
+> machine — and the rest of this section stands unchanged: a green gate is still not evidence
+> for a claim about 3.7c or about the 3.2 floor.
+
 **2.13 One tmux server serves every plane on the machine, and session names carry no plane.**
 `SOCKET = "charter"` (`commands_frame.py:167`), documented as *"one shared tmux server for every
 frame **this machine** runs"*. `config.STATE_DIR` is per **plane**. Session names are
@@ -302,6 +313,28 @@ until the operator closes the chat.** Closing is the only reaper — `chat: clos
 
 ### 4e. Resume, and the file that must stop being deleted
 
+> **AMENDED 2026-09-01, by the change that shipped §4e's restore and §4f's capture.** Three
+> things below are now wrong and one is unreachable; each is corrected where it appears, and
+> the reasoning is in `docs/superpowers/plans/2026-08-28-phase5-workspace-and-chat-tabs.md`'s
+> Task 9 amendment.
+>
+> * **The gauge gate is DROPPED.** *"Gate the gauge on `state.exit_code(fid) is None`"* reads
+>   a `kill-window`ed chat as live (§2.17 — that call writes no `exit`), which is the inverse
+>   of the case it was written for; and nothing needs suppressing, because a reopened chat
+>   gets a FRESH chat id and its directory therefore holds no `session` mapping to inherit.
+>   **The ordering hazard this section names disappears with the gate.**
+> * **`cwd` was added**, not dropped: `state.record_cwd` / `state.chat_cwd`, written by both
+>   launch paths from the `os.getcwd()` each already read. It is deliberately not in
+>   `identity`, whose every value reaches a world-readable tmux argv.
+> * **`session.durable` is not enough on its own, and §6 stage 2 could not have known.**
+>   `reap` deletes a chat's whole directory when its launcher pid is dead, and after a
+>   restart every launcher pid is dead — so #757's id is deleted by the next launch. What
+>   makes it durable is a plane-scoped **file** in the frame root (`reopen.json`), which
+>   `reap` does not collect because it is not a directory. That is what let stage 7 ship
+>   ahead of stage 4 rather than behind it.
+> * **What a reopen restores into is a new directory, not the chat's own.** Relaunching into
+>   the existing directory needs stage 4, which is not done.
+
 Charter already records the harness's own session id (`.charter/frame/<fid>/session`). It is
 exactly what a resume needs, and `clear_shape` deliberately deletes it (§2.5).
 
@@ -367,7 +400,9 @@ transcript on quit is a hole in the premise — and eight rounds of grilling did
 Quit is the one moment charter knows a pane is about to be destroyed, and
 `tmux capture-pane -p -S -` hands back the whole history.
 
-**On quit, each chat's scrollback is written to its own directory. On reopen it is offered,
+**On quit, each chat's scrollback is written to its own directory** *(amended: to its own
+**file** in the frame root, `<chat>.transcript` — the chat's directory is reaped, and a file
+there is not; the reopen renames it onto the new chat's id)*. **On reopen it is offered,
 never replayed.** `F2 → chat: previous transcript` opens the captured text; the live pane
 starts clean. Replaying bytes into a pane would present a session that is not running as
 though it were, which is the convincing-empty this project refuses everywhere else — and it
@@ -565,6 +600,21 @@ makes it expensive is everything that leaves with it:
    `pane-died[1]` and charter's exit-code contract (§2.14).
 7. **Quit, the warning, the scrollback capture, and pruning `inflight` (§4i, §4f, §4e).** Quit
    is what makes the capture necessary and the prune possible.
+
+   > **SHIPPED 2026-09-01, and it moved AHEAD of stages 4, 5 and 6 rather than behind them.**
+   > The ordering above assumed a reopen needs a durable chat directory (stage 4) and a gauge
+   > gate (stage 2's successor). Neither turned out to be true: a plane-scoped **file** in the
+   > frame root survives `reap` untouched, so the record does not need the directory to be
+   > durable, and a reopen into a FRESH chat id has no gauge mapping to inherit, so there is
+   > no gate to ship first. `chat: close` — listed as one of stage 4's six edits — shipped
+   > here alone, because it is what pays for "a missing exit record means it was open".
+   > **`reap` was NOT inverted; stage 4 is untouched and still six edits wide.**
+   >
+   > Two further corrections this stage produced: the `inflight` prune is plane-scoped
+   > because the quit is (a per-frame quit could not prune at all — those records name no
+   > chat), and §4f's *"each chat's scrollback is written to its own directory"* had to become
+   > *"to its own file in the frame root"*, for the same reason the manifest is a file: the
+   > directory is reaped.
 8. **Bare `charter` and `[harness] default` (§4a)**, including the non-tty hazard.
 9. **Place the `workspaces` bar with activity and stale marks (§4b, §4g, §4h), and
    `charter status` (§4m).** One change, not three.

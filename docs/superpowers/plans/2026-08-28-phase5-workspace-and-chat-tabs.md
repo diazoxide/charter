@@ -275,19 +275,99 @@ Nothing visible changes. Everything underneath does.
 
 ### Task 9: Cold chats, and the sentence that admits what is lost
 
-- [ ] **Step 1:** write the failing test — closing a chat kills its window and keeps its record;
-      reopening restores the workspace, the persona, the harness and the cwd, **starts a fresh
-      harness session**, and says so **before** the relaunch.
-- [ ] **Step 2:** run it, confirm it fails.
-- [ ] **Step 3:** implement. `state.clear_shape` already unlinks `session` for this reason
-      (#413) — the reopened chat must not inherit the closed one's token gauge.
-- [ ] **Step 4:** **do not add a resume member to `Harness`.** `harness/base.py`'s docstring sets
-      the bar — *"A fifth member needs the same kind of argument, not just a use."* Charter can
-      verify resume for one of three harnesses; a resume that silently starts a new conversation
-      is worse than a sentence saying it will.
-- [ ] **Step 5:** mutation — reopen without clearing `session`, and confirm the stale gauge is
-      caught RED. Second mutation: drop the message and confirm the test asserting **which**
-      sentence appears goes RED.
+> **AMENDED 2026-09-01 — steps 1, 3 and 5 are superseded; step 4 stands.** This task said a
+> reopened chat *"starts a fresh harness session"* and *"must not inherit the closed one's
+> token gauge"*. The operator reversed the first, and the second turned out to be wrong on
+> its own terms. Both reversals are recorded here rather than left to be inferred from a
+> later document, because §4j of the IDE spec was silently violated for five days by exactly
+> that — a later document citing an earlier one without re-reading it, which shipped a bug
+> the operator had to report.
+>
+> **1. Resume, not fresh.** `docs/superpowers/specs/2026-08-30-charter-opens-like-an-ide.md`
+> §4e settles it and the operator settled it again in their own words: *"when opening again
+> we need to resume harness sessions as well… to not lose sessions, state etc."* #757 keeps
+> the id (`session.durable`) for exactly this, and a reopen appends `--resume <id>` to the
+> harness's own argv. This task's *"starts a fresh harness session"* is no longer true and
+> was never argued for — it was written when nothing recorded an id to resume from.
+>
+> **2. Resume is Claude-only, which is what this task was really right about.** §2.8:
+> `record_harness_session` has exactly one caller, Claude Code's `statusLine` hook. So the
+> honest form of *"a resume that silently starts a new conversation is worse than a sentence
+> saying it will"* is not "do not resume" — it is **resume where charter has an id, and say
+> per chat which of the four reasons it has none**. That sentence is `frame/leave.py`'s four
+> notes, drawn in the quit's confirmation before any keypress commits anything.
+>
+> **3. The gauge gate is DROPPED, and there are three reasons, the third of which is the
+> one that actually settles it.** §4e specified gating the gauge on
+> `state.exit_code(fid) is None`.
+>
+> * **It reads a killed chat as live.** For a chat `kill-window` ended, `exit_code` is
+>   `None` (§2.17 — `kill-pane`, `kill-window` and `kill-session` write nothing, measured),
+>   so the gate answers "show the gauge" for precisely the case it was written to suppress.
+>   That is the inverse of the intent, and it is a fact about charter's own files.
+> * **It would blank a correct gauge.** `claude --resume` preserves the harness's session id
+>   — one `sessionId` carried across the gap a restart made, in the operator's own
+>   transcript — so after a resume the usage history the gauge reads is that same
+>   conversation's own. *(Recorded as the operator's measurement; not re-run here, and see
+>   the next point for why nothing shipped depends on it.)*
+> * **Nothing needs suppressing, because there is nothing to inherit.** A reopen mints a
+>   FRESH chat id (point 4), so the reopened chat's directory has no `session` file at all:
+>   `state.harness_session` answers `None`, `frame/slots.py`'s own rule draws no gauge, and
+>   Claude Code's `statusLine` hook writes the mapping on the chat's first turn from the
+>   live payload. Pinned by
+>   `tests/test_a_reopen_says_what_it_cannot_bring_back.WhatAReopenPutsBack.
+>   test_a_reopened_chat_draws_no_gauge_until_its_own_first_turn`, which is also the
+>   assertion that will go red at the stage that relaunches into a chat's own directory —
+>   which is where the second point above stops being decoration and starts being the
+>   argument.
+>
+> **The ordering hazard §4e names disappears with the gate**: there is no stage that has to
+> ship before another.
+>
+> **4. Reopening does not relaunch into the chat's OWN directory, and cannot yet.** That
+> needs stage 4 of the IDE spec's delivery order — the chat directory becoming durable —
+> which is six edits wide and not done. `reap` still deletes a chat directory whose launcher
+> pid is dead, and after a restart every launcher pid is dead, so `session.durable` does not
+> survive to be read. A reopen therefore mints a FRESH chat id and seeds it from a
+> plane-scoped manifest (`.charter/frame/reopen.json`, a file, which `reap` does not collect).
+>
+> One consequence worth stating, and **#791 is what settles it.** A fresh id is not on its
+> own enough: `new_chat_id` walks upward from 1 and `reap` frees the ordinals a quit's chats
+> held, so a reopen very often gets the same NAME back. While
+> `.charter/sessions/<fid>.workspace` was a rung of `state.own_workspace`, a
+> `charter workspace use gamma` typed in the OLD `alpha.1` would have decided the NEW
+> `alpha.1`'s membership over the manifest and over the launcher's own record. #791 removed
+> that rung, so the manifest is authoritative; pinned by
+> `tests/test_a_reopen_says_what_it_cannot_bring_back.WhatAReopenPutsBack.
+> test_the_manifest_outranks_a_stale_pointer_left_on_a_recycled_ordinal`, which goes red
+> against a `state.py` with the rung put back.
+>
+> **Step 4 stands unchanged and is now load-bearing.** `Harness.launch_argv` is
+> `[self.binary, *extra]` with no override anywhere in the registry, so the pass-through IS
+> the seam; `frame/leave.resumable_harness` asks the registry which harness records an id,
+> and no member was added.
+
+- [x] **Step 1:** ~~closing a chat kills its window and keeps its record; reopening restores
+      the workspace, the persona, the harness and the cwd, **starts a fresh harness session**,
+      and says so **before** the relaunch.~~ Amended: `chat: close` kills the window and marks
+      the chat closed so nothing brings it back; a **quit** is what keeps the record; a reopen
+      restores the workspace, the persona, the harness and the cwd, and **resumes** the
+      conversation where charter has an id. `tests/test_a_reopen_says_what_it_cannot_bring_back.py`.
+- [x] **Step 2:** the tests were written first and failed first; the two guards that could be
+      mutated away were each verified RED without them (see step 5).
+- [x] **Step 3:** implemented. **`state.clear_shape` is untouched** — it still unlinks
+      `session` for #413's reason, which is an argument about a *reading*; the ID survives in
+      `session.durable` (#757) and, across a reap, in the manifest. No gauge gate: see the
+      amendment above for the two measurements that killed it.
+- [x] **Step 4:** **no resume member was added to `Harness`.** The flag rides the existing
+      `extra` pass-through, and which harness may be handed it is asked of the registry
+      (`frame/leave.resumable_harness`).
+- [x] **Step 5:** mutations run and RED: dropping `state.record_cwd` from the private-server
+      launch path (`BothLaunchPathsRecordIt`), and pruning `inflight` before the kill instead
+      of after (`TheTrackerIsPrunedAfterTheKill`). One property was found to be
+      **over-determined** and is recorded as such rather than claimed as guarded: three
+      independent rules in `reap` keep a non-directory entry in the frame root, so no single
+      mutation can take the manifest's durability away.
 - [ ] **Step 6:** commit.
 
 ### Task 10: Measure at 5 and 10 chats — §4j's instruction, discharged

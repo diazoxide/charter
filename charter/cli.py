@@ -359,6 +359,18 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("-n", type=int, default=0, help="Show only the last N raw events.")
     tr.set_defaults(func=commands_persona.cmd_trace)
 
+    # §4e/§4i's third verb, and the only one of the three an operator types rather than
+    # presses: quit and close are palette rows in a running frame, and by the time a reopen
+    # is wanted there is no frame to press a key in. Registered HERE, above
+    # `_add_frame_parsers`, so it is one of the commands the harness collision guard checks
+    # a `cli_name` against rather than one added after that snapshot is taken.
+    ro = sub.add_parser(
+        "reopen",
+        help="Put back the plane your last `F2 → charter: quit` recorded: every "
+             "workspace, chat, persona and directory, and — for Claude Code — the "
+             "conversation.")
+    ro.set_defaults(func=commands_frame.cmd_reopen)
+
     _add_harness_parser(sub)
     _add_workspace_parser(sub)
     _add_worktree_parser(sub)
@@ -756,7 +768,9 @@ def _add_frame_parsers(sub) -> None:
     _core_commands = set(sub.choices) | {"frame", "panel", "frame-palette",
                                          "frame-probe", "frame-respawn", "frame-density",
                                          "frame-resize", "frame-gather", "frame-switch",
-                                         "frame-toggle", "frame-chrome", "frame-chat"}
+                                         "frame-toggle", "frame-chrome", "frame-chat",
+                                         "frame-quit", "frame-close",
+                                         "frame-transcript"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -990,6 +1004,43 @@ def _add_frame_parsers(sub) -> None:
     ch.add_argument("chat_id")
     ch.add_argument("--chat", dest="chat", default="")
     ch.set_defaults(func=commands_frame.cmd_chat)
+
+    # §4i's quit. Started DETACHED by the palette's confirmation row
+    # (`commands_frame._start_leaving`) and typeable by hand, which is why it warns on its
+    # own stderr as well as on the surface that confirmed it: §4i is explicit that quit
+    # *warns and proceeds*, so the record of what was lost has to survive the keypress.
+    #
+    # **It takes no target, and that is the design rather than an omission.** Quit is
+    # plane-scoped — the operator's own words were "all harness sessions will be closed" —
+    # and §3.3 bounds it from the other side: one tmux server serves every plane on the
+    # machine and session names carry no plane, so the set of things it stops can only come
+    # from this plane's own chat directories. `--chat` is where the keypress came FROM, for
+    # `frame-toggle`'s reason, and is used only to decide which workspace a later
+    # `charter reopen` puts the operator back on.
+    qt = sub.add_parser("frame-quit")
+    qt.add_argument("--chat", dest="chat", default="")
+    qt.set_defaults(func=commands_frame.cmd_quit)
+
+    # §4d's `chat: close`, which is stage 4's new reaper arriving on its own. Quit's
+    # teardown with one target and one file more (`state.record_closed`), because a missing
+    # `exit` file means "was open" and closing writes no exit either — see `cmd_close`.
+    #
+    # **Two chat ids, and they are two different questions**, exactly as `frame-chat` has:
+    # the POSITIONAL is which chat to close, optional so the bare command closes the one
+    # you are in; `--chat` is where the keypress came from. Deliberately NOT `choices=`,
+    # for `frame-chat`'s reason — which chats exist is a property of the frame root at the
+    # moment the key fires, so there is no set for argparse to hold.
+    cl = sub.add_parser("frame-close")
+    cl.add_argument("chat_id", nargs="?", default="")
+    cl.add_argument("--chat", dest="chat", default="")
+    cl.set_defaults(func=commands_frame.cmd_close)
+
+    # §4f's other half: the captured scrollback, offered rather than replayed. Opens a
+    # pager in a window of its own; nothing is ever written into the harness's pane. See
+    # the ADR 0018 amendment this change carries.
+    tr = sub.add_parser("frame-transcript")
+    tr.add_argument("--chat", dest="chat", default="")
+    tr.set_defaults(func=commands_frame.cmd_transcript)
 
     # A TOP-LEVEL sibling of `frame` for a DIFFERENT reason than `frame-palette` above:
     # that one exists because `_split_frame_argv` eats everything

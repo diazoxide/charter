@@ -1596,6 +1596,135 @@ def exit_code(fid: str) -> int | None:
         return None
 
 
+#: The directory the launcher started this chat's harness in — the fourth of §4e's four
+#: restore items, and the only one that had nowhere to live.
+#:
+#: **It could not ride in `identity`, and that is a security property rather than a
+#: preference.** :func:`record_identity` holds the five names of
+#: `commands_frame._FRAME_IDENTITY`, and every value in it goes straight onto a tmux
+#: ``-e NAME=VALUE`` argv, which `_frame_identity_env` measures as world-readable in
+#: `/proc/<pid>/cmdline`. That list is a PROMISE about what reaches an argv — *"none of
+#: the five is ever a credential"* — and a sixth name added for a convenience is how that
+#: promise stops being checkable. A cwd is not a credential either, but it is also not
+#: identity: nothing inside the frame needs it in its environment, so putting it there
+#: would widen an argv for a reader that does not exist.
+#:
+#: `workspace` beside it is the model: one fact, one file, written by the one process that
+#: knows it. `os.getcwd()` was read on both launch paths (`cmd_launch`,
+#: `_launch_in_operator_tmux`), handed to tmux, and dropped.
+_CWD_FILE = "cwd"
+
+
+def record_cwd(fid: str, path: str) -> None:
+    """Write down the directory this chat's harness was started in.
+
+    Same atomic-write, never-raise, rewrite-on-every-launch shape as
+    :func:`record_workspace`, and for the identical reason: an adopted directory's value is
+    another frame's answer, so it is overwritten rather than merged.
+
+    Deliberately NOT deleted by :func:`clear_shape`. The four files that list argues about
+    are all *readings* — a density somebody pressed, a highlight somebody clicked, a pane
+    map, a gauge — and every one of them is wrong for the next frame. A cwd is where the
+    conversation was, which is the same kind of fact as `workspace`: durable per-chat
+    state, and one of the four things a reopen restores.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "cwd.tmp"
+    try:
+        config.write_for(tmp, f"{path}\n")
+        os.replace(tmp, d / _CWD_FILE)
+    except OSError:
+        return
+
+
+def chat_cwd(fid: str) -> str | None:
+    """The directory recorded for *fid*, or ``None`` when charter has no usable one.
+
+    **Absolute or nothing, checked here**, because of where this value goes next: a
+    reopen hands it to `os.chdir` and to `layout.chat_window_argv`'s ``-c`` argv. A
+    relative path would be resolved against whatever directory `charter reopen` happened
+    to be typed in — which is precisely the "silently somewhere else" a restore must not
+    do — and is indistinguishable on disk from a truncated write.
+
+    ``None`` for a chat launched by a charter that predates :func:`record_cwd`, for a
+    directory that is not a chat's, for a file that cannot be read, and for a value that
+    is not an absolute path. Four reasons, one answer, because every caller does the same
+    thing with it: fall back to somewhere it can name, and SAY that it did (§4e's own
+    rule — a restore that quietly substitutes is worse than one that reports).
+
+    Never checked for EXISTENCE here. Whether the directory is still there is a question
+    about the machine at the moment of the reopen, not about the record, and the caller is
+    the one that has an operator to tell.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        val = (d / _CWD_FILE).read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return val if val and os.path.isabs(val) else None
+
+
+#: What :func:`record_closed` writes, and the whole difference between a chat the operator
+#: CLOSED and a chat that merely stopped (§4i, and the accepted cost in the reopen design).
+#:
+#: **A missing `exit` file means "was open", so "closed" needs a file of its own.**
+#: `record_exit` is written by a pane hook and only ever for a harness that ended on its
+#: own; `kill-pane`, `kill-window` and `kill-session` write nothing (§2.17, measured). A
+#: reopen therefore reads "no exit" as *bring this chat back*, which is what "less
+#: invasive" means — and which would bring back a chat the operator had deliberately
+#: closed, because closing it also writes no exit. This is the one bit that tells them
+#: apart.
+#:
+#: **In the chat's own directory rather than beside the manifest**, and that placement is
+#: the bound: this marker only has to outlive the chat's WINDOW, never the chat's
+#: directory. Once `reap` has taken the directory the chat is gone from every surface, so
+#: there is nothing left for a plane-scoped marker to protect and it would be litter with
+#: no collector.
+_CLOSED_FILE = "closed"
+
+
+def record_closed(fid: str) -> None:
+    """Mark *fid* as closed by the operator, so a later quit does not record it as open.
+
+    Never raises, like everything else here. What a failed write costs is stated rather
+    than guarded against: the chat's window is killed either way, and the only loss is
+    that a quit landing before `reap` collects the directory would put it in the manifest
+    and a reopen would bring it back. That is the same cost §4i already accepts for a chat
+    closed by some other route, and it is recoverable with one more `chat: close`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.write_for(d / _CLOSED_FILE, "1\n")
+    except OSError:
+        return
+
+
+def was_closed(fid: str) -> bool:
+    """Whether the operator closed *fid* — one ``stat``, like :func:`exit_code` beside it.
+
+    A bool rather than :func:`exit_code`'s tri-state, and that is the difference between
+    the two questions: an exit code has a VALUE somebody wants to read (finished, or
+    crashed with N), while closing has none — a chat is closed or it is not.
+
+    ``Path.exists`` answers ``False`` for a marker charter cannot stat as well as for one
+    that is not there, and here those two fall on the *restoring* side: an unreadable
+    marker means the chat is recorded and comes back. That is the deliberate direction of
+    this whole design — nothing means "we do not know it stopped, bring it back" — and the
+    cost is one uninvited tab that `chat: close` closes again, against the alternative of
+    silently dropping a chat charter could not read one file of.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    return (d / _CLOSED_FILE).exists()
+
+
 #: The subdirectory :func:`respawn_attempt` counts in, named once so
 #: :func:`clear_respawn` cannot drift away from it — the two are only correct together.
 _RESPAWN_DIR = "respawn"

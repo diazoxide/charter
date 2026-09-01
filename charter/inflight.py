@@ -317,3 +317,47 @@ def _matches_kind(p: Path, kind: str) -> bool:
         return _kind_of(json.loads(p.read_text())) == kind
     except (OSError, TypeError, ValueError):
         return False
+
+
+def prune_all() -> int:
+    """Discard every record on this plane. How many were removed.
+
+    **The one caller is `charter frame-quit`, and it is the one moment that can honestly do
+    this.** Records clear only on :func:`finish`, which the worker that started them calls —
+    so killing every harness on a plane strands every record it was holding:
+    :func:`still_running` reports one for :data:`PRESUMED_DEAD_SECONDS` (30 minutes) and
+    :func:`live` holds it for :data:`PRUNE_SECONDS` (24 hours). The frame's spinner reads
+    `live(kind=None)`, so it would animate for a plane doing nothing, and the
+    dispatch-overlap nudge reads :func:`still_running`, so it would name agents the quit
+    itself killed.
+
+    **Plane-scoped, because a record cannot say anything narrower.** Every record is
+    ``{"agent", "kind", "ts"}`` — no fid, no chat, no workspace — so there is no filter a
+    per-frame caller could apply, and inventing one here would be a second reading of a fact
+    the file does not hold. That is exactly co-extensive with what a quit stops: `cmd_quit`
+    kills every chat this PLANE has a directory for, which is every process that could have
+    written one of these. The two scopes are the same scope, and that is why this is safe
+    rather than merely convenient.
+
+    **Not an age sweep, and not `PRUNE_SECONDS` brought forward.** :func:`live_records`
+    already drops records past that horizon opportunistically, and #308 is explicit that
+    deleting a record for being OLD destroys the single most interesting thing this tracker
+    holds. This deletes for a different reason entirely: the work is over, because the caller
+    just ended it.
+
+    Everything here is best-effort, like the rest of this module: a record that could not be
+    removed is one stale row in a frame that is about to stop existing, and a tracker that
+    broke a quit would be worse than one that missed a file.
+    """
+    try:
+        records = list(_dir().glob("*.json"))
+    except OSError:
+        return 0
+    gone = 0
+    for p in records:
+        try:
+            p.unlink(missing_ok=True)
+            gone += 1
+        except OSError:
+            continue
+    return gone
