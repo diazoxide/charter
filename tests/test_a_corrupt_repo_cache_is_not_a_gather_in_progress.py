@@ -23,14 +23,13 @@ re-gathers without the operator having to know `--session`/`--workspace`.
 
 from __future__ import annotations
 
-
 import os
 import sys
 import unittest
 from unittest import mock
 
 from charter import statusline as sl
-from charter import tui, util
+from charter import commands_frame, tui, util
 from charter.frame import action as faction
 from charter.frame import builtin_actions, gather, slots, state
 
@@ -70,7 +69,7 @@ class TheCacheSaysWhichKindOfNothingItIs(PersonaIso, unittest.TestCase):
     """`gather.unreadable` — the fact `cached()`'s ``None`` throws away.
 
     `cached()` stays exactly as it is (its docstring promises ``None`` for every way
-    reading can fail, and four callers depend on that); this is the second question, asked
+    reading can fail, and every caller depends on that); this is the second question, asked
     only by the caller that needs to say something different about the answer.
     """
 
@@ -271,9 +270,7 @@ class ThePaletteCanReGather(PersonaIso, unittest.TestCase):
 
     def test_running_it_starts_the_command_with_both_flags_filled_in(self):
         """The whole value of the row. Asserted against `builtin_actions._spawn`, the one
-        place a palette row becomes a second charter, and against the exact argv
-        `commands_frame._spawn_gather` uses at launch — two ways to start the same gather
-        that must not drift apart."""
+        place a palette row becomes a second charter."""
         a = self._reg().get("frame.gather")
         with mock.patch.object(builtin_actions, "_spawn") as spawn:
             said = a.run(faction.build(a.touches, fid=self.FID, snapshot={}))
@@ -284,6 +281,27 @@ class ThePaletteCanReGather(PersonaIso, unittest.TestCase):
             "frame-gather", "--session", self.FID, "--workspace", ws))
         self.assertEqual(spawn.call_args.kwargs, {"fid": self.FID})
         self.assertTrue(said)
+
+    def test_it_is_the_same_command_the_launch_already_detaches(self):
+        """Two ways to start the same gather, and the docstrings say they must not drift —
+        so the drift is measured rather than asserted in prose. `commands_frame._spawn_gather`
+        is what the LAUNCH fires (#512); this row is what the palette fires. The
+        `charter`-side arguments are compared, not the interpreter prefix: `_spawn_gather`
+        goes through `util.detach_self` and this goes through `util.self_relaunch_argv`,
+        which is a difference about how a child is started rather than about what it is
+        asked to do."""
+        with mock.patch.object(commands_frame.util, "detach_self",
+                               return_value=True) as detach:
+            commands_frame._spawn_gather(self.FID, "alpha")
+        a = self._reg().get("frame.gather")
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "alpha"}, clear=True), \
+             mock.patch.object(builtin_actions, "_spawn") as spawn:
+            a.run(faction.build(a.touches, fid=self.FID, snapshot={}))
+        launch = detach.call_args.args[0]
+        row = spawn.call_args.args[0]
+        self.assertEqual(launch, ["frame-gather", "--session", self.FID,
+                                  "--workspace", "alpha"])
+        self.assertEqual(row[row.index("frame-gather"):], launch)
 
     def test_it_names_the_frames_workspace_and_not_this_process_s(self):
         """#512's rule, on the one path that would otherwise re-resolve it: a detached
