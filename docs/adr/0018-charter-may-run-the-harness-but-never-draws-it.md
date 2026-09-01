@@ -100,3 +100,54 @@ charter never has to understand what is in that pane to draw around it.
   what it printed) needs its own measurement and its own ADR — this one settles rendering,
   not observation, and conflating the two is how a boundary like this erodes one convenient
   exception at a time.
+
+## Amendment, 2026-09-01: charter reads that pane at two moments, and draws in it at none
+
+The bullet above asked for a measurement and its own record before charter read the
+harness's pane. **The measurement showed charter was already reading it**, and had been
+since #384 — so what follows is a correction to this ADR's own description of the code
+rather than a new permission granted to it.
+
+`commands_frame._pane_last_words` runs `tmux capture-pane -p -S -` on the harness pane on
+**both** launch paths, and its docstring records the 3.7c measurement that put it there: a
+registered harness whose binary is missing produced *zero bytes* of output and exit 127, and
+that capture is the only thing that turns it into a sentence. §4f of
+`docs/superpowers/specs/2026-08-30-charter-opens-like-an-ide.md` then asked for a second
+read: tmux history dies with its session, so quitting a plane discards every visible
+transcript, and *"less invasive"* cannot mean that.
+
+So the rule is stated as it actually holds, rather than as a prohibition with two
+undocumented exceptions:
+
+**tmux composes the rectangles and does every part of terminal emulation. Charter draws only
+its own panels — the edges — and never draws in the harness's own pane, never parses its
+escape sequences, and never decides what a cursor or a colour means inside it. It READS that
+pane at exactly two moments, both of which are moments the pane is about to stop existing:**
+
+1. **a harness that died before the frame was drawn** (`_pane_last_words`) — the only chance
+   to say anything at all, because nothing is ever drawn on that path;
+2. **a chat being stopped by `charter: quit`** (`_capture_transcript`) — bounded to the last
+   2,000 lines and 512 KB, written to that chat's own file under `.charter/frame/`, and
+   **offered on the way back rather than replayed**. `F2 → chat: previous transcript` opens
+   it in a pager in a window of its own; the reopened harness's pane starts clean.
+
+**Both exceptions are bounded by the same property, and it is the property that keeps this a
+boundary rather than a preference: charter reads only what is about to be destroyed, and
+writes nothing back.** The two failures this ADR was written against — owning a terminal
+parser, and drawing where tmux draws — are untouched by either. Nothing here parses an
+escape sequence: `-e` keeps them and `-N` keeps the trailing spaces `-e` alone trims, and the
+bytes go to a file and to `less -R`, both of which understand them better than charter would.
+
+**What is still refused, sharpened rather than repeated.** Reading that pane to *react* to
+what it printed — a hook on its output, a parse of its state, a decision made from its
+content — is still a different feature and still needs its own measurement and its own
+record. The distinguishing question is now written down so the next reader does not have to
+infer it: *does charter read this pane at a moment it is ending, and does it write nothing
+back?* Two yeses is this amendment. Anything else is a new one.
+
+**Measured cost, because "capture it" is not free.** One 200-column pane at charter's shipped
+`history_limit = 50000` took the shared tmux server from 3.7 MB to **130 MB**, and
+`capture-pane -p -S -` pipes that whole history through charter's own process. That is why
+the capture asks tmux for the last N lines (`-S -2000`) rather than for everything and
+trimming afterwards: the bound belongs where the memory is. Verified on tmux 3.7c and at the
+3.2 floor.

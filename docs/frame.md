@@ -633,6 +633,72 @@ A `$TMUX` that names a server nothing answers on — one captured by `env` and r
 or a `tmux kill-server` under a running script — is not a tmux you are inside. Charter
 checks before it builds anything, and falls back to its own private server.
 
+## Leaving: detach, close, quit — and reopen
+
+**Closing the window detaches, and that is the exit that costs nothing.** tmux sessions
+survive a client leaving, so the common way out loses nothing and needs no resume: the
+harnesses keep running and `tmux -L charter attach -t <workspace>` puts you back. A terminal
+that dies, a lid that closes and an ssh connection that drops all do this. `F2 → detach` is
+the same thing without needing to know tmux's prefix key.
+
+**`F2 → charter: quit` stops everything on this plane, and records it first.** It is the only
+route — never a signal, never a closing terminal. Enter on that row opens a confirmation
+rather than doing anything: one row per chat, saying what that chat will and will not get
+back, with the row that goes through at the bottom.
+
+```
+quit · 5 to choose from
+    alpha.1 · claude-code       conversation resumes
+  * alpha.2 · claude-code       reopens empty — no session id recorded for this chat yet
+    api.1 · opencode            reopens empty — opencode records no session id to resume …
+    gone.3 · claude-code        conversation resumes · workspace 'gone' is gone — reopen…
+>   quit — stop 4 chats in 3 workspaces; 2 of 4 can resume the conversation
+
+  up/down move   enter choose   esc cancel   F12 back to the harness
+```
+
+It **warns and proceeds** — it does not refuse. Refusing would leave you unable to quit
+while any agent was working, which on a control plane is most of the time. The one thing that
+stops it is being unable to write the record down: a quit that killed the plane after failing
+to record it is exactly the invasive quit this exists to prevent, so that refuses and stops
+nothing.
+
+**`charter reopen` puts the recorded plane back.** Every workspace, every chat, each one's
+persona and the directory it was started in — and, for Claude Code, the conversation, by
+resuming it. It attaches you to the workspace you pressed quit in, on the chat that was in
+front of you. The record describes one quit and is consumed by one reopen, so running it
+twice does not double your tabs.
+
+**Resume is Claude Code only, and the warning says so per chat.** Charter records a harness's
+own session id from Claude Code's status-line hook, which is the only harness that supplies
+one — so it is the only harness whose conversation charter can ask for back. A chat that
+cannot be resumed still comes back: its directory, its workspace and its persona return, and
+only the conversation is gone. A chat whose *workspace* has been deleted comes back too, and
+says the workspace is missing; charter never quietly re-homes a chat.
+
+**`F2 → chat: previous transcript`** opens what a chat had on screen before it was last
+stopped, in a pager, in a window of its own. tmux history dies with its session and
+`claude --resume` re-renders the conversation rather than the screen, so a quit captures the
+last 2,000 lines of each pane (at most 512 KB) into `.charter/frame/<chat>.transcript`. It is
+**offered, never replayed** — the reopened harness's pane starts clean, because replaying a
+previous run's output above a new run's prompt would present a session that is not running as
+though it were. The row is refused, with its reason, until a quit has captured one.
+
+**`F2 → chat: close` stops one chat and marks it so nothing brings it back.** That is the
+whole difference from quit: quit records, close forgets. It exists because charter reads "no
+recorded exit code" as *"we do not know it stopped — bring it back"*, which is what makes a
+restart cheap and which would otherwise resurrect a chat you had deliberately finished with.
+It also drops that chat's captured transcript, since a capture exists to be offered on the way
+back. Closing does **not** refuse while that chat's harness is working: charter's in-flight
+tracker records no chat on any of its entries, so there is no reading to refuse on, and the
+confirmation says the chat will not come back instead of pretending to check.
+
+**What quit stops is this plane, and nothing else on the machine.** One tmux server serves
+every frame on a machine and session names carry no plane — `default` is a name every plane
+has — so quit works from *this* plane's chat directories and kills one window at a time, never
+`kill-server` and never a session by name. Two planes with a workspace of the same name can
+share one tmux session, and quitting one leaves the other's chats running.
+
 ## Exit codes
 
 The launcher does not `exec` tmux — an attached `tmux new-session` reports 0 regardless of
@@ -1906,7 +1972,7 @@ remember the flags. The workspace is the session; tmux puts you back on whicheve
 chats was last in front of you.
 
 ```
-charter · 12 to choose from
+charter · 16 to choose from
 >   workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
     persona: steward — pick another
     detach — leave the harness running
@@ -1919,7 +1985,18 @@ charter · 12 to choose from
   * chrome: off
     chrome: dark
     chrome: light
+    chat: previous transcript          no previous transcript for this chat — one …
+    refresh — gather this workspace's repos, todos and changes again
+    charter: quit — stop every harness on this plane
+    chat: close — stop this chat and do not bring it back
+```
 
+**The two rows that stop something are last, and that is a guard rather than an ordering
+taste.** The cursor starts on the first row that can run, so a destructive row at the top of
+the list would be one `F2` `Enter` away. Every harmless row charter has keeps the top of the
+list; see *Leaving* below for what those two do.
+
+```
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```
 
@@ -1934,9 +2011,10 @@ for the cursor and two for the "you are on this one" mark, in that order, whethe
 the row has either. So `detach` and `density: full` start in the same column, and the
 distance from the cursor to the text is the same on every row of the list.
 
-**Two of those rows are doorways.** `workspace:` and `persona:` say which one this frame is
-on, and Enter opens the list of the others **in the same pane** — a picker, which is this
-same surface over a different set of rows. Type to narrow it exactly as you would the
+**Four of those rows are doorways.** `workspace:` and `persona:` say which one this frame is
+on, and `charter: quit` and `chat: close` open a confirmation; Enter on any of them replaces
+the surface **in the same pane** with a picker, which is this same surface over a different
+set of rows. Type to narrow it exactly as you would the
 palette, Enter to switch, Escape to leave having changed nothing:
 
 ```
