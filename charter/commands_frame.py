@@ -8282,23 +8282,41 @@ def cmd_transcript(args) -> int:
     if shutil.which(_PAGER[0]) is None:
         _say_on_screen(fid, NO_PAGER.format(path=path))
         return 0
-    target = chats.pane_of(fid)
-    if target is None:
+    pane_id = chats.pane_of(fid)
+    if pane_id is None:
         _say_on_screen(fid, "charter has no usable record of this chat's harness pane, so "
                             "it cannot place a window beside it — relaunch this chat")
         return 0
     socket = state.frame_server(fid) or SOCKET
-    # `-t <pane id>`: a pane resolves to its own window on 3.7c and at the 3.2 floor, so the
-    # new window lands in THIS chat's session — never `-t <session name>`, which tmux parses
-    # as `window.pane` for any workspace with a dot in it (#695).
+    # **The target is the SESSION ID, and every other spelling was measured failing.** This
+    # is the #664/#695 shape and it cost a hand-run to find: `kill-window -t %N` resolves a
+    # pane to its own window, so `new-window -t %N` looks like it should too. It does not.
+    # On tmux 3.7c **and** at the 3.2 floor, with a session called `alpha.2` and its own
+    # `$0`/`@0`/`%0`:
     #
+    #     new-window -t %0        rc 1   can't specify pane here
+    #     new-window -t @0        rc 1   create window failed: index 0 in use
+    #     new-window -t alpha.2   rc 1   can't specify pane here      <- #695, again
+    #     new-window -t $0        rc 0
+    #
+    # `-t` here is a target-WINDOW and a window id is read as the index to insert at, which
+    # is by definition taken; a session NAME with a dot in it is parsed as `window.pane`,
+    # which is the collision `state._UNSAFE` already exists for. The session id is the one
+    # unambiguous spelling, and `_pane_place` is what turns this chat's recorded pane into
+    # one — held to `_SESSION_ID_RE` on the way out, at #475's boundary.
+    place = _pane_place(socket, pane_id)
+    if place is None:
+        _say_on_screen(fid, f"tmux would not say which session this chat is in, so charter "
+                            f"cannot place a window there — the captured text is at {path}")
+        return 0
+    session_id, _window_id = place
     # `--` and an argv, never a joined string: tmux shell-interprets a single argument and
     # does not interpret separate ones (`harness.base.launch_argv`'s own measured rule), and
     # the path here is charter's own file under a state directory whose name carries the
     # plane's.
     opened = tmuxctl.run(
         "opening this chat's previous transcript",
-        tmuxctl.server_argv(socket, "new-window", "-t", target, "-n",
+        tmuxctl.server_argv(socket, "new-window", "-t", session_id, "-n",
                             f"transcript {fid}", "--", *_PAGER, str(path)))
     if opened.returncode != 0:
         _say_on_screen(fid, f"tmux would not open a window for the transcript — it is at "

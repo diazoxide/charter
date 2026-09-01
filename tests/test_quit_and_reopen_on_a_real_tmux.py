@@ -186,6 +186,118 @@ class ARealQuitStopsRealChats(PersonaIso, unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
+class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
+    """§4f's other half, and **the one target only a hand-run could have found.**
+
+    `kill-window -t %N` resolves a pane to its own window — measured, and `cmd_launch`'s
+    early-death path already relies on it — so `new-window -t %N` looks like it should too.
+    It does not. Measured on tmux 3.7c **and** at the 3.2 floor, on a session called
+    `alpha.2` holding its own `$0`/`@0`/`%0`:
+
+        new-window -t %0        rc 1   can't specify pane here
+        new-window -t @0        rc 1   create window failed: index 0 in use
+        new-window -t alpha.2   rc 1   can't specify pane here      <- #695, again
+        new-window -t $0        rc 0
+
+    `-t` here is a target-WINDOW and a window id is read as the index to insert at, which is
+    by definition taken; a dotted session name is parsed as `window.pane`. The session ID is
+    the one unambiguous spelling. The first version of this shipped `-t <pane>`, was correct
+    against nothing, and reported its own failure into the frame's notice row — which is
+    exactly the *"ten lines and a tmux semantics claim is not cheap"* the delivery plan warns
+    about (#664, #687, #690).
+    """
+
+    def setUp(self):
+        super().setUp()
+        make_plane(self)
+        self.socket = _tmuxreap.name(f"transcript-{next(_SERVERS)}")
+        self.addCleanup(self._kill_server)
+
+    def _kill_server(self):
+        subprocess.run(["tmux", "-L", self.socket, "kill-server"],
+                       capture_output=True, text=True)
+
+    def _tmux(self, *argv, check=True):
+        out = subprocess.run(["tmux", "-L", self.socket, *argv],
+                             capture_output=True, text=True, timeout=20)
+        if check:
+            self.assertEqual(out.returncode, 0, f"{argv}: {out.stderr}")
+        return out.stdout.strip()
+
+    def _chat_with_a_transcript(self, text="LINE-ONE\n\x1b[31mRED\x1b[0m\nLINE-THREE\n"):
+        """A real chat in a session whose NAME has a dot in it, which is the hostile case.
+
+        A workspace may be called `api.2` (`instance.WORKSPACE_NAME_RE` accepts a dot), and
+        `state.workspace_prefix` is what keeps the SESSION name out of that alphabet — so the
+        session here is `alpha_2` and the recorded workspace is `alpha.2`, exactly as a real
+        launch would have it. The point is that nothing on this path ever hands tmux a name.
+        """
+        pane = self._tmux("new-session", "-d", "-s", "alpha_2", "-P", "-F", "#{pane_id}",
+                          "-x", "80", "-y", "24", "sh", "-c", "exec cat")
+        self._tmux("set-option", "-w", "-t", pane, commands_frame._CHAT_OPTION, "alpha_2.1")
+        state.frame_dir("alpha_2.1", create=True)
+        state.record_server("alpha_2.1", self.socket)
+        state.record_workspace("alpha_2.1", "alpha.2")
+        state.record_harness_pane("alpha_2.1", pane)
+        config.write_for(reopen.transcript_path("alpha_2.1"), text)
+        return pane
+
+    def _windows(self):
+        return dict(line.split("\t", 1) for line in self._tmux(
+            "list-windows", "-a", "-F", "#{window_id}\t#{window_name}").splitlines())
+
+    def test_it_opens_a_pager_window_beside_the_chat_and_shows_the_text(self):
+        self._chat_with_a_transcript()
+        before = self._windows()
+
+        with mock.patch.object(commands_frame, "SOCKET", self.socket):
+            self.assertEqual(commands_frame.cmd_transcript(
+                SimpleNamespace(chat="alpha_2.1")), 0)
+
+        after = self._windows()
+        new = [w for w in after if w not in before]
+        self.assertEqual(len(new), 1, f"{before} -> {after}")
+        self.assertIn("transcript alpha_2.1", after[new[0]])
+        # A pager, not a dead pane: `less` is what makes `q` close the window, and a dead
+        # pane under `remain-on-exit` is a window that does not close in a frame whose
+        # prefix key charter hides (§2.14).
+        panes = self._tmux("list-panes", "-t", new[0], "-F",
+                           "#{pane_current_command}\t#{pane_dead}")
+        self.assertEqual(panes.split("\t")[0], commands_frame._PAGER[0])
+        self.assertEqual(panes.split("\t")[1], "0")
+        # And the text really reached it, with the escape sequence rendered rather than
+        # printed — which is what `-R` on the pager and `-e` on the capture are both for.
+        seen = self._tmux("capture-pane", "-p", "-t", new[0])
+        self.assertIn("LINE-ONE", seen)
+        self.assertIn("RED", seen)
+        self.assertNotIn("\x1b[31m", seen)
+
+    def test_the_chats_own_window_is_left_exactly_as_it_was(self):
+        pane = self._chat_with_a_transcript()
+
+        with mock.patch.object(commands_frame, "SOCKET", self.socket):
+            commands_frame.cmd_transcript(SimpleNamespace(chat="alpha_2.1"))
+
+        # Nothing is written into the harness's pane — ADR 0018's half that this change
+        # leaves untouched — and its own process is still the one that was there.
+        self.assertEqual(self._tmux("display-message", "-p", "-t", pane,
+                                    "#{pane_current_command}:#{pane_dead}"), "cat:0")
+
+    def test_a_chat_with_no_capture_says_so_and_opens_nothing(self):
+        self._chat_with_a_transcript()
+        reopen.transcript_path("alpha_2.1").unlink()
+        before = self._windows()
+
+        with mock.patch.object(commands_frame, "SOCKET", self.socket), \
+                mock.patch.object(commands_frame, "_say_on_screen") as said:
+            self.assertEqual(commands_frame.cmd_transcript(
+                SimpleNamespace(chat="alpha_2.1")), 0)
+
+        self.assertEqual(self._windows(), before)
+        said.assert_called_once()
+        self.assertEqual(said.call_args[0][1], commands_frame.NO_TRANSCRIPT)
+
+@unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
 class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
     """§3.3, and the one case a single-plane test is blind to.
 

@@ -190,6 +190,23 @@ ADR is amended in this change rather than quietly added to. The rule now reads: 
 reads that pane at exactly two moments, both of them moments the pane is about to stop
 existing, and writes nothing back into it.**
 
+**The window it opens is targeted by SESSION ID, and every other spelling was measured
+failing.** This is the #664/#695 shape and it cost a hand-run to find: `kill-window -t %N`
+resolves a pane to its own window — charter's early-death path already relies on that — so
+`new-window -t %N` looks like it should too. It does not. On tmux 3.7c *and* at the 3.2 floor,
+on a session called `alpha.2` holding its own `$0`/`@0`/`%0`:
+
+```
+new-window -t %0        rc 1   can't specify pane here
+new-window -t @0        rc 1   create window failed: index 0 in use
+new-window -t alpha.2   rc 1   can't specify pane here      <- #695, again
+new-window -t $0        rc 0
+```
+
+`-t` there is a target-*window*, a window id is read as the index to insert at (which is by
+definition taken), and a dotted session name is parsed as `window.pane`. The first version of
+this shipped `-t <pane>` and was correct against nothing.
+
 Reopening **offers** the capture; it never replays it. Replaying bytes would present a session
 that is not running as though it were, and put a previous run's output above a new run's
 prompt with nothing marking the seam.
