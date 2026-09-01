@@ -332,8 +332,9 @@ class SuppressionSaysSoOnDemand(PersonaIso, unittest.TestCase):
         self.assertNotIn("blank", (row.hint or "").lower())
 
 
-class PanelFollowsWorkspaceUse(PersonaIso, unittest.TestCase):
-    """`charter ws use` inside a frame moves that frame's panels (#411).
+class PanelFollowsWorkspaceUseOnAFrameWithNoRecord(PersonaIso, unittest.TestCase):
+    """`charter ws use` inside a frame that recorded nothing moves that frame's panels
+    (#411), and **only** such a frame since #791.
 
     This is the collision #386 had to decide, pinned. The launcher exports the frame id
     under `$CHARTER_SESSION_ID` — the variable `charter.session.current` already owns —
@@ -343,6 +344,21 @@ class PanelFollowsWorkspaceUse(PersonaIso, unittest.TestCase):
     Nothing else connects the two: the per-TERMINAL pointer is keyed by `$TMUX_PANE`, and
     the harness and each panel are different panes, so it is structurally unable to carry
     a switch from one to the other.
+
+    **Which rung of `state.workspace_for` carries it has changed, and the class was
+    renamed rather than left to read as a promise it no longer makes.** The pointer used to
+    be rung 1, inside `state.own_workspace`, and #791 took it out: a chat's workspace is
+    its identity (§4j) and `own_workspace` is also what decides membership of a workspace,
+    so a typed command moving that rung re-homed the chat (#733, #788 verbatim). What is
+    left is rung 2 — a local `workspace.resolve()` for a frame that recorded no workspace
+    of its own, which is the migration case `docs/frame.md` names. The fixture here is
+    exactly that frame: a `{workspace}-{pid}` id with no directory under `.charter/frame/`,
+    which is what #411 was reported on.
+
+    The chat case — a frame WITH a launch record, which is every frame charter mints today
+    — is the opposite assertion and lives with the surface it is about:
+    `tests/test_frame_slots.EveryPanelDrawsTheFramesOwnWorkspace`. The last case below
+    pins the boundary between the two so neither file can move without the other noticing.
     """
 
     def _top(self, fid: str) -> str:
@@ -379,6 +395,29 @@ class PanelFollowsWorkspaceUse(PersonaIso, unittest.TestCase):
                              {"CHARTER_SESSION_ID": "someone-elses-frame-1234"},
                              clear=True):
             workspace.set_active("beta")
+        self.assertIn("alpha", self._top(fid))
+        self.assertNotIn("beta", self._top(fid))
+
+    def test_the_moment_the_frame_records_a_workspace_the_pointer_stops_reaching_it(self):
+        """**The boundary #791 drew, asserted from the side that used to cross it.**
+
+        The two cases above pass through rung 2 of `state.workspace_for` — a local
+        `workspace.resolve()`, reached only because this frame recorded nothing. Write the
+        launch record and rung 1 answers instead, and rung 1 is `state.own_workspace`,
+        which no longer reads a pointer at all. So the same switch that moved the panel a
+        line ago moves nothing: the panel draws what the launch recorded.
+
+        Without this, both cases above read as "panels follow `ws use`" — which is what
+        their class was called and what `docs/frame.md` promised — on a plane where that is
+        true for the migration case alone."""
+        fid = f"demo-{os.getpid()}"
+        workspace.ensure("alpha")
+        workspace.ensure("beta")
+        state.record_workspace(fid, "alpha")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid}, clear=True):
+            workspace.set_active("beta")
+            self.assertEqual(workspace.for_session(fid), "beta",
+                             "the pointer this case is about was not written")
         self.assertIn("alpha", self._top(fid))
         self.assertNotIn("beta", self._top(fid))
 

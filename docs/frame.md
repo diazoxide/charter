@@ -800,9 +800,9 @@ has no numbers to show without a payload.)
 `charter <harness>` exports the frame's id as `$CHARTER_SESSION_ID`, the same variable
 every charter command reads to answer "which session am I". That is on purpose: inside a
 frame, the frame **is** the charter session. The agent's shell, each panel and any
-`charter` command typed inside the frame all agree on one identity, which is why
-`charter workspace use <name>` typed at the agent moves the panels too — the pointer is
-written under the frame's id and the panels read it back under the same one.
+`charter` command typed inside the frame all agree on one identity — so a workspace, a
+persona or a lock chosen inside the frame is one thing chosen for the whole frame, not one
+per pane.
 
 Claude Code's own session id has not gone anywhere; it arrives in the status line's stdin
 payload and keys what comes with it (the usage history, the session trace). Two ids, two
@@ -817,11 +817,27 @@ instead. Nothing is pinned into the environment to achieve it, deliberately: exp
 `$CHARTER_WORKSPACE` would rank above every pointer and take `charter workspace use` away
 from every framed session.
 
-So the order the panels read is: `$CHARTER_WORKSPACE` if you pinned one, then what you
-chose **inside** this frame, then what the launch resolved, then whatever the panel can
-resolve for itself (a frame launched by an older charter, still running across the
-upgrade). `charter workspace use <name>` at the agent still moves the panels, and still
-moves them for the same reason as before.
+So the order the panels read is: `$CHARTER_WORKSPACE` if you pinned one, then what the
+launch recorded — the pin it was launched under, then the workspace it resolved — then
+whatever the panel can resolve for itself (a frame launched by an older charter, still
+running across the upgrade).
+
+**`charter workspace use <name>` typed at the agent does not move the panels, and this
+line used to say the opposite.** It writes the per-session pointer under the frame's id,
+which is what makes every `charter` command in that shell act on the new name — `charter
+clone`, `charter repos`, `charter ws current`, all of it. What it does *not* do is change
+which workspace the chat is in, and for one release it did: that pointer was a rung of the
+ladder the panels read, and the same ladder decides which chats a workspace has. So the
+command quietly re-homed the chat — the chat beside it in the same tmux session could no
+longer see it, and its own tab bar filled with the other workspace's chats, which the
+palette then refused to open. **A chat belongs to its workspace for life** (spec §4j); a
+conversation wanted elsewhere is a new chat, opened with `charter <harness>` in that
+workspace. If you want the panels on another workspace, `F2 → workspace` moves your
+terminal to it and leaves every chat where it is.
+
+One consequence worth stating: a chat's workspace is now fixed at launch, so **renaming a
+workspace orphans its chats** — their record still names the old name. That was already
+true of any chat nobody had typed `workspace use` in, and it is now true of all of them.
 
 The pin comes first because that is what it means everywhere else in charter: it ranks
 above every pointer in `charter`'s own resolution, and `charter workspace use` warns you
