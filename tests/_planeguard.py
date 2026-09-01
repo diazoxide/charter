@@ -271,7 +271,9 @@ class RealPlaneWrite(BaseException):
 
 
 def _explain(op: str, path) -> str:
-    if str(path).endswith(_root.MARKER):
+    # The BASENAME, not a suffix: `.charter/x-charter.toml` is a file inside the state
+    # directory and gets the state directory's message, which is the one that helps.
+    if os.path.basename(str(path)) == _root.MARKER:
         return (
             f"REFUSED: {op} {path}\n"
             f"This test is writing the file that MAKES that directory a control plane — "
