@@ -404,6 +404,87 @@ class TheConstantShape(unittest.TestCase):
         self.assertEqual(_by(muts, "retune-constant"), [])
 
 
+class AConstantIsOfferedOnceHoweverItIsSpelled(unittest.TestCase):
+    """#755: a module-level constant written in base 8, 16 or 2 satisfies two rules.
+
+    The module-constant rule and the non-decimal rule both recognise `MODE = 0o600`, and
+    both move it by one — so they were offering one integer twice, `385` and `0o601`, and
+    `385` is the spelling the non-decimal rule's own comment says nobody can check at a
+    glance. Two rows, two sandbox runs, one value: `swap-synonym`'s rule about a mutation
+    that produces the same program, in integers instead of method names.
+
+    The answer keeps one of each half. The module-constant rule keeps the node, because
+    its question NAMES the constant — the whole of what a reviewer needs to find the line
+    — and `_moved_int` gives it the non-decimal rule's spelling on the way out. Every
+    assertion below is one half of that: either that there is exactly one row, or that the
+    row that remains is the readable one.
+    """
+
+    def test_a_module_level_permission_is_offered_once(self):
+        """`charter/config.py`'s `STATE_FILE_MODE = 0o600` and
+        `charter/secrets/base.py`'s `_OTHERS = 0o077` — measured on `main`, the only two
+        module-level non-decimal integer constants in the tree, and both were offered
+        twice."""
+        muts = _by(_mutations("STATE_FILE_MODE = 0o600\n"), "retune-constant")
+        self.assertEqual([m.after for m in muts], ["0o601"])
+
+    def test_the_row_that_remains_names_the_constant(self):
+        """The two rules differ in their question as well as their spelling, and this is
+        the half that had to be kept: "is this value pinned" leaves a reviewer holding a
+        survivor with a line number, where "is `STATE_FILE_MODE`'s value pinned" names the
+        thing to go and look at."""
+        muts = _by(_mutations("STATE_FILE_MODE = 0o600\n"), "retune-constant")
+        self.assertEqual([m.question for m in muts],
+                         ["is `STATE_FILE_MODE`'s value pinned, or would any number do?"])
+
+    def test_hex_and_binary_keep_their_own_base_too(self):
+        """The rule is about the base the source wrote, not about octal. `0x1b` is a byte
+        and `0b1010` is a bit pattern, and a report answering `28` or `11` for either is
+        the same unreadable row."""
+        for source, after in (("_ESC = 0x1b\n", "0x1c"),
+                              ("_BITS = 0b1010\n", "0b1011"),
+                              ("_UPPER = 0O600\n", "0o601")):
+            with self.subTest(source=source):
+                muts = _by(_mutations(source), "retune-constant")
+                self.assertEqual([m.after for m in muts], [after])
+
+    def test_a_decimal_module_constant_is_still_decimal(self):
+        """The spelling follows the source and nothing else — `LIMIT = 28` must not come
+        back as `0o35`, which would be this defect's mirror image."""
+        muts = _by(_mutations("LIMIT = 28\n"), "retune-constant")
+        self.assertEqual([m.after for m in muts], ["29"])
+
+    def test_a_non_decimal_that_is_not_a_module_constant_is_still_asked_about(self):
+        """The fix withholds the DUPLICATE, not the shape. A `0o600` inside a function is
+        the non-decimal rule's alone and it still gets its row — the rule is not narrowed
+        to "not a permission", it is narrowed to "not one the rule above already asked
+        about"."""
+        muts = _by(_mutations("""
+            def f(p):
+                p.chmod(0o600)
+        """), "retune-constant")
+        self.assertEqual([(m.after, m.question) for m in muts],
+                         [("0o601", "is this value pinned, or would any number do?")])
+
+    def test_a_lowercase_module_level_name_falls_to_the_non_decimal_rule(self):
+        """`timeout = 0o600` is not a constant by the module rule's own test, so the node
+        belongs to the non-decimal rule and must not be dropped by the exclusion — a
+        withheld node with no rule left to ask about it is a guard silently uncovered."""
+        muts = _by(_mutations("mode = 0o600\n"), "retune-constant")
+        self.assertEqual([(m.after, m.question) for m in muts],
+                         [("0o601", "is this value pinned, or would any number do?")])
+
+    def test_a_module_level_sum_of_non_decimals_still_asks_about_each_part(self):
+        """The exclusion is keyed on the integer NODE, so a module constant whose value is
+        not a bare literal is untouched by it — `drop-term` on the sum, and the
+        non-decimal rule on each operand, which are three different questions."""
+        muts = _mutations("_MASK = 0o700 + 0o070\n")
+        self.assertEqual(_afters(muts, "drop-term"), ["0o070", "0o700"])
+        # `0o71` and not `0o071`: `oct` does not pad, which is `oct`'s answer and not this
+        # rule's, and is the same answer the non-decimal rule has always given.
+        self.assertEqual(_afters(muts, "retune-constant"), ["0o701", "0o71"])
+
+
 # ======================================================================================
 # Splicing — line numbers are the whole output of this tool
 # ======================================================================================
@@ -2269,20 +2350,49 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
                         f"is satisfied by mutants meaning different things: "
                         + "  ||  ".join(sorted(seen)))
 
+    def test_no_two_mutants_of_one_node_are_the_same_program(self):
+        """The sibling property above is about the REPORT; this one is about the plan.
+
+        Two mutants of one node that compile to the same program are one question asked
+        twice, and the test above cannot see it — `385` and `0o601` are two distinct
+        strings in every field it reads. That was #755, live in this fixture on `MODE =
+        0o600` for as long as the class existed: two rows, two sandbox runs, one integer,
+        and the second row spelled the way the tool's own comment says nobody can read.
+
+        Keyed on the span alone and not on the operator, because "the same program" is not
+        an operator's business — two rules recognising one node is exactly how the
+        duplicate arose. Normalised through `ast` rather than compared as text: the
+        replacement is spliced source, and `parenthesised` alone makes two texts of one
+        program routine.
+        """
+        groups: dict[tuple, list] = {}
+        for m in _mutations(self.FIXTURE):
+            groups.setdefault(m.span, []).append(m)
+        for span, ms in sorted(groups.items()):
+            programs: dict[str, list] = {}
+            for m in ms:
+                programs.setdefault(ast.dump(ast.parse(m.source)), []).append(m)
+            for _, same in programs.items():
+                with self.subTest(line=same[0].line, before=same[0].before):
+                    self.assertEqual(
+                        len(same), 1,
+                        f"{same[0].before!r} at line {same[0].line} is offered as "
+                        f"{len(same)} mutants that are one program: "
+                        + "  ||  ".join(f"{m.operator} -> {m.after}" for m in same))
+
     def test_every_shape_that_yields_siblings_is_in_the_fixture(self):
         """A guard on the guard. The assertion above is only as general as this list, and
         a fixture that quietly stopped covering `unclamp` would still pass it.
 
-        `retune-constant` is here because a module-level constant written in a base other
-        than ten is offered twice — once by the module-constant rule as `n + 1` in decimal,
-        once by the non-decimal rule re-spelled in its own base. Those two are the same
-        VALUE, so it is a question asked twice rather than an ambiguity, and it is left
-        alone here: this test pins that the two are told apart, not that both exist.
+        `retune-constant` is NOT here, and that is #755: `MODE = 0o600` used to yield two
+        of them and now yields one. The fixture still carries the line, because the shape
+        that has to stay measured is "one row, in the readable base" — see
+        `AConstantIsOfferedOnceHoweverItIsSpelled`.
         """
         self.assertEqual(
             sorted({operator for _, operator in self.siblings()}),
             ["collapse-ifexp", "disable-branch", "drop-conjunct", "drop-term",
-             "retune-constant", "shift-boundary", "unclamp"])
+             "shift-boundary", "unclamp"])
 
     def test_the_fixture_exercises_every_operator_the_table_names(self):
         """An operator added to `_iter_operators` and not to the fixture is a shape this
