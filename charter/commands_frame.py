@@ -7760,10 +7760,14 @@ def cmd_quit(args) -> int:
     fid = _pressers_chat(args)
     servers = _plane_servers()
     live, windows, active = _plane_live(servers)
-    # Parenthesised, because the two readings differ and only one is right: `focus` is the
-    # workspace of the chat the quit was PRESSED in, and `""` for a `charter frame-quit`
+    # The workspace of the chat the quit was PRESSED in, and `""` for a `charter frame-quit`
     # typed outside a frame — where a reopen falls back to the first frame it recorded.
-    focus = (state.own_workspace(fid) or "") if fid else ""
+    #
+    # `or ""` and no `if fid` in front of it: the deletion sweep could not turn that
+    # conditional red and it was right, because `own_workspace("")` already answers `None`
+    # (`frame_dir` refuses the empty id) and the `or` converts it. A guard that passes only
+    # because a DIFFERENT guard caught the case is the shape this repository deletes.
+    focus = state.own_workspace(fid) or ""
     p = leave.plan(live=live, focus=focus)
     doomed = leave.stopping(p)
     if not doomed:

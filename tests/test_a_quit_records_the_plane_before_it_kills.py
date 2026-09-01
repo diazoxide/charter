@@ -410,6 +410,70 @@ class TheQuitsOwnSentenceIsSaidByTheLauncher(PersonaIso, unittest.TestCase):
         self.assertEqual(self._said("alpha.1"), "")
 
 
+class EachServerIsAskedOnceAndTheFocusIsWhereYouWere(PersonaIso, unittest.TestCase):
+    """`_plane_servers`' dedupe and `cmd_quit`'s focus, both found unpinned by the sweep."""
+
+    def test_a_server_several_chats_share_is_listed_once(self):
+        # Not tidiness: the list is what `_plane_live` iterates, and a duplicate is a second
+        # `list-windows` against the same server whose answer overwrites the first — one
+        # round trip bought for nothing, on the path a quit is waiting on.
+        for fid in ("alpha.1", "alpha.2", "alpha.3"):
+            _plant(fid, ws="alpha")
+
+        servers = commands_frame._plane_servers()
+
+        self.assertEqual(servers, [SERVER])
+        self.assertEqual(len(servers), len(set(servers)))
+
+    def test_charters_own_socket_is_listed_even_when_no_chat_records_it(self):
+        # It is where a chat with no recorded server will be — `builtin_actions._server`'s
+        # own fallback, spelled the same way.
+        state.frame_dir("alpha.9", create=True)
+        state.record_server("alpha.9", "somebody-elses-socket")
+        state.record_workspace("alpha.9", "alpha")
+
+        servers = commands_frame._plane_servers()
+
+        self.assertEqual(servers[0], SERVER)
+        self.assertIn("somebody-elses-socket", servers)
+
+    def test_a_quit_typed_outside_a_frame_records_no_focus(self):
+        # `(state.own_workspace(fid) or "") if fid else ""` — the `else`. Without it the
+        # focus comes from `own_workspace("")`, which is a question about no chat at all.
+        _plant("alpha.1", ws="alpha")
+
+        with mock.patch.multiple(commands_frame, _chat_seats=mock.DEFAULT,
+                                 _capture_transcript=mock.DEFAULT,
+                                 _stop_chats=mock.DEFAULT) as m:
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0"}, set())
+            m["_capture_transcript"].return_value = False
+            m["_stop_chats"].return_value = 1
+            self.assertEqual(commands_frame.cmd_quit(SimpleNamespace(chat="")), 0)
+
+        self.assertEqual(reopen.read().focus, "",
+                         "nowhere to put you back is an honest answer; a guess is not")
+        # And it is written as a STRING, not as `null`. `reopen.read` would normalise a
+        # `null` back to `""` and no charter would notice — but `Manifest.focus` is declared
+        # `str`, the file is a documented format, and a JSON `null` where a string belongs is
+        # a shape every future reader and every human looking at the file has to handle.
+        # That is the whole of what the `or ""` in `cmd_quit` buys, and it is why it stayed.
+        self.assertEqual(json.loads(reopen.path().read_text())["focus"], "")
+
+    def test_a_quit_pressed_in_a_chat_records_that_chats_workspace(self):
+        _plant("alpha.1", ws="alpha")
+        _plant("beta.1", ws="beta")
+
+        with mock.patch.multiple(commands_frame, _chat_seats=mock.DEFAULT,
+                                 _capture_transcript=mock.DEFAULT,
+                                 _stop_chats=mock.DEFAULT) as m:
+            m["_chat_seats"].return_value = _seats({"alpha.1": "@0", "beta.1": "@1"}, set())
+            m["_capture_transcript"].return_value = False
+            m["_stop_chats"].return_value = 2
+            commands_frame.cmd_quit(SimpleNamespace(chat="beta.1"))
+
+        self.assertEqual(reopen.read().focus, "beta")
+
+
 class TheWarningIsSaidOnStderrAndOnTheScreenTheOperatorHas(PersonaIso, unittest.TestCase):
     """`_warn_about`'s two surfaces, and the `if on:` the sweep found unpinned.
 
