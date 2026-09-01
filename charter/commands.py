@@ -481,7 +481,15 @@ def _clone_one(r: dict, wd) -> dict:
 def cmd_save(args) -> int:
     """Commit + push the CONTROL PLANE's own changes in one step, via ITS OWN FORGE's
     HTTPS token — no SSH keys, no 1Password signing hang. (For a *clone's* changes, work
-    in a repo-rooted session; this is only the control plane's orchestration files.)"""
+    in a repo-rooted session; this is only the control plane's orchestration files.)
+
+    **Refused from a linked worktree of the plane** (#806). ``config.ROOT`` from a worktree
+    is the clone it was cut from (`root._plane_of`, and for identity that is right), so this
+    ran ``git -C <the plane's clone> add -A`` and committed a tree the caller was not
+    standing in: the operator's mid-edit files under the agent's message, and none of the
+    agent's own work. The guard is in `planegit.commit_push` rather than here, keyed on the
+    add staging files it never named — the danger is the unbounded stage, not this name.
+    """
     return commit_push(config.ROOT, ["add", "-A"], args.message,
                        sign=getattr(args, "sign", False), no_push=getattr(args, "no_push", False))
 
