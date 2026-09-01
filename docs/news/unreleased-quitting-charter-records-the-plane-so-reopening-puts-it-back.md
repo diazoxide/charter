@@ -246,8 +246,11 @@ name can have — and quitting one leaves the other's harness running.
 * **And a correction to the design's own §2.12, measured on this branch: the real-tmux tests
   DO run in CI.** `.github/workflows/test.yml` installs no tmux, but `ubuntu-latest` ships
   one — so they ran there, and one of them failed on 3.11 and 3.13 while passing on 3.14 in
-  the same run. That is a race (a pane's process has not exec'd when `new-window` returns),
-  found by CI and not by this machine. The honest statement is narrower than "no tmux in CI":
+  the same run. That was a race — two of them, in the same assertion: a pane's process has not
+  exec'd when `new-window` returns, and a pager that HAS exec'd has not necessarily painted.
+  Both were found by CI and by neither hand-run, and the second needed a second CI run,
+  because fixing the first made 3.11 and 3.13 green while 3.14 came back with an empty
+  capture. The honest statement is narrower than "no tmux in CI":
   **CI answers on whatever tmux the runner image happens to ship, which is neither of the two
   versions charter promises**, so it is a third machine's opinion on top of the hand-runs
   rather than a substitute for them.
