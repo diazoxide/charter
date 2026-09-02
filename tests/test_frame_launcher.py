@@ -38,6 +38,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 from charter import commands_frame, config, instance, statusline, util
 from charter.frame import (builtin_actions, gather, layout, overlay, slots, state,
@@ -1576,6 +1577,11 @@ class _FakeTmux:
         # round 3, item 2) separately from an ordinary resize-hook failure.
         self.resize_hook_stderr = resize_hook_stderr
         self.calls: list[list[str]] = []
+        #: One entry per tmux INVOCATION, where `calls` has one per tmux COMMAND. The
+        #: two were the same list until #780 batched every write nothing reads back;
+        #: the difference between their lengths is what that issue is about, and
+        #: `Launch.test_a_launch_spends_one_invocation_per_batch` is what holds it down.
+        self.invocations: list[list[str]] = []
         #: The CHAT id, learned from the `@charter_chat` window option the launcher
         #: writes — never from `new-session -s`, which names the WORKSPACE now.
         self.fid = None
@@ -1587,6 +1593,17 @@ class _FakeTmux:
         self.kill_window_called = False
 
     def __call__(self, cmd, **kwargs):
+        """One tmux INVOCATION, which since #780 may carry several commands.
+
+        `tests/_tmuxchain.answer` splits it and runs each through :meth:`_one`, folding
+        the results tmux's own way, so `self.calls` still holds one entry per tmux
+        COMMAND — which is what every assertion in this module reads — while
+        `self.invocations` counts what charter actually spent on the socket.
+        """
+        self.invocations.append(list(cmd))
+        return _tmuxchain.answer(self._one, cmd, **kwargs)
+
+    def _one(self, cmd, **kwargs):
         self.calls.append(list(cmd))
         if "new-session" in cmd:
             self.session = cmd[cmd.index("-s") + 1]
@@ -5068,11 +5085,22 @@ class _FakeOperatorTmux:
         self.status_queries = 0
         self.window_killed = False
         self.respawn_env = None
+        #: One entry per tmux INVOCATION, where `calls` has one per tmux COMMAND — see
+        #: :meth:`__call__` and `_FakeTmux`'s own.
+        self.invocations: list[list[str]] = []
 
     def _ok(self, cmd, stdout=""):
         return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
     def __call__(self, cmd, **kwargs):
+        """One tmux INVOCATION — see `_FakeTmux.__call__`, which splits one the same way
+        and for the same reason: since #780 a launch sends its window dressing, its
+        panel splits and its respawn hooks as command LISTS, and `self.calls` has to go
+        on holding one entry per COMMAND or every assertion here silently narrows."""
+        self.invocations.append(list(cmd))
+        return _tmuxchain.answer(self._one, cmd, **kwargs)
+
+    def _one(self, cmd, **kwargs):
         self.calls.append(list(cmd))
         if commands_frame._WINDOW_SEAT_FORMAT in cmd:
             # `_chat_being_left` (#688). Before the generic `list-windows` branch, for

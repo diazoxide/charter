@@ -27,6 +27,7 @@ from unittest import mock
 
 from charter import commands_frame, config, contain, instance, workspace
 from charter.frame import chats, choose, slots, state, switch, tmuxctl
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 from tests._tmuxsocket import OPERATOR_SOCKET
 # The one list of hostile display strings this suite has, imported rather than retyped:
@@ -920,6 +921,9 @@ class _FakeServer:
 
     def __init__(self, *, select_rc: int = 0):
         self.calls: list[list[str]] = []
+        #: One entry per tmux INVOCATION, where `calls` has one per tmux COMMAND — see
+        #: :meth:`__call__`. A switch's own count of these is #780's subject.
+        self.invocations: list[list[str]] = []
         self.select_rc = select_rc
         #: ``{pane id: (session id, window id)}`` — what `#{session_id}:#{window_id}`
         #: reports for a pane. A pane that is not here is one tmux cannot resolve, and
@@ -928,8 +932,21 @@ class _FakeServer:
         self.place = {"%1": ("$0", "@0"), "%2": ("$0", "@1")}
         #: ``{session id: window id}`` — the window each session is currently on.
         self.current = {"$0": "@0"}
+        #: The last pane id handed out by `split-window`, so each split answers a
+        #: DIFFERENT one — see there.
+        self.next_pane = 8
 
     def __call__(self, what, argv, **kw):
+        """One tmux INVOCATION, which since #780 may carry several commands.
+
+        Split through `tests/_tmuxchain.answer` so `self.calls` keeps one entry per tmux
+        COMMAND — the list every ordering assertion below reads — while
+        `self.invocations` counts what the switch really spent on the socket.
+        """
+        self.invocations.append(list(argv))
+        return _tmuxchain.answer(self._one, argv, **kw)
+
+    def _one(self, argv, **kw):
         import subprocess
         self.calls.append(list(argv))
         rc, out = 0, ""
@@ -941,7 +958,14 @@ class _FakeServer:
                 if seat is not None:
                     self.current[seat[0]] = seat[1]
         elif verb == "split-window":
-            out = "%9"
+            # A NEW id per split, and each on its own LINE, which is what real tmux
+            # answers `-P -F '#{pane_id}'` with — measured on 3.7c and at the 3.2 floor,
+            # including four splits sent as one invocation, whose four ids come back one
+            # per line in the order they were given. A fake that answered one id for
+            # every split let two panels share a pane id, and one that dropped the
+            # newline let a batch of four look like a single unparseable id.
+            self.next_pane += 1
+            out = f"%{self.next_pane}\n"
         elif verb == "display-message":
             out = self._display(argv)
         return subprocess.CompletedProcess(argv, rc, out, "")
