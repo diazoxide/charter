@@ -257,17 +257,35 @@ message, while other workers held their own worktrees over the same clone.
 
 ### Nested planes
 
-`charter` takes the **innermost** `charter.toml` above your working directory. That is the
-right rule — it is the one git, cargo and npm use — but a plane clones product repos into
-its workspaces, and a product repo may itself carry a `charter.toml`, since `charter init`
-is run inside existing repos. So `cd`-ing into `workspaces/<ws>/<repo>` can land you in a
-*different* control
-plane: different personas, a different vault, and memories written somewhere you did not
-choose.
+`charter` takes the **innermost** `charter.toml` above your working directory — the rule
+git, cargo and npm use — with **one exception, and charter builds the shape it covers.** A
+plane clones repos into its workspaces, and a cloned repo may itself carry a `charter.toml`,
+since `charter init` is run inside existing repos. Taking the innermost marker there landed
+you in a *different* control plane: different personas, a different vault, and memories
+written somewhere you did not choose.
 
-The rule does not change; charter just stops being quiet about it. When the active plane
-sits inside another plane's `workspaces/`, the status line carries a warning naming both
-planes and the `$CHARTER_ROOT` export that pins you to the outer one.
+So when a plane sits inside another plane's `workspaces/`, resolution hops **outward** to
+the enclosing one, and keeps hopping until nothing encloses it — the plane that actually
+holds the vault wins. The hop is allowed only through an enclosing plane's own
+`workspaces/`: a stray `charter.toml` in `~` does not swallow every plane beneath it.
+`$CHARTER_ROOT` still wins outright, and is the escape hatch when you genuinely mean the
+inner one.
+
+Charter is not quiet about the hop. The status line names both planes and the
+`$CHARTER_ROOT` export that pins you to the inner one, and **`charter save` refuses**
+outright rather than committing a tree you are not standing in — that being the one command
+whose whole job is to stage everything under the plane it resolved:
+
+```
+✗ Refusing to stage all of /…/plane — you are standing in /…/plane/workspaces/dev/charter,
+  a control plane of its own under that plane's workspaces/. …
+•   your own work:   git -C /…/workspaces/dev/charter add -A && git -C /…/workspaces/dev/charter commit
+•   the plane's own: run `charter save` from /…/plane
+•   you really do mean this plane: CHARTER_ROOT=/…/workspaces/dev/charter charter save
+```
+
+Only the unbounded stage refuses: memory, the dispatch tally, the workspace manifest and the
+version pin name plane-state files, and those keep reaching the plane from inside a clone.
 
 ## A self-hosted example
 
