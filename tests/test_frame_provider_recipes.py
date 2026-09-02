@@ -220,8 +220,12 @@ class NoColourReachesTheRecipesToo(unittest.TestCase):
                 self.assertEqual(r[role], "")
 
     def test_presence_and_not_a_value(self):
-        """`NO_COLOR=` and `NO_COLOR=0` both count, per no-color.org. Matching a value
-        would be the spelling-not-property mistake in the file that is about it."""
+        """`NO_COLOR=` and `NO_COLOR=0` both count — charter's rule, not no-color.org's.
+        That page has excluded the empty string since 2022 (`jcs/no_color` `99f90e27`);
+        this line used to cite it and was quoting the sentence it replaced. Matching a
+        value would be the spelling-not-property mistake in the file that is about it, and
+        `NO_COLOR=` is what a shell exporting the name with no value has set — which is
+        the whole of the disagreement. See `chrome.no_colour` for the argument."""
         for value in ("", "0", "1", "false"):
             with self.subTest(value=value):
                 with mock.patch.dict(os.environ, {"NO_COLOR": value}, clear=True), _tty():

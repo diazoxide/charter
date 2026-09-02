@@ -304,10 +304,17 @@ class ColourIsARequestTheOperatorCanRefuse(unittest.TestCase):
     unconditionally — measured, `panel.run` with stdout a `StringIO` wrote a
     clear-screen and full SGR into it.
 
-    The property is `os.environ.get("NO_COLOR") is not None`, per the no-color.org
-    convention. `== "1"` is the spelling-not-property mistake in the one file that is
-    about that mistake, and it breaks first on `NO_COLOR=` — which is what a shell that
-    exports the variable with no value has set.
+    The property is `os.environ.get("NO_COLOR") is not None`. `== "1"` is the
+    spelling-not-property mistake in the one file that is about that mistake, and it
+    breaks first on `NO_COLOR=` — which is what a shell that exports the variable with no
+    value has set.
+
+    **This is charter's rule and it used to be cited as no-color.org's.** That page has
+    said "present *and not an empty string*" since `jcs/no_color` `99f90e27` (2022-06-27),
+    so the citation was a quote of the sentence that commit replaced, and the one input it
+    disagrees about is the `NO_COLOR=""` this class asserts on first. The behaviour is
+    unchanged and the argument for it is in `chrome.no_colour`; what these cases pin is
+    charter's rule, which is the only thing they were ever able to pin.
     """
 
     def _tty(self, answer: bool):
