@@ -209,9 +209,12 @@ _VERSION = re.compile(r"^tmux (\d+)\.(\d+)")
 #: `<socket path>,<server pid>,<session id>`, the session id being the NUMBER off
 #: tmux's own `#{session_id}` (`$1` is written `1`). Measured against tmux 3.7c by
 #: printing the variable from inside a real pane. The socket path is required to be
-#: ABSOLUTE here because :func:`server_argv` discriminates on a leading `/` alone — a
+#: ABSOLUTE here because :func:`is_socket_path` discriminates on a leading `/` alone — a
 #: relative path would be handed to tmux as a `-L` server NAME and quietly start a
-#: brand-new server, which is the nesting `commands_frame` reads this to avoid.
+#: brand-new server, which is the nesting `commands_frame` reads this to avoid. What the
+#: absolute form does NOT establish is whose server it is: it is exactly how tmux writes
+#: charter's OWN socket into charter's own panes, which is #812 — see
+#: :func:`is_operator_socket`.
 _TMUX_ENV = re.compile(r"^(/[^,]*),\d+,(\d+)$")
 
 #: The variable itself, named once so :func:`operator_server` and the tests that fake it
