@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from charter.frame import tmuxctl
-from tests._tmuxsocket import OPERATOR_SOCKET, OPERATOR_TMUX
+from tests._tmuxsocket import OPERATOR_SOCKET, OPERATOR_TMUX, socket_path
 
 
 class Version(unittest.TestCase):
@@ -234,6 +234,136 @@ class ServerArgv(unittest.TestCase):
         argv = tmuxctl.server_argv("charter", "new-window", "--", "claude", "-p", "a;b")
         self.assertEqual(argv[-1], "a;b")
         self.assertTrue(all(isinstance(a, str) for a in argv))
+
+    def test_charters_own_socket_spelled_as_a_path_still_gets_dash_s(self):
+        """**The spelling test is unchanged by #812 and this is the case that proves
+        it.** `-S` is the only flag that can reach a socket named by path — a `-L` may
+        not contain a separator at all — so a value that happens to be charter's own
+        server written the long way must still be aimed with `-S`, however the
+        OWNERSHIP question (`is_operator_socket`) now answers for it."""
+        own = socket_path("charter")
+        self.assertFalse(tmuxctl.is_operator_socket(own, own="charter"))
+        self.assertEqual(tmuxctl.server_argv(own, "list-sessions"),
+                         ["tmux", "-S", own, "list-sessions"])
+
+
+class TwoSpellingsOfOneSocket(unittest.TestCase):
+    """#812: `<name>` and `<tmpdir>/tmux-<uid>/<name>` are ONE server, and the guest test
+    could not tell them apart.
+
+    The operator's own ``$TMUX`` reads ``/private/tmp/tmux-502/charter,18923,83`` — the
+    socket charter started itself, spelled absolute because tmux writes it that way into
+    every pane it opens. A chat launched from inside one of those panes recorded that
+    spelling, and `is_operator_socket` — a leading-slash test — answered "somebody else's
+    tmux" for charter's own private server. Every workspace tab in that chat, the one
+    back included, was then refused by name.
+
+    **The socket paths here come from `tests/_tmuxsocket.py`, which computes tmux's rule
+    independently of the module under test** (#601: never a spelled ``tmux-502``, and never
+    the production function asked to confirm itself). If the two implementations of "where
+    tmux puts a socket" ever disagree, that is this class going red rather than a round
+    trip agreeing with itself.
+    """
+
+    def test_a_name_and_its_socket_file_are_one_server(self):
+        self.assertTrue(tmuxctl.same_server("charter", socket_path("charter")))
+
+    def test_two_names_are_two_servers(self):
+        self.assertFalse(tmuxctl.same_server("charter", "default"))
+
+    def test_two_socket_files_are_two_servers(self):
+        self.assertFalse(tmuxctl.same_server(socket_path("charter"),
+                                             socket_path("default")))
+
+    def test_the_symlinked_spelling_of_one_file_is_one_server(self):
+        """``/tmp`` is a symlink to ``/private/tmp`` on macOS, and BOTH spellings reach
+        the same running server — `test_frame_tmux_integration.OP_SOCKET_PATH` builds the
+        ``/tmp`` form and talks to a server tmux reports at the ``/private/tmp`` one. A
+        comparison that read those as two servers would answer #812 on Linux and not on
+        the platform the report came from."""
+        unresolved = os.path.join("/tmp", f"tmux-{os.getuid()}", "charter")
+        self.assertTrue(tmuxctl.same_server(unresolved, "charter"),
+                        f"{unresolved} and `charter` are the same socket file")
+
+    def test_an_unknown_side_is_never_the_same_server_as_anything(self):
+        """``""`` is `state.frame_server` reading a marker that is not there — the absence
+        of an answer, not a spelling of one. Two absences are not a match either, which is
+        the case a bare equality would have got wrong."""
+        self.assertFalse(tmuxctl.same_server("", "charter"))
+        self.assertFalse(tmuxctl.same_server("charter", ""))
+        self.assertFalse(tmuxctl.same_server("", ""))
+        self.assertFalse(tmuxctl.same_server(None, None))
+
+    def test_the_socket_directory_is_tmuxs_own_rule_and_not_dollar_tmpdir(self):
+        """``$TMUX_TMPDIR`` or tmux's ``_PATH_TMP`` literal — **never** ``$TMPDIR``.
+
+        Measured on tmux 3.7c and at the 3.2 floor, on the machine this was written on: a
+        server started with ``TMPDIR`` pointed at a scratch directory reported its own
+        ``#{socket_path}`` as ``/private/tmp/tmux-<uid>/<name>`` and left that directory
+        empty, while the same run with ``TMUX_TMPDIR`` set built ``<it>/tmux-<uid>/``. On
+        macOS `tempfile.gettempdir()` answers a per-user ``/var/folders/…`` that tmux
+        never puts a socket in, so reading the wrong variable would put every socket path
+        charter computes somewhere no server has ever listened."""
+        with mock.patch.dict(os.environ, {"TMPDIR": "/nowhere-tmpdir"}, clear=False):
+            os.environ.pop("TMUX_TMPDIR", None)
+            self.assertEqual(tmuxctl.socket_path("charter"),
+                             os.path.realpath(f"/tmp/tmux-{os.getuid()}") + "/charter")
+        with mock.patch.dict(os.environ, {"TMUX_TMPDIR": "/nowhere-tmux"}, clear=False):
+            self.assertEqual(tmuxctl.socket_path("charter"),
+                             f"/nowhere-tmux/tmux-{os.getuid()}/charter")
+
+
+class WhoseServerIsIt(unittest.TestCase):
+    """`is_operator_socket` — the question `frame/slots.py` and
+    `commands_frame._switch_workspace` ask, and the one #812 was answered wrongly.
+
+    The refusal it gates is not the defect and is asserted still to fire below: inside a
+    genuine operator tmux a workspace really is not a session, and `switch-client` has
+    nothing correct to do there.
+    """
+
+    def test_charters_own_socket_by_name_is_not_a_guests(self):
+        self.assertFalse(tmuxctl.is_operator_socket("charter", own="charter"))
+
+    def test_charters_own_socket_by_absolute_path_is_not_a_guests_either(self):
+        """**#812 itself, in one line.** This answered True, and every workspace tab in a
+        chat that recorded this spelling refused."""
+        self.assertFalse(tmuxctl.is_operator_socket(socket_path("charter"),
+                                                    own="charter"))
+
+    def test_a_socket_charter_did_not_start_is_still_a_guests(self):
+        """The other half, and the reason this is a comparison rather than a deletion:
+        ``default`` is the socket an operator's own `tmux` starts, in the same directory
+        as charter's, and a frame there is a WINDOW in their session."""
+        self.assertTrue(tmuxctl.is_operator_socket(OPERATOR_SOCKET, own="charter"))
+        self.assertNotEqual(OPERATOR_SOCKET, socket_path("charter"))
+
+    def test_another_planes_private_socket_is_a_guests_too(self):
+        """Not merely "is it in tmux's socket directory": a second charter-shaped socket
+        that is not the one THIS charter starts is somebody else's server."""
+        self.assertTrue(tmuxctl.is_operator_socket(socket_path("charter-elsewhere"),
+                                                   own="charter"))
+
+    def test_nothing_recorded_is_not_a_guests_server(self):
+        """`state.frame_server` answers ``None`` for a frame launched by a charter that
+        predates the marker, and the fallback beside every call is charter's own socket."""
+        self.assertFalse(tmuxctl.is_operator_socket(None, own="charter"))
+        self.assertFalse(tmuxctl.is_operator_socket("", own="charter"))
+
+    def test_the_socket_it_compares_against_is_the_one_charter_launches_on(self):
+        """*own* defaults to `commands_frame.SOCKET`, read at CALL time.
+
+        Bound at import instead, this would answer for the socket the suite was loaded
+        with rather than the throwaway one a real-tmux test patches in — so every such
+        test would be measuring ownership of a server it never touched, which is the
+        shape of mistake #812 is."""
+        from charter import commands_frame
+        self.assertEqual(commands_frame.SOCKET, "charter")
+        self.assertFalse(tmuxctl.is_operator_socket(socket_path("charter")))
+        with mock.patch.object(commands_frame, "SOCKET", "charter-somewhere-else"):
+            self.assertTrue(tmuxctl.is_operator_socket(socket_path("charter")))
+            self.assertFalse(
+                tmuxctl.is_operator_socket(socket_path("charter-somewhere-else")))
 
 
 

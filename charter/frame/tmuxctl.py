@@ -267,35 +267,140 @@ def operator_server(env: Mapping[str, str] | None = None) -> tuple[str, str] | N
     return m.group(1), f"${m.group(2)}"
 
 
+#: tmux's ``_PATH_TMP``, verbatim: a literal in its own source, and **not** ``$TMPDIR``.
+#:
+#: Measured rather than read, on tmux 3.7c and at the 3.2 floor, by starting a server
+#: with ``TMPDIR`` pointed at a scratch directory and asking it where it actually is:
+#: both answered ``/private/tmp/tmux-502/<name>``, and the scratch directory stayed
+#: empty. The same pair of runs with ``TMUX_TMPDIR`` set DID build
+#: ``<that dir>/tmux-502/``, so the variable tmux honours is that one alone. The
+#: distinction is load-bearing on macOS, where `tempfile.gettempdir()` answers a per-user
+#: ``/var/folders/…`` that tmux never puts a socket in.
+DEFAULT_TMPDIR = "/tmp"
+
+
+def socket_path(name: str) -> str:
+    """The socket FILE tmux computes for ``-L name`` — ``<tmpdir>/tmux-<uid>/<name>``.
+
+    **The other half of :func:`server_argv`'s split, and the reason it needs one.** That
+    function turns a NAME into ``-L`` and a PATH into ``-S``, which is right for aiming a
+    command; it says nothing about whether two spellings aim at the SAME server. They
+    routinely do: `commands_frame.SOCKET` is ``charter``, and a process started in one of
+    that server's own panes reads ``/private/tmp/tmux-502/charter`` out of ``$TMUX``.
+    #812 is what happens when those two are compared as strings.
+
+    **The result is RESOLVED, and that is not tidiness.** tmux calls ``realpath()`` on the
+    base directory before it uses it, which on macOS turns ``/tmp`` into ``/private/tmp``
+    — measured: a server started as ``-L <name>`` reports ``socket_path`` as
+    ``/private/tmp/tmux-502/<name>`` on 3.7c and on 3.2 alike, while
+    `tests/test_frame_tmux_integration.OP_SOCKET_PATH` builds the ``/tmp`` spelling of
+    that same file and reaches the same server with it. Two spellings of one socket that
+    differ only by a symlink must not read as two servers, so both sides go through
+    `os.path.realpath` and no caller has to know which form it is holding.
+
+    Nothing here touches the filesystem beyond that resolution: `os.path.realpath` leaves
+    what does not exist lexical, so a socket directory tmux has not created yet still gets
+    the right answer and asking the question starts no server.
+    """
+    base = os.environ.get("TMUX_TMPDIR") or DEFAULT_TMPDIR
+    return os.path.join(os.path.realpath(os.path.join(base, f"tmux-{os.getuid()}")), name)
+
+
+def same_server(a: str | None, b: str | None) -> bool:
+    """Do *a* and *b* name ONE tmux server, whichever way each is spelled?
+
+    The question `is_operator_socket` could not ask while it was a leading-slash test.
+    Each side is resolved to the socket FILE it names — a name through
+    :func:`socket_path`, a path through `os.path.realpath` — and the files are compared.
+
+    Empty on either side is never the same server as anything, including another empty:
+    ``""`` is not a spelling of a socket, it is the absence of one, and the callers that
+    can produce it (`state.frame_server` reading a truncated marker) mean "unknown".
+    """
+    if not a or not b:
+        return False
+    return _resolved(a) == _resolved(b)
+
+
+def _resolved(server: str) -> str:
+    """*server* as the socket FILE it names, whichever of the two spellings it is."""
+    return os.path.realpath(server if is_socket_path(server) else socket_path(server))
+
+
+def is_socket_path(server: str | None) -> bool:
+    """Is *server* spelled as a socket PATH rather than as a `-L` name?
+
+    A leading ``/`` is the whole discriminator, and it is total rather than a heuristic: a
+    socket path only ever reaches charter from `$TMUX`, which tmux writes absolute, and a
+    `-L` name may not contain a separator at all — tmux joins that name onto its own
+    socket directory to build the path, so a name with a `/` in it names a directory that
+    does not exist.
+
+    **This is the SPELLING, and it is no longer the same question as "whose server is
+    it".** It was both until #812: a frame launched inside one of charter's own panes
+    records the path spelling of charter's own socket, and every reader that asked
+    :func:`is_operator_socket` was told it was a guest on somebody else's tmux. Splitting
+    the two leaves `server_argv` exactly the test it always had — which flag aims at this
+    string — and gives the ownership question a comparison that can see through a
+    spelling.
+    """
+    return bool(server) and server.startswith("/")
+
+
 def server_argv(server: str, *args: str) -> list[str]:
     """`tmux`, the flags that select ONE server, then *args* — every element separate.
 
     Charter talks to two different servers now, and this is the one place that difference
     is spelled: its own private one by NAME (`-L charter`, see `commands_frame.SOCKET`),
     and the operator's existing one by SOCKET PATH (`-S /private/tmp/tmux-502/default`,
-    read out of `$TMUX` by :func:`operator_server`). A leading `/` is the whole
-    discriminator, and it is total rather than a heuristic: a socket path only ever
-    reaches charter from `$TMUX`, which tmux writes absolute, and a `-L` name may not
-    contain a separator at all — tmux joins that name onto its own socket directory to
-    build the path, so a name with a `/` in it names a directory that does not exist.
+    read out of `$TMUX` by :func:`operator_server`). :func:`is_socket_path` is the whole
+    discriminator and says why it is total.
 
     Nothing is ever joined, here or anywhere downstream of here: a joined string is
     shell-interpreted by tmux and a separate argv is not (pinned against 3.7c, see
     `frame/layout.py`'s module docstring).
     """
-    return ["tmux", "-S" if is_operator_socket(server) else "-L", server, *args]
+    return ["tmux", "-S" if is_socket_path(server) else "-L", server, *args]
 
 
-def is_operator_socket(server: str | None) -> bool:
+def is_operator_socket(server: str | None, *, own: str | None = None) -> bool:
     """Is *server* a tmux charter did not start — one it is a guest on?
 
-    The same leading-slash test :func:`server_argv` turns into `-S`, named so the two
-    places that care about the difference cannot answer it differently. The second is
-    `frame/slots.py`: charter binds no hotkey on a server it is a guest on (a key table
-    is server-wide in tmux, with no per-window form), so the bottom panel must not
-    advertise one there.
+    Two readers care and each would be wrong in its own way for a wrong answer.
+    `frame/slots.py` drops the hotkey hint on a server charter is a guest on (a key table
+    is server-wide in tmux, with no per-window form, so charter binds none there);
+    `commands_frame._switch_workspace` refuses a workspace switch there, because inside an
+    operator's tmux every chat is a `new-window` in the session they were already in and
+    there is no session for another workspace to BE (§2.1).
+
+    **It was a leading-slash test, and #812 is the bug that was.** The operator's own
+    ``$TMUX`` on the machine this was written for is
+    ``/private/tmp/tmux-502/charter,18923,83`` — charter's OWN socket, spelled as an
+    absolute path, because the process reading it was started in one of charter's own
+    panes. So a chat opened from a workspace tab recorded that spelling, every tab in it
+    (including the one back) read it as a guest tmux, and the operator was told *"this
+    chat is a window in your own tmux, where a workspace is not a session"* about a frame
+    sitting on charter's private server. **Two spellings of one socket are not the same
+    string.** The refusal itself is not the defect and is still here; what was wrong was
+    concluding that this frame was in one.
+
+    So the question is asked of the SERVER (:func:`same_server`) rather than of the
+    string. *own* is charter's own private socket and defaults to it; it is a parameter so
+    a caller that has already resolved which server it means can say so rather than have
+    this reach for a module global.
+
+    Imported lazily for `frame/builtin_actions._server`'s reason, and reached at CALL time
+    rather than bound at import: `commands_frame` imports this module at load, so a
+    top-level import would be a cycle — and a value bound once would not follow the
+    `commands_frame.SOCKET` a test patches, which is exactly how a suite ends up proving
+    the wrong socket's ownership.
     """
-    return bool(server) and server.startswith("/")
+    if not is_socket_path(server):
+        return False
+    if own is None:
+        from ..commands_frame import SOCKET
+        own = SOCKET
+    return not same_server(server, own)
 
 
 #: tmux's own separator between commands sent in ONE invocation. A standalone argument,
