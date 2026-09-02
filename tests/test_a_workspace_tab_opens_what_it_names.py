@@ -913,8 +913,10 @@ class ATabClickedInsideCharactersOwnTmux(ARealTabOpensARealWorkspace):
     implied: on the code as it stood, `cmd_launch` read that variable, concluded it was a
     guest, and built the new workspace's chat as a `new-window` in the session the click
     came FROM. `test_the_workspace_opens_and_the_terminal_arrives_in_it` fails there
-    (`list-sessions` never grows a `beta`), and the two cases below name the halves the
-    operator actually reported.
+    (`list-sessions` never grows a `beta`), and the four cases below name what that cost:
+    the workspace was not a session, the chat recorded the spelling rather than the
+    socket, the way back was refused, and the round trip had to leave the chat it started
+    in running.
 
     **The operator's report was the round trip, not the open.** *"I switched to `fleet`
     workspace, it switched with a new empty chat session, then when I want to switch back
