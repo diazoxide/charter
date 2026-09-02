@@ -186,35 +186,41 @@ class RunNeverRaisesOnWhatItCannotDecode(unittest.TestCase):
     neither the `TimeoutExpired` clause nor the `OSError` one sees — out of the one function
     whose whole contract is that a misbehaving tmux degrades down the path a refusal does.
 
-    **The sharp caller is a quit.** `commands_frame._capture_transcript` runs `capture-pane`
-    over a HARNESS pane, which holds whatever a coding agent printed, at the moment §4e has
-    promised to record the plane and is about to kill it — and its own `False`-for-everything
-    contract cannot help, because the raise happens before it has an answer to branch on.
+    **It does land in a quit — through the window listing, not through the capture.** #828
+    files the sharp caller as `commands_frame._capture_transcript` reading a harness pane, and
+    tmux sanitises that one: measured on 3.7c, a pane that prints `\\377` is stored in tmux's
+    own screen as U+FFFD and `capture-pane` hands back valid UTF-8. What does not get
+    sanitised is a user OPTION, which round-trips its bytes untouched out of `list-windows -a
+    -F '#{@charter_chat}'` — `_chat_seats`, which `cmd_quit` asks before it kills anything.
+    The real-tmux half of that is in
+    `tests/test_quit_and_reopen_on_a_real_tmux.ARealQuitStopsRealChats`; the cases here drive
+    the decode itself.
 
     Charter now decodes with :data:`tmuxctl.DECODE_ERRORS`, and the assertions here spell the
     substitute character by hand: reading it off the constant would agree with any value the
     constant took, including `strict`.
     """
 
-    def test_a_pane_charter_cannot_decode_comes_back_rather_than_raising(self):
+    def test_an_answer_charter_cannot_decode_comes_back_rather_than_raising(self):
         with self.assertRaises(UnicodeDecodeError):
             b"ONE\xffTWO".decode("utf-8")   # or this case is not about what it says it is
 
-        proc = tmuxctl.run("capturing what this chat had on screen",
+        proc = tmuxctl.run("listing the chats this plane has open",
                            _PRINTS_A_BYTE_UTF8_CANNOT_READ, timeout=20)
 
-        self.assertEqual(proc.returncode, 0, "the child succeeded; only charter could not read it")
+        self.assertEqual(proc.returncode, 0,
+                         "the child succeeded; only charter could not read it")
         self.assertEqual(proc.stdout, "ONE\ufffdTWO")
 
     def test_the_text_around_the_byte_is_kept_rather_than_thrown_away(self):
         """The reason this is not a third invented return code beside `TIMED_OUT`.
 
-        tmux answered — rc 0, a complete capture — so calling it a refusal would blame tmux
-        for a command it ran correctly, and would cost `_capture_transcript` the whole
-        transcript over one byte in two thousand lines. What charter cannot read is one
-        codepoint wide; what it can read is the rest of the pane.
+        tmux answered — rc 0, the whole listing — so calling it a refusal would blame tmux
+        for a command it ran correctly, and would throw away every row charter CAN read over
+        one it cannot. What charter cannot read is one codepoint wide; what it can read is
+        the rest of the answer.
         """
-        proc = tmuxctl.run("capturing what this chat had on screen",
+        proc = tmuxctl.run("listing the chats this plane has open",
                            _PRINTS_A_BYTE_UTF8_CANNOT_READ, timeout=20)
 
         self.assertTrue(proc.stdout.startswith("ONE"))
