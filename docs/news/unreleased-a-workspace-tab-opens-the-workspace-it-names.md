@@ -107,8 +107,13 @@ the interesting one — beyond failing those three assertions it `execvp`s the e
 test runner away into the fake harness, which is exactly the silent failure the guard exists
 to stop.
 
-Run against real tmux on **3.7c and on tmux 3.2**, the floor charter promises. CI installs no
-tmux, so the real-server half runs only by hand.
+Run against real tmux on **3.7c and on tmux 3.2**, the floor charter promises.
+
+CI does have tmux, and these tests really run there — what it does not have is a terminal
+tmux will hand a *client*, which is measured rather than assumed: the first version of this
+work asserted a client attached and went red on all four CI Pythons while passing here. The
+cases that need a real client try three `TERM`s and then skip, so the client half is verified
+by hand and the rest of it on every run.
 
 Nothing to adopt — the `workspaces` bar is still off by default (`[frame] slots`), and a
 switch is the same command it always was.
