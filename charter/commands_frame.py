@@ -8921,7 +8921,8 @@ def cmd_new_chat(args) -> int:
         _say_on_screen(fid, NO_CHAT_HERE)
         return 0
     ws = state.workspace_for(fid)
-    if _plane_session(socket, ws=ws) is None:
+    seat = _plane_session(socket, ws=ws)
+    if seat is None:
         _say_on_screen(fid, NO_SESSION_HERE)
         return 0
     # Which harness, and it is the one question a `+` cannot carry — `_open_workspace`'s
@@ -8947,9 +8948,32 @@ def cmd_new_chat(args) -> int:
     # with no operator waiting, `pick` is false for the same reason and for #518's pointer,
     # `rest` is empty so the harness starts at its own prompt with nothing sent to it, and
     # `attach` is the seam this command exists on the far side of.
+    # **The window the new chat is laid out for — and never an empty `-t`.**
+    # `_window_size` hands its target straight to `display-message -t`, and an EMPTY
+    # target does not fail: it resolves to the tmux server's CURRENT window, which on a
+    # socket serving eleven sessions from three projects is very likely another plane's.
+    # `_open_workspace` carried exactly that `state.harness_pane(fid) or ""`, the deletion
+    # sweep survived the `or ""`, and asking why is what found the hazard — there the
+    # caller had already proved a pane, so the fallback was unreachable.
+    #
+    # **Here it is reachable**, which is why this is a pair of readings and not a `or ""`:
+    # a chat launched by a charter that predates `state.record_harness_pane`, or one whose
+    # state directory was truncated, genuinely has no pane of its own. So it is this
+    # chat's pane, else the pane :func:`_plane_session` has *just proved* is live in this
+    # workspace — the window a client in this workspace is looking at, which is
+    # `_open_workspace`'s own answer to the same question — else NOTHING. `_launch_size`
+    # reads `None` as "measure your own terminal", which for a detached process is the
+    # documented 80x24. A frame charter could not measure comes up small; one measured off
+    # a stranger's terminal comes up wrong, and only one of those is recoverable by
+    # resizing the window.
+    #
+    # `chats.pane_of` and not `state.harness_pane`, because it is the reader that holds
+    # the value to `tmuxctl.PANE_ID_RE` — this is a `-t` target coming off disk, which is
+    # #475's boundary exactly.
+    pane = chats.pane_of(fid) or chats.pane_of(seat[1])
     launch = SimpleNamespace(harness=h.cli_name, rest=[], no_frame=False,
                              workspace=ws, pick=False, attach=False,
-                             size=_window_size(socket, state.harness_pane(fid) or ""))
+                             size=_window_size(socket, pane) if pane else None)
     here_dir = os.getcwd()
     try:
         os.chdir(root)

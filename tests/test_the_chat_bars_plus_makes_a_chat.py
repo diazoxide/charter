@@ -169,6 +169,60 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
         self._press()
         self.assertEqual(self.launched[0].size, (132, 43))
 
+    def test_no_tmux_target_is_ever_the_empty_string(self):
+        """**An empty `-t` is not a failed read — it is the SERVER's current window**, and
+        on a socket serving eleven sessions from three projects that is very likely another
+        plane's. `_open_workspace` carried a `state.harness_pane(fid) or ""` into
+        `_window_size`, the deletion sweep survived the `or ""` because that caller had
+        already proved a pane, and asking why is what found this.
+
+        Asked of every argv this command sends rather than of the one line that could get
+        it wrong, so a second target added later is covered on the day it is added — and
+        asked in the state that can REACH it. With this chat's pane recorded, no fallback
+        runs and the check is vacuous; the row that matters is the chat whose pane record
+        is gone while a SIBLING's is not — the migration case, and the one an `or ""` would
+        send to the server's current window. A chat with no sibling either never gets that
+        far: `_plane_session` has nothing to match and refuses before it asks tmux
+        anything, which is why the sibling is planted rather than assumed.
+        """
+        _a_chat("alpha.9", ws="alpha", pane="%1")
+        for pane in ("%1", ""):
+            with self.subTest(recorded=pane or "<none>"):
+                state.record_harness_pane(self.FID, pane)
+                self.calls.clear()
+                self._press()
+                self.assertTrue(self.calls, "the press sent tmux nothing at all")
+                for cmd in self.calls:
+                    self.assertNotIn("", cmd[1:],
+                                     f"an empty argument reached tmux: {cmd}")
+
+    def test_a_chat_with_no_pane_of_its_own_is_sized_off_the_live_one(self):
+        """**Reachable, unlike the fallback it replaces**: a chat launched by a charter
+        that predates `state.record_harness_pane`, or one whose state directory was
+        truncated, has no pane. What it is sized for is then the pane `_plane_session` has
+        just proved is live in this workspace — the window a client in this workspace is
+        looking at, which is `_open_workspace`'s own answer to the same question."""
+        _a_chat("alpha.9", ws="alpha", pane="%1")
+        state.record_harness_pane(self.FID, "")
+        self._press()
+        self.assertEqual(self.launched[0].size, (132, 43))
+        self.assertTrue(any("%1" in cmd for cmd in self.calls),
+                        f"nothing was measured off the live pane: {self.calls}")
+
+    def test_a_workspace_whose_panes_are_all_gone_measures_nothing_at_all(self):
+        """The end of the chain: no pane anywhere means charter has no window to lay the
+        new frame out for, and `_launch_size` reads `None` as *measure your own terminal*
+        — which for a detached process is the documented 80x24. A frame charter could not
+        measure comes up small; one measured off a stranger's terminal comes up wrong, and
+        only one of those is recoverable by resizing the window."""
+        with mock.patch("charter.frame.chats.pane_of", return_value=None):
+            self._press()
+        self.assertIsNone(self.launched[0].size)
+        self.assertFalse(any("display-message" in cmd and "window_width" in cmd[-1]
+                             for cmd in self.calls),
+                         f"a window was measured with no pane to measure it from: "
+                         f"{self.calls}")
+
     def test_the_launch_runs_in_the_workspaces_own_directory(self):
         """`cmd_launch` reads `os.getcwd()` for the frame's cwd, and a panel process is
         standing wherever its pane was started. Restored in a `finally` — this process goes
