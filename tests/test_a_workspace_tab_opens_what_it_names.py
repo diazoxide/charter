@@ -45,16 +45,18 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config
+from charter import commands_frame, config, root
 from charter.frame import state
 
-from tests import _tmuxreap, _ttyguard
-from tests._isolation import PersonaIso, no_background_refresh
+from tests import _tmuxreap, _tmuxsocket, _ttyguard
+from tests._isolation import PersonaIso, make_plane, no_background_refresh
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -551,6 +553,61 @@ class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestC
         self.assertTrue(commands_frame._wants_attach(SimpleNamespace()))
 
 
+class TheLauncherAsksWhoseTmuxItIsIn(PersonaIso, unittest.TestCase):
+    """`cmd_launch`'s guest branch, in the one form that runs everywhere (#812).
+
+    :class:`ATabClickedInsideCharactersOwnTmux` is the truth of this and it needs a real
+    tmux and a real attached client, so it SKIPS wherever no pty can be handed one — CI
+    among them. This is the same decision asked with nothing running: does `$TMUX` naming
+    charter's OWN socket send the launch down `_launch_in_operator_tmux`?
+
+    It answers in milliseconds, and that matters twice over. `_launch_in_operator_tmux`
+    stays awake for the life of the harness it starts, so the real-tmux class catches a
+    regression here as a click that never returns — a 30-second deadline, and a deletion
+    sweep that would rather kill a hanging suite than record the mutation. This case
+    fails outright instead.
+    """
+
+    #: A socket name no server is running on, so the fall-through path below reaches tmux
+    #: and finds nothing rather than reading the operator's own live `charter` server.
+    SOCKET = _tmuxreap.name("whose-tmux")
+
+    def _guest_path_taken(self, tmux_socket: str) -> bool:
+        """Whether a launch whose ``$TMUX`` names *tmux_socket* builds a guest window."""
+        (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
+        _ttyguard.no_terminal()
+        args = SimpleNamespace(harness="frame", rest=["--", "true"], no_frame=False,
+                               workspace="beta", pick=False, attach=False,
+                               size=(120, 40))
+        empty = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET), \
+                mock.patch.dict(os.environ,
+                                {"TMUX": _tmuxsocket.tmux_env(tmux_socket)}), \
+                mock.patch.object(commands_frame.tmuxctl, "version",
+                                  return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "run", return_value=empty), \
+                mock.patch.object(commands_frame.state, "new_chat_id",
+                                  return_value=None), \
+                mock.patch.object(commands_frame, "_launch_in_operator_tmux",
+                                  return_value=0) as guest:
+            commands_frame.cmd_launch(args)
+        return guest.called
+
+    def test_charters_own_socket_read_out_of_tmux_is_not_somebody_elses_server(self):
+        """**#812's launch half.** A tab click runs `cmd_launch` in-process from a panel
+        of charter's own frame (`_open_workspace`), and tmux exports its socket into that
+        process as an absolute path. Read as a guest, the chat for the workspace being
+        opened is built as a window inside the session the click came FROM — so the
+        workspace never becomes a session and the switch has nothing to switch to."""
+        self.assertFalse(self._guest_path_taken(_tmuxsocket.socket_path(self.SOCKET)))
+
+    def test_a_tmux_charter_did_not_start_still_builds_a_window_in_it(self):
+        """The branch is narrowed, not removed: ADR 0018's whole point is that a frame
+        inside somebody else's tmux is a WINDOW on their server, with no second tmux under
+        it and no second prefix key on top."""
+        self.assertTrue(self._guest_path_taken(_tmuxsocket.OPERATOR_SOCKET))
+
+
 @unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
 class ADetachedProcessCanBuildAWorkspace(unittest.TestCase):
     """The measurement the old refusal's reason was wrong about, against a real server.
@@ -836,6 +893,234 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
                            "#{window_width}").stdout.strip()
         self.assertEqual(width, str(self.CLIENT_SIZE[0]),
                          "the opened workspace was laid out for the wrong terminal")
+
+
+class ATabClickedInsideCharactersOwnTmux(ARealTabOpensARealWorkspace):
+    """#812: the same click, from the ``$TMUX`` a real one actually has.
+
+    **The shape no case above had, and the gap #811 shipped through.** Every real-tmux
+    test in this suite starts from a socket charter created and reaches it by the NAME it
+    created it under, with ``$TMUX`` unset — which is what `tests/_envguard.py` leaves and
+    what CI hands you. A click never happens there. It happens in a `charter frame-switch`
+    started from a PANEL PANE of charter's own frame, and tmux exports ``$TMUX`` into
+    every process it starts in a pane — as ``<socket path>,<server pid>,<session id>``,
+    the socket ABSOLUTE. The operator's own read
+    ``/private/tmp/tmux-502/charter,18923,83``: charter's own private server, spelled the
+    one way `is_operator_socket` used to call somebody else's.
+
+    So this class is its parent with one thing changed — the environment the click runs in
+    — and every test above is re-run through it. What that buys is stated rather than
+    implied: on the code as it stood, `cmd_launch` read that variable, concluded it was a
+    guest, and built the new workspace's chat as a `new-window` in the session the click
+    came FROM. `test_the_workspace_opens_and_the_terminal_arrives_in_it` fails there
+    (`list-sessions` never grows a `beta`), and the two cases below name the halves the
+    operator actually reported.
+
+    **The operator's report was the round trip, not the open.** *"I switched to `fleet`
+    workspace, it switched with a new empty chat session, then when I want to switch back
+    — I get an error."* :meth:`test_a_tab_in_the_opened_chat_takes_the_terminal_back` is
+    that sentence, and it is the case that can only be written here: a chat opened from
+    inside charter's own tmux is the only chat that ever recorded the absolute spelling,
+    so it is the only one whose own tabs were refused.
+
+    Verified on tmux 3.7c and at the 3.2 floor. Skipped where no tmux client can attach —
+    a switch is a decision about an ATTACHED client, and CI has a tmux server but no pty
+    it will hand one (`_attach`).
+    """
+
+    def setUp(self):
+        super().setUp()
+        # tmux is the authority on where its own socket is; `_tmuxsocket` computes the
+        # same thing without asking. Both are here because the FIXTURE has to be built
+        # before any server answers in the real case this stands in for, and because two
+        # implementations of one rule that quietly drift apart is the defect underneath
+        # #812 arriving in the suite instead of the product.
+        self.socket_file = _tmuxsocket.socket_path(self.socket)
+        self.assertEqual(
+            self._tmux("display-message", "-p", "#{socket_path}").stdout.strip(),
+            self.socket_file,
+            "this tmux does not put its socket where charter computes it would")
+        self.server_pid = self._tmux("display-message", "-p", "#{pid}").stdout.strip()
+        # **The standing chat is marked the way a launcher marks one, and the round trip
+        # is what needed it.** `_chat_option_argv` writes `@charter_chat` on every window
+        # `cmd_launch` opens; this fixture builds the chat it starts in by hand and did
+        # not. Nothing above notices — but a real `cmd_launch` reaps on its way in
+        # (`_live_chats` reads exactly that option), so the open triggered by the FORWARD
+        # click deleted `alpha.1`'s state directory as a chat with no live window, and the
+        # way back could no longer prove the session it wanted was this plane's. The chat
+        # left standing looks like a real one here because in production it always is.
+        marked = self._tmux("set-option", "-w", "-t", self.pane,
+                            commands_frame._CHAT_OPTION, self.fid)
+        self.assertEqual(marked.returncode, 0, marked.stderr)
+        # A plane a CHILD can find, not merely one this process believes in. The way back
+        # re-dresses the chat it lands on (`_apply_arrangement`), and the chat this
+        # fixture starts in was built by hand with no panels — so the round trip really
+        # does split real `charter panel` processes, and each resolves its own plane. See
+        # :meth:`_in_a_pane_of`.
+        make_plane(self)
+
+    def _in_a_pane_of(self, session: str):
+        """The environment a `charter frame-switch` really runs in — the two variables
+        that decide which tmux it is inside and which plane it belongs to.
+
+        ``$TMUX`` is the subject: ``<socket path>,<server pid>,<session id>``, tmux's own
+        spelling, exported into every process it starts in a pane.
+
+        ``$CHARTER_ROOT`` is not, and it is here because leaving it out would have this
+        fixture's panel children resolve a plane by walking up from the test runner's cwd
+        — the checkout, which is the developer's REAL plane (`tests/_planeguard.py`
+        refuses exactly that). A real one gets the answer from the frame's own cwd, which
+        `_open_workspace` chdirs into and a switch does not; the pointer says the same
+        thing across a process boundary. `make_plane` in `setUp` is what makes it a plane
+        a child can actually find.
+        """
+        return {"TMUX": self._tmux_env(session), root.ENV_VAR: str(config.ROOT)}
+
+    def _tmux_env(self, session: str) -> str:
+        """``$TMUX`` exactly as tmux writes it into a pane of *session* on this server."""
+        sid = self._tmux("display-message", "-p", "-t", session,
+                         "#{session_id}").stdout.strip()
+        self.assertTrue(sid.startswith("$"), sid)
+        return f"{self.socket_file},{self.server_pid},{sid[1:]}"
+
+    #: How long a click gets before this class calls it stuck. A click is `switch-client`
+    #: plus, at most, one `cmd_launch` that does not attach — tenths of a second on both
+    #: tmux versions, measured. Generous enough that a loaded CI runner is not called a
+    #: hang, and finite because a click that never returns is exactly what regressing this
+    #: looks like (see :meth:`_click_the_tab`).
+    CLICK_DEADLINE = 30.0
+
+    def _click_the_tab(self):
+        """The click, on a thread, with a deadline — because the failure this class
+        catches is a HANG and not a wrong answer.
+
+        On the code #812 was filed against, `cmd_launch` read this `$TMUX`, decided it was
+        a guest, and took `_launch_in_operator_tmux` — which does not install the
+        `pane-died` hooks and instead stays awake for the whole life of the harness
+        (`_wait_for_harness`). The harness here is `exec sleep 300`. So the click never
+        returned at all: measured, this class run against `ff228a4` did not fail, it sat
+        there until it was killed, which is not a pass, not a fail and not a report — and
+        the deletion sweep kills a suite that hangs rather than recording the mutation.
+
+        A daemon thread is what makes the deadline honest rather than cosmetic: the click
+        that has not returned is left where it is, said so by name, and `_teardown`'s
+        `kill-server` is what finally releases it.
+        """
+        out: list[BaseException | None] = []
+
+        def go():
+            try:
+                with mock.patch.dict(os.environ, self._in_a_pane_of(self.HERE)):
+                    ARealTabOpensARealWorkspace._click_the_tab(self)
+                out.append(None)
+            except BaseException as e:                  # noqa: BLE001 - reported below
+                out.append(e)
+
+        clicking = threading.Thread(target=go, daemon=True)
+        clicking.start()
+        clicking.join(self.CLICK_DEADLINE)
+        if not out:
+            # The server goes BEFORE the failure is raised, not in `_teardown` after it.
+            # `_wait_for_harness` is watching a pane on it, so killing it is what lets the
+            # stuck click unwind — and a click still inside `_open_workspace` when
+            # `PersonaIso` removes this case's tmp tree takes the NEXT case down with an
+            # `os.getcwd()` that has no directory to answer. Measured exactly that way
+            # against `ff228a4`: one honest failure here, one unrelated `FileNotFoundError`
+            # in the case after it.
+            self._tmux("kill-server")
+            clicking.join(10)
+            self.fail(f"the click has not returned after {self.CLICK_DEADLINE:g}s — a "
+                      f"workspace tab that opens its workspace as a window in the session "
+                      f"it was clicked from blocks in `_wait_for_harness` for the life of "
+                      f"the harness, and the switch never happens (#812)")
+        if out[0] is not None:
+            raise out[0]
+
+    def _click_back(self, opened: str):
+        """The second half of the operator's report: a tab in the chat they arrived at.
+
+        Run from inside charter's tmux too, and naming the session it is standing in NOW
+        — a panel in the chat they landed on is as much inside charter's server as the one
+        they left, and a round trip that only set the variable on the way out would not be
+        the trip that was reported.
+        """
+        with mock.patch.dict(os.environ, self._in_a_pane_of(self.THERE)):
+            commands_frame._switch_client(opened, self.HERE,
+                                          said=f"workspace → {self.HERE}")
+        time.sleep(0.3)
+
+    def _opened_chat(self) -> str:
+        """The chat id the click's own launch claimed, read off the server."""
+        chats = [c for c in self._tmux("list-windows", "-t", self.THERE,
+                                       "-F", "#{@charter_chat}").stdout.split() if c]
+        self.assertEqual(len(chats), 1, f"expected one chat in {self.THERE}: {chats}")
+        return chats[0]
+
+    def test_the_opened_workspace_is_a_session_of_its_own(self):
+        """**The launch, not the switch, and this is what a fix to `is_operator_socket`
+        alone would not have reached.** `cmd_launch` decided between "session on charter's
+        own server" and "window in the session I am already in" on whether ``$TMUX``
+        parsed at all. From a panel pane it always parses, so a tab click opened its chat
+        inside the workspace it was leaving — measured before the fix as `list-sessions`
+        reporting only `alpha` with `list-windows -a` reporting `[alpha] win=beta.1`."""
+        self._attach(self.HERE)
+        self._click_the_tab()
+        self.assertIn(self.THERE,
+                      self._tmux("list-sessions", "-F", "#{session_name}").stdout.split())
+        self.assertEqual(
+            [w for w in self._tmux("list-windows", "-t", self.HERE,
+                                   "-F", "#{window_name}").stdout.split() if w],
+            [self.fid],
+            f"the chat for '{self.THERE}' was opened as a window inside '{self.HERE}'")
+
+    def test_the_opened_chat_records_the_server_by_the_name_charter_launches_it_under(
+            self):
+        """The record every later tab reads (`state.frame_server`).
+
+        Spelled by hand rather than compared to `commands_frame.SOCKET`, because the
+        failure this pins is precisely a second, equal-but-different spelling of one
+        socket: a round trip through the same constant would have agreed with itself
+        while the operator was stuck."""
+        self._attach(self.HERE)
+        self._click_the_tab()
+        recorded = state.frame_server(self._opened_chat())
+        self.assertEqual(recorded, self.socket,
+                         "the chat recorded a spelling of the socket, not the socket")
+        self.assertNotEqual(recorded, self.socket_file)
+        self.assertFalse(recorded.startswith("/"),
+                         f"{recorded} is the absolute spelling #812 is about")
+
+    def test_a_tab_in_the_opened_chat_takes_the_terminal_back(self):
+        """**The operator's report, end to end.** Click `beta`, land there, click `alpha`,
+        arrive — where the second click used to answer *"cannot switch: this chat is a
+        window in your own tmux, where a workspace is not a session"* about a chat sitting
+        on charter's private server.
+
+        The way back runs with ``$TMUX`` set too, and to the session it is standing in
+        now: a panel in the chat the operator arrived at is as much inside charter's tmux
+        as the one they left, and a round trip that only set the variable on the way out
+        would not be the trip that was reported."""
+        client = self._attach(self.HERE)
+        self._click_the_tab()
+        self.assertEqual(self._clients(self.THERE), [client])
+        opened = self._opened_chat()
+        self._click_back(opened)
+        self.assertEqual(self._clients(self.HERE), [client],
+                         "the tab back did not take the terminal back")
+        self.assertEqual(self._clients(self.THERE), [])
+        self.assertNotIn("a window in your own tmux", state.notice(opened) or "")
+
+    def test_the_chat_it_came_from_is_still_running_after_the_round_trip(self):
+        """§4b's own requirement across both legs: switching keeps the other chat's
+        harness alive, and a trip out and back must leave the pane it started in with the
+        pid it started with."""
+        self._attach(self.HERE)
+        before = [p for p in self._panes() if p.startswith(self.pane + " ")]
+        self._click_the_tab()
+        opened = self._opened_chat()
+        self._click_back(opened)
+        self.assertEqual([p for p in self._panes() if p.startswith(self.pane + " ")],
+                         before, "the round trip killed the chat it started in")
 
 
 if __name__ == "__main__":

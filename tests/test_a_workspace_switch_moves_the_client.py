@@ -348,6 +348,26 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         self.assertIn("a window in your own tmux", said)
         self.assertIn("charter <harness> --workspace beta", said)
 
+    def test_charters_own_socket_written_the_long_way_is_not_that_frame(self):
+        """**#812, and the pair to the case above rather than a replacement for it.**
+
+        The refusal is right; the premise was not. `is_operator_socket` was a
+        leading-slash test, and tmux writes its socket into every pane it opens as an
+        ABSOLUTE path — so a chat launched from inside one of charter's own panes recorded
+        `/private/tmp/tmux-<uid>/charter` for the server `-L charter` reaches, and every
+        tab in it was told it was a window in somebody else's tmux. The operator's report
+        is exactly that: switch to `fleet`, land in a new chat, and then no tab, including
+        the one back, would move them.
+
+        Two spellings of one socket are not the same string, so this asserts on the
+        SWITCH: the same fixture as the ordinary case, with the server recorded the way
+        `$TMUX` spells it, still moves the client."""
+        state.record_server(self.FID, _tmuxsocket.socket_path(commands_frame.SOCKET))
+        s = self._switch(self._ordinary())
+        self.assertEqual(s.switched, [("/dev/ttys001", "$2")],
+                         "a frame on charter's own socket was refused as a guest's")
+        self.said.assert_called_once_with("beta.1", "workspace → beta", ok=True)
+
     def test_a_chat_whose_own_window_cannot_be_found_refuses_before_anything_moves(self):
         """`cmd_chat`'s own sentence for its own reason: with no reading of where this
         client is standing there is no way to tell afterwards whether it moved, and a
