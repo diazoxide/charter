@@ -282,6 +282,26 @@ class TestTheSentenceItself(SubmoduleCase):
             "but not initialised (dev-scripts) — nothing is checked out there, so "
             "anything that runs from them fails with 'no such file or directory'.")
 
+    def test_both_kinds_are_joined_into_the_one_line_not_the_first_of_them(self):
+        """Every other case here carries a single fact, so a join that kept only the first
+        would read correctly in all of them and drop half the finding exactly when there is
+        most to say."""
+        r, sub = self.repo(), make_repo(self.tmp / "sub")
+        plant_submodule(r, "dev-scripts")
+        git("submodule", "add", "-q", str(sub), "extra-tools", cwd=r)
+        git("commit", "-qm", "add", cwd=r)
+        git("commit", "-q", "--allow-empty", "-m", "v2", cwd=r / "extra-tools")
+        moved = git("rev-parse", "HEAD", cwd=r / "extra-tools").stdout.strip()
+        git("update-index", "--cacheinfo", f"160000,{moved},extra-tools", cwd=r)
+        git("commit", "-qm", "bump", cwd=r)
+        git("checkout", "-q", "HEAD~1", cwd=r / "extra-tools")
+        self.assertEqual(
+            self.say(r, branch="main")[0],
+            "super: 1 submodule(s) recorded but not initialised (dev-scripts) — nothing "
+            "is checked out there, so anything that runs from them fails with 'no such "
+            "file or directory'; 1 submodule(s) not at the commit main records "
+            "(extra-tools).")
+
     def test_nothing_is_said_about_a_tree_with_no_drift(self):
         self.assertEqual(self.say(self.repo()), [])
 
