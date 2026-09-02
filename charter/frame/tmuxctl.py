@@ -701,10 +701,16 @@ class Write(NamedTuple):
     report: bool = True
 
 
-#: The two return codes :func:`run` invents rather than reads off tmux — a wedged server
-#: and a tmux that could not be started. They are what :func:`write_all` refuses to
-#: replay on: both mean charter never learnt what the server did, and a batch of
-#: idempotent writes is safe to repeat only when it is known that they did not take.
+#: The two return codes :func:`run` invents rather than reads off tmux, and the two
+#: :func:`write_all` will not replay on — for two different reasons, both of which end in
+#: "one at a time buys nothing here".
+#:
+#: :data:`TIMED_OUT` is the load-bearing one: a wedged server has not told charter what
+#: it did, so re-issuing would be repeating writes that may already have taken against a
+#: tmux that is not answering — the one case idempotence cannot cover, because charter
+#: cannot know it is repeating. :data:`COULD_NOT_RUN` is the opposite and is grouped with
+#: it for economy rather than for safety: nothing ran and nothing can, so a replay is N
+#: more failed `exec`s and N copies of one sentence about a tmux that is not there.
 _UNKNOWABLE = (TIMED_OUT, COULD_NOT_RUN)
 
 
@@ -746,9 +752,9 @@ def write_all(joint: str, writes: list[Write], *, env: dict | None = None,
     **A wedged server is not replayed** (:data:`_UNKNOWABLE`). A timeout says charter
     never learnt what the server did, not that it did nothing, so re-issuing would be
     the one thing idempotence cannot cover: writes charter cannot know it is repeating,
-    against a tmux that is not answering. The batch is reported once, every write gets
-    that same result back, and the caller degrades exactly as it does for any other
-    non-zero return.
+    against a tmux that is not answering. The batch is reported once — and only if any
+    write in it would have reported on its own — every write gets that same result back,
+    and the caller degrades exactly as it does for any other non-zero return.
     """
     if not writes:
         return []
