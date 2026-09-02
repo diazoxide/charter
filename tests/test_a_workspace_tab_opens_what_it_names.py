@@ -339,6 +339,13 @@ class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestC
 
     Both are correct for every launch that IS the operator's terminal, and neither is
     correct for one that will never attach.
+
+    **`shutil.which` is pinned in both cases, and that is not decoration.** `cmd_launch`
+    has an EARLIER `bypass` for a registered harness whose binary is not installed, so
+    without the pin these cases ask whether the developer running them happens to have
+    `claude` on `$PATH` — green on a laptop, red on CI, and measuring the machine rather
+    than the repo either way. Caught exactly that way: both passed locally and failed on
+    all four CI Pythons.
     """
 
     def test_a_launch_that_will_not_attach_is_not_execd_away_by_the_non_tty_guard(self):
@@ -354,6 +361,8 @@ class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestC
                                size=(120, 40))
         with mock.patch("charter.commands_frame.sys.stdout") as out, \
                 mock.patch("charter.commands_frame.bypass") as byp, \
+                mock.patch("charter.commands_frame.shutil.which",
+                           return_value="/nowhere/claude"), \
                 mock.patch("charter.commands_frame.tmuxctl.version", return_value=None):
             out.isatty.return_value = False
             commands_frame.cmd_launch(args)
@@ -365,6 +374,8 @@ class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestC
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False,
                                workspace=None, pick=False)
         with mock.patch("charter.commands_frame.sys.stdout") as out, \
+                mock.patch("charter.commands_frame.shutil.which",
+                           return_value="/nowhere/claude"), \
                 mock.patch("charter.commands_frame.bypass",
                            return_value=0) as byp:
             out.isatty.return_value = False
@@ -410,25 +421,40 @@ class ADetachedProcessCanBuildAWorkspace(unittest.TestCase):
 
         self.addCleanup(tm, "kill-server")
         tm("new-session", "-d", "-s", "home", "sh")
-        pid, _fd = pty.fork()
-        if pid == 0:                                    # pragma: no cover - the child
-            # `os._exit` in a `finally`, which every other `pty.fork` in this suite spells
-            # for the same reason: an `execvp` that RAISES leaves the child running the
-            # test framework, and a second runner that goes on to fork is how one failed
-            # exec becomes a machine full of them. Never `sys.exit` — that unwinds, and
-            # unittest catches `SystemExit`.
-            try:
-                os.execvp("tmux", ["tmux", "-L", sock, "attach", "-t", "home"])
-            finally:
-                os._exit(127)
-        self.addCleanup(lambda: os.waitpid(pid, os.WNOHANG))
 
-        deadline = time.time() + 10
+        # **Several `TERM`s, then a skip — never an assertion.** CI has tmux but the
+        # terminal it offers a client is not the developer's: measured, a client that
+        # attaches on a laptop refuses on all four CI Pythons, and a bare `assertTrue`
+        # there reports "charter is broken" for "this machine has no terminal tmux will
+        # talk to". The sibling real-tmux modules all spell this ladder; so does this one.
         client = ""
-        while time.time() < deadline and not client:
-            client = tm("list-clients", "-F", "#{client_tty}").stdout.strip()
-            time.sleep(0.05)
-        self.assertTrue(client, "no client ever attached")
+        for term in ("xterm-256color", "screen", "vt100"):
+            pid, _fd = pty.fork()
+            if pid == 0:                                # pragma: no cover - the child
+                # `os._exit` in a `finally`, which every other `pty.fork` in this suite
+                # spells for the same reason: an `execvp` that RAISES leaves the child
+                # running the test framework, and a second runner that goes on to fork is
+                # how one failed exec becomes a machine full of them. Never `sys.exit` —
+                # that unwinds, and unittest catches `SystemExit`.
+                try:
+                    os.environ["TERM"] = term
+                    os.execvp("tmux", ["tmux", "-L", sock, "attach", "-t", "home"])
+                finally:
+                    os._exit(127)
+            self.addCleanup(lambda p=pid: os.waitpid(p, os.WNOHANG))
+            deadline = time.time() + 10
+            while time.time() < deadline and not client:
+                client = tm("list-clients", "-F", "#{client_tty}").stdout.strip()
+                time.sleep(0.05)
+            if client:
+                break
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        if not client:
+            self.skipTest("no tmux client can attach on this machine, and the claim "
+                          "under test is that a detached process can move a real one")
 
         script = (
             '{ [ -t 0 ] || [ -t 1 ] || [ -t 2 ]; } && exit 91; '
