@@ -4788,7 +4788,17 @@ def cmd_launch(args) -> int:
     # just created. It cannot be spelled as "reopen always carries a `rest`" either — only
     # a Claude chat with a recorded id carries `--resume`, and a chat with nothing to resume
     # is exactly the one that must still come back as a tab.
-    if not rest and _reopening(args) is None:
+    #
+    # **And never for a launch that was never the operator's terminal**, which is this
+    # same gate one case wider again — `_wants_attach` rather than the `_reopening` half
+    # of it. A focus IS an attach, so a caller that passed `attach=False` cannot be
+    # answered with one: `cmd_new_chat` launches into the workspace it is standing in, so
+    # the workspace is live and attached BY CONSTRUCTION and this branch fired on every
+    # press. In a panel — all three streams on `/dev/null` — tmux answered `open terminal
+    # failed: not a terminal`, and the `+` reported `the launcher returned 1` instead of
+    # ever adding a chat. `_wants_attach` was unpicked from `_reopening(args) is None` for
+    # exactly this reason and this site kept asking the old question.
+    if not rest and _wants_attach(args):
         focus = _workspace_to_focus(SOCKET, ws=ws)
         if focus is not None:
             return _focus_workspace(*focus, ws=ws, picked=picked)

@@ -587,5 +587,127 @@ class TwoPlanesOnOneMachine(unittest.TestCase):
         self.assertNotEqual(self._current_window(), was)
 
 
+class _AttachRefused:
+    """*server* with `attach` answering the way it does with no terminal to attach to.
+
+    Wrapping rather than a flag on `_FakeServer`: every other case in this module is about
+    a launch that IS the operator's terminal, where an attach that fails is a different
+    subject. This is the one place the failure is the point.
+    """
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def __call__(self, cmd, **kwargs):
+        # The window this launch makes becomes live, which `_FakeServer` alone does not
+        # model — every other case here asserts on the CALLS and never on what came back.
+        # Without it `cmd_launch` reads its own new chat as already dead and answers for
+        # that instead, which would make the return code below measure the fixture.
+        got = self.inner(cmd, **kwargs)
+        if "new-window" in cmd:
+            self.inner.chats.append(cmd[cmd.index("-n") + 1])
+            return _completed(cmd, 0, "%9\n")
+        if "attach" in cmd:
+            return _completed(cmd, 1, "", "open terminal failed: not a terminal")
+        return got
+
+    def asked(self, verb: str) -> int:
+        return self.inner.asked(verb)
+
+class ALaunchThatIsNotTheTerminalNeverFocuses(PersonaIso, unittest.TestCase):
+    """`attach=False` is the third case this gate has to know about, and it was the one
+    left out.
+
+    The gate reads `if not rest and _reopening(args) is None:` — which is `_wants_attach`
+    with its first question missing. `_wants_attach` exists BECAUSE "am I restoring" and
+    "am I the terminal" stopped having one answer, and this site still asks only the old
+    one. Its own comment records the last time it had to widen: *"And never for a reopen,
+    which is the same gate one case wider."*
+
+    **What that costs, measured on the operator's plane.** The chat bar's `+` runs
+    `cmd_new_chat`, which launches with `attach=False` into the workspace it is standing
+    in — so the workspace is live and attached BY CONSTRUCTION, the one state that makes
+    `_workspace_to_focus` answer. The launch therefore focused instead of adding a chat,
+    and focusing is attaching: in a panel process with all three streams on `/dev/null`
+    tmux answered `open terminal failed: not a terminal`, `cmd_launch` returned its code,
+    and the press reported `could not open another chat — the launcher returned 1`.
+
+    A press on `+` could never add a second chat to a workspace, which is the only thing
+    it does.
+    """
+
+    def _press(self, fake, *, workspace=SHARED, harness="claude", rest=()):
+        """`cmd_new_chat`'s namespace, not the CLI's — `attach=False` and no terminal."""
+        args = SimpleNamespace(harness=harness, rest=list(rest), no_frame=False,
+                               workspace=workspace, pick=False, attach=False, size=None)
+        stripped = {k: v for k, v in os.environ.items()
+                    if k not in ("TMUX", "TMUX_PANE")}
+        with mock.patch.dict(os.environ, stripped, clear=True), \
+             mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
+             mock.patch("charter.commands_frame.shutil.which",
+                        side_effect=lambda n, *a, **k: f"/usr/bin/{n}"), \
+             mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch("charter.commands_frame._spawn_gather"), \
+             mock.patch("sys.stdout.isatty", return_value=False), \
+             mock.patch("sys.stdin.isatty", return_value=False):
+            return commands_frame.cmd_launch(args)
+
+    def _focusable(self):
+        """The exact state a `+` press is always in: this plane's workspace, live, with a
+        client attached to it. Every other case in this module treats that as the state
+        that MUST focus — which is right for a launch that is the terminal."""
+        _a_chat("shared.1", ws=SHARED, pane="%0")
+        return _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
+                           sessions=[SHARED], chats=["shared.1"])
+
+    def test_a_launch_that_will_not_attach_does_not_attach(self):
+        fake = self._focusable()
+        self._press(fake)
+        self.assertEqual(fake.asked("attach"), 0,
+                         "a launch that asked not to attach attached anyway")
+
+    def test_it_adds_the_window_the_press_was_for(self):
+        """The positive half, and the one that makes this a defect rather than a tidiness:
+        not attaching is worth nothing if the chat still is not made."""
+        fake = self._focusable()
+        self._press(fake)
+        self.assertEqual(fake.asked("new-window"), 1)
+
+    def test_it_answers_zero_where_a_focus_would_have_answered_the_attach_failure(self):
+        """**The operator's actual symptom, and the assertion has to make the attach FAIL
+        to be worth anything.** With a fake whose `attach` succeeds this case passes on
+        the unfixed code too — it would be green at both inputs, which is no test at all.
+
+        A panel has all three streams on `/dev/null`, so tmux answers `open terminal
+        failed: not a terminal` and exits non-zero. `cmd_launch` hands that code back and
+        `cmd_new_chat` prints `could not open another chat — the launcher returned 1`.
+        A launch that never attaches cannot be told anything by an attach that failed."""
+        fake = self._focusable()
+        refuses_a_terminal = _AttachRefused(fake)
+        self.assertEqual(self._press(refuses_a_terminal), 0)
+        self.assertEqual(refuses_a_terminal.asked("new-window"), 1)
+
+    def test_a_launch_that_is_the_terminal_still_focuses(self):
+        """The control, in the same fixture — otherwise this class would pass just as well
+        against a gate that had deleted the focus branch outright."""
+        _a_chat("shared.1", ws=SHARED, pane="%0")
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"],
+                           sessions=[SHARED], chats=["shared.1"])
+        args = SimpleNamespace(harness="claude", rest=[], no_frame=False,
+                               workspace=SHARED, pick=False)
+        stripped = {k: v for k, v in os.environ.items()
+                    if k not in ("TMUX", "TMUX_PANE")}
+        with mock.patch.dict(os.environ, stripped, clear=True), \
+             mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
+             mock.patch("charter.commands_frame.shutil.which",
+                        side_effect=lambda n, *a, **k: f"/usr/bin/{n}"), \
+             mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+             mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("sys.stdin.isatty", return_value=False):
+            commands_frame.cmd_launch(args)
+        self.assertEqual(fake.asked("attach"), 1)
+        self.assertEqual(fake.asked("new-window"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
