@@ -2120,11 +2120,17 @@ clicks would be the "select, then confirm" that clicking a tab is supposed to re
 undo is `F2` → `chat` → close.
 
 A switch is still refused, with the reason on your own screen, for a name that cannot name a
-workspace, a workspace this plane does not have, the workspace you are already in, and — the
-one that is new — a workspace whose **name is already running on this machine under another
-plane**. One tmux server serves every plane on this machine, so `default` usually exists
-several times over; charter will not add your chat to another project's session, and tells
-you to attach to it by hand if it turns out to be yours.
+workspace, a workspace this plane does not have, the workspace you are already in, and a
+terminal that has moved nowhere. Two refusals are new, and both exist because opening is not
+free:
+
+* **A workspace whose name is already running on this machine under another plane.** One
+  tmux server serves every plane on this machine, so `default` usually exists several times
+  over. Charter will not add your chat to another project's session, and tells you to attach
+  to it by hand if it turns out to be yours.
+* **Nothing attached to the frame you are switching from.** If you have detached, or an
+  agent with no terminal is driving the frame, the click is refused before anything starts
+  rather than launching a harness into a workspace with no client to move into it.
 
 **Switching a persona from the picker moves the frame, and says so.** Choosing one writes
 the choice under the frame's own id and bumps the frame so every panel repaints, and a
