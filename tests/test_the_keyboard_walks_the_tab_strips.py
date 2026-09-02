@@ -179,16 +179,25 @@ class AWalkStartsTheSwitchATabClickStarts(_AStripAKeyboardCanWalk):
         importing them — `frame/builtins.py` is a RENDERER module a palette process has no
         other reason to load. This is the assertion that stands in for the import, so the
         two spellings cannot drift apart in silence."""
-        spellings = {noun: command for noun, _n, _h, command, _a
-                     in builtin_actions._STRIPS}
+        spellings = {s.noun: s.command for s in builtin_actions._STRIPS}
         self.assertEqual(spellings["chat"], builtins._CHAT_SWITCH)
         self.assertEqual(spellings["workspace"], builtins._WORKSPACE_SWITCH)
 
     def test_the_row_says_which_tab_it_started_for(self):
         """`_select`'s `selected <name>` one strip over: the palette says what it started
-        rather than that it started something."""
-        self.assertIn("api.3", str(self._run("chat.next")))
-        self.assertIn("api.1", str(self._run("chat.previous")))
+        rather than that it started something.
+
+        **In the plane's own `<noun> → <name>` vocabulary**, which is what
+        `commands_frame._say_on_screen` says for every other switch (`persona → zeb`). The
+        noun comes off `_Strip` rather than out of the argv: `frame-switch --workspace`
+        would have made the workspace row report `switch → gamma`, which names a verb
+        where every other line on the plane names a noun.
+        """
+        self.assertEqual(self._run("chat.next"), "chat → api.3")
+        self.assertEqual(self._run("chat.previous"), "chat → api.1")
+        names = switch.workspaces()
+        want = names[names.index(self.here) + 1]
+        self.assertEqual(self._run("workspace.next"), f"workspace → {want}")
 
     def test_the_child_is_told_which_frame_it_is(self):
         """`_spawn`'s `fid=` is the child's own `$CHARTER_SESSION_ID`. One tmux server is
