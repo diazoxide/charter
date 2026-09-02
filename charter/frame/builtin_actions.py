@@ -43,8 +43,10 @@ from __future__ import annotations
 import os
 import subprocess
 
+from typing import Callable, NamedTuple
+
 from .. import util
-from . import action, actions, choose, state, tmuxctl
+from . import action, actions, chats, choose, state, switch, tmuxctl
 
 #: What marks the density a frame is currently on. **One constant, not two**: it is
 #: `frame/choose.py`'s, which marks the workspace and the persona a frame is on for the
@@ -222,6 +224,32 @@ def _register_selection(reg: actions.ActionRegistry) -> None:
             reason_unavailable=lambda ctx: NO_REPOS))
 
 
+def _walk(names: list, here, step: int, start: int):
+    """The entry *step* along from *here* in *names*, wrapping — or from *start* if *here*
+    is not in the list.
+
+    **One walk, three callers**, and that is why it is a function rather than two lines
+    inside each: :func:`_select` moves the repo table's cursor and :func:`_register_strip`
+    moves along each of the two tab strips, and the three of them have to agree about what
+    "next" means or the palette teaches an operator two different answers.
+
+    The modulo is what wraps, and wrapping is :func:`_register_selection`'s decision
+    unchanged: stepping off the end and stopping makes a row that visibly does nothing,
+    which reads as broken and costs an operator a whole `F2` to find out.
+
+    *start* is where a walk with nothing under it begins — the entry before the first for
+    `next`, the one after the last for `previous`, so `(start + step) % len` lands on the
+    end the direction is coming from. It is :data:`_SELECT_STEPS`' third column rather than
+    something derived from the step's sign, for that constant's own recorded reason.
+
+    Never called with an empty *names*: every caller's `available` refuses the row first,
+    and `ActionRegistry._check` hands `run` the same ctx it asked about — so a guard here
+    would be a line nothing could turn red.
+    """
+    at = names.index(here) if here in names else start
+    return names[(at + step) % len(names)]
+
+
 def _select(ctx, step: int, start: int):
     """Move this frame's repo selection *step* rows through the table's display order.
 
@@ -244,15 +272,177 @@ def _select(ctx, step: int, start: int):
     be a line nothing could turn red.
     """
     names = [r.get("name") for r in ctx.repos]
-    chosen = state.selection(ctx.fid)
-    here = names.index(chosen) if chosen in names else start
-    name = names[(here + step) % len(names)]
+    name = _walk(names, state.selection(ctx.fid), step, start)
     state.record_selection(ctx.fid, name)
     # The `repos` pane redraws its highlight and the `attention` pane redraws the detail,
     # and neither is this process — see `frame/builtins._repos_events` for the same two
     # lines said from the pointer's side.
     state.bump(ctx.fid)
     return f"selected {name}"
+
+
+#: What a workspace alone on its plane is told instead of a row that does nothing.
+#: `chats.ONLY_CHAT`'s shape one noun over, and its argument: a refusal that names no way
+#: out is a row an operator reads once and never again.
+ONLY_WORKSPACE = ("this plane has one workspace — make another with `charter workspace "
+                  "create <name>`, and every workspace row starts offering it")
+
+class _Strip(NamedTuple):
+    """One tab strip, as everything the keyboard needs to walk it.
+
+    A record rather than a five-tuple, for `chats.Chat`'s reason one module over: the
+    fields are read in two places (the row that is registered and the walk that runs) and
+    a positional unpack in each is two chances for the day a sixth field is added.
+    """
+
+    #: What the row calls it, and what it says when it has started one — `chat`,
+    #: `workspace`. The palette's own `<noun> → <name>` vocabulary
+    #: (`commands_frame._say_on_screen`'s `persona → zeb`), so a walk reports the way every
+    #: other switch on this plane reports.
+    noun: str
+    #: ``names(fid) -> list`` — the strip, in the order the BAR draws it
+    #: (`frame/chats.roster`, `frame/switch.workspaces`). Asked of the same listers so a
+    #: keyboard walk and a pointer walk cannot disagree about which tab is next.
+    names: Callable
+    #: ``here(fid) -> str`` — the tab this frame is on, from the same reading the bar's
+    #: own mark comes from.
+    here: Callable
+    #: The argv prefix the switch is started with, `frame/builtins._CHAT_SWITCH` and
+    #: `_WORKSPACE_SWITCH` — the same one a click on that tab spawns.
+    command: tuple
+    #: What a strip of one says instead of switching to where the operator already is.
+    alone: str
+
+
+#: The two strips a keyboard can walk.
+#:
+#: **Data rather than four functions**, exactly as :data:`_SELECT_STEPS` is data rather
+#: than a sign test: everything that differs between a chat strip and a workspace strip is
+#: on this table, and what does not differ — the walk, the wrap, the start, the spawn — is
+#: written once below. `slots._bar` makes the identical trade for the two ROWS ("one
+#: function for both bars, so the two cannot degrade differently"), and this is the
+#: keyboard's half of the same strip.
+#:
+#: The listers are `frame/chats.py`'s and `frame/switch.py`'s — the same two the bars draw
+#: from — so "the next tab" is the tab drawn next, in the order it is drawn, and a keyboard
+#: walk and a pointer walk cannot come to disagree about which one that is.
+#:
+#: The commands are `frame/builtins._CHAT_SWITCH` and `_WORKSPACE_SWITCH` respelled here
+#: rather than imported, and the respelling is deliberate: `frame/builtins.py` is a
+#: RENDERER module that a palette process has no other reason to import, and
+#: `tests/test_the_keyboard_walks_the_tab_strips.py` holds the two spellings equal instead.
+_STRIPS = (
+    _Strip("chat", lambda fid: [c.id for c in chats.roster(fid)], lambda fid: fid,
+           ("frame-chat",), chats.ONLY_CHAT),
+    _Strip("workspace", lambda _fid: switch.workspaces(), switch.current_workspace,
+           ("frame-switch", "--workspace"), ONLY_WORKSPACE),
+)
+
+
+def _register_strip(reg: actions.ActionRegistry) -> None:
+    """Four rows that walk the chat and workspace strips — **the keyboard's half.**
+
+    **`frame/builtins._bar_events` states the gap this closes and could not close
+    itself.** A tab bar is a pointer affordance whose only route was a pointer: `key` is in
+    `component.EVENT_KINDS` and deliberately NOT in `events.DELIVERED`, because tmux routes
+    typing to the ACTIVE pane and that pane is the harness the frame exists to protect. So
+    a bar has no keyboard of its own, and `component.EVENT_KINDS` asks for exactly one
+    thing in that situation: *give every pointer affordance a key as well.*
+    :func:`_register_selection` is charter keeping that rule for the repo table; this is
+    charter keeping it for the two strips.
+
+    **It is worth more than the pickers that are already there, and the difference is the
+    gesture rather than the reach.** `F2` → `chat` → a name reaches any chat and is what a
+    narrow frame has instead of a bar at all. What it is not is *the next one*: an operator
+    cycling between two agents pays a pane cycle, a list and a choice each time, to move
+    one step along a strip they can see. These four rows are that step, and they are the
+    only route to it on the planes where `[frame] mouse` is off — which is the shipped
+    default.
+
+    **They are not `repeat=True`, unlike the repo rows, and the difference is what the row
+    does to the surface it was pressed on.** Moving a selection writes two files and leaves
+    the palette standing; a switch moves the CLIENT to another window (or another
+    workspace's session), and the palette's pane is in the window being left. A row that
+    asked to stay open would be asking to stay open somewhere the operator no longer is.
+
+    **The walk is `_walk`'s, the listers are the bars' own, and the commands are the ones
+    a tab click already spawns** — so the keyboard and the pointer cannot come to two
+    different answers about what "the next tab" is or about what happens when you get
+    there, including every refusal `chats.check` and `switch.to_workspace` can raise. That
+    is `_register_selection`'s discipline (`state.record_selection` is the same write the
+    click makes) applied to a strip that is driven from another process.
+
+    **"Nowhere else to go" is reported by the RUN and not by `available`, and that is the
+    palette's own cost promise rather than a preference.**
+    `tests/test_frame_palette_names.TheRosterIsNeverReadUntilSomethingIsTyped` pins that
+    opening the palette reads no roster at all — *`F2` on a plane with forty workspaces
+    costs what it cost with none* — and `available` is asked for every row every time the
+    surface is drawn. An availability that asked `switch.workspaces()` would enumerate the
+    plane on every `F2`, including the ones where the operator opened the palette to
+    detach and never asked a question about names.
+
+    So the walk itself reports it: :func:`_step_strip` starts nothing when the step lands
+    on the tab the frame is already on, and answers the sentence instead. That is exactly
+    the state — a strip of one — and it is read once, on the press, by an operator who
+    asked. `slots._Tabs.switch_to` refuses the same gesture for the pointer, in the same
+    words and for the same reason: re-switching to where you already are is not free.
+
+    **"The step landed where it started" is the whole test, and it is sharper than a
+    count.** `len(names) > 1` reads *is there anywhere to go* as *are there two places*,
+    and those differ on a real state: a frame whose recorded workspace has been deleted is
+    on no name at all, so the one workspace left IS somewhere to send it — and a count
+    would refuse the only row that could.
+    """
+    for strip in _STRIPS:
+        for word, step, start in _SELECT_STEPS:
+            reg.register(action.Action(
+                id=f"{strip.noun}.{word}", title=f"{strip.noun}: the {word} tab",
+                run=(lambda ctx, s=strip, st=step, sr=start:
+                     _step_strip(ctx, s, st, sr))))
+
+
+def _step_strip(ctx, strip: "_Strip", step: int, start: int):
+    """Start the switch to the tab *step* along from the one this frame is on.
+
+    Split out of the row above for :func:`_select`'s reason: the arithmetic can then be
+    exercised against a list of names with no palette, no tmux server and no frame
+    directory under it.
+
+    **It STARTS the switch and returns, which is `action.Action.run`'s whole contract and
+    not a shortcut.** A chat switch is 41 tmux invocations and a workspace switch moves a
+    client; both of those outlive the pane the palette is drawn in, and both have refusals
+    that have to reach a surface this process is about to lose. `_spawn` is what every
+    other row that starts real work uses, and it is the same argv a tab click spawns.
+
+    **A step that lands where it started starts nothing and says *alone* instead**, which
+    is the row's refusal arriving on the press rather than on the listing — see
+    :func:`_register_strip` for why it cannot be on the listing. It is the exact test
+    `slots._Tabs.switch_to` applies to a click on the tab you are already on, and it is
+    reached only by a strip of one: from two names or more, one step is never a no-op.
+
+    The sentence it answers with names the tab, so the palette says what it started rather
+    than that it started something — `_select`'s `f"selected {name}"` one strip over.
+
+    **The name is NOT contained here, and the deletion sweep is what settled it — for the
+    third time in this file.** It was `contain.one_line(name)`, and that is a masked call:
+    **the receipt is contained by the CONTRACT**, `actions.Invocation._work` running
+    `contain.one_line(str(note), limit=REASON_LIMIT)` over whatever a `run` hands back.
+    Every surface downstream contains it again anyway — `palette.Palette._headline` over
+    the header it draws, `state.record_notice` over the whole assembled line it writes.
+
+    :func:`_regather` records the identical finding about the workspace name it returns,
+    :func:`_select` hands back a bare repo name for the same reason, and `choose._note`
+    records the trap in as many words one module over. A call whose result is provably its
+    argument is a line this repository deletes — and `_empty_lines`' warning is the sharper
+    half: a guard kept for a reason that is not the true one is how the real one gets
+    deleted later.
+    """
+    here = strip.here(ctx.fid)
+    name = _walk(list(strip.names(ctx.fid)), here, step, start)
+    if name == here:
+        return strip.alone
+    _spawn(util.self_relaunch_argv(*strip.command, name), fid=ctx.fid)
+    return f"{strip.noun} → {name}"
 
 
 #: What a workspace with nothing open is told instead of a row that does nothing.
@@ -592,6 +782,11 @@ def build(fid: str, *, current_density: str,
     reg = actions.ActionRegistry()
     _register_detach(reg)
     _register_selection(reg)
+    # Beside the repo table's own next/previous rather than among the densities, because
+    # they are the same gesture on a different list — an operator who has learned one has
+    # learned all three. Above `_register_todos` for `_register_density`'s stated reason:
+    # the rows pressed by muscle memory sit at the top of a palette nobody has typed into.
+    _register_strip(reg)
     _register_todos(reg)
     _register_density(reg, current=current_density)
     _register_chrome(reg, current=current_chrome)

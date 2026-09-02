@@ -577,6 +577,17 @@ plane declares no `[harness] default`; or charter cannot enter the workspace's d
 workspace is a directory and a *name*, which is `charter workspace create` — and a picker
 that creates on a typo leaves litter.
 
+**You do not need a mouse for the strips either.** `F2` → `chat: the next tab` (and
+`previous`, and the same pair for `workspace`) walks the strip one step, in the order it is
+drawn, running the same command a click on that tab runs. It wraps, so every press moves
+something; a plane with nowhere else to go says so rather than sending you where you
+already are. Those four rows are the only route to *the next one* on a plane with `mouse =
+false`, which is the default — and charter will not bind a bare key to it for the reason
+the repo table's own rows give: a `bind -n` is server-wide and would take the key before
+your harness sees it. Unlike the repo rows they do not leave the palette open, because a
+switch moves your terminal to another window and the palette's pane is in the one you are
+leaving.
+
 **They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
 exactly what `F2` → `chat` does — the same command, the same five refusals, the same
 sentence on your screen when one fires. A **workspace** tab does exactly what `charter
@@ -2083,6 +2094,10 @@ charter · 16 to choose from
     detach — leave the harness running
     repo: select the next row
     repo: select the previous row
+    chat: the next tab
+    chat: the previous tab
+    workspace: the next tab
+    workspace: the previous tab
     todo: read the next open todo
     density: minimal
     density: normal
