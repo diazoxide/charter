@@ -1077,6 +1077,18 @@ class ReposTable(PersonaIso, unittest.TestCase):
     would satisfy a unit test of the helper and none of the promise.
     """
 
+    def setUp(self):
+        super().setUp()
+        # **The workspace these frames draw, on disk** — and it is fixture, not decoration
+        # (#752). Every "nothing here" sentence this pane can say is a claim about a
+        # workspace that EXISTS: `⋯ gathering this workspace's repos…` and `no clones in
+        # <ws>` are both waiting on something, and a workspace that is not there is not
+        # waiting on anything, so it now gets a line of its own instead. A fixture with no
+        # directory was asking this pane about a plane where neither sentence is the true
+        # answer, and the assertions below are about the ones where they are.
+        (config.WORKSPACES_DIR / config.DEFAULT_WORKSPACE).mkdir(parents=True,
+                                                                 exist_ok=True)
+
     def _render(self, fid="f-1", *, cols=200, rows=24) -> str:
         with mock.patch("os.get_terminal_size",
                         return_value=os.terminal_size((cols, rows))), \
@@ -1158,17 +1170,26 @@ class ReposTable(PersonaIso, unittest.TestCase):
         self.assertIn("charter clone", tui.strip_ansi(out))
 
     def test_a_workspace_name_the_rungs_never_checked_is_still_one_line(self):
-        """`_empty_lines` interpolates a workspace name with no `contain.one_line` over
-        it, and the reason has to be the true one. It is NOT that every rung of
-        `state.workspace_for` name-checks its answer: rung 0 does (`valid_name`), but the
-        last rung is `workspace.resolve()`, which returns `$CHARTER_WORKSPACE` stripped
-        and otherwise untouched — so a name with a newline in it reaches this renderer
-        verbatim, as this test's first assertion measures.
+        """A workspace name with no `contain.one_line` over it, and the reason has to be
+        the true one. It is NOT that every rung of `state.workspace_for` name-checks its
+        answer: rung 0 does (`valid_name`), but the last rung is `workspace.resolve()`,
+        which returns `$CHARTER_WORKSPACE` stripped and otherwise untouched — so a name
+        with a newline in it reaches this renderer verbatim, as this test's first
+        assertion measures.
 
         What contains it is `tui.truncate`, which runs `tui.sanitize` first: the newline
         is not charter's markup, so the pane still draws exactly ONE line — the property
         the whole slot is built on, since a `repos` pane that quietly became three rows
         tall would push the attention strip off the bottom of the window.
+
+        **The line it lands on is `_gone_lines` since #752, and that is the whole point of
+        naming it here.** A name no rung checked cannot name a workspace that EXISTS —
+        `workspace.exists` asks `valid_name` before it asks the filesystem, precisely
+        because `workspaces/..` is a real directory — so this state reaches the "not on
+        disk" sentence and can no longer reach `_empty_lines` at all. That makes
+        `_gone_lines` the one line in this pane that is interpolated with a value nobody
+        has checked, and the one whose `tui.truncate` is load-bearing for reasons of
+        CONTENT rather than of length.
 
         The hostile value is asserted to have got through as well as to have been
         contained. Asserting containment alone would pass just as well on a build where a
@@ -1181,6 +1202,28 @@ class ReposTable(PersonaIso, unittest.TestCase):
             out = self._render("f-known-empty")
         self.assertEqual(len(out.split("\n")), 1, repr(out))
         self.assertIn("rm -rf /", tui.strip_ansi(out))
+        self.assertIn("no workspace", tui.strip_ansi(out))
+
+    def test_a_workspace_name_longer_than_the_pane_is_cut_to_it(self):
+        """`_empty_lines`' own bound, measured with a name the pane cannot hold.
+
+        Since #752 this line is only ever reached with a name `workspace.exists` accepted,
+        so the `tui.sanitize` half of its `tui.truncate` has nothing left to do — the
+        alphabet `instance.WORKSPACE_NAME_RE` allows holds no newline and no ESC. What is
+        NOT bounded by that check is LENGTH: a workspace name is arbitrarily long, and an
+        untruncated line here is a `repos` pane wider than its own pane, which wraps and
+        becomes two rows. Measured at `statusline._LEFT_W`, the narrowest width this pane
+        draws anything at all at, with a name long enough that the unbounded version
+        overflows — the bound is red the moment the truncate goes."""
+        long = "w" * 90
+        (config.WORKSPACES_DIR / long).mkdir(parents=True, exist_ok=True)
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": long}, clear=True):
+            self.assertEqual(state.workspace_for("f-long-empty"), long)
+            _seed("f-long-empty")
+            out = self._render("f-long-empty", cols=statusline._LEFT_W)
+        self.assertEqual(len(out.split("\n")), 1, repr(out))
+        self.assertIn("no clones", tui.strip_ansi(out))
+        self.assertLessEqual(tui.width(tui.strip_ansi(out)), statusline._LEFT_W, out)
 
     def test_a_frame_whose_repos_are_not_gathered_yet_says_so_rather_than_showing_none(self):
         """#512, at the renderer. `cmd_launch` deletes the cache before it draws anything

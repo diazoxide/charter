@@ -1046,9 +1046,17 @@ conversation wanted elsewhere is a new chat, opened with `charter <harness>` in 
 workspace. If you want the panels on another workspace, `F2 → workspace` moves your
 terminal to it and leaves every chat where it is.
 
-One consequence worth stating: a chat's workspace is now fixed at launch, so **renaming a
-workspace orphans its chats** — their record still names the old name. That was already
-true of any chat nobody had typed `workspace use` in, and it is now true of all of them.
+**Renaming a workspace does not orphan its chats, and that is not an exception to §4j.**
+For one release it did: a chat's workspace is fixed at launch, so `charter workspace rename
+alpha alpha2` left every chat in it still recording `alpha` — invisible to `alpha2`, and
+with no route back, because the pointer that used to repair it had stopped being a rung
+(#795). `rename` now repoints both of the records that ARE rungs, and bumps each frame so
+its panels repaint. §4j forbids moving a chat *between* workspaces, because that makes the
+harness's own cwd, files and history about a different plane; a rename moves no chat — the
+clones and the memory travel with the directory, and only the name changed — so following
+it is the chat keeping its identity. **Chat ids are not rewritten**, so after a rename you
+may see `alpha.1` beside a later `alpha2.3`. That is cosmetic and deliberate: rewriting ids
+would break every `$CHARTER_SESSION_ID` already exported into a live process.
 
 **That pointer, and everything else keyed on a chat, dies with the chat.** A chat id is
 `<workspace>.<n>` and the ordinal is handed back when the chat's state is reaped, so the
@@ -1097,6 +1105,28 @@ stays where it is.
 
 The wait and the failure are told apart by a fact rather than by a clock — the file is
 there and does not parse — so a gather that is merely slow is never called broken.
+
+**A workspace that is not on disk at all gets its own line, ahead of all three of those**,
+because all three are claims about a workspace that is there (#752). A frame outlives the
+directory it draws — `charter workspace remove`, a `git clean`, a teammate's pull, a plain
+`mv` — and none of those is something charter can hook, so the pane simply drew whichever
+"empty" the cache happened to reach, `⋯ gathering…` forever being the reported one. It now
+says what is true, with the command that changes it:
+
+```
+  no workspace <workspace> · charter workspace create <workspace>
+```
+
+Told apart by the same kind of fact as the line above it — `workspace.exists`, asked of the
+filesystem at the moment the pane is drawn — and nothing is repaired by drawing: the pane
+does not re-create the directory. A workspace that was *renamed* never reaches this line,
+because the chat followed the rename.
+
+The question is asked where the pane was about to say "nothing here" and **not** above the
+cache, so a table gathered before the workspace went stays on screen until the next gather
+empties it. That is deliberate: a panel reads its cache or says it has none, and a renderer
+that overrode its own cache from a `stat` would be re-deriving, on every repaint, state the
+gather owns.
 
 ## Configuring it
 

@@ -997,9 +997,14 @@ def own_workspace(fid: str) -> str | None:
 
     Two consequences, both deliberate. `docs/frame.md` no longer promises that `ws use`
     "moves the panels too", because it no longer does. And a chat with a pointer used to
-    follow a workspace RENAME (#752) while a chat without one was orphaned; every chat now
-    behaves like the second kind — more uniform, and a behaviour change rather than a
-    repair.
+    follow a workspace RENAME while a chat without one was orphaned; dropping the rung made
+    every chat behave like the second kind — more uniform, and worse in one respect,
+    because the repair route went with it (#795). **That is closed from the other end, by
+    :func:`rename_workspace`**: `workspace.rename` repoints both of the rungs below, so a
+    rename orphans nothing and needs no pointer to be a rung. §4j is untouched by it — a
+    rename does not move a chat between workspaces, it renames the one the chat is already
+    in — and a workspace that is GONE is the other answer, which `slots._repos` now says
+    out loud instead of drawing empty (#752).
 
     ``None`` where both rungs are empty, and that is a real answer rather than a failure:
     "this chat says nothing" belongs in nobody's roster, while :func:`workspace_for` still
@@ -1016,6 +1021,82 @@ def own_workspace(fid: str) -> str | None:
     if ws_mod.valid_name(pin):
         return pin
     return frame_workspace(fid)
+
+
+def rename_workspace(old: str, new: str) -> list[str]:
+    """Repoint every frame record that says ``old`` at ``new`` — the ids that moved.
+
+    **`workspace._rename_active_pointers`, one noun out, and #795 is the gap between the
+    two.** That function rewrites every per-session and per-terminal pointer whose VALUE is
+    the old name, so a renamed workspace stays the one its sessions act on. Since #791
+    those pointers are no longer rungs of :func:`own_workspace`, and nothing did the same
+    for the two rungs that are — so `charter workspace rename alpha alpha2` left every chat
+    in `alpha` still saying `alpha`: `chats.of_workspace("alpha2")` empty, and with it
+    `commands_frame._plane_session`, which is how a workspace tab and `charter -w` find a
+    plane's live session (BY its chats, never by a tmux session name). The chats were not
+    merely mislabelled; they were unreachable, and typing `charter workspace use alpha2`
+    inside one no longer repaired it because that pointer stopped being a rung.
+
+    **This is not §4j's "moving a chat between workspaces", and the design said so
+    first.** §4j forbids re-homing a chat because "the harness's own context — its cwd, its
+    files, its history — is suddenly about a different plane". A rename moves no chat: the
+    clones, the memory and the cwd travel with the directory, the siblings are the same
+    siblings, and the only thing that changed is what the workspace is called. Following it
+    is the chat KEEPING its identity, and :func:`new_chat_id` already reserved the mechanism
+    in as many words — "`frame_workspace` reads the workspace out of the frame's own
+    ``workspace`` file, **which can be repointed**, and the bars show that rather than the
+    prefix of the id". What §4j forbids and this does not do is rewrite the ID: `alpha.1`
+    stays `alpha.1` beside a later `alpha2.3`, because every `$CHARTER_SESSION_ID` already
+    exported into a live process spells the old one.
+
+    **Both rungs, each on its own value.** A frame's pin (`$CHARTER_WORKSPACE` as the launch
+    recorded it) outranks its launch record, so a walk that rewrote only the record would
+    leave a PINNED chat exactly as orphaned as before. They are matched independently for
+    `_rename_active_pointers`' reason: what moves is a record whose value is the old name,
+    not every record belonging to a frame that had one.
+
+    **A frame with no identity record is left without one.** :func:`identity` answers ``{}``
+    for a frame launched by a charter that predates it, and every reader treats that as "do
+    not take this frame's identity from here"; writing one here would hand a migration-era
+    frame a pin nobody set, which then outranks every rung below it.
+
+    **Each mover is :func:`bump`ed, because a panel repaints on a version bump and on
+    nothing else.** The rename is typed in ANOTHER terminal, so no hook fires inside the
+    frame's own session and nothing else is coming — #748's cost exactly: a record written
+    in silence is a panel that goes on contradicting it for as long as the frame is idle.
+
+    **No `is_dir()` filter on the scan, and its absence is deliberate.** `leave.plane_chats`
+    keeps one for a measured reason (#733) — a loose FILE called `api.2` in the frame root
+    is a name that would otherwise reach a tmux target — and that reason does not exist
+    here: nothing this function finds is handed to tmux, and the two questions it asks of a
+    name are :func:`frame_workspace` and :func:`identity`, both of which open a file INSIDE
+    the name and answer ``None``/``{}`` for a plain file (``NotADirectoryError`` is an
+    ``OSError``, which both already catch). So the filter could not change an outcome, and
+    a guard kept for a reason that is not the true one is how the real one gets deleted
+    later.
+
+    Best-effort at every step like the writers it calls: a frame root that cannot be listed
+    yields ``[]`` and a rename that could not repoint a chat is a chat that says the old
+    name, never a rename that half-happened.
+    """
+    moved: list[str] = []
+    try:
+        names = sorted(e.name for e in os.scandir(_root()))
+    except OSError:
+        return moved
+    for fid in names:
+        touched = False
+        if frame_workspace(fid) == old:
+            record_workspace(fid, new)
+            touched = True
+        ident = identity(fid)
+        if ident.get("CHARTER_WORKSPACE", "").strip() == old:
+            record_identity(fid, {**ident, "CHARTER_WORKSPACE": new})
+            touched = True
+        if touched:
+            bump(fid)
+            moved.append(fid)
+    return moved
 
 
 def workspace_for(fid: str) -> str:

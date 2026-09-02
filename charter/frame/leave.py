@@ -89,8 +89,10 @@ class Doomed(NamedTuple):
     #: recorded and not brought back; it is listed by nothing and appears here only so
     #: :func:`plan` has one place that drops it.
     closed: bool
-    #: Whether the workspace this chat belongs to still has a directory on disk. §4j
-    #: forbids re-homing a chat, so a missing workspace is *reported*, never repaired.
+    #: Whether the workspace this chat belongs to still has a directory on disk
+    #: (`workspace.exists`, the one predicate the repo pane asks too — #752). §4j forbids
+    #: re-homing a chat, so a missing workspace is *reported*, never repaired; a RENAMED
+    #: one is not missing at all, because `workspace.rename` repoints the chat (#795).
     homeless: bool
     #: Whether the recorded cwd is still a directory.
     cwd_gone: bool
@@ -162,7 +164,7 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
             active=False,
             exit_code=state.exit_code(fid),
             closed=False,
-            homeless=bool(ws) and not ws_mod.workspace_dir(ws).is_dir(),
+            homeless=bool(ws) and not ws_mod.exists(ws),
             cwd_gone=bool(cwd) and not os.path.isdir(cwd),
         ))
     return Plan(chats=tuple(out), focus=focus)
