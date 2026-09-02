@@ -326,6 +326,25 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
             self._run()
         self.assertEqual(self.launched[0].harness, "codex")
 
+    def test_a_directory_charter_cannot_enter_is_refused_before_the_launch(self):
+        """`cmd_launch` reads its cwd with `os.getcwd()`, so the open has to `os.chdir`
+        into the workspace — and a `chdir` that fails must stop the launch rather than
+        run it from wherever this process happened to be standing, which is a chat in
+        ANOTHER workspace. Refused before `cmd_launch` is called at all."""
+        with mock.patch("charter.commands_frame.os.chdir",
+                        side_effect=OSError(13, "denied")):
+            self._run()
+        self.assertEqual(self.launched, [])
+        self.assertIn("cannot enter", self.said.call_args[0][1])
+
+    def test_the_launcher_is_left_standing_where_it_started(self):
+        """The `finally` half of the same `chdir`, and `cmd_reopen`'s own rule: this
+        process goes on to re-lay-out two frames, and a launcher left in somebody else's
+        directory is the silent wrongness §4e's cwd item exists to close."""
+        was = os.getcwd()
+        self._run()
+        self.assertEqual(os.getcwd(), was)
+
     def test_with_neither_it_refuses_by_name_rather_than_guessing(self):
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
         with mock.patch.dict(config.HARNESS, {"default": ""}):
@@ -381,6 +400,24 @@ class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestC
             out.isatty.return_value = False
             commands_frame.cmd_launch(args)
         byp.assert_called_once()
+
+    def test_a_size_that_is_not_two_positive_integers_is_measured_instead(self):
+        """The handed-in size reaches `layout.session_argv` as `-x`/`-y`, where a
+        malformed pair is a tmux parse error that would take the whole launch down with
+        nothing on screen to say why — so it is validated rather than trusted, and an
+        unusable one falls back to the terminal reading `cmd_launch` always did.
+
+        Each shape is its own row because each is a separate `and`/`isinstance` in the
+        guard, and a single case would leave the rest of them free to be deleted."""
+        for bad in (None, (80,), (80, 24, 3), "80x24", (80.0, 24), ("80", 24),
+                    (0, 24), (80, 0), (-1, 24), (80, -1)):
+            with self.subTest(size=bad):
+                self.assertIsNone(
+                    commands_frame._launch_size(SimpleNamespace(size=bad)))
+
+    def test_a_size_of_two_positive_integers_is_taken(self):
+        self.assertEqual(
+            commands_frame._launch_size(SimpleNamespace(size=(132, 43))), (132, 43))
 
     def test_wants_attach_is_false_when_a_caller_says_so(self):
         """`_wants_attach`'s own docstring anticipated this: *"the day a third caller
