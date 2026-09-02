@@ -31,6 +31,21 @@ from tests._isolation import PersonaIso
 from tests.test_frame_chat_switch import _plant
 
 
+def _plain(row: str) -> str:
+    """*row* with the frame's own paint taken off.
+
+    The bar draws the tab you are on as a reverse-video block (`chrome.block`), so the
+    string a rung returns is no longer the string a terminal shows — and every question
+    below that is about TEXT (is this field a whole name? is `chats  2/3` the whole row?)
+    is about the second one. `tui.strip_ansi` is what `panel._write` runs for a plane
+    under `NO_COLOR`, so this is also literally what such a plane is shown.
+
+    Questions about COLUMNS do not go through here and must not: `tui.width` already
+    counts no SGR, so a width taken off the painted row is the width the pane sees.
+    """
+    return tui.strip_ansi(row)
+
+
 class TheLadderGivesUpWholeThings(unittest.TestCase):
     """`slots._bar` alone, against a list of names and a width — no plane underneath it.
 
@@ -129,7 +144,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
             narrowest = min(w for w in range(201)
                             if here in self._row(w, names=names, here=here))
             row = self._row(narrowest, names=names, here=here)
-            self.assertEqual(row.strip(), expected)
+            self.assertEqual(_plain(row).strip(), expected)
             self.assertEqual(tui.width(row), narrowest,
                              "the row does not fill the width it is first drawn at, so "
                              "this measures no boundary")
@@ -252,7 +267,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         positions = {f"{i}/{len(names)}" for i in range(1, len(names) + 1)}
         for width in range(0, 201):
             row = slots._bar("chats", list(names), "api-standby.2", width)
-            text = row[0] if row else ""
+            text = _plain(row[0]) if row else ""
             self.assertLessEqual(tui.width(text), width, repr(text))
             if not text:
                 continue
@@ -364,6 +379,43 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         self.assertEqual(row, row.rstrip(),
                          "an absent note still spent its separator")
 
+    def test_a_page_that_ends_the_list_spends_no_columns_on_a_count_it_has_not_got(self):
+        """The same rule one rung down, for the TRAILING `+N` — and the deletion sweep is
+        what asked for it.
+
+        A page whose last name is the last name in the list draws no trailing count, and
+        the separator that would have gone in front of it must go with it. The sweep found
+        `f"{gap}{trailing}" if trailing else ""` surviving: with the `else` collapsed, such
+        a page ends in the gap alone, which is two blank cells on a plane whose rules are
+        hidden and ` | ` on one whose rules are visible — a seam drawn between a tab and
+        nothing.
+
+        **It is not only cosmetic**, which is why it is asserted as a width rather than as
+        a strip. Those cells are measured: `_bar` refuses the whole rung when the composed
+        body will not fit, so a page carrying a phantom separator is given up one to three
+        columns earlier than it should be — a name lost from a pane that had room for it.
+
+        Asked over every width and every name, because which pages end the list depends on
+        both, and asked on a plane whose rules are VISIBLE as well, where the phantom is a
+        glyph rather than whitespace and `rstrip` alone would not see it.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for rules in ("hidden", "visible"):
+            with mock.patch.dict(config.FRAME, {"rules": rules}):
+                for here in names:
+                    for width in range(0, 201):
+                        row = _plain(self._row(width, names=names, here=here))
+                        if not row:
+                            continue
+                        self.assertEqual(
+                            row, row.rstrip(),
+                            f"{rules} at {width} on {here}: the row ends in the "
+                            f"separator of a count it did not draw — {row!r}")
+                        self.assertFalse(
+                            row.rstrip().endswith(slots._BAR_RULE),
+                            f"{rules} at {width} on {here}: a seam was drawn between the "
+                            f"last tab and nothing — {row!r}")
+
     def test_the_mark_follows_the_raw_name_and_not_the_repaired_one(self):
         """`contain.one_line` is a REPAIR, so two names differing only in what it repairs
         are one string after it — and a mark matched on the drawn text would follow the
@@ -371,7 +423,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         (`chats.ID_RE` and `workspace.valid_name` both refuse those characters), which is
         why the index is taken before containment rather than left to be found later."""
         names = ["api x", "apix"]
-        row = slots._bar("chats", list(names), "apix", 200)[0]
+        row = _plain(slots._bar("chats", list(names), "apix", 200)[0])
         marks = [f for f in row.split(" " * slots._BAR_GAP)
                  if f.strip().startswith(slots._BAR_MARK[0])]
         self.assertEqual(len(marks), 1,
@@ -398,7 +450,8 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
     columns it clicks by looking for the field in the string `_bar` returned, which is the
     thing the operator points at; asking `TABS` where it put something and then asking
     `TABS` what is there would agree with itself whatever the ladder did. The fixtures are
-    ASCII on purpose, so a character index into that string IS a terminal column — the one
+    ASCII on purpose, so what separates a character index from a terminal column is only
+    the frame's own paint — :meth:`_cells` is where the two are reconciled, and the one
     case that is about a name needing repair says so and measures with `tui.width`.
 
     **A bar is horizontal, so the map is per column, and the ladder is why it has to exist
@@ -422,10 +475,20 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         return rows[0] if rows else ""
 
     def _cells(self, row, field):
-        """Every column *field* occupies in *row*, taken from the drawn row itself."""
+        """Every column *field* occupies in *row*, taken from the drawn row itself.
+
+        **A character index is not a column, and this is where the two stopped being one
+        number.** The bar paints the tab you are on (`chrome.block`), so every field right
+        of it sits some escape bytes further into the string than it sits into the pane —
+        and a case that clicked the character index would be clicking a column left of the
+        one it read, which is precisely the off-by-a-tab this class exists to catch.
+        `tui.width` of the text BEFORE the field is the column, and it counts no SGR, so
+        it is right whether or not anything on the row is painted.
+        """
         at = row.index(field)
         self.assertNotIn(field, row[at + 1:], f"{field!r} is not unique in {row!r}")
-        return range(at, at + len(field))
+        start = tui.width(row[:at])
+        return range(start, start + tui.width(field))
 
     def test_every_tab_on_a_wide_row_resolves_to_its_own_name(self):
         """The whole feature, at the rung that draws every name: point at a tab, get that
@@ -494,21 +557,64 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         for col in self._cells(row, "api.2"):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
 
-    def test_neither_overflow_count_resolves_to_anything(self):
+    def test_neither_overflow_count_switches_to_anything(self):
         """A `+N` stands for names that are NOT on the row, so there is nothing there to
         switch to — `…(+N more)`'s rule one axis over. **Both ends**, and the LEADING one
         is the new half: it sits between the heading and the first tab, so a map measured
         from the lead rather than from where the tabs actually start would hand its cells
         to the first name on the page — a click landing one tab off where the operator
-        pressed."""
+        pressed.
+
+        This is still exactly true and it is no longer the whole answer: a count is a
+        `more_at` cell now, which is the case below. The two are separate methods for
+        `_Tabs.more_at`'s reason, so they get separate cases: what would be wrong is a
+        count that started SWITCHING somewhere, and that is what this keeps out.
+        """
         names = [f"workspace-{i:02d}" for i in range(15)]
-        row = self._draw(80, names=names, here="workspace-07")
+        row = _plain(self._draw(80, names=names, here="workspace-07"))
         counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
                   if f.strip().startswith("+")]
         self.assertEqual(len(counts), 2, f"this width is not a page in the middle: {row!r}")
         for count in counts:
             for col in self._cells(row, count):
                 self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_both_overflow_counts_are_a_cell_that_opens_the_picker(self):
+        """*"when workspaces are more we are showing `+N` now in tabs — but user can't
+        click and see other workspaces."*
+
+        The operator pressed one. That is the strongest evidence available about what a
+        `+9` looks like it does, and the answer was nothing at all.
+
+        **Both ends, measured off the drawn row**, for the reason every case in this class
+        gives: the leading count is the one a map built from the heading rather than from
+        the composition would put in the wrong place, and it is drawn at a different width
+        than the trailing one (`+13` against `+1`), so a `_span` measured with `len` would
+        pass on one and fail on the other only for names that sort late.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        row = _plain(self._draw(80, names=names, here="workspace-07"))
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        self.assertEqual(len(counts), 2, f"this width is not a page in the middle: {row!r}")
+        for count in counts:
+            for col in self._cells(row, count):
+                self.assertTrue(slots.TABS.more_at(col),
+                                f"the {count} is still inert at column {col}: {row!r}")
+
+    def test_nothing_but_a_count_is_a_cell_that_opens_the_picker(self):
+        """The negative, and it is the one that keeps the two answers apart. A tab, the
+        heading, a gap and the space past the last name must all answer `more_at` no —
+        otherwise a click meant for a workspace would open a palette instead of switching,
+        which is the same class of wrong as switching to the neighbour."""
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        row = _plain(self._draw(80, names=names, here="workspace-07"))
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        opening = {c for c in range(200) if slots.TABS.more_at(c)}
+        expected = {col for count in counts for col in self._cells(row, count)}
+        self.assertEqual(opening, expected,
+                         f"a cell that is not a count opens the picker: {row!r}")
 
     def test_a_page_that_starts_in_the_middle_still_maps_its_tabs_where_they_are(self):
         """The leading count moves every tab right of where a bar without one puts them.
@@ -538,10 +644,39 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
 
     def test_the_rung_that_says_only_where_you_are_has_no_tabs_at_all(self):
         """`2/3` is a position, not a name, and there is no name on the row to click."""
-        row = self._draw(16, here="api.2")
+        row = _plain(self._draw(16, here="api.2"))
         self.assertEqual(row.strip(), "chats  2/3", repr(row))
         for col in range(0, 200):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_rung_that_says_only_where_you_are_still_opens_the_picker(self):
+        """**The width where this matters most.** A frame narrow enough to fall to `2/3`
+        has a strip that can be pointed at and not pressed — the whole list is off the row,
+        so every rule above about clicking a tab is vacuous here. `2/3` is the same field
+        the counts are, saying the same thing about all three names instead of about nine
+        of fifteen, so it opens the same chooser.
+
+        The heading and the space past it stay inert, which is what says the cells were
+        measured rather than the whole row being made live."""
+        row = _plain(self._draw(16, here="api.2"))
+        for col in self._cells(row, "2/3"):
+            self.assertTrue(slots.TABS.more_at(col), f"column {col} of {row!r}")
+        for col in self._cells(row, "chats"):
+            self.assertFalse(slots.TABS.more_at(col), f"the heading opened a picker")
+        self.assertFalse(slots.TABS.more_at(tui.width(row) + 5),
+                         "the space past the row opened a picker")
+
+    def test_a_rung_that_draws_nothing_opens_nothing(self):
+        """`_Viewport.blank`'s half, for the third thing `publish` writes. A bar narrowed
+        past its last rung draws no row — so there is no count on screen, and a `more_at`
+        that survived the narrowing would open a palette from a cell the operator can see
+        is empty."""
+        self._draw(80, names=[f"workspace-{i:02d}" for i in range(15)],
+                   here="workspace-07")
+        self.assertTrue(any(slots.TABS.more_at(c) for c in range(80)))
+        self.assertEqual(self._draw(11), "")
+        self.assertEqual([c for c in range(200) if slots.TABS.more_at(c)], [],
+                         "a bar that drew no row kept the counts it is no longer drawing")
 
     def test_a_narrowed_bar_forgets_the_tabs_it_is_no_longer_drawing(self):
         """**The `_Viewport.blank` half, one axis over.** A pane that drew every name and
@@ -656,6 +791,241 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
                         f"{width}: pressing column {col} twice switched twice — "
                         f"{name} then {slots.TABS.switch_to(col)}\n"
                         f"  before {row!r}\n  after  {after!r}")
+
+
+class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
+    """The strip's own paint: a block on the tab you are on, and nothing anywhere else.
+
+    *"now we are showing plain text, no colors, no active tab/session color"* — the report
+    this class is the standing form of. The bar drew a `*` and nothing else, which is a
+    caption's way of saying "you are here" and not a strip's.
+
+    **Reverse video and not a colour, which is `frame/chrome.py`'s decision and not a
+    fresh one.** Reverse is the operator's own foreground and background exchanged, so it
+    is right on every theme charter cannot see — including the Solarized palettes, where
+    every named grey charter could have picked IS somebody's background. It also survives
+    every terminal tier tmux downsamples for. And it is orthogonal to `[frame] chrome`,
+    which is the shipped `off`: that key paints the pane's BACKGROUND through a tmux pane
+    option and says nothing about what a renderer writes into its own row.
+
+    **`slots._BAR_MARK` stays, and that is what makes the design read with no colour at
+    all.** `panel._write` strips every escape from every row on a plane under `NO_COLOR`,
+    and the Linux console can carry no highlight worth the name — so a strip whose only
+    answer to "which tab am I on" was the paint would have no answer there. The `*` is a
+    character. The block is on top of it, never instead of it.
+    """
+
+    NAMES = ["api.1", "api.2", "api.3"]
+    #: Spelled out rather than read off `chrome._REVERSE` and `chrome._OFF`. A case built
+    #: from the constants it is about agrees with any value they take, which is the
+    #: survivor `commands_change.BLOCK_END` produced — so the escape a terminal actually
+    #: receives is written here, by hand, a second time.
+    ON, OFF = "\x1b[7m", "\x1b[0m"
+
+    def setUp(self):
+        slots.TABS.forget()
+        self.addCleanup(slots.TABS.forget)
+
+    def _row(self, width=200, names=None, here="api.2"):
+        rows = slots._bar("chats", list(names or self.NAMES), here, width)
+        return rows[0] if rows else ""
+
+    def test_the_tab_you_are_on_is_a_block_and_no_other_tab_is(self):
+        row = self._row()
+        self.assertIn(f"{self.ON}*api.2{self.OFF}", row)
+        self.assertEqual(row.count(self.ON), 1, f"more than one block: {row!r}")
+
+    def test_the_block_covers_the_mark_and_the_name_and_stops(self):
+        """**Exactly the cells `slots.TABS` gives that tab, which is the point.** A block
+        one cell wide either way would highlight a column that answers for a different tab
+        — or for no tab — and the operator would be pointing at what they can see is lit.
+        """
+        row = self._row()
+        painted = row.split(self.ON, 1)[1].split(self.OFF, 1)[0]
+        self.assertEqual(painted, "*api.2")
+        start = tui.width(row[:row.index(self.ON)])
+        for col in range(start, start + tui.width(painted)):
+            self.assertIsNone(slots.TABS.switch_to(col),
+                              f"column {col} is inside the block and is not the tab you "
+                              f"are on: {row!r}")
+        self.assertEqual(slots.TABS.switch_to(start - 1), None)
+        self.assertEqual(slots.TABS.switch_to(start + tui.width(painted)), None)
+
+    def test_the_paint_costs_the_row_no_cell_at_all(self):
+        """Which is why it could be added to a strip that is already competing for columns.
+        Asked at every width, so a rung that measured the painted body instead of the
+        plain one would be caught at the boundary where it overflows rather than only at
+        the wide end."""
+        for width in range(0, 201):
+            painted = self._row(width)
+            plain = _plain(painted)
+            self.assertEqual(tui.width(painted), tui.width(plain), repr(painted))
+            self.assertLessEqual(tui.width(painted), width, repr(painted))
+
+    def test_a_row_that_is_on_no_tab_paints_nothing(self):
+        """`here` naming nothing in the list is a real state — the workspace bar draws it
+        for a frame whose recorded workspace has been deleted. Nothing is marked, so
+        nothing is lit; a block on a tab the frame is not on would be the row claiming a
+        position it has just declined to claim one field over."""
+        row = self._row(here="nowhere")
+        self.assertNotIn(self.ON, row, f"an unmarked row painted something: {row!r}")
+
+    def test_with_every_escape_stripped_the_row_still_says_where_you_are(self):
+        """`NO_COLOR`, the Linux console, `charter panel chats --session x > /tmp/log`.
+        The strip has to keep working on all three, and this is the property that says it
+        does: the answer survives the paint being deleted."""
+        row = _plain(self._row())
+        self.assertIn(f"{slots._BAR_MARK[0]}api.2", row)
+        self.assertNotIn(f"{slots._BAR_MARK[0]}api.1", row)
+        self.assertNotIn(f"{slots._BAR_MARK[0]}api.3", row)
+
+    def test_every_column_of_a_painted_row_still_answers_for_the_tab_under_it(self):
+        """**The regression the paint could actually cause**, asked directly and at both
+        the rung that draws every name and the rung that draws a page.
+
+        Escapes make the string longer than the row, so a map measured off character
+        positions would hand every tab right of the block to its left-hand neighbour — a
+        real name, a plausible switch, and wrong. The map is built from `tui.width` of the
+        fields, which counts no SGR, and this is what says so.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for width in (200, 120, 80, 60):
+            with self.subTest(width=width):
+                row = self._row(width, names=names, here="workspace-07")
+                if not row:
+                    continue
+                plain = _plain(row)
+                for name in (n for n in names if n in plain):
+                    at = plain.index(name) - tui.width(slots._BAR_MARK[0])
+                    want = None if name == "workspace-07" else name
+                    for col in range(at, at + 1 + tui.width(name)):
+                        self.assertEqual(slots.TABS.switch_to(col), want,
+                                         f"{width}: column {col} of {plain!r}")
+
+
+class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
+    """`[frame] rules`, one scope in — the seam between two TABS rather than two panes.
+
+    *"we don't have any separator borders."* The key that answers that question already
+    exists and the operator has already been asked it: `rules = "hidden"` (shipped) means
+    "I want a surface with no seams in it", `rules = "visible"` means "show me the
+    structure". A second key for the tab strip would let one frame draw pane borders and
+    no tab rules, which is the disagreement `instance.FRAME_RULES` exists to end.
+
+    **The glyph is ASCII and that is the sharp end of this class.** `│` is what an IDE
+    draws and it is East-Asian *Ambiguous*: `tui.width` says one cell, a terminal may draw
+    two. The repo table draws box glyphs and can afford to because its click map is per
+    ROW. A bar's map is per COLUMN, so a separator that comes out a cell wider than it was
+    measured shifts every tab right of it — ten separators, ten columns, and the operator
+    presses one workspace and lands on another. `component.EVENT_KINDS`' "fires wrongly",
+    reached through a glyph.
+    """
+
+    NAMES = ["api.1", "api.2", "api.3"]
+
+    def setUp(self):
+        slots.TABS.forget()
+        self.addCleanup(slots.TABS.forget)
+
+    def _with(self, rules):
+        return mock.patch.dict(config.FRAME, {"rules": rules})
+
+    def _row(self, width=200, names=None, here="api.2", rules="hidden"):
+        with self._with(rules):
+            rows = slots._bar("chats", list(names or self.NAMES), here, width)
+        return rows[0] if rows else ""
+
+    def test_a_plane_whose_rules_are_hidden_draws_the_row_it_always_drew(self):
+        """**The shipped default costs nothing**, which is what made this affordable on a
+        row that is already short of columns. Byte for byte the old composition: two
+        blanks between two tabs and no glyph anywhere."""
+        row = _plain(self._row(rules="hidden"))
+        self.assertEqual(row.strip(), "chats   api.1  *api.2   api.3")
+        self.assertNotIn(slots._BAR_RULE, row)
+
+    def test_a_plane_whose_rules_are_visible_puts_one_between_every_pair(self):
+        row = _plain(self._row(rules="visible"))
+        self.assertEqual(row.strip(), "chats   api.1 | *api.2 |  api.3")
+        self.assertEqual(row.count(slots._BAR_RULE), len(self.NAMES) - 1)
+
+    def test_the_rule_is_a_glyph_no_terminal_draws_two_cells_wide(self):
+        """Asked as the PROPERTY rather than as `== "|"`: what matters is that no terminal
+        may disagree with `tui.width` about it, and every character outside ASCII is a
+        character some terminal might. A future edit reaching for `│` because it looks
+        better fails here, which is where the reason is written down."""
+        self.assertEqual(tui.width(slots._BAR_RULE), 1)
+        self.assertTrue(slots._BAR_RULE.isascii(),
+                        f"{slots._BAR_RULE!r} is outside ASCII, so a terminal may draw it "
+                        f"a different width than this row was measured at — and every tab "
+                        f"right of it then answers a click meant for its neighbour")
+
+    def test_nothing_the_strip_draws_is_outside_ascii(self):
+        """The rule above, asked of the WHOLE row rather than of one constant — the mark,
+        the separator, the counts and the position. A name is not charter's to hold to
+        this and is excluded by construction: these fixtures are ASCII, so anything else
+        on the row came from this module."""
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for width in range(0, 261):
+            row = _plain(self._row(width, names=names, here="workspace-07",
+                                   rules="visible"))
+            self.assertTrue(row.isascii(), f"{width}: {row!r}")
+
+    def test_the_rule_belongs_to_neither_tab(self):
+        """A seam is a cell the operator can see is not a name. Picking the nearer one for
+        it would be the clamp `events.Dispatcher._on_canvas` refuses one rectangle out —
+        and here it would be worse than for a blank gap, because a rule LOOKS like an
+        edge and the tab it would be read as is the one on the far side of it."""
+        row = self._row(rules="visible", here="nowhere")
+        plain = _plain(row)
+        self.assertIn(slots._BAR_RULE, plain)
+        for col, ch in enumerate(plain):
+            if ch == slots._BAR_RULE:
+                self.assertIsNone(slots.TABS.switch_to(col),
+                                  f"the seam at column {col} answered for a tab: {plain!r}")
+
+    def test_every_column_of_a_ruled_row_answers_for_the_tab_under_it(self):
+        """The whole map, on a plane that draws rules, at four widths and on a list long
+        enough to reach the windowed rung. A gap read as two cells in the cut and drawn as
+        three would put every tab one column left of where the map says it is."""
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for width in (300, 200, 120, 80):
+            with self.subTest(width=width):
+                row = self._row(width, names=names, here="workspace-07",
+                                rules="visible")
+                if not row:
+                    continue
+                plain = _plain(row)
+                self.assertLessEqual(tui.width(plain), width, repr(plain))
+                for name in (n for n in names if n in plain):
+                    at = plain.index(name) - tui.width(slots._BAR_MARK[0])
+                    want = None if name == "workspace-07" else name
+                    for col in range(at, at + 1 + tui.width(name)):
+                        self.assertEqual(slots.TABS.switch_to(col), want,
+                                         f"{width}: column {col} of {plain!r}")
+
+    def test_the_ladder_pays_for_the_rules_rather_than_overflowing(self):
+        """**A rule costs a column and the ladder is what finds it.** At the width where
+        every name fits without rules, the same row with rules on cannot hold them all —
+        so it must give up a whole name, exactly as it does for a narrower pane, and never
+        run past the width it was given.
+
+        Asked at every width from 0 to 300 on this project's own fifteen workspaces, which
+        is where fourteen extra cells is a name and a half.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for width in range(0, 301):
+            with self._with("visible"):
+                rows = slots._bar("workspaces", list(names), "workspace-07", width)
+            text = _plain(rows[0]) if rows else ""
+            self.assertLessEqual(tui.width(text), width, f"{width}: {text!r}")
+        widest = next(w for w in range(500)
+                      if all(n in _plain(self._row(w, names=names, here="workspace-07",
+                                                   rules="visible")) for n in names))
+        without = next(w for w in range(500)
+                       if all(n in _plain(self._row(w, names=names, here="workspace-07",
+                                                    rules="hidden")) for n in names))
+        self.assertEqual(widest - without, len(names) - 1,
+                         "a plane that draws rules pays exactly one cell per seam")
 
 
 class ThisPlaneIsWhyTheRungIsWindowed(unittest.TestCase):

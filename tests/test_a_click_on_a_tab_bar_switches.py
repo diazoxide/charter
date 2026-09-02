@@ -34,7 +34,7 @@ import os
 import unittest
 from unittest import mock
 
-from charter import commands_frame, config, util
+from charter import commands_frame, config, tui, util
 from charter.frame import (builtin_actions, builtins, chats, component, events, overlay,
                            slots, state)
 
@@ -86,9 +86,18 @@ class _ABarThatWasDrawn(PersonaIso):
         return builtins.build(fid).get(cid).on_event
 
     def _column_of(self, row: str, field: str) -> int:
+        """Which COLUMN of the drawn *row* the field *field* starts in.
+
+        **`tui.width` of what comes before it, never the character index.** The bar paints
+        the tab you are on as a reverse-video block (`chrome.block`), so a field to the
+        right of it sits further into the STRING than it sits into the pane — and a case
+        that pressed the character index would be pressing a column the operator's eye is
+        not on, which is the one mistake every case in this file exists to catch. `width`
+        counts no SGR, so this is the same number it always was on an unpainted row.
+        """
         at = row.index(field)
         self.assertNotIn(field, row[at + 1:], f"{field!r} is not unique in {row!r}")
-        return at
+        return tui.width(row[:at])
 
 
 class AClickOnAChatTabStartsTheChatSwitch(_ABarThatWasDrawn, unittest.TestCase):
@@ -307,3 +316,139 @@ class AClickIsTheWholeGesture(_ABarThatWasDrawn, unittest.TestCase):
                 d._deliver(overlay.Event(overlay.SCROLL, direction, row=0,
                                          col=self.beta)))
         self.assertEqual(self.spawned, [])
+
+
+class AClickOnTheOverflowCountOpensThePalette(_ABarThatWasDrawn, unittest.TestCase):
+    """*"when workspaces are more we are showing `+N` now in tabs — but user can't click
+    and see other workspaces."*
+
+    The operator pressed the `+9`. It is the strongest evidence available about what that
+    field looks like it does, and what it did was nothing at all: the count is drawn for
+    names that are NOT on the row, so `slots._Tabs.switch_to` correctly refused to pick
+    one of them, and the refusal was the whole of the behaviour.
+
+    **It opens the palette rather than turning a page**, and the alternative is worth
+    saying out loud because it is the obvious one. `slots._page` cuts the list into
+    consecutive pages that depend on the NAMES and the WIDTH and on nothing remembered —
+    that is what makes a drawn tab safe to press twice, and its own docstring measures what
+    a remembered window costs (a panel does not survive `cmd_respawn`, a density change
+    re-splits the panes, and two frames on one plane at one width would then disagree). A
+    `+N` that paged would need exactly that memory.
+
+    What the palette gives instead is §3.6's own sentence — *the bar is a readout, never
+    the mechanism* — with the hand-off happening where the readout runs out of room.
+
+    The COLUMN half of this (which cells are a count, and that nothing else is) is
+    `tests/test_frame_bars.AClickResolvesAgainstWhatWasDrawn`; this file is what happens
+    once one is pressed.
+    """
+
+    #: Narrow enough that this plane's names do not all fit, so the row carries a count at
+    #: each end. Chosen against `NAMES` below rather than as a round number — the case
+    #: asserts there are two counts, so a width that drew none fails loudly.
+    WIDTH = 80
+
+    NAMES = [f"workspace-{i:02d}" for i in range(15)]
+    HERE = "workspace-07"
+
+    def setUp(self):
+        super().setUp()
+        for name in self.NAMES:
+            (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
+        state.frame_dir("f1", create=True)
+        state.record_workspace("f1", self.HERE)
+        self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""},
+                                          clear=False))
+        self.row = tui.strip_ansi(slots.workspaces_bar("f1", self.WIDTH)[0])
+        self.on_event = self._handler("workspaces", "f1")
+        self.counts = [f.strip() for f in self.row.split(" " * slots._BAR_GAP)
+                       if f.strip().startswith("+")]
+        self.assertEqual(len(self.counts), 2,
+                         f"this width draws no page in the middle: {self.row!r}")
+
+    def _column_of_count(self, count: str) -> int:
+        return self._column_of(self.row, count)
+
+    def test_a_press_on_either_count_opens_the_palette(self):
+        """Both ends, and the argv spelled out. `frame-palette` with no arguments is what
+        `F2` runs and what a click on a door runs (`builtins._strip_events`) — one answer
+        to "how does a frame surface open the palette", shared rather than copied."""
+        for count in self.counts:
+            with self.subTest(count=count):
+                self.spawned.clear()
+                self.on_event(_press(self._column_of_count(count)))
+                self.assertEqual(
+                    self.spawned,
+                    [(util.self_relaunch_argv("frame-palette"), "f1")])
+
+    def test_it_opens_exactly_the_door_a_strip_click_opens(self):
+        """One palette, two front doors on one frame. A count that assembled its own argv
+        would be a second answer to a question `_strip_events` already answers, and the
+        two would drift the day either grew an option."""
+        self.on_event(_press(self._column_of_count(self.counts[0])))
+        by_count = self.spawned.pop()
+        slots.DOORS.forget()
+        slots.render("top", "f1")
+        door = next(c for c in range(self.WIDTH) if slots.DOORS.opens_palette(c))
+        builtins.build("f1").get("identity").on_event(_press(door))
+        self.assertEqual(by_count, self.spawned.pop())
+
+    def test_no_switch_is_started_by_a_count(self):
+        """The count names no workspace, so nothing may be switched to on the strength of
+        one. A handler that fell through to `frame-switch` with an empty name would reach
+        `cmd_switch`, which is the class of wrongness §4i is about."""
+        for count in self.counts:
+            self.on_event(_press(self._column_of_count(count)))
+        self.assertTrue(all(argv[-2:-1] != ["--workspace"] or argv[-1] in self.NAMES
+                            for argv, _fid in self.spawned))
+        self.assertTrue(all("frame-switch" not in argv for argv, _fid in self.spawned),
+                        f"a count started a switch: {self.spawned!r}")
+
+    def test_a_press_on_a_tab_still_switches_and_opens_nothing(self):
+        """The control. Both answers live in one handler now, so a case that only asserted
+        the new one would pass with the old one deleted."""
+        drawn = [n for n in self.NAMES if n in self.row and n != self.HERE]
+        self.assertTrue(drawn, f"no switchable tab on this page: {self.row!r}")
+        self.on_event(_press(self._column_of(self.row, f" {drawn[0]}")))
+        self.assertEqual(
+            self.spawned,
+            [(util.self_relaunch_argv("frame-switch", "--workspace", drawn[0]), "f1")])
+
+    def test_the_release_opens_nothing_either(self):
+        """§4i, kept for the second gesture as well as the first: the press is where the
+        operator pointed, and a drag that began on a pane border and ended over this row
+        delivers only a release."""
+        for count in self.counts:
+            self.on_event(_press(self._column_of_count(count), pressed=False))
+        self.assertEqual(self.spawned, [])
+
+    def test_the_middle_and_right_buttons_open_nothing(self):
+        """Middle-click is paste and right-click is the terminal's own menu, exactly as for
+        a tab — the count did not get its own button rule."""
+        for button in ("middle", "right"):
+            self.on_event(_press(self._column_of_count(self.counts[0]), name=button))
+        self.assertEqual(self.spawned, [])
+
+    def test_the_handler_is_still_falsy_when_it_opened_the_palette(self):
+        """Truthy means *repaint me* and nothing in this rectangle changed: the palette
+        carves its pane off the HARNESS. `_strip_events` answers the same way for the same
+        reason."""
+        self.assertFalse(self.on_event(_press(self._column_of_count(self.counts[0]))))
+        self.assertEqual(len(self.spawned), 1, "the case measured nothing")
+
+    def test_the_chat_bar_hands_off_to_the_same_place(self):
+        """One function draws both bars, so one handler answers for both — and the palette
+        is the door for either noun. A count that opened a workspace picker from the chat
+        bar would be the two bars degrading differently, which `slots._bar` exists to stop.
+        """
+        for chat in [f"api.{i}" for i in range(1, 13)]:
+            _plant(chat, workspace="api")
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "api"}):
+            row = tui.strip_ansi(slots.chats_bar("api.6", 44)[0])
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        self.assertTrue(counts, f"this width draws no count: {row!r}")
+        self.spawned.clear()
+        self._handler("chats", "api.6")(_press(self._column_of(row, counts[0])))
+        self.assertEqual(self.spawned,
+                         [(util.self_relaunch_argv("frame-palette"), "api.6")])

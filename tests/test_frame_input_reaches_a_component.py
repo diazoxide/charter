@@ -71,7 +71,7 @@ import unittest
 from pathlib import Path
 
 from charter import commands_frame, config
-from charter.frame import layout, state, tmuxctl
+from charter.frame import layout, overlay, state, tmuxctl
 
 from tests import _tmuxreap
 from tests._isolation import PersonaIso
@@ -242,6 +242,16 @@ class _AFrameWithProviderPanels(PersonaIso):
     #: the pointer cases are about.
     MOUSE = False
 
+    #: How big the window — and therefore the pty the client is born on — is made.
+    #:
+    #: A class attribute rather than a literal in `setUp` because
+    #: :class:`APointerPastColumnTwoTwentyThreeLandsWhereItWasAimed` needs a window WIDER
+    #: than 223 columns and everything else about that fixture is identical. 100x24 is
+    #: what every case here has always run at and stays the default, so no existing case
+    #: changes size to make room for the new one — `_fork_pty`'s measurement is about the
+    #: client agreeing with the window, not about which size they agree on.
+    COLS, ROWS = 100, 24
+
     def setUp(self) -> None:
         super().setUp()
         v = tmuxctl.version()
@@ -264,7 +274,8 @@ class _AFrameWithProviderPanels(PersonaIso):
         self.env.pop("CHARTER_HOME", None)
 
         started = _tmux("-f", "/dev/null", "new-session", "-d", "-s", self.fid,
-                        "-x", "100", "-y", "24", "-P", "-F", "#{pane_id}", "cat",
+                        "-x", str(self.COLS), "-y", str(self.ROWS),
+                        "-P", "-F", "#{pane_id}", "cat",
                         env=self.env)
         self.assertEqual(started.returncode, 0, started.stderr)
         self.harness = started.stdout.strip()
@@ -837,6 +848,123 @@ class APointerWithTmuxsOwnMouseOn(_AFrameWithProviderPanels):
                         f"the wheel never reached it: {self._pointed()!r}")
         self.assertEqual(self._active(), self.harness,
                          "the wheel moved the keyboard")
+
+
+class APointerPastColumnTwoTwentyThreeLandsWhereItWasAimed(_AFrameWithProviderPanels):
+    """A click on the 240th column of a 244-column pane is a click on the 240th column.
+
+    **The one terminal limit found so far that could degrade to "fires wrongly".** Every
+    other one degrades to *never fires*, which `component.EVENT_KINDS` asks for and which
+    costs an operator a dead affordance and nothing else. This one would hand a component
+    a real column that is not the one the pointer was over — and the widest single row in
+    the frame is a tab bar, so on the 244-column window this was measured for it would
+    switch the operator to a **real but wrong workspace**.
+
+    The suspicion came from tmux's own CHANGES for 3.3: *"Do not report mouse positions
+    (incorrectly) above the maximum of 223"*, which says in as many words that before 3.3
+    tmux got this wrong — and 3.2 is `tmuxctl.FLOOR`. 223 is where the X10 mouse encoding
+    runs out: it spells a coordinate as one byte at ``value + 32``, so column 224 needs
+    byte 256 and wraps.
+
+    **Measured on the real 3.2 floor binary and on 3.7c, and the suspicion is refuted for
+    charter — on the leg it was aimed at.** There are two legs and only one of them is
+    charter's::
+
+        terminal -> tmux   what the outer terminal reports, in whatever mode tmux asked
+                           it for.
+        tmux -> pane       what tmux synthesises for the pane's program, in whatever mode
+                           the PANE asked for.
+
+    On the first leg, at a 244-column pty with ``TERM=xterm-256color``, **tmux 3.2 asks
+    the outer terminal for ``?1006h``** — unconditionally, alongside ``?1000h``/``?1002h``,
+    and with no ``XM``/``xm`` capability in that terminfo entry to have asked for it
+    (stock macOS ships a 2015 entry that has neither). So the terminal reports in SGR and
+    no wrap is possible, on either version::
+
+        tmux 3.2   SGR col 240 in  ->  pane read b'\\x1b[<0;240;1M'
+        tmux 3.7c  SGR col 240 in  ->  pane read b'\\x1b[<0;240;1M'
+
+    The second leg is where the CHANGES entry lives, and it is reached only by a pane that
+    asks for ``1000`` **without** ``1006``. Measured with exactly such a pane::
+
+        tmux 3.2   SGR col 240 in  ->  pane read b'\\x1b[M \\x10!'   <- WRAPPED, col 16-ish
+        tmux 3.2   SGR col 244 in  ->  pane read b'\\x1b[M \\x14!'   <- WRAPPED
+        tmux 3.7c  SGR col 240 in  ->  pane read b'\\x1b[M \\xff!'   <- clamped at 223
+        tmux 3.7c  SGR col 244 in  ->  pane read b'\\x1b[M \\xff!'   <- clamped at 223
+
+    So the wrap is real at the floor, and `overlay.MOUSE_ON` asking for **1006 before
+    1000** is the single line that keeps charter off it. That is what
+    :meth:`test_the_request_is_what_keeps_a_wide_column_honest` pins, and why it is
+    spelled as a literal: the constant looks like belt-and-braces and is load-bearing on
+    the floor tmux charter declares.
+
+    **And the fallback is safe rather than merely unreached.** A terminal too old to speak
+    SGR sends X10 into tmux, tmux forwards that form verbatim (`overlay.decode`'s own
+    measurement), and `decode` reads the payload bytes as stray single-byte KEYS — which
+    `events.DELIVERED` never delivers. Never fires, not fires wrongly.
+
+    No refusal was written into charter for any of this, and that is the finding: a guard
+    refusing clicks past column 223 on 3.2 would have refused clicks that measurably
+    arrive correctly.
+    """
+
+    #: Wide enough that the interesting columns are past where X10 runs out, and the width
+    #: the operator this was measured for actually runs.
+    COLS, ROWS = 244, 24
+
+    def _pointed(self) -> str:
+        return self._shown(POINT_CID)
+
+    def test_the_request_is_what_keeps_a_wide_column_honest(self):
+        """`overlay.MOUSE_ON` asks for SGR, and asks for it FIRST.
+
+        A literal, and both halves matter. Dropping ``?1006h`` puts every panel on the
+        X10 leg above, where the 3.2 floor wraps a column past 223 onto a real, wrong one.
+        Asking for it *after* ``?1000h`` is the same hazard with a race in front of it.
+        """
+        self.assertEqual(overlay.MOUSE_ON, "\x1b[?1006h\x1b[?1000h")
+        self.assertLess(overlay.MOUSE_ON.index("1006"), overlay.MOUSE_ON.index("1000"),
+                        "the pane asks for press/release before it asks for SGR, so tmux "
+                        "may synthesise an X10 report for it — which wraps past column "
+                        "223 at the 3.2 floor")
+
+    def test_an_x10_report_reaches_no_component_at_all(self):
+        """The other end of the same measurement, as an assertion rather than a paragraph.
+
+        These are the exact bytes tmux 3.2 forwarded for a wrapped column. `decode` must
+        produce no `click` from them — a `key` is fine, because `events.DELIVERED` carries
+        none, and the whole point is that the wrap can only ever be silence.
+        """
+        for payload in (b"\x1b[M \x105", b"\x1b[M \x145", b"\x1b[M \xff!"):
+            with self.subTest(payload=payload):
+                evs, rest = overlay.decode(payload, final=True)
+                self.assertEqual(rest, b"")
+                self.assertEqual([e for e in evs if e.kind != overlay.KEY], [],
+                                 f"a wrapped X10 report became a pointer event: {evs!r}")
+
+    def test_a_click_past_two_hundred_and_twenty_three_is_the_column_it_was_aimed_at(self):
+        """The whole finding, end to end, through a real tmux on a real 244-column pty.
+
+        Aimed at four columns rather than one, because the failure this is about is an
+        arithmetic one and a single sample cannot tell "the column survived" from "the
+        column happened to be right". 100 is the control below the boundary; 223 is the
+        last column X10 can spell; 224 is the first it cannot; and the last column of the
+        pane is where the operator's `+N` sits on a full-width tab bar.
+        """
+        self._select(self.harness)
+        left, _top, width, _h = self._rect(self.pane[POINT_CID])
+        self.assertEqual(left, 0, "this pane does not start at the window's left edge, so "
+                                  "the columns below are not the ones being asked about")
+        self.assertGreater(width, 223,
+                           f"this pane is {width} columns wide, so nothing here is past "
+                           f"the boundary the case is about")
+        for col in (100, 222, 223, width - 1):
+            with self.subTest(col=col):
+                self._point(self.pane[POINT_CID], row=0, col=col)
+                want = "POINT-click:left:0,%d:up" % col
+                self.assertTrue(_await(lambda w=want: w in self._pointed()),
+                                f"a click aimed at column {col} of a {width}-column pane "
+                                f"arrived somewhere else: {self._pointed()!r}")
 
 
 if __name__ == "__main__":
