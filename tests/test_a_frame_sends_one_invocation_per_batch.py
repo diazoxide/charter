@@ -195,6 +195,39 @@ class WhatARealTmuxDoesWithACommandList(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
 
 
+class TheFakesSplitExactlyWhatCharterJoined(unittest.TestCase):
+    """`tests/_tmuxchain.commands` is the inverse of `tmuxctl.chain`, and this is what
+    says so — because every other test in the suite now believes it.
+
+    A fake that split too eagerly would report commands charter never sent; one that split
+    too little would answer a batch of eight with the last one's arguments and let seven
+    assertions quietly stop meaning anything. The case that decides it is an argument
+    CONTAINING a semicolon — `tmuxctl.SEPARATOR`'s own measurement is that tmux reads only
+    a standalone `;` as one, and charter really sends both shapes: the exit-status hook's
+    action is a shell line with a `;` in the middle of it, and the value
+    `frame/overlay.close_argvs` writes back into `@charter_hatch` is a tmux command line
+    with a spaced ` ; ` in it. Either would be torn in half by a character-wise split.
+    """
+
+    def test_a_chain_splits_back_into_the_commands_it_was_built_from(self):
+        hook = commands_frame._pane_died_write_hook_argv(socket="s", harness_pane="%1")
+        self.assertTrue(any(";" in part for part in hook),
+                        "the exit-status hook's action no longer carries a `;` inside "
+                        "one argument, so this test is no longer about the case it names")
+        spaced = tmuxctl.server_argv("s", "set-option", "-w", "-t", "%1",
+                                     "@charter_hatch",
+                                     "select-pane -t %1 ; kill-pane -t %2")
+        argvs = [tmuxctl.server_argv("s", "set-option", "-w", "-t", "%1",
+                                     "remain-on-exit", "on"),
+                 hook, spaced,
+                 tmuxctl.server_argv("s", "kill-pane", "-t", "%2")]
+        self.assertEqual(_tmuxchain.commands(tmuxctl.chain(argvs)), argvs)
+
+    def test_one_command_is_handed_back_whole(self):
+        argv = tmuxctl.server_argv("s", "kill-pane", "-t", "%2")
+        self.assertEqual(_tmuxchain.commands(argv), [argv])
+
+
 class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
     """The counts, on a machine with no tmux — the assertion that catches a batch quietly
     coming apart again.
