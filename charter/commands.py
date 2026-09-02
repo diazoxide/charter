@@ -626,10 +626,10 @@ def report_submodule_drift(d: Path, label: str, branch: str | None = None,
 
     The last line is the asymmetry: the PARENT resolves the URL from local config, while
     the CHILD consumes the transport config and its config search skips the surrounding
-    repository's local file. So golden rule 0 — every git
-    operation over that repo's own forge's token — **does not hold for a submodule fetch**,
-    and an auto-init would be charter fetching outside its own credential policy, quietly,
-    on the operator's behalf. Saying so leaves that call where it belongs.
+    repository's local file. So golden rule 0 — every git operation over that repo's own
+    forge's token — **does not hold for a submodule fetch**, and an auto-init would be
+    charter fetching outside its own credential policy, quietly, on the operator's behalf.
+    Saying so leaves that call where it belongs.
     """
     absent, moved = submodule_drift(d)
     if not absent and not moved:
@@ -813,7 +813,7 @@ def _clone_note(d: Path) -> str:
     note = f"{branch} · {dirty}"
     absent, moved = submodule_drift(d)
     if absent:
-        note += f" · {len(absent)} submodule not initialised"
+        note += f" · {len(absent)} submodule(s) not initialised"
     if moved:
         note += f" · {len(moved)} out of date"
     return note

@@ -389,7 +389,17 @@ class TestStatusRowSaysSo(SubmoduleCase):
         r = self.repo()
         plant_submodule(r, "dev-scripts")
         self.assertEqual(commands._clone_note(r),
-                         "main · clean · 1 submodule not initialised")
+                         "main · clean · 1 submodule(s) not initialised")
+
+    def test_two_uninitialised_submodules_are_counted_not_just_named(self):
+        """The count is what makes the row worth a column, and `(s)` is this repo's form
+        for a number it does not know at write time (`{len(targets)} repo(s)`). Pinned at
+        two because one reads correctly under either spelling."""
+        r = self.repo()
+        plant_submodule(r, "dev-scripts")
+        plant_submodule(r, "extra-tools")
+        self.assertEqual(commands._clone_note(r),
+                         "main · clean · 2 submodule(s) not initialised")
 
     def test_both_kinds_of_drift_fit_in_one_note(self):
         """`dirty` here is not incidental — a submodule left behind IS an unstaged change
@@ -406,7 +416,7 @@ class TestStatusRowSaysSo(SubmoduleCase):
         git("commit", "-qm", "bump", cwd=r)
         git("checkout", "-q", "HEAD~1", cwd=r / "extra-tools")
         self.assertEqual(commands._clone_note(r),
-                         "main · dirty · 1 submodule not initialised · 1 out of date")
+                         "main · dirty · 1 submodule(s) not initialised · 1 out of date")
 
 
 if __name__ == "__main__":
