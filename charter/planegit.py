@@ -661,6 +661,42 @@ def commit_push(root, add_cmd: list, message: str | None,
                       f"{_root.ENV_VAR}={tree} charter save")
             return 1
 
+        # #809: the same two harms, reached the other way. `charter clone` puts clones at
+        # `workspaces/<ws>/<repo>`, `charter.toml` is tracked, and charter dogfoods on a
+        # clone of itself — so `workspaces/dev/charter` is a plane inside a plane, and
+        # `root._outermost` resolves outward to the enclosing one by #140's deliberate
+        # choice. That choice is right and is not touched here: the outer plane holds the
+        # vault, the personas and the memory, and #200 measured what happens when identity
+        # lands in the inner one. It just means `charter save` typed in the clone ran `git
+        # -C <the outer plane> add -A`. Measured on a throwaway plane with a real clone and
+        # the `.gitignore` `charter init` writes: it committed the operator's untracked
+        # NOTES.txt and their half-edited `charter.toml` under the agent's message and
+        # exited 0, and the agent's own work in the clone was not committed at all.
+        #
+        # A SECOND ROUTE, not a widening of the first. `tree_of` reads the `.git` FILE in a
+        # linked worktree; a clone has a real `.git` directory, so it answers `None` here
+        # and must keep doing so — widening it to "am I inside any other plane" would
+        # collapse the plane/tree distinction its docstring exists to draw.
+        #
+        # REFUSE rather than commit the inner plane instead. Committing the inner one would
+        # make `save` disagree with every other command about which plane it acts on —
+        # `persona remember`, the vault, the dispatch tally and the workspace manifest all
+        # follow `config.ROOT` outward — and split the plane in two. Committing the outer
+        # one is the defect. So charter names both trees and lets the caller say which they
+        # meant (ADR 0013's second rule), which is the shape #808 took.
+        nested = _root.nested_plane_in(root)
+        if nested is not None:
+            util.err(f"Refusing to stage all of {root} — you are standing in {nested}, a "
+                     f"control plane of its own under that plane's workspaces/. charter "
+                     f"resolves outward to the plane holding the vault, so committing every "
+                     f"change there would take that tree's uncommitted work under your "
+                     f"message, and leave your own work here unsaved.")
+            util.info(f"  your own work:   git -C {nested} add -A && git -C {nested} commit")
+            util.info(f"  the plane's own: run `charter save` from {root}")
+            util.info(f"  you really do mean this plane: "
+                      f"{_root.ENV_VAR}={nested} charter save")
+            return 1
+
     # A plane is not always a git repo: `charter init` in a fresh directory does not run
     # `git init`, and that is exactly the README's 60-second path. Every git call below
     # runs with check=False (this is reached from hooks and background paths that must
