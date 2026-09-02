@@ -145,6 +145,21 @@ def cmd_worktree_add(args) -> int:
     util.info(f"  base:   {base}{' (detached)' if detached else ''}")
     util.info(f"  branch: {args.branch or args.piece}")
 
+    # #817's third surface, and the one that hits EVERY time. `git worktree add` gives the
+    # new tree the superproject's gitlinks and initialises none of them — measured, a
+    # worktree cut from a clone whose `dev-scripts` was checked out and in sync:
+    #
+    #     source:   +038cbf7… dev-scripts (heads/main)
+    #     worktree: -a8320ac… dev-scripts          <- and the directory is empty
+    #
+    # So unlike `clone`, where it depends on the repo, a worktree of a repo with submodules
+    # is always missing them, and this is the line an agent reads immediately before `cd`
+    # ing in and running the build. Imported here rather than at module scope: `commands`
+    # imports a good deal of the package, and this module is on the import path of the CLI
+    # for every subcommand.
+    from .commands import report_submodule_drift
+    report_submodule_drift(path, f"{args.repo} · {args.piece}")
+
     # `root.find_root` now resolves a plane-less worktree back to its main tree, so this
     # is an invariant assertion rather than the fix — kept because it catches the same
     # failure one step earlier, right beside the `enter:` line the user is about to run,
