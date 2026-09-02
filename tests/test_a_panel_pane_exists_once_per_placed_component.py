@@ -76,6 +76,7 @@ from charter import commands_frame, config, instance
 from charter.frame import layout, state, tmuxctl
 
 from tests import _tmuxreap
+from tests import _tmuxchain
 from tests._isolation import PersonaIso, make_plane
 
 _HAS_TMUX = shutil.which("tmux") is not None
@@ -126,8 +127,22 @@ class _Tmux:
         self.size = size
         self.new_panes = list(new_panes)
         self.calls: list[list[str]] = []
+        #: One entry per tmux INVOCATION, where `calls` has one per
+        #: tmux COMMAND — see :meth:`__call__`.
+        self.invocations: list[list[str]] = []
 
     def __call__(self, action, argv, *, env=None, timeout=None, report=True):
+        """One tmux INVOCATION, which since #780 may carry several commands.
+
+        Split through `tests/_tmuxchain.answer_run` so `self.calls` keeps one entry per
+        tmux COMMAND — the list every assertion here reads — where charter now spends
+        one invocation on a whole group of them.
+        """
+        self.invocations.append(list(argv))
+        return _tmuxchain.answer_run(self._one, action, argv, env=env, timeout=timeout,
+                                     report=report)
+
+    def _one(self, action, argv, *, env=None, timeout=None, report=True):
         self.calls.append(list(argv))
         out = ""
         if "list-panes" in argv:
@@ -139,7 +154,7 @@ class _Tmux:
         elif "display-message" in argv:
             out = self.size
         elif "split-window" in argv:
-            out = self.new_panes.pop(0) if self.new_panes else ""
+            out = f"{self.new_panes.pop(0)}\n" if self.new_panes else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     def killed(self) -> list[str]:

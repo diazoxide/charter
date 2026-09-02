@@ -38,6 +38,7 @@ from unittest import mock
 from charter import (commands_frame, config, inflight, instance, statusline, tui,
                      util)
 from charter.frame import builtin_actions, gather, layout, panel, slots, state
+from tests import _tmuxchain
 from tests._tmuxsocket import OPERATOR_SOCKET
 
 from tests._isolation import PersonaIso
@@ -86,8 +87,22 @@ class _Tmux:
         self.pane_cols = pane_cols
         self.new_panes = list(new_panes)
         self.calls: list[list[str]] = []
+        #: One entry per tmux INVOCATION, where `calls` has one per
+        #: tmux COMMAND — see :meth:`__call__`.
+        self.invocations: list[list[str]] = []
 
     def __call__(self, action, argv, *, env=None, timeout=None, report=True):
+        """One tmux INVOCATION, which since #780 may carry several commands.
+
+        Split through `tests/_tmuxchain.answer_run` so `self.calls` keeps one entry per
+        tmux COMMAND — the list every assertion here reads — where charter now spends
+        one invocation on a whole group of them.
+        """
+        self.invocations.append(list(argv))
+        return _tmuxchain.answer_run(self._one, action, argv, env=env, timeout=timeout,
+                                     report=report)
+
+    def _one(self, action, argv, *, env=None, timeout=None, report=True):
         self.calls.append(list(argv))
         out = ""
         if commands_frame._PANE_WIDTH_FORMAT in argv:
@@ -97,7 +112,7 @@ class _Tmux:
                 self.size = self.sizes.pop(0)
             out = self.size
         elif "split-window" in argv:
-            out = self.new_panes.pop(0) if self.new_panes else ""
+            out = f"{self.new_panes.pop(0)}\n" if self.new_panes else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     def where(self, *words: str) -> list[int]:
@@ -1301,8 +1316,7 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         hostile here too, and for the same reason: `cmd_resize` reads that one off disk as
         well, and #515 gave this function a `resize-pane -t <harness>` of its own."""
         calls = []
-        with mock.patch("charter.frame.tmuxctl.run",
-                        side_effect=lambda a, argv, **k: calls.append(list(argv))):
+        with mock.patch("charter.frame.tmuxctl.run", _tmuxchain.recorder(calls)):
             commands_frame._reassert_sizes(
                 "charter", fid=self.fid,
                 panes={"top": "%1", "bottom": "%2;kill-server"},

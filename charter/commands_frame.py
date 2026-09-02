@@ -3005,7 +3005,7 @@ def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
     charter's window reads `on` while the operator's own window still reads the global
     default and their own panes still vanish when their programs exit. `kill-pane` also
     still destroys a pane this is holding, which is what lets `cmd_density` drop a slot
-    (see `_disarm_panel_respawn`) rather than leave a corpse behind in the frame.
+    (see `_disarm_respawn_argv`) rather than leave a corpse behind in the frame.
     """
     return tmuxctl.server_argv(socket, "set-option", "-w", "-t", harness_pane,
                                "remain-on-exit", "on")
@@ -3604,13 +3604,31 @@ def _reconcile_panels(socket: str, *, harness_pane: str, want: list[str],
             keep[mark] = pane_id
         else:
             doomed.append((mark, pane_id))
+    # Disarm before killing, always: `kill-pane` on an armed panel fires its own
+    # `pane-died` hook, and `cmd_respawn` brings back the panel the operator just
+    # dropped, one respawn life poorer. See :func:`_disarm_respawn_argv`.
+    #
+    # **All of it in ONE invocation, and both halves of that are the point** (#780).
+    # Eight round trips for four doomed panels was the single largest block a chat switch
+    # spent, and tmux keeps the pairing: a `;`-separated list runs in order, server-side,
+    # so every disarm still precedes its own kill. It is also what the operator SEES —
+    # four separate `kill-pane` invocations are four command-queue drains and four
+    # redraws, so the panels vanished one at a time and the harness pane grew in four
+    # steps. One invocation is one repaint.
+    #
+    # `report=False` on the disarms and not on the kills, which is the reason
+    # `tmuxctl.Write` carries the flag at all: unsetting a hook nothing set answers rc 0
+    # (measured on 3.7c and at the 3.2 floor), so the only way a disarm fails is a pane
+    # that is already gone — and then its kill says so, once.
+    writes = []
     for slot, pane_id in doomed:
-        # Disarm before killing, always: `kill-pane` on an armed panel fires its own
-        # `pane-died` hook, and `cmd_respawn` brings back the panel the operator just
-        # dropped, one respawn life poorer. See :func:`_disarm_panel_respawn`.
-        _disarm_panel_respawn(socket, pane_id=pane_id)
-        tmuxctl.run(f"closing the {slot} panel",
-                    tmuxctl.server_argv(socket, "kill-pane", "-t", pane_id))
+        writes.append(tmuxctl.Write("disarming a panel's respawn hook",
+                                    _disarm_respawn_argv(socket, pane_id=pane_id),
+                                    report=False))
+        writes.append(tmuxctl.Write(f"closing the {slot} panel",
+                                    tmuxctl.server_argv(socket, "kill-pane", "-t",
+                                                        pane_id)))
+    tmuxctl.write_all("closing the panels this frame no longer draws", writes)
     return keep
 
 
@@ -3731,10 +3749,22 @@ def _dress_window(socket: str, *, fid: str, harness_pane: str, env: dict | None,
     looks wrong, it does not fail. `remain-on-exit` is armed FIRST and this function is
     called before any `split-window`, so no panel is ever born into a window that would
     throw its corpse away and its respawn hook with it (#408).
+
+    **All of it is ONE tmux invocation, and the ordering that made it eight is exactly
+    what a chain preserves** (#780, `tmuxctl.write_all`). Every command here is a write
+    nothing reads back, so the eight round trips they cost were eight only because they
+    were sent one at a time — measured at ~5 ms each on tmux 3.7c on the machine this was
+    written on and ~13.4 ms each on the one that filed #728, spent twice per chat switch
+    and once per launch. tmux runs a `;`-separated list in order, server-side, so
+    `remain-on-exit` still precedes every border option and the whole group still precedes
+    the first `split-window`; what changes is only how many times charter waits for a
+    unix socket. A failure inside the list re-issues every one of them on its own, so the
+    per-command sentences above are not traded away for the round trips — see
+    `tmuxctl.write_all` for what a failed chain costs and why it can be replayed at all.
     """
-    tmuxctl.run("keeping the frame's own dead panes long enough to bring them back",
-                _panel_remain_on_exit_argv(socket=socket, harness_pane=harness_pane),
-                env=env)
+    writes = [tmuxctl.Write(
+        "keeping the frame's own dead panes long enough to bring them back",
+        _panel_remain_on_exit_argv(socket=socket, harness_pane=harness_pane))]
     # The frame's own word for its chrome, resolved through `_current_chrome` so a live
     # `charter frame-chrome` is what a re-layout re-asserts rather than the configured
     # value the frame launched with. `_split_panels` resolves it the same way for the pane
@@ -3764,10 +3794,11 @@ def _dress_window(socket: str, *, fid: str, harness_pane: str, env: dict | None,
     # be a second subprocess for one unchanging fact — and one more place for the two
     # readings to disagree. It answers a different question from *look*: one says which
     # rows are issued, the other says what the two style rows carry.
-    for argv in _chrome_argvs(
-            socket=socket, harness_pane=harness_pane, v=v, look=look,
-            surface=None if pane_borders else instance.border_bg(config.FRAME, chrome)):
-        tmuxctl.run("styling the frame's own rules", argv, env=env)
+    writes += [tmuxctl.Write("styling the frame's own rules", argv)
+               for argv in _chrome_argvs(
+                   socket=socket, harness_pane=harness_pane, v=v, look=look,
+                   surface=(None if pane_borders
+                            else instance.border_bg(config.FRAME, chrome)))]
     # And the three rules AROUND the harness, which above the floor are the harness's own
     # cells and are therefore the one part of the frame the loop above no longer reaches
     # (`_harness_rule_argvs`, #657). Left unset by #631 they were the terminal's own
@@ -3775,11 +3806,13 @@ def _dress_window(socket: str, *, fid: str, harness_pane: str, env: dict | None,
     # horizontal rule came out in two colours — reported off a screenshot three times, and
     # reproduced through a nested client at 100x24: 78 rule cells carrying an explicit
     # `ESC[49m` beside 22 cells of `ESC[100m`.
-    for argv in _harness_rule_argvs(
-            socket=socket, harness_pane=harness_pane, pane_borders=pane_borders,
-            look=look, surface=instance.agreed_border_bg(config.FRAME, chrome)):
-        tmuxctl.run("styling the rules around the pane charter does not paint", argv,
-                    env=env)
+    writes += [tmuxctl.Write("styling the rules around the pane charter does not paint",
+                             argv)
+               for argv in _harness_rule_argvs(
+                   socket=socket, harness_pane=harness_pane, pane_borders=pane_borders,
+                   look=look,
+                   surface=instance.agreed_border_bg(config.FRAME, chrome))]
+    tmuxctl.write_all("dressing the frame's own window", writes, env=env)
 
 
 def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
@@ -3842,59 +3875,138 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
     panel_cmds = layout.panel_argvs(slots=slots, session=fid, socket=socket,
                                     harness_pane=harness_pane, env=pane_env,
                                     sizes=sizes)
-    # Zipped with `slots`, not just iterated: `_resize_hook_argv` needs to know WHICH slot
-    # each successfully-created pane belongs to (for its size and its resize-pane flag),
-    # and `panel_argvs` returns exactly one command per slot, in the same order (see its
-    # own docstring).
     panes: dict[str, str] = {}
-    for slot, cmd in zip(slots, panel_cmds):
-        # Reported by `tmuxctl.run` but not fatal: one decorative panel failing to draw
-        # must not take down a harness pane that is already up and running (correction 2
-        # asks for every return code to be CHECKED, not every failure refused).
+    # **Every pane's options collected across the whole loop and sent as ONE invocation
+    # below** (#780). Per pane was the shape this had while each `split-window` was its
+    # own round trip and a pane's `%N` was learnt one at a time; `_split_all` answers for
+    # all of them at once, so there is nothing left forcing four batches where one will
+    # do. The order inside is unchanged — every pane's mark before its own surface, and
+    # the panes in the order they were split — because a chain runs in the order it is
+    # given.
+    writes: list[tmuxctl.Write] = []
+    for slot, pane_id in _split_all(socket, slots=slots, cmds=panel_cmds, env=env):
+        panes[slot] = pane_id
+        # This pane is a PANEL, said to tmux itself where a root-table binding can ask
+        # (#634, `_panel_mark_argv`). It goes before the surface rather than after
+        # because it is the only one of the two that decides where a click goes: a
+        # panel that came up unmarked takes the keyboard off the harness the first
+        # time it is clicked, which is the whole defect. Reported but not fatal, like
+        # the splits and the surface — a panel charter could not mark still draws and
+        # is still clicked, it just costs the operator an `F12` afterwards.
+        writes.append(tmuxctl.Write(
+            "marking a panel so a click on it stays where it points",
+            _panel_mark_argv(socket=socket, pane_id=pane_id)))
+        # And WHICH panel it is, on the same pane and out of the same funnel (#714,
+        # `_panel_slot_argv`). The mark above says a pane is charter's; this says what
+        # charter meant by it, which is the half `state.panes` cannot be trusted for —
+        # that file is rewritten whole on every re-layout, so a component whose pane
+        # got split twice has one id recorded and the other invisible to every reader
+        # that goes through it. Written where the pane is CREATED rather than by a
+        # later pass, because a later pass is a thing to forget: `_reconcile_panels`
+        # will not kill a pane it cannot name, so a panel that missed this is a panel
+        # that can be orphaned exactly once more. `None` for a name charter will not
+        # put on a pane — see there for why that is not silent about its cost.
+        slot_argv = _panel_slot_argv(socket=socket, pane_id=pane_id, slot=slot)
+        if slot_argv is not None:
+            writes.append(tmuxctl.Write("saying which component a panel draws",
+                                        slot_argv))
+        # The pane surface, on the pane that was just created and on no other — the
+        # one place charter has a panel's `%N` in hand. The harness pane is never an
+        # argument (`_surface_argvs`), which is how ADR 0018's boundary holds by
+        # construction. Not fatal, like the splits: a frame whose panes kept the
+        # terminal's own background is a frame that looks plainer, not one that fails.
+        # And this pane's OWN background where the arrangement gave it one
+        # (`instance.component_style`, the single walk over the placements that
+        # `frame/slots.py` asks for the pad on the other side of the split). Resolved
+        # per slot rather than once for the batch, unlike `chrome` above, because that
+        # is the whole difference between the two keys: one word about the frame, one
+        # word about this pane.
+        bg = instance.component_style(config.FRAME, slot)["bg"]
+        writes += [tmuxctl.Write("painting a panel's surface", surface)
+                   for surface in _surface_argvs(
+                       socket=socket, pane_id=pane_id, chrome=chrome, bg=bg,
+                       pane_borders=pane_borders, look=look)]
+    tmuxctl.write_all("dressing this frame's panels", writes, env=env)
+    return panes
+
+
+def _split_all(socket: str, *, slots: list[str], cmds: list[list[str]],
+               env: dict | None) -> list[tuple[str, str]]:
+    """Every `split-window` in *cmds* as ONE invocation, and the `(slot, pane id)` pairs
+    tmux answered with — in *slots*' own order, and holding only the panes that exist.
+
+    **A split READS a value back, so this is not `tmuxctl.write_all` and cannot be**
+    (see there: its replay is safe only for writes that mean the same thing twice, and a
+    replayed `split-window` is a second pane). What makes the batch possible anyway is
+    that a chain answers for every command in it: measured on tmux 3.7c and at the 3.2
+    floor alike, four `split-window -P -F '#{pane_id}'` in one invocation print **four
+    ids, one per line, in the order they were given**, and produce exactly the geometry
+    the same four commands produce one at a time. Every one of them targets the HARNESS
+    pane — `layout.panel_argvs` builds the whole list up front for `frame/layout.py`'s
+    own reason (tmux renumbers pane INDICES on every split, so nothing here may be
+    derived from an earlier split's answer) — so there was never an ordering dependency
+    between them to give up.
+
+    **And it is what stops the operator watching the panels arrive one at a time.** Four
+    invocations are four command-queue drains and four client redraws ~5 ms apart, which
+    is the "jumping texts" #780 was split out of; one invocation is one drain, and the
+    window goes from a bare harness to four panels in a single repaint.
+
+    **The mapping is by POSITION, so it rests on every command in *cmds* printing exactly
+    one line**, and `layout.panel_argvs` is where that holds: it puts `-P -F '#{pane_id}'`
+    on every argv it builds, unconditionally, one per slot in *slots*' own order. A slot
+    whose command stopped asking for the id would not merely lose its own pane — it would
+    shift every slot after it onto the wrong one. Stated here rather than re-checked,
+    because a count that agrees is not evidence that the right command produced it.
+
+    **A refused split ABORTS the rest of the list** (`tmuxctl.write_all` measures it), and
+    tmux prints nothing to stdout for it — so the id count says exactly how far the list
+    got: the command at `len(ids)` is the one that was refused and nothing after it ran.
+    Those are re-issued ONE AT A TIME, which is both what makes the failure reportable per
+    slot ("drawing a panel", the phrase this had before it was a batch) and what keeps a
+    decorative panel that cannot be drawn from taking the rest of the frame with it.
+
+    **A wedged tmux is not retried at all** (`tmuxctl.UNKNOWABLE`). A timeout does not
+    say the split did not happen, and re-issuing it would be how a frame ends up with two
+    panes for one component and no record of the second.
+    """
+    made: list[tuple[str, str]] = []
+    todo = list(zip(slots, cmds))
+    # No `if not todo: return` in front of this: `tmuxctl.chain([])` answers ``None``, so
+    # an empty slot list already falls past the batch into a loop over nothing and comes
+    # back with the same empty map. The deletion sweep reported the guard as a survivor —
+    # correctly — and this repository deletes an equivalent mutant rather than documenting
+    # it.
+    argv = tmuxctl.chain([c for _, c in todo])
+    if argv is not None:
+        # `report=False`, and the two branches below are why: an ordinary refusal is
+        # re-issued per slot and reported THERE, under the name that says which panel the
+        # operator lost, while a wedged tmux is reported here because there is nothing
+        # left to re-issue it as.
+        p = tmuxctl.run("drawing this frame's panels", argv, env=env, report=False)
+        # `splitlines()` and not `strip().split()`: the POSITION of a line is what names
+        # its slot, so a line that is not a pane id has to keep its place in the count
+        # rather than vanish out of it. It also leaves nothing to strip — the sweep
+        # reported a `.strip()` here as a survivor, and it was right: tmux prints the
+        # format and a newline, and `splitlines` has already taken the newline.
+        lines = p.stdout.splitlines()
+        for (slot, _), pane_id in zip(todo, lines):
+            if _PANE_ID_RE.fullmatch(pane_id):
+                made.append((slot, pane_id))
+        if p.returncode == 0:
+            return made
+        if p.returncode in tmuxctl.UNKNOWABLE:
+            tmuxctl.report_failure("drawing this frame's panels", argv, p)
+            return made
+        todo = todo[len(lines):]
+    for slot, cmd in todo:
         p = tmuxctl.run("drawing a panel", cmd, env=env)
         if p.returncode != 0:
             continue
         pane_id = p.stdout.strip()
-        if pane_id and _PANE_ID_RE.fullmatch(pane_id):
-            panes[slot] = pane_id
-            # This pane is a PANEL, said to tmux itself where a root-table binding can ask
-            # (#634, `_panel_mark_argv`). It goes before the surface rather than after
-            # because it is the only one of the two that decides where a click goes: a
-            # panel that came up unmarked takes the keyboard off the harness the first
-            # time it is clicked, which is the whole defect. Reported but not fatal, like
-            # the splits and the surface — a panel charter could not mark still draws and
-            # is still clicked, it just costs the operator an `F12` afterwards.
-            tmuxctl.run("marking a panel so a click on it stays where it points",
-                        _panel_mark_argv(socket=socket, pane_id=pane_id), env=env)
-            # And WHICH panel it is, on the same pane and out of the same funnel (#714,
-            # `_panel_slot_argv`). The mark above says a pane is charter's; this says what
-            # charter meant by it, which is the half `state.panes` cannot be trusted for —
-            # that file is rewritten whole on every re-layout, so a component whose pane
-            # got split twice has one id recorded and the other invisible to every reader
-            # that goes through it. Written where the pane is CREATED rather than by a
-            # later pass, because a later pass is a thing to forget: `_reconcile_panels`
-            # will not kill a pane it cannot name, so a panel that missed this is a panel
-            # that can be orphaned exactly once more. `None` for a name charter will not
-            # put on a pane — see there for why that is not silent about its cost.
-            slot_argv = _panel_slot_argv(socket=socket, pane_id=pane_id, slot=slot)
-            if slot_argv is not None:
-                tmuxctl.run("saying which component a panel draws", slot_argv, env=env)
-            # The pane surface, on the pane that was just created and on no other — the
-            # one place charter has a panel's `%N` in hand. The harness pane is never an
-            # argument (`_surface_argvs`), which is how ADR 0018's boundary holds by
-            # construction. Not fatal, like the splits: a frame whose panes kept the
-            # terminal's own background is a frame that looks plainer, not one that fails.
-            # And this pane's OWN background where the arrangement gave it one
-            # (`instance.component_style`, the single walk over the placements that
-            # `frame/slots.py` asks for the pad on the other side of the split). Resolved
-            # per slot rather than once for the batch, unlike `chrome` above, because that
-            # is the whole difference between the two keys: one word about the frame, one
-            # word about this pane.
-            bg = instance.component_style(config.FRAME, slot)["bg"]
-            for surface in _surface_argvs(socket=socket, pane_id=pane_id, chrome=chrome,
-                                          bg=bg, pane_borders=pane_borders, look=look):
-                tmuxctl.run("painting a panel's surface", surface, env=env)
-    return panes
+        if _PANE_ID_RE.fullmatch(pane_id):
+            made.append((slot, pane_id))
+    return made
 
 
 def _install_resize_hook(socket: str, *, harness_pane: str, panes: dict[str, str],
@@ -4020,7 +4132,15 @@ def _arm_panel_respawn(socket: str, *, fid: str, panes: dict[str, str],
     A pane charter will not arm (`_panel_died_hook_argv` returning ``None`` — see its own
     docstring for what fails that check) is NAMED rather than skipped in silence: the
     operator loses respawn for that panel and this is the only place that could say so.
+
+    **One invocation for the whole map** (#780, `tmuxctl.write_all`). Each hook is a
+    `set-hook -p` on its own pane, nothing reads any of them back, and no one of them
+    depends on another having run — they were four round trips per launch and four more
+    per chat switch only because they were sent one at a time. A failure inside the batch
+    re-issues every hook separately, so the per-slot phrase above is still what an
+    operator is told when one pane cannot be armed.
     """
+    writes = []
     for slot, pane_id in panes.items():
         cmd = _panel_died_hook_argv(socket=socket, panel_pane=pane_id, slot=slot, fid=fid)
         if cmd is None:
@@ -4028,10 +4148,11 @@ def _arm_panel_respawn(socket: str, *, fid: str, panes: dict[str, str],
                       "dies — charter cannot build a respawn hook it can be sure tmux "
                       "and the shell will read the way it means it")
             continue
-        tmuxctl.run(f"arming the {slot} panel for respawn", cmd, env=env)
+        writes.append(tmuxctl.Write(f"arming the {slot} panel for respawn", cmd))
+    tmuxctl.write_all("arming this frame's panels for respawn", writes, env=env)
 
 
-def _disarm_panel_respawn(socket: str, *, pane_id: str) -> None:
+def _disarm_respawn_argv(socket: str, *, pane_id: str) -> list[str]:
     """Take one panel pane's `pane-died` hook off, BEFORE that pane is killed.
 
     Without this, changing density is self-undoing: `kill-pane` on a panel charter no
@@ -4041,17 +4162,22 @@ def _disarm_panel_respawn(socket: str, *, pane_id: str) -> None:
     way. Unsetting first removes the question rather than answering it: there is no hook
     left to fire, whichever way this tmux treats a killed pane's `pane-died`.
 
-    `report=False`: a pane charter declined to arm (`_panel_died_hook_argv` returning
-    ``None``) has no hook to unset, and a frame launched by a charter that predates #382
-    has none either, so a `set-hook -u` for a hook that is not set is an ORDINARY case
-    rather than a fault — the same reason `_live_sessions` opts out of reporting for a
-    socket no server has run on. Until #408 the ordinary case was the whole of the
-    operator's server, where nothing was ever armed at all.
+    **An ARGV rather than a call, since #780**, because the disarm and the kill it guards
+    now travel to tmux together — `_reconcile_panels` puts both in one `tmuxctl.write_all`
+    so four doomed panels cost one round trip and one repaint instead of eight and four.
+    The pairing is unchanged: a chain runs in the order it is given, server-side.
+
+    It is issued with reporting OFF, and that is the flag `tmuxctl.Write` exists to carry:
+    a pane charter declined to arm (`_panel_died_hook_argv` returning ``None``) has no
+    hook to unset, and a frame launched by a charter that predates #382 has none either.
+    Measured on tmux 3.7c and at the 3.2 floor, `set-hook -p -u` for a hook that is not
+    set answers **rc 0** — so the ordinary case is not even a failure, and the one way
+    this can fail is a pane that has gone, which its own `kill-pane` reports. Until #408
+    the ordinary case was the whole of the operator's server, where nothing was ever
+    armed at all.
     """
-    tmuxctl.run("disarming a panel's respawn hook",
-                tmuxctl.server_argv(socket, "set-hook", "-p", "-u", "-t", pane_id,
-                                    "pane-died"),
-                timeout=5, report=False)
+    return tmuxctl.server_argv(socket, "set-hook", "-p", "-u", "-t", pane_id,
+                               "pane-died")
 
 
 def _pane_last_words(socket: str, harness_pane: str) -> list[str]:
@@ -4843,6 +4969,29 @@ def cmd_launch(args) -> int:
     # tell "I am this frame's harness" from "I inherited this frame's id", which below
     # `SESSION_ENV_FLOOR` a second frame on this shared server genuinely does.
     state.record_harness_pane(fid, harness_pane)
+    # **Everything this frame's window and session have to be told, COLLECTED here and
+    # sent as one invocation below** (#780, `tmuxctl.write_all`). Ten writes, not one of
+    # which reads anything back, that used to be ten round trips — ~5 ms each on tmux
+    # 3.7c on the machine this was written on and ~13.4 ms each on the one that filed
+    # #728, all of them spent before a client can be attached and anything can be on
+    # screen. Their ORDER is load-bearing (`@charter_chat` before the hook whose action
+    # reads `#{@charter_chat}`; the hatch before the first panel), and a chain is
+    # executed in order, server-side, so that is exactly what survives.
+    #
+    # `lost` is what an operator is told when the write at the same index does not take —
+    # kept beside the write rather than at its call site, so the two cannot drift apart,
+    # and printed below only for the ones that failed. Every "charter cannot build this
+    # argv at all" warning stays exactly where it was: those are refusals to ask, not
+    # answers, and they carry no return code.
+    writes: list[tmuxctl.Write] = []
+    lost: list[str] = []
+
+    def _tell(action: str, argv: list[str], if_refused: str) -> int:
+        """Add one write to the batch, and answer where in it its result will be."""
+        writes.append(tmuxctl.Write(action, argv))
+        lost.append(if_refused)
+        return len(writes) - 1
+
     # And what every later lookup asks instead of parsing the window's name: `reap`'s
     # liveness list (`_live_chats`), the write hook's `#{@charter_chat}`, and the binds
     # `conf_text` writes. Armed before either hook, so the hook that names it cannot fire
@@ -4852,11 +5001,10 @@ def cmd_launch(args) -> int:
         util.warn(f"charter frame: {fid!r} is not a shape tmux can carry as a window "
                   "option — this chat's state may be reaped while it is still running")
     else:
-        chat_set = tmuxctl.run("naming the chat on its window", named, env=env)
-        if chat_set.returncode != 0:
-            util.warn("charter frame: continuing without it — this chat's state may be "
-                      "reaped while it is still running, and its exit code may not be "
-                      "recorded")
+        _tell("naming the chat on its window", named,
+              "charter frame: continuing without it — this chat's state may be "
+              "reaped while it is still running, and its exit code may not be "
+              "recorded")
     # And which PLANE the session belongs to — §4b's marker, written by the launch that
     # CREATED the session and by no other. `joining` is the same NAME test three dozen
     # lines up, which is exactly the cross-plane collision this marker records: a launch
@@ -4870,31 +5018,29 @@ def cmd_launch(args) -> int:
             util.warn("charter frame: this plane's state directory is not a shape tmux "
                       "can carry as an option — a workspace switch cannot tell this "
                       "session from another plane's of the same name")
-        elif tmuxctl.run("marking the workspace session with its plane", marked,
-                         env=env).returncode != 0:
-            util.warn("charter frame: continuing without it — a workspace switch cannot "
-                      "tell this session from another plane's of the same name")
+        else:
+            _tell("marking the workspace session with its plane", marked,
+                  "charter frame: continuing without it — a workspace switch cannot "
+                  "tell this session from another plane's of the same name")
 
     frame = config.FRAME
+    # Written before the batch is sent rather than in the middle of it, which is the one
+    # reordering collecting the writes forces and it is not one anything can see: this
+    # file has exactly one reader and it is the `source-file` two lines down.
     config.write_for(conf_path,
                      conf_text(hotkey=frame["hotkey"], mouse=frame["mouse"],
                                history_limit=frame["history_limit"], session=session,
                                toggles=instance.frame_toggles(frame)))
-    src = tmuxctl.run("loading the frame's config",
-                      tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
-                      env=env)
-    if src.returncode != 0:
-        util.warn("charter frame: continuing without it — mouse/history-limit/hotkey "
-                  "settings may not be in effect for this frame")
+    _tell("loading the frame's config",
+          tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
+          "charter frame: continuing without it — mouse/history-limit/hotkey "
+          "settings may not be in effect for this frame")
 
-    env_set = tmuxctl.run(
-        "carrying the exit-status path",
-        _exit_path_env_argv(socket=SOCKET, session=session,
-                            frame_root=str(frame_root)),
-        env=env)
-    if env_set.returncode != 0:
-        util.warn("charter frame: continuing without it — the exit code may not be "
-                  "recorded for this frame")
+    _tell("carrying the exit-status path",
+          _exit_path_env_argv(socket=SOCKET, session=session,
+                              frame_root=str(frame_root)),
+          "charter frame: continuing without it — the exit code may not be "
+          "recorded for this frame")
 
     # Ties this session to its own id BEFORE anything else can ask for it — the hotkey
     # bind's action (`charter frame-palette`) and every action the palette starts resolve
@@ -4902,22 +5048,19 @@ def cmd_launch(args) -> int:
     # this call a frame beyond the first sharing
     # `SOCKET` would silently resolve the FIRST frame's id instead of its own (see
     # `_session_id_env_argv`'s own docstring for what was verified by hand).
-    sid_set = tmuxctl.run("carrying the frame id to its own palette",
-                          _session_id_env_argv(socket=SOCKET, session=session, chat=fid),
-                          env=env)
-    if sid_set.returncode != 0:
-        util.warn("charter frame: continuing without it — the palette may not find "
-                  "this frame's own actions")
+    _tell("carrying the frame id to its own palette",
+          _session_id_env_argv(socket=SOCKET, session=session, chat=fid),
+          "charter frame: continuing without it — the palette may not find "
+          "this frame's own actions")
 
     # The second value the same mechanism carries: which interpreter runs charter when
     # the hotkey fires. Without it both fall back to a bare `charter`
     # on the tmux server's own `$PATH`, and `run-shell` reports the resulting 127 by
     # printing it INTO THE HARNESS PANE — see `conf_text`'s own docstring.
-    py_set = tmuxctl.run("carrying charter's own interpreter to the palette",
-                         _charter_py_env_argv(socket=SOCKET, session=session), env=env)
-    if py_set.returncode != 0:
-        util.warn("charter frame: continuing without it — the palette may not open "
-                  "on this frame")
+    _tell("carrying charter's own interpreter to the palette",
+          _charter_py_env_argv(socket=SOCKET, session=session),
+          "charter frame: continuing without it — the palette may not open "
+          "on this frame")
 
     # The escape hatch's other half. `conf_text`'s bind carries no identity — it reads a
     # WINDOW option, and this is what puts this frame's own answer in it, so a key table
@@ -4930,39 +5073,44 @@ def cmd_launch(args) -> int:
         util.warn("charter frame: tmux did not report this frame's harness as a pane id "
                   f"— the {overlay.HATCH_KEY} escape hatch will not be armed for it")
     else:
-        armed_hatch = tmuxctl.run("arming the frame's escape hatch", hatch, env=env)
-        if armed_hatch.returncode != 0:
-            util.warn(f"charter frame: continuing without it — {overlay.HATCH_KEY} may "
-                      "not return to the harness in this frame")
+        _tell("arming the frame's escape hatch", hatch,
+              f"charter frame: continuing without it — {overlay.HATCH_KEY} may "
+              "not return to the harness in this frame")
 
     # #390: the same "-m prepends the cwd to sys.path" hole `util.self_relaunch_argv`'s
     # `-P` closes for the panel argv below, closed here as `PYTHONSAFEPATH=1` because
     # the hotkey template above has no room for a per-invocation flag — see
     # `_charter_pythonsafepath_env_argv`'s own docstring.
-    safepath_set = tmuxctl.run("carrying PYTHONSAFEPATH to the palette",
-                               _charter_pythonsafepath_env_argv(socket=SOCKET,
-                                                               session=session),
-                               env=env)
-    if safepath_set.returncode != 0:
-        util.warn("charter frame: continuing without it — the palette may import "
-                  "the wrong charter if this pane's directory has its own `charter/` "
-                  "package")
+    _tell("carrying PYTHONSAFEPATH to the palette",
+          _charter_pythonsafepath_env_argv(socket=SOCKET, session=session),
+          "charter frame: continuing without it — the palette may import "
+          "the wrong charter if this pane's directory has its own `charter/` "
+          "package")
 
     # Nothing is recorded for the hotkey to open. The menu was a TABLE on disk that every
     # density change and every switch had to rewrite or it went stale (`_rerecord_menu`,
     # deleted with it); the palette is built from live state each time it opens
     # (`frame/builtin_actions.build`), so there is no snapshot left to keep in step.
 
-    write_hook = tmuxctl.run(
-        "installing the exit-status hook",
-        _pane_died_write_hook_argv(socket=SOCKET, harness_pane=harness_pane), env=env)
-    if write_hook.returncode != 0:
-        util.warn("charter frame: continuing without it — the exit code may not be "
-                  "recorded for this frame")
+    _tell("installing the exit-status hook",
+          _pane_died_write_hook_argv(socket=SOCKET, harness_pane=harness_pane),
+          "charter frame: continuing without it — the exit code may not be "
+          "recorded for this frame")
 
-    teardown_hook = tmuxctl.run(
+    # The one write in this batch whose return code is read rather than merely warned
+    # about — a teardown hook that did not install makes this launcher refuse to attach
+    # at all, further down — so its position is kept rather than its result guessed at.
+    teardown_at = _tell(
         "installing the chat-teardown hook",
-        _pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=harness_pane), env=env)
+        _pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=harness_pane),
+        "")
+
+    told = tmuxctl.write_all("telling the frame's window and session what they are",
+                             writes, env=env)
+    for result, sentence in zip(told, lost):
+        if result.returncode != 0 and sentence:
+            util.warn(sentence)
+    teardown_hook = told[teardown_at]
 
     # Closes the install race directly, rather than merely working around its symptom. A
     # harness that died in the window between `new-session` starting it and the hooks
@@ -5297,7 +5445,7 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
       drawing correct content, is what that looked like on a real frame. The record is
       still read, and still chooses which of several panes for one component survives; it
       is no longer the only thing that can see a pane.
-    * **Disarm before killing.** See :func:`_disarm_panel_respawn` — otherwise the panel
+    * **Disarm before killing.** See :func:`_disarm_respawn_argv` — otherwise the panel
       charter just closed comes straight back, one respawn life poorer.
     * **Split off the HARNESS pane, never off a sibling panel.** `_draw_panels` already
       does this and it is `frame/layout.py`'s own module-docstring measurement: tmux
@@ -5427,16 +5575,23 @@ def _apply_sizes(socket: str, *, panes: dict[str, str], sizes: dict[str, int],
     `report=False`: a pane that has since died (the operator closed it, a panel crashed
     between the map being read and this running) makes `resize-pane` fail, and that is not
     an integration failure worth printing over the agent's own screen.
+
+    **One invocation per pass** (#780, `tmuxctl.write_all`). A `resize-pane` reads nothing
+    back and one pane's does not depend on another's having run, so the three or four this
+    issues for a four-panel frame's rows were three or four round trips for no reason —
+    and, since tmux redraws once per command list rather than once per command, three or
+    four separate repaints of a window whose panes were being shuffled into place. The two
+    passes stay two batches: the measurement between them is what makes the second one
+    truthful, and it is a READ.
     """
-    for slot, pane_id in panes.items():
-        if layout.resize_flag(slot) != flag or slot not in sizes:
-            continue
-        if not _PANE_ID_RE.fullmatch(pane_id):
-            continue
-        tmuxctl.run(f"restoring the {slot} panel's size",
-                    tmuxctl.server_argv(socket, "resize-pane", "-t", pane_id,
-                                        flag, str(sizes[slot])),
-                    report=False)
+    writes = [tmuxctl.Write(f"restoring the {slot} panel's size",
+                            tmuxctl.server_argv(socket, "resize-pane", "-t", pane_id,
+                                                flag, str(sizes[slot])),
+                            report=False)
+              for slot, pane_id in panes.items()
+              if layout.resize_flag(slot) == flag and slot in sizes
+              and _PANE_ID_RE.fullmatch(pane_id)]
+    tmuxctl.write_all(f"restoring this frame's panel sizes ({flag})", writes)
 
 
 def _variable_pane_cols(socket: str, *, panes: dict[str, str], window_cols: int) -> int:

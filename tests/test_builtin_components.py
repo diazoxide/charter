@@ -71,7 +71,8 @@ class Declared(unittest.TestCase):
 
         `chats` and `workspaces` are last, registered and not placed for the same reason
         one measurement further on: a plane with one chat is that same ordinary,
-        permanent state, and every placed pane is ~7 of a switch's 41 tmux invocations."""
+        permanent state, and every placed pane is a share of a switch's tmux invocations —
+        26 of them with four panels, ~162 ms on tmux 3.7c (#780)."""
         self.assertEqual([c.id for c in self.reg.all()],
                          ["identity", "attention", "repos", "personas", "todos",
                           "changes", "sidebar", "chats", "workspaces"])

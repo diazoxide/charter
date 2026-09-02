@@ -38,6 +38,7 @@ from unittest import mock
 from charter import commands_frame, config, instance, statusline, tui
 from charter.frame import gather, panel, slots
 
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 from tests.test_frame_tmux_integration import _HAS_TMUX, _TmuxServerFixture
 
@@ -542,9 +543,14 @@ class TheLauncherActuallyAsksForEachPanesColour(PersonaIso, unittest.TestCase):
         panes = iter(f"%{n}" for n in range(10, 99))
 
         def fake_run(_why, argv, **_kw):
-            seen.append(list(argv))
-            out = next(panes) if "split-window" in argv else ""
-            return subprocess.CompletedProcess(argv, 0, stdout=out + "\n", stderr="")
+            # ONE entry per tmux COMMAND and one id per `split-window`, on its own line:
+            # since #780 charter sends the splits as one command list and a pane's own
+            # options as another, and real tmux answers a chain of splits with one id per
+            # line, in order (measured on 3.7c and at the 3.2 floor).
+            issued = _tmuxchain.commands(argv)
+            seen.extend(issued)
+            out = "".join(f"{next(panes)}\n" for c in issued if "split-window" in c)
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
         with mock.patch.dict(config.FRAME, frame), \
              mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
@@ -1720,10 +1726,8 @@ class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCa
         """
         from charter.frame import state
         ran: list[list[str]] = []
-        with mock.patch.object(
-                commands_frame.tmuxctl, "run",
-                side_effect=lambda _w, argv, **kw: ran.append(argv) or
-                subprocess.CompletedProcess(argv, 0, "", "")):
+        with mock.patch.object(commands_frame.tmuxctl, "run",
+                               _tmuxchain.recorder(ran)):
             state.record_panes("fr-pane-style", panels={"repos": "%1", "right": "%2"})
             with mock.patch.dict(config.FRAME,
                                  _arrangement(sidebar={"bg": "brightblack"})), \

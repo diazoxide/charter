@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Mapping
+from typing import NamedTuple
 
 from .. import util
 
@@ -677,6 +678,116 @@ def run(action: str, argv: list[str], *, env: dict | None = None,
     if proc.returncode != 0 and report:
         report_failure(action, argv, proc)
     return proc
+
+
+class Write(NamedTuple):
+    """One fire-and-forget tmux command, with everything :func:`run` would need for it.
+
+    A record rather than a bare `(action, argv)` pair because the two things a batch has
+    to carry per command are exactly the two :func:`run` takes per command and neither is
+    the same for every member of a group: `_reconcile_panels` batches a `set-hook -u`
+    that must NOT be reported (unsetting a hook nothing set is rc 0 — measured on 3.7c
+    and at the 3.2 floor — so the only way it fails is a pane that is gone) beside a
+    `kill-pane` that must be. Flattening the two would either print a second sentence
+    about one broken pane or swallow the sentence about it.
+    """
+
+    #: The phrase :func:`report_failure` prints for THIS command, if it is ever run on
+    #: its own. Required for the same reason :func:`run`'s is.
+    action: str
+    #: The full argv, `tmux -L … verb …`, built by :func:`server_argv` like any other.
+    argv: list[str]
+    #: Whether a non-zero return from this one command is worth printing.
+    report: bool = True
+
+
+#: The two return codes :func:`run` invents rather than reads off tmux, and the two
+#: :func:`write_all` will not replay on. Public because `commands_frame._split_all` reads
+#: it too: the split batch cannot use :func:`write_all` (a replayed `split-window` is a
+#: second pane) and so has to make the same call about the same two codes, and one
+#: constant is what stops the two answering differently — for two different reasons, both of which end in
+#: "one at a time buys nothing here".
+#:
+#: :data:`TIMED_OUT` is the load-bearing one: a wedged server has not told charter what
+#: it did, so re-issuing would be repeating writes that may already have taken against a
+#: tmux that is not answering — the one case idempotence cannot cover, because charter
+#: cannot know it is repeating. :data:`COULD_NOT_RUN` is the opposite and is grouped with
+#: it for economy rather than for safety: nothing ran and nothing can, so a replay is N
+#: more failed `exec`s and N copies of one sentence about a tmux that is not there.
+UNKNOWABLE = (TIMED_OUT, COULD_NOT_RUN)
+
+
+def write_all(joint: str, writes: list[Write], *, env: dict | None = None,
+              timeout: float = TIMEOUT) -> list[subprocess.CompletedProcess]:
+    """Every write in *writes* — as ONE invocation when they all take, one at a time when
+    any of them does not. One result per write, in order, whichever way it went.
+
+    **What this buys is round trips, and they are most of what a launch and a switch
+    spend.** Measured on this machine against tmux 3.7c, a `tmuxctl.run` costs ~5 ms of
+    wall clock whatever it carries — the operator who filed #728 measured ~13.4 ms on
+    theirs — and a four-panel switch made 58 of them. Two thirds of those read nothing
+    back: window options, pane options, hooks, kills. tmux parses and executes a whole
+    `;`-separated list server-side (:func:`chain`), so a group of them costs one.
+
+    **A failing command ABORTS the rest of the list, and that is the whole reason this
+    is not just :func:`chain`.** Measured on tmux 3.7c and at the 3.2 floor alike:
+    `set-option @a 1 ; set-option nosuchoption 1 ; set-option @b 1` sets `@a`, refuses
+    the middle one, and **never sets `@b`** — rc 1, and the third command is not run.
+    So a chain is one command as far as failure is concerned, while charter's callers
+    are written around each write failing on its own with its own sentence and its own
+    consequence (`_dress_window`'s rules are decorative, `_install_resize_hook`'s hook
+    is a capability ceiling, the launcher's five `set-environment`s each warn about a
+    different thing). Collapsing those into one phrase would be a worse frame than the
+    one the round trips buy.
+
+    So: the chain is tried first with reporting off, and **the moment it returns
+    non-zero every write is re-issued one at a time**, through :func:`run`, with its own
+    action and its own *report*. The fast path is one invocation; the failure path is
+    one wasted invocation plus exactly the calls, the codes and the sentences the caller
+    would have got before this function existed.
+
+    **Which makes idempotence the entry condition, stated here because nothing else can
+    enforce it.** The replay re-runs writes that already took, so every *write* must be
+    one that means the same thing twice: `set-option`, `set-hook`, `set-environment`,
+    `kill-pane`. Never `split-window` — a replayed split is a second pane, and
+    `_split_panels` reads its ids back for that reason and batches by hand.
+
+    **A wedged server is not replayed** (:data:`UNKNOWABLE`). A timeout says charter
+    never learnt what the server did, not that it did nothing, so re-issuing would be
+    the one thing idempotence cannot cover: writes charter cannot know it is repeating,
+    against a tmux that is not answering. The batch is reported once — and only if any
+    write in it would have reported on its own — every write gets that same result back,
+    and the caller degrades exactly as it does for any other non-zero return.
+    """
+    if len(writes) == 1:
+        w = writes[0]
+        return [run(w.action, w.argv, env=env, timeout=timeout, report=w.report)]
+    argv = chain([w.argv for w in writes])
+    if argv is None:
+        # **Two cases, one answer, and no `if not writes` in front of them.** :func:`chain`
+        # answers ``None`` both for a group spanning two servers — which it will not guess
+        # between, and which nothing in charter builds, every caller deriving its argvs
+        # from a single *socket* — and for an EMPTY group, which several callers really do
+        # hand over (a frame with no doomed panel, no missing slot, no chrome to set). One
+        # at a time is exactly right for the first and is a loop over nothing for the
+        # second, so an early return for the empty case could not change an answer: the
+        # deletion sweep reported it as a survivor and this repository deletes an
+        # equivalent mutant rather than documenting it.
+        return [run(w.action, w.argv, env=env, timeout=timeout, report=w.report)
+                for w in writes]
+    proc = run(joint, argv, env=env, timeout=timeout, report=False)
+    if proc.returncode == 0:
+        return [subprocess.CompletedProcess(w.argv, 0, stdout="", stderr="")
+                for w in writes]
+    if proc.returncode in UNKNOWABLE:
+        # Reported only if any write in the group would have reported on its own — a
+        # batch of `resize-pane`s that all opted out (`_apply_sizes`) must not start
+        # printing over the agent's screen just because it is now a batch.
+        if any(w.report for w in writes):
+            report_failure(joint, argv, proc)
+        return [proc for _ in writes]
+    return [run(w.action, w.argv, env=env, timeout=timeout, report=w.report)
+            for w in writes]
 
 
 def interact(argv: list[str], *, env: dict | None = None) -> subprocess.CompletedProcess:
