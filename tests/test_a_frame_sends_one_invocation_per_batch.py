@@ -95,7 +95,14 @@ class WhatARealTmuxDoesWithACommandList(unittest.TestCase):
         cls._tmux_cmd("kill-server")
         held = cls._tmux_cmd("new-session", "-d", "-s", "keep", "-x", "80", "-y", "24",
                              "--", "cat")
-        assert held.returncode == 0, held.stderr
+        if held.returncode != 0:
+            # Raised rather than `assert`ed: an `assert` in a fixture is stripped by
+            # `python -O`, and this suite has a test that says so. Not a skip either —
+            # `_HAS_TMUX` has already established there is a tmux, so a server that will
+            # not start is a fact about this machine worth failing loudly over rather
+            # than a capability to shrug at.
+            raise AssertionError(
+                f"tmux would not hold a session open on {SOCKET}: {held.stderr!r}")
 
     @classmethod
     def tearDownClass(cls):
