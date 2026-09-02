@@ -162,6 +162,27 @@ OVERLAY_OPTION = "@charter_overlay"
 #: without `drag`). Measured: tmux propagates this pane's exact request to the outer
 #: terminal when tmux's own `mouse` is off, and coordinates arrive pane-relative and
 #: 1-based, with any `pane-border-status` row already subtracted.
+#:
+#: **The 1006 is load-bearing at `tmuxctl.FLOOR`, and it is the one thing standing between
+#: charter and the only "fires wrongly" this project has found.** tmux synthesises a
+#: report for a pane in whatever mode that pane asked for, and X10 spells a coordinate as
+#: one byte at ``value + 32`` — so column 224 needs byte 256 and wraps. tmux clamps that
+#: from 3.3 ("Do not report mouse positions (incorrectly) above the maximum of 223"); 3.2
+#: does not. Measured on both, a 244-column pty, against a pane asking for **1000 alone**::
+#:
+#:     3.2   col 240 -> b'\\x1b[M \\x10!'   wrapped, and 16 is a REAL column of the pane
+#:     3.2   col 244 -> b'\\x1b[M \\x14!'   wrapped
+#:     3.7c  col 240 -> b'\\x1b[M \\xff!'   clamped at 223
+#:
+#: With this constant as written, both versions hand the pane ``\\x1b[<0;240;1M`` — the
+#: column that was pressed. A tab bar is the widest single row in the frame, so on a
+#: 244-column window a wrapped column is a click on a real but wrong tab.
+#: `tests/test_frame_input_reaches_a_component.APointerPastColumnTwoTwentyThree
+#: LandsWhereItWasAimed` is the standing form of the whole measurement, and its unit half
+#: is what refuses a "simplification" of this line.
+#:
+#: The ORDER is part of it: 1006 is asked for first so there is no instant in which the
+#: pane has asked to be reported to and not yet said how.
 MOUSE_ON = "\x1b[?1006h\x1b[?1000h"
 
 #: And the withdrawal, in the reverse order it was asked for. Written before
