@@ -435,6 +435,40 @@ class TestTheDetector(PlaneInsideAPlane):
         leaf = self._plane_at("top2", "workspaces", "a", "mid", "workspaces", "b", "leaf")
         self.assertEqual(root.nested_plane_in(top, leaf), leaf.resolve())
 
+    def test_a_start_reached_through_a_symlink_answers_the_real_directory(self):
+        """`start.resolve()`, pinned — and pinned WITHOUT relying on the platform's tmpdir.
+
+        This was a deletion-sweep survivor on CI and a pin on the developer's macOS, which is
+        the "your machine is not the runner" trap exactly: macOS `/tmp` is a symlink to
+        `/private/tmp`, so every fixture path there needs normalising and `resolve()` looks
+        pinned for free. On Linux `tempfile.mkdtemp()` already hands back a canonical path,
+        nothing needed normalising, and dropping the call changed nothing anywhere.
+
+        A symlink this test makes itself needs normalising on both. It is also the real case:
+        the answer is printed as `git -C <path>` in the refusal, and a path with a symlink
+        still in it names a directory the reader then cannot find in `git worktree list` or
+        match against anything else charter printed.
+        """
+        link = self.tmp / "via-a-link"
+        os.symlink(self.plane, link)
+        through = link / "workspaces" / "dev" / "charter"
+        self.assertEqual(root.nested_plane_in(self.plane, through), self.clone.resolve())
+
+    def test_a_plane_named_through_a_symlink_still_matches_the_chain(self):
+        """`plane.resolve()`, pinned — the other half of the pair, and reached with the first
+        one satisfied so the two cannot mask each other.
+
+        `enclosing_plane` resolves internally, so it answers the REAL enclosing plane. Leave
+        *plane* unresolved and the comparison is symlinked-path vs real-path: it never
+        matches, `nested_plane_in` answers `None`, and `charter save` commits the outer
+        plane exactly as #809 reports — for any operator whose plane is reached through a
+        symlink, which on macOS is every plane under `/tmp` and anywhere a home directory is
+        linked.
+        """
+        link = self.tmp / "plane-by-another-name"
+        os.symlink(self.plane, link)
+        self.assertEqual(root.nested_plane_in(link, self.clone), self.clone.resolve())
+
     def test_it_never_raises_on_a_path_that_is_gone(self):
         """It sits on a command path, beside `tree_of`, which makes the same promise.
 
