@@ -64,6 +64,16 @@ class _FrameRoot(PersonaIso):
         # directory, and `PersonaIso` repointing it is the only thing between that and the
         # developer's own plane.
         self.assertIn("edm-test-", str(config.STATE_DIR))
+        # **The process cwd is restored before the tmp plane is removed, and that ordering
+        # is the whole of it.** `_reopen_one` does a real `os.chdir` into the recorded
+        # directory, and one case here makes the chdir BACK fail on purpose — which is
+        # exactly the branch under test. Left alone, the runner ends that case standing
+        # inside a directory `PersonaIso` is about to `rmtree`, and every later
+        # `os.getcwd()` in the whole run raises `FileNotFoundError`: measured on CI as
+        # ~40 errors across nine unrelated modules, on all four interpreters. Cleanups run
+        # LIFO and `PersonaIso` registered its teardown first, so this one runs before the
+        # removal rather than after it.
+        self.addCleanup(os.chdir, os.getcwd())
         config.private_mkdir(state._root())
 
     def chat(self, **kw):
@@ -358,7 +368,11 @@ class AReopenThatCannotStandSomewhereSaysSo(_FrameRoot):
         self.assertIsNotNone(out)
         self.assertEqual(out.fid, "alpha.1")
         self.assertEqual(len(calls), 1)
-        real(str(config.ROOT))
+        # And the cost, stated rather than tidied away: the process really is left in the
+        # recorded directory. Nothing in `_reopen_one` can fix that — the `finally` already
+        # tried — so the honest assertion is that it happened, and `setUp`'s cleanup is
+        # what puts the RUNNER back before the tmp plane is removed.
+        self.assertEqual(os.getcwd(), str(config.ROOT.resolve()))
 
 
 if __name__ == "__main__":
