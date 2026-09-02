@@ -283,24 +283,28 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
 
     # -- the refusals, and what each one leaves standing ---------------------------------
 
-    def test_a_workspace_with_no_session_is_refused_and_nothing_is_launched(self):
-        """**What a workspace nobody has opened is answered with.** Opening one is
-        `cmd_launch` — a directory, an ordinal, a harness and an `attach` — and this runs
-        detached with its streams on `/dev/null`, with no terminal to attach anything to.
-        `switch.py`'s standing rule is the same one (#518), so the refusal names the
-        command that does."""
-        s = self._switch(self._ordinary(panes=[_seat("$1", "%1")]))
+    def test_a_workspace_with_no_session_is_opened_rather_than_refused(self):
+        """**What a workspace nobody has opened is answered with**, and it is no longer a
+        refusal. This used to print `charter <harness> --workspace beta` for the operator
+        to type, on the grounds that opening ends in an `attach` and a detached switch has
+        no terminal for one — measured false on 3.7c and at the 3.2 floor, and beside the
+        point, because arriving is `switch-client`. The open itself is
+        `tests/test_a_workspace_tab_opens_what_it_names.py`; what belongs HERE is that the
+        switch reaches it, and that an open which produces nothing moves nothing."""
+        with mock.patch.object(commands_frame, "_open_workspace",
+                               return_value=None) as opener:
+            s = self._switch(self._ordinary(panes=[_seat("$1", "%1")]))
+        opener.assert_called_once()
+        self.assertEqual(opener.call_args[0][1], "beta")
         self.assertEqual(s.switched, [])
         self.laid_out.assert_not_called()
-        said = self.said.call_args[0][1]
-        self.assertIn("workspace 'beta' is not open on this plane", said)
-        self.assertIn("charter <harness> --workspace beta", said)
 
     def test_a_workspace_this_plane_has_never_opened_reaches_no_tmux_call_for_it(self):
-        """The ordinary case of the same refusal, and the property that keeps it cheap:
-        with no chat directory there is nothing to compare against, so the answer is on
-        disk. `_pane_place` is still asked, because charter has to know where it is
-        standing before it can say it is not going anywhere."""
+        """The ordinary case, and the property that keeps it cheap: with no chat directory
+        there is nothing to compare against, so "is it open" is answered on disk without
+        asking tmux to list a single pane. `_pane_place` is still asked, because charter
+        has to know where it is standing before it can move — or, now, before it opens
+        somewhere to move to."""
         for chat in chats.of_workspace("beta"):
             state.record_harness_pane(chat, "")
         s = self._switch(self._ordinary())
@@ -731,24 +735,48 @@ class TwoPlanesOnOneMachine(_RealServer):
         """**End to end, and it is the operator's decision made observable**: switching is
         restricted to workspaces of THIS plane, and anything else is refused by name.
         Plane B clicks `shared`; there is a live session called `shared` with plane B's
-        own operator's terminal nowhere near it; the switch says the workspace is not open
-        *on this plane* and the client that is attached to plane A's session stays there.
+        own operator's terminal nowhere near it; the switch refuses because that session
+        is not one plane B can prove is its own, and the client attached to plane A's
+        session stays there.
+
+        **Plane B is given a terminal of its own, and the fixture is not honest without
+        it.** Since a tab OPENS, `_switch_client` refuses first — before spending a harness
+        process — when nothing is attached to the frame doing the switching. Plane B's
+        `$9000` is a session this test invented and nobody is on it, so without this the
+        case would stop one refusal early and prove nothing about planes at all.
         """
         self._mark(self.a_state)
         client = self._attach(SHARED)
+        windows_before = _tmux("list-windows", "-t", SHARED,
+                               "-F", "#{window_id}").stdout.split()
         with _plane(self.plane_b):
             _a_chat("shared.2", ws=SHARED, pane="%9001", server=SOCKET)
             state.record_harness_pane("shared.2", "%9001")
             said = []
             with mock.patch.object(commands_frame, "_pane_place",
                                    return_value=("$9000", "@9000")), \
+                 mock.patch.object(commands_frame, "_clients_on",
+                                   side_effect=lambda _s, sess:
+                                   ["/dev/ttyplaneb"] if sess == "$9000" else []), \
                  mock.patch.object(commands_frame, "_say_on_screen",
                                    side_effect=lambda fid, msg, **kw: said.append(msg)):
                 commands_frame._switch_client("shared.2", SHARED,
                                               said="workspace → shared")
-        self.assertTrue(any("is not open on this plane" in m for m in said), said)
+        self.assertTrue(any("is already running on this machine" in m for m in said),
+                        said)
         self.assertEqual(self._clients(SHARED), [client],
                          "another plane's switch moved this plane's client")
+        # **The window count is the assertion that matters now that a tab OPENS.** The
+        # refusal this used to get was free; an open is not, and `cmd_launch` decides
+        # between starting a session and joining one on a NAME that both planes have. A
+        # missing guard would not have moved the client either — it would have quietly
+        # added plane B's chat window to plane A's session and then failed the marker veto,
+        # which reads on screen as "the open failed" and on the server as litter in another
+        # project's frame.
+        self.assertEqual(
+            _tmux("list-windows", "-t", SHARED, "-F", "#{window_id}").stdout.split(),
+            windows_before,
+            "an open from another plane added a window to this plane's session")
 
 
 if __name__ == "__main__":

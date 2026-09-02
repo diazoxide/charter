@@ -430,8 +430,8 @@ set once, by the launch that creates a workspace's session, and holds that plane
 `.charter` path. Sessions started by a charter older than this carry no marker; those are
 still found by the pane record, which is what they were always found by.
 
-A workspace with no session yet is **not open**, and the switch says so rather than opening
-one — see *Switching a workspace moves your terminal* below for why.
+A workspace with no session yet is **opened**, and then you are taken to it — see
+*Switching a workspace moves your terminal* below for what that costs.
 
 ### Switching between them
 
@@ -2102,12 +2102,35 @@ its history — so nothing about the chat you left changes. It keeps running, ke
 whatever it was burning, and is still there when you switch back. That is the point:
 several workspaces open at once, one on screen.
 
-A switch is refused, with the reason on your own screen, for a name that cannot name a
+**A workspace that is not open yet is opened, and you are taken to it.** Most of the tabs
+in the bar are like this — the bar lists every workspace the plane has, and only the ones
+you have been in today are running. Clicking one starts it: a chat, a harness, the panels,
+and then your terminal moves there. It is the same thing `charter <harness> --workspace
+<name>` does, which is what this used to print for you to go and type.
+
+The harness it opens with is **the one this chat is running**, because that is the only
+answer a tab can carry — a tab names a workspace and nothing else. If charter has no record
+of it, the plane's `[harness] default` is used, and with neither the click is refused by
+name rather than starting something you did not choose.
+
+What a click costs: one harness process at its own prompt with nothing sent to it, one chat
+directory, and a set of panels. Nothing is asked first, deliberately — the frame delivers no
+key events to a panel, so there is no confirmer available to one, and a tab that needed two
+clicks would be the "select, then confirm" that clicking a tab is supposed to replace. The
+undo is `F2` → `chat` → close.
+
+A switch is still refused, with the reason on your own screen, for a name that cannot name a
 workspace, a workspace this plane does not have, the workspace you are already in, and a
-workspace that **is not open** — nothing on this plane has a session for it yet. Charter
-does not open one for you: opening a workspace starts a harness and attaches a terminal,
-and the switch runs detached with no terminal to attach. The refusal names the command that
-does it: `charter <harness> --workspace <name>`.
+terminal that has moved nowhere. Two refusals are new, and both exist because opening is not
+free:
+
+* **A workspace whose name is already running on this machine under another plane.** One
+  tmux server serves every plane on this machine, so `default` usually exists several times
+  over. Charter will not add your chat to another project's session, and tells you to attach
+  to it by hand if it turns out to be yours.
+* **Nothing attached to the frame you are switching from.** If you have detached, or an
+  agent with no terminal is driving the frame, the click is refused before anything starts
+  rather than launching a harness into a workspace with no client to move into it.
 
 **Switching a persona from the picker moves the frame, and says so.** Choosing one writes
 the choice under the frame's own id and bumps the frame so every panel repaints, and a

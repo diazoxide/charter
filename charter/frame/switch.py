@@ -171,11 +171,14 @@ def to_workspace(fid: str, name: str) -> Outcome:
     and is still not a switch. They are asked in that order for :func:`to_persona`'s
     reason: the narrower answer is the one the operator can do something with.
 
-    **The fourth refusal is deliberately not here, because it is tmux's.** "That workspace
-    is not open" is a question about live sessions on a shared server, and answering it
-    here would answer it at the instant a palette opened rather than at the instant the
-    switch runs — `chats.check`'s own split, one noun out. `commands_frame._switch_client`
-    owns it, together with every other reading only a server can give.
+    **"Is it open" is deliberately not asked here, because it is tmux's — and since a tab
+    OPENS a workspace it is no longer a refusal at all.** A name that passes the three
+    checks above is a workspace this plane has, and `commands_frame._switch_client` either
+    finds its session or starts one (`_open_workspace`, §4k). Either way the answer belongs
+    to the instant the switch runs rather than the instant a palette opened —
+    `chats.check`'s own split, one noun out — and the readings it needs, which of this
+    plane's sessions is `ws` and whether its NAME is already taken on this shared machine
+    by a plane that is not this one, are ones only a server can give.
 
     **`$CHARTER_WORKSPACE` is no longer a pin on this noun, and its absence is a
     decision.** The variable pins which workspace THIS CHAT is in

@@ -60,14 +60,13 @@ pane record, exactly as they were before. The marker is written once, by the lau
 the session name, which is the collision itself, so re-marking there could relabel another
 plane's session as yours.
 
-## A workspace with no session yet is not open, and charter says so
+## A workspace with no session yet is opened
 
 The bar lists every workspace the plane has, and most of them are not running. Clicking one
-answers `workspace 'foo' is not open on this plane — open it with `charter <harness>
---workspace foo``. Charter does not open it for you: opening a workspace starts a harness and
-attaches a terminal, and a switch runs detached with no terminal to attach — a picker that
-creates on a typo leaves litter, which is the same rule every other switch in the palette
-follows.
+opens it and takes you there — see *A workspace tab opens the workspace it names*, which
+replaced the refusal this section used to describe and explains why the reason it gave
+("opening ends in an attach, and a switch has no terminal to attach") was measured to be
+false.
 
 The other refusals are a name that cannot name a workspace, a name this plane does not have
 (with the names it does have beside it), the workspace you are already in, and a terminal

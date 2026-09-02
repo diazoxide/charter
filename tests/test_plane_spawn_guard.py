@@ -779,6 +779,12 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "switch is ABOUT: `switch-client -c <client>` moves a CLIENT, and only a real "
             "one on a real terminal exists to be moved — a detached session has nothing "
             "for the switch to act on. `os._exit`s in its `finally`.",
+        "tests/test_a_workspace_tab_opens_what_it_names.py:execvp":
+            "The same `tmux attach` inside a `pty.fork` child, for the reason opening a "
+            "workspace from a tab is ABOUT: the claim under test is that a process with "
+            "no controlling terminal can still build a session and `switch-client` a "
+            "real client onto it, and only a real client on a real terminal is a thing "
+            "that can be moved. `os._exit`s in its `finally`.",
         "tests/test_a_real_click_on_a_real_tab_bar_switches.py:execvp":
             "The same `tmux attach` inside a `pty.fork` child, for the sibling reason "
             "again: that file exercises the pointer against the two BARS, whose click "
