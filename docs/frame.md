@@ -1021,6 +1021,17 @@ One consequence worth stating: a chat's workspace is now fixed at launch, so **r
 workspace orphans its chats** — their record still names the old name. That was already
 true of any chat nobody had typed `workspace use` in, and it is now true of all of them.
 
+**That pointer, and everything else keyed on a chat, dies with the chat.** A chat id is
+`<workspace>.<n>` and the ordinal is handed back when the chat's state is reaped, so the
+next chat in that workspace very often gets the same *name* — and a pointer, a lock, a
+persona selection or a tool-gate marker left under it would be inherited by a conversation
+that never chose any of them. What that cost, before it was fixed, was a chat launched with
+`--workspace alpha` whose every command acted on `gamma` and which refused
+`charter workspace use alpha` as **locked** (#731). So reaping a chat removes
+`.charter/sessions/<chat id>.*` along with `.charter/frame/<chat id>/`. Sessions that are
+not chats — a bare harness outside a frame, keyed by its own id — are untouched, and so is
+every live chat.
+
 The pin comes first because that is what it means everywhere else in charter: it ranks
 above every pointer in `charter`'s own resolution, and `charter workspace use` warns you
 that it will not stick while the variable is set. A frame is not an exception to that —

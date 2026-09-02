@@ -1996,6 +1996,61 @@ def is_live(fid: str, *, pane: str | None = None) -> bool:
     return True
 
 
+def _forget_session(fid: str) -> None:
+    """Remove every per-session marker keyed on *fid* from ``SESSIONS_DIR`` (#731).
+
+    **A frame's directory is not all of a frame's state, and an ordinal is recycled.**
+    :func:`new_chat_id` hands out the lowest FREE ordinal and an ordinal is free the
+    moment :func:`reap` removes its directory, so a "fresh" chat id is very often a
+    recycled NAME. Inside a frame the frame **is** the charter session (ADR 0019), so
+    every file charter keys on a session id — one directory over, in
+    ``.charter/sessions/<sid>.*`` — is keyed on that name too, and the next tenant of the
+    ordinal inherits all of it. Measured on the reported case: a relaunched `alpha.1`
+    whose predecessor had chosen `gamma` answers `workspace.resolve` → `gamma`,
+    `is_locked` → `gamma`, and refuses `charter workspace use alpha` as **locked** — to
+    the operator who had just launched with `--workspace alpha`. Minting a new id is not
+    isolation; reaping the state keyed on the old one is.
+
+    **The prefix, not a list of suffixes**, and that is `workspace._prune`'s lesson taken
+    at its word rather than re-learned (#366): it enumerated five marker families,
+    drifted three times, and was replaced by "every file in the directory". Eight
+    families are keyed this way today across five modules (`workspace`'s `.workspace` and
+    `.lock`, `persona`'s `.persona`, `statusline`'s `.usage`, `toolgate`'s `.tools` and
+    `.gate`, `hooks`' `.configver`, `.memnudge`, `.route-pending` and
+    `.<tool-use-id>.<kind>.ask-pending`), and a ninth written tomorrow is covered the day
+    it is written. Nothing in either directory is a member for which surviving its own
+    session is the right answer.
+
+    The dot is part of the prefix and load-bearing: `alpha.1` must not reap `alpha.10`'s
+    markers. Never raises, on the same terms as everything else in this module: a marker
+    that could not be removed costs exactly what it cost before this function existed.
+
+    **No `is_file()` filter, and its absence is measured rather than assumed.**
+    `_prune` has one, where it is load-bearing (it guards a `stat` whose `st_mtime` is
+    the whole decision); here it would be the identity. `unlink` on a directory refuses
+    on every platform charter runs on — ``EISDIR`` on Linux, ``EPERM`` on macOS, both
+    ``OSError`` — so the `except` below already leaves it exactly where the filter would
+    have, and a branch no input can distinguish is a survivor waiting to be written.
+
+    Called only where a directory was actually removed, so it inherits `reap`'s scope for
+    free: a live frame keeps its selection, and so does a frame on another server.
+    """
+    try:
+        entries = list(Path(config.SESSIONS_DIR).iterdir())
+    except OSError:
+        # No sessions directory yet, or one this process cannot list. Same side every
+        # unreadable answer in this module falls on: no proof, no deletion.
+        return
+    prefix = f"{fid}."
+    for f in entries:
+        if not f.name.startswith(prefix):
+            continue
+        try:
+            f.unlink()
+        except OSError:
+            continue
+
+
 def reap(live: set[str], *, server: str) -> list[str]:
     """Remove state for frames of *server* that are gone. Returns what was removed.
 
@@ -2134,5 +2189,8 @@ def reap(live: set[str], *, server: str) -> list[str]:
         if pid is not None and _launcher_is_alive(pid):
             continue
         shutil.rmtree(d, ignore_errors=True)
+        # The frame's directory is half its state; the other half is keyed on the same
+        # name one directory over, and the ordinal is about to be handed out again (#731).
+        _forget_session(d.name)
         removed.append(d.name)
     return removed
