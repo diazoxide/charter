@@ -201,10 +201,16 @@ reach a panel at all — tmux gives your typing to the active pane, which is the
 
 Clicking the tab you are already on does nothing at all, rather than tearing the panels down
 and putting them back to arrive where you were. So does clicking the heading, the gap between
-two names, either `+N` count where names did not fit, or the empty space past the last tab:
-those are cells no tab was drawn into, and charter will not pick the nearest name for you. On
-a bar narrow enough that only your own name is drawn, nothing on it is clickable — `F2` is
-what reaches the rest at any width, which is what the bar being a readout means.
+two names, or the empty space past the last tab: those are cells no tab was drawn into, and
+charter will not pick the nearest name for you.
+
+**The `+N` counts are the exception, and they open the palette.** A `+9` stands for names
+that are not on the row, so there is nothing there to switch *to* — but it is the field
+you are most likely to try, and charter now hands off to the surface that can answer:
+pressing either count, or the `n/N` a very narrow bar draws instead of names, opens `F2`.
+It is the top-level palette rather than the picker for that bar's noun, so it is one
+keystroke more than it should be; the doorway row for your noun is already there with the
+name you are on in it.
 
 **The names on a narrow bar do not move when you switch between them.** Where the whole list
 does not fit, the bar cuts it into pages and draws the page yours falls on — and that cut is
@@ -493,15 +499,29 @@ are (`2/3`). It never shows half a name.
 Fifteen workspaces need 274 columns to fit on one row, so on a real terminal the bar is
 usually drawing a page. At 120 columns it draws six of them, at 160 eight, at 200 ten.
 
+**The tab you are on is drawn as a block**, in reverse video — your own terminal's two
+colours exchanged, so it is right on every theme and needs no `[frame] chrome`. The `*`
+beside the name stays, which is what keeps the bar readable with `NO_COLOR` set, on a
+console that has no highlight to give, and with the pane's output redirected to a file.
+
+**`rules = "visible"` puts a separator between tabs.** The same key that decides whether
+you see the seams between panes decides whether you see them between tabs; at the shipped
+`hidden` the strip is exactly the row it always was, and at `visible` it spends one column
+per seam out of the names it can draw. The separator is an ASCII `|` and not the box-drawing
+`│` an IDE would use, deliberately: that glyph is East-Asian *Ambiguous*, so a terminal may
+draw it two cells wide where charter measured one — and on a row whose clicks are resolved
+by *column*, ten separators drawn a cell wide each would put your press ten columns off the
+tab you aimed at.
+
 **They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
 exactly what `F2` → `chat` does — the same command, the same five refusals, the same
 sentence on your screen when one fires. A **workspace** tab does exactly what `charter
 frame-switch --workspace <name>` does: your terminal moves to that workspace, and the chat
 you were in keeps running behind you. *Mouse is off by default* above has the rules a click
 follows and why a tab switches where a repo row only selects; the short of it is that
-clicking the tab you are on, the `+N`, or anything that is not a drawn name does nothing at
-all. The mark stays on the workspace **this chat** is in, because that is what it names —
-switching does not move the chat.
+clicking the tab you are on, or anything that is not a drawn name and not a count, does
+nothing at all. The mark stays on the workspace **this chat** is in, because that is what it
+names — switching does not move the chat.
 
 **Neither is drawn unless a plane places it**, and that is deliberate rather than
 unfinished: on the ordinary plane there is one chat, and a row saying so permanently costs
