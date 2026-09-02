@@ -1065,6 +1065,26 @@ def rename_workspace(old: str, new: str) -> list[str]:
     frame's own session and nothing else is coming — #748's cost exactly: a record written
     in silence is a panel that goes on contradicting it for as long as the frame is idle.
 
+    **The read is `.strip()` and not `.lstrip()`, because it has to be the reading
+    :func:`own_workspace` makes.** That function answers the pin as
+    ``identity(fid).get("CHARTER_WORKSPACE", "").strip()``, and `_frame_identity_env` copies
+    the launcher's environment verbatim — so a shell that exported ``CHARTER_WORKSPACE=
+    "alpha "`` gives a chat whose recorded pin has a trailing space and whose MEMBERSHIP is
+    `alpha` all the same. Compared any other way, this walk repoints a different set from
+    the roster it claims to be following, and the chats it skipped are orphaned by the fix
+    for orphaning. The deletion sweep found it as a survivor and it is pinned rather than
+    softened; what goes back is the clean *new*, so a repoint also tidies the value.
+
+    **No ordering on the scan, and that is a deletion rather than an omission.** It was
+    `sorted(...)`, the sweep survived removing it, and the classification is *equivalent*
+    rather than *untested*: every frame is repointed independently of every other, each
+    writer swallows its own failures, and the only consumer of the answer is a COUNT
+    (`commands_workspace.cmd_workspace_rename`). There is no order for a test to observe,
+    so a test asserting one would be asserting the filesystem's. The list is still
+    materialised INSIDE the ``try``, and that is not incidental: `os.scandir` is lazy, so a
+    directory that becomes unreadable part-way through raises during iteration and not at
+    the call.
+
     **No `is_dir()` filter on the scan, and its absence is deliberate.** `leave.plane_chats`
     keeps one for a measured reason (#733) — a loose FILE called `api.2` in the frame root
     is a name that would otherwise reach a tmux target — and that reason does not exist
@@ -1081,7 +1101,7 @@ def rename_workspace(old: str, new: str) -> list[str]:
     """
     moved: list[str] = []
     try:
-        names = sorted(e.name for e in os.scandir(_root()))
+        names = [e.name for e in os.scandir(_root())]
     except OSError:
         return moved
     for fid in names:

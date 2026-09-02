@@ -208,6 +208,28 @@ class ARenameTakesItsChatsWithIt(PersonaIso, unittest.TestCase):
         self.assertEqual(state.identity("alpha.3").get("CHARTER_WORKSPACE"), "alpha2")
         self.assertEqual(state.own_workspace("alpha.3"), "alpha2")
 
+    def test_a_pin_is_read_exactly_the_way_membership_reads_it(self):
+        """**The deletion sweep found this one, as `strip` -> `lstrip` surviving.**
+        `state.own_workspace` answers the pin as
+        ``identity(fid).get("CHARTER_WORKSPACE", "").strip()``, and `_frame_identity_env`
+        copies the launcher's environment verbatim — so a shell that exported
+        ``CHARTER_WORKSPACE="alpha "`` produces a chat whose recorded pin carries a
+        trailing space and whose MEMBERSHIP is `alpha` regardless. A walk that compared it
+        any other way would repoint a different set from the roster it is following, and
+        the chats it skipped would be orphaned by the fix for orphaning.
+
+        Asserted as the pair that makes it a property rather than a spelling: the chat is
+        in `alpha`'s roster BEFORE (which is `own_workspace`'s reading) and in `alpha2`'s
+        after (which is this walk's). One assertion alone would pass on either function
+        being wrong in the same direction. Both ends of the value are exercised, because
+        `lstrip` and `rstrip` fail on opposite ones."""
+        _plant("alpha.4", ws="beta", pane="%5", pin=" alpha ")
+        self.assertEqual(state.own_workspace("alpha.4"), "alpha")
+        self.assertIn("alpha.4", chats.of_workspace("alpha"))
+        workspace.rename("alpha", "alpha2")
+        self.assertEqual(state.identity("alpha.4").get("CHARTER_WORKSPACE"), "alpha2")
+        self.assertIn("alpha.4", chats.of_workspace("alpha2"))
+
     def test_the_rest_of_a_chats_identity_is_not_lost_on_the_way(self):
         """The pin is rewritten by re-writing the identity record, which holds three other
         names a frame's new panes are launched with (`_relayout_pane_env`). A rewrite that
