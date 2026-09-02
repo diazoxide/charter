@@ -112,6 +112,22 @@ denial from a shell command of its own.)
 command that touches a working tree — it asks each clone's forge for the open change and
 last CI and writes the cache the status line reads (`glstate.refresh`).
 
+## The surface that misses them every time is not `clone`
+
+`git worktree add` hands the new tree the superproject's gitlinks and initialises none of
+them. Measured, from a clone whose submodule was checked out and in sync:
+
+```
+source:   +038cbf7… dev-scripts (heads/main)
+worktree: -a8320ac… dev-scripts          <- and the directory is empty
+```
+
+So unlike `clone`, where it depends on the repo, a worktree of a repo with submodules is
+missing them **always** — and `charter worktree add` prints its `enter: cd …` line
+directly into an agent's next command. It says so now, on the same two lines as everywhere
+else. Every clone path already routed through `cmd_clone` (`workspace restore`, `workspace
+create --repos`, `workspace fork --restore`), so those needed nothing.
+
 ## The trap the first fix set, and the second one that closes it
 
 A submodule left behind is an **unstaged change to the gitlink**. So the fast-forward that
@@ -130,16 +146,18 @@ submodule objects; what it never did was check anything out. Nothing here change
 ## Verification
 
 Reproduced first, in a throwaway plane with `config.ROOT` and `config.STATE_DIR` asserted
-into a scratch directory, never against a real one. 25 new cases: submodules planted by
+into a scratch directory, never against a real one. 28 new cases: submodules planted by
 hand as index gitlinks (a recorded submodule needs no network, no second repository and no
 `protocol.file.allow`), and real `git submodule add` fixtures for the two states that
 genuinely need a checked-out submodule.
 
-Fifteen hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
+Eighteen hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
 the two drift marks onto one, removing the report from `clone`, from `sync` and from each
 half of the `status` row, flattening the remedy path, and trimming `--init --recursive`
 off the remedy, silencing the dirty-skip branch, and narrowing the clone report to freshly
-cloned repos so an already-cloned one is not told. One was killed for the wrong reason —
+cloned repos so an already-cloned one is not told, returning a failure exit code from
+`clone`, dropping the worktree report, and pointing the worktree report at the clone
+instead of the worktree. One was killed for the wrong reason —
 splitting the git output on every space rather than the first survives any fixture whose
 submodule paths are single words —
 so two cases now use a submodule path with a space in it, and that mutation is measured
