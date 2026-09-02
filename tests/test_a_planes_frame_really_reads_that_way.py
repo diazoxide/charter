@@ -557,7 +557,7 @@ class TheLivePaneIsMarkedOnASurfacelessFrame(_NestedClient, unittest.TestCase):
 
 @unittest.skipUnless(_FLOOR_BIN.exists(),
                      f"no {_FLOOR_BIN.name} built on this machine — `docs/frame.md` says "
-                     "how, and CI installs no tmux at all")
+                     "how, and CI has no build of the floor version")
 class TheFloorHasNoSuchCueAndSaysSo(TheLivePaneIsMarkedOnASurfacelessFrame):
     """`pane-border-indicators` arrived in tmux 3.3 and charter's floor is 3.2, so every
     test above SKIPS here rather than passing or failing.
@@ -578,7 +578,7 @@ class TheFloorHasNoSuchCueAndSaysSo(TheLivePaneIsMarkedOnASurfacelessFrame):
 
 @unittest.skipUnless(_FLOOR_BIN.exists(),
                      f"no {_FLOOR_BIN.name} built on this machine — `docs/frame.md` says "
-                     "how, and CI installs no tmux at all")
+                     "how, and CI has no build of the floor version")
 class TheFloorAnswersIdentically(TheHiddenRuleIsDrawnAndCannotBeSeen):
     """Every rendering above, re-run against `tmuxctl.FLOOR`.
 

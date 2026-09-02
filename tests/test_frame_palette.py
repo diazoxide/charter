@@ -30,6 +30,7 @@ from charter import commands_frame, contain, tui
 from charter.frame import (action, actions, builtin_actions, component, overlay, palette,
                            state)
 
+from tests import _tmuxsocket
 from tests._isolation import PersonaIso
 
 
@@ -577,6 +578,30 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
     def test_a_frame_with_a_real_harness_pane_can_move_its_density(self):
         """The other direction, so the reason above cannot pass by never being available."""
         self.assertTrue(self._offers()["density.normal"].available)
+
+    def test_a_frame_on_charters_own_socket_by_path_is_still_detachable(self):
+        """#812 at a second reader, and the one an operator would have SEEN.
+
+        A chat opened by a workspace tab records charter's own socket the way `$TMUX`
+        spells it — absolute — because it was launched from a process tmux started in one
+        of charter's own panes. `_detachable` read that as "somebody else's tmux, where a
+        frame is a window and `detach-client -s <fid>` names nothing", so the palette in
+        that chat quietly dropped its Detach row. It is a session on charter's own server
+        and `detach-client -s` names it exactly.
+
+        The path is built by `tests/_tmuxsocket.py`, which computes tmux's rule
+        independently of the code under test (#601 — never a spelled uid, and never the
+        production function confirming itself)."""
+        state.record_server(self.FID,
+                            _tmuxsocket.socket_path(commands_frame.SOCKET))
+        self.assertTrue(self._offers()["frame.detach"].available)
+
+    def test_a_frame_in_a_tmux_charter_did_not_start_is_still_not_detachable(self):
+        """The pair, so the case above cannot pass by making every frame detachable:
+        inside an operator's own tmux a frame really is a WINDOW, and `-s <fid>` targets a
+        session that does not exist."""
+        state.record_server(self.FID, _tmuxsocket.OPERATOR_SOCKET)
+        self.assertFalse(self._offers()["frame.detach"].available)
 
     def test_a_frame_whose_server_is_unrecorded_is_charters_own_and_detachable(self):
         """`state.frame_server` answers `None` for a frame launched by a charter that

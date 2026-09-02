@@ -73,7 +73,10 @@ attaches to `$0`, adds no window and leaves the client on `shared.1`; on `main` 
 second launch adds `shared.2` and moves the attached client onto it. The third launch, from
 the other plane, opens its own chat on both.
 
-Run by hand on **tmux 3.7c and on tmux 3.2** — 29/29 on each. CI installs no tmux, so none
-of it runs there.
+Run by hand on **tmux 3.7c and on tmux 3.2** — 29/29 on each. CI has tmux and runs every
+case that needs only a tmux SERVER; the ones that need a client on a real pty skip there,
+because the runner has no terminal tmux will hand one. (This paragraph used to say "CI
+installs no tmux, so none of it runs there", which is false and cost #811 a red run on all
+four Pythons — see #812.)
 
 Nothing to adopt.

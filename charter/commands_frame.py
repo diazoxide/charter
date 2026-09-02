@@ -1944,8 +1944,10 @@ def _frame_is_live(socket: str, fid: str) -> bool:
     A frame is a WINDOW on either server now — one of a workspace session's chats on
     charter's own, one of the operator's own windows in theirs — and `@charter_chat` is
     what it answers to on both, so `_live_chats` is asked either way.
-    `tmuxctl.is_operator_socket` is the same single discriminator that already turns a
-    server into `-L` or `-S`, and it still decides what the SECOND question is:
+    `tmuxctl.is_operator_socket` is the single question "whose server is this" — since
+    #812 a comparison of SERVERS rather than of spellings, so charter's own socket read
+    out of `$TMUX` as a path is not mistaken for somebody else's — and it decides what
+    the SECOND question is:
     `cmd_respawn` asked `_live_sessions(SOCKET)` unconditionally, which on the operator's
     server is a question about a server that is not theirs: it answers "no such session"
     for a frame that is on screen, so a panel that died there could never have been
@@ -4557,8 +4559,38 @@ def cmd_launch(args) -> int:
     # names often enough to matter (`env` captures, a `tmux kill-server` under a running
     # script), and charter is then not inside a tmux whatever it says. `None` back means
     # exactly that, and the private-server path below is the right one after all.
+    #
+    # **`is_operator_socket`, not `inside is not None`, and that is #812's other half.**
+    # `$TMUX` says which tmux this process is INSIDE; it does not say whose it is. A
+    # launch reached from a workspace tab runs in a panel process of charter's own frame
+    # (`_open_workspace` calls this function in-process), so its `$TMUX` is charter's own
+    # socket spelled as a path — and this branch, asked only whether the variable parsed,
+    # built the new workspace's chat as a `new-window` in whatever session the CALLER was
+    # in. Measured on tmux 3.7c against a real server, before this line changed, with
+    # `$TMUX` naming charter's own socket by path and a launch asking for workspace
+    # `beta`: `list-sessions` reported only the caller's own session and never a `beta`,
+    # `list-windows -a` reported `beta.1` as a window INSIDE it, `state.record_server`
+    # wrote the absolute spelling, and the launcher was still inside `_wait_for_harness`
+    # when the harness was still alive. So `_open_workspace`'s closing
+    # `_plane_session(socket, ws=ws)` could never find the session it had just asked for,
+    # and the switch never got its answer back at all. With this line as it now stands,
+    # the same launch recorded the short NAME and left a real `beta` session behind. On
+    # charter's own server a workspace IS a session (§2.1), so the private path below is
+    # the right one however `$TMUX` spells the socket.
+    #
+    # **What this changes for a launch that WILL be a terminal, stated rather than
+    # discovered.** `charter <harness>` typed at a shell inside a charter frame now builds
+    # its own session and reaches the `attach` below, from a process already inside that
+    # very server — a NESTED client, which `_frame_env` makes possible by popping `$TMUX`
+    # and which was measured to succeed on tmux 3.7c and at the 3.2 floor (a client on the
+    # inner pane's tty, `list-clients` reporting it against the new session). That is the
+    # pre-ADR-0018 shape and it stacks two prefix layers on one terminal, so it is not
+    # good — but what it replaces is not "working": that launch used to land a chat for
+    # one workspace as a window inside ANOTHER workspace's session, whose every workspace
+    # tab then refused with #812's own sentence. The one-way door was reachable by typing
+    # as well as by clicking, and both doors are the same defect.
     inside = tmuxctl.operator_server()
-    if inside is not None:
+    if inside is not None and tmuxctl.is_operator_socket(inside[0], own=SOCKET):
         rc = _launch_in_operator_tmux(inside[0], inside[1], ws=ws, argv=argv,
                                       h=h, v=v, picked=picked)
         if rc is not None:
@@ -6805,9 +6837,18 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
     deletes.
     """
     socket = state.frame_server(fid) or SOCKET
-    if tmuxctl.is_operator_socket(socket):
-        # **A workspace is a tmux session only on charter's OWN server** (§2.1), and this
-        # frame is not on it. Inside an operator's tmux every chat charter opens is a
+    if tmuxctl.is_operator_socket(socket, own=SOCKET):
+        # **This is #812's refusal, and it is still here because the reasoning was never
+        # the defect.** What was wrong was the premise: `is_operator_socket` was a
+        # leading-slash test, and a chat launched inside one of charter's own panes
+        # records charter's own socket as the absolute path `$TMUX` spells it with — so
+        # every tab in that chat, the one back included, was refused by this line for a
+        # server charter had started itself. It asks about the SERVER now, so a frame on
+        # charter's private socket reaches the switch whichever way its record spells it,
+        # and a frame genuinely inside somebody else's tmux is refused exactly as before.
+        #
+        # **A workspace is a tmux session only on charter's OWN server** (§2.1), and such
+        # a frame is not on it. Inside an operator's tmux every chat charter opens is a
         # `new-window` in the session that operator was already in (`layout.window_argv`,
         # `_launch_in_operator_tmux`) — whatever workspace it names — so there is no
         # session for another workspace to be, and the two things `switch-client` could
@@ -8290,7 +8331,17 @@ def cmd_reopen(args) -> int:
         util.err(tmuxctl.absent_message())
         return 1
     # **Refused inside a tmux the operator already has, and stated rather than half-done.**
-    # `cmd_launch` builds a frame there as a WINDOW on THEIR server
+    #
+    # **The test is `operator_server`, deliberately, and NOT #812's `is_operator_socket`.**
+    # This is not a question about whose server it is; it is a question about whether this
+    # process is already inside ONE, and both answers refuse. On somebody else's server
+    # the reason is the paragraph below. On charter's own — reached when a `charter
+    # reopen` is typed at a shell inside a frame — every chat would build correctly and
+    # the single `_attach_after_reopen` at the end would then attach a NESTED client
+    # inside the pane it was typed in, which is the pre-ADR-0018 shape ADR 0018 removed.
+    # Refusing costs one message; the operator's own shell is one `detach` away.
+    #
+    # `cmd_launch` builds a frame in somebody else's tmux as a WINDOW on THEIR server
     # (`_launch_in_operator_tmux`), and that path is awake for the whole life of the frame —
     # it reads the harness's exit status itself instead of installing the `pane-died` hooks,
     # which is what makes it correct there and what makes it BLOCK exactly as `attach` does.
