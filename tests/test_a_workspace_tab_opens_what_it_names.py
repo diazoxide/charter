@@ -53,7 +53,8 @@ from unittest import mock
 from charter import commands_frame, config
 from charter.frame import state
 
-from tests._isolation import PersonaIso
+from tests import _tmuxreap, _ttyguard
+from tests._isolation import PersonaIso, no_background_refresh
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -411,7 +412,15 @@ class ADetachedProcessCanBuildAWorkspace(unittest.TestCase):
         tm("new-session", "-d", "-s", "home", "sh")
         pid, _fd = pty.fork()
         if pid == 0:                                    # pragma: no cover - the child
-            os.execvp("tmux", ["tmux", "-L", sock, "attach", "-t", "home"])
+            # `os._exit` in a `finally`, which every other `pty.fork` in this suite spells
+            # for the same reason: an `execvp` that RAISES leaves the child running the
+            # test framework, and a second runner that goes on to fork is how one failed
+            # exec becomes a machine full of them. Never `sys.exit` — that unwinds, and
+            # unittest catches `SystemExit`.
+            try:
+                os.execvp("tmux", ["tmux", "-L", sock, "attach", "-t", "home"])
+            finally:
+                os._exit(127)
         self.addCleanup(lambda: os.waitpid(pid, os.WNOHANG))
 
         deadline = time.time() + 10
@@ -447,6 +456,193 @@ class ADetachedProcessCanBuildAWorkspace(unittest.TestCase):
         self.assertEqual(
             len(tm("list-panes", "-t", "home", "-F", "#{pane_id}").stdout.split()), 1,
             "building a workspace killed something")
+
+
+@unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
+class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
+    """**The operator's report, end to end, with nothing faked but the harness binary.**
+
+    Every class above stops somewhere: the unit cases stop at a mock `cmd_launch`, and
+    :class:`ADetachedProcessCanBuildAWorkspace` measures tmux without charter in the room.
+    This one runs the whole thing — a real tmux server, a real client on a real pty, a real
+    `_switch_client`, a real `cmd_launch` underneath it building a real session with real
+    panel processes, and a real `switch-client` landing the client on it.
+
+    **The harness is a script that sleeps**, and that is the only substitution. A test may
+    not start a real `claude`: it costs money, it needs credentials, and it would make this
+    file's result depend on a network. What the script has to be is a real executable on
+    `$PATH` that tmux really runs, because the claim being tested is that a detached
+    process can start one at all.
+
+    Verified on tmux 3.7c and at the 3.2 floor, identically on both.
+    """
+
+    HERE, THERE = "alpha", "beta"
+
+    def setUp(self):
+        super().setUp()
+        # **The declaration is the point of the fixture, not paperwork around it.** The
+        # process this stands in for is a `charter frame-switch` started by
+        # `builtin_actions._spawn`: `start_new_session=True`, all three streams on
+        # `/dev/null`. Saying so out loud is what makes the launch below take the branches
+        # a real click takes — no #518 picker, and `os.get_terminal_size()` raising, which
+        # is exactly the condition the size seam exists for.
+        _ttyguard.no_terminal()
+        # The repo scan and the version/forge pollers are real detached charter children
+        # that `cmd_launch` kicks off and nothing here waits for. This test is about the
+        # SESSION the launch builds, not about them, so the spawners are stopped rather
+        # than the forks allowed — `tests/_planeguard.py`'s own first suggestion.
+        no_background_refresh(self)
+        self.enterContext(mock.patch("charter.commands_frame._spawn_gather"))
+        self.socket = _tmuxreap.name("open-ws-tab")
+        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.addCleanup(self._teardown)
+        self.kids: list[tuple[int, int]] = []
+
+        # A harness that is a real binary and starts no conversation.
+        binroot = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
+        fake = binroot / "codex"
+        fake.write_text("#!/bin/sh\nexec sleep 300\n")
+        fake.chmod(0o755)
+        self.enterContext(mock.patch.dict(
+            os.environ, {"PATH": f"{binroot}{os.pathsep}{os.environ.get('PATH', '')}"}))
+
+        for n in (self.HERE, self.THERE):
+            (config.WORKSPACES_DIR / n).mkdir(parents=True, exist_ok=True)
+
+        # The chat the operator is standing in, built by hand so the fixture does not
+        # depend on the code path under test.
+        self.fid = f"{self.HERE}.1"
+        started = self._tmux("new-session", "-d", "-s", self.HERE, "-n", self.fid,
+                             "-x", "132", "-y", "43", "-P", "-F", "#{pane_id}",
+                             "sleep 300")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.pane = started.stdout.strip()
+        _a_chat(self.fid, ws=self.HERE, pane=self.pane, harness="codex")
+        self.assertEqual(self._tmux("set-option", "-t", self.pane,
+                                    commands_frame._PLANE_OPTION,
+                                    str(config.STATE_DIR)).returncode, 0)
+
+    def _teardown(self):
+        for pid, fd in self.kids:
+            try:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self._tmux("kill-server")
+
+    def _tmux(self, *a):
+        return subprocess.run(["tmux", "-L", self.socket, *a],
+                              capture_output=True, text=True)
+
+    def _clients(self, session):
+        return [c for c in self._tmux("list-clients", "-t", session,
+                                      "-F", "#{client_name}").stdout.split() if c]
+
+    #: The terminal this fixture's operator is sitting at. Deliberately NOT 80x24: the
+    #: whole point of the size seam is that the frame is built for the real terminal, and
+    #: a fixture at the fallback size could not tell the two apart.
+    CLIENT_SIZE = (132, 43)
+
+    def _attach(self, session):
+        import fcntl
+        import pty
+        import struct
+        import termios
+        import time
+        for term in ("xterm-256color", "screen", "vt100"):
+            pid, fd = pty.fork()
+            if pid == 0:                                # pragma: no cover - the child
+                try:
+                    os.environ["TERM"] = term
+                    os.execvp("tmux", ["tmux", "-L", self.socket, "attach",
+                                       "-t", session])
+                finally:
+                    os._exit(127)
+            # Sized BEFORE the client is waited for: a pty is born 80x24, and tmux resizes
+            # the session it attaches to to whatever the client is. Left at the default
+            # this fixture would be measuring `_FALLBACK_SIZE` against itself.
+            cols, rows = self.CLIENT_SIZE
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+            end = time.time() + 10
+            while time.time() < end and not self._clients(session):
+                time.sleep(0.05)
+            if self._clients(session):
+                self.kids.append((pid, fd))
+                return self._clients(session)[-1]
+            try:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+        self.skipTest("no tmux client can attach on this machine, and opening a "
+                      "workspace to switch into is a decision about an ATTACHED client")
+
+    def _panes(self):
+        """Every pane on the server with its pid and whether tmux calls it dead."""
+        return sorted(self._tmux("list-panes", "-a", "-F",
+                                 "#{pane_id} #{pane_pid} #{pane_dead}").stdout.split("\n"))
+
+    def _click_the_tab(self):
+        """What the panel's handler does, minus the pointer: `charter frame-switch
+        --workspace <name>` in a process of its own. Called in-process so the assertions
+        can be made after it has finished rather than polled for."""
+        import time
+        commands_frame._switch_client(self.fid, self.THERE,
+                                      said=f"workspace → {self.THERE}")
+        time.sleep(0.3)
+
+    def test_the_workspace_opens_and_the_terminal_arrives_in_it(self):
+        """**The report, answered.** A tab for a workspace that was not open now opens it
+        and takes the operator there — which is what the refusal it replaces told them to
+        go and type by hand."""
+        client = self._attach(self.HERE)
+        self._click_the_tab()
+        self.assertIn(self.THERE,
+                      self._tmux("list-sessions", "-F", "#{session_name}").stdout.split(),
+                      "the click did not open the workspace it named")
+        self.assertEqual(self._clients(self.THERE), [client],
+                         "the workspace opened and the terminal never arrived in it")
+        self.assertEqual(self._clients(self.HERE), [])
+
+    def test_the_chat_left_behind_keeps_running(self):
+        """The operator's own sentence — *"keep my current sessions open in background"* —
+        measured rather than argued: the pane they left has the same pid afterwards and
+        tmux does not call it dead."""
+        self._attach(self.HERE)
+        before = [p for p in self._panes() if p.startswith(self.pane + " ")]
+        self._click_the_tab()
+        self.assertEqual([p for p in self._panes() if p.startswith(self.pane + " ")],
+                         before, "opening a workspace killed the chat it left")
+
+    def test_the_opened_workspace_is_marked_with_this_plane(self):
+        """§4b's marker, written by the launch that CREATED the session — so the next
+        switch can tell this session from another plane's of the same name."""
+        self._attach(self.HERE)
+        self._click_the_tab()
+        pane = self._tmux("list-panes", "-t", self.THERE,
+                          "-F", "#{pane_id}").stdout.split()[0]
+        self.assertEqual(
+            self._tmux("display-message", "-p", "-t", pane,
+                       "#{%s}" % commands_frame._PLANE_OPTION).stdout.strip(),
+            str(config.STATE_DIR))
+
+    def test_the_new_workspace_is_laid_out_for_the_terminal_and_not_for_eighty_columns(
+            self):
+        """The size seam, measured where it matters. A detached launcher cannot read a
+        terminal, so without a size handed in this window would have been built at
+        `_FALLBACK_SIZE` — and `_drawable_slots` reads 80x24 as room for almost nothing."""
+        self._attach(self.HERE)
+        self._click_the_tab()
+        width = self._tmux("display-message", "-p", "-t", self.THERE,
+                           "#{window_width}").stdout.strip()
+        self.assertEqual(width, str(self.CLIENT_SIZE[0]),
+                         "the opened workspace was laid out for the wrong terminal")
 
 
 if __name__ == "__main__":
