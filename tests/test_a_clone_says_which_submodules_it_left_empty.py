@@ -543,6 +543,10 @@ class TestAWorktreeSaysSoToo(SubmoduleCase):
         self.assertIn("dev-scripts", said)
         self.assertIn("1 submodule(s) recorded but not initialised", said)
         self.assertIn("submodule update --init --recursive", said)
+        # The label names the PIECE as well as the repo: a worktree add prints one repo's
+        # name several times and the piece is what tells the reader which tree this is
+        # about. Hand-spelled rather than built from the args.
+        self.assertIn("super · p1: 1 submodule(s)", said)
 
     def test_a_worktree_of_an_INITIALISED_submodule_still_says_so(self):
         """The case that makes this surface different from `clone`: the source tree is
