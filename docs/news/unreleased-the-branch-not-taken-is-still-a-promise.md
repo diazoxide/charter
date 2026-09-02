@@ -84,4 +84,24 @@ refuses the same value the writer does, a manifest read back through a function 
 the empty frame it was about to prove, a workspace ordering that happened to agree with the
 chat ordinals. Every one of those is now a case whose fixture disagrees on purpose.
 
+## And two survivors nobody had named
+
+#810's own author warned that a survivor list is *a union across runs, not a snapshot*, so
+the sweep's operators were re-run over these functions on today's file rather than the
+issue's list being worked as gospel. **116 mutations over the 30 functions groups A and B
+are about**, and two of them were survivors the issue never mentions:
+
+- **`.decode("utf-8", "ignore")` on the transcript cut.** The byte cut is taken from the
+  end, so the only edge it can land inside is the leading one — and every existing case
+  builds its capture out of characters whose byte length divides the cap evenly, so the cut
+  always landed on a boundary and the handler was never read. A capture one byte off that
+  boundary now pins it: the partial character is dropped rather than written as a `U+FFFD`
+  the pager would show as noise.
+- **`state.record_cwd`'s `if d is None` guard.** #810 named this function's `except OSError`
+  and not the refusal two lines above it. The value is a chat id off the manifest, and what
+  it records is the directory a later reopen will `os.chdir` into.
+
+With both closed, those 116 mutations leave **one** survivor: the `strip` pair above, which
+is the same program.
+
 Nothing to adopt.
