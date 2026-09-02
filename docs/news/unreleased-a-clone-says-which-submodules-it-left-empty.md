@@ -130,7 +130,7 @@ submodule objects; what it never did was check anything out. Nothing here change
 ## Verification
 
 Reproduced first, in a throwaway plane with `config.ROOT` and `config.STATE_DIR` asserted
-into a scratch directory, never against a real one. 24 new cases: submodules planted by
+into a scratch directory, never against a real one. 25 new cases: submodules planted by
 hand as index gitlinks (a recorded submodule needs no network, no second repository and no
 `protocol.file.allow`), and real `git submodule add` fixtures for the two states that
 genuinely need a checked-out submodule.
