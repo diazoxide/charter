@@ -150,6 +150,42 @@ class ARealQuitStopsRealChats(PersonaIso, unittest.TestCase):
 
         self.assertIsNone(commands_frame._chat_seats(self.socket))
 
+    def test_a_window_charter_cannot_decode_is_dropped_rather_than_raised(self):
+        """#828 on a real server, and **not through the caller the issue names.**
+
+        The issue's reproduction is `capture-pane` over a harness pane, on the grounds that
+        a pane holds arbitrary bytes. Measured on tmux 3.7c — under `LANG=C.UTF-8` and again
+        under `LC_ALL=C` — it does not reach charter that way: a pane that prints `\\377` is
+        stored in tmux's own screen as U+FFFD, and `capture-pane -p -e -N` hands back valid
+        UTF-8. tmux sanitised it first.
+
+        Two real paths do reach charter, and this is the one a quit walks. A tmux USER
+        OPTION round-trips its bytes untouched — `set-option -w @charter_chat` with a raw
+        `\\377` in it comes back out of ``list-windows -a -F '#{@charter_chat}'`` and out of
+        `display-message -p` exactly as it went in, measured on 3.7c — and that listing is
+        `_chat_seats`, which `cmd_quit` asks before it kills anything. §3.3 is why this is
+        not hypothetical: one tmux server serves every plane on the machine, so charter
+        reads windows it did not create, and the harness agent inside a pane can reach the
+        same socket. (The other path is tmux's own stderr, which echoes the raw bytes of an
+        argument it refuses: `invalid window name: BAD\\377NAME`, straight into
+        `report_failure`.)
+
+        What the row does once it decodes is what this class already documents: it fails
+        `_FRAME_ID_RE` and is dropped, *rows charter cannot read are dropped rather than
+        guessed at* — and the chats charter CAN read are still answered for.
+        """
+        self._chat("alpha.1", ws="alpha", session="alpha", first=True, says="ONE")
+        pane = self._tmux("new-window", "-d", "-t", "alpha", "-P", "-F", "#{pane_id}",
+                          "sh", "-c", "exec cat")
+        # A lone surrogate in argv is how a raw byte reaches a child: `os.fsencode` writes
+        # it back out with `surrogateescape`, so tmux stores 0xFF and not the escape.
+        self._tmux("set-option", "-w", "-t", pane, commands_frame._CHAT_OPTION,
+                   "al\udcffpha.9")
+
+        seats = commands_frame._chat_seats(self.socket)
+
+        self.assertEqual(sorted(c for c, _w, _a in seats), ["alpha.1"])
+
     def test_quit_stops_both_chats_records_both_and_ends_the_session(self):
         self._chat("alpha.1", ws="alpha", session="alpha", first=True, says="ONE")
         self._chat("alpha.2", ws="alpha", session="alpha", first=False, says="TWO")

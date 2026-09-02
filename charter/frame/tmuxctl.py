@@ -526,13 +526,68 @@ TIMED_OUT = 124
 #: missing harness binary.
 COULD_NOT_RUN = 127
 
+#: How every captured child in this module is decoded, and the THIRD way one of them could
+#: end badly (#828). `text=True` with no `errors=` decodes the pipe **strictly**, so a child
+#: whose output is not valid UTF-8 raised `UnicodeDecodeError` — a `ValueError`, which
+#: neither :func:`run`'s `TimeoutExpired` clause nor its `OSError` one catches — out of the
+#: one function documented as never raising.
+#:
+#: **Which tmux output can do that, measured on 3.7c rather than reasoned about.** #828
+#: files the sharp caller as `commands_frame._capture_transcript`, reading a HARNESS pane
+#: during a quit, on the grounds that a pane holds arbitrary bytes. It does not reach
+#: charter that way: under `LANG=C.UTF-8` and again under `LC_ALL=C`, a pane that prints
+#: `\377` is stored in tmux's own screen as U+FFFD, and `capture-pane -p -e -N` hands back
+#: valid UTF-8. tmux sanitises it first. Two other paths do reach charter, both measured on
+#: the same binary:
+#:
+#: * A tmux USER OPTION round-trips its bytes untouched — `set-option -w @charter_chat` with
+#:   a raw `\377` in it comes back out of ``list-windows -a -F '#{@charter_chat}'`` and out
+#:   of `display-message -p` exactly as it went in. That listing is
+#:   `commands_frame._chat_seats`, which `cmd_quit` asks BEFORE it kills anything, so the
+#:   raise does land in a quit — one call to the left of where the issue put it. §3.3 is why
+#:   it is not hypothetical: one tmux server serves every plane on the machine, so charter
+#:   reads windows it did not create.
+#: * tmux's own stderr echoes the raw bytes of an argument it refuses (`invalid window name:
+#:   BAD\377NAME`), which is :func:`report_failure`'s input — so the decode could take
+#:   charter down while it was REPORTING a failure.
+#:
+#: **Not a third invented return code beside :data:`TIMED_OUT`.** Those two say *charter
+#: never got an answer*. Here tmux answered — rc 0, the whole listing — and only charter
+#: could not read one byte of it. Reporting that as a refusal would name tmux in a failure
+#: message for a command it ran correctly, and would throw away every row charter CAN read
+#: over one it cannot. What the callers do with the replaced byte is what they already do
+#: with anything they cannot read: the chat id fails `_FRAME_ID_RE` and its row is dropped.
+#:
+#: **And not `surrogateescape`, which was the shape #828 suggested.** It would stop the
+#: raise HERE and move it: a lone surrogate has no UTF-8 encoding at all, so it raises
+#: `UnicodeEncodeError` on any strict encode a caller later performs — `sys.stdout` under a
+#: normal `LANG=en_US.UTF-8` is exactly that (measured: `sys.stdout.errors` is `strict`
+#: there, and writing one raises), as is any `Path.write_text`. A function whose contract is
+#: that it never raises has to hand back a value that does not raise either, or the promise
+#: covers only its own frame. The round trip is not cashed anywhere either: the one caller
+#: that PERSISTS the text encodes it with `errors="replace"` first, which writes `?` — 0x3F,
+#: measured — so the bytes would be lost at the sink regardless, and lost as a character
+#: indistinguishable from a question mark the agent really printed. U+FFFD says instead that
+#: something unreadable was there, which is both true and what a terminal shows anyway.
+#:
+#: Read by the two captured children here and by nothing else. `interact` captures nothing
+#: — it IS the operator's terminal — so it has no pipe to decode.
+DECODE_ERRORS = "replace"
+
 
 def _probe() -> str | None:
-    """`tmux -V`'s output, or ``None`` when there is no tmux to ask."""
+    """`tmux -V`'s output, or ``None`` when there is no tmux to ask.
+
+    Decoded like :func:`run`'s pipes and for the same reason: this gates the whole launch
+    and is asked before anything is drawn, so a `tmux` on `$PATH` answering in some other
+    encoding would be a traceback in place of a frame. It already has an answer for a
+    `tmux -V` it cannot parse, and "could not read it" is that same fact.
+    """
     if not shutil.which("tmux"):
         return None
     try:
-        out = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=5,
+                             errors=DECODE_ERRORS)
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout.strip() or None
@@ -658,6 +713,11 @@ def run(action: str, argv: list[str], *, env: dict | None = None,
     reattach line. Every caller already branches on a non-zero return, so a wedged server
     now degrades down the same path a refusal does — see :data:`TIMED_OUT`.
 
+    **And output charter cannot read comes back as text, not an exception** —
+    :data:`DECODE_ERRORS`, which is #828 and the third way this could end badly. That one
+    is not a refusal: tmux answered, and what charter could not read is one codepoint of
+    what it said.
+
     *report* is opt-out for the two callers that read the failure themselves: a query
     whose whole answer is "cannot tell" (`_query_pane_dead_status`), and one whose
     non-zero return is the ORDINARY case rather than a fault (`_live_sessions` against a
@@ -668,7 +728,7 @@ def run(action: str, argv: list[str], *, env: dict | None = None,
                         "— see frame/layout.py")
     try:
         proc = subprocess.run(argv, env=env, capture_output=True, text=True,
-                              timeout=timeout)
+                              errors=DECODE_ERRORS, timeout=timeout)
     except subprocess.TimeoutExpired:
         proc = subprocess.CompletedProcess(
             argv, TIMED_OUT, stdout="",
