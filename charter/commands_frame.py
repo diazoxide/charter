@@ -3948,6 +3948,13 @@ def _split_all(socket: str, *, slots: list[str], cmds: list[list[str]],
     is the "jumping texts" #780 was split out of; one invocation is one drain, and the
     window goes from a bare harness to four panels in a single repaint.
 
+    **The mapping is by POSITION, so it rests on every command in *cmds* printing exactly
+    one line**, and `layout.panel_argvs` is where that holds: it puts `-P -F '#{pane_id}'`
+    on every argv it builds, unconditionally, one per slot in *slots*' own order. A slot
+    whose command stopped asking for the id would not merely lose its own pane — it would
+    shift every slot after it onto the wrong one. Stated here rather than re-checked,
+    because a count that agrees is not evidence that the right command produced it.
+
     **A refused split ABORTS the rest of the list** (`tmuxctl.write_all` measures it), and
     tmux prints nothing to stdout for it — so the id count says exactly how far the list
     got: the command at `len(ids)` is the one that was refused and nothing after it ran.
