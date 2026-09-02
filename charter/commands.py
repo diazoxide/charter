@@ -403,6 +403,10 @@ def cmd_clone(args) -> int:
             util.err(f"{r['name']}: clone failed — no access, network, or {cli} isn't authed "
                      f"(`{cli} auth status`). Skipping.\n" + res["stderr"])
             continue
+        # A clone that fetched less than the repo records says so BEFORE the docs hint —
+        # an empty submodule directory is the thing that breaks the next command, and the
+        # exit code stays 0 because the repo really is cloned (#817).
+        report_submodule_drift(dest, r["name"])
         _hint_repo_docs(dest, r)
     return 1 if failures else 0
 
@@ -515,6 +519,138 @@ def _hint_repo_docs(dest: Path, r: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# submodules: reported, never fetched (#817)                                   #
+# --------------------------------------------------------------------------- #
+#: ``git submodule status`` marks each recorded submodule with ONE leading character:
+#: ``-`` nothing checked out, ``+`` checked out at a commit other than the one the
+#: superproject records, ``U`` unmerged, and a space for in sync. Only the first two are
+#: drift charter reports. ``U`` is a conflict the operator is standing in the middle of,
+#: and a second voice on a live merge is noise, not a finding.
+_SUBMODULE_ABSENT = "-"
+_SUBMODULE_MOVED = "+"
+
+#: The one command charter names, and the only one it names. ``--init`` covers the paths
+#: with nothing checked out, the update itself moves the ones left behind, and
+#: ``--recursive`` covers a submodule that has submodules of its own — so one line is the
+#: remedy for every state below rather than three lines the reader has to choose between.
+SUBMODULE_REMEDY = "submodule update --init --recursive"
+
+
+def submodule_drift(d: Path) -> tuple[list[str], list[str]]:
+    """``(nothing checked out, not at the recorded commit)`` — submodule paths in the tree
+    at *d*, in the order git lists them.
+
+    ``([], [])`` for a tree with no submodules and for anything this cannot read: a
+    directory that is not a repository, a `git` that failed, an unparseable line. This
+    feeds three REPORTS (`clone`, `sync`, `status`); none of them is the place to raise,
+    and a workspace holds whatever somebody put in it.
+
+    **The `.gitmodules` stat comes first and is not an optimisation detail.** `status`
+    already spends two `git` invocations per row and prints the table as it goes; a third
+    on every clone would be paid by every plane, and almost every clone has no submodules
+    at all. The stat is also EXACT rather than approximate: `git submodule status` lists
+    what `.gitmodules` maps, so with no such file there is nothing it could have said —
+    measured, a gitlink with no `.gitmodules` makes it exit 128 (`no submodule mapping
+    found in .gitmodules for path 'gl'`) and print nothing, which is the same answer this
+    returns.
+
+    Not ``--recursive``. A submodule with nothing checked out has no submodules charter
+    can see, so recursion would cost a process per level to re-report the paths already
+    named — and the remedy this pairs with is recursive, so nothing is lost by saying it
+    once at the top.
+    """
+    d = Path(d)
+    if not (d / ".gitmodules").exists():
+        return [], []
+    proc = _git(["submodule", "status"], cwd=d)
+    if proc.returncode != 0:
+        return [], []
+    absent: list[str] = []
+    moved: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        mark, rest = line[:1], line[1:]
+        if mark not in (_SUBMODULE_ABSENT, _SUBMODULE_MOVED):
+            continue
+        # ``<mark><sha> <path>``, and for a CHECKED-OUT one a trailing `` (<describe>)``.
+        # The path is everything between, so it is taken from the first space rather than
+        # split on every space — a submodule path may contain them.
+        path = rest.partition(" ")[2]
+        if path.endswith(")") and " (" in path:
+            path = path[:path.rindex(" (")]
+        if not path:
+            continue
+        (absent if mark == _SUBMODULE_ABSENT else moved).append(path)
+    return absent, moved
+
+
+def _submodule_remedy(d: Path) -> str:
+    """The exact command, rooted at *d* — relative to the plane when it is inside one, so
+    it can be pasted from wherever the operator is reading this."""
+    try:
+        where = Path(d).relative_to(config.ROOT)
+    except ValueError:
+        where = Path(d)
+    return f"git -C {where} {SUBMODULE_REMEDY}"
+
+
+def report_submodule_drift(d: Path, label: str, branch: str | None = None,
+                           lead: str | None = None) -> bool:
+    """Say what *d*'s submodules are not, and name the command that fixes it. Returns
+    whether anything was said, so a caller can drop its own success line rather than print
+    a tick beside this (`_sync_one`).
+
+    ONE warning line and one remedy line, whatever the mix of states — a caller that wants
+    to open with its own situation (`sync` has just claimed something about the branch)
+    passes *lead*, and the facts follow it in the same sentence. Two commands reporting the
+    same finding in two shapes is how the shapes drift apart.
+
+    **charter reports and does not initialise, and the sentence says so.** Two reasons,
+    and the second is the one that settles it.
+
+    A submodule URL comes out of `.gitmodules` — a file inside the repo charter has just
+    cloned. `_https_url` refuses to hand `git clone` a string charter did not build (#335,
+    where `ext::sh -c '…'` is a transport that runs a command); fetching whatever
+    `.gitmodules` names, recursively, would put that same string back one layer down where
+    that allowlist cannot see it.
+
+    And charter could not do it under its own rule anyway. **`git clone` does not read the
+    local config of the repository it is standing in** — system, global and `-c` only. A
+    submodule fetch IS a nested `git clone`, so `gitpolicy.apply`'s ``--local``
+    `credential.helper` and ``url.<https>.insteadOf`` never reach it. Measured on git
+    2.50.1 against a superproject whose submodule needs a config to be fetchable at all::
+
+        LOCAL  protocol.file.allow in the superproject -> submodule init rc = 1
+        -c     on the command line                     -> submodule init rc = 0
+        GLOBAL protocol.file.allow                     -> submodule init rc = 0
+        LOCAL  submodule.<name>.url override           -> submodule init rc = 0
+
+    The last line is the asymmetry: the PARENT resolves the URL from local config, the
+    CHILD consumes the transport config and cannot see it. So golden rule 0 — every git
+    operation over that repo's own forge's token — **does not hold for a submodule fetch**,
+    and an auto-init would be charter fetching outside its own credential policy, quietly,
+    on the operator's behalf. Saying so leaves that call where it belongs.
+    """
+    absent, moved = submodule_drift(d)
+    if not absent and not moved:
+        return False
+    bits = []
+    if absent:
+        bits.append(f"{len(absent)} submodule(s) recorded but not initialised "
+                    f"({', '.join(absent)}) — nothing is checked out there, so anything "
+                    f"that runs from them fails with 'no such file or directory'")
+    if moved:
+        bits.append(f"{len(moved)} submodule(s) not at the commit "
+                    f"{branch or 'this branch'} records ({', '.join(moved)})")
+    facts = "; ".join(bits)
+    util.warn(f"{label}: {facts}." if lead is None else f"{label}: {lead} — {facts}.")
+    util.info(f"  charter does not fetch them: a submodule URL comes out of the cloned "
+              f"repo's own .gitmodules and can point anywhere, and charter's token-only "
+              f"policy does not reach a submodule fetch. Yours to run: "
+              f"{_submodule_remedy(d)}")
+    return True
+
+
+# --------------------------------------------------------------------------- #
 # sync                                                                         #
 # --------------------------------------------------------------------------- #
 def cmd_sync(args) -> int:
@@ -545,10 +681,24 @@ def _sync_one(d: Path, ws: str) -> None:
         util.err(f"{label}: fetch failed (access or network) — skipping.")
         return
     ff = _git(["merge", "--ff-only", f"origin/{branch}"], cwd=d)
-    if ff.returncode == 0:
-        util.ok(f"{label}: up to date on {branch}")
-    else:
+    if ff.returncode != 0:
         util.warn(f"{label}: {branch} won't fast-forward (diverged/local commits) — left as-is.")
+        return
+    # The tick is not printed over a tree the fast-forward left behind (#817). A
+    # fast-forward moves the GITLINK and never touches the submodule's own checkout, so
+    # the commonest outcome here is a branch that is up to date beside a submodule that is
+    # not — and `up to date on main` was the whole of what charter said about it. Measured
+    # on a clone whose upstream moved one submodule pointer and added a second submodule:
+    # `✓ ws/repo: up to date on main`, with the first still at the old commit and an empty
+    # directory where the second should be.
+    #
+    # The branch half of that sentence was true, which is exactly why it had to be said
+    # differently rather than merely followed by a warning — a tick is what an operator
+    # scans for and stops reading at.
+    if report_submodule_drift(d, label, branch,
+                              lead=f"{branch} is up to date, its submodules are not"):
+        return
+    util.ok(f"{label}: up to date on {branch}")
 
 
 # --------------------------------------------------------------------------- #
@@ -639,9 +789,25 @@ def _status_for_workspace(ws: str, inv_by_name: dict, active: str) -> None:
 
 
 def _clone_note(d: Path) -> str:
+    """The NOTE column of `charter status`'s repo table.
+
+    A submodule that was never initialised leaves an EMPTY DIRECTORY and a clean
+    `git status --porcelain` — measured — so without this third fact the row reads
+    ``main · clean`` over a tree that is missing the scripts every build target calls.
+    The whole point of #817 is that nothing said so, and `status` is where an operator
+    looks when something already went wrong.
+
+    It costs a `git submodule status` only for a clone that has a `.gitmodules` at all
+    (see `submodule_drift`), so the common row is still the two calls it always was."""
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=d).stdout.strip()
     dirty = "dirty" if _git(["status", "--porcelain"], cwd=d).stdout.strip() else "clean"
-    return f"{branch} · {dirty}"
+    note = f"{branch} · {dirty}"
+    absent, moved = submodule_drift(d)
+    if absent:
+        note += f" · {len(absent)} submodule not initialised"
+    if moved:
+        note += f" · {len(moved)} out of date"
+    return note
 
 
 # --------------------------------------------------------------------------- #
