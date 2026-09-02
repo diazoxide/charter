@@ -378,6 +378,43 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         self.assertEqual(row, row.rstrip(),
                          "an absent note still spent its separator")
 
+    def test_a_page_that_ends_the_list_spends_no_columns_on_a_count_it_has_not_got(self):
+        """The same rule one rung down, for the TRAILING `+N` — and the deletion sweep is
+        what asked for it.
+
+        A page whose last name is the last name in the list draws no trailing count, and
+        the separator that would have gone in front of it must go with it. The sweep found
+        `f"{gap}{trailing}" if trailing else ""` surviving: with the `else` collapsed, such
+        a page ends in the gap alone, which is two blank cells on a plane whose rules are
+        hidden and ` | ` on one whose rules are visible — a seam drawn between a tab and
+        nothing.
+
+        **It is not only cosmetic**, which is why it is asserted as a width rather than as
+        a strip. Those cells are measured: `_bar` refuses the whole rung when the composed
+        body will not fit, so a page carrying a phantom separator is given up one to three
+        columns earlier than it should be — a name lost from a pane that had room for it.
+
+        Asked over every width and every name, because which pages end the list depends on
+        both, and asked on a plane whose rules are VISIBLE as well, where the phantom is a
+        glyph rather than whitespace and `rstrip` alone would not see it.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        for rules in ("hidden", "visible"):
+            with mock.patch.dict(config.FRAME, {"rules": rules}):
+                for here in names:
+                    for width in range(0, 201):
+                        row = _plain(self._row(width, names=names, here=here))
+                        if not row:
+                            continue
+                        self.assertEqual(
+                            row, row.rstrip(),
+                            f"{rules} at {width} on {here}: the row ends in the "
+                            f"separator of a count it did not draw — {row!r}")
+                        self.assertFalse(
+                            row.rstrip().endswith(slots._BAR_RULE),
+                            f"{rules} at {width} on {here}: a seam was drawn between the "
+                            f"last tab and nothing — {row!r}")
+
     def test_the_mark_follows_the_raw_name_and_not_the_repaired_one(self):
         """`contain.one_line` is a REPAIR, so two names differing only in what it repairs
         are one string after it — and a mark matched on the drawn text would follow the
