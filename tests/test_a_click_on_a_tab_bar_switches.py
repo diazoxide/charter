@@ -452,3 +452,140 @@ class AClickOnTheOverflowCountOpensThePalette(_ABarThatWasDrawn, unittest.TestCa
         self._handler("chats", "api.6")(_press(self._column_of(row, counts[0])))
         self.assertEqual(self.spawned,
                          [(util.self_relaunch_argv("frame-palette"), "api.6")])
+
+
+class APressOnThePlusMakesAChat(_ABarThatWasDrawn, unittest.TestCase):
+    """*"`+` button not working for creating new session."*
+
+    **The affordance was a sentence and the sentence was the defect.** It read
+    `+ charter <harness> opens another`, which is true, which names the command that does
+    it, and which sits at the end of a row of clickable tabs beginning with a `+`. Every
+    terminal an operator has used puts a `+` there and every one of them means *new*.
+
+    `slots.ADD_CHAT` is a `+` now and this is what pressing it starts. What it starts is
+    not `charter <harness>`: `builtin_actions._spawn` hands its child all three streams on
+    `/dev/null`, and `cmd_launch` reads a non-tty stdout as "this process cannot be the
+    operator's terminal" and `os.execvp`s the bare harness into the void. `attach=False`
+    is the seam that says *build the frame, do not become the terminal*, it has existed
+    since `_open_workspace` needed it, and `charter frame-new-chat` is the first spelling
+    that can ask for it.
+
+    The tmux half — that a chat really appears, in this workspace's session, with the
+    client on it — is `tests/test_a_real_click_on_a_real_tab_bar_switches.py`; what this
+    file can say is which press starts what.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "api"},
+                                          clear=False))
+        for chat in ("api.1", "api.2"):
+            _plant(chat, workspace="api")
+        self.row = tui.strip_ansi(slots.chats_bar("api.1", self.WIDTH)[0])
+        self.on_event = self._handler("chats", "api.1")
+        self.plus = self._column_of(self.row, slots.ADD_CHAT)
+
+    def test_a_press_on_the_plus_starts_the_new_chat_command(self):
+        """The argv spelled out. A `--chat` would be a second spelling of a value the
+        child's environment already carries — `_spawn` sets `$CHARTER_SESSION_ID` to the
+        *fid* below, which is what `_pressers_chat` falls back to — and that is
+        `_CHAT_SWITCH`'s own recorded reason for not carrying one either."""
+        self.on_event(_press(self.plus))
+        self.assertEqual(self.spawned,
+                         [(util.self_relaunch_argv("frame-new-chat"), "api.1")])
+
+    def test_it_names_no_chat_and_no_workspace(self):
+        """**#518's line held.** There is nothing here for an operator to type: a chat's
+        id is allocated (`state.workspace_prefix`) and its workspace is the one this chat
+        is in for life (§4j). An argv carrying either would be a name charter would have to
+        validate, which is the whole reason the workspace bar has no `+` at all."""
+        self.on_event(_press(self.plus))
+        argv = self.spawned[0][0]
+        self.assertEqual(argv[-1], "frame-new-chat")
+        for word in ("api", "api.1", "api.2", "--workspace", "--chat"):
+            self.assertNotIn(word, argv[argv.index("charter"):],
+                             f"{word!r} rode along on the argv: {argv!r}")
+
+    def test_the_press_acts_and_the_release_does_not(self):
+        """§4i, and it is worth re-asking for this gesture rather than inheriting it: a
+        switch is undone by the same click and making a chat is not. What carries it is
+        the clause that always did — the press is the half that is never delivered
+        unpaired — plus the fact that a chat made by mistake destroys nothing: the chat it
+        came from keeps its harness and its conversation, and `charter frame-close` is the
+        way back. The gesture §4i really forbids on a pointer is `frame-quit`, which stops
+        every harness on the plane and lives behind a palette confirmation."""
+        self.on_event(_press(self.plus, pressed=False))
+        self.assertEqual(self.spawned, [], "an unpaired release made a chat")
+        self.on_event(_press(self.plus))
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_the_middle_and_right_buttons_make_nothing(self):
+        for button in ("middle", "right"):
+            self.on_event(_press(self.plus, name=button))
+        self.assertEqual(self.spawned, [])
+
+    def test_the_cell_beside_it_makes_nothing(self):
+        """The gap belongs to neither field, exactly as it does between two tabs — and
+        here it matters more, because the neighbour is a tab and picking the nearer field
+        would switch instead of create."""
+        for col in (self.plus - 1, self.plus - 2, self.plus + 1):
+            self.on_event(_press(col))
+        self.assertEqual(self.spawned, [],
+                         f"a cell beside the `+` acted: {self.row!r}")
+
+    def test_a_press_on_a_tab_still_switches(self):
+        """The control: three answers live in one handler now, so a case that only
+        asserted the new one would pass with the other two deleted."""
+        self.on_event(_press(self._column_of(self.row, " api.2")))
+        self.assertEqual(self.spawned,
+                         [(util.self_relaunch_argv("frame-chat", "api.2"), "api.1")])
+
+    def test_the_handler_is_falsy_when_it_made_a_chat(self):
+        """Truthy means *repaint me* and nothing this process can see has changed: the
+        chat is built by another process and ends in a `state.bump` this panel's poll is
+        already watching."""
+        self.assertFalse(self.on_event(_press(self.plus)))
+        self.assertEqual(len(self.spawned), 1, "the case measured nothing")
+
+    def test_the_workspace_bar_draws_no_such_thing_to_press(self):
+        """**A chat is a press; a workspace is a name.** A new chat has nothing for an
+        operator to type — its id is allocated and its workspace is fixed for life (§4j) —
+        while a new workspace is a directory and a name #518 refuses to create on a typo.
+        So the affordance is the chat bar's, and no column of a workspace bar is one."""
+        for name in ("alpha", "beta"):
+            (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
+        state.frame_dir("f1", create=True)
+        state.record_workspace("f1", "alpha")
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""}):
+            row = tui.strip_ansi(slots.workspaces_bar("f1", self.WIDTH)[0])
+        self.assertNotIn(slots.ADD_CHAT, row)
+        self.spawned.clear()
+        handler = self._handler("workspaces", "f1")
+        for col in range(self.WIDTH):
+            handler(_press(col))
+        self.assertTrue(all("frame-new-chat" not in argv for argv, _fid in self.spawned),
+                        f"a workspace tab made a chat: {self.spawned!r}")
+
+    def test_the_workspace_bars_handler_is_not_wired_for_creation_either(self):
+        """**The property the case above cannot reach, and the reason the handler is handed
+        the command as DATA rather than deriving it from what the renderer drew.**
+
+        Above, no column is an affordance because `workspaces_bar` passes no note — so a
+        handler that spawned on `add_at` regardless would pass, and would start making
+        chats off the workspace bar on the day that renderer grew a note of its own. This
+        publishes the map by hand, which is what `slots.TABS` exists to let a test do, and
+        asks the handler directly.
+
+        The chat bar is asked the same question with the same hand-made map, so this is
+        not "the workspaces handler ignores everything" wearing an assertion.
+        """
+        slots.TABS.publish({}, "", add=[7])
+        self.spawned.clear()
+        self._handler("workspaces", "f1")(_press(7))
+        self.assertEqual(self.spawned, [],
+                         "the workspace bar's handler makes chats — it is only the "
+                         "renderer that is stopping it")
+        slots.TABS.publish({}, "", add=[7])
+        self._handler("chats", "f1")(_press(7))
+        self.assertEqual([argv[-1] for argv, _fid in self.spawned], ["frame-new-chat"],
+                         "the control failed: the chat bar's handler is not wired either")

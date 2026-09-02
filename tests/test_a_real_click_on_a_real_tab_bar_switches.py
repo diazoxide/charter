@@ -50,7 +50,7 @@ import unittest
 from pathlib import Path
 
 from charter import commands_frame, config
-from charter.frame import layout, state, tmuxctl
+from charter.frame import chats, layout, slots, state, tmuxctl
 
 from tests import _tmuxreap
 from tests._isolation import PersonaIso, make_plane
@@ -776,3 +776,141 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         self.assertEqual(self._panes(), before,
                          "a click on the heading opened something")
         self.assertEqual(self._active(), self.harness)
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
+                                                   unittest.TestCase):
+    """The chat bar's `+`, pressed on a real terminal — #: *"`+` button not working for
+    creating new session."*
+
+    **Three processes and none of them is this one**, exactly as for a tab: the row is
+    painted by a `charter panel chats` child, the report is decoded there, and
+    `charter frame-new-chat` is started detached by that child.
+
+    **What this can and cannot say, stated rather than left to be discovered.**
+    `commands_frame.SOCKET` is a module constant — `"charter"`, the one shared server every
+    frame on this machine runs on — and `cmd_launch` uses it rather than the server the
+    frame recorded. So a case that let the launch RUN would build a session on the
+    operator's own live charter server, from a suite. That is the one thing no test in this
+    repository may do, so no test here does it: the launcher itself is asserted against a
+    stand-in by `tests/test_the_chat_bars_plus_makes_a_chat.py`, and what is real here is
+    everything up to it.
+
+    Everything is a great deal: the affordance is at the column the paint put it in, tmux
+    routes the report to a pane that is not active, the panel decodes it and tells a `+`
+    from a tab, the child resolves which frame it belongs to out of its own environment,
+    it establishes that this is charter's own server, it proves the workspace's session is
+    this plane's (`_plane_session` — a real `list-panes` against a real server), and it
+    reports on the frame's own attention row, which is the only surface a detached process
+    with `/dev/null` for stdout has. Every one of those is a link that was not there
+    before this change.
+
+    **The stop this fixture reaches is the harness one, and it is reached honestly rather
+    than arranged.** The plane declares no `[harness] default` and the chats this fixture
+    plants record none, which is the migration state of every chat launched by a charter
+    that predates `state.record_identity`. So the last link — "which harness does the new
+    chat run" — has no answer, and the command says so instead of guessing. A case that
+    passed this by faking a harness would have to let the launch happen.
+    """
+
+    WS = "alpha"
+
+    #: A word out of :data:`commands_frame.cmd_new_chat`'s harness refusal, spelled by hand
+    #: rather than imported: a constant read out of the module under test follows a
+    #: reworded sentence into a green run, which is the survivor this repository's sweep
+    #: reports. Short enough to survive a rewording that keeps the meaning, specific enough
+    #: that no other refusal on this path says it.
+    _NO_HARNESS = "records no harness this charter can launch"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.here = f"{self.WS}.1"
+        self.harness = self._start_session(self.here, session=self.WS)
+        state.frame_dir(self.here, create=True)
+        state.record_workspace(self.here, self.WS)
+        state.record_server(self.here, self.socket)
+        state.record_harness_pane(self.here, self.harness)
+        state.record_identity(self.here, {"CHARTER_SESSION_ID": self.here,
+                                          "CHARTER_ROOT": str(self.plane)})
+        self._source_conf(self.WS)
+        self.assertEqual(self._tmux("select-window", "-t", self.harness).returncode, 0)
+        self.bar = self._split_bar(self.harness, "chats", self.here)
+        self.assertEqual(self._tmux("select-pane", "-t", self.harness).returncode, 0)
+        self.fd = self._attach(self.WS)
+        self.assertTrue(
+            _await(lambda: slots.ADD_CHAT in self._bar_row(self.bar).rstrip()),
+            f"the chat bar never painted its `+`: {self._bar_row(self.bar)!r}")
+        self.assertEqual(self._active(), self.harness)
+        self.assertEqual(state.notice(self.here), "",
+                         "this frame already carries a notice, so the cases below could "
+                         "pass on something the fixture said")
+
+    def _plus(self) -> int:
+        """The column the `+` is drawn in, read off the PANE.
+
+        Not `self._column_of`, because that helper asserts the field is unique on the row
+        and a single `+` is a character an overflow count also starts with. The affordance
+        is the LAST field on the row by construction, so the last `+` is it — and the row
+        it is read off is the one tmux painted, which is what the operator's eye lands on.
+        """
+        row = self._bar_row(self.bar).rstrip()
+        self.assertTrue(row.endswith(slots.ADD_CHAT),
+                        f"the row does not end in the affordance: {row!r}")
+        return len(row) - 1
+
+    def test_a_press_on_the_plus_reaches_the_command_behind_it(self):
+        """The whole chain, end to end, with the answer coming back on the frame's own
+        row — which is where every outcome of a detached charter has to land."""
+        self._click(self.bar, col=self._plus())
+        self.assertTrue(
+            _await(lambda: self._NO_HARNESS in state.notice(self.here)),
+            f"the press never reached the command: {state.notice(self.here)!r} — "
+            f"row {self._bar_row(self.bar)!r}")
+
+    def test_the_press_leaves_the_keyboard_on_the_harness(self):
+        """`docs/frame.md`'s promise, kept for the third gesture as well as the first two:
+        a click on a PANEL acts where it points and does not move the keyboard. Nothing
+        about making a chat changes that — the new chat's own window is what a successful
+        press would select, and that is tmux moving a client, not a pointer moving focus.
+        """
+        self._click(self.bar, col=self._plus())
+        self.assertTrue(_await(lambda: self._NO_HARNESS in state.notice(self.here)),
+                        "the press never arrived, so this proves nothing about focus")
+        self.assertEqual(self._active(), self.harness,
+                         "a press on the `+` took the keyboard off the harness")
+
+    def test_a_press_that_could_not_finish_created_nothing(self):
+        """The negative that makes the refusal worth having: it stopped, and it stopped
+        BEFORE anything existed. One window on the server and one chat on the plane, after
+        a press that reached the command and declined."""
+        before = self._tmux("list-windows", "-t", self.WS, "-F", "#{window_id}").stdout
+        self._click(self.bar, col=self._plus())
+        self.assertTrue(_await(lambda: self._NO_HARNESS in state.notice(self.here)))
+        time.sleep(1.5)
+        self.assertEqual(
+            self._tmux("list-windows", "-t", self.WS, "-F", "#{window_id}").stdout,
+            before, "a refused press still added a window")
+        self.assertEqual(chats.of_workspace(self.WS), [self.here],
+                         "a refused press still made a chat directory")
+
+    def test_the_cell_beside_the_plus_reaches_nothing(self):
+        """The control every affordance case needs: a row that answers EVERY click is as
+        wrong as one that answers none. The gap before the `+` belongs to neither field —
+        and its left-hand neighbour is a TAB, so picking the nearer one would switch
+        instead of create."""
+        self._click(self.bar, col=self._plus() - 1)
+        time.sleep(2.0)
+        self.assertEqual(state.notice(self.here), "",
+                         "the gap before the `+` reached the command")
+
+    def test_a_release_with_no_press_reaches_nothing(self):
+        """§4i, measured end to end for the one gesture on this row that CREATES: a drag
+        begun on a pane border delivers exactly one release, and every charter handler acts
+        on the press for that reason."""
+        left, top = self._rect(self.bar)
+        col = self._plus()
+        os.write(self.fd, b"\x1b[<0;%d;%dm" % (left + col + 1, top + 1))
+        time.sleep(2.0)
+        self.assertEqual(state.notice(self.here), "",
+                         "an unpaired release reached the command")

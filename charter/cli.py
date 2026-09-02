@@ -769,7 +769,7 @@ def _add_frame_parsers(sub) -> None:
                                          "frame-probe", "frame-respawn", "frame-density",
                                          "frame-resize", "frame-gather", "frame-switch",
                                          "frame-toggle", "frame-chrome", "frame-chat",
-                                         "frame-quit", "frame-close",
+                                         "frame-new-chat", "frame-quit", "frame-close",
                                          "frame-transcript"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
@@ -1004,6 +1004,28 @@ def _add_frame_parsers(sub) -> None:
     ch.add_argument("chat_id")
     ch.add_argument("--chat", dest="chat", default="")
     ch.set_defaults(func=commands_frame.cmd_chat)
+
+    # The chat bar's `+`, and the one thing no other spelling of `charter <harness>` can
+    # ask for: a launch that must NOT become the operator's terminal. `cmd_launch` has
+    # taken `attach=False` since `_open_workspace` needed it (§4k), and until now it was
+    # reachable only in-process — so a panel that wanted to add a chat had `charter claude`
+    # and nothing else, which on a detached child with `/dev/null` for stdout takes
+    # `bypass` and `os.execvp`s a bare harness into the void.
+    #
+    # **A sibling of `frame-chat` rather than a flag on it.** They are two different
+    # operations that happen to share a noun: one moves this client to a window that
+    # exists, the other makes one. `frame-chat`'s positional would have to become optional
+    # to carry a `--new`, which makes `charter frame-chat` alone — a plausible typo —
+    # parse into something that CREATES.
+    #
+    # **No name and no positional at all**, which is #518's line held: the chat's id is
+    # allocated (`state.workspace_prefix`) and its workspace is the one this chat is in for
+    # life (§4j), so there is nothing here for an operator to type and nothing to validate.
+    # `--chat` is where the press happened, exactly as it is for `frame-toggle` and
+    # `frame-quit`, and it falls back to `$CHARTER_SESSION_ID`.
+    nc = sub.add_parser("frame-new-chat")
+    nc.add_argument("--chat", dest="chat", default="")
+    nc.set_defaults(func=commands_frame.cmd_new_chat)
 
     # §4i's quit. Started DETACHED by the palette's confirmation row
     # (`commands_frame._start_leaving`) and typeable by hand, which is why it warns on its
