@@ -282,16 +282,35 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
                               f"{width}: {field!r} is not a whole name, a count or a "
                               f"position — {text!r}")
 
-    def test_one_chat_carries_the_add_affordance_and_two_do_not(self):
-        row = self._row(120, names=["api.1"], here="api.1", note=slots.ADD_CHAT)
-        self.assertIn(slots.ADD_CHAT, row)
+    def test_the_affordance_is_drawn_only_when_a_caller_asks_for_one(self):
+        """`_bar` draws no note it was not handed one for. Which BARS ask is
+        `chats_bar`/`workspaces_bar`'s decision and has its own case at
+        :class:`TheChatBarReadsThePlane`; this is the arithmetic half."""
+        row = _plain(self._row(120, names=["api.1"], here="api.1", note=slots.ADD_CHAT))
+        self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
         self.assertNotIn(slots.ADD_CHAT, self._row(120))
 
     def test_the_affordance_is_dropped_before_any_name_is(self):
-        """It is a reminder and the names are the readout, so it goes first."""
-        row = self._row(28, names=["api.1"], here="api.1", note=slots.ADD_CHAT)
-        self.assertIn("api.1", row)
-        self.assertNotIn(slots.ADD_CHAT, row)
+        """It is one affordance and the names are the readout, so it goes first.
+
+        A `+` is one cell where the sentence it replaced was 29, so the width that drops it
+        while keeping the name is narrower than it used to be — measured off the ladder
+        below rather than written as a number, for the reason `test_rung_one_still_needs
+        _two_hundred_and_seventy_four_columns` gives: a constant here would be a second
+        copy of the arithmetic."""
+        names = ["api-staging.1", "api-standby.2"]
+        widest = max(w for w in range(0, 201)
+                     if slots.ADD_CHAT not in
+                     _plain(self._row(w, names=names, here="api-staging.1",
+                                      note=slots.ADD_CHAT))
+                     and "api-standby.2" in _plain(self._row(w, names=names,
+                                                             here="api-staging.1",
+                                                             note=slots.ADD_CHAT)))
+        row = _plain(self._row(widest, names=names, here="api-staging.1",
+                               note=slots.ADD_CHAT))
+        for name in names:
+            self.assertIn(name, row, repr(row))
+        self.assertNotIn(slots.ADD_CHAT, row, repr(row))
 
     def test_no_names_at_all_is_no_row(self):
         self.assertEqual(slots._bar("chats", [], "api.1", 200), [])
@@ -700,11 +719,58 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col}")
 
     def test_the_add_chat_affordance_is_not_a_tab(self):
-        """It is a reminder naming a command, not a name to switch to."""
-        row = self._draw(120, names=["api.1"], here="nowhere", note=slots.ADD_CHAT)
-        self.assertIn(slots.ADD_CHAT, row)
+        """It makes a chat; it does not switch to one. There is no chat there yet, which
+        is the whole point of pressing it."""
+        row = _plain(self._draw(120, names=["api.1"], here="nowhere",
+                                note=slots.ADD_CHAT))
+        self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
         for col in self._cells(row, slots.ADD_CHAT):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_add_chat_affordance_is_a_cell_that_makes_a_chat(self):
+        """*"`+` button not working for creating new session."*
+
+        The other half of the case above, and the reason the row has a third question:
+        the cell switches to nothing and opens no picker, and it is not therefore inert.
+        """
+        row = _plain(self._draw(120, names=["api.1"], here="nowhere",
+                                note=slots.ADD_CHAT))
+        cells = list(self._cells(row, slots.ADD_CHAT))
+        self.assertEqual([c for c in range(200) if slots.TABS.add_at(c)], cells,
+                         f"the `+` is not the one cell that makes a chat: {row!r}")
+        for col in cells:
+            self.assertFalse(slots.TABS.more_at(col),
+                             "the `+` was published as an overflow count as well")
+
+    def test_a_plus_and_a_plus_n_are_never_on_the_same_row(self):
+        """**Two fields that both begin with `+` and mean different things**, kept apart
+        by the ladder rather than by a reader's care: the affordance is drawn only on the
+        rung where every name fits and a count only on the rung where they do not.
+
+        Asked at every width on a list long enough to overflow, because "they cannot both
+        appear" is exactly the kind of claim that is true of the three widths somebody
+        checked.
+        """
+        names = [f"api.{i}" for i in range(1, 13)]
+        for width in range(0, 201):
+            row = _plain(self._draw(width, names=names, here="api.6",
+                                    note=slots.ADD_CHAT))
+            fields = [f.strip() for f in row.split(" " * slots._BAR_GAP) if f.strip()]
+            plus = [f for f in fields if f.startswith("+")]
+            self.assertLessEqual(len(plus), 2, f"{width}: {row!r}")
+            if slots.ADD_CHAT in plus:
+                self.assertEqual(plus, [slots.ADD_CHAT],
+                                 f"{width}: a `+` and a count share a row: {row!r}")
+
+    def test_a_narrowed_bar_forgets_the_affordance_it_is_no_longer_drawing(self):
+        """`_Viewport.blank`'s rule for the fourth thing `publish` writes. A bar that kept
+        its `+` cell through a resize would make a chat from a column the operator can see
+        holds a name."""
+        self._draw(120, names=["api.1"], here="api.1", note=slots.ADD_CHAT)
+        self.assertTrue(any(slots.TABS.add_at(c) for c in range(120)))
+        self._draw(120, names=["api.1"], here="api.1")
+        self.assertEqual([c for c in range(200) if slots.TABS.add_at(c)], [],
+                         "the bar kept an affordance it stopped drawing")
 
     def test_no_row_at_any_width_ever_draws_or_maps_a_column_left_of_zero(self):
         """**The property a deleted guard used to protect by accident** (#767).
@@ -1103,26 +1169,50 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
         self._env.start()
         self.addCleanup(self._env.stop)
 
-    def test_the_bar_hides_the_second_name_when_there_is_one_chat_and_says_how(self):
+    def test_a_workspace_with_one_chat_still_says_which_and_offers_another(self):
         """Stage 5b's exit criterion, first half: "the chat bar is absent with one chat".
         Absent means it stops being a list — it still says which chat you are in and how
         to get a second, because a row that vanished would leave an operator with no way
         to learn the feature exists."""
         _plant("api.1", workspace="api")
-        row = slots.chats_bar("api.1", 200)[0]
+        row = _plain(slots.chats_bar("api.1", 200)[0])
         self.assertIn("api.1", row)
-        self.assertIn(slots.ADD_CHAT, row)
-        self.assertIn("charter <harness>", row,
-                      "the affordance must name something that works today")
+        self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
 
-    def test_the_bar_lists_both_chats_when_there_are_two(self):
-        """The other half: "present with two"."""
+    def test_the_bar_lists_both_chats_when_there_are_two_and_still_offers_a_third(self):
+        """The other half: "present with two" — and the `+` stays.
+
+        **It used to go**, on the argument that the affordance was a reminder for a plane
+        that had not discovered chats yet. That was right about a SENTENCE and is wrong
+        about a button: an operator with two chats wanting a third is exactly who presses
+        it, and a `+` that appears and disappears depending on how many tabs there are is
+        the one behaviour no tab strip anywhere has.
+        """
         _plant("api.1", workspace="api")
         _plant("api.2", workspace="api")
-        row = slots.chats_bar("api.2", 200)[0]
+        row = _plain(slots.chats_bar("api.2", 200)[0])
         self.assertIn("api.1", row)
         self.assertIn("*api.2", row)
-        self.assertNotIn(slots.ADD_CHAT, row)
+        self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
+
+    def test_the_workspace_bar_offers_no_such_thing(self):
+        """**A chat is a press; a workspace is a name.** A new chat has nothing for an
+        operator to type — its id is allocated and its workspace is fixed for life (§4j) —
+        while a new workspace is a directory and a name #518 refuses to create on a typo.
+        So the `+` is the chat bar's and the workspace bar draws none, at any width and
+        whatever the plane holds."""
+        for name in ("alpha", "beta"):
+            (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
+        state.frame_dir("f1", create=True)
+        state.record_workspace("f1", "alpha")
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""}):
+            for width in range(0, 201):
+                rows = slots.workspaces_bar("f1", width)
+                row = _plain(rows[0]) if rows else ""
+                self.assertFalse(row.rstrip().endswith(slots.ADD_CHAT),
+                                 f"{width}: the workspace bar drew a `+`: {row!r}")
+                self.assertEqual([c for c in range(width) if slots.TABS.add_at(c)], [],
+                                 f"{width}: the workspace bar published an affordance")
 
     def test_only_this_workspaces_chats_are_on_the_bar(self):
         _plant("api.1", workspace="api")
