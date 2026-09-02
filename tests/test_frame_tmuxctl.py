@@ -259,6 +259,11 @@ class RunNeverRaisesOnWhatItCannotDecode(unittest.TestCase):
         here is a traceback in place of a frame. It already has an answer for a `tmux -V` it
         cannot parse — `None`, which reads as "charter could not find out" — and a `tmux` on
         `$PATH` that is a wrapper script answering in some other encoding is the same fact.
+
+        `_probe` is asserted as well as `version`, and not only because it is the line that
+        changed: `assertIsNone(version())` alone passes just as well against a shim that
+        never ran at all, which is a case that would go quietly green the day the fixture
+        breaks rather than the day the code does.
         """
         d = Path(self.enterContext(tempfile.TemporaryDirectory()))
         shim = d / "tmux"
@@ -268,6 +273,7 @@ class RunNeverRaisesOnWhatItCannotDecode(unittest.TestCase):
         self.enterContext(mock.patch.dict(os.environ,
                                           {"PATH": f"{d}{os.pathsep}{os.environ['PATH']}"}))
 
+        self.assertEqual(tmuxctl._probe(), "tmux 3.\ufffdc")
         self.assertIsNone(tmuxctl.version())
 
 
