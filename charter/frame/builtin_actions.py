@@ -43,6 +43,8 @@ from __future__ import annotations
 import os
 import subprocess
 
+from typing import Callable, NamedTuple
+
 from .. import contain, util
 from . import action, actions, chats, choose, state, switch, tmuxctl
 
@@ -285,7 +287,34 @@ def _select(ctx, step: int, start: int):
 ONLY_WORKSPACE = ("this plane has one workspace — make another with `charter workspace "
                   "create <name>`, and every workspace row starts offering it")
 
-#: The two strips a keyboard can walk, as ``(noun, names, here, command)``.
+class _Strip(NamedTuple):
+    """One tab strip, as everything the keyboard needs to walk it.
+
+    A record rather than a five-tuple, for `chats.Chat`'s reason one module over: the
+    fields are read in two places (the row that is registered and the walk that runs) and
+    a positional unpack in each is two chances for the day a sixth field is added.
+    """
+
+    #: What the row calls it, and what it says when it has started one — `chat`,
+    #: `workspace`. The palette's own `<noun> → <name>` vocabulary
+    #: (`commands_frame._say_on_screen`'s `persona → zeb`), so a walk reports the way every
+    #: other switch on this plane reports.
+    noun: str
+    #: ``names(fid) -> list`` — the strip, in the order the BAR draws it
+    #: (`frame/chats.roster`, `frame/switch.workspaces`). Asked of the same listers so a
+    #: keyboard walk and a pointer walk cannot disagree about which tab is next.
+    names: Callable
+    #: ``here(fid) -> str`` — the tab this frame is on, from the same reading the bar's
+    #: own mark comes from.
+    here: Callable
+    #: The argv prefix the switch is started with, `frame/builtins._CHAT_SWITCH` and
+    #: `_WORKSPACE_SWITCH` — the same one a click on that tab spawns.
+    command: tuple
+    #: What a strip of one says instead of switching to where the operator already is.
+    alone: str
+
+
+#: The two strips a keyboard can walk.
 #:
 #: **Data rather than four functions**, exactly as :data:`_SELECT_STEPS` is data rather
 #: than a sign test: everything that differs between a chat strip and a workspace strip is
@@ -303,10 +332,10 @@ ONLY_WORKSPACE = ("this plane has one workspace — make another with `charter w
 #: RENDERER module that a palette process has no other reason to import, and
 #: `tests/test_the_keyboard_walks_the_tab_strips.py` holds the two spellings equal instead.
 _STRIPS = (
-    ("chat", lambda fid: [c.id for c in chats.roster(fid)], lambda fid: fid,
-     ("frame-chat",), chats.ONLY_CHAT),
-    ("workspace", lambda _fid: switch.workspaces(), switch.current_workspace,
-     ("frame-switch", "--workspace"), ONLY_WORKSPACE),
+    _Strip("chat", lambda fid: [c.id for c in chats.roster(fid)], lambda fid: fid,
+           ("frame-chat",), chats.ONLY_CHAT),
+    _Strip("workspace", lambda _fid: switch.workspaces(), switch.current_workspace,
+           ("frame-switch", "--workspace"), ONLY_WORKSPACE),
 )
 
 
@@ -364,15 +393,15 @@ def _register_strip(reg: actions.ActionRegistry) -> None:
     on no name at all, so the one workspace left IS somewhere to send it — and a count
     would refuse the only row that could.
     """
-    for noun, names_of, here_of, command, alone in _STRIPS:
+    for strip in _STRIPS:
         for word, step, start in _SELECT_STEPS:
             reg.register(action.Action(
-                id=f"{noun}.{word}", title=f"{noun}: the {word} tab",
-                run=(lambda ctx, n=names_of, h=here_of, c=command, st=step, sr=start,
-                     a=alone: _step_strip(ctx, n, h, c, st, sr, a))))
+                id=f"{strip.noun}.{word}", title=f"{strip.noun}: the {word} tab",
+                run=(lambda ctx, s=strip, st=step, sr=start:
+                     _step_strip(ctx, s, st, sr))))
 
 
-def _step_strip(ctx, names_of, here_of, command, step: int, start: int, alone: str):
+def _step_strip(ctx, strip: "_Strip", step: int, start: int):
     """Start the switch to the tab *step* along from the one this frame is on.
 
     Split out of the row above for :func:`_select`'s reason: the arithmetic can then be
@@ -394,12 +423,12 @@ def _step_strip(ctx, names_of, here_of, command, step: int, start: int, alone: s
     The sentence it answers with names the tab, so the palette says what it started rather
     than that it started something — `_select`'s `f"selected {name}"` one strip over.
     """
-    here = here_of(ctx.fid)
-    name = _walk(list(names_of(ctx.fid)), here, step, start)
+    here = strip.here(ctx.fid)
+    name = _walk(list(strip.names(ctx.fid)), here, step, start)
     if name == here:
-        return alone
-    _spawn(util.self_relaunch_argv(*command, name), fid=ctx.fid)
-    return f"{command[0].split('-')[-1]} → {contain.one_line(name)}"
+        return strip.alone
+    _spawn(util.self_relaunch_argv(*strip.command, name), fid=ctx.fid)
+    return f"{strip.noun} → {contain.one_line(name)}"
 
 
 #: What a workspace with nothing open is told instead of a row that does nothing.
