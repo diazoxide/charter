@@ -775,6 +775,43 @@ class TheCaptureRefusesAServerThatSaidNothing(PersonaIso):
 
         self.assertFalse(dest.exists())
 
+    def test_a_cut_that_lands_inside_a_character_drops_it_rather_than_mangling_it(self):
+        """`.decode("utf-8", "ignore")`, and **this one is not on #810's list.**
+
+        It was found by re-running the sweep's own operators over these functions rather
+        than working the issue's survivor list, which is what its author asked for: *a
+        survivor list is a union across runs, not a snapshot.*
+
+        The byte cut is taken from the END, so the only edge it can land inside is the
+        LEADING one — and every existing case builds its capture out of characters whose
+        byte length divides the cap evenly, so the cut always landed on a boundary and the
+        handler was never read. (`str.decode` looks an error handler up lazily, exactly
+        like `str.encode`: a re-tuned name is a `LookupError` only when a decode actually
+        fails.)
+
+        This capture is one byte off that boundary, so the slice begins on a continuation
+        byte. What `ignore` buys is that the partial character is DROPPED rather than
+        written as a `U+FFFD` the pager would show as noise — which is the sentence the
+        comment above the line already makes and nothing measured.
+        """
+        cap = commands_frame._TRANSCRIPT_BYTES
+        text = "é" * cap + "x"          # 2·cap + 1 bytes, so the cut lands mid-character
+        raw = text.encode("utf-8")
+        self.assertTrue(0x80 <= raw[len(raw) - cap] < 0xC0,
+                        "or this case is not about a cut inside a character")
+        dest = reopen.transcript_path("alpha.1")
+        answer = SimpleNamespace(returncode=0, stdout=text, stderr="")
+
+        with mock.patch.object(commands_frame.tmuxctl, "run", return_value=answer):
+            self.assertTrue(commands_frame._capture_transcript(
+                commands_frame.SOCKET, "%1", dest))
+
+        got = dest.read_text()          # would raise if half a character were written
+        self.assertNotIn("\ufffd", got, "dropped, not replaced with a noise glyph")
+        self.assertTrue(got.startswith("é"))
+        self.assertTrue(got.endswith("x"))
+        self.assertLessEqual(len(dest.read_bytes()), cap)
+
     def test_a_capture_with_something_in_it_keeps_its_surrounding_blank_lines(self):
         """The other half of the same call, and the reason it is `strip()` on the TEST and
         not on the text: what is written is `out.stdout`, whitespace and all."""
@@ -923,6 +960,19 @@ class AChatIdCharterCannotResolveWritesAndReadsNothing(PersonaIso):
 
         self.assertEqual(sorted(p.name for p in state._root().iterdir()), before,
                          "nothing was created outside, and nothing inside either")
+
+    def test_a_name_that_cannot_be_a_directory_records_no_cwd(self):
+        """`state.record_cwd`'s own `if d is None` — **also not on #810's list**, and found
+        the same way: the issue named this function's `except OSError` and not the guard
+        two lines above it. The value is a chat id off the manifest, and what it records is
+        the directory a later reopen will `os.chdir` into."""
+        before = sorted(p.name for p in state._root().iterdir())
+
+        for bad in ("../elsewhere", "", "a/b", "."):
+            self.assertIsNone(state.record_cwd(bad, "/some/where"), repr(bad))
+            self.assertIsNone(state.chat_cwd(bad), repr(bad))
+
+        self.assertEqual(sorted(p.name for p in state._root().iterdir()), before)
 
     def test_a_name_that_cannot_be_a_directory_reads_as_not_closed(self):
         for bad in ("../elsewhere", "", "a/b", "."):
