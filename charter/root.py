@@ -230,6 +230,73 @@ def tree_of(plane: Path, start: Path | None = None) -> Path | None:
     return None
 
 
+def nested_plane_in(plane: Path, start: Path | None = None) -> Path | None:
+    """The plane nested inside *plane*'s ``workspaces/`` that *start* stands in — else
+    ``None``.
+
+    :func:`tree_of`'s sibling, and deliberately a **second route rather than a widening of
+    it** (#809). Both answer one question — *is the caller standing somewhere other than the
+    tree this command is about to commit?* — but the two arrangements are told apart by
+    different evidence, and neither detector can see the other's:
+
+    * a linked WORKTREE is a view of the plane's own repo, marked by the ``.git`` **file**
+      git writes into it. That is `tree_of`, pure path arithmetic.
+    * a nested PLANE is a *different repository* that happens to carry a tracked
+      ``charter.toml``, sitting where `charter clone` puts clones. Its ``.git`` is a real
+      directory, so `tree_of` correctly answers ``None`` for it — and must keep doing so.
+      Teaching `tree_of` this case would mean teaching it "am I inside any other plane",
+      which is :func:`enclosing_plane`'s question, answered on purpose in a different way.
+
+    **Root-relative, exactly like `tree_of`, and that is what makes ``$CHARTER_ROOT`` work.**
+    The question is not "is this plane nested" — it is "is the caller standing in a plane
+    nested inside *the one being committed*". With ``$CHARTER_ROOT=<the clone>`` the plane
+    being committed IS the one they are standing in, the first branch below returns ``None``,
+    and the operator gets what they explicitly asked for. A detector keyed on
+    :func:`standing_in_nested_plane` instead would refuse there too — and the refusal that
+    uses this prints that very override as its remedy, so the advice would be a lie.
+
+    **The chain is walked, not shortcut through :func:`_outermost`.** ``_outermost(inner) ==
+    plane`` looks equivalent and is not: in a plane inside a plane inside a plane, under
+    ``$CHARTER_ROOT=<the middle one>``, the outermost is not the tree being committed, yet
+    standing in the leaf still commits a tree the caller is not in. Membership of the chain
+    is the honest test. ``seen`` guards a symlink arrangement that could otherwise cycle,
+    on the same grounds as `_outermost`'s.
+
+    The answer is the INNERMOST plane the caller stands in, never an intermediate one: it is
+    printed as "run git here", and that has to be the tree actually holding their work.
+
+    Never raises: it sits on a command path, beside `tree_of`, which makes the same promise.
+    """
+    try:
+        cur = (Path(start) if start is not None else Path.cwd()).resolve()
+        target = Path(plane).resolve()
+    except (OSError, RuntimeError):
+        return None
+    inner = None
+    try:
+        for d in (cur, *cur.parents):
+            if (d / MARKER).is_file():
+                inner = _plane_of(d)
+                break
+    except OSError:                       # PermissionError on an ancestor mid-walk
+        return None
+    if inner is None or inner == target:
+        return None
+    seen = {inner}
+    cur_plane = inner
+    while True:
+        try:
+            outer = enclosing_plane(cur_plane)
+        except OSError:
+            return None
+        if outer is None or outer in seen:
+            return None
+        if outer == target:
+            return inner
+        seen.add(outer)
+        cur_plane = outer
+
+
 def _plane_of(marked: Path) -> Path:
     """The plane a found marker really belongs to.
 
