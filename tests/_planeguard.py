@@ -1238,7 +1238,10 @@ def _shell_launches_charter(command: str, depth: int = 0, cwd=None, env=None) ->
       up, and anything else that computes the name;
     * a wrapper that takes a command as its arguments — ``sudo``, ``eval``, ``xargs``,
       ``timeout`` — with the word anywhere after it;
-    * a string that will not lex, or nesting past the fourth level.
+    * a string that will not lex, or nesting past the fourth level — undecidable, and
+      answered "charter" whenever the WORD test finds the name in it. Not the gate: the
+      gate matches a substring, and a substring is not a reason to refuse a command
+      nothing lexed. See the comment on `named` in the body.
 
     The per-segment question is :func:`_cmd_launches_charter`'s, in full: the wrapper
     clause used to be repeated here because that function did not have one, which is how
@@ -1246,21 +1249,36 @@ def _shell_launches_charter(command: str, depth: int = 0, cwd=None, env=None) ->
     """
     if not _CHARTER_MENTION.search(command):
         return False
+    # Three exits below answer "charter" without ever having READ a command position, and
+    # each of them is reached only because the gate let the string through. The gate is
+    # deliberately loose — see :data:`_CHARTER_MENTION` — on the promise that "the word test
+    # still decides what is a COMMAND once the string is lexed". Where nothing gets lexed
+    # that promise is broken and the loose gate IS the decision, which is #830: a `bash -c
+    # printf` was refused because `tempfile` had named a directory `tmpq71ovzj50hedm9za`,
+    # three of whose random characters spell charter's pre-rename binary. `tests/_isolation`
+    # spells the same three letters on purpose, in `edm-test-`, so this is a false refusal
+    # waiting on the argv rather than on a coin.
+    #
+    # So the undecidable answers are the WORD test's, which is the one that knows a name
+    # from a path — while the gate keeps deciding nothing on its own and the lexed path
+    # keeps its full reach. What this gives up is stated where it costs something:
+    # `test_an_unlexable_string_that_names_charter_only_glued_to_a_word_is_the_price`.
+    named = bool(_CHARTER_WORD.search(command))
     if depth > 3:                         # nesting nobody writes; stop, and refuse
-        return True
+        return named
     for body in _substitution_bodies(command):
         if _shell_launches_charter(body, depth + 1, cwd, env):
             return True
     try:
         segments = _shell_segments(command)
     except ValueError:
-        return True
+        return named
     for segment in segments:
         if _cmd_launches_charter(segment, depth + 1, cwd, env):
             return True
         words, _consumed = _launcher_argv(segment)
         if words and ("$" in words[0] or "`" in words[0]):
-            return True                   # the command word is computed: undecidable
+            return named                  # the command word is computed: undecidable
     return False
 
 
@@ -1384,11 +1402,23 @@ def _charter_argv(args, opts: dict) -> list[str] | None:
     return parts if _cmd_launches_charter(parts, 0, cwd, env) else None
 
 
-def _explain_spawn(parts: list[str], plane) -> str:
+def _explain_spawn(parts: list[str], plane, source: str) -> str:
+    """The refusal, naming the plane AND where that value came from.
+
+    *source* is `_child_plane`'s second return value, and #830 is why it is printed. That
+    failure was a `bash -c printf` refused intermittently, and the log said which argv was
+    refused but not which plane it was refused against \u2014 so the two candidate stories (the
+    guard misread the argv; something moved the plane under it) could not be told apart
+    from the artifact. One line of provenance separates them: a plane that came from the
+    walk up from an untouched cwd is the guard's own steady answer, and a plane that came
+    from a handed ``$CHARTER_ROOT`` or from `find_root_or_cwd`'s fallback is not.
+    """
     return (
         f"REFUSED: spawning charter against the real control plane\n"
         f"{_current_test()} is about to run `{' '.join(parts)}`, and that child would "
-        f"resolve its plane as {plane} \u2014 the developer's REAL one. It is a separate "
+        f"resolve its plane as {plane} \u2014 the developer's REAL one.\n"
+        f"That plane came from {source}.\n"
+        f"It is a separate "
         f"process: nothing this suite patches in memory reaches it, so it would refresh "
         f"that plane's forge state, rewrite its caches, and (for `persona _gc`) collect "
         f"against it. Two ways out. (1) If the test is not about the spawn, stub it \u2014 "
@@ -1479,24 +1509,50 @@ def _child_plane(opts: dict):
     the guard — charging every test that spawns `bash` with a read it never made. A copy
     carries the same values (the ambient ones were scrubbed at install, so it is the same
     on every machine) and is exactly what the child will inherit.
+
+    Returns the plane AND the sentence saying where it came from, because the refusal has
+    to print both. #830 is the measurement: a `RealPlaneSpawn` that names a plane but not
+    its provenance leaves the reader unable to tell an inherited cwd from a handed
+    ``$CHARTER_ROOT`` from `find_root_or_cwd`'s unwalked fallback — three different bugs
+    with one message. Computed here rather than beside `_explain_spawn` because this is
+    where the three branches already are, and a second reader of them would drift.
     """
     from charter import root as _root
 
     env = opts.get("env")
     cwd = opts.get("cwd")
     try:
+        # A COPY, and `dict()` around it for the same reason the walk below takes one:
+        # ``env=os.environ`` is a legal spelling, and a targeted `.get` off the live
+        # mapping is what `_envguard` refuses.
+        pointer = dict(dict(os.environ) if env is None else env).get(_root.ENV_VAR)
+    except (TypeError, ValueError, AttributeError):
+        pointer = None                    # not a mapping at all; the walk still answers
+    try:
         start = Path(os.fsdecode(cwd)) if cwd is not None else Path.cwd()
     except (TypeError, ValueError, OSError):
-        return None
+        return None, "unreadable"
+    if pointer:
+        carrier = ("the spawn's own env=" if env is not None
+                   else "this process's environment")
+        handed = f"${_root.ENV_VAR}={pointer}, inherited from {carrier}"
+    else:
+        whose = ("the spawn's own cwd=" if cwd is not None
+                 else "this process's cwd, which the spawn did not override: ")
+        handed = f"the walk up from {whose}{start}"
     try:
-        return _root.find_root(start, env=dict(os.environ) if env is None else env)
+        return _root.find_root(start, env=dict(os.environ) if env is None else env), handed
     except _root.ControlPlaneNotFound:
         try:
-            return start.resolve()        # what `find_root_or_cwd` hands `config`
+            # What `find_root_or_cwd` hands `config`: no plane above the child at all, so
+            # its own working directory becomes one, unwalked.
+            return start.resolve(), (
+                f"{handed} — which found no plane, so `find_root_or_cwd`'s fallback makes "
+                f"that directory the plane")
         except (OSError, RuntimeError):
-            return None
+            return None, "unreadable"
     except Exception:
-        return None
+        return None, "unreadable"
 
 
 #: Whether :func:`_guard_spawns` has already wrapped ``Popen.__init__``. Separate from
@@ -1571,7 +1627,7 @@ def _guard_spawns() -> None:
         parts = _charter_argv(args, opts)
         if parts is not None:
             if _REAL_ROOT:
-                plane = _child_plane(opts)
+                plane, source = _child_plane(opts)
                 if plane is not None:
                     try:
                         here = os.path.abspath(str(plane))
@@ -1579,7 +1635,7 @@ def _guard_spawns() -> None:
                         here = None
                     if here is not None and (here in _REAL_ROOT
                                              or os.path.realpath(here) in _REAL_ROOT):
-                        raise RealPlaneSpawn(_explain_spawn(parts, plane))
+                        raise RealPlaneSpawn(_explain_spawn(parts, plane, source))
             if opts.get("start_new_session") and not _BACKGROUND_ALLOWED:
                 raise BackgroundCharterChild(_explain_background(parts))
         return original(self, args, *rest, **kw)

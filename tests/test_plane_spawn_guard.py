@@ -140,6 +140,41 @@ class ARefusedSpawn(_FakePlane):
         self.assertIn("maybe_spawn", msg)       # way out (1): do not spawn at all
         self.assertIn(str(self.real), msg)      # which plane it would have landed on
 
+    def test_the_message_says_where_that_plane_CAME_FROM(self):
+        """#830 put one question to a CI log and the log could not answer it.
+
+        The refusal named the argv it objected to and the plane it objected on behalf of —
+        but not where that plane came from, and `_child_plane` has three answers with three
+        different bugs behind them. A plane reached by walking up from a cwd nobody
+        overrode is the guard's own steady answer, and if it is the operator's, so is every
+        other spawn in the run. A plane that arrived as a handed ``$CHARTER_ROOT`` is a
+        fixture pointing at the wrong place. A plane that is only `find_root_or_cwd`'s
+        unwalked fallback is neither. One line separates them; without it the reader is
+        reduced to reproducing a failure that fired once in two runs of one commit.
+        """
+        stranded = {k: v for k, v in os.environ.items() if k != root.ENV_VAR}
+
+        # (1) the walk, from a cwd the spawn did not override.
+        with self.assertRaises(_planeguard.RealPlaneSpawn) as caught:
+            self.run_fake(cwd=self.real, env=stranded)
+        self.assertIn(f"the walk up from the spawn's own cwd={self.real}",
+                      str(caught.exception))
+
+        # (2) a pointer handed across the boundary — a fixture aiming at the wrong plane,
+        #     which reads nothing like (1) and used to print the same sentence.
+        with self.assertRaises(_planeguard.RealPlaneSpawn) as caught:
+            self.run_fake(cwd=self.elsewhere,
+                          env={**stranded, root.ENV_VAR: str(self.real)})
+        self.assertIn(f"${root.ENV_VAR}={self.real}, inherited from the spawn's own env=",
+                      str(caught.exception))
+
+        # (3) no plane above the child at all, so `find_root_or_cwd` makes its cwd one.
+        with self.assertRaises(_planeguard.RealPlaneSpawn) as caught:
+            self.run_fake(cwd=self.real,
+                          env={**stranded, root.ENV_VAR: str(self.elsewhere / "gone")})
+        self.assertIn("found no plane, so `find_root_or_cwd`'s fallback",
+                      str(caught.exception))
+
     def test_it_is_a_base_exception_so_charters_own_fallbacks_cannot_eat_it(self):
         """`glstate.maybe_spawn` and `update.maybe_spawn` both wrap their `Popen` in
         `except Exception: return`. A tripwire those can catch reports nothing at all."""
@@ -617,6 +652,107 @@ class SpellingsThatAreNotASpawn(_FakePlane):
         # resolved spelling — the same two-spellings problem `_REAL_ROOT` carries.
         self.assertEqual(self.allow(["/bin/sh", "-c", f'pwd > "{self.ran}"']).strip(),
                          str(self.real.resolve()))
+
+    def test_a_name_buried_in_a_longer_word_does_not_decide_an_unlexable_string(self):
+        """#830: a `bash -c printf` refused against the operator's real plane, in one of
+        two runs of the SAME commit — and the argv spawns no charter at all.
+
+        Nothing raced. `tempfile` had drawn the directory name ``tmpq71ovzj50hedm9za``, and
+        three of its eight random characters spell ``edm``, charter's pre-rename binary.
+        That is enough for the mention GATE, which asks for the name and nothing about its
+        boundaries; `shlex` cannot lex bash's ``$'…'`` ANSI-C quoting, so nothing was ever
+        segmented; and "undecidable" answered charter. The gate was the whole decision —
+        which is exactly what its own docstring says it must never be.
+
+        The second name is the same defect with the coin taken out: every throwaway plane
+        `tests._isolation` makes is ``edm-test-…``, so those three letters are in the argv
+        of anything that hands such a path to a shell.
+        """
+        for name in ("tmpq71ovzj50hedm9za", "edm-test-9f2c"):
+            with self.subTest(name=name):
+                out = self.elsewhere / name / "it-ran"
+                out.parent.mkdir()
+                # Valid bash that `shlex` will not lex: the backslash inside `$'…'` is an
+                # escape to bash and an ordinary character to shlex, which leaves shlex
+                # holding an unbalanced quote.
+                p = subprocess.Popen(["bash", "-c", f"printf %s $'a\\'b' > {out}"],
+                                     cwd=self.real, env=self.stranded)
+                self.assertEqual(p.wait(), 0)
+                self.assertEqual(out.read_text(), "a'b", "the child did not run")
+
+
+class WhatDecidesAnUndecidableShellString(unittest.TestCase):
+    """#830, at the decision function rather than through a spawn.
+
+    `_shell_launches_charter` has three exits that answer "charter" without having read a
+    command position at all: nesting past the fourth level, a string that will not lex, and
+    a command word the shell computes. Each is reached only because the mention gate let
+    the string through, so on those three the gate is not a gate — it is the verdict. And
+    the gate matches a bare SUBSTRING by design, on the promise (its own docstring) that
+    "the word test still decides what is a COMMAND once the string is lexed". Where nothing
+    is lexed, that promise has nothing behind it.
+
+    The failure that cost a run was the compound: an incidental ``edm`` in a `tempfile`
+    name AND a string `shlex` cannot lex. Pinning it as a spawn needs the guard to be
+    armed against a real plane; pinning it here needs neither, so this is the half that
+    still measures something the day the fixture above stops being reproducible.
+    """
+
+    #: Ordinary bash, and `shlex` raises on it — the premise the case below asserts rather
+    #: than assumes.
+    UNLEXABLE = "printf %s $'a\\'b'"
+
+    def test_the_premise_that_shlex_refuses_what_bash_accepts(self):
+        with self.assertRaises(ValueError):
+            _planeguard._shell_segments(self.UNLEXABLE)
+        self.assertEqual(
+            subprocess.run(["bash", "-c", self.UNLEXABLE],
+                           capture_output=True, text=True).stdout, "a'b")
+
+    def test_the_name_inside_a_longer_word_is_not_what_decides_it(self):
+        for path in ("/tmp/tmpq71ovzj50hedm9za/ran",   # the name CI actually drew
+                     "/tmp/edm-test-9f2c/ran",         # `tests._isolation`'s own prefix
+                     "/tmp/rechartering/ran"):         # and the current name, buried
+            with self.subTest(path=path):
+                command = f"{self.UNLEXABLE} > {path}"
+                self.assertTrue(_planeguard._CHARTER_MENTION.search(command),
+                                "fixture no longer reaches the gate it is about")
+                self.assertFalse(_planeguard._shell_launches_charter(command))
+
+    def test_the_name_as_a_word_still_decides_it(self):
+        """The other half, and without it the case above is satisfied by a guard that
+        answers "not charter" to everything it cannot lex."""
+        for command in (f"{self.UNLEXABLE}; charter doctor",
+                        f"{self.UNLEXABLE}; /usr/local/bin/charter doctor",
+                        f"{self.UNLEXABLE}; edm doctor",
+                        f'{self.UNLEXABLE}; CHARTER doctor'):
+            with self.subTest(command=command):
+                self.assertTrue(_planeguard._shell_launches_charter(command))
+
+    def test_a_computed_command_word_is_decided_the_same_way(self):
+        """The third exit. `ARefusedSpawn`'s spawn-level case pins the refusal; this pins
+        that an incidental substring is not what earns it."""
+        self.assertTrue(_planeguard._shell_launches_charter(
+            "# this line starts charter\n$CBIN --version"))
+        self.assertFalse(_planeguard._shell_launches_charter(
+            "cd /tmp/edm-test-9f2c && $CBIN --version"))
+
+    def test_an_unlexable_string_that_names_charter_only_glued_to_a_word_is_the_price(self):
+        """What #830's fix gives up, stated where it costs something rather than left to
+        be discovered.
+
+        ``env -Scharter`` puts a word character against the name, which is the shape the
+        mention gate exists for — so in a string that will not LEX, that spelling is no
+        longer refused. It is the intersection of two rare things (a string bash runs and
+        `shlex` cannot read, naming charter only glued to another word), and every one of
+        those spellings is still refused the moment the string lexes, which is the case
+        underneath. Narrowing this back out means finding a boundary rule that keeps
+        ``-Scharter`` and drops ``edm-test-`` — and there is none: ``edm`` there is already
+        bounded on both sides.
+        """
+        self.assertFalse(
+            _planeguard._shell_launches_charter(f"env -Scharter {self.UNLEXABLE}"))
+        self.assertTrue(_planeguard._shell_launches_charter("env -Scharter --version"))
 
 
 class TheHarnessGuardIsNotASecondCopyOfProductions(unittest.TestCase):
