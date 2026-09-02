@@ -24,9 +24,16 @@ A real attached client at 200x50 with four panels, `charter frame-chat` and a wh
 | launch, 3.7c | 46 → **17** | 227 ms → **91 ms** | — |
 | launch, 3.2 | 42 → **16** | 174 ms → **69 ms** | — |
 
-The third column is the jumping. tmux redraws once per command **list**, not once per
-command, so four `split-window`s sent one at a time are four screen updates ~5 ms apart —
-the panels arriving one by one — and four sent as one list are one.
+The third column is the jumping, and it is a direct reading rather than an inference: the
+bytes tmux wrote to a real client's terminal, grouped into bursts with more than 3 ms of
+silence between them. tmux redraws once per command **list**, not once per command, so four
+`split-window`s sent one at a time are four screen updates ~5 ms apart — the panels arriving
+one by one — and four sent as one list are one. There is no tmux command that suppresses
+paints while a batch applies (`refresh-client` forces one, its `-A pane:off` is control-mode
+only, and `suspend-client` stops the client process); fewer command lists is the mechanism.
+
+What is left is not nothing: 14 updates is still four `charter panel` processes starting and
+painting themselves, which is a different cost and a different lever.
 
 ## What changed
 
@@ -45,8 +52,10 @@ actually watches arrive — become a single repaint.
 **The switch still tears the old chat's panels down and splits fresh ones in, and that is
 not the part to optimise away.** A tmux window that is not current keeps the size it had,
 so panels left running in a chat you switched away from are not idle — they are drawing at
-a width that is no longer their window's. The teardown is a correctness rule; what it was
-not is 41 separate conversations with the server.
+a width that is no longer their window's. Re-verified on both versions while doing this: a
+client at 200x50 resized to 100x30 leaves the window it is not on at 200x50, and tmux
+resizes it at the `select-window`. The teardown is a correctness rule; what it was not is
+58 separate conversations with the server.
 
 ## What a failure costs, because a batch could have made that worse
 
