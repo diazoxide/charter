@@ -282,8 +282,13 @@ class TestTheRefusalNamesBothTrees(PlaneInsideAPlane):
 
     def test_it_names_the_override(self):
         """A guard with no documented override is a guard people uninstall (#370). This one
-        is honoured — `TestAnExplicitRootIsHonoured` below runs it."""
-        self.assertIn(root.ENV_VAR, self.said)
+        is honoured — `TestAnExplicitRootIsHonoured` below runs it.
+
+        Hand-spelled, not `root.ENV_VAR`. Asserting a message against the constant that
+        spells it dies to nothing: rename the variable and the message, the docs and the news
+        entry all change together while this still passes. The words are the contract —
+        somebody is going to copy this line out of a terminal."""
+        self.assertIn("CHARTER_ROOT=", self.said)
 
     def test_it_does_not_call_the_clone_a_worktree(self):
         """The two refusals must not be interchangeable. Telling an agent standing in a
