@@ -191,7 +191,7 @@ hand as index gitlinks (a recorded submodule needs no network, no second reposit
 `protocol.file.allow`), and real `git submodule add` fixtures for the two states that
 genuinely need a checked-out submodule.
 
-Twenty-seven hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
+Twenty-eight hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
 the two drift marks onto one, removing the report from `clone`, from `sync` and from each
 half of the `status` row, flattening the remedy path, and trimming `--init --recursive`
 off the remedy, silencing the dirty-skip branch, and narrowing the clone report to freshly
