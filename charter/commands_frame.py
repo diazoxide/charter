@@ -3876,6 +3876,14 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
                                     harness_pane=harness_pane, env=pane_env,
                                     sizes=sizes)
     panes: dict[str, str] = {}
+    # **Every pane's options collected across the whole loop and sent as ONE invocation
+    # below** (#780). Per pane was the shape this had while each `split-window` was its
+    # own round trip and a pane's `%N` was learnt one at a time; `_split_all` answers for
+    # all of them at once, so there is nothing left forcing four batches where one will
+    # do. The order inside is unchanged — every pane's mark before its own surface, and
+    # the panes in the order they were split — because a chain runs in the order it is
+    # given.
+    writes: list[tmuxctl.Write] = []
     for slot, pane_id in _split_all(socket, slots=slots, cmds=panel_cmds, env=env):
         panes[slot] = pane_id
         # This pane is a PANEL, said to tmux itself where a root-table binding can ask
@@ -3885,9 +3893,9 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
         # time it is clicked, which is the whole defect. Reported but not fatal, like
         # the splits and the surface — a panel charter could not mark still draws and
         # is still clicked, it just costs the operator an `F12` afterwards.
-        writes = [tmuxctl.Write(
+        writes.append(tmuxctl.Write(
             "marking a panel so a click on it stays where it points",
-            _panel_mark_argv(socket=socket, pane_id=pane_id))]
+            _panel_mark_argv(socket=socket, pane_id=pane_id)))
         # And WHICH panel it is, on the same pane and out of the same funnel (#714,
         # `_panel_slot_argv`). The mark above says a pane is charter's; this says what
         # charter meant by it, which is the half `state.panes` cannot be trusted for —
@@ -3918,11 +3926,7 @@ def _split_panels(socket: str, *, slots: list[str], fid: str, harness_pane: str,
                    for surface in _surface_argvs(
                        socket=socket, pane_id=pane_id, chrome=chrome, bg=bg,
                        pane_borders=pane_borders, look=look)]
-        # One invocation for everything this pane needs said about it (#780). PER PANE
-        # and not once for the whole batch, because that is the shape the split loop
-        # forces: a pane's `%N` is not known until its own `split-window` has answered,
-        # and it is the `-t` of every command here.
-        tmuxctl.write_all("dressing a panel", writes, env=env)
+    tmuxctl.write_all("dressing this frame's panels", writes, env=env)
     return panes
 
 

@@ -9,10 +9,10 @@ this was written on and ~13.4 ms on the one that filed #728. Measured with a rea
 ===================  ==================  ====================  ====================
 path and tmux        invocations         wall clock            terminal repaints
 ===================  ==================  ====================  ====================
-switch, 3.7c         58 -> 26            329 ms -> 162 ms      45 -> 17
-switch, 3.2          50 -> 24            243 ms -> 127 ms      41 -> 15
-launch, 3.7c         46 -> 20            245 ms -> 114 ms      (no client yet)
-launch, 3.2          42 -> 19            184 ms -> 83 ms       (no client yet)
+switch, 3.7c         58 -> 23            329 ms -> 155 ms      45 -> 15
+switch, 3.2          50 -> 21            243 ms -> 121 ms      41 -> 13
+launch, 3.7c         46 -> 17            245 ms -> 95 ms       (no client yet)
+launch, 3.2          42 -> 16            184 ms -> 77 ms       (no client yet)
 ===================  ==================  ====================  ====================
 
 The repaint column is the *"jumping"*: tmux redraws once per command LIST rather than once
@@ -205,13 +205,12 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
     A count that has to be edited is a count somebody has to look at.
     """
 
-    def test_a_four_panel_launch_sends_eighteen_invocations_up_to_the_attach(self):
+    def test_a_four_panel_launch_sends_fifteen_invocations_up_to_the_attach(self):
         """The whole private-server launch, up to and including `attach`. It was 44.
 
-        Batched: the ten writes that tell the window and session what they are (one), the
-        window's own dressing (one), the four splits (one), each pane's two options (one
-        PER PANE — a pane's `%N` is not known until its own split has answered), and the
-        four respawn hooks (one).
+        Five batches carry 33 of the 47 commands: the ten writes that tell the window and
+        session what they are, the window's own dressing, the four splits, every pane's
+        own options, and the four respawn hooks.
 
         Unbatched, and named here so a reader can see what is left rather than guess: two
         reaping reads, `new-session`, the eager death check, `list-panes`, the resize
@@ -223,20 +222,20 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
         with mock.patch.dict(config.FRAME, {"slots": list(_FOUR)}):
             self.assertEqual(_launch(fake, cols=200, rows=50), 0)
         attach = next(i for i, c in enumerate(fake.invocations) if "attach" in c)
-        self.assertEqual(attach + 1, 18,
+        self.assertEqual(attach + 1, 15,
                          [" ".join(c[3:])[:70] for c in fake.invocations[:attach + 1]])
         # And every command is still issued — batching moved them, it did not drop them.
         self.assertEqual(len([c for c in fake.calls if "split-window" in c]), 4)
         self.assertEqual(sorted(state.panes(_the_chat(fake))),
                          ["bottom", "repos", "right", "top"])
 
-    def test_a_four_panel_switch_sends_twenty_six_invocations(self):
+    def test_a_four_panel_switch_sends_twenty_three_invocations(self):
         """The `charter frame-chat` path: tear four panels down, select the window, split
         four fresh ones in.
 
         The teardown's eight commands (a disarm and a kill per panel) are one invocation,
-        each end's window dressing is one, the four splits are one, and the four respawn
-        hooks are one.
+        each end's window dressing is one, the four splits are one, every new pane's
+        options are one, and the four respawn hooks are one.
         """
         _plant("api.1", workspace="api", pane="%1")
         _plant("api.2", workspace="api", pane="%2")
@@ -252,7 +251,7 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
                                             "CHARTER_WORKSPACE": "api"}, clear=False):
             self.assertEqual(
                 commands_frame.cmd_chat(SimpleNamespace(chat_id="api.2")), 0)
-        self.assertEqual(len(fake.invocations), 26,
+        self.assertEqual(len(fake.invocations), 23,
                          [" ".join(c[3:])[:70] for c in fake.invocations])
         self.assertEqual(len([c for c in fake.calls if "kill-pane" in c]), 4)
         self.assertEqual(len([c for c in fake.calls if "split-window" in c]), 4)
