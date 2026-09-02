@@ -34,7 +34,7 @@ import os
 import unittest
 from unittest import mock
 
-from charter import commands_frame, config, util
+from charter import commands_frame, config, tui, util
 from charter.frame import (builtin_actions, builtins, chats, component, events, overlay,
                            slots, state)
 
@@ -86,9 +86,18 @@ class _ABarThatWasDrawn(PersonaIso):
         return builtins.build(fid).get(cid).on_event
 
     def _column_of(self, row: str, field: str) -> int:
+        """Which COLUMN of the drawn *row* the field *field* starts in.
+
+        **`tui.width` of what comes before it, never the character index.** The bar paints
+        the tab you are on as a reverse-video block (`chrome.block`), so a field to the
+        right of it sits further into the STRING than it sits into the pane — and a case
+        that pressed the character index would be pressing a column the operator's eye is
+        not on, which is the one mistake every case in this file exists to catch. `width`
+        counts no SGR, so this is the same number it always was on an unpainted row.
+        """
         at = row.index(field)
         self.assertNotIn(field, row[at + 1:], f"{field!r} is not unique in {row!r}")
-        return at
+        return tui.width(row[:at])
 
 
 class AClickOnAChatTabStartsTheChatSwitch(_ABarThatWasDrawn, unittest.TestCase):

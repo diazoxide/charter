@@ -923,6 +923,46 @@ def reverse(row: str, width: int) -> str:
     return fill(_REVERSE + body, width) + _OFF
 
 
+def block(text: str) -> str:
+    """*text* drawn as a reverse-video block — ONE FIELD of a row, never a whole row.
+
+    :func:`reverse`'s sibling and deliberately not a call to it. That one answers "this
+    ROW is the one you picked": it fills to the pane's last column, so the highlight is a
+    band across the frame, and it takes a *width* because a band that stops short or runs
+    one cell long is #553. This one answers "this FIELD is the one you are on", which is
+    what a tab strip needs — the highlight has to end where the tab ends, because the cells
+    on either side belong to other tabs and a band would say the operator is on all of
+    them.
+
+    **No re-assertion pass, and that is a fact about the caller rather than a shortcut.**
+    :func:`reverse` runs `_SGR.sub(_restated, …)` because it wraps a row a renderer already
+    finished, and charter's rows carry `statusline._R` after every coloured span — a full
+    reset inside the run cancels reverse for the rest of it (the measured defect in that
+    function's docstring). A tab field is `slots._BAR_MARK` plus a name that has been
+    through `contain.one_line`, which turns an `ESC` into the four characters `\x1b`. There
+    is no SGR inside it to cancel anything, so a substitution here would be a pass whose
+    output is provably its input — the survivor the deletion sweep reports and this
+    repository deletes rather than keeps as insurance.
+
+    That is also why there is no colour deletion (#736): the run sets none.
+
+    **No `[frame] chrome` gate and no `colour_ok` gate**, for the two reasons this module
+    already gives one function up. What leaves here names no colour, so there is no theme
+    it can be wrong on — including a plane at `chrome = "off"`, which is the shipped
+    default and is about the pane's BACKGROUND, not about what a renderer may write into
+    its own row. And `NO_COLOR` is honoured in `panel._write`, the one place anything
+    reaches a pane's screen, so a gate here would be a second answer to a question that is
+    already answered once for every row in the frame. Under it the strip still says which
+    tab you are on, because `slots._BAR_MARK` is a character and not an attribute.
+
+    An empty *text* comes back as a bare `\x1b[7m\x1b[0m` rather than `""`, and there is
+    deliberately no guard: no caller can reach it — a tab field always carries a mark —
+    so the guard would be a line no input could turn red, which is `fill`'s own recorded
+    reason for not having one either.
+    """
+    return _REVERSE + text + _OFF
+
+
 def _restated(m: re.Match) -> str:
     """One SGR inside a reversed run, rewritten: its colours gone and reverse put back if
     it turned reverse off.

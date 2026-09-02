@@ -3114,7 +3114,59 @@ _BAR_MARK = ("*", " ")
 
 #: Columns a bar spends between two names. Two, so a name reads as one name — a single
 #: space runs `api.1 api.2` together at the widths where this matters most.
+#:
+#: **The floor rather than the whole answer now**: :func:`_bar_gap` is what a rung actually
+#: joins with, and on a plane that draws its rules it is one cell wider. This constant
+#: stays the blank form because it is also the gap between the heading and the first tab —
+#: a seam between a label and a strip, which is not the seam a rule is about.
 _BAR_GAP = 2
+
+#: What a bar draws between two tabs on a plane whose seams are visible.
+#:
+#: **ASCII, and this one is not the same argument as :data:`_BAR_MARK`'s — it is a harder
+#: one.** `│` (U+2502) is what an IDE draws here and it is East-Asian *Ambiguous*: a
+#: terminal may draw it one cell or two, and `tui.width` says one. The repo table draws
+#: box glyphs (`statusline._TREE_MID` and its neighbours) and can afford to, because its
+#: click map is per ROW — a glyph that comes out two cells wide makes a row ragged and
+#: moves no row index. **A bar's map is per COLUMN.** One separator drawn a cell wider than
+#: it was measured shifts every tab right of it by one, ten separators shift the tenth tab
+#: by ten, and the operator presses `fleet` and lands on `default`. That is `EVENT_KINDS`'
+#: "fires wrongly", reached through a glyph rather than through a protocol.
+#:
+#: So the rule the bar draws is the one glyph whose width no terminal disagrees about.
+#: `▏`, `▎`, `●` and the pointing triangles are the same refusal for the same reason, and
+#: `statusline._persona_chips` records two of them breaking this layout already.
+_BAR_RULE = "|"
+
+
+def _bar_gap() -> str:
+    """The cells a bar puts between two of its own fields.
+
+    Two blanks on a plane whose seams are hidden — charter's shipped default, and byte for
+    byte what every bar drew before rules reached this row. `" | "` on a plane that asked
+    for visible rules, which is one cell more.
+
+    **The same key, one scope in.** ``[frame] rules`` is the operator saying whether they
+    want to see the structure of the frame or a surface with no seams in it
+    (`instance.FRAME_RULES` carries the four reports that produced it). The seam between
+    two tabs is that question about a row instead of about a pane, and answering it from a
+    second key would let one frame draw pane borders and no tab rules, which is exactly the
+    disagreement that key exists to end.
+
+    **It costs nothing on the shipped default**, which is what makes it affordable at all:
+    a plane at ``rules = "hidden"`` spends not one column on this, and a plane that asked
+    for rules pays one cell per gap — fourteen of them on this project's own fifteen
+    workspaces, which the ladder gives up a whole name for rather than overflowing.
+
+    Read at call time through `config.FRAME` rather than cached, exactly as
+    `chrome.dim_ok` and :func:`pad_of` read the keys they need: a panel is a long-lived
+    process and `charter.toml` is re-read when the frame relaunches. The import is
+    function-level for this module's own repaint-path reason.
+    """
+    from .. import config, instance
+    if instance.look_of(config.FRAME).rules == "visible":
+        return f" {_BAR_RULE} "
+    return " " * _BAR_GAP
 
 
 class _Tabs:
@@ -3227,22 +3279,33 @@ class _Tabs:
 TABS = _Tabs()
 
 
-def _tab_columns(start: int, drawn) -> dict:
+def _tab_columns(start: int, drawn, gap: int) -> dict:
     """Which canvas column each drawn tab owns — the map :meth:`_Tabs.publish` takes.
 
     *drawn* is the ``(name, field)`` pairs the rung actually put on the row, in the order
     it put them: the raw name a click switches to, and the text that was drawn for it.
-    *start* is the column the first field begins in. So this walks the composition once
-    more rather than guessing at it, and the two things that could have been guessed wrong
+    *start* is the column the first field begins in, and *gap* is how many cells the rung
+    put between two of them (:func:`_bar_gap`). So this walks the composition once more
+    rather than guessing at it, and the two things that could have been guessed wrong
     are settled here in one place: **the mark belongs to the tab it marks** (it is drawn
-    against that name and there is nothing else it could be a click on), and **the
-    :data:`_BAR_GAP` between two tabs belongs to neither** — those cells are separator,
-    the operator can see they are empty, and picking the nearer name for them would be the
-    clamp `events.Dispatcher._on_canvas` refuses one rectangle out.
+    against that name and there is nothing else it could be a click on), and **the gap
+    between two tabs belongs to neither** — those cells are separator, the operator can
+    see they are not a name, and picking the nearer one for them would be the clamp
+    `events.Dispatcher._on_canvas` refuses one rectangle out. That holds for a gap holding
+    a :data:`_BAR_RULE` exactly as it did for a gap of two blanks: a rule is a seam
+    somebody drew *between* two tabs, and a click on the seam has no tab to be about.
+
+    *gap* is a parameter rather than a read of :func:`_bar_gap` here, and it is the same
+    discipline the rest of this pass keeps: :func:`_bar` resolves the plane's answer ONCE
+    and hands the same number to the cut, the composition and this map. Three readings of
+    a key `charter.toml` is re-read behind is three chances for the map to describe a row
+    the operator is not looking at.
 
     ``tui.width`` and never ``len``, for the reason every other measurement in this module
     gives: a field is display text that has already been through `contain.one_line`, and
-    the column a name ENDS in is a question about cells.
+    the column a name ENDS in is a question about cells. It is also what makes the
+    highlight free: :func:`_bar` paints the marked field in reverse video, `tui.width`
+    counts no SGR, and the map comes out the same either way.
 
     The walk starts one gap behind *start* and pays the gap at the top of every iteration,
     so there is no "first field is different" branch to get wrong or to test — the same
@@ -3250,9 +3313,9 @@ def _tab_columns(start: int, drawn) -> dict:
     down as data rather than deriving them from a sign.
     """
     cols: dict[int, str] = {}
-    at = start - _BAR_GAP
+    at = start - gap
     for name, field in drawn:
-        at += _BAR_GAP
+        at += gap
         width = tui.width(field)
         for col in range(at, at + width):
             cols[col] = name
@@ -3260,18 +3323,26 @@ def _tab_columns(start: int, drawn) -> dict:
     return cols
 
 
-def _page(fields: list[str], at: int, room: int) -> tuple[int, int]:
+def _page(fields: list[str], at: int, room: int, gap: int) -> tuple[int, int]:
     """The half-open run of *fields* the tab at index *at* is drawn with, inside *room*.
 
     :func:`_bar`'s windowed rung. *fields* are the already-marked, already-contained tab
     texts; the answer is a slice of them wide enough to draw, with room left for the two
     counts that stand for what it leaves out.
 
+    *gap* is how many cells go between two fields — :func:`_bar_gap`, resolved once by
+    :func:`_bar` and handed to the cut, the composition and the map together, so that a
+    plane which draws its rules cannot cut a page for one gap and draw it with another.
+
     **The pages do not depend on *at*, and that is the whole design.** The list is cut
     into consecutive pages left to right — greedily, as many whole names as fit, then the
     next page from where that one stopped — and this returns whichever page the marked tab
-    falls in. So the page is a pure function of the NAMES and the WIDTH, and switching to a
-    tab that is on the page redraws that page unchanged with only the `*` moved.
+    falls in. So the page is a pure function of the NAMES, the WIDTH and the gap, and
+    switching to a tab that is on the page redraws that page unchanged with only the `*`
+    moved. The gap belongs in that list and changes nothing about the property: it is
+    fixed for the life of a frame, so it cannot move a page out from under a pointer — the
+    same standard the WIDTH is held to, which moves only on a resize that redraws the row
+    anyway.
 
     That property is what makes a windowed strip safe to click, and the alternative is
     where it was measured. A window CENTRED on the marked tab moves every column each time
@@ -3304,18 +3375,18 @@ def _page(fields: list[str], at: int, room: int) -> tuple[int, int]:
     """
     # The widest count either end can carry: every name but one left out. Measured with
     # `tui.width` for this module's own reason, even though charter mints the digits.
-    tail = _BAR_GAP + tui.width(f"+{len(fields) - 1}")
+    tail = gap + tui.width(f"+{len(fields) - 1}")
 
     def room_for(start: int) -> int:
         """What a page beginning at *start* may spend on names and the gaps between."""
-        return room - tail - (_BAR_GAP + tui.width(f"+{start}") if start else 0)
+        return room - tail - (gap + tui.width(f"+{start}") if start else 0)
 
     def reach(start: int) -> int:
         """Where a page beginning at *start* ends when it is filled to the brim."""
         used, stop = tui.width(fields[start]), start + 1
         budget = room_for(start)
-        while stop < len(fields) and used + _BAR_GAP + tui.width(fields[stop]) <= budget:
-            used += _BAR_GAP + tui.width(fields[stop])
+        while stop < len(fields) and used + gap + tui.width(fields[stop]) <= budget:
+            used += gap + tui.width(fields[stop])
             stop += 1
         return stop
 
@@ -3466,7 +3537,16 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     # call whose result is provably its argument. The sweep found both as survivors for
     # exactly that reason: no input could make the mutation differ. The NAMES are
     # contained, below, which is where the open alphabet actually is.
+    from . import chrome
     lead = _inset() + head + " " * _BAR_GAP
+    # **Resolved ONCE, here, and handed to everything below it.** The cut
+    # (:func:`_page`), the composition and the map (:func:`_tab_columns`) all need to
+    # agree about how wide the seam between two tabs is, and `charter.toml` is re-read
+    # behind :func:`_bar_gap` — so three readings is three chances for the map to describe
+    # a row that was drawn with a different gap. This is `_Viewport.blank`'s discipline
+    # said about a number instead of about a pair of fields.
+    gap = _bar_gap()
+    gapw = tui.width(gap)
 
     def row(body: str = "", drawn=(), before: str = "") -> list[str]:
         """This rung's row, and the column map for the tabs it actually drew.
@@ -3488,7 +3568,7 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         the operator pressed. Every other rung starts its tabs at the lead and says so by
         not passing it.
         """
-        TABS.publish(_tab_columns(tui.width(lead + before), drawn), here)
+        TABS.publish(_tab_columns(tui.width(lead + before), drawn, gapw), here)
         return [lead + before + body] if body else []
 
     if not names:
@@ -3506,19 +3586,35 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     shown = [contain.one_line(n) for n in names]
     marked = [f"{_BAR_MARK[0] if i == at else _BAR_MARK[1]}{n}"
               for i, n in enumerate(shown)]
+    # **The same fields twice: one set to MEASURE and one set to DRAW.** `chrome.block`
+    # adds no cell — `tui.width` counts no SGR — so the two are the same width by
+    # construction and either could have been measured. Measuring the plain one is what
+    # makes that a property of the code rather than a fact a reader has to know about
+    # `tui.width`, and it is the same split `chrome`'s module docstring insists on
+    # everywhere else: compose and measure, THEN paint.
+    #
+    # **The block covers the mark and the name together**, which is exactly what
+    # :func:`_tab_columns` gives that tab as its columns and what `_Tabs.switch_to`
+    # answers for — so what the operator sees highlighted is what a click there is about.
+    # And it is reverse video rather than a colour for `chrome`'s stated reason: it is the
+    # operator's own two colours exchanged, so it cannot be wrong on a theme charter
+    # cannot see, and `[frame] chrome = "off"` — the shipped default — has nothing to do
+    # with it. Under `NO_COLOR` `panel._write` strips it and the `*` is still there, which
+    # is why the mark stays and was not replaced by the highlight.
+    painted = [chrome.block(f) if i == at else f for i, f in enumerate(marked)]
     room = width - tui.width(lead)
-    joined = (" " * _BAR_GAP).join(marked)
-    if note and tui.width(joined) + _BAR_GAP + tui.width(note) <= room:
-        return row(joined + " " * _BAR_GAP + note, zip(names, marked))
+    joined = gap.join(marked)
+    if note and tui.width(joined) + gapw + tui.width(note) <= room:
+        return row(gap.join(painted) + gap + note, zip(names, marked))
     if tui.width(joined) <= room:
-        return row(joined, zip(names, marked))
+        return row(gap.join(painted), zip(names, marked))
     if at >= 0:
         # **No `if len(names) > 1` here, and it is unreachable rather than merely
         # untested.** With ONE name the page is that name, both counts are absent, and the
         # body this composes IS `joined` — so the rung above asks exactly what this one
         # asks and always answers first. The sweep found the old conditional as a survivor
         # for that reason and the shape has not changed.
-        first, last = _page(marked, at, room)
+        first, last = _page(marked, at, room, gapw)
         # Neither count is a tab. `+9` stands for names that are not on the row, so there
         # is nothing there to switch to and saying so is better than picking one of them —
         # `_Viewport.publish`'s rule for `…(+N more)`, one axis over. **Two of them, and
@@ -3527,14 +3623,17 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         # row are the FIRST fourteen, which is false. `+5  *harness-wrapper  …  +9` says
         # where in the plane's fifteen this page sits, which is the readout `n/N` gives
         # one rung down and the reason that rung was worth keeping.
-        before = f"+{first}{' ' * _BAR_GAP}" if first else ""
-        after = f"{' ' * _BAR_GAP}+{len(names) - last}" if last < len(names) else ""
-        body = (" " * _BAR_GAP).join(marked[first:last]) + after
+        before = f"+{first}{gap}" if first else ""
+        after = f"{gap}+{len(names) - last}" if last < len(names) else ""
+        body = gap.join(marked[first:last]) + after
         # Measured, not assumed. :func:`_page` puts at least one name on a page, so a name
         # wider than the whole row composes a body that overflows — and this ladder gives a
-        # rung up rather than drawing part of anything.
+        # rung up rather than drawing part of anything. Measured on the PLAIN body for the
+        # reason `painted` states: the two are the same width, and the one that is the same
+        # width by construction is the one to hold a refusal on.
         if tui.width(before + body) <= room:
-            return row(body, zip(names[first:last], marked[first:last]), before=before)
+            return row(gap.join(painted[first:last]) + after,
+                       zip(names[first:last], marked[first:last]), before=before)
     counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
     if tui.width(counted) <= room:
         return row(counted)
