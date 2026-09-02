@@ -9,10 +9,10 @@ this was written on and ~13.4 ms on the one that filed #728. Measured with a rea
 ===================  ==================  ====================  ====================
 path and tmux        invocations         wall clock            terminal repaints
 ===================  ==================  ====================  ====================
-switch, 3.7c         58 -> 23            329 ms -> 155 ms      45 -> 15
-switch, 3.2          50 -> 21            243 ms -> 121 ms      41 -> 13
-launch, 3.7c         46 -> 17            245 ms -> 95 ms       (no client yet)
-launch, 3.2          42 -> 16            184 ms -> 77 ms       (no client yet)
+switch, 3.7c         58 -> 23            314 ms -> 142 ms      45 -> 14
+switch, 3.2          50 -> 21            237 ms -> 114 ms      41 -> 12
+launch, 3.7c         46 -> 17            227 ms -> 91 ms       (no client yet)
+launch, 3.2          42 -> 16            174 ms -> 69 ms       (no client yet)
 ===================  ==================  ====================  ====================
 
 The repaint column is the *"jumping"*: tmux redraws once per command LIST rather than once
@@ -207,6 +207,10 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
 
     def test_a_four_panel_launch_sends_fifteen_invocations_up_to_the_attach(self):
         """The whole private-server launch, up to and including `attach`. It was 44.
+
+        Against THIS MODULE'S fake, which is what makes the number assertable at all; a
+        real launch on a real server makes two more reads than the fake does (46 -> 17
+        measured), and the shape of the saving is the same one.
 
         Five batches carry 33 of the 47 commands: the ten writes that tell the window and
         session what they are, the window's own dressing, the four splits, every pane's

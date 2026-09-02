@@ -106,8 +106,8 @@ Measured on a four-panel frame at 200x50, from the first tmux command to the att
 
 | | tmux invocations | wall clock |
 |---|---|---|
-| tmux 3.7c | 46 → **20** | 245 ms → **114 ms** |
-| at the 3.2 floor | 42 → **19** | 184 ms → **83 ms** |
+| tmux 3.7c | 46 → **17** | 227 ms → **91 ms** |
+| at the 3.2 floor | 42 → **16** | 174 ms → **69 ms** |
 
 No client is attached during any of that, by construction — there is nothing to attach to
 until `attach` — which is why the blank has no progress line and cannot have one (#728).
@@ -472,12 +472,12 @@ switched away from are not idle, they are drawing at a width that is not their w
 The switch therefore tears the old chat's panels down, selects the new window (tmux resizes
 it *at* that moment), and splits fresh panels into a window that is already the right size.
 
-**It costs about a sixth of a second.** Measured with a real client and four panels:
+**It costs about a seventh of a second.** Measured with a real client and four panels:
 
 | | tmux invocations | wall clock | times your terminal is repainted |
 |---|---|---|---|
-| tmux 3.7c | 58 → **26** | 329 ms → **162 ms** | 45 → **17** |
-| at the 3.2 floor | 50 → **24** | 243 ms → **127 ms** | 41 → **15** |
+| tmux 3.7c | 58 → **23** | 314 ms → **142 ms** | 45 → **14** |
+| at the 3.2 floor | 50 → **21** | 237 ms → **114 ms** | 41 → **12** |
 
 That is the price of not keeping four panel processes per chat drawing at the wrong width,
 and it is the whole cost — nothing is lost, no harness is restarted, and the chat you left
@@ -494,9 +494,9 @@ sees while the panels are torn down and split back one at a time.
 Most of those commands read nothing back, so tmux takes them as one list. The four kills
 and their four disarms are one invocation now; so is each end's window dressing, so are the
 four splits, and so are the four respawn hooks. Nothing was dropped and nothing was
-reordered — the same commands, in the same order, in less than half the invocations and a
-third fewer repaints. It is not silent: 17 updates is still four panel processes coming up
-and painting themselves, which is a different cost and not this one.
+reordered — the same commands, in the same order, in 40% of the invocations and a third of
+the repaints. It is not silent: 14 updates is still four panel processes coming up and
+painting themselves, which is a different cost and not this one.
 
 A switch is refused, with the reason on your own screen, for a chat this workspace does not
 have, one whose window has gone, one charter has no pane record for, and the chat you are
@@ -517,7 +517,7 @@ as long as the message asks for. So every persona and chat switch put a sentence
 announcing a repaint that the same sentence was hiding — and so did a workspace switch,
 while there was one: measured with a real client, the panes were correct at 0.5 s and the
 operator went on looking at the previous workspace until 4.3 s — on tmux 3.7c and at the 3.2 floor alike, within 0.1 s of each
-other. The same switch now reaches your eyes in **0.16 s**, with no stale window at all —
+other. The same switch now reaches your eyes in **0.14 s**, with no stale window at all —
 0.33 s until #780 batched the tmux commands it spends that time in.
 
 The row is also the only surface that can be aimed at *your* frame. `display-message -t`

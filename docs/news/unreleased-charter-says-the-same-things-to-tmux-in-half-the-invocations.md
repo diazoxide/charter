@@ -19,10 +19,10 @@ A real attached client at 200x50 with four panels, `charter frame-chat` and a wh
 
 | | invocations | wall clock | times the terminal is repainted |
 |---|---|---|---|
-| switch, 3.7c | 58 → **26** | 329 ms → **162 ms** | 45 → **17** |
-| switch, 3.2 | 50 → **24** | 243 ms → **127 ms** | 41 → **15** |
-| launch, 3.7c | 46 → **20** | 245 ms → **114 ms** | — |
-| launch, 3.2 | 42 → **19** | 184 ms → **83 ms** | — |
+| switch, 3.7c | 58 → **23** | 314 ms → **142 ms** | 45 → **14** |
+| switch, 3.2 | 50 → **21** | 237 ms → **114 ms** | 41 → **12** |
+| launch, 3.7c | 46 → **17** | 227 ms → **91 ms** | — |
+| launch, 3.2 | 42 → **16** | 174 ms → **69 ms** | — |
 
 The third column is the jumping. tmux redraws once per command **list**, not once per
 command, so four `split-window`s sent one at a time are four screen updates ~5 ms apart —
@@ -35,7 +35,7 @@ Nothing charter says to tmux, and nothing about the order it says it in. tmux pa
 nothing back go as one invocation: the window's dressing (`remain-on-exit`, the five
 border options, the two rules round the harness), a doomed panel's disarm beside its own
 `kill-pane`, the ten writes a launch uses to tell its window and session what they are,
-each pane's own options, the respawn hooks, and the row resizes.
+every new pane's own options, the respawn hooks, and the row resizes.
 
 The four `split-window`s go together too, which needed a measurement rather than an
 argument: a chain of them answers with **one pane id per line, in the order given**, on
