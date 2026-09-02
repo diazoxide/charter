@@ -442,7 +442,9 @@ class ADetachedProcessCanBuildAWorkspace(unittest.TestCase):
     marks it, and moves an attached client onto it.
 
     Run against tmux 3.7c and against tmux 3.2 (`tmuxctl.FLOOR`), identically on both.
-    CI installs no tmux, so this runs by hand.
+    CI has tmux and really runs this; what it does not have is a terminal tmux will hand a
+    CLIENT, so the case skips there and the `switch-client` half is verified by hand. See
+    the `TERM` ladder below, which is the measurement that established that.
     """
 
     def test_a_detached_creator_builds_a_session_and_switches_a_client_onto_it(self):
