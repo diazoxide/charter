@@ -59,8 +59,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands, config
-
-from ._isolation import PersonaIso
+from tests._isolation import PersonaIso
 
 
 def git(*args, cwd) -> subprocess.CompletedProcess:
