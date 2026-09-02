@@ -530,18 +530,33 @@ COULD_NOT_RUN = 127
 #: end badly (#828). `text=True` with no `errors=` decodes the pipe **strictly**, so a child
 #: whose output is not valid UTF-8 raised `UnicodeDecodeError` — a `ValueError`, which
 #: neither :func:`run`'s `TimeoutExpired` clause nor its `OSError` one catches — out of the
-#: one function documented as never raising. The sharp caller is
-#: `commands_frame._capture_transcript`, which runs `capture-pane` over a HARNESS pane at
-#: the moment §4e has promised to record the plane and is about to kill it: arbitrary bytes
-#: a coding agent printed, read on the one path that cannot afford a traceback. Its own
-#: `False`-for-everything contract could not help, because the raise happens before it has
-#: an answer to branch on.
+#: one function documented as never raising.
+#:
+#: **Which tmux output can do that, measured on 3.7c rather than reasoned about.** #828
+#: files the sharp caller as `commands_frame._capture_transcript`, reading a HARNESS pane
+#: during a quit, on the grounds that a pane holds arbitrary bytes. It does not reach
+#: charter that way: under `LANG=C.UTF-8` and again under `LC_ALL=C`, a pane that prints
+#: `\377` is stored in tmux's own screen as U+FFFD, and `capture-pane -p -e -N` hands back
+#: valid UTF-8. tmux sanitises it first. Two other paths do reach charter, both measured on
+#: the same binary:
+#:
+#: * A tmux USER OPTION round-trips its bytes untouched — `set-option -w @charter_chat` with
+#:   a raw `\377` in it comes back out of ``list-windows -a -F '#{@charter_chat}'`` and out
+#:   of `display-message -p` exactly as it went in. That listing is
+#:   `commands_frame._chat_seats`, which `cmd_quit` asks BEFORE it kills anything, so the
+#:   raise does land in a quit — one call to the left of where the issue put it. §3.3 is why
+#:   it is not hypothetical: one tmux server serves every plane on the machine, so charter
+#:   reads windows it did not create.
+#: * tmux's own stderr echoes the raw bytes of an argument it refuses (`invalid window name:
+#:   BAD\377NAME`), which is :func:`report_failure`'s input — so the decode could take
+#:   charter down while it was REPORTING a failure.
 #:
 #: **Not a third invented return code beside :data:`TIMED_OUT`.** Those two say *charter
-#: never got an answer*. Here tmux answered — rc 0, the whole capture — and only charter
+#: never got an answer*. Here tmux answered — rc 0, the whole listing — and only charter
 #: could not read one byte of it. Reporting that as a refusal would name tmux in a failure
-#: message for a command it ran correctly, and would cost the transcript the other two
-#: thousand lines over one byte.
+#: message for a command it ran correctly, and would throw away every row charter CAN read
+#: over one it cannot. What the callers do with the replaced byte is what they already do
+#: with anything they cannot read: the chat id fails `_FRAME_ID_RE` and its row is dropped.
 #:
 #: **And not `surrogateescape`, which was the shape #828 suggested.** It would stop the
 #: raise HERE and move it: a lone surrogate has no UTF-8 encoding at all, so it raises
