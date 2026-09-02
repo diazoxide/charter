@@ -366,9 +366,43 @@ def _bar_events(fid: str, command: tuple[str, ...]):
       under a feature's name.
 
     **A click on the tab you are already on does nothing**, and that rule lives in
-    `slots._Tabs.switch_to` rather than here — see it for why, and for the two other
-    things that answer nothing: the `+14` overflow, which stands for names that are not
-    on the row, and every cell this bar drew no tab into.
+    `slots._Tabs.switch_to` rather than here — see it for why, and for the other thing
+    that answers nothing: every cell this bar drew no tab into.
+
+    **A click on the `+14` opens the palette, and that is a second gesture on one row
+    rather than a widening of the first.** The overflow counts stand for names that are
+    NOT on the row, so there is nothing there to switch to and there never will be — that
+    much is unchanged. What changed is the conclusion drawn from it. Answering nothing was
+    right while the alternative was picking one of the names it stands for; it is not
+    right when the operator can see a field that says *nine more* and press it, which is
+    what the operator this change is for did.
+
+    So the count hands off to the palette, which is §3.6 arriving where it was always
+    heading: *the bar is a readout, never the mechanism*, and the palette reaches every
+    chat and every workspace in two keystrokes at every width — including the widths where
+    this bar can draw no name at all. That last part is why the narrow rung's `2/3` is a
+    count here too: it is the same field at the width where the strip reaches nothing.
+
+    **It is :func:`_strip_events`' gesture, not this one's**, and the difference is worth
+    keeping straight because both live in this handler now. A tab click completes on the
+    pointer: it switches, and the tab you left is one click away. A count click cannot —
+    it names no chat — so it can only mean *let me see the rest*, and seeing needs a
+    chooser. `key` is in `component.EVENT_KINDS` and deliberately not in
+    `events.DELIVERED`, so charter cannot grow a pointer-driven chooser inside a one-row
+    pane; the palette IS the chooser and it makes itself the active pane
+    (`overlay.modal_argvs`), so the keyboard reaches the list it just drew.
+
+    **The palette it opens is the top-level one, not the picker for this bar's noun**, and
+    that is an honest cost rather than a design. `charter frame-palette` has no way to say
+    "open in the `workspaces` picker": the option would live in `commands_frame.cmd_palette`
+    and `cli.py`, and what the operator gets meanwhile is the doorway row for their noun
+    with the name they are on already in it, one keystroke from the list. That is one
+    keystroke more than it should be and infinitely fewer than a field that does nothing.
+
+    **`switch_to` is asked first and `more_at` second, and the two cannot both answer.**
+    A count is not in the column map and a tab is not in the overflow set — `slots._bar`
+    builds them from one walk of one composition — so the order is a reading order rather
+    than a precedence. It is written this way round because the tab is the common case.
 
     **It answers falsy even when it started a switch**, which is the one place this reads
     differently from the table's handler. Truthy means *repaint me* (§4f), and nothing
@@ -415,6 +449,12 @@ def _bar_events(fid: str, command: tuple[str, ...]):
             return False
         name = _slots.TABS.switch_to(ev.col)
         if name is None:
+            if _slots.TABS.more_at(ev.col):
+                # The same argv `_strip_events` spawns for a door, for its reasons — one
+                # answer to "how does a frame surface open the palette", shared rather than
+                # copied. Falsy afterwards for this handler's own reason: the palette's
+                # pane is carved off the harness, so nothing in THIS rectangle changed.
+                _spawn(util.self_relaunch_argv(*_PALETTE), fid=fid)
             return False
         # `builtin_actions._spawn` and not a `Popen` of this module's own — one answer to
         # "how does a frame surface start work that must outlive it", shared with every

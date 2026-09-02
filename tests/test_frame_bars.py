@@ -519,21 +519,64 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         for col in self._cells(row, "api.2"):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
 
-    def test_neither_overflow_count_resolves_to_anything(self):
+    def test_neither_overflow_count_switches_to_anything(self):
         """A `+N` stands for names that are NOT on the row, so there is nothing there to
         switch to — `…(+N more)`'s rule one axis over. **Both ends**, and the LEADING one
         is the new half: it sits between the heading and the first tab, so a map measured
         from the lead rather than from where the tabs actually start would hand its cells
         to the first name on the page — a click landing one tab off where the operator
-        pressed."""
+        pressed.
+
+        This is still exactly true and it is no longer the whole answer: a count is a
+        `more_at` cell now, which is the case below. The two are separate methods for
+        `_Tabs.more_at`'s reason, so they get separate cases: what would be wrong is a
+        count that started SWITCHING somewhere, and that is what this keeps out.
+        """
         names = [f"workspace-{i:02d}" for i in range(15)]
-        row = self._draw(80, names=names, here="workspace-07")
+        row = _plain(self._draw(80, names=names, here="workspace-07"))
         counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
                   if f.strip().startswith("+")]
         self.assertEqual(len(counts), 2, f"this width is not a page in the middle: {row!r}")
         for count in counts:
             for col in self._cells(row, count):
                 self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_both_overflow_counts_are_a_cell_that_opens_the_picker(self):
+        """*"when workspaces are more we are showing `+N` now in tabs — but user can't
+        click and see other workspaces."*
+
+        The operator pressed one. That is the strongest evidence available about what a
+        `+9` looks like it does, and the answer was nothing at all.
+
+        **Both ends, measured off the drawn row**, for the reason every case in this class
+        gives: the leading count is the one a map built from the heading rather than from
+        the composition would put in the wrong place, and it is drawn at a different width
+        than the trailing one (`+13` against `+1`), so a `_span` measured with `len` would
+        pass on one and fail on the other only for names that sort late.
+        """
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        row = _plain(self._draw(80, names=names, here="workspace-07"))
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        self.assertEqual(len(counts), 2, f"this width is not a page in the middle: {row!r}")
+        for count in counts:
+            for col in self._cells(row, count):
+                self.assertTrue(slots.TABS.more_at(col),
+                                f"the {count} is still inert at column {col}: {row!r}")
+
+    def test_nothing_but_a_count_is_a_cell_that_opens_the_picker(self):
+        """The negative, and it is the one that keeps the two answers apart. A tab, the
+        heading, a gap and the space past the last name must all answer `more_at` no —
+        otherwise a click meant for a workspace would open a palette instead of switching,
+        which is the same class of wrong as switching to the neighbour."""
+        names = [f"workspace-{i:02d}" for i in range(15)]
+        row = _plain(self._draw(80, names=names, here="workspace-07"))
+        counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
+                  if f.strip().startswith("+")]
+        opening = {c for c in range(200) if slots.TABS.more_at(c)}
+        expected = {col for count in counts for col in self._cells(row, count)}
+        self.assertEqual(opening, expected,
+                         f"a cell that is not a count opens the picker: {row!r}")
 
     def test_a_page_that_starts_in_the_middle_still_maps_its_tabs_where_they_are(self):
         """The leading count moves every tab right of where a bar without one puts them.
@@ -563,10 +606,39 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
 
     def test_the_rung_that_says_only_where_you_are_has_no_tabs_at_all(self):
         """`2/3` is a position, not a name, and there is no name on the row to click."""
-        row = self._draw(16, here="api.2")
+        row = _plain(self._draw(16, here="api.2"))
         self.assertEqual(row.strip(), "chats  2/3", repr(row))
         for col in range(0, 200):
             self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+
+    def test_the_rung_that_says_only_where_you_are_still_opens_the_picker(self):
+        """**The width where this matters most.** A frame narrow enough to fall to `2/3`
+        has a strip that can be pointed at and not pressed — the whole list is off the row,
+        so every rule above about clicking a tab is vacuous here. `2/3` is the same field
+        the counts are, saying the same thing about all three names instead of about nine
+        of fifteen, so it opens the same chooser.
+
+        The heading and the space past it stay inert, which is what says the cells were
+        measured rather than the whole row being made live."""
+        row = _plain(self._draw(16, here="api.2"))
+        for col in self._cells(row, "2/3"):
+            self.assertTrue(slots.TABS.more_at(col), f"column {col} of {row!r}")
+        for col in self._cells(row, "chats"):
+            self.assertFalse(slots.TABS.more_at(col), f"the heading opened a picker")
+        self.assertFalse(slots.TABS.more_at(tui.width(row) + 5),
+                         "the space past the row opened a picker")
+
+    def test_a_rung_that_draws_nothing_opens_nothing(self):
+        """`_Viewport.blank`'s half, for the third thing `publish` writes. A bar narrowed
+        past its last rung draws no row — so there is no count on screen, and a `more_at`
+        that survived the narrowing would open a palette from a cell the operator can see
+        is empty."""
+        self._draw(80, names=[f"workspace-{i:02d}" for i in range(15)],
+                   here="workspace-07")
+        self.assertTrue(any(slots.TABS.more_at(c) for c in range(80)))
+        self.assertEqual(self._draw(11), "")
+        self.assertEqual([c for c in range(200) if slots.TABS.more_at(c)], [],
+                         "a bar that drew no row kept the counts it is no longer drawing")
 
     def test_a_narrowed_bar_forgets_the_tabs_it_is_no_longer_drawing(self):
         """**The `_Viewport.blank` half, one axis over.** A pane that drew every name and

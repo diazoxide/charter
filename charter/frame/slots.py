@@ -3209,11 +3209,12 @@ class _Tabs:
     reports and this repository deletes.
     """
 
-    __slots__ = ("_cols", "_here")
+    __slots__ = ("_cols", "_here", "_more")
 
     def __init__(self) -> None:
         self._cols: dict[int, str] = {}
         self._here = ""
+        self._more: frozenset[int] = frozenset()
 
     def forget(self) -> None:
         """Back to a bar nobody has drawn — for a test, and only a test.
@@ -3224,7 +3225,7 @@ class _Tabs:
         """
         self.publish({}, "")
 
-    def publish(self, columns: dict, here: str) -> None:
+    def publish(self, columns: dict, here: str, more=()) -> None:
         """Record what the paint that just happened put on each column, and where you are.
 
         *columns* maps a column of the component's OWN canvas — the rectangle `ctx.width`
@@ -3246,9 +3247,22 @@ class _Tabs:
         is display text and what goes into `choose.switch_to` or `charter frame-chat`
         has to be the name on disk. The mark is matched on the raw name for the same
         reason one function down; this is that decision arriving at the other end.
+
+        *more* is the columns of the fields that stand for names NOT on the row — both
+        `+N` counts, and the `n/N` of the rung that has no names at all. **A third thing
+        this call writes rather than a second method**, for the reason the class docstring
+        gives about the pair it already held: a rung that published its columns and left
+        a stale overflow behind would open a picker from a cell that is now a tab, or
+        leave a count inert that the paint has just drawn. There is no way to write down
+        one of the three here, so there is nothing for a second method to keep in step.
+
+        A `frozenset` and not a range, because the two counts are two disjoint runs and
+        the narrow rung's is a third — and because :meth:`more_at` asks about ONE column,
+        which is the same question `_cols` answers and should be the same kind of lookup.
         """
         self._cols = dict(columns)
         self._here = here
+        self._more = frozenset(more)
 
     def switch_to(self, col: int):
         """The tab a click at canvas column *col* should switch this frame to, or ``None``.
@@ -3270,6 +3284,32 @@ class _Tabs:
         """
         name = self._cols.get(col)
         return None if name == self._here else name
+
+    def more_at(self, col: int) -> bool:
+        """Whether column *col* is a field standing for names this row could not draw.
+
+        **The other half of "a click on a cell nothing was drawn into does nothing".** A
+        `+9` is not nothing: the operator can see it, it says there are nine more, and it
+        is drawn precisely where the row ran out of names to show. It was inert — pressed,
+        and reported, by the operator this change is for — and answering nothing there was
+        the one place the rule was serving the code rather than the reader.
+
+        What it opens is the palette rather than a page of its own, and that is §3.6
+        arriving where it was always heading: *the bar is a readout, never the mechanism*,
+        and the palette reaches every chat and every workspace at every width including
+        the widths where the bar can draw no name at all. So a count hands off to the
+        mechanism at exactly the point where the readout ran out of room.
+        `frame/builtins._bar_events` is what performs the hand-off; this is only which
+        cells it is about.
+
+        **It is not `switch_to`'s answer wearing a sentinel**, and the separation is the
+        point: that method answers "which name", and every caller of it feeds the name to
+        a command that switches. A count has no name — that is what makes it a count — so
+        a sentinel would be a value every one of those callers would have to learn to not
+        switch to. Two questions, two methods, and a column that is neither answers no to
+        both.
+        """
+        return col in self._more
 
 
 #: The one tab strip this process's bar draws into. See :class:`_Tabs` for why there is
@@ -3321,6 +3361,21 @@ def _tab_columns(start: int, drawn, gap: int) -> dict:
             cols[col] = name
         at += width
     return cols
+
+
+def _span(start: int, text: str) -> range:
+    """The columns *text* occupies when it is drawn starting at column *start*.
+
+    Two lines, and it exists so the fields that are NOT tabs are measured by the same rule
+    the tabs are (:func:`_tab_columns`): `tui.width` and never `len`, off the string the
+    rung actually composed and never off a search of the finished row.
+
+    **An absent field is an empty range rather than a special case.** ``_span(n, "")``
+    contributes no column, so :func:`_bar` can hand both counts to the same expression
+    whether or not the page it cut carries either — which is the branch that would
+    otherwise have to be written twice and got right twice.
+    """
+    return range(start, start + tui.width(text))
 
 
 def _page(fields: list[str], at: int, room: int, gap: int) -> tuple[int, int]:
@@ -3548,7 +3603,7 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     gap = _bar_gap()
     gapw = tui.width(gap)
 
-    def row(body: str = "", drawn=(), before: str = "") -> list[str]:
+    def row(body: str = "", drawn=(), before: str = "", more=()) -> list[str]:
         """This rung's row, and the column map for the tabs it actually drew.
 
         **Every way out of the ladder goes through here**, which is what keeps "the map
@@ -3567,8 +3622,14 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         cells left of the names it drew, which is a click landing on the tab beside the one
         the operator pressed. Every other rung starts its tabs at the lead and says so by
         not passing it.
+
+        *more* is the columns of the fields that stand for names this rung could NOT draw
+        — both `+N` counts, and the `n/N`. Passed here rather than worked out inside
+        :data:`TABS` for :func:`_tab_columns`' whole reason: the rung that composed the
+        row is the only thing that knows where it put them, and a second walk of the
+        ladder to find them again is a second answer to what is on the row.
         """
-        TABS.publish(_tab_columns(tui.width(lead + before), drawn, gapw), here)
+        TABS.publish(_tab_columns(tui.width(lead + before), drawn, gapw), here, more)
         return [lead + before + body] if body else []
 
     if not names:
@@ -3623,9 +3684,28 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         # row are the FIRST fourteen, which is false. `+5  *harness-wrapper  …  +9` says
         # where in the plane's fifteen this page sits, which is the readout `n/N` gives
         # one rung down and the reason that rung was worth keeping.
-        before = f"+{first}{gap}" if first else ""
-        after = f"{gap}+{len(names) - last}" if last < len(names) else ""
-        body = gap.join(marked[first:last]) + after
+        #
+        # **Both are CLICKABLE now and neither is a tab**, which are two statements that
+        # sit together rather than in tension. `+9` still names no chat and still switches
+        # nothing; what it does is open the palette, because the palette is what the bar
+        # hands off to when the readout runs out of room (`_Tabs.more_at`). The operator
+        # who reported this had pressed one, which is the strongest evidence available
+        # about what a `+9` looks like it does.
+        leading = f"+{first}" if first else ""
+        trailing = f"+{len(names) - last}" if last < len(names) else ""
+        before = f"{leading}{gap}" if leading else ""
+        tabs = gap.join(marked[first:last])
+        after = f"{gap}{trailing}" if trailing else ""
+        body = tabs + after
+        # Where the two counts landed, taken from the composition above rather than
+        # searched for in the finished string — :func:`_tab_columns`' discipline for the
+        # names, kept for the fields that are not names. :func:`_span` answers an empty
+        # range for a count this page does not carry, so there is no branch here to get
+        # wrong: a page at the start of the list has no leading count and contributes no
+        # columns.
+        start = tui.width(lead)
+        counts = [*_span(start, leading),
+                  *_span(start + tui.width(before + tabs + gap), trailing)]
         # Measured, not assumed. :func:`_page` puts at least one name on a page, so a name
         # wider than the whole row composes a body that overflows — and this ladder gives a
         # rung up rather than drawing part of anything. Measured on the PLAIN body for the
@@ -3633,10 +3713,17 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         # width by construction is the one to hold a refusal on.
         if tui.width(before + body) <= room:
             return row(gap.join(painted[first:last]) + after,
-                       zip(names[first:last], marked[first:last]), before=before)
+                       zip(names[first:last], marked[first:last]), before=before,
+                       more=counts)
     counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
     if tui.width(counted) <= room:
-        return row(counted)
+        # **The narrow rung is a count too, and it is the one where this matters most.**
+        # `2/3` stands for every name the row could not draw — all of them — so it is the
+        # widest form of the same field, on the only rung where the bar reaches nothing at
+        # all. A frame narrow enough to fall here had a strip that could be pointed at and
+        # not pressed; it opens the palette now, which is the surface that works at every
+        # width.
+        return row(counted, more=_span(tui.width(lead), counted))
     return row()
 
 

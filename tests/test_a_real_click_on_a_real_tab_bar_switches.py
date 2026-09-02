@@ -312,6 +312,17 @@ class _ARealFrameWithBars(PersonaIso):
     def _active(self) -> str:
         return self._tmux("display-message", "-p", "#{pane_id}").stdout.strip()
 
+    def _panes(self, session: str | None = None) -> list[str]:
+        """Every pane of this frame's window, asked of tmux.
+
+        How a case says whether the palette opened: it is a real pane carved off the
+        harness by a real detached `charter frame-palette`, so a pane appearing is the
+        observable — `tests/test_a_real_click_opens_the_real_palette.py` uses the same one
+        for the doorway on the attention row.
+        """
+        return self._tmux("list-panes", "-t", session or self.fid,
+                          "-F", "#{pane_id}").stdout.split()
+
     def _current_window(self, session: str) -> str:
         return self._tmux("display-message", "-p", "-t", f"{session}:",
                      "#{window_id}").stdout.strip()
@@ -703,9 +714,15 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         self.assertEqual(state.frame_workspace(self.fid), self.HERE,
                          "the second press at the same column moved the chat")
 
-    def test_neither_overflow_count_is_a_tab(self):
-        """`+9` stands for names that are not on the row. It is the field an operator is
-        most likely to try, and it has to do nothing rather than pick one of them."""
+    def test_neither_overflow_count_switches_the_frame_to_a_workspace(self):
+        """`+9` stands for names that are not on the row, so it must not pick one of them.
+
+        It is no longer inert — see the case below, which is the same two clicks asked
+        the other way round — and this is what keeps the two answers apart on a real
+        terminal: whatever a count does, it does not switch. A handler that fell through
+        from `more_at` to the switch would name whichever workspace happened to be under
+        the map, which is the class of wrongness this whole file exists to catch.
+        """
         row = self._bar_row(self.bar)
         counts = [f.strip() for f in row.split("  ") if f.strip().startswith("+")]
         self.assertTrue(counts, f"this row carries no count to click: {row!r}")
@@ -713,3 +730,49 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
             self._click(self.bar, col=self._column_of(self.bar, count))
         time.sleep(2.0)
         self.assertEqual(state.frame_workspace(self.fid), self.HERE)
+
+    def test_clicking_the_overflow_count_opens_a_real_palette(self):
+        """*"when workspaces are more we are showing `+N` now in tabs — but user can't
+        click and see other workspaces."*
+
+        The operator pressed this field on their own frame and nothing happened. This is
+        that press, on a real 120-column terminal, with the fifteen workspaces that make
+        the count appear in the first place — and three processes, none of them this one:
+        the row is painted by a `charter panel workspaces` child, the report is decoded
+        there, and the palette is carved by a detached `charter frame-palette` that child
+        starts.
+
+        **The pane is the observable**, exactly as it is for a click on the attention row's
+        doorway, and the keyboard following it is `overlay.modal_argvs` doing what `F2`
+        does: a modal surface you cannot type into is not one. That is not the pointer
+        moving the keyboard — a click on a TAB leaves it on the harness, which is
+        `test_the_click_leaves_the_keyboard_on_the_harness`'s job two classes up and stays
+        true.
+        """
+        before = self._panes()
+        self.assertEqual(self._active(), self.harness)
+        row = self._bar_row(self.bar)
+        counts = [f.strip() for f in row.split("  ") if f.strip().startswith("+")]
+        self.assertTrue(counts, f"this row carries no count to click: {row!r}")
+        self._click(self.bar, col=self._column_of(self.bar, counts[0]))
+        self.assertTrue(
+            _await(lambda: len(self._panes()) > len(before)),
+            f"no pane was carved off the harness, so the {counts[0]} is still inert — "
+            f"row {self._bar_row(self.bar)!r}")
+        opened = [p for p in self._panes() if p not in before]
+        self.assertEqual(len(opened), 1, f"expected one new pane, got {opened}")
+        self.assertTrue(
+            _await(lambda: "workspace" in self._shown(opened[0])
+                   or "chat" in self._shown(opened[0])),
+            f"the new pane is not the palette: {self._shown(opened[0])!r}")
+
+    def test_clicking_the_heading_still_opens_nothing(self):
+        """The control the case above cannot do without: a row that answers EVERY click is
+        as wrong as one that answers none. `workspaces` is a label — the frame naming what
+        the row is about — and the cells it occupies were measured, not made live."""
+        before = self._panes()
+        self._click(self.bar, col=self._column_of(self.bar, "workspaces"))
+        time.sleep(2.0)
+        self.assertEqual(self._panes(), before,
+                         "a click on the heading opened something")
+        self.assertEqual(self._active(), self.harness)
