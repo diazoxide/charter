@@ -112,12 +112,17 @@ denial from a shell command of its own.)
 command that touches a working tree — it asks each clone's forge for the open change and
 last CI and writes the cache the status line reads (`glstate.refresh`).
 
-## What this changes that was not a defect
+## The trap the first fix set, and the second one that closes it
 
-A submodule left behind is an unstaged change to the gitlink, so `charter status` already
-said `dirty` for it and said nothing about why. The row now names the cause — and that
-matters more than it reads, because `_sync_one` **skips a dirty tree**: a submodule nobody
-was told about silently stops that repo being synced at all.
+A submodule left behind is an **unstaged change to the gitlink**. So the fast-forward that
+produces one also makes every later `charter sync` take the `uncommitted changes —
+skipping (your work is left untouched)` branch: the repo quietly stops being synced at
+all, under a sentence about work the operator never did. Reporting only on the paths that
+reach the merge would have shipped the finding once and then hidden it forever after.
+
+That branch now explains itself too — the same one warning line and remedy — and a dirty
+tree with no submodules says exactly what it always said. `charter status` gains the same
+answer in its NOTE column, so an unexplained `dirty` names its cause.
 
 `git fetch` recurses into submodules on demand, so `charter sync` was already fetching
 submodule objects; what it never did was check anything out. Nothing here changes that.
@@ -125,16 +130,18 @@ submodule objects; what it never did was check anything out. Nothing here change
 ## Verification
 
 Reproduced first, in a throwaway plane with `config.ROOT` and `config.STATE_DIR` asserted
-into a scratch directory, never against a real one. 21 new cases: submodules planted by
+into a scratch directory, never against a real one. 24 new cases: submodules planted by
 hand as index gitlinks (a recorded submodule needs no network, no second repository and no
 `protocol.file.allow`), and real `git submodule add` fixtures for the two states that
 genuinely need a checked-out submodule.
 
-Thirteen hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
+Fifteen hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
 the two drift marks onto one, removing the report from `clone`, from `sync` and from each
 half of the `status` row, flattening the remedy path, and trimming `--init --recursive`
-off the remedy. One was killed for the wrong reason — splitting the git output on every
-space rather than the first survives any fixture whose submodule paths are single words —
+off the remedy, silencing the dirty-skip branch, and narrowing the clone report to freshly
+cloned repos so an already-cloned one is not told. One was killed for the wrong reason —
+splitting the git output on every space rather than the first survives any fixture whose
+submodule paths are single words —
 so two cases now use a submodule path with a space in it, and that mutation is measured
 where it is made.
 

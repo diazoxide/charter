@@ -676,6 +676,14 @@ def _sync_one(d: Path, ws: str) -> None:
     label = f"{ws}/{d.name}"
     if _git(["status", "--porcelain"], cwd=d).stdout.strip():
         util.warn(f"{label}: uncommitted changes — skipping (your work is left untouched).")
+        # …and this is the one case where "your work" may be nobody's work. A submodule
+        # left behind the commit the branch records IS an unstaged change to the gitlink,
+        # so the previous sync's own fast-forward is enough to make this branch fire
+        # forever after: the repo silently stops being synced, and the only sentence
+        # charter had for it named changes the operator never made. Reported here for the
+        # same reason it is reported below — the skip is honest and unexplained, and the
+        # explanation is one `git submodule status` away.
+        report_submodule_drift(d, label)
         return
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=d).stdout.strip()
     if _git(["fetch", "--prune"], cwd=d).returncode != 0:

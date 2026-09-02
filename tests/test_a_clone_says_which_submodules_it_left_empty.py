@@ -256,6 +256,32 @@ class TestCloneSaysWhatItLeftEmpty(SubmoduleCase):
         self.assertIn("charter does not fetch them", said)
         self.assertIn(".gitmodules", said)
 
+    def test_a_repo_that_was_already_cloned_is_told_about_too(self):
+        """`already cloned in 'ws'` is the line an operator gets on every re-run of a
+        `workspace restore`, and the submodule is no more initialised for being old. The
+        report sits after the whole status branch on purpose, not inside the `ok` arm."""
+        r = self.repo()
+        plant_submodule(r, "dev-scripts")
+        out = []
+        rec = {"repo": {"name": r.name}, "dest": r, "status": "exists"}
+        with mock.patch.object(commands, "_clone_one", lambda rr, wd: {**rec, "repo": rr}), \
+             mock.patch.object(commands.util, "info", lambda m, *a: out.append(m)), \
+             mock.patch.object(commands.util, "ok", lambda m, *a: out.append(m)), \
+             mock.patch.object(commands.util, "warn", lambda m, *a: out.append(m)), \
+             mock.patch.object(commands.workspace, "resolve", lambda *a, **k: "ws"), \
+             mock.patch.object(commands.workspace, "banner", lambda *a, **k: None), \
+             mock.patch.object(commands.workspace, "ensure",
+                               lambda *a: config.ROOT / "workspaces" / "ws"), \
+             mock.patch.object(commands.inventory, "load", lambda: {}), \
+             mock.patch.object(commands.inventory, "repos",
+                               lambda d=None: [{"name": r.name}]), \
+             mock.patch.object(commands, "_resolve_targets",
+                               lambda a, d: [{"name": r.name}]):
+            commands.cmd_clone(SimpleNamespace(repos=[r.name], workspace="ws"))
+        said = "\n".join(out)
+        self.assertIn("already cloned", said)
+        self.assertIn("dev-scripts", said)
+
     def test_the_clone_still_succeeded(self):
         """This is a report, not a failure: the repo IS cloned, and an exit code that said
         otherwise would break every `workspace restore` that has a submodule in it."""
@@ -303,6 +329,30 @@ class TestSyncStopsCallingItUpToDate(SubmoduleCase):
         plant_submodule(seed, "dev-scripts")
         said = self.said(commands._sync_one, self.clone_of(seed), "ws")
         self.assertIn("submodule update --init --recursive", said)
+
+    def test_the_skip_over_a_dirty_tree_explains_itself(self):
+        """The trap the previous case sets. A submodule left behind is an unstaged change
+        to the gitlink, so the FF that produced it makes every later sync take the
+        `uncommitted changes` branch — the repo quietly stops being synced, under a
+        sentence about work the operator never did."""
+        seed, sub = make_repo(self.tmp / "seed"), make_repo(self.tmp / "sub")
+        git("submodule", "add", "-q", str(sub), "dev-scripts", cwd=seed)
+        git("commit", "-qm", "add", cwd=seed)
+        dest = self.clone_of(seed)
+        git("submodule", "update", "--init", cwd=dest)
+        git("checkout", "-q", "--detach", "HEAD", cwd=dest / "dev-scripts")
+        git("commit", "-q", "--allow-empty", "-m", "local", cwd=dest / "dev-scripts")
+        said = self.said(commands._sync_one, dest, "ws")
+        self.assertIn("uncommitted changes", said)
+        self.assertIn("dev-scripts", said)
+        self.assertIn("not at the commit this branch records", said)
+
+    def test_a_dirty_tree_with_no_submodules_says_only_what_it_always_said(self):
+        dest = self.clone_of(make_repo(self.tmp / "seed"))
+        (dest / "README.md").write_text("edited\n")
+        said = self.said(commands._sync_one, dest, "ws")
+        self.assertIn("uncommitted changes", said)
+        self.assertNotIn("submodule", said)
 
     def test_a_submodule_the_merge_moved_past_is_reported_too(self):
         """The commonest sync case, and the one a fix for `clone` alone would miss: the
