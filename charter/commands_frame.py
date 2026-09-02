@@ -4566,14 +4566,17 @@ def cmd_launch(args) -> int:
     # (`_open_workspace` calls this function in-process), so its `$TMUX` is charter's own
     # socket spelled as a path — and this branch, asked only whether the variable parsed,
     # built the new workspace's chat as a `new-window` in whatever session the CALLER was
-    # in. Measured on tmux 3.7c against a real server, before this line changed: clicking
-    # `beta` from a chat in `alpha` left `list-sessions` reporting only `alpha` and
-    # `list-windows -a` reporting `[alpha] win=beta.1` — so `_open_workspace`'s closing
+    # in. Measured on tmux 3.7c against a real server, before this line changed, with
+    # `$TMUX` naming charter's own socket by path and a launch asking for workspace
+    # `beta`: `list-sessions` reported only the caller's own session and never a `beta`,
+    # `list-windows -a` reported `beta.1` as a window INSIDE it, `state.record_server`
+    # wrote the absolute spelling, and the launcher was still inside `_wait_for_harness`
+    # when the harness was still alive. So `_open_workspace`'s closing
     # `_plane_session(socket, ws=ws)` could never find the session it had just asked for,
-    # and this launcher blocked in `_wait_for_harness` for the life of that chat rather
-    # than returning to the switch at all. On charter's own server a workspace IS a
-    # session (§2.1), so the private path below is the right one however `$TMUX` spells
-    # the socket.
+    # and the switch never got its answer back at all. With this line as it now stands,
+    # the same launch recorded the short NAME and left a real `beta` session behind. On
+    # charter's own server a workspace IS a session (§2.1), so the private path below is
+    # the right one however `$TMUX` spells the socket.
     #
     # **What this changes for a launch that WILL be a terminal, stated rather than
     # discovered.** `charter <harness>` typed at a shell inside a charter frame now builds
