@@ -251,7 +251,7 @@ class TwoSpellingsOfOneSocket(unittest.TestCase):
     """#812: `<name>` and `<tmpdir>/tmux-<uid>/<name>` are ONE server, and the guest test
     could not tell them apart.
 
-    The operator's own ``$TMUX`` reads ``/private/tmp/tmux-502/charter,18923,83`` — the
+    The operator's own ``$TMUX`` reads ``/private/tmp/tmux-<uid>/charter,18923,83`` — the
     socket charter started itself, spelled absolute because tmux writes it that way into
     every pane it opens. A chat launched from inside one of those panes recorded that
     spelling, and `is_operator_socket` — a leading-slash test — answered "somebody else's
@@ -259,7 +259,7 @@ class TwoSpellingsOfOneSocket(unittest.TestCase):
     back included, was then refused by name.
 
     **The socket paths here come from `tests/_tmuxsocket.py`, which computes tmux's rule
-    independently of the module under test** (#601: never a spelled ``tmux-502``, and never
+    independently of the module under test** (#601: never a spelled uid, and never
     the production function asked to confirm itself). If the two implementations of "where
     tmux puts a socket" ever disagree, that is this class going red rather than a round
     trip agreeing with itself.

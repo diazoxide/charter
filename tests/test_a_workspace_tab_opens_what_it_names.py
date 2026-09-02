@@ -905,7 +905,7 @@ class ATabClickedInsideCharactersOwnTmux(ARealTabOpensARealWorkspace):
     started from a PANEL PANE of charter's own frame, and tmux exports ``$TMUX`` into
     every process it starts in a pane — as ``<socket path>,<server pid>,<session id>``,
     the socket ABSOLUTE. The operator's own read
-    ``/private/tmp/tmux-502/charter,18923,83``: charter's own private server, spelled the
+    ``/private/tmp/tmux-<uid>/charter,18923,83``: charter's own private server, spelled the
     one way `is_operator_socket` used to call somebody else's.
 
     So this class is its parent with one thing changed — the environment the click runs in
