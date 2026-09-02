@@ -89,8 +89,10 @@ veto, dropping `-c <client>` from `switch-client`, never verifying the client mo
 the seat charter matched instead of the window tmux landed on, leaving the old chat's panels
 up, and writing the plane marker on a launch that joined a session rather than made one.
 
-Run against real tmux on **3.7c and on tmux 3.2**, the floor charter promises. CI installs no
-tmux, so the real-server half runs only by hand.
+Run against real tmux on **3.7c and on tmux 3.2**, the floor charter promises. CI has tmux
+and really runs the real-server half; what it cannot run is the half that needs a client on
+a real pty, which skips there. (This paragraph used to say "CI installs no tmux", which is
+false — believing it cost #811 a red run on all four Pythons, and #812 is what found it.)
 
 Nothing to adopt — the `workspaces` bar is still off by default (`[frame] slots`), and a
 switch is the same command it always was.
