@@ -3252,14 +3252,25 @@ class Launch(PersonaIso, unittest.TestCase):
         The return code must be NONZERO, not the `0` a deliberate operator detach
         returns below: the harness never ran interactively and charter has no way to
         learn its real exit code, so a script or `&&` chain must see this launch as
-        having failed, not quietly succeeded."""
+        having failed, not quietly succeeded.
+
+        **And it says that ONCE.** Since #780 the launcher sends its ten window and
+        session writes as one batch and warns per write afterwards, off a list of
+        sentences kept beside them — and this hook is the one write in that batch whose
+        failure is answered by the refusal below rather than by a sentence of its own, so
+        its entry in that list is empty. A loop that warned on the return code alone
+        would print a blank `charter frame:` line here, above the refusal, which is what
+        the deletion sweep asked about."""
         fake = _FakeTmux(teardown_hook_rc=1, still_live=True)
-        buf = []
-        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)):
+        buf, warned = [], []
+        with mock.patch("charter.util.err", side_effect=lambda m: buf.append(m)), \
+             mock.patch("charter.util.warn", side_effect=lambda m: warned.append(m)):
             rc = _launch(fake)
         self.assertNotEqual(rc, 0)
         self.assertTrue(any("refusing to attach" in m for m in buf),
                         f"no refusal message: {buf}")
+        self.assertEqual([m for m in warned if not m.strip()], [],
+                         f"a blank warning was printed above the refusal: {warned}")
         self.assertFalse(any("attach" in c for c in fake.calls),
                          "attach must never be reached once teardown cannot be trusted")
         self.assertTrue(state.frame_dir(fake.fid).exists())

@@ -759,17 +759,20 @@ def write_all(joint: str, writes: list[Write], *, env: dict | None = None,
     write in it would have reported on its own — every write gets that same result back,
     and the caller degrades exactly as it does for any other non-zero return.
     """
-    if not writes:
-        return []
     if len(writes) == 1:
         w = writes[0]
         return [run(w.action, w.argv, env=env, timeout=timeout, report=w.report)]
     argv = chain([w.argv for w in writes])
     if argv is None:
-        # Two servers in one group, which :func:`chain` will not guess between. Nothing
-        # in charter builds one — every caller derives its argvs from a single *socket*
-        # — so this is the refusal taken rather than a case, and one at a time is
-        # exactly right for it.
+        # **Two cases, one answer, and no `if not writes` in front of them.** :func:`chain`
+        # answers ``None`` both for a group spanning two servers — which it will not guess
+        # between, and which nothing in charter builds, every caller deriving its argvs
+        # from a single *socket* — and for an EMPTY group, which several callers really do
+        # hand over (a frame with no doomed panel, no missing slot, no chrome to set). One
+        # at a time is exactly right for the first and is a loop over nothing for the
+        # second, so an early return for the empty case could not change an answer: the
+        # deletion sweep reported it as a survivor and this repository deletes an
+        # equivalent mutant rather than documenting it.
         return [run(w.action, w.argv, env=env, timeout=timeout, report=w.report)
                 for w in writes]
     proc = run(joint, argv, env=env, timeout=timeout, report=False)

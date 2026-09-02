@@ -3972,8 +3972,11 @@ def _split_all(socket: str, *, slots: list[str], cmds: list[list[str]],
     """
     made: list[tuple[str, str]] = []
     todo = list(zip(slots, cmds))
-    if not todo:
-        return made
+    # No `if not todo: return` in front of this: `tmuxctl.chain([])` answers ``None``, so
+    # an empty slot list already falls past the batch into a loop over nothing and comes
+    # back with the same empty map. The deletion sweep reported the guard as a survivor —
+    # correctly — and this repository deletes an equivalent mutant rather than documenting
+    # it.
     argv = tmuxctl.chain([c for _, c in todo])
     if argv is not None:
         # `report=False`, and the two branches below are why: an ordinary refusal is
@@ -3981,10 +3984,15 @@ def _split_all(socket: str, *, slots: list[str], cmds: list[list[str]],
         # operator lost, while a wedged tmux is reported here because there is nothing
         # left to re-issue it as.
         p = tmuxctl.run("drawing this frame's panels", argv, env=env, report=False)
+        # `splitlines()` and not `strip().split()`: the POSITION of a line is what names
+        # its slot, so a line that is not a pane id has to keep its place in the count
+        # rather than vanish out of it. It also leaves nothing to strip — the sweep
+        # reported a `.strip()` here as a survivor, and it was right: tmux prints the
+        # format and a newline, and `splitlines` has already taken the newline.
         lines = p.stdout.splitlines()
         for (slot, _), pane_id in zip(todo, lines):
-            if _PANE_ID_RE.fullmatch(pane_id.strip()):
-                made.append((slot, pane_id.strip()))
+            if _PANE_ID_RE.fullmatch(pane_id):
+                made.append((slot, pane_id))
         if p.returncode == 0:
             return made
         if p.returncode in tmuxctl.UNKNOWABLE:
