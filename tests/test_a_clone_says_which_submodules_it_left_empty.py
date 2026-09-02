@@ -29,10 +29,11 @@ read the local config of the repository it is standing in** — only system, glo
     GLOBAL protocol.file.allow                    -> submodule init rc = 0
     LOCAL submodule.<name>.url override           -> submodule init rc = 0  (parent reads it)
 
-The last line is the asymmetry: the PARENT resolves the URL from local config, the CHILD
-consumes the transport config and cannot see it. So golden rule 0 does not hold for a
-submodule fetch, and a charter that initialised them would be quietly fetching outside
-its own credential policy.
+The last line is the asymmetry: the PARENT resolves the URL from local config, while the
+CHILD consumes the transport config and its config search skips the surrounding
+repository's local file. So golden rule 0 does not hold for a submodule fetch, and a
+charter that initialised them would be quietly fetching outside its own credential
+policy.
 
 `sync` is the same silence with a stronger claim on it. Measured on a clone whose upstream
 moved one submodule pointer and added a second submodule, `charter sync` printed
@@ -224,7 +225,7 @@ class TestCloneSaysWhatItLeftEmpty(SubmoduleCase):
              mock.patch.object(commands.inventory, "load", lambda: {}), \
              mock.patch.object(commands.inventory, "repos", lambda d=None: [r]), \
              mock.patch.object(commands, "_resolve_targets", lambda a, d: [r]):
-            commands.cmd_clone(SimpleNamespace(repos=[r["name"]], workspace="ws"))
+            self.rc = commands.cmd_clone(SimpleNamespace(repos=[r["name"]], workspace="ws"))
         return "\n".join(out)
 
     def test_a_clone_with_no_submodules_says_nothing_extra(self):
@@ -282,13 +283,16 @@ class TestCloneSaysWhatItLeftEmpty(SubmoduleCase):
         self.assertIn("already cloned", said)
         self.assertIn("dev-scripts", said)
 
-    def test_the_clone_still_succeeded(self):
-        """This is a report, not a failure: the repo IS cloned, and an exit code that said
-        otherwise would break every `workspace restore` that has a submodule in it."""
+    def test_the_clone_still_succeeds_and_says_so(self):
+        """This is a report, not a failure: the repo IS cloned. The EXIT CODE is asserted
+        as well as the line, because it is the half that would break `workspace restore`
+        for every repo that has a submodule in it, and a check on the arrow alone would
+        stay green through a `return 1`."""
         r = self.repo()
         plant_submodule(r, "dev-scripts")
         said = self.clone_output(r)
         self.assertIn("→", said)
+        self.assertEqual(self.rc, 0)
 
 
 # --------------------------------------------------------------------------- #
