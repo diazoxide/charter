@@ -223,6 +223,30 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
                          f"a window was measured with no pane to measure it from: "
                          f"{self.calls}")
 
+    def test_a_workspace_with_no_directory_yet_runs_from_the_planes_root(self):
+        """**A real state, not a defensive one.** `switch.workspaces` folds
+        `config.DEFAULT_WORKSPACE` into its list whether or not its directory exists —
+        `workspace.ensure` makes it on demand — so a plane that has never made one still
+        draws a tab for it and still offers a `+` in it. `config.ROOT` is where charter
+        would have created it, and it is where the launcher is run from.
+
+        The `else` this reaches was a sweep survivor: every other case here runs in a
+        workspace whose directory the fixture made.
+        """
+        seen: list[str] = []
+
+        def fake_launch(args):
+            seen.append(os.getcwd())
+            self.launched.append(args)
+            return 0
+
+        (config.WORKSPACES_DIR / "alpha").rmdir()
+        with mock.patch("charter.commands_frame.subprocess.run", side_effect=self._tmux), \
+                mock.patch("charter.commands_frame.cmd_launch", side_effect=fake_launch):
+            commands_frame.cmd_new_chat(mock.Mock(chat=self.FID))
+        self.assertEqual(seen, [str(config.ROOT.resolve())],
+                         "a workspace with no directory did not fall back to the root")
+
     def test_the_launch_runs_in_the_workspaces_own_directory(self):
         """`cmd_launch` reads `os.getcwd()` for the frame's cwd, and a panel process is
         standing wherever its pane was started. Restored in a `finally` — this process goes
@@ -268,7 +292,18 @@ class ThePressSaysWhyWhenItWillNotMakeAChat(_APlusOnAFrameInAlpha):
         state.record_server(self.FID, "/nowhere/someone-elses")
         self.assertEqual(self._press(), 0)
         self.assertEqual(self.launched, [], "a chat was made in somebody else's tmux")
-        self.assertEqual(self._sentences(), [commands_frame.NO_CHAT_HERE])
+        # **The sentence spelled by hand, not read off the constant.** A case built from
+        # the constant it is about agrees with any value that constant takes — the
+        # survivor the deletion sweep reported for exactly this line. What the operator has
+        # to be told is *that charter will not do it here* and *what does work there*, so
+        # both halves are written out.
+        said = self._sentences()
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("window in a tmux you already had", said[0])
+        self.assertIn("charter <harness>", said[0],
+                      "the refusal does not name the command that DOES work there")
+        self.assertEqual(said, [commands_frame.NO_CHAT_HERE],
+                         "the constant and the sentence have come apart")
 
     def test_a_session_this_plane_cannot_prove_is_its_own_is_refused(self):
         """**§3.3 at a new door.** One tmux server serves every plane on this machine, and
@@ -278,22 +313,72 @@ class ThePressSaysWhyWhenItWillNotMakeAChat(_APlusOnAFrameInAlpha):
         with mock.patch("charter.commands_frame._plane_session", return_value=None):
             self.assertEqual(self._press(), 0)
         self.assertEqual(self.launched, [])
-        self.assertEqual(self._sentences(), [commands_frame.NO_SESSION_HERE])
+        # Spelled by hand for the case above's reason. The load-bearing half is *cannot
+        # prove* — charter is not saying the session is somebody else's, it is saying it
+        # cannot show it is this plane's, and those are different claims.
+        said = self._sentences()
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("cannot prove", said[0])
+        self.assertIn("another plane's", said[0])
+        self.assertEqual(said, [commands_frame.NO_SESSION_HERE],
+                         "the constant and the sentence have come apart")
 
     def test_a_chat_recording_no_launchable_harness_is_refused_by_name(self):
         with mock.patch.dict(config.HARNESS, {"default": "nothing-installed"}):
             state.record_identity(self.FID, {"CHARTER_HARNESS": "also-nothing"})
             self.assertEqual(self._press(), 0)
         self.assertEqual(self.launched, [])
-        self.assertEqual(len(self._sentences()), 1)
-        self.assertIn("harness", self._sentences()[0])
+        said = self._sentences()
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("records no harness this charter can launch", said[0])
+        self.assertIn("[harness] default", said[0],
+                      "the refusal does not name the key that would fix it")
+        self.assertTrue(said[0].startswith("cannot open another chat:"),
+                        f"the refusal does not name its own subject: {said[0]!r}")
 
     def test_a_workspace_directory_charter_cannot_enter_is_refused_by_name(self):
         with mock.patch("charter.commands_frame.os.chdir", side_effect=OSError("nope")):
             self.assertEqual(self._press(), 0)
         self.assertEqual(self.launched, [])
-        self.assertEqual(len(self._sentences()), 1)
-        self.assertIn("cannot enter", self._sentences()[0])
+        said = self._sentences()
+        self.assertEqual(len(said), 1, said)
+        self.assertEqual(said[0], "cannot open another chat: charter cannot enter this "
+                                  "workspace's directory")
+
+    def test_a_cwd_that_vanished_while_the_launcher_ran_costs_nothing(self):
+        """**The `except OSError` on the way BACK, which the deletion sweep asked about.**
+
+        The launcher is run from the workspace's directory and this process is put back
+        where it was in a `finally`. That restore can fail for the same reasons the first
+        `chdir` can — the panel's own cwd removed while the launch was in flight — and it
+        happens after the work is done, so it must not turn a chat that WAS made into a
+        traceback in a process whose streams are `/dev/null`.
+
+        The second call is the one that raises, so the launch really runs; the first is the
+        one that must not, or this would be measuring the refusal above.
+        """
+        calls = {"n": 0}
+        real = os.chdir
+        # **The restore this case breaks is the one that puts THIS process back**, so the
+        # case has to do it instead — otherwise the interpreter is left standing in the
+        # workspace directory and every later case in this file resolves its plane from
+        # there. Registered before the failure is arranged, so it runs whatever happens.
+        self.addCleanup(real, os.getcwd())
+
+        def flaky(path):
+            calls["n"] += 1
+            if calls["n"] > 1:
+                raise OSError("the directory this panel was standing in is gone")
+            real(path)
+
+        with mock.patch("charter.commands_frame.os.chdir", side_effect=flaky):
+            self.assertEqual(self._press(), 0)
+        self.assertEqual(calls["n"], 2, "the restore was never attempted")
+        self.assertEqual(len(self.launched), 1,
+                         "the launch did not happen, so this measures nothing")
+        self.assertEqual(self._sentences(), [],
+                         f"a failed restore was reported as a failure: "
+                         f"{self._sentences()}")
 
     def test_no_frame_at_all_is_a_message_on_stderr_and_nothing_else(self):
         """Typed by hand outside a frame. There is no attention row to draw on — that is
