@@ -6782,6 +6782,76 @@ def _clients_on(socket: str, session: str) -> list[str]:
     return out.stdout.split()
 
 
+#: The half of a "cannot open" that is the same whatever is being opened — said after
+#: each caller's own subject, so `_open_workspace`'s names the workspace and
+#: `cmd_new_chat`'s names nothing, and neither has to keep the rest of the sentence in step
+#: with the other. One string, because it is one FACT: this plane cannot name a harness to
+#: run.
+NO_HARNESS = ("this chat records no harness this charter can launch, and this plane "
+              "declares no `[harness] default`")
+
+
+def _same_harness_as(fid: str):
+    """The harness a chat opened FROM *fid* should run, or ``None`` when there is none.
+
+    **The one question neither a workspace tab nor a chat bar's `+` can carry.** Both are a
+    single press with nothing typed into it, so the only answer available that the operator
+    has actually expressed is the tool they are already in: the chat they pressed from
+    recorded its own (`state.record_identity`, `$CHARTER_HARNESS`), which makes the press
+    mean "another one of these".
+
+    Two rungs and no third. A chat whose identity predates that record — or whose recorded
+    harness this charter cannot launch — falls back to `[harness] default`, and a plane
+    that declares none is refused by name rather than opened under something nobody chose.
+
+    **One function because it was two identical blocks, and the deletion sweep is what
+    found that.** `cmd_new_chat` was written from :func:`_open_workspace` and copied its
+    five lines; the sweep charged the copy and reported the `or {}` below as a survivor —
+    unpinned *there*, while `tests/test_a_workspace_tab_opens_what_it_names
+    .TheOpenUsesTheHarnessTheOperatorIsAlreadyIn
+    .test_a_plane_whose_harness_table_is_missing_entirely_is_not_a_crash` had pinned it
+    *here* all along. One function, one place for that case to reach, and no second copy
+    for the next sweep to charge.
+
+    **The `or {}` stays, and it was nearly deleted.** `instance.harness_of` is annotated
+    `-> dict` and measurably answers one for `{}` and for `{"harness": None}`, so the
+    branch looks unreachable through a plane's own config — but that is an argument about
+    ONE producer of the value, and the case above asserts the whole detached path survives
+    `config.HARNESS` being `None`, where an `AttributeError` goes to `/dev/null` and the
+    press does nothing. A guard an existing case makes observable is not this function's
+    to remove.
+
+    The two callers still say their own sentences (:data:`NO_HARNESS` is the half they
+    share), because one names a workspace and the other names nothing.
+    """
+    ident = state.identity(fid).get("CHARTER_HARNESS", "")
+    h = next((x for x in harness.all() if x.name == ident and x.cli_name), None)
+    if h is not None:
+        return h
+    fallback = (config.HARNESS or {}).get("default")
+    return next((x for x in harness.all() if x.cli_name == fallback), None)
+
+
+def _launch_root(ws: str):
+    """The directory a launch for workspace *ws* should run in.
+
+    `cmd_launch` reads the frame's cwd off `os.getcwd()`, so a caller that starts one has
+    to stand in the right place first — and the right place is what `charter --workspace
+    <ws>` typed in it would have used.
+
+    **The plane's own root when that workspace has no directory yet**, which is a real
+    state rather than a defensive one: `switch.workspaces` folds
+    `config.DEFAULT_WORKSPACE` into its list whether or not its directory exists —
+    `workspace.ensure` makes it on demand — so a plane that has never made one still
+    offers a tab and a `+` for it. `config.ROOT` is where charter would have created it.
+
+    Shared by :func:`_open_workspace` and :func:`cmd_new_chat` for
+    :func:`_same_harness_as`' reason: it was the same two lines twice.
+    """
+    where = workspace.workspace_dir(ws)
+    return where if where.is_dir() else config.ROOT
+
+
 def _open_workspace(fid: str, ws: str, *, socket: str,
                     window: str) -> tuple[str, str] | None:
     """Open *ws* on this plane without attaching to it — ``(session id, chat id)``, or
@@ -6874,19 +6944,12 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
                             f"hand if it is yours: tmux -L {socket} attach -t "
                             f"{state.workspace_prefix(ws)}")
         return None
-    ident = state.identity(fid).get("CHARTER_HARNESS", "")
-    h = next((x for x in harness.all() if x.name == ident and x.cli_name), None)
+    h = _same_harness_as(fid)
     if h is None:
-        fallback = (config.HARNESS or {}).get("default")
-        h = next((x for x in harness.all() if x.cli_name == fallback), None)
-    if h is None:
-        _say_on_screen(fid, f"cannot open '{ws}': this chat records no harness this "
-                            "charter can launch, and this plane declares no `[harness] "
-                            "default`")
+        _say_on_screen(fid, f"cannot open '{ws}': {NO_HARNESS}")
         return None
     from types import SimpleNamespace
-    where = workspace.workspace_dir(ws)
-    root = where if where.is_dir() else config.ROOT
+    root = _launch_root(ws)
     # Every field `cmd_launch` and `_choose_workspace` read is named rather than left to a
     # `getattr` default — `_reopen_args`'s rule, which is what makes this a contract that
     # can be read instead of a puzzle. `workspace` is set outright so `_picker_wanted` can
@@ -8929,19 +8992,12 @@ def cmd_new_chat(args) -> int:
     # paragraph, unchanged: the chat the operator pressed FROM recorded its own
     # (`state.record_identity`), and using it makes the click mean "another chat, same
     # tool", which is the only answer available that they have actually expressed.
-    ident = state.identity(fid).get("CHARTER_HARNESS", "")
-    h = next((x for x in harness.all() if x.name == ident and x.cli_name), None)
+    h = _same_harness_as(fid)
     if h is None:
-        fallback = (config.HARNESS or {}).get("default")
-        h = next((x for x in harness.all() if x.cli_name == fallback), None)
-    if h is None:
-        _say_on_screen(fid, "cannot open another chat: this chat records no harness this "
-                            "charter can launch, and this plane declares no `[harness] "
-                            "default`")
+        _say_on_screen(fid, f"cannot open another chat: {NO_HARNESS}")
         return 0
     from types import SimpleNamespace
-    where = workspace.workspace_dir(ws)
-    root = where if where.is_dir() else config.ROOT
+    root = _launch_root(ws)
     # Every field `cmd_launch` and `_choose_workspace` read is named rather than left to a
     # `getattr` default — `_open_workspace`'s rule and its reasons, one noun over.
     # `workspace` is set outright so `_picker_wanted` can never raise a prompt on a path
@@ -8978,8 +9034,14 @@ def cmd_new_chat(args) -> int:
     try:
         os.chdir(root)
     except OSError:
-        _say_on_screen(fid, "cannot open another chat: charter cannot enter "
-                            f"{contain.readable(str(root)) or 'this workspace'}")
+        # **The directory is not named, and that is one fewer thing to get right.**
+        # `_open_workspace`'s twin says `contain.readable(str(root)) or 'its directory'`,
+        # whose `or` is a branch nothing can reach — `root` is a path under `config.ROOT`
+        # and always renders as something — so it is a survivor wearing a fallback. The
+        # operator knows which workspace they pressed `+` in; what they do not know is that
+        # charter could not get into it, and that is the whole of what this says.
+        _say_on_screen(fid, "cannot open another chat: charter cannot enter this "
+                            "workspace's directory")
         return 0
     try:
         rc = cmd_launch(launch)
