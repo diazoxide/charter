@@ -3,18 +3,21 @@
 The operator's report was *"very slow rendering on switching — it seems re-rendering all
 and I see jumping texts ~0.2 sec, then it's ready"*, and both halves of it are one defect:
 charter issued every tmux command on its own, and a round trip is ~5 ms on the machine
-this was written on and ~13.4 ms on the one that filed #728. Measured with a real client
-and four panels, before this change:
+this was written on and ~13.4 ms on the one that filed #728. Measured with a real client at
+200x50 and four panels, before this change and after it:
 
-===========================  ===============  =============  ===============  =============
-path                         3.7c invocations 3.7c wall      3.2 invocations  3.2 wall
-===========================  ===============  =============  ===============  =============
-dressing and splitting        26              147 ms         22               105 ms
-a chat switch                 58              321 ms         50               237 ms
-===========================  ===============  =============  ===============  =============
+===================  ==================  ====================  ====================
+path and tmux        invocations         wall clock            terminal repaints
+===================  ==================  ====================  ====================
+switch, 3.7c         58 -> 26            329 ms -> 162 ms      45 -> 17
+switch, 3.2          50 -> 24            243 ms -> 127 ms      41 -> 15
+launch, 3.7c         46 -> 20            245 ms -> 114 ms      (no client yet)
+launch, 3.2          42 -> 19            184 ms -> 83 ms       (no client yet)
+===================  ==================  ====================  ====================
 
-and after it, 9 / 57 ms, 8 / 42 ms, 26 / 159 ms and 24 / 133 ms. `docs/frame.md` carries
-the full table including what the operator's terminal was actually asked to repaint.
+The repaint column is the *"jumping"*: tmux redraws once per command LIST rather than once
+per command, so four splits sent one at a time are four screen updates ~5 ms apart and
+four sent as one list are one. `docs/frame.md` carries the same table for a reader.
 
 **Three kinds of test, because the claim has three parts.**
 

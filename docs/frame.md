@@ -92,6 +92,30 @@ measured at 86 bytes ahead of the switch — and it comes back into view only on
 exits. All of them are standing properties of this machine and this plane rather than news
 about one launch, so they live on the two surfaces you can ask on demand.
 
+### What opening one costs
+
+There is a moment between typing `charter claude` and the frame appearing, and most of the
+tmux half of it used to be charter waiting on a socket. A tmux command is a round trip —
+~5 ms on the machine these were measured on, ~13.4 ms on the one that reported it as slow —
+and a four-panel launch made 46 of them before it could attach. Two thirds read nothing
+back: window options, pane options, hooks, the panel splits. tmux takes a `;`-separated
+list and runs the whole thing server-side, in order, so each of those groups is now one
+invocation (#780).
+
+Measured on a four-panel frame at 200x50, from the first tmux command to the attach:
+
+| | tmux invocations | wall clock |
+|---|---|---|
+| tmux 3.7c | 46 → **20** | 245 ms → **114 ms** |
+| at the 3.2 floor | 42 → **19** | 184 ms → **83 ms** |
+
+No client is attached during any of that, by construction — there is nothing to attach to
+until `attach` — which is why the blank has no progress line and cannot have one (#728).
+
+The rest of the wait is charter's own import, paid once by the launcher, once by the
+detached gather child, and once per panel process. That is a different lever and is not
+this one.
+
 ## What changes inside the frame
 
 **Scrollback is tmux's own copy-mode, not your terminal's — the difference people notice
@@ -448,11 +472,31 @@ switched away from are not idle, they are drawing at a width that is not their w
 The switch therefore tears the old chat's panels down, selects the new window (tmux resizes
 it *at* that moment), and splits fresh panels into a window that is already the right size.
 
-**It costs about a third of a second.** Measured with a real client and four panels: 41
-tmux commands, median 360 ms on tmux 3.7c and 395 ms at the 3.2 floor, with the panels
-painting roughly 90 ms after that. That is the price of not keeping four panel processes
-per chat drawing at the wrong width, and it is the whole cost — nothing is lost, no harness
-is restarted, and the chat you left goes on running exactly as it was.
+**It costs about a sixth of a second.** Measured with a real client and four panels:
+
+| | tmux invocations | wall clock | times your terminal is repainted |
+|---|---|---|---|
+| tmux 3.7c | 58 → **26** | 329 ms → **162 ms** | 45 → **17** |
+| at the 3.2 floor | 50 → **24** | 243 ms → **127 ms** | 41 → **15** |
+
+That is the price of not keeping four panel processes per chat drawing at the wrong width,
+and it is the whole cost — nothing is lost, no harness is restarted, and the chat you left
+goes on running exactly as it was.
+
+**It used to be twice that, and the difference is how many times charter spoke rather than
+what it said** (#780). A tmux command is a round trip over a socket — ~5 ms on the machine
+this was measured on, ~13.4 ms on the one that reported the switch as slow — and charter
+sent every one of them on its own. The third column is what that looked like from the
+outside: tmux redraws once per command *list* rather than once per command, so 58
+invocations were **45 separate screen updates**, which is the *"jumping texts"* an operator
+sees while the panels are torn down and split back one at a time.
+
+Most of those commands read nothing back, so tmux takes them as one list. The four kills
+and their four disarms are one invocation now; so is each end's window dressing, so are the
+four splits, and so are the four respawn hooks. Nothing was dropped and nothing was
+reordered — the same commands, in the same order, in less than half the invocations and a
+third fewer repaints. It is not silent: 17 updates is still four panel processes coming up
+and painting themselves, which is a different cost and not this one.
 
 A switch is refused, with the reason on your own screen, for a chat this workspace does not
 have, one whose window has gone, one charter has no pane record for, and the chat you are
@@ -473,7 +517,8 @@ as long as the message asks for. So every persona and chat switch put a sentence
 announcing a repaint that the same sentence was hiding — and so did a workspace switch,
 while there was one: measured with a real client, the panes were correct at 0.5 s and the
 operator went on looking at the previous workspace until 4.3 s — on tmux 3.7c and at the 3.2 floor alike, within 0.1 s of each
-other. The same switch now reaches your eyes in **0.33 s**, with no stale window at all.
+other. The same switch now reaches your eyes in **0.16 s**, with no stale window at all —
+0.33 s until #780 batched the tmux commands it spends that time in.
 
 The row is also the only surface that can be aimed at *your* frame. `display-message -t`
 selects the target for format evaluation, not the client — measured on both versions, a
@@ -505,7 +550,7 @@ switching does not move the chat.
 
 **Neither is drawn unless a plane places it**, and that is deliberate rather than
 unfinished: on the ordinary plane there is one chat, and a row saying so permanently costs
-a row off your harness, a 24 MB panel process, and about seven of every switch's 41 tmux
+a row off your harness, a 24 MB panel process, and a share of every switch's tmux
 commands — to draw a name `F2` already reaches in two keystrokes. Turn one on with a
 `[[frame.component]]` table, which is also how it gets a key of its own.
 

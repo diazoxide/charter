@@ -10,8 +10,9 @@ gives both up before `top`.
 **Neither is placed by default, and that is a decision with a measurement behind it
 rather than an omission.** `frame/builtins.build` carries the argument; the short of it is
 that a plane with one chat is the ordinary, permanent state (the same fact that keeps
-`changes` a section rather than a pane), and each placed pane is ~7 of a switch's 41 tmux
-invocations — measured at ~360 ms on tmux 3.7c and ~395 ms at the 3.2 floor. So the bars
+`changes` a section rather than a pane), and each placed pane is a share of a switch's tmux
+invocations — 26 of them since #780 batched every write nothing reads back, ~162 ms on
+tmux 3.7c and ~127 ms at the 3.2 floor with four panels. So the bars
 ship as components a `[[frame.component]]` table can place, and
 :class:`ABarIsPlaceableByConfig` is what says that route actually works end to end rather
 than leaving two components nothing could ever ask for.
@@ -486,8 +487,8 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
 
     def test_the_tab_you_are_already_on_resolves_to_nothing(self):
         """Re-selecting what is already selected is not news — `_repos_events`' sentence,
-        and here it is worth more: a re-switch is a real teardown and split (~360 ms for a
-        chat) arriving exactly where the operator already was. It is also what keeps a
+        and here it is worth more: a re-switch is a real teardown and split (~162 ms for a
+        four-panel chat on 3.7c) arriving exactly where the operator already was. It is also what keeps a
         double-click from switching twice."""
         row = self._draw(200, here="api.2")
         for col in self._cells(row, "api.2"):
