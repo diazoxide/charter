@@ -8406,7 +8406,14 @@ def _restore_recorded_chat(rec, fid: str) -> None:
     promise every writer in `frame/state.py` makes for the same reason.
     """
     from . import persona as persona_mod
-    if rec.persona and persona_mod.valid_name(rec.persona):
+    # `valid_name` alone, and the `rec.persona and` that used to stand in front of it is
+    # gone. The deletion sweep reported the conjunct as a survivor and it was right:
+    # `persona.valid_name` is total and answers `False` for every falsy value a manifest
+    # can carry — measured on this tree for `""`, `None`, `0` and `[]`, none of which
+    # raises — so the first conjunct could only ever restate what the second was about to
+    # say. That is the same finding `persona.set_active` records about its own
+    # `(name or "")`, and it is the shape this repository deletes rather than documents.
+    if persona_mod.valid_name(rec.persona):
         try:
             persona_mod.set_active(rec.persona, session_id=fid, terminal_id="")
         except (OSError, ValueError):
