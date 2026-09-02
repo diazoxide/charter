@@ -326,8 +326,23 @@ def same_server(a: str | None, b: str | None) -> bool:
 
 
 def _resolved(server: str) -> str:
-    """*server* as the socket FILE it names, whichever of the two spellings it is."""
-    return os.path.realpath(server if is_socket_path(server) else socket_path(server))
+    """*server* as the socket FILE it names, whichever of the two spellings it is.
+
+    **One expression and no branch, because `os.path.join` already is the branch.** This
+    read ``server if is_socket_path(server) else socket_path(server)``, and the deletion
+    sweep found that `if` to be exactly equivalent to its else — correctly, and the reason
+    is worth writing down rather than the line being quietly deleted:
+    `os.path.join(base, tail)` throws every earlier component away when *tail* is absolute
+    (CPython's documented rule), so :func:`socket_path` handed a socket PATH answers with
+    that path unchanged and handed a `-L` NAME builds the file for it. Measured on this
+    machine: ``socket_path("/private/tmp/tmux-<uid>/charter")`` is that string back.
+
+    That property is pinned by name in `tests/test_frame_tmuxctl.py`, because it is the
+    whole of why there is no branch here and a future :func:`socket_path` that stopped
+    honouring it would silently turn every guest comparison into nonsense rather than
+    failing.
+    """
+    return os.path.realpath(socket_path(server))
 
 
 def is_socket_path(server: str | None) -> bool:

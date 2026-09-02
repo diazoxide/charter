@@ -285,6 +285,24 @@ class TwoSpellingsOfOneSocket(unittest.TestCase):
         self.assertTrue(tmuxctl.same_server(unresolved, "charter"),
                         f"{unresolved} and `charter` are the same socket file")
 
+    def test_a_socket_file_asked_for_by_its_own_path_is_that_path(self):
+        """**Why `_resolved` has no branch in it, pinned where a change would be caught.**
+
+        `os.path.join` throws every earlier component away when the tail is absolute, so
+        `socket_path` handed a socket PATH answers with that path and handed a `-L` NAME
+        builds the file for it — one expression covering both spellings. The deletion
+        sweep found the `if` that used to stand in `_resolved` to be exactly equivalent to
+        its else, which is this property being true; the line went, and the property is
+        asserted here instead of being relied on silently.
+
+        Both spellings of the same file, because the second is the one that carries a
+        symlink: `socket_path` resolves the DIRECTORY it builds and does not touch a path
+        handed to it, and `_resolved` is what resolves the whole thing afterwards."""
+        for spelled in (f"/tmp/tmux-{os.getuid()}/charter",
+                        os.path.realpath(f"/tmp/tmux-{os.getuid()}") + "/charter"):
+            with self.subTest(spelled=spelled):
+                self.assertEqual(tmuxctl.socket_path(spelled), spelled)
+
     def test_an_unknown_side_is_never_the_same_server_as_anything(self):
         """``""`` is `state.frame_server` reading a marker that is not there — the absence
         of an answer, not a spelling of one. Two absences are not a match either, which is
