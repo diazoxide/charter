@@ -3966,7 +3966,7 @@ def _split_all(socket: str, *, slots: list[str], cmds: list[list[str]],
     slot ("drawing a panel", the phrase this had before it was a batch) and what keeps a
     decorative panel that cannot be drawn from taking the rest of the frame with it.
 
-    **A wedged tmux is not retried at all** (`tmuxctl._UNKNOWABLE`). A timeout does not
+    **A wedged tmux is not retried at all** (`tmuxctl.UNKNOWABLE`). A timeout does not
     say the split did not happen, and re-issuing it would be how a frame ends up with two
     panes for one component and no record of the second.
     """
@@ -3987,7 +3987,7 @@ def _split_all(socket: str, *, slots: list[str], cmds: list[list[str]],
                 made.append((slot, pane_id.strip()))
         if p.returncode == 0:
             return made
-        if p.returncode in tmuxctl._UNKNOWABLE:
+        if p.returncode in tmuxctl.UNKNOWABLE:
             tmuxctl.report_failure("drawing this frame's panels", argv, p)
             return made
         todo = todo[len(lines):]

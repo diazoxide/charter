@@ -702,7 +702,10 @@ class Write(NamedTuple):
 
 
 #: The two return codes :func:`run` invents rather than reads off tmux, and the two
-#: :func:`write_all` will not replay on — for two different reasons, both of which end in
+#: :func:`write_all` will not replay on. Public because `commands_frame._split_all` reads
+#: it too: the split batch cannot use :func:`write_all` (a replayed `split-window` is a
+#: second pane) and so has to make the same call about the same two codes, and one
+#: constant is what stops the two answering differently — for two different reasons, both of which end in
 #: "one at a time buys nothing here".
 #:
 #: :data:`TIMED_OUT` is the load-bearing one: a wedged server has not told charter what
@@ -711,7 +714,7 @@ class Write(NamedTuple):
 #: cannot know it is repeating. :data:`COULD_NOT_RUN` is the opposite and is grouped with
 #: it for economy rather than for safety: nothing ran and nothing can, so a replay is N
 #: more failed `exec`s and N copies of one sentence about a tmux that is not there.
-_UNKNOWABLE = (TIMED_OUT, COULD_NOT_RUN)
+UNKNOWABLE = (TIMED_OUT, COULD_NOT_RUN)
 
 
 def write_all(joint: str, writes: list[Write], *, env: dict | None = None,
@@ -749,7 +752,7 @@ def write_all(joint: str, writes: list[Write], *, env: dict | None = None,
     `kill-pane`. Never `split-window` — a replayed split is a second pane, and
     `_split_panels` reads its ids back for that reason and batches by hand.
 
-    **A wedged server is not replayed** (:data:`_UNKNOWABLE`). A timeout says charter
+    **A wedged server is not replayed** (:data:`UNKNOWABLE`). A timeout says charter
     never learnt what the server did, not that it did nothing, so re-issuing would be
     the one thing idempotence cannot cover: writes charter cannot know it is repeating,
     against a tmux that is not answering. The batch is reported once — and only if any
@@ -773,7 +776,7 @@ def write_all(joint: str, writes: list[Write], *, env: dict | None = None,
     if proc.returncode == 0:
         return [subprocess.CompletedProcess(w.argv, 0, stdout="", stderr="")
                 for w in writes]
-    if proc.returncode in _UNKNOWABLE:
+    if proc.returncode in UNKNOWABLE:
         # Reported only if any write in the group would have reported on its own — a
         # batch of `resize-pane`s that all opted out (`_apply_sizes`) must not start
         # printing over the agent's screen just because it is now a batch.
