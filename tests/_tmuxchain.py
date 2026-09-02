@@ -62,13 +62,53 @@ def answer(one, argv: list[str], **kwargs) -> subprocess.CompletedProcess:
 
     A single command is handed straight through, so a fake wrapped in this behaves
     identically for every invocation charter has always made.
+
+    For the fakes that stand in for `subprocess.run`, whose handler takes the argv first.
+    :func:`answer_run` is the same fold for the ones that stand in for `tmuxctl.run`,
+    whose handler takes the action phrase in front of it.
     """
+    return _fold(one, argv, (), kwargs)
+
+
+def answer_run(one, action: str, argv: list[str], **kwargs
+               ) -> subprocess.CompletedProcess:
+    """:func:`answer` for a fake patched in over `tmuxctl.run` rather than over
+    `subprocess.run` — one whose handler is called ``one(action, argv, …)``.
+
+    The action phrase travels UNSPLIT to every command in the list, which is what
+    `tmuxctl.write_all` really does with it: the chained invocation carries one joint
+    phrase, and a fake that recorded a different phrase per command would be describing
+    a call charter never made.
+    """
+    return _fold(one, argv, (action,), kwargs)
+
+
+def recorder(calls: list, *, stdout: str = "", rc: int = 0):
+    """A stand-in for `tmuxctl.run` that records one entry per tmux COMMAND.
+
+    For the dozen tests whose whole fake is "write down what charter said" — they hold a
+    list and read options out of it by position (``a[-2]``, ``a[-1]``), which a chained
+    invocation would answer for its LAST command only. :func:`commands` is what puts each
+    command back in the list under its own entry, so those readings mean what they meant
+    before #780 batched the writes.
+
+    It returns a real `CompletedProcess` rather than ``None``, which the lambdas this
+    replaces did: `tmuxctl.write_all` branches on the chain's return code, so a fake that
+    answers nothing is a fake charter cannot use.
+    """
+    def run(_action, argv, **_kw):
+        calls.extend(commands(argv))
+        return subprocess.CompletedProcess(argv, rc, stdout, "")
+    return run
+
+
+def _fold(one, argv, before, kwargs) -> subprocess.CompletedProcess:
     parts = commands(argv)
     if len(parts) == 1:
-        return one(argv, **kwargs)
+        return one(*before, argv, **kwargs)
     stdout = []
     for part in parts:
-        p = one(part, **kwargs)
+        p = one(*before, part, **kwargs)
         stdout.append(p.stdout or "")
         if p.returncode != 0:
             # Everything after this one is not run — see the module docstring's second

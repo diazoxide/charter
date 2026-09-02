@@ -919,7 +919,7 @@ class _FakeServer:
     another session, the way the real server put it there.
     """
 
-    def __init__(self, *, select_rc: int = 0):
+    def __init__(self, *, select_rc: int = 0, size: str = "80:24"):
         self.calls: list[list[str]] = []
         #: One entry per tmux INVOCATION, where `calls` has one per tmux COMMAND — see
         #: :meth:`__call__`. A switch's own count of these is #780's subject.
@@ -935,6 +935,10 @@ class _FakeServer:
         #: The last pane id handed out by `split-window`, so each split answers a
         #: DIFFERENT one — see there.
         self.next_pane = 8
+        #: What `_WINDOW_SIZE_FORMAT` reports. The default is a small terminal, which is
+        #: what every test here was written against; a caller that wants the four-panel
+        #: frame — `_drawable_slots` places two at 80x24 — says so.
+        self.size = size
 
     def __call__(self, what, argv, **kw):
         """One tmux INVOCATION, which since #780 may carry several commands.
@@ -985,7 +989,7 @@ class _FakeServer:
             return self.current.get(target, "")
         if fmt == commands_frame._PANE_WIDTH_FORMAT:
             return "80"
-        return "80:24"
+        return self.size
 
     @staticmethod
     def _target(argv) -> str:

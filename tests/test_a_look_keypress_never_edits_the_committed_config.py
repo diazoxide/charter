@@ -36,6 +36,7 @@ from unittest import mock
 
 from charter import commands_frame, config, instance
 from charter.frame import state
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 
 #: The operator's own committed text, trimmed to the two tables and the one paragraph
@@ -101,10 +102,8 @@ class AChromeKeypressLeavesTheCommittedConfigAlone(PersonaIso, unittest.TestCase
             f"refusing to record anything: STATE_DIR is {config.STATE_DIR}")
 
         self.ran: list[list[str]] = []
-        patcher = mock.patch.object(
-            commands_frame.tmuxctl, "run",
-            side_effect=lambda _what, argv, **kw: self.ran.append(argv) or
-            subprocess.CompletedProcess(argv, 0, "", ""))
+        patcher = mock.patch.object(commands_frame.tmuxctl, "run",
+                                    _tmuxchain.recorder(self.ran))
         patcher.start()
         self.addCleanup(patcher.stop)
 

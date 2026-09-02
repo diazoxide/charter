@@ -44,6 +44,7 @@ from unittest import mock
 
 from charter import commands_frame, persona, tui
 from charter.frame import panel, slots, state
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 
 #: The roster the sidebar already draws — what must not also be on the identity row.
@@ -74,14 +75,28 @@ class _Tmux:
     def __init__(self, new_panes=("%11", "%12", "%13", "%14")):
         self.new_panes = list(new_panes)
         self.calls: list[list[str]] = []
+        #: One entry per tmux INVOCATION, where `calls` has one per
+        #: tmux COMMAND — see :meth:`__call__`.
+        self.invocations: list[list[str]] = []
 
     def __call__(self, action, argv, *, env=None, timeout=None, report=True):
+        """One tmux INVOCATION, which since #780 may carry several commands.
+
+        Split through `tests/_tmuxchain.answer_run` so `self.calls` keeps one entry per
+        tmux COMMAND — the list every assertion here reads — where charter now spends
+        one invocation on a whole group of them.
+        """
+        self.invocations.append(list(argv))
+        return _tmuxchain.answer_run(self._one, action, argv, env=env, timeout=timeout,
+                                     report=report)
+
+    def _one(self, action, argv, *, env=None, timeout=None, report=True):
         self.calls.append(list(argv))
         out = ""
         if "display-message" in argv:
             out = "200:50"
         elif "split-window" in argv:
-            out = self.new_panes.pop(0) if self.new_panes else ""
+            out = f"{self.new_panes.pop(0)}\n" if self.new_panes else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
 

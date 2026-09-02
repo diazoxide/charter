@@ -38,6 +38,7 @@ from unittest import mock
 
 from charter import commands_frame, config, instance
 from charter.frame import state, tmuxctl
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 # This repo's own committed `charter.toml`, IMPORTED rather than recomputed. Cross-module
 # test imports are this suite's ordinary way of sharing a fixture, and the thing worth
@@ -928,9 +929,13 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
         panes = iter(f"%{n}" for n in range(10, 99))
 
         def fake_run(_why, argv, **_kw):
-            seen.append(list(argv))
-            out = next(panes) if "split-window" in argv else ""
-            return subprocess.CompletedProcess(argv, 0, stdout=out + "\n", stderr="")
+            # ONE id per `split-window` in the invocation, on its own line — since #780
+            # `_split_all` sends every split as one command list and real tmux answers
+            # it with one id per line, in order (measured on 3.7c and at the 3.2 floor).
+            issued = _tmuxchain.commands(argv)
+            seen.extend(issued)
+            out = "".join(f"{next(panes)}\n" for c in issued if "split-window" in c)
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
         with mock.patch.dict(config.FRAME, frame), \
                 mock.patch.object(commands_frame.tmuxctl, "run", fake_run), \
@@ -1060,9 +1065,13 @@ class TheVersionReachesTheFunnelFromTheFunctionThatKnowsIt(PersonaIso, unittest.
         panes = iter(f"%{n}" for n in range(20, 99))
 
         def fake_run(_why, argv, **_kw):
-            seen.append(list(argv))
-            out = next(panes) if "split-window" in argv else ""
-            return subprocess.CompletedProcess(argv, 0, stdout=out + "\n", stderr="")
+            # ONE id per `split-window` in the invocation, on its own line — since #780
+            # `_split_all` sends every split as one command list and real tmux answers
+            # it with one id per line, in order (measured on 3.7c and at the 3.2 floor).
+            issued = _tmuxchain.commands(argv)
+            seen.extend(issued)
+            out = "".join(f"{next(panes)}\n" for c in issued if "split-window" in c)
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
         frame = _resolved(*["brightblack"] * 4, chrome="dark")
         with mock.patch.object(config, "FRAME", frame), \
@@ -1151,7 +1160,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         state.record_chrome(self.FID, level)
 
         def fake_run(_why, argv, **_kw):
-            calls.append(list(argv))
+            calls.extend(_tmuxchain.commands(argv))
             return subprocess.CompletedProcess(argv, 0, stdout="%9\n", stderr="")
 
         with mock.patch.object(config, "FRAME", frame), \
@@ -1196,7 +1205,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         state.record_harness_pane(self.FID, "%1")
         with mock.patch.object(config, "FRAME", frame), \
                 mock.patch.object(commands_frame.tmuxctl, "run",
-                                  lambda _w, argv, **kw: calls.append(argv)), \
+                                  _tmuxchain.recorder(calls)), \
                 mock.patch.object(commands_frame.tmuxctl, "version", lambda: v), \
                 mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID},
                                 clear=True):
@@ -1302,7 +1311,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         state.record_panes(self.FID, panels={"s0": "%2"})
         with mock.patch.object(config, "FRAME", _frame("brightblack")), \
                 mock.patch.object(commands_frame.tmuxctl, "run",
-                                  lambda _w, argv, **kw: calls.append(argv)), \
+                                  _tmuxchain.recorder(calls)), \
                 mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID},
                                 clear=True):
             self.assertEqual(
@@ -1320,7 +1329,7 @@ class TheLaunchPathAndTheLivePathAgree(PersonaIso, unittest.TestCase):
         state.record_harness_pane(self.FID, "; kill-server")
         with mock.patch.object(config, "FRAME", _frame("brightblack")), \
                 mock.patch.object(commands_frame.tmuxctl, "run",
-                                  lambda _w, argv, **kw: calls.append(argv)), \
+                                  _tmuxchain.recorder(calls)), \
                 mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID},
                                 clear=True):
             commands_frame.cmd_chrome(type("A", (), {"level": "dark"})())
@@ -1351,9 +1360,11 @@ class ARelayoutThatAddsNoPaneStillAssertsTheWindowsOwnOptions(PersonaIso,
         spare = iter(f"%{n}" for n in range(30, 99))
 
         def fake_run(_why, argv, **_kw):
-            seen.append(list(argv))
-            out = next(spare) if "split-window" in argv else "80"
-            return subprocess.CompletedProcess(argv, 0, stdout=out + "\n", stderr="")
+            issued = _tmuxchain.commands(argv)
+            seen.extend(issued)
+            splits = [c for c in issued if "split-window" in c]
+            out = ("".join(f"{next(spare)}\n" for _ in splits) if splits else "80\n")
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
         frame = _resolved(*["brightblack"] * 4, chrome="dark")
         with mock.patch.object(config, "FRAME", frame), \

@@ -48,6 +48,8 @@ from unittest import mock
 from charter import commands_frame, config, instance
 from charter.frame import builtins, component, layout
 
+from tests import _tmuxchain
+
 #: This repository's own committed plane file. Read rather than described, for
 #: `test_component_id_is_the_currency.CharterOwnConfigIsUnchanged`'s reason and for one
 #: more of its own: #661 was a defect an operator triggered by editing exactly this file.
@@ -575,7 +577,7 @@ class TheBoundaryIsWhereThePlaneIsRead(unittest.TestCase):
         calls: list[list[str]] = []
 
         def fake(action, argv, *, env=None, timeout=None, report=True):
-            calls.append(list(argv))
+            calls.extend(_tmuxchain.commands(argv))
             return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
         panes = {"top": "%1", "bottom": "%2", "repos": "%3"}
