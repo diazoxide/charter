@@ -129,10 +129,41 @@ def no_colour() -> bool:
     site — here, in :func:`colour_ok`, and in `commands_frame._surface_argvs`, which is a
     different process on a different path asking the same thing.
 
-    Honoured by **presence**, per the `no-color.org` convention: any value, including the
-    empty string and ``0``, means no colour. Matching a *value* (``== "1"``) would be the
-    spelling-not-property mistake in the one file that is about that mistake — and it is
-    the reading that breaks first, because a shell that exports ``NO_COLOR=`` has set it.
+    Honoured by **presence**: any value, including the empty string and ``0``, means no
+    colour. Matching a *value* (``== "1"``) would be the spelling-not-property mistake in
+    the one file that is about that mistake — and it is the reading that breaks first,
+    because a shell that exports ``NO_COLOR=`` has set it.
+
+    **That is charter's rule, not the standard's, and this docstring used to say
+    otherwise.** It cited `no-color.org` for it. The page's normative sentence reads, as
+    of 2026-09-02:
+
+        *Command-line software which adds ANSI color to its output by default should check
+        for a ``NO_COLOR`` environment variable that, when present **and not an empty
+        string** (regardless of its value), prevents the addition of ANSI color.*
+
+    The exclusion arrived in ``jcs/no_color`` commit ``99f90e27`` (2022-06-27), whose diff
+    replaced the older *"when present (regardless of its value)"* — which is the sentence
+    this docstring was paraphrasing, four years after it stopped being the text. So the
+    authority named here disagreed with the behaviour beneath it, on exactly one input,
+    ``NO_COLOR=""``, and read as a measurement while doing it.
+
+    The behaviour stands; only the justification changes, because the argument above is
+    charter's own and does not need borrowed authority. The field is genuinely split on
+    that input — ripgrep's own manual says *"when the NO_COLOR environment variable is set
+    (regardless of value)"*, and `rich` moved the other way in its PR #3675 (*"an empty
+    NO_COLOR env var is now considered disabled"*) — so there is no convention left to
+    defer to, only a rule to state and be judged on.
+
+    **charter is also stricter than that standard in a second way, deliberately.** The
+    same page answers *"No. This standard only signals the user's intention regarding
+    adding ANSI color to text output"* about bold, underline and italic — they may still
+    be emitted under ``NO_COLOR``. Charter emits none of them: :func:`recipes` serves the
+    empty string for **every** role, including ``heading``'s bold, and `panel._write`
+    escapes a hard-coded escape a component wrote. §3.2's rule is that charter emits no
+    SGR from the frame at all, and the reason is one the standard is not about — see the
+    paragraph below on the pane background. An attribute charter still emitted would be
+    charter still painting.
 
     **It reaches the tmux surface too**, which is the half that is easy to miss. The pane
     background is painted by tmux rather than by charter, so gating only charter's own

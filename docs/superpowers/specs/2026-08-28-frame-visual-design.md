@@ -236,6 +236,16 @@ at all** — and the property is `os.environ.get("NO_COLOR") is not None`, per t
 `no-color.org` convention, not `== "1"`, because matching a value rather than presence is the
 spelling-not-property mistake again.
 
+> **Correction, 2026-09-02.** The rule above stands; the citation does not. `no-color.org`
+> has said *"when present **and not an empty string** (regardless of its value)"* since
+> `jcs/no_color` commit `99f90e27` (2022-06-27) — so this spec quoted the sentence that
+> commit replaced, and charter's presence-only reading is charter's own choice rather than
+> the convention's. It differs on exactly one input, `NO_COLOR=""`. The same page also says
+> the standard is only about colour and not about bold, underline or italic; charter empties
+> every SGR role regardless, which is stricter than it asks and is argued for in
+> `chrome.no_colour`. Left in place rather than rewritten: this file is dated, and what it
+> recorded on 2026-08-28 is part of the record.
+
 **And `NO_COLOR` forces `[frame] chrome` to `off`, which is the half that is easy to miss.**
 The surface is painted by tmux, not by charter, so gating only charter's own SGR would leave
 an operator who asked for no colour looking at a coloured frame — charter having asked
