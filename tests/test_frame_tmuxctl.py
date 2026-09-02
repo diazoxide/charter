@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from charter.frame import tmuxctl
@@ -157,6 +160,109 @@ class RunGuardsTheTimeout(unittest.TestCase):
         self.assertNotIn("timeout", kwargs)
         self.assertNotIn("capture_output", kwargs)
         self.assertEqual(kwargs["env"], {"A": "b"})
+
+
+#: A child that writes one byte no UTF-8 decoder can read, between two markers that survive
+#: it. Driven as a REAL subprocess and not a `mock.patch("subprocess.run")`, because the
+#: raise this class is about happens **inside** `subprocess.run` — in the decode of the pipe
+#: it opened — so a stub standing in for it is a stub standing in for the defect. Written
+#: with this interpreter rather than `sh -c "printf ..."` so nothing rests on which shell
+#: `/bin/sh` is or how its `printf` reads an octal escape.
+_PRINTS_A_BYTE_UTF8_CANNOT_READ = [
+    sys.executable, "-c", r"import sys; sys.stdout.buffer.write(b'ONE\xffTWO')"]
+
+#: The same, on the other pipe and with a non-zero exit — `report_failure` reads `stderr`,
+#: so the two streams are two separate ways for one decode to take a launch down.
+_FAILS_SAYING_A_BYTE_UTF8_CANNOT_READ = [
+    sys.executable, "-c",
+    r"import sys; sys.stderr.buffer.write(b'no such session: \xff'); sys.exit(1)"]
+
+
+class RunNeverRaisesOnWhatItCannotDecode(unittest.TestCase):
+    """#828: `run` caught two ways for a tmux command to end badly and there were three.
+
+    `capture_output=True, text=True` with no `errors=` decodes both pipes **strictly**, so a
+    child whose output is not valid UTF-8 raised `UnicodeDecodeError` — a `ValueError`, which
+    neither the `TimeoutExpired` clause nor the `OSError` one sees — out of the one function
+    whose whole contract is that a misbehaving tmux degrades down the path a refusal does.
+
+    **The sharp caller is a quit.** `commands_frame._capture_transcript` runs `capture-pane`
+    over a HARNESS pane, which holds whatever a coding agent printed, at the moment §4e has
+    promised to record the plane and is about to kill it — and its own `False`-for-everything
+    contract cannot help, because the raise happens before it has an answer to branch on.
+
+    Charter now decodes with :data:`tmuxctl.DECODE_ERRORS`, and the assertions here spell the
+    substitute character by hand: reading it off the constant would agree with any value the
+    constant took, including `strict`.
+    """
+
+    def test_a_pane_charter_cannot_decode_comes_back_rather_than_raising(self):
+        with self.assertRaises(UnicodeDecodeError):
+            b"ONE\xffTWO".decode("utf-8")   # or this case is not about what it says it is
+
+        proc = tmuxctl.run("capturing what this chat had on screen",
+                           _PRINTS_A_BYTE_UTF8_CANNOT_READ, timeout=20)
+
+        self.assertEqual(proc.returncode, 0, "the child succeeded; only charter could not read it")
+        self.assertEqual(proc.stdout, "ONE\ufffdTWO")
+
+    def test_the_text_around_the_byte_is_kept_rather_than_thrown_away(self):
+        """The reason this is not a third invented return code beside `TIMED_OUT`.
+
+        tmux answered — rc 0, a complete capture — so calling it a refusal would blame tmux
+        for a command it ran correctly, and would cost `_capture_transcript` the whole
+        transcript over one byte in two thousand lines. What charter cannot read is one
+        codepoint wide; what it can read is the rest of the pane.
+        """
+        proc = tmuxctl.run("capturing what this chat had on screen",
+                           _PRINTS_A_BYTE_UTF8_CANNOT_READ, timeout=20)
+
+        self.assertTrue(proc.stdout.startswith("ONE"))
+        self.assertTrue(proc.stdout.endswith("TWO"))
+
+    def test_the_value_handed_back_is_one_a_caller_can_print(self):
+        """`errors="surrogateescape"` would also stop the raise HERE, and move it.
+
+        A lone surrogate has no UTF-8 encoding at all, so it raises `UnicodeEncodeError` on
+        any strict encode downstream — `sys.stdout` under a normal `LANG=en_US.UTF-8` is
+        exactly that (measured: `sys.stdout.errors == "strict"`, and writing one raises). A
+        function documented as never raising has to hand back a value that does not raise
+        either, or the promise is only about its own frame.
+        """
+        proc = tmuxctl.run("reading what the harness printed before it died",
+                           _PRINTS_A_BYTE_UTF8_CANNOT_READ, timeout=20)
+
+        proc.stdout.encode("utf-8")        # raises if a surrogate got through
+
+    def test_a_failure_charter_cannot_decode_is_still_reported(self):
+        """The failure REPORT is why this wrapper exists, and it reads `stderr`."""
+        said = []
+        with mock.patch("charter.util.err", side_effect=said.append):
+            proc = tmuxctl.run("ending the frame after an early death",
+                               _FAILS_SAYING_A_BYTE_UTF8_CANNOT_READ, timeout=20)
+
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stderr, "no such session: \ufffd")
+        self.assertTrue(any("ending the frame" in m and "no such session" in m for m in said),
+                        said)
+
+    def test_a_version_charter_cannot_decode_is_unreadable_rather_than_a_crash(self):
+        """`_probe` is the module's other captured child, and it caught the same two things.
+
+        `version()` gates the whole launch and is asked before anything is drawn, so a raise
+        here is a traceback in place of a frame. It already has an answer for a `tmux -V` it
+        cannot parse — `None`, which reads as "charter could not find out" — and a `tmux` on
+        `$PATH` that is a wrapper script answering in some other encoding is the same fact.
+        """
+        d = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        shim = d / "tmux"
+        shim.write_text(f"#!{sys.executable}\n"
+                        r"import sys; sys.stdout.buffer.write(b'tmux 3.\xffc')" + "\n")
+        shim.chmod(0o755)
+        self.enterContext(mock.patch.dict(os.environ,
+                                          {"PATH": f"{d}{os.pathsep}{os.environ['PATH']}"}))
+
+        self.assertIsNone(tmuxctl.version())
 
 
 class OperatorServer(unittest.TestCase):

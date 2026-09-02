@@ -422,13 +422,18 @@ class ACaptureCharterCannotEncodeStillLands(PersonaIso):
 
     So the case that pins it hands `_capture_transcript` a capture that cannot be encoded,
     through the seam every other case in `TheCaptureIsBoundedAndNeverRaises` already uses.
-    **Stated honestly: today's decode path cannot produce such a string** — `tmuxctl.run`
-    runs `subprocess.run(..., text=True)`, whose default `errors` is `strict`, so a pane
-    charter cannot decode raises there rather than arriving here as surrogates. The handler
-    is a floor for the day that changes, and this is the invariant the class one file over
-    is named for: **the capture never raises.** A quit that tracebacks on the way out is
-    the one failure §4e cannot afford, because the operator has already asked for the plane
-    to be recorded.
+    **Stated honestly: today's decode path cannot produce such a string** — and the reason
+    moved with #828. It used to be that `tmuxctl.run` decoded STRICTLY, so a pane charter
+    could not read raised there rather than arriving here as surrogates; that was the defect
+    #828 fixed, because the raise landed in the middle of a quit. It now decodes with
+    `tmuxctl.DECODE_ERRORS`, which substitutes U+FFFD — a character that encodes perfectly
+    well — so a lone surrogate still cannot reach this line, and the handler is still a
+    floor. What it is a floor FOR is what changed: not "the day the read stops raising", but
+    "the day the read stops replacing".
+
+    The invariant is the one the class one file over is named for: **the capture never
+    raises.** A quit that tracebacks on the way out is the one failure §4e cannot afford,
+    because the operator has already asked for the plane to be recorded.
     """
 
     def setUp(self):

@@ -526,13 +526,53 @@ TIMED_OUT = 124
 #: missing harness binary.
 COULD_NOT_RUN = 127
 
+#: How every captured child in this module is decoded, and the THIRD way one of them could
+#: end badly (#828). `text=True` with no `errors=` decodes the pipe **strictly**, so a child
+#: whose output is not valid UTF-8 raised `UnicodeDecodeError` — a `ValueError`, which
+#: neither :func:`run`'s `TimeoutExpired` clause nor its `OSError` one catches — out of the
+#: one function documented as never raising. The sharp caller is
+#: `commands_frame._capture_transcript`, which runs `capture-pane` over a HARNESS pane at
+#: the moment §4e has promised to record the plane and is about to kill it: arbitrary bytes
+#: a coding agent printed, read on the one path that cannot afford a traceback. Its own
+#: `False`-for-everything contract could not help, because the raise happens before it has
+#: an answer to branch on.
+#:
+#: **Not a third invented return code beside :data:`TIMED_OUT`.** Those two say *charter
+#: never got an answer*. Here tmux answered — rc 0, the whole capture — and only charter
+#: could not read one byte of it. Reporting that as a refusal would name tmux in a failure
+#: message for a command it ran correctly, and would cost the transcript the other two
+#: thousand lines over one byte.
+#:
+#: **And not `surrogateescape`, which was the shape #828 suggested.** It would stop the
+#: raise HERE and move it: a lone surrogate has no UTF-8 encoding at all, so it raises
+#: `UnicodeEncodeError` on any strict encode a caller later performs — `sys.stdout` under a
+#: normal `LANG=en_US.UTF-8` is exactly that (measured: `sys.stdout.errors` is `strict`
+#: there, and writing one raises), as is any `Path.write_text`. A function whose contract is
+#: that it never raises has to hand back a value that does not raise either, or the promise
+#: covers only its own frame. The round trip is not cashed anywhere either: the one caller
+#: that PERSISTS the text encodes it with `errors="replace"` first, which writes `?` — 0x3F,
+#: measured — so the bytes would be lost at the sink regardless, and lost as a character
+#: indistinguishable from a question mark the agent really printed. U+FFFD says instead that
+#: something unreadable was there, which is both true and what a terminal shows anyway.
+#:
+#: Read by the two captured children here and by nothing else. `interact` captures nothing
+#: — it IS the operator's terminal — so it has no pipe to decode.
+DECODE_ERRORS = "replace"
+
 
 def _probe() -> str | None:
-    """`tmux -V`'s output, or ``None`` when there is no tmux to ask."""
+    """`tmux -V`'s output, or ``None`` when there is no tmux to ask.
+
+    Decoded like :func:`run`'s pipes and for the same reason: this gates the whole launch
+    and is asked before anything is drawn, so a `tmux` on `$PATH` answering in some other
+    encoding would be a traceback in place of a frame. It already has an answer for a
+    `tmux -V` it cannot parse, and "could not read it" is that same fact.
+    """
     if not shutil.which("tmux"):
         return None
     try:
-        out = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=5,
+                             errors=DECODE_ERRORS)
     except (OSError, subprocess.SubprocessError):
         return None
     return out.stdout.strip() or None
@@ -658,6 +698,11 @@ def run(action: str, argv: list[str], *, env: dict | None = None,
     reattach line. Every caller already branches on a non-zero return, so a wedged server
     now degrades down the same path a refusal does — see :data:`TIMED_OUT`.
 
+    **And output charter cannot read comes back as text, not an exception** —
+    :data:`DECODE_ERRORS`, which is #828 and the third way this could end badly. That one
+    is not a refusal: tmux answered, and what charter could not read is one codepoint of
+    what it said.
+
     *report* is opt-out for the two callers that read the failure themselves: a query
     whose whole answer is "cannot tell" (`_query_pane_dead_status`), and one whose
     non-zero return is the ORDINARY case rather than a fault (`_live_sessions` against a
@@ -668,7 +713,7 @@ def run(action: str, argv: list[str], *, env: dict | None = None,
                         "— see frame/layout.py")
     try:
         proc = subprocess.run(argv, env=env, capture_output=True, text=True,
-                              timeout=timeout)
+                              errors=DECODE_ERRORS, timeout=timeout)
     except subprocess.TimeoutExpired:
         proc = subprocess.CompletedProcess(
             argv, TIMED_OUT, stdout="",

@@ -8062,6 +8062,16 @@ def _capture_transcript(socket: str, pane_id: str, dest) -> bool:
     # edge, and a partial character there is dropped rather than written as a replacement
     # glyph the pager would show as noise. It is also cheaper than what it replaces — one
     # encode rather than an encode for the length plus a slice.
+    #
+    # The `"replace"` on the ENCODE is a floor rather than a live handler, and it is coupled
+    # to one line in another module: `tmuxctl.DECODE_ERRORS`. That decode substitutes U+FFFD,
+    # which encodes, so nothing this function can be handed today is unencodable — the only
+    # string that would be is one holding a lone surrogate, which is what `surrogateescape`
+    # there would produce. Deliberately kept and pinned (#810 group C,
+    # `tests/test_what_a_quit_says_is_spelled_where_it_is_asserted
+    # .ACaptureCharterCannotEncodeStillLands`) because a quit is the one path that cannot
+    # afford a raise: §4e writes the manifest before anything is stopped, and the operator
+    # has already asked for the plane to be recorded.
     text = text.encode("utf-8", "replace")[-_TRANSCRIPT_BYTES:].decode("utf-8", "ignore")
     try:
         config.write_for(dest, text)
