@@ -6595,7 +6595,8 @@ def _clients_on(socket: str, session: str) -> list[str]:
     return out.stdout.split()
 
 
-def _open_workspace(fid: str, ws: str, *, socket: str) -> tuple[str, str] | None:
+def _open_workspace(fid: str, ws: str, *, socket: str,
+                    window: str) -> tuple[str, str] | None:
     """Open *ws* on this plane without attaching to it — ``(session id, chat id)``, or
     ``None`` having said why.
 
@@ -6638,6 +6639,23 @@ def _open_workspace(fid: str, ws: str, *, socket: str) -> tuple[str, str] | None
     own arrangement, for its reason: this process goes on to re-lay-out two frames, and a
     launcher left standing in somebody else's directory is exactly the silent wrongness
     §4e's cwd item exists to close.
+
+    **How big, and why *window* is a parameter rather than another read of disk.** The frame
+    is laid out for the terminal it is about to be shown on, which is the one looking at the
+    switching chat right now — so the size is measured off THAT window and handed to the
+    launcher, which has no terminal of its own to measure (`_launch_size`).
+
+    It arrives as an argument because the caller has already proved it. This was
+    ``_window_size(socket, state.harness_pane(fid) or "")`` and the deletion sweep was right
+    to survive the ``or ""``: it is unreachable, and asking why the two sides cannot differ
+    is what found the real problem. `_switch_client` has already required
+    `_pane_place(socket, state.harness_pane(fid))` to answer, and `_pane_place` refuses an
+    empty target for its own measured reason — **an empty `-t` resolves to the tmux server's
+    CURRENT window**, which on a socket serving eleven sessions from three projects is very
+    likely another plane's. So the fallback could never fire, and if it ever had it would
+    have sized this plane's new frame off another project's terminal. Taking the window
+    `_pane_place` returned removes the unreachable branch and the second read of a record
+    that could disagree with the one the caller checked.
 
     **The answer is re-asked, never inferred.** `_plane_session` is the same question that
     returned ``None`` a moment ago, put again now the session exists — so a launch that
@@ -6691,7 +6709,7 @@ def _open_workspace(fid: str, ws: str, *, socket: str) -> tuple[str, str] | None
     # `attach` is the seam.
     args = SimpleNamespace(harness=h.cli_name, rest=[], no_frame=False,
                            workspace=ws, pick=False, attach=False,
-                           size=_window_size(socket, state.harness_pane(fid) or ""))
+                           size=_window_size(socket, window))
     here_dir = os.getcwd()
     try:
         os.chdir(root)
@@ -6837,7 +6855,7 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
                                 f"workspace, so charter will not open '{ws}' — there "
                                 "would be no client to move into it")
             return
-        there = _open_workspace(fid, ws, socket=socket)
+        there = _open_workspace(fid, ws, socket=socket, window=here[1])
         if there is None:
             return
     if there[0] == here[0]:

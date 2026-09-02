@@ -163,6 +163,25 @@ class _OpensBeta(PersonaIso, unittest.TestCase):
             commands_frame._switch_client(self.FID, "beta", said="workspace → beta")
         return server
 
+    def _run_watching_cwd(self, seen: list) -> None:
+        """Run a click, recording the launcher's cwd at the moment it is called.
+
+        The `chdir` is only in effect inside `cmd_launch`; the `finally` has restored it
+        before the test could look, so the reading has to be taken from in there."""
+        server = _Server()
+
+        def fake_launch(args):
+            seen.append(os.getcwd())
+            self.launched.append(args)
+            _a_chat("beta.1", ws="beta", pane="%9")
+            server.opened.append("%9")
+            return 0
+
+        with mock.patch("charter.commands_frame.subprocess.run", side_effect=server), \
+                mock.patch("charter.commands_frame.cmd_launch",
+                           side_effect=fake_launch):
+            commands_frame._switch_client(self.FID, "beta", said="workspace → beta")
+
 
 class TheTabOpensTheWorkspaceItNames(_OpensBeta):
     """The report, answered. A tab for a workspace with no session builds one and moves
@@ -343,6 +362,31 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
             self._run()
         self.assertEqual(self.launched[0].harness, "codex")
 
+    def test_the_launch_runs_in_the_workspaces_own_directory(self):
+        """Where `charter --workspace beta` typed in it would have run, and what
+        `state.record_cwd` goes on to hold. Read INSIDE the fake launcher, because that is
+        the only moment the `chdir` is in effect — the `finally` has put it back by the
+        time the test could look."""
+        seen = []
+        self._run_watching_cwd(seen)
+        # `os.path.realpath` on the expected side, never on the reading: `os.getcwd()`
+        # hands back a RESOLVED path, and on macOS the plane lives under a `/tmp` that
+        # is a symlink to `/private/tmp`. Comparing the constructed spelling would
+        # fail on the platform that resolves and pass on the one that does not
+        # (`tests/_tmuxsocket.py` measures the same trap for a socket path).
+        self.assertEqual(seen, [os.path.realpath(config.WORKSPACES_DIR / "beta")])
+
+    def test_a_workspace_with_no_directory_of_its_own_falls_back_to_the_plane_root(self):
+        """The other half of the same expression. A workspace can be named by a chat
+        record and by the bar without having a directory yet, and a `chdir` into a path
+        that is not there would refuse the open for a workspace that is perfectly usable —
+        so the plane root is the answer, which is where a bare `charter` starts."""
+        import shutil as _sh
+        _sh.rmtree(config.WORKSPACES_DIR / "beta")
+        seen = []
+        self._run_watching_cwd(seen)
+        self.assertEqual(seen, [os.path.realpath(config.ROOT)])
+
     def test_a_directory_charter_cannot_enter_is_refused_before_the_launch(self):
         """`cmd_launch` reads its cwd with `os.getcwd()`, so the open has to `os.chdir`
         into the workspace — and a `chdir` that fails must stop the launch rather than
@@ -354,6 +398,53 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
         self.assertEqual(self.launched, [])
         self.assertIn("cannot enter", self.said.call_args[0][1])
 
+    def test_the_refused_directory_is_contained_before_it_reaches_the_screen(self):
+        """A path is the one value in that sentence charter did not choose the shape of,
+        and the attention row is a pane charter paints — a newline in it writes a second
+        line into the frame's own chrome. `contain.readable` is what stops that.
+
+        The literal is spelled out by hand rather than round-tripped through the same
+        constant the code interpolates, which would be green under any containment at
+        all: the raw two-line form must not appear, and the message must stay one line.
+        """
+        # It has to EXIST, and getting that wrong is what this comment is for: `root` is
+        # `where if where.is_dir() else config.ROOT`, so a bad path that is not a real
+        # directory is replaced by the plane root and never reaches the sentence at all.
+        # The first version of this test made exactly that mistake and passed against an
+        # uncontained message. A newline is legal in a POSIX filename, so the directory is
+        # real.
+        bad = Path(str(config.WORKSPACES_DIR / "beta") + "\nworkspace → evil")
+        bad.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(bad.rmdir)
+        self.assertTrue(bad.is_dir(), "the fixture's bad path must be a real directory")
+        with mock.patch("charter.commands_frame.workspace.workspace_dir",
+                        return_value=bad), \
+                mock.patch("charter.commands_frame.os.chdir",
+                           side_effect=OSError(13, "denied")):
+            self._run()
+        said = self.said.call_args[0][1]
+        self.assertNotIn("\nworkspace → evil", said)
+        self.assertEqual(said.count("\n"), 0, said)
+
+    def test_a_directory_that_cannot_be_returned_to_does_not_lose_the_open(self):
+        """The `finally`'s own `except OSError`. Restoring the cwd is best effort — the
+        directory this process started in can be gone by the time the launch returns
+        (a sibling `reap` removed a chat directory, a worktree was deleted) — and a
+        raise there would take down a switch whose workspace is already open and
+        running, leaving the operator's client where it was with no message at all."""
+        calls = []
+
+        def chdir(path):
+            calls.append(str(path))
+            if len(calls) > 1:                 # the restore, not the way in
+                raise OSError(2, "gone")
+
+        with mock.patch("charter.commands_frame.os.chdir", side_effect=chdir):
+            s = self._run()
+        self.assertEqual(len(calls), 2, "the launcher never tried to go back")
+        self.assertEqual(s.switched, [("/dev/ttys001", "$2")],
+                         "a cwd charter could not return to lost the switch")
+
     def test_the_launcher_is_left_standing_where_it_started(self):
         """The `finally` half of the same `chdir`, and `cmd_reopen`'s own rule: this
         process goes on to re-lay-out two frames, and a launcher left in somebody else's
@@ -361,6 +452,17 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
         was = os.getcwd()
         self._run()
         self.assertEqual(os.getcwd(), was)
+
+    def test_a_plane_whose_harness_table_is_missing_entirely_is_not_a_crash(self):
+        """`config.HARNESS` is ``None`` on a plane whose config has no `[harness]` table at
+        all — a different state from one that has the table with no `default` in it, and
+        the `or {}` is the only thing between the two and an `AttributeError` on the
+        detached side, where a traceback goes to `/dev/null` and the click does nothing."""
+        _a_chat(self.FID, ws="alpha", pane="%1", harness="")
+        with mock.patch.object(config, "HARNESS", None):
+            self._run()
+        self.assertEqual(self.launched, [])
+        self.assertIn("no harness", self.said.call_args[0][1])
 
     def test_with_neither_it_refuses_by_name_rather_than_guessing(self):
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
@@ -576,6 +678,15 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
         # than the forks allowed — `tests/_planeguard.py`'s own first suggestion.
         no_background_refresh(self)
         self.enterContext(mock.patch("charter.commands_frame._spawn_gather"))
+        # **`bypass` is stubbed so this case can FAIL rather than vanish, and that is a
+        # measurement fix rather than a convenience.** `bypass` calls `os.execvp`: on the
+        # unmutated code it is never reached from here, but the deletion sweep's whole job
+        # is to reach it — and when it did, the exec replaced this test runner with the
+        # fake harness below, so the shard reported `no tests ran` and TWO mutations of
+        # `_wants_attach` came back "not measured" instead of killed. Returning 127 keeps
+        # the meaning exactly (a launch that bypassed the frame started no session, so
+        # every assertion below fails) while leaving a process alive to say so.
+        self.enterContext(mock.patch("charter.commands_frame.bypass", return_value=127))
         self.socket = _tmuxreap.name("open-ws-tab")
         self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
         self.addCleanup(self._teardown)
