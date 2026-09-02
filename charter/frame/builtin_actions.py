@@ -45,7 +45,7 @@ import subprocess
 
 from typing import Callable, NamedTuple
 
-from .. import contain, util
+from .. import util
 from . import action, actions, chats, choose, state, switch, tmuxctl
 
 #: What marks the density a frame is currently on. **One constant, not two**: it is
@@ -422,13 +422,27 @@ def _step_strip(ctx, strip: "_Strip", step: int, start: int):
 
     The sentence it answers with names the tab, so the palette says what it started rather
     than that it started something — `_select`'s `f"selected {name}"` one strip over.
+
+    **The name is NOT contained here, and the deletion sweep is what settled it — for the
+    third time in this file.** It was `contain.one_line(name)`, and that is a masked call:
+    **the receipt is contained by the CONTRACT**, `actions.Invocation._work` running
+    `contain.one_line(str(note), limit=REASON_LIMIT)` over whatever a `run` hands back.
+    Every surface downstream contains it again anyway — `palette.Palette._headline` over
+    the header it draws, `state.record_notice` over the whole assembled line it writes.
+
+    :func:`_regather` records the identical finding about the workspace name it returns,
+    :func:`_select` hands back a bare repo name for the same reason, and `choose._note`
+    records the trap in as many words one module over. A call whose result is provably its
+    argument is a line this repository deletes — and `_empty_lines`' warning is the sharper
+    half: a guard kept for a reason that is not the true one is how the real one gets
+    deleted later.
     """
     here = strip.here(ctx.fid)
     name = _walk(list(strip.names(ctx.fid)), here, step, start)
     if name == here:
         return strip.alone
     _spawn(util.self_relaunch_argv(*strip.command, name), fid=ctx.fid)
-    return f"{strip.noun} → {contain.one_line(name)}"
+    return f"{strip.noun} → {name}"
 
 
 #: What a workspace with nothing open is told instead of a row that does nothing.
