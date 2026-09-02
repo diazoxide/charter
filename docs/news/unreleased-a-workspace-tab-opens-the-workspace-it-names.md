@@ -100,11 +100,12 @@ panel processes. The workspace opens, the client arrives, the chat left behind k
 the session carries this plane's marker, and the new window is 132 columns wide rather than
 the 80 a detached launcher would otherwise have guessed.
 
-Three hand-written mutations were run against it and each goes red: dropping the size the
-launch is handed, ignoring the "do not attach" flag, and removing the cross-plane name guard.
-The second is the interesting one — it does not fail an assertion so much as `execvp` the test
-runner away into the fake harness, which is precisely the silent failure the guard exists to
-stop.
+Four hand-written mutations were run against it and each goes red: dropping the size the
+launch is handed (1 failure), ignoring the "do not attach" flag (3), removing the cross-plane
+name guard (2), and dropping the fall back to the plane's default harness (1). The second is
+the interesting one — beyond failing those three assertions it `execvp`s the end-to-end's own
+test runner away into the fake harness, which is exactly the silent failure the guard exists
+to stop.
 
 Run against real tmux on **3.7c and on tmux 3.2**, the floor charter promises. CI installs no
 tmux, so the real-server half runs only by hand.
