@@ -493,7 +493,8 @@ sees while the panels are torn down and split back one at a time.
 
 Most of those commands read nothing back, so tmux takes them as one list. The four kills
 and their four disarms are one invocation now; so is each end's window dressing, so are the
-four splits, and so are the four respawn hooks. Nothing was dropped and nothing was
+four splits, so is everything the four new panes are told about themselves, and so are the
+four respawn hooks. Nothing was dropped and nothing was
 reordered — the same commands, in the same order, in 40% of the invocations and a third of
 the repaints. It is not silent: 14 updates is still four panel processes coming up and
 painting themselves, which is a different cost and not this one.
