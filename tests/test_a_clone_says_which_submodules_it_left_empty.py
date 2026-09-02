@@ -383,6 +383,56 @@ class TestSyncStopsCallingItUpToDate(SubmoduleCase):
 
 
 # --------------------------------------------------------------------------- #
+# and a worktree, which is the surface that misses them every time             #
+# --------------------------------------------------------------------------- #
+class TestAWorktreeSaysSoToo(SubmoduleCase):
+    """`git worktree add` gives the new tree the superproject's gitlinks and initialises
+    none of them — measured, from a clone whose submodule was checked out and in sync::
+
+        source:   +038cbf7… dev-scripts (heads/main)
+        worktree: -a8320ac… dev-scripts          <- and the directory is empty
+
+    So unlike `clone`, where it depends on the repo, a worktree of a repo with submodules
+    is missing them ALWAYS. It is also the line an agent reads immediately before `cd`ing
+    in and running the build, which is where #817's report started."""
+
+    def add(self, repo: Path, piece: str = "p1") -> str:
+        from charter import commands_worktree
+        buf = io.StringIO()
+        args = SimpleNamespace(workspace="ws", repo=repo.name, piece=piece, branch=None,
+                               force=False, delete_branch=False)
+        with redirect_stdout(buf), redirect_stderr(buf):
+            self.rc = commands_worktree.cmd_worktree_add(args)
+        return buf.getvalue()
+
+    def test_a_worktree_of_a_plain_repo_says_nothing_extra(self):
+        said = self.add(self.repo())
+        self.assertEqual(self.rc, 0, said)
+        self.assertNotIn("submodule", said)
+
+    def test_a_worktree_names_the_submodule_it_did_not_bring(self):
+        r = self.repo()
+        plant_submodule(r, "dev-scripts")
+        said = self.add(r)
+        self.assertEqual(self.rc, 0, said)
+        self.assertIn("dev-scripts", said)
+        self.assertIn("1 submodule(s) recorded but not initialised", said)
+        self.assertIn("submodule update --init --recursive", said)
+
+    def test_a_worktree_of_an_INITIALISED_submodule_still_says_so(self):
+        """The case that makes this surface different from `clone`: the source tree is
+        complete, and the worktree is not."""
+        r, sub = self.repo(), make_repo(self.tmp / "sub")
+        git("submodule", "add", "-q", str(sub), "dev-scripts", cwd=r)
+        git("commit", "-qm", "add", cwd=r)
+        self.assertEqual(commands.submodule_drift(r), ([], []))
+        said = self.add(r)
+        self.assertEqual(self.rc, 0, said)
+        self.assertIn("dev-scripts", said)
+        self.assertIn("recorded but not initialised", said)
+
+
+# --------------------------------------------------------------------------- #
 # status says so                                                               #
 # --------------------------------------------------------------------------- #
 class TestStatusRowSaysSo(SubmoduleCase):
