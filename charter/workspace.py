@@ -234,6 +234,40 @@ def workspace_dir(name: str) -> Path:
     return config.WORKSPACES_DIR / name
 
 
+def exists(name: str) -> bool:
+    """Whether *name* is a workspace this plane HAS — a fact about the filesystem, now.
+
+    **Named because it is asked on a REPAINT path, where the answer changes under the
+    reader** (#752). A frame is long-lived by definition, and `charter workspace remove`,
+    a `git clean`, a teammate's pull and a plain `mv` all take a workspace out from under
+    one that is drawing it. `frame/slots._repos` asks this the way it asks
+    `gather.unreadable`: of the filesystem, at the moment the pane is drawn, rather than
+    inferring absence from a scan that came back empty — which is a different claim, and
+    drawing the two the same is what #512 already cost this pane once.
+
+    **The name check is part of the predicate and not the caller's job, and that is what
+    is new here.** The same question was spelled inline in `frame/leave.plan` (`homeless`)
+    and in `commands_frame._reopen_one`'s `· workspace is missing`, and both are fed from
+    `state.own_workspace`, which name-checks every rung it returns — so a bare
+    `workspace_dir(ws).is_dir()` was safe *there* because of something true one call up.
+    The pane's name comes from `state.workspace_for`, whose LAST rung is a bare
+    :func:`resolve` handing back `$CHARTER_WORKSPACE` stripped and otherwise untouched.
+    Measured: with ``CHARTER_WORKSPACE=..`` that value reaches the renderer verbatim, and
+    ``WORKSPACES_DIR / ".."`` is the plane root — a directory, so a filesystem-only
+    predicate answers *present* for a name that is not a workspace and can never be one,
+    and the pane goes on drawing it. :func:`valid_name` is therefore asked FIRST, and a
+    name it refuses is absent by definition: no `ensure` will make it, so there is nothing
+    for the join to be right about.
+
+    Never creates and never raises: :func:`ensure` is the creator, the one caller that must
+    not write is the renderer, and :func:`_unreadable` is what keeps a `workspaces/` charter
+    is not allowed to look into from taking down a panel — the same reason every other
+    predicate in this module goes through it, said for a caller whose failure mode is a
+    dead pane rather than a blank footer.
+    """
+    return valid_name(name) and _unreadable(lambda: workspace_dir(name).is_dir())
+
+
 def from_path(path=None) -> str | None:
     """The workspace whose working tree *path* is inside, or ``None``.
 
@@ -863,11 +897,31 @@ def _rename_active_pointers(old: str, new: str) -> None:
                 pass
 
 
-def rename(old: str, new: str) -> None:
+def _rename_frame_records(old: str, new: str) -> list[str]:
+    """Repoint any frame that says it is in ``old`` — :func:`_rename_active_pointers`'
+    rule applied to the records that decide a chat's MEMBERSHIP rather than a session's
+    work, which is the half #795 found missing. Answers the chats that moved, so the
+    command can say how many: a rename that silently re-labels four running conversations
+    is a thing the operator who typed it is entitled to see happen.
+
+    The two are deliberately separate walks over separate directories rather than one
+    generic sweep, because they answer different questions and are read by different code:
+    a pointer says which workspace a session's `charter` commands act on, and
+    `.charter/frame/<fid>/` says which workspace a CHAT is in. `frame/state.rename_workspace`
+    owns the second — it is the module that writes those records, knows which of them are
+    rungs of `own_workspace`, and has to bump each frame's version so its panels repaint.
+    Imported here rather than at module scope: `frame.state` reads this module back.
+    """
+    from .frame import state as fstate
+    return fstate.rename_workspace(old, new)
+
+
+def rename(old: str, new: str) -> list[str]:
     """Rename a workspace: move its directory (clones + memory + refs come along),
-    update the manifest ``name``, move its liveness (gitignore block) if live, and
-    repoint active pointers/lock. Filesystem-level; the caller commits the tracked
-    move for a LIVE workspace. Assumes the caller validated old exists / new is free."""
+    update the manifest ``name``, move its liveness (gitignore block) if live, repoint
+    active pointers/lock, and repoint every chat that says it is in it (#795).
+    Filesystem-level; the caller commits the tracked move for a LIVE workspace. Assumes
+    the caller validated old exists / new is free. Answers the chats that followed."""
     was_live = is_live(old)
     workspace_dir(old).rename(workspace_dir(new))
     m = read_manifest(new)
@@ -878,6 +932,7 @@ def rename(old: str, new: str) -> None:
         set_live(old, False)
         set_live(new, True)
     _rename_active_pointers(old, new)
+    return _rename_frame_records(old, new)
 
 
 def manifest_path(name: str) -> Path:

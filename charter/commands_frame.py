@@ -8708,7 +8708,7 @@ def _reopen_one(c) -> "Reopening | None":
         return None
     util.info(f"  {c.chat} → {r.fid} · {leave.RESUMES if rest else 'empty'}"
               + (" · workspace is missing" if c.workspace
-                 and not workspace.workspace_dir(c.workspace).is_dir() else ""))
+                 and not workspace.exists(c.workspace) else ""))
     return r
 
 

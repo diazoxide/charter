@@ -29,7 +29,7 @@ import unittest
 from unittest import mock
 
 from charter import statusline as sl
-from charter import commands_frame, tui, util
+from charter import commands_frame, config, tui, util
 from charter.frame import action as faction
 from charter.frame import builtin_actions, gather, slots, state
 
@@ -125,6 +125,16 @@ class TheRepoPaneSaysWhichStateItIsIn(PersonaIso, unittest.TestCase):
     """The renderer's half — through the real `slots.render("repos", …)`, because what
     #735 is about is what an operator READS, not what a helper returns."""
 
+    def setUp(self):
+        super().setUp()
+        # **The workspace these frames draw, on disk** — fixture rather than decoration
+        # since #752. `unreadable repo cache` is a claim about a gather that will never
+        # land IN A WORKSPACE; a workspace that is not on disk at all is a different
+        # sentence and is asked for first, because it is why nothing is coming. Without
+        # the directory, every case here would be measuring that other line.
+        (config.WORKSPACES_DIR / config.DEFAULT_WORKSPACE).mkdir(parents=True,
+                                                                 exist_ok=True)
+
     def _render(self, fid, *, cols=200, rows=24) -> str:
         with mock.patch("os.get_terminal_size",
                         return_value=os.terminal_size((cols, rows))), \
@@ -170,6 +180,10 @@ class TheRepoPaneSaysWhichStateItIsIn(PersonaIso, unittest.TestCase):
         the moment the truncate goes."""
         fid = "f-" + "w" * 60
         ws = "a" * 60
+        # On disk, since #752: this line is about a gather that will never land IN a
+        # workspace, and a workspace that is not there is a different sentence, asked
+        # first. Without the directory this measurement would be of that other line.
+        (config.WORKSPACES_DIR / ws).mkdir(parents=True, exist_ok=True)
         _corrupt(fid, "not json {{{")
         with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ws}, clear=True):
             self.assertEqual(state.workspace_for(fid), ws)
@@ -179,11 +193,20 @@ class TheRepoPaneSaysWhichStateItIsIn(PersonaIso, unittest.TestCase):
             self.assertLessEqual(tui.width(tui.strip_ansi(line)), sl._LEFT_W, line)
 
     def test_a_workspace_name_the_rungs_never_checked_is_still_one_line(self):
-        """`_empty_lines`' hostile-name case, for the line beside it. `state.workspace_for`
-        rung 0 name-checks the pin, but its LAST rung is `workspace.resolve()`, which hands
-        back `$CHARTER_WORKSPACE` stripped and otherwise untouched — so a name with a
-        newline in it arrives at this renderer verbatim. `tui.truncate` runs `tui.sanitize`
-        first, which is what keeps a `repos` pane one row tall.
+        """The hostile-name case for this pane, which #752 moved one line over and which
+        is kept here because the property is the pane's rather than any one sentence's.
+        `state.workspace_for` rung 0 name-checks the pin, but its LAST rung is
+        `workspace.resolve()`, which hands back `$CHARTER_WORKSPACE` stripped and otherwise
+        untouched — so a name with a newline in it arrives at this renderer verbatim, and
+        `tui.truncate` runs `tui.sanitize` first, which is what keeps a `repos` pane one
+        row tall whatever it was handed.
+
+        **It lands on `_gone_lines` and not on this class's own line**, because a name no
+        rung checked cannot name a workspace that exists: `workspace.exists` asks
+        `valid_name` before the filesystem, so `unreadable repo cache` is now only ever
+        composed from a name that passed it. Asserted rather than left implied — a corrupt
+        cache in a workspace that is not there is a workspace that is not there, and saying
+        `charter frame-gather` about it would name a command that cannot help.
 
         The hostile value is asserted to have got THROUGH as well as to have been
         contained: containment alone would pass just as well on a build where a rung had
@@ -195,6 +218,7 @@ class TheRepoPaneSaysWhichStateItIsIn(PersonaIso, unittest.TestCase):
             out = self._render("f-hostile")
         self.assertEqual(len(out.split("\n")), 1, repr(out))
         self.assertIn("rm -rf /", tui.strip_ansi(out))
+        self.assertIn("no workspace", tui.strip_ansi(out))
 
     def test_a_gathered_cache_still_draws_its_table(self):
         """The other three states are untouched — the new branch is reached only from

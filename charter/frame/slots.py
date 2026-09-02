@@ -720,8 +720,9 @@ class _Viewport:
         """Record which repo each row of the pane is about, the paint that just happened.
 
         Indexed by the PANE's row, not the table's: `_repos` puts a heading on row 0 and
-        the table under it, and the three one-line answers it draws instead of a table
-        (`_unknown_lines`, `_empty_lines`, `_too_narrow_lines`) publish nothing at all —
+        the table under it, and the one-line answers it draws instead of a table
+        (`_gone_lines`, `_unknown_lines`, `_unreadable_lines`, `_empty_lines`,
+        `_too_narrow_lines`) publish nothing at all —
         through :meth:`blank`, which is the one call that says so, because such a paint
         has a bound to record as well. So a click on the heading, on a message, or below
         the last row lands on ``None`` and is not a selection — which is the same rule
@@ -735,11 +736,12 @@ class _Viewport:
 
         **The two halves of a paint are recorded together, because a paint that recorded
         one and not the other is the defect this method exists to make unwriteable.**
-        `_repos` has four ways out and three of them draw a single sentence instead of a
-        table (`_too_narrow_lines`, `_unknown_lines`, `_empty_lines`). Each cleared the
-        click map and none of them touched the bound, so a pane that had been scrolled and
-        then lost its table — the terminal narrowed below `statusline._LEFT_W`, the gather
-        cache went away, the workspace's last clone was removed — kept whatever
+        `_repos` has five ways out and four of them draw a single sentence instead of a
+        table (`_too_narrow_lines`, `_gone_lines`, `_unknown_lines`, `_empty_lines`). Each
+        cleared the click map and none of them touched the bound, so a pane that had been
+        scrolled and then lost its table — the terminal narrowed below `statusline._LEFT_W`,
+        the gather cache went away, the workspace's last clone was removed, the workspace
+        itself was removed — kept whatever
         :meth:`settle` recorded for the TALLER table that was there before. The handler
         reads that bound and nothing else (§4f), so every wheel notch over the sentence
         answered truthy and the panel repainted a byte-identical line, once per notch:
@@ -1240,14 +1242,78 @@ def _unreadable_lines(fid: str, ws: str, width: int) -> list[str]:
     it. The pane says what is true and the operator decides.
 
     One line, bounded through `tui.truncate` like every other line in this module — *fid*
-    and *ws* are both arbitrary length, and `tui.sanitize` under that truncate is what
-    contains a `$CHARTER_WORKSPACE` no rung ever checked (see :func:`_empty_lines`).
+    and *ws* are both arbitrary length. **The bound is about that length and not about
+    content**, since #752: `_repos` reaches this branch only past `workspace.exists(ws)`,
+    which name-checks before it asks the filesystem, so a `$CHARTER_WORKSPACE` no rung ever
+    checked now reaches :func:`_gone_lines` instead and never this one. See
+    :func:`_empty_lines`, which says the same thing at length about the line beside it.
     """
     from .. import statusline as sl
 
     return [tui.truncate(
         f"  {sl._DIM}unreadable repo cache · charter frame-gather --session{sl._R} "
         f"{fid}{sl._DIM} --workspace{sl._R} {ws}", width)]
+
+
+def _gone_lines(ws: str, width: int) -> list[str]:
+    """What the `repos` pane draws when this frame's workspace is not on disk at all.
+
+    **The fourth state, and #752 is the cost of not having had one.** Every other sentence
+    this pane can say is about a workspace that is THERE: `_unknown_lines` is a gather that
+    has not landed in it, `_unreadable_lines` is a cache that will not read for it,
+    :func:`_empty_lines` is a scan of it that found no clones. A frame outlives the
+    directory it draws — `charter workspace remove`, a `git clean` on the plane, a
+    teammate's pull and a plain `mv` all take one away while a frame is running, and a
+    frame is by definition long-lived enough for that to happen — and absence was spelled
+    with whichever of those three the cache happened to reach. The reported reading is the
+    first: `0 todos`, no rows, and `⋯ gathering this workspace's repos…` for as long as the
+    frame stayed up, because a panel never gathers on its own and none of the four ways a
+    workspace can be taken away is something charter can hook.
+
+    **Asked from the two branches that were about to say "nothing here", and never above
+    the cache.** ``gather.json`` lives under `.charter/` and not under `workspaces/`, so a
+    removed workspace leaves its last scan exactly where it was — and this line does NOT
+    override it. A panel "never gathers on its own — it reads the cache or says it has
+    none" (`docs/frame.md`), so a renderer that contradicted its own cache from a `stat`
+    would be re-deriving, on every repaint of every frame, state the gather owns. What that
+    leaves is a table that is stale rather than a pane that is wrong about which state it
+    is in, and it converges on its own: `gather.scan` reads `workspace.clones`, which
+    answers nothing for a workspace with no directory, so the first refresh after the
+    removal empties the cache and this line is what the pane draws.
+
+    **A fact at the moment it is asked**, `workspace.exists` — which is `gather.unreadable`'s
+    rule for the noun one level up, and for the same reason: the alternative is to infer
+    absence from an empty scan, and "gathered, nothing there" and "there is nothing to
+    gather" are two different claims. #512 is what drawing two claims as one sentence
+    already cost this pane once.
+
+    **It names the command that makes the workspace exist again**, which is
+    :func:`_empty_lines`' shape and its reason — a line that names a problem and not its fix
+    costs a row and settles nothing. `charter workspace create <ws>` is the same remedy
+    `commands_workspace` already prints for this fact (`no workspace 'x' (create it: …)`),
+    and it is the one that works whether or not the workspace was LIVE; `restore` needs a
+    committed manifest, which a LOCAL workspace never has. No key is named, for
+    :func:`_unreadable_lines`' measured reason: a frame running as a window in an
+    operator's own tmux has no `F2` of charter's to offer.
+
+    **Nothing is repaired by drawing.** Re-creating the directory would put a write on the
+    repaint path #387 pinned at one `stat`, would hide whatever removed it, and would hand
+    back a workspace with none of the clones it had. The pane says what is true and the
+    operator decides — `_unreadable_lines`' rule, and the same one that makes a RENAMED
+    workspace a different answer entirely: `workspace.rename` repoints the chat, so this
+    line is never how a rename shows up (#795).
+
+    One line, bounded through `tui.truncate` like every other line in this module. *ws* is
+    arbitrary length AND arbitrary content — `state.workspace_for`'s last rung hands back
+    `$CHARTER_WORKSPACE` untouched (see :func:`_empty_lines` on exactly this) — so the
+    `tui.sanitize` under that truncate is what keeps a newline in the name from making this
+    pane two rows tall.
+    """
+    from .. import statusline as sl
+
+    return [tui.truncate(
+        f"  {sl._DIM}no workspace{sl._R} {ws}{sl._DIM} · charter workspace create "
+        f"{ws}{sl._R}", width)]
 
 
 def _empty_lines(ws: str, width: int) -> list[str]:
@@ -1271,26 +1337,28 @@ def _empty_lines(ws: str, width: int) -> list[str]:
     the same. That one is reached when `gather.cached` answers ``None``; this one when it
     answers a real scan with no rows in it.
 
-    **No `contain.one_line` over *ws*, and the reason is `tui.sanitize`, not the name
-    rungs.** It would be comfortable to say every rung of `state.workspace_for` checks its
-    answer against `instance.WORKSPACE_NAME_RE` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`) — rung 0
-    does, through `valid_name` — but the LAST rung does not: it is `workspace.resolve()`,
-    which hands back `$CHARTER_WORKSPACE` stripped and otherwise untouched. Measured:
-    with `CHARTER_WORKSPACE='ev\\nil\\x1b[31m;rm -rf /'` and no session pointer and no
-    recorded launch workspace, rung 0 rejects it, rungs 1 and 2 have nothing, and rung 3
-    returns that exact string — which arrives here verbatim.
+    **No `contain.one_line` over *ws*, and since #752 the reason is LENGTH rather than
+    content.** It used to be neither, and the true reason is worth spelling twice. It was
+    never that every rung of `state.workspace_for` checks its answer against
+    `instance.WORKSPACE_NAME_RE` (`^[A-Za-z0-9][A-Za-z0-9._-]*$`) — rung 0 does, through
+    `valid_name`, and the LAST rung does not: it is `workspace.resolve()`, which hands back
+    `$CHARTER_WORKSPACE` stripped and otherwise untouched, so
+    `CHARTER_WORKSPACE='ev\\nil\\x1b[31m;rm -rf /'` really did arrive here verbatim.
 
-    What contains it is the `tui.truncate` call below, which runs `tui.sanitize` first:
-    the newline is not charter's markup, so it is replaced and the pane still gets ONE
-    line; the SGR is passed through as colour, which costs zero columns and cannot move a
-    cursor. That is the guarantee this module leans on everywhere — a value nobody has
-    thought about yet is contained at the point it is drawn, not by a rung nobody
-    re-checked. `_top` interpolates the same value on the same terms, and has since
-    before #515. Naming the wrong reason is how a guard gets deleted later for being
-    redundant against a property that was never true.
+    **It cannot any more, and that is a fact about the CALLER and not about this line.**
+    `_repos` reaches this branch only past `workspace.exists(ws)`, which asks `valid_name`
+    before it asks the filesystem (`workspaces/..` is a real directory, so a
+    filesystem-only predicate would answer "present" for a name that is not a workspace).
+    So the name in this sentence has passed the alphabet, which holds no newline and no
+    ESC — and :func:`_gone_lines` is where a name nobody checked now lands, and where the
+    `tui.sanitize` half of the argument moved with it.
 
-    What is NOT free either way is the WIDTH: the name is arbitrary length, so the line
-    is measured through `tui.truncate` like every other line in this module.
+    What is NOT bounded by that check is the WIDTH: a workspace name is arbitrary length,
+    and an untruncated line here is a pane wider than itself, which wraps into the second
+    row this slot must never have. So the line is measured through `tui.truncate` like
+    every other line in this module — for the reason stated, and not for one that stopped
+    being true, because naming the wrong reason is how a guard gets deleted later against
+    a property that was never the one it had.
     """
     from .. import statusline as sl
 
@@ -2820,13 +2888,13 @@ def _repos(fid: str) -> str:
     end (see :func:`_table_lines`), so a starved pane never claims one clean repo is the
     whole plane.
 
-    **Three states, three different sentences, because they are three different claims.**
-    A gather that has not run yet is `_unknown_lines`; a gather that ran and found
-    nothing is :func:`_empty_lines`; anything else is the table. #512 is the cost of
-    drawing the first two the same, and #515 is the cost of drawing the second one as an
-    empty rectangle — which is what an unmodified `_table_lines` returning `[]` would now
-    be, since this pane no longer has an attention row above it to make its emptiness
-    read as "nothing to add".
+    **Four states, four different sentences, because they are four different claims.** A
+    workspace that is not on disk at all is :func:`_gone_lines` and is asked FIRST (#752);
+    a gather that has not run yet is `_unknown_lines`; a gather that ran and found nothing
+    is :func:`_empty_lines`; anything else is the table. #512 is the cost of drawing two of
+    them the same, and #515 is the cost of drawing "nothing there" as an empty rectangle —
+    which is what an unmodified `_table_lines` returning `[]` would now be, since this pane
+    no longer has an attention row above it to make its emptiness read as "nothing to add".
 
     **One `gather.cached`, and no repo directory touched.** #387 pinned a panel's idle
     tick at exactly one `stat` — `panel._tick`'s single `state.version(fid)`, which every
@@ -2856,7 +2924,7 @@ def _repos(fid: str) -> str:
       three one-line answers below publish nothing, which is what makes a click on
       `gathering this workspace's repos…` not a selection.
 
-    **All four ways out record BOTH, and the three that draw no table say so in one call**
+    **All five ways out record BOTH, and the four that draw no table say so in one call**
     (:meth:`_Viewport.blank`). They used to clear the map and leave the bound where the
     last table put it, so a pane whose terminal had narrowed, whose cache had gone or whose
     workspace had lost its last clone still answered every wheel notch truthy — repainting
@@ -2921,8 +2989,28 @@ def _repos(fid: str) -> str:
         # repaints its way back to a readable cache. `gather.unreadable` is the second
         # question, asked ONLY here and only once `cached` has already said `None`: it is
         # a fact about a file on disk at the moment this line is drawn, never a timeout.
+        #
+        # **Three, not two** (#752). Both sentences below are about a workspace that is
+        # THERE — one gather has not landed, one never will — and neither is true of a
+        # workspace that is not on disk at all, which is the state a frame reaches by
+        # outliving its own directory (`charter workspace remove`, a `git clean`, a
+        # teammate's pull, a plain `mv`). Asked FIRST of the three, because "there is
+        # nothing to gather" is the reason the other two are waiting for something that is
+        # not coming. `workspace.exists` is `gather.unreadable`'s rule one noun up: a fact
+        # about the filesystem at the moment the pane is drawn, never a duration.
+        #
+        # `ws` is resolved HERE and in the `if not repos` branch below, rather than once
+        # above the cache, so that the path which draws a TABLE pays for neither: the
+        # `state.workspace_for` behind `_frame_workspace` is two file reads (`identity`
+        # and the launch record) and this pane is repainted on every version bump. That is
+        # exactly where it was resolved before #752 — the new question is asked beside the
+        # old ones and did not move them onto the hot path.
+        from .. import workspace as ws_mod
+        ws = _frame_workspace(fid)
+        if not ws_mod.exists(ws):
+            return "\n".join(_gone_lines(ws, w))
         if gather.unreadable(fid):
-            return "\n".join(_unreadable_lines(fid, _frame_workspace(fid), w))
+            return "\n".join(_unreadable_lines(fid, ws, w))
         return "\n".join(_unknown_lines(w))
     repos = data.get("repos") or []
     if not repos:
@@ -2930,7 +3018,19 @@ def _repos(fid: str) -> str:
         # empty bordered rectangle — see :func:`_empty_lines`. No heading: `▪ repos 0`
         # above "no clones in demo" is the same fact twice in a two-row pane.
         VIEWPORT.blank()
-        return "\n".join(_empty_lines(_frame_workspace(fid), w))
+        # The other half of the same question, and it is asked twice rather than once
+        # above the cache ON PURPOSE. Above it, this would override a table the cache
+        # still has — and a panel "never gathers on its own: it reads the cache or says it
+        # has none" (docs/frame.md), so a renderer that contradicted its own cache from a
+        # `stat` would be re-deriving state the gather owns, on every repaint of every
+        # frame. Here it costs nothing on the path that draws a table and separates the
+        # two claims that were one sentence: `no clones in <ws>` is a workspace with
+        # nothing cloned into it, which is not what an absent one is.
+        from .. import workspace as ws_mod
+        ws = _frame_workspace(fid)
+        if not ws_mod.exists(ws):
+            return "\n".join(_gone_lines(ws, w))
+        return "\n".join(_empty_lines(ws, w))
     # The heading takes the first row and the table spends what is left. Asked for fewer
     # ROWS rather than sliced afterwards, so what survives at `terse` (or in a pane a
     # resize starved) is still `_pick_rows`' ranked subset — the repo you are standing

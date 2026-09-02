@@ -267,10 +267,11 @@ def cmd_workspace_remove(args) -> int:
 
 def cmd_workspace_rename(args) -> int:
     """Rename a workspace: move workspaces/<old>/ → workspaces/<new>/ (clones, memory,
-    refs, and manifest come along), fix the manifest name + liveness block, and repoint
+    refs, and manifest come along), fix the manifest name + liveness block, repoint
     the active session/terminal pointer + lock so a renamed active workspace stays
-    active. For a LIVE workspace, commit the tracked move (manifest + memory) so the
-    rename propagates to the team."""
+    active, and repoint every chat that says it is in the workspace (#795) so none of
+    them is orphaned. For a LIVE workspace, commit the tracked move (manifest + memory)
+    so the rename propagates to the team."""
     old, new = args.old, args.new
     if not workspace.valid_name(new):
         util.err(f"invalid workspace name '{new}' (use lowercase letters, digits, . _ -)")
@@ -293,8 +294,20 @@ def cmd_workspace_rename(args) -> int:
         r = _git(["ls-files", "-z", "--", f"workspaces/{old}"], cwd=config.ROOT)
         tracked_old = [p for p in r.stdout.split("\0") if p]
 
-    workspace.rename(old, new)
+    moved = workspace.rename(old, new)
     util.ok(f"Renamed workspace '{old}' → '{new}' (clones, memory, and manifest moved).")
+    if moved:
+        # #795: the chats came too. A rename that silently re-labels running conversations
+        # is one the operator finds out about from a panel; this is the sibling of the
+        # "this session's active workspace followed the rename" line below, for the noun
+        # that is a chat's identity rather than a session's work.
+        #
+        # A COUNT and not the ids. Every id in `moved` reached it through `contain.child`
+        # (`state.frame_dir`, which every reader in `rename_workspace` goes through), so a
+        # `contain.one_line` here would be a guard nothing could turn red — which this repo
+        # deletes rather than ships. `new` is `valid_name`-checked at the top of this
+        # function.
+        util.info(f"{len(moved)} chat(s) in '{old}' followed the rename → '{new}'.")
     if workspace.resolve() == new and workspace.source() in ("session", "active-file"):
         util.info(f"This session's active workspace followed the rename → '{new}' (still 🔒 locked).")
 
