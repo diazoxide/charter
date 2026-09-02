@@ -55,6 +55,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from charter import commands, config, root
 from tests._isolation import PersonaIso
@@ -435,9 +436,74 @@ class TestTheDetector(PlaneInsideAPlane):
         self.assertEqual(root.nested_plane_in(top, leaf), leaf.resolve())
 
     def test_it_never_raises_on_a_path_that_is_gone(self):
-        """It sits on a command path, beside `tree_of`, which makes the same promise."""
+        """It sits on a command path, beside `tree_of`, which makes the same promise.
+
+        A missing path does not actually THROW — `Path.resolve` tolerates it and `is_file`
+        answers False — so this pins the ANSWER and nothing else.
+        `TestTheDetectorNeverRaises` is where the catches are pinned."""
         self.assertIsNone(root.nested_plane_in(self.plane, self.tmp / "nope" / "gone"))
         self.assertIsNone(root.nested_plane_in(self.tmp / "nope" / "gone", self.clone))
+
+
+class TestTheDetectorNeverRaises(PlaneInsideAPlane):
+    """The "never raises" promise, made observable.
+
+    Every one of these was a deletion-sweep SURVIVOR before it existed: the catches sat over
+    calls that no fixture could make fail, so `narrow-except` changed nothing anywhere and
+    the promise was asserted only by paths that never throw. A hostile filesystem is not
+    exotic on the path this sits on — an unreadable ancestor directory, a cwd deleted out
+    from under the process, a symlink loop — and this runs inside `charter save`, where an
+    escaping `OSError` is a traceback instead of a refusal.
+
+    Each case makes exactly ONE of the three calls throw, so the three catches are pinned
+    separately rather than by one blanket failure.
+    """
+
+    def _raising(self, module, attr, exc=OSError("unreadable")):
+        """The shape `tests/test_doctor_absent_is_not_health.py` uses: swap a module
+        attribute for one that throws, and put it back afterwards."""
+        def boom(*a, **kw):
+            raise exc
+        real = getattr(module, attr)
+        setattr(module, attr, boom)
+        self.addCleanup(setattr, module, attr, real)
+
+    def test_a_cwd_that_no_longer_exists(self):
+        """`Path.cwd()` raises `FileNotFoundError` when the process's working directory has
+        been deleted — the OSError half of the first catch. Reached with ``start=None``,
+        which is how `commit_push` calls it."""
+        with mock.patch.object(Path, "cwd", side_effect=FileNotFoundError("gone")):
+            self.assertIsNone(root.nested_plane_in(self.plane))
+
+    def test_a_symlink_loop_under_the_starting_directory(self):
+        """`Path.resolve()` raises `RuntimeError`, not `OSError`, on a symlink loop — the
+        other half of the first catch, and the reason it names two exception types. Narrow
+        it to `OSError` alone and this is a traceback out of `charter save`."""
+        with mock.patch.object(Path, "resolve", side_effect=RuntimeError("symlink loop")):
+            self.assertIsNone(root.nested_plane_in(self.plane, self.clone))
+
+    def test_an_ancestor_directory_that_cannot_be_read(self):
+        """`Path.is_file()` propagates `PermissionError` (it swallows only
+        ENOENT/ENOTDIR/EBADF/ELOOP, never EACCES) — the second catch, over the marker walk.
+        One unreadable directory between the caller and the plane is enough."""
+        with mock.patch.object(Path, "is_file", side_effect=PermissionError("denied")):
+            self.assertIsNone(root.nested_plane_in(self.plane, self.clone))
+
+    def test_the_walk_outward_hitting_an_unreadable_directory(self):
+        """The third catch, over `enclosing_plane` — which does its own `is_file` stat on
+        each ancestor and is documented as able to throw. Reached only from a caller that
+        IS in a nested plane, so the loop is entered before it fails."""
+        self._raising(root, "enclosing_plane")
+        self.assertIsNone(root.nested_plane_in(self.plane, self.clone))
+
+    def test_the_refusal_path_survives_it_too(self):
+        """The contract that matters to the caller: `charter save` degrades to committing
+        the plane, not to a traceback. `nested_plane_in` answering `None` means "no nested
+        plane I can see", and an unreadable tree is exactly that."""
+        self._raising(root, "enclosing_plane")
+        rc, said = self.save_from(self.clone)
+        self.assertEqual(rc, 0, said)
+        self.assertNotIn("Traceback", said)
 
 
 if __name__ == "__main__":

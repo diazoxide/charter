@@ -259,41 +259,51 @@ def nested_plane_in(plane: Path, start: Path | None = None) -> Path | None:
     plane`` looks equivalent and is not: in a plane inside a plane inside a plane, under
     ``$CHARTER_ROOT=<the middle one>``, the outermost is not the tree being committed, yet
     standing in the leaf still commits a tree the caller is not in. Membership of the chain
-    is the honest test. ``seen`` guards a symlink arrangement that could otherwise cycle,
-    on the same grounds as `_outermost`'s.
+    is the honest test.
 
     The answer is the INNERMOST plane the caller stands in, never an intermediate one: it is
     printed as "run git here", and that has to be the tree actually holding their work.
 
+    **No ``seen`` set, and no ``inner == target`` short-circuit, unlike `_outermost`.** Both
+    were written here first and the deletion sweep charged them as unreachable, which they
+    are: :func:`enclosing_plane` answers an element of ``here.resolve().parents``, so every
+    hop is a strictly SHORTER resolved path. The chain therefore cannot revisit anything —
+    ``outer in seen`` is never true and the loop always terminates at ``None`` — and it can
+    never arrive back at ``inner``, so a caller standing in the very plane being committed
+    (the ``$CHARTER_ROOT`` hatch) falls out of the loop returning ``None`` without needing to
+    be checked for. `_outermost`'s copy of the guard is older, is charged to nobody, and is
+    left alone; this note is here so the next reader does not "restore" a set that provably
+    never holds a second element.
+
     Never raises: it sits on a command path, beside `tree_of`, which makes the same promise.
+    Each of the three catches below is pinned by a test that makes the call under it throw —
+    `TestTheDetectorNeverRaises` — because "never raises" asserted only by paths that never
+    fail is a promise nothing measured.
     """
     try:
         cur = (Path(start) if start is not None else Path.cwd()).resolve()
         target = Path(plane).resolve()
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError):       # cwd deleted (OSError); symlink loop (RuntimeError)
         return None
-    inner = None
     try:
         for d in (cur, *cur.parents):
             if (d / MARKER).is_file():
                 inner = _plane_of(d)
                 break
+        else:
+            return None                   # no marker above `start` at all
     except OSError:                       # PermissionError on an ancestor mid-walk
         return None
-    if inner is None or inner == target:
-        return None
-    seen = {inner}
     cur_plane = inner
     while True:
         try:
             outer = enclosing_plane(cur_plane)
         except OSError:
             return None
-        if outer is None or outer in seen:
+        if outer is None:
             return None
         if outer == target:
             return inner
-        seen.add(outer)
         cur_plane = outer
 
 
