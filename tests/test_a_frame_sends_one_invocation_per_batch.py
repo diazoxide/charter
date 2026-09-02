@@ -77,20 +77,51 @@ class WhatARealTmuxDoesWithACommandList(unittest.TestCase):
     **A server and no client**, which is what makes this runnable in CI: nothing here
     attaches anything or draws anything, so `TERM=dumb` and no controlling terminal are
     no obstacle. What it needs is a tmux that will start a detached session, which CI has.
+
+    **One server for the whole class, HELD open, and #713 is why that is a construction
+    rather than tidiness** (`test_frame_tmux_integration._hold_the_server` measures it).
+    `exit-empty` is on by default: the moment a socket's last session goes, the server
+    retires — and it does not unlink its socket file, so the next `new-session` is a
+    client that finds a socket to connect to rather than a path to build a server at. If
+    it lands while the retiring server still holds its listening fd, the connect succeeds,
+    the command is never run, and tmux answers **`server exited unexpectedly`**, rc 1.
+    A server per test on one socket is three chances at that per run, and this class took
+    one on its first CI run. The keeper session is never a target and never dies, so the
+    server is born once and no client ever rebuilds it.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        cls._tmux_cmd("kill-server")
+        held = cls._tmux_cmd("new-session", "-d", "-s", "keep", "-x", "80", "-y", "24",
+                             "--", "cat")
+        assert held.returncode == 0, held.stderr
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmux_cmd("kill-server")
+        # `kill-server` ends the server and leaves its socket FILE — measured, and the
+        # reason `tests/_tmuxreap.py` exists at all. Removed here so a run leaks nothing.
+        (_tmuxreap.socket_dir() / SOCKET).unlink(missing_ok=True)
+
+    @classmethod
+    def _tmux_cmd(cls, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["tmux", "-L", SOCKET, *args],
+                              capture_output=True, text=True, timeout=15)
+
     def setUp(self):
-        self.addCleanup(lambda: subprocess.run(
-            ["tmux", "-L", SOCKET, "kill-server"], capture_output=True))
-        started = self._tmux("new-session", "-d", "-s", "s", "-x", "80", "-y", "24",
-                             "-P", "-F", "#{pane_id}", "cat")
+        # A session of this test's own on the held server. Not killed afterwards: the
+        # server must never become empty (see the class docstring), and `tearDownClass`
+        # takes every session down at once.
+        name = f"s{len(self.id())}{abs(hash(self.id())) % 100000}"
+        started = self._tmux("new-session", "-d", "-s", name, "-x", "80", "-y", "24",
+                             "-P", "-F", "#{pane_id}", "--", "cat")
         self.assertEqual(started.returncode, 0, started.stderr)
         self.pane = started.stdout.strip()
         self.assertTrue(self.pane.startswith("%"), started.stdout)
 
     def _tmux(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["tmux", "-L", SOCKET, *args],
-                              capture_output=True, text=True, timeout=15)
+        return self._tmux_cmd(*args)
 
     def _option(self, name: str) -> str:
         """One window option's value, or ``""`` where this tmux has none set.
