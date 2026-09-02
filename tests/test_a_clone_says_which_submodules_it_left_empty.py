@@ -164,6 +164,27 @@ class TestWhatTheTreeReports(SubmoduleCase):
         git("checkout", "-q", "HEAD~1", cwd=r / "dev-scripts")
         self.assertEqual(commands.submodule_drift(r), ([], ["dev-scripts"]))
 
+    def test_a_submodule_path_with_a_space_in_it_survives_the_parse(self):
+        """`git submodule status` is `<mark><sha> <path>` and, for a checked-out one, a
+        trailing ` (<describe>)`. Splitting on every space reads the describe — or the last
+        word of the path — as the name. Nothing stops a repo naming a directory this way,
+        and the sweep cannot tell a parse that only ever sees single-word paths from a
+        correct one."""
+        r = self.repo()
+        plant_submodule(r, "dev scripts")
+        self.assertEqual(commands.submodule_drift(r), (["dev scripts"], []))
+
+    def test_a_checked_out_submodule_is_not_named_after_its_describe(self):
+        r, sub = self.repo(), make_repo(self.tmp / "sub")
+        git("submodule", "add", "-q", str(sub), "dev scripts", cwd=r)
+        git("commit", "-qm", "add", cwd=r)
+        git("commit", "-q", "--allow-empty", "-m", "v2", cwd=r / "dev scripts")
+        moved = git("rev-parse", "HEAD", cwd=r / "dev scripts").stdout.strip()
+        git("update-index", "--cacheinfo", f"160000,{moved},dev scripts", cwd=r)
+        git("commit", "-qm", "bump", cwd=r)
+        git("checkout", "-q", "HEAD~1", cwd=r / "dev scripts")
+        self.assertEqual(commands.submodule_drift(r), ([], ["dev scripts"]))
+
     def test_a_directory_that_is_not_a_repository_reports_nothing(self):
         """Called from `status` on whatever sits in a workspace — it must not raise."""
         d = config.ROOT / "workspaces" / "ws" / "notarepo"
@@ -317,7 +338,8 @@ class TestStatusRowSaysSo(SubmoduleCase):
     def test_the_row_names_the_uninitialised_count(self):
         r = self.repo()
         plant_submodule(r, "dev-scripts")
-        self.assertEqual(commands._clone_note(r), "main · clean · 1 submodule not initialised")
+        self.assertEqual(commands._clone_note(r),
+                         "main · clean · 1 submodule not initialised")
 
     def test_both_kinds_of_drift_fit_in_one_note(self):
         """`dirty` here is not incidental — a submodule left behind IS an unstaged change

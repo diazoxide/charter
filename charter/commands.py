@@ -624,8 +624,9 @@ def report_submodule_drift(d: Path, label: str, branch: str | None = None,
         GLOBAL protocol.file.allow                     -> submodule init rc = 0
         LOCAL  submodule.<name>.url override           -> submodule init rc = 0
 
-    The last line is the asymmetry: the PARENT resolves the URL from local config, the
-    CHILD consumes the transport config and cannot see it. So golden rule 0 — every git
+    The last line is the asymmetry: the PARENT resolves the URL from local config, while
+    the CHILD consumes the transport config and its config search skips the surrounding
+    repository's local file. So golden rule 0 — every git
     operation over that repo's own forge's token — **does not hold for a submodule fetch**,
     and an auto-init would be charter fetching outside its own credential policy, quietly,
     on the operator's behalf. Saying so leaves that call where it belongs.

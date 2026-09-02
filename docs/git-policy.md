@@ -52,6 +52,55 @@ secret in the transcript. Those are the accidental roads, and they are the only 
 name-based guard can close — a command you chose to run is not one of them. See
 [secrets.md](secrets.md) and [SECURITY.md](../SECURITY.md).
 
+## Submodules are outside the rule, and charter says so rather than reaching past it
+
+`charter clone` clones the repo you named and **does not initialise its submodules**.
+`charter clone`, `charter sync` and `charter status` each say when a clone has submodules
+with nothing checked out, name them, and print the one command that fixes it:
+
+```bash
+git -C workspaces/<ws>/<repo> submodule update --init --recursive
+```
+
+It is yours to run, and that is a decision rather than an omission.
+
+**A submodule URL is not a URL charter built.** It comes out of `.gitmodules`, a file
+inside the repo that was just cloned, and it can name any host, recursively.
+`commands._https_url` already refuses to hand `git clone` a string charter did not
+build — `ext::sh -c '…'` is a transport that runs a command — and fetching whatever
+`.gitmodules` names would put that string back one layer down, where the allowlist above
+it cannot see it.
+
+**And the policy on this page does not reach a submodule fetch anyway.** Everything
+`--apply` writes goes into a repo's *local* config, and **`git clone` does not read the
+local config of the repository it is standing in** — system, global and `-c` only. A
+submodule fetch *is* a nested `git clone`. Measured on git 2.50.1, against a superproject
+whose submodule cannot be fetched at all without the config under test:
+
+| where `protocol.file.allow` was set | `git submodule update --init` |
+| --- | --- |
+| the superproject's **local** config | fails — never read |
+| `-c` on the command line | succeeds |
+| **global** config | succeeds |
+| **local** `submodule.<name>.url` override | succeeds |
+
+The last row is the asymmetry: the *parent* (`git submodule update`) resolves the URL from
+local config, so a `submodule.<name>.url` override works; the *child* (`git clone`)
+consumes `credential.helper` and `url.<https>.insteadOf`, and its config search skips the
+local file that holds them. So a submodule fetch runs **without** charter's credential
+helper and **without** its SSH→HTTPS rewrite, whoever starts it. A charter that
+initialised submodules for you would be fetching outside its own credential policy,
+quietly, with your token in reach.
+
+Two practical consequences if your repos keep tooling in a submodule:
+
+- A submodule whose `.gitmodules` URL is SSH will go over SSH — the rewrite is not there.
+  `git config submodule.<name>.url https://…` in that clone is read by the parent and
+  fixes it for good.
+- The guard is **not** what stops you. It reads the command line, never `.gitmodules`, so
+  `git submodule update --init` is not denied by anything. What it *does* deny is typing an
+  SSH URL while you configure the override — write the HTTPS form instead.
+
 ## When you are not using charter for git
 
 The policy is applied per repo, in that repo's local config, and never to your global git
