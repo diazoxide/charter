@@ -247,12 +247,13 @@ def pin_reason(noun: str, fid: str) -> str:
     which the picker is dishonest, and a `$CHARTER_WORKSPACE` pin does not make one: it
     pins which workspace this CHAT is in, and nothing here proposes to change that.
 
-    **The one refusal a workspace row can still earn is not asked here, deliberately.**
-    "That workspace is not open" is a question about live tmux sessions, and `pin_reason`
-    runs when the palette OPENS — so an answer taken here would be a reading of the server
-    from before the operator had chosen anything, drawn as though it were about the name
-    they went on to press. `commands_frame._switch_client` asks it at the instant it
-    matters, which is `cmd_chat`'s own split one noun out.
+    **What a workspace row does about "not open" is not asked here, deliberately — and it
+    is no longer a refusal.** Whether a workspace has a live session is a question about
+    tmux, and `pin_reason` runs when the palette OPENS, so an answer taken here would be a
+    reading of the server from before the operator had chosen anything, drawn as though it
+    were about the name they went on to press. `commands_frame._switch_client` asks at the
+    instant it matters — `cmd_chat`'s own split one noun out — and a workspace with no
+    session is opened there (§4k) rather than refused.
 
     For a persona it is the launch pin: the same sentence `switch.to_persona` refuses
     with, built from the same read (`switch._pin`), for the same reason.
