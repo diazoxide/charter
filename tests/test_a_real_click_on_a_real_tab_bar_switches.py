@@ -59,16 +59,23 @@ _HAS_TMUX = shutil.which("tmux") is not None
 
 
 def _NOT_OPEN(ws: str) -> str:
-    """What `commands_frame._switch_client` says for a workspace with no session on this
-    server — the answer every click in this module gets, because a test fixture builds one
-    workspace session and clicks the tab of another.
+    """What a click on a not-open workspace's tab puts on this fixture's attention row.
+
+    **This used to be a flat refusal and is now as far as an OPEN gets here.** A tab for a
+    workspace with no session opens it (`commands_frame._open_workspace`); what stops it in
+    *this* module is the next question along — which harness to open it with. The chats
+    these cases build record no `$CHARTER_HARNESS` and the isolated plane declares no
+    `[harness] default`, so the open refuses by name rather than starting something nobody
+    chose. That is deliberate and load-bearing for a test suite: **no case in this file may
+    ever start a real harness process**, and the assertion below is what would notice if
+    one became reachable.
 
     Spelled here rather than imported, deliberately: it is the operator-visible sentence
     and this module's whole subject is that a click PRODUCES one. A constant read out of
     the module under test would follow a reworded sentence silently, and the wording is
     the thing. It carries the name, so a click that landed on the wrong tab fails here.
     """
-    return f"workspace '{ws}' is not open on this plane"
+    return f"cannot open '{ws}': this chat records no harness"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 

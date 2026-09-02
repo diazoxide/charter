@@ -4425,13 +4425,45 @@ def _reopening(args) -> "Reopening | None":
 def _wants_attach(args) -> bool:
     """Whether this launch should become the operator's terminal.
 
-    Every launch except a reopen's does. Asked as its own function rather than inline as
-    ``_reopening(args) is None`` because the two are genuinely different questions that
-    happen to have one answer today — "am I restoring" and "am I the terminal" — and the
-    day a third caller wants one without the other, a shared expression would have to be
-    unpicked at two call sites at once.
+    Asked as its own function rather than inline as ``_reopening(args) is None`` because
+    the two are genuinely different questions that happen to have had one answer — "am I
+    restoring" and "am I the terminal". **That day arrived**: :func:`_open_workspace`
+    opens a workspace a tab named, from a `frame-switch` running detached with its streams
+    on `/dev/null`, and it is neither restoring nor a terminal. So the expression is
+    unpicked here, once, rather than at the three call sites that read it.
+
+    ``attach`` is deliberately a `getattr` default rather than a required field, for
+    `_reopening`'s own reason: every other caller of `cmd_launch` in this codebase — the
+    CLI's own namespace, `cmd_reopen`'s, and every test's — constructs an `args` without
+    it, and each of them IS the terminal. Absent means yes.
     """
+    if not getattr(args, "attach", True):
+        return False
     return _reopening(args) is None
+
+
+def _launch_size(args) -> tuple[int, int] | None:
+    """The window size this launch was HANDED, or ``None`` to measure its own terminal.
+
+    `cmd_launch` sizes the frame from `os.get_terminal_size()`, which is right for every
+    launch that has a terminal and raises `OSError` for one that does not — and the
+    `_FALLBACK_SIZE` underneath it is 80x24, which `_drawable_slots` reads as room for
+    almost nothing. A workspace opened by :func:`_open_workspace` has no terminal of its
+    own and yet is about to be shown on one charter can already measure (the client is
+    looking at the switching chat's window this instant), so the number is passed in
+    rather than guessed.
+
+    Validated rather than trusted: it reaches `layout.session_argv` as `-x`/`-y`, and a
+    non-positive or non-integer pair there is a tmux parse error that would take the whole
+    launch down with nothing on screen to say why.
+    """
+    got = getattr(args, "size", None)
+    if not isinstance(got, tuple) or len(got) != 2:
+        return None
+    cols, rows = got
+    if not isinstance(cols, int) or not isinstance(rows, int):
+        return None
+    return (cols, rows) if cols > 0 and rows > 0 else None
 
 
 def cmd_launch(args) -> int:
@@ -4456,7 +4488,19 @@ def cmd_launch(args) -> int:
         util.err("charter frame: nothing to run — `charter frame -- <command>`")
         return 2
 
-    if args.no_frame or not sys.stdout.isatty():
+    # **`_wants_attach` is in this guard, and it is a correctness fix rather than a
+    # widening.** A non-tty stdout means exactly one thing — "this process cannot be the
+    # operator's terminal" — and the conclusion drawn from it, run the harness bare, is
+    # right only for a launch that was going to BE that terminal. `_open_workspace` starts
+    # one from a `frame-switch` running detached with all three streams on `/dev/null`
+    # (`builtin_actions._spawn`), and it never attaches: arriving is `switch-client`.
+    #
+    # Left un-gated this is not a wrong frame, it is an `os.execvp` — `bypass` execs — so
+    # the switching process would have been REPLACED by a bare harness writing to
+    # `/dev/null`: no frame, no session, no switch, no exit code, and no surface left to
+    # report any of it on. That, and not the `attach` the old refusal named, is what
+    # actually stopped a detached process opening a workspace.
+    if args.no_frame or (not sys.stdout.isatty() and _wants_attach(args)):
         return bypass(argv)
 
     # A REGISTERED harness whose binary is not installed never reaches tmux — and the
@@ -4674,13 +4718,24 @@ def cmd_launch(args) -> int:
     # start rather than in front of it. See `_spawn_gather`.
     _spawn_gather(fid, ws)
 
-    try:
-        cols, rows = os.get_terminal_size()
-    except OSError:
-        # `os.get_terminal_size()` raises even when `isatty()` said yes — a tty with
-        # nothing behind it to answer `TIOCGWINSZ`. Falling back rather than propagating
-        # is the deliberate choice; see `_FALLBACK_SIZE`'s own docstring for why 80x24.
-        cols, rows = _FALLBACK_SIZE
+    given = _launch_size(args)
+    if given is not None:
+        # Handed a size by a caller that has no terminal of its own but knows which one
+        # this frame is about to be shown on — see :func:`_launch_size`. Measured in a
+        # process with its streams on `/dev/null`, on tmux 3.7c and at the 3.2 floor
+        # alike: `os.get_terminal_size()` raises there, so without this the frame would be
+        # laid out for `_FALLBACK_SIZE` and `_drawable_slots` would drop every panel the
+        # operator's real terminal has room for.
+        cols, rows = given
+    else:
+        try:
+            cols, rows = os.get_terminal_size()
+        except OSError:
+            # `os.get_terminal_size()` raises even when `isatty()` said yes — a tty with
+            # nothing behind it to answer `TIOCGWINSZ`. Falling back rather than
+            # propagating is the deliberate choice; see `_FALLBACK_SIZE`'s own docstring
+            # for why 80x24.
+            cols, rows = _FALLBACK_SIZE
 
     slots = _drawable_slots(cols, rows)
     env = _frame_env(fid, h)
@@ -6540,6 +6595,129 @@ def _clients_on(socket: str, session: str) -> list[str]:
     return out.stdout.split()
 
 
+def _open_workspace(fid: str, ws: str, *, socket: str) -> tuple[str, str] | None:
+    """Open *ws* on this plane without attaching to it — ``(session id, chat id)``, or
+    ``None`` having said why.
+
+    **§4k's other half, reached from a tab instead of from a command line.** `charter -w
+    foo` "opens or focuses": `_workspace_to_focus` is the focus, and this is the open, for
+    the surface where the operator did not type a command. The old refusal here named
+    ``charter <harness> --workspace foo`` for the operator to type by hand; this runs it.
+
+    **Why the reason the old refusal gave was wrong.** It said opening needs "a directory,
+    an ordinal, a harness process and an `attach`", and that a switch running detached with
+    its streams on `/dev/null` has "no terminal to attach anything to". The first three
+    need no terminal, and the fourth is not wanted: arriving is `switch-client`, which
+    #793 already does and which needs no tty at all. Measured on tmux 3.7c and at the 3.2
+    floor, in a process with `start_new_session=True` and all three streams on
+    `/dev/null`: `new-session -d`, `split-window`, a session option and `switch-client`
+    all succeed, and the client lands with nothing killed. `_wants_attach` is what carries
+    that decision into the launcher, and its docstring had already reserved the seam.
+
+    **And #518 does not reach this, which is worth stating rather than assuming.** #518 is
+    about `charter <harness>` resolving a workspace *silently*, and its "creating is not
+    free" paragraph is about `charter workspace create` making a workspace DIRECTORY from a
+    name the operator typed — "a picker that creates on a typo leaves litter". Nothing here
+    types a name or creates a workspace: `switch.to_workspace` has already refused any name
+    that is not already a directory under `workspaces/`, so the set of workspaces is the
+    same after this call as before it. What is created is a CHAT in a workspace that
+    exists, which is the thing §4k says `-w foo` creates. `_pin_workspace` is still not
+    reached with ``picked``, so the launcher's own pointer — #518's "never ask twice" — is
+    not written by a click either.
+
+    **Which harness**, and it is the one question a tab cannot carry. The chat the operator
+    clicked FROM recorded its own (`state.record_identity`, `$CHARTER_HARNESS`), and using
+    it makes the click mean "another workspace, same tool" — the only answer available that
+    the operator has actually expressed. A chat whose identity predates that record, or
+    names a harness this charter cannot launch, falls back to `[harness] default` and, with
+    neither, is refused by name rather than opened under something nobody chose.
+
+    **Where.** The workspace's own directory, which is what `charter --workspace foo` typed
+    in it would have used and what `state.record_cwd` is for. `cmd_launch` reads it from
+    `os.getcwd()`, so it is `os.chdir`'d into and restored in a `finally` — `cmd_reopen`'s
+    own arrangement, for its reason: this process goes on to re-lay-out two frames, and a
+    launcher left standing in somebody else's directory is exactly the silent wrongness
+    §4e's cwd item exists to close.
+
+    **The answer is re-asked, never inferred.** `_plane_session` is the same question that
+    returned ``None`` a moment ago, put again now the session exists — so a launch that
+    reported success but left nothing on the server is caught here rather than switching a
+    client at a session id charter made up.
+    """
+    # **The name must be free on the whole MACHINE, not merely unresolved on this plane**,
+    # and this guard is what keeps #793's cross-plane guarantee across the new door into
+    # the launcher. `_plane_session` answered ``None`` a moment ago, and that means "this
+    # plane cannot prove a session of this name is its own" — NOT "no such session". One
+    # tmux server serves every plane on this machine (eleven sessions from three projects
+    # on the operator's own socket the week this was written), and `cmd_launch` decides
+    # between starting a session and joining one with `if session in live_sessions:`, a
+    # NAME test over all of them. So an open that skipped this would add a chat window to
+    # another plane's live session — another project's frame, across every isolation
+    # boundary charter has — and then fail the `@charter_plane` veto on the way back out,
+    # leaving the operator told the open failed with a window sitting in somebody else's
+    # session. §3.3: "Open-or-focus must match on this plane's chat directories, never on a
+    # live session name."
+    #
+    # Deliberately refusing a session this plane may actually own but cannot PROVE it owns
+    # — a chat whose `harness_pane` record was lost, or one an older charter left unmarked.
+    # Both are recoverable by attaching to it by hand; a window in another project's frame
+    # is not, and the asymmetry decides which way an uncertain answer falls.
+    if state.workspace_prefix(ws) in _live_sessions(socket):
+        _say_on_screen(fid, f"cannot open '{ws}': a session of that name is already "
+                            "running on this machine and this plane cannot prove it is "
+                            f"its own — it is probably another plane's. Attach to it by "
+                            f"hand if it is yours: tmux -L {socket} attach -t "
+                            f"{state.workspace_prefix(ws)}")
+        return None
+    ident = state.identity(fid).get("CHARTER_HARNESS", "")
+    h = next((x for x in harness.all() if x.name == ident and x.cli_name), None)
+    if h is None:
+        fallback = (config.HARNESS or {}).get("default")
+        h = next((x for x in harness.all() if x.cli_name == fallback), None)
+    if h is None:
+        _say_on_screen(fid, f"cannot open '{ws}': this chat records no harness this "
+                            "charter can launch, and this plane declares no `[harness] "
+                            "default`")
+        return None
+    from types import SimpleNamespace
+    where = workspace.workspace_dir(ws)
+    root = where if where.is_dir() else config.ROOT
+    # Every field `cmd_launch` and `_choose_workspace` read is named rather than left to a
+    # `getattr` default — `_reopen_args`'s rule, which is what makes this a contract that
+    # can be read instead of a puzzle. `workspace` is set outright so `_picker_wanted` can
+    # never raise a prompt on a path with no operator waiting, `pick` is false for the same
+    # reason and for #518's pointer, `rest` is empty so §4k's open-or-focus gate stays
+    # reachable and the harness starts at its own prompt with nothing sent to it, and
+    # `attach` is the seam.
+    args = SimpleNamespace(harness=h.cli_name, rest=[], no_frame=False,
+                           workspace=ws, pick=False, attach=False,
+                           size=_window_size(socket, state.harness_pane(fid) or ""))
+    here_dir = os.getcwd()
+    try:
+        os.chdir(root)
+    except OSError:
+        _say_on_screen(fid, f"cannot open '{ws}': charter cannot enter "
+                            f"{contain.readable(str(root)) or 'its directory'}")
+        return None
+    try:
+        rc = cmd_launch(args)
+    finally:
+        try:
+            os.chdir(here_dir)
+        except OSError:
+            pass
+    opened = _plane_session(socket, ws=ws)
+    if opened is None:
+        # Said rather than swallowed, and this is the one outcome an operator cannot see
+        # for themselves: `cmd_launch`'s own `util.err` went to `/dev/null` with everything
+        # else this process writes, so without this line a click would simply do nothing —
+        # the exact complaint this change exists to answer, arriving through a new door.
+        _say_on_screen(fid, f"could not open workspace '{ws}' — the launcher returned "
+                            f"{rc} and started no session")
+        return None
+    return opened
+
+
 def _switch_client(fid: str, ws: str, *, said: str) -> None:
     """Move the client(s) reading chat *fid* to this plane's workspace *ws* — §4b.
 
@@ -6634,15 +6812,19 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
         return
     there = _plane_session(socket, ws=ws)
     if there is None:
-        # **What a workspace with no session yet is answered with**, and it is a refusal
-        # rather than a launch. Opening one is `cmd_launch` — a directory, an ordinal, a
-        # harness process and an `attach` — and this runs detached with its streams on
-        # `/dev/null` (`builtin_actions._spawn`), with no terminal to attach anything to.
-        # `switch.py`'s rule is the same one: nothing there creates anything either, and
-        # #518 is why. So the refusal names the command that does.
-        _say_on_screen(fid, f"workspace '{ws}' is not open on this plane — open it with "
-                            f"`charter <harness> --workspace {ws}`")
-        return
+        # **What a workspace with no session yet is answered with, and it is now an OPEN
+        # rather than a refusal** — §4k's "if it is live, attach to it; if not, open it and
+        # leave the others", reached from a tab instead of a command line. This used to
+        # print `charter <harness> --workspace <ws>` for the operator to go and type, on
+        # the grounds that opening ends in an `attach` and a detached switch has no
+        # terminal for one. Measured on 3.7c and at the 3.2 floor, that is false twice
+        # over: a tty-less process creates sessions and panes perfectly well, and the
+        # attach is not wanted anyway — arriving is `switch-client`, three lines below.
+        # See :func:`_open_workspace`, which also says why #518 does not reach a name the
+        # operator picked off a list of workspaces that already exist.
+        there = _open_workspace(fid, ws, socket=socket)
+        if there is None:
+            return
     if there[0] == here[0]:
         # Records can disagree with tmux: `switch.to_workspace` refused this by NAME a
         # moment ago, off `state.workspace_for`, and this is the same question asked of
