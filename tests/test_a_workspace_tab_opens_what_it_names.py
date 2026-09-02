@@ -203,6 +203,23 @@ class TheTabOpensTheWorkspaceItNames(_OpensBeta):
         self.assertTrue(self.said.called)
         self.assertEqual(self.said.call_args[0][1], "workspace → beta")
 
+    def test_nothing_is_opened_when_there_is_no_terminal_to_take_there(self):
+        """**A switch that cannot happen must not spend first.** `_switch_client` already
+        refuses when no client is attached to this chat's session — the operator detached,
+        or an agent with no terminal is driving the frame — and that refusal used to come
+        after a free `_plane_session` read. An open is not free: it starts a harness
+        process and claims a chat ordinal. Asked BEFORE the open, so a frame nobody is
+        looking at cannot be made to launch things into the dark.
+
+        Deliberately inside the not-open branch rather than hoisted over the whole
+        function: the order of the existing refusals is #793's and pinned by its own
+        tests, and moving this one over `already in workspace` would change what a
+        detached frame is told about a workspace it is already in."""
+        s = self._run(_Server(clients=()))
+        self.assertEqual(self.launched, [], "it started a harness for nobody")
+        self.assertEqual(s.switched, [])
+        self.assertIn("no terminal", self.said.call_args[0][1])
+
     def test_an_open_that_starts_no_session_moves_nothing_and_says_so(self):
         """A launch can fail — a harness that is not installed, a state directory that
         cannot be made. The switch must then leave this chat exactly as it was rather

@@ -53,6 +53,11 @@ to a bar, and a tab that needed two clicks would be the select-then-confirm that
 tab exists to replace. Opening is also the reversible direction: `F2` → `chat` → close undoes
 it, and nothing is destroyed on the way in.
 
+**And nothing is opened for nobody.** If no terminal is attached to the frame doing the
+switching — you detached, or an agent with no terminal is driving it — the click is refused
+before anything starts, rather than launching a harness into a workspace with no client to
+move into it.
+
 The harness it opens with is **the one the chat you clicked from is running**, because a tab
 names a workspace and nothing else, and that is the only answer available that you actually
 expressed. Failing that, the plane's `[harness] default`. With neither, the click is refused

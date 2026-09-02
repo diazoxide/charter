@@ -735,8 +735,15 @@ class TwoPlanesOnOneMachine(_RealServer):
         """**End to end, and it is the operator's decision made observable**: switching is
         restricted to workspaces of THIS plane, and anything else is refused by name.
         Plane B clicks `shared`; there is a live session called `shared` with plane B's
-        own operator's terminal nowhere near it; the switch says the workspace is not open
-        *on this plane* and the client that is attached to plane A's session stays there.
+        own operator's terminal nowhere near it; the switch refuses because that session
+        is not one plane B can prove is its own, and the client attached to plane A's
+        session stays there.
+
+        **Plane B is given a terminal of its own, and the fixture is not honest without
+        it.** Since a tab OPENS, `_switch_client` refuses first — before spending a harness
+        process — when nothing is attached to the frame doing the switching. Plane B's
+        `$9000` is a session this test invented and nobody is on it, so without this the
+        case would stop one refusal early and prove nothing about planes at all.
         """
         self._mark(self.a_state)
         client = self._attach(SHARED)
@@ -748,6 +755,9 @@ class TwoPlanesOnOneMachine(_RealServer):
             said = []
             with mock.patch.object(commands_frame, "_pane_place",
                                    return_value=("$9000", "@9000")), \
+                 mock.patch.object(commands_frame, "_clients_on",
+                                   side_effect=lambda _s, sess:
+                                   ["/dev/ttyplaneb"] if sess == "$9000" else []), \
                  mock.patch.object(commands_frame, "_say_on_screen",
                                    side_effect=lambda fid, msg, **kw: said.append(msg)):
                 commands_frame._switch_client("shared.2", SHARED,

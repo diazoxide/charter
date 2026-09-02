@@ -6822,6 +6822,21 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
         # attach is not wanted anyway — arriving is `switch-client`, three lines below.
         # See :func:`_open_workspace`, which also says why #518 does not reach a name the
         # operator picked off a list of workspaces that already exist.
+        #
+        # **Asked before the open, because an open is not free.** The refusal below for
+        # "nobody is attached" is #411's shape — reporting a switch that moved nothing —
+        # and it used to sit after a `_plane_session` read that costs one tmux call. An
+        # open costs a harness process and a chat ordinal, so a frame nobody is looking
+        # at (the operator detached, or an agent with no terminal is driving it) must be
+        # refused BEFORE anything is started rather than after. Spelled here rather than
+        # hoisted over the whole function: the order of the other refusals is #793's and
+        # pinned by its own tests, and moving this one over `already in workspace` would
+        # change what a detached frame is told about a workspace it is already in.
+        if not _clients_on(socket, here[0]):
+            _say_on_screen(fid, "cannot switch: no terminal is attached to this "
+                                f"workspace, so charter will not open '{ws}' — there "
+                                "would be no client to move into it")
+            return
         there = _open_workspace(fid, ws, socket=socket)
         if there is None:
             return
