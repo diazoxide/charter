@@ -540,10 +540,16 @@ def submodule_drift(d: Path) -> tuple[list[str], list[str]]:
     """``(nothing checked out, not at the recorded commit)`` — submodule paths in the tree
     at *d*, in the order git lists them.
 
-    ``([], [])`` for a tree with no submodules and for anything this cannot read: a
-    directory that is not a repository, a `git` that failed, an unparseable line. This
-    feeds three REPORTS (`clone`, `sync`, `status`); none of them is the place to raise,
-    and a workspace holds whatever somebody put in it.
+    ``([], [])`` for a tree with no submodules, for a directory that is not a repository,
+    and for a `git` that exited non-zero. This feeds three REPORTS (`clone`, `sync`,
+    `status`); none of them is the place to raise, and a workspace holds whatever somebody
+    put in it.
+
+    **The non-zero check is not a formality, and it is not satisfied by an empty stdout.**
+    `git submodule status` prints the submodules it mapped and THEN fails on one it did
+    not: measured, an index carrying a gitlink that `.gitmodules` does not map exits 128
+    having already written ``-<sha> mapped`` to stdout. Without the check those lines are
+    reported as findings out of a run git itself disowned.
 
     **The `.gitmodules` stat comes first and is not an optimisation detail.** `status`
     already spends two `git` invocations per row and prints the table as it goes; a third
@@ -567,18 +573,25 @@ def submodule_drift(d: Path) -> tuple[list[str], list[str]]:
         return [], []
     absent: list[str] = []
     moved: list[str] = []
-    for line in (proc.stdout or "").splitlines():
+    for line in proc.stdout.splitlines():
         mark, rest = line[:1], line[1:]
         if mark not in (_SUBMODULE_ABSENT, _SUBMODULE_MOVED):
             continue
         # ``<mark><sha> <path>``, and for a CHECKED-OUT one a trailing `` (<describe>)``.
-        # The path is everything between, so it is taken from the first space rather than
-        # split on every space — a submodule path may contain them.
+        # The path starts at the FIRST space, because a submodule path may contain more of
+        # them — and the describe is taken off **by the mark**, never by looking at what
+        # the path ends with. Those two cannot be told apart by inspection: measured, a
+        # submodule at ``tools (x)`` reports as ``-<sha> tools (x)`` while absent and
+        # ``+<sha> tools (x) (remotes/origin/HEAD)`` while checked out, so a rule that
+        # trims whatever resembles a suffix reads the first one's path as ``tools``.
+        #
+        # `rpartition` rather than a search for the first ``" ("``: the describe is always
+        # LAST, which is what makes ``tools (x) (heads/main)`` come back as ``tools (x)``.
+        # A checked-out line always carries one — measured on a submodule with no tags,
+        # detached, which still prints ``(remotes/origin/HEAD)`` — so this never guesses.
         path = rest.partition(" ")[2]
-        if path.endswith(")") and " (" in path:
-            path = path[:path.rindex(" (")]
-        if not path:
-            continue
+        if mark == _SUBMODULE_MOVED:
+            path = path.rpartition(" (")[0]
         (absent if mark == _SUBMODULE_ABSENT else moved).append(path)
     return absent, moved
 

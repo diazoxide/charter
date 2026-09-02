@@ -164,6 +164,53 @@ class TestWhatTheTreeReports(SubmoduleCase):
         git("checkout", "-q", "HEAD~1", cwd=r / "dev-scripts")
         self.assertEqual(commands.submodule_drift(r), ([], ["dev-scripts"]))
 
+    def test_a_path_that_looks_like_a_describe_suffix_is_not_trimmed(self):
+        """The two cannot be told apart by inspecting the path, so the mark decides.
+        Measured, a submodule at `tools (x)` reports as::
+
+            absent      -<sha> tools (x)
+            checked out +<sha> tools (x) (remotes/origin/HEAD)
+
+        A rule that trims whatever ends in `)` after a ` (` reads the first path as
+        `tools` — a directory that does not exist, in the one sentence whose whole job is
+        to name the directory that does."""
+        r = self.repo()
+        plant_submodule(r, "tools (x)")
+        self.assertEqual(commands.submodule_drift(r), (["tools (x)"], []))
+
+    def test_the_describe_is_still_taken_off_a_checked_out_one(self):
+        """The other direction of the same decision: `+` lines DO carry the suffix, and
+        the path in front of it may itself end in `)`."""
+        r, sub = self.repo(), make_repo(self.tmp / "sub")
+        git("submodule", "add", "-q", str(sub), "tools (x)", cwd=r)
+        git("commit", "-qm", "add", cwd=r)
+        git("commit", "-q", "--allow-empty", "-m", "v2", cwd=r / "tools (x)")
+        moved = git("rev-parse", "HEAD", cwd=r / "tools (x)").stdout.strip()
+        git("update-index", "--cacheinfo", f"160000,{moved},tools (x)", cwd=r)
+        git("commit", "-qm", "bump", cwd=r)
+        git("checkout", "-q", "HEAD~1", cwd=r / "tools (x)")
+        self.assertEqual(commands.submodule_drift(r), ([], ["tools (x)"]))
+
+    def test_a_git_that_failed_reports_nothing_even_though_it_printed_findings(self):
+        """The non-zero check is not satisfied by an empty stdout, which is why dropping
+        it survives a test that only builds a broken directory. `git submodule status`
+        prints the submodules it mapped and THEN fails on one it did not — measured::
+
+            rc = 128
+            stdout = '-000…001 mapped\n'
+            stderr = "fatal: no submodule mapping found in .gitmodules for path 'unmapped'"
+
+        Without the check, `mapped` is reported as a finding out of a run git disowned."""
+        r = self.repo()
+        plant_submodule(r, "mapped")
+        # A SECOND gitlink that `.gitmodules` does not map — the state git refuses on.
+        git("update-index", "--add", "--cacheinfo", f"160000,{UNREACHABLE},unmapped", cwd=r)
+        git("commit", "-qm", "an unmapped gitlink", cwd=r)
+        proc = git("submodule", "status", cwd=r)
+        self.assertNotEqual(proc.returncode, 0, "fixture no longer makes git fail")
+        self.assertIn("mapped", proc.stdout, "fixture no longer prints a parseable line")
+        self.assertEqual(commands.submodule_drift(r), ([], []))
+
     def test_a_submodule_path_with_a_space_in_it_survives_the_parse(self):
         """`git submodule status` is `<mark><sha> <path>` and, for a checked-out one, a
         trailing ` (<describe>)`. Splitting on every space reads the describe — or the last
@@ -200,6 +247,65 @@ class TestWhatTheTreeReports(SubmoduleCase):
                                side_effect=AssertionError("ran git anyway")) as spy:
             self.assertEqual(commands.submodule_drift(r), ([], []))
         spy.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# the sentence, spelled out                                                    #
+# --------------------------------------------------------------------------- #
+class TestTheSentenceItself(SubmoduleCase):
+    def say(self, d: Path, **kw) -> list[str]:
+        out = []
+        with mock.patch.object(commands.util, "warn", lambda m, *a: out.append(m)), \
+             mock.patch.object(commands.util, "info", lambda m, *a: out.append(m)):
+            commands.report_submodule_drift(d, "super", **kw)
+        return out
+
+    def test_with_no_lead_the_facts_are_the_whole_sentence(self):
+        """Hand-spelled, because the alternative — building the expected string from the
+        same f-string the code uses — agrees with any wording that f-string takes. It is
+        also the half a caller can drop silently: always taking the `lead` branch renders
+        `super: None — 1 submodule(s) …` and every substring check still passes."""
+        r = self.repo()
+        plant_submodule(r, "dev-scripts")
+        self.assertEqual(
+            self.say(r)[0],
+            "super: 1 submodule(s) recorded but not initialised (dev-scripts) — nothing "
+            "is checked out there, so anything that runs from them fails with 'no such "
+            "file or directory'.")
+
+    def test_a_lead_is_joined_to_the_facts_and_does_not_replace_them(self):
+        r = self.repo()
+        plant_submodule(r, "dev-scripts")
+        self.assertEqual(
+            self.say(r, branch="main", lead="main is up to date, its submodules are not")[0],
+            "super: main is up to date, its submodules are not — 1 submodule(s) recorded "
+            "but not initialised (dev-scripts) — nothing is checked out there, so "
+            "anything that runs from them fails with 'no such file or directory'.")
+
+    def test_nothing_is_said_about_a_tree_with_no_drift(self):
+        self.assertEqual(self.say(self.repo()), [])
+
+
+class TestTheRemedyNamesAPathTheReaderCanUse(SubmoduleCase):
+    def test_a_tree_inside_the_plane_is_named_relative_to_it(self):
+        r = self.repo()
+        self.assertEqual(commands._submodule_remedy(r),
+                         "git -C workspaces/ws/super submodule update --init --recursive")
+
+    def test_a_tree_outside_the_plane_is_named_absolutely(self):
+        """Not hypothetical: `[plane] worktrees` and `$CHARTER_WORKTREES` relocate the
+        worktree root to a SIBLING of the plane (`config.worktrees_root_for`), and
+        `charter worktree add` reports on the tree it just created. `relative_to` raises
+        `ValueError` there, and without the catch the command that says how to fix a
+        submodule is itself a traceback."""
+        outside = self.tmp.parent / f"{self.tmp.name}.worktrees" / "ws" / "super.p1"
+        # The precondition, asserted as the condition the catch is FOR rather than as a
+        # string test — `<tmp>.worktrees` has `<tmp>` as a string prefix and is not under
+        # it as a path, which is the whole reason `relative_to` is the right question.
+        with self.assertRaises(ValueError):
+            outside.relative_to(config.ROOT)
+        self.assertEqual(commands._submodule_remedy(outside),
+                         f"git -C {outside} submodule update --init --recursive")
 
 
 # --------------------------------------------------------------------------- #

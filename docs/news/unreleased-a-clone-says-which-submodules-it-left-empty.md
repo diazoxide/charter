@@ -143,15 +143,55 @@ answer in its NOTE column, so an unexplained `dirty` names its cause.
 `git fetch` recurses into submodules on demand, so `charter sync` was already fetching
 submodule objects; what it never did was check anything out. Nothing here changes that.
 
+## What the deletion sweep found, and the defect inside it
+
+The first green run came back **`7 survivors`** — the verdict is the check NAME, and every
+one sat in `submodule_drift`. Two were deleted and five are now pinned, and one of them was
+not a missing test at all.
+
+**The parse was wrong, and the sweep's question is what showed it.** Asked whether
+`path.endswith(")")` was pinned, the answer was that neither half of
+
+```python
+if path.endswith(")") and " (" in path:      # trim the ` (<describe>)` suffix
+```
+
+could be, because the rule itself is unsound: a submodule whose PATH is `tools (x)` is
+reported as
+
+```
+absent      -<sha> tools (x)
+checked out +<sha> tools (x) (remotes/origin/HEAD)
+```
+
+and a rule that trims whatever resembles a suffix reads the first path as `tools` — a
+directory that does not exist, in the one sentence whose whole job is to name the directory
+that does. The describe is now taken off **by the mark**, never by inspecting the path, and
+`rpartition` takes the LAST ` (` because that is where the describe always is. A
+checked-out line always carries one: measured on a submodule with no tags, detached, which
+still prints `(remotes/origin/HEAD)`.
+
+**And the non-zero check was a real guard sitting on a test that already passed without
+it.** `git submodule status` prints the submodules it mapped and THEN fails on one it did
+not — measured, rc 128 with `-000…001 mapped` already on stdout. The case that was supposed
+to cover it built a directory that is not a repository, where stdout is empty and dropping
+the check changes nothing. It is now pinned on the state that actually distinguishes them.
+
+The two deletions were fallbacks with nothing behind them: `proc.stdout or ""` (nothing in
+charter passes `capture=False`, so stdout is always a string, and every neighbour in this
+file reads `.stdout` plainly) and `if not path: continue` (git emits no line without a
+space after the mark). The docstring stopped promising to handle "an unparseable line",
+because the code no longer does.
+
 ## Verification
 
 Reproduced first, in a throwaway plane with `config.ROOT` and `config.STATE_DIR` asserted
-into a scratch directory, never against a real one. 28 new cases: submodules planted by
+into a scratch directory, never against a real one. 36 new cases: submodules planted by
 hand as index gitlinks (a recorded submodule needs no network, no second repository and no
 `protocol.file.allow`), and real `git submodule add` fixtures for the two states that
 genuinely need a checked-out submodule.
 
-Eighteen hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
+Twenty-six hand-mutations, all killed: dropping the `.gitmodules` short-circuit, collapsing
 the two drift marks onto one, removing the report from `clone`, from `sync` and from each
 half of the `status` row, flattening the remedy path, and trimming `--init --recursive`
 off the remedy, silencing the dirty-skip branch, and narrowing the clone report to freshly
