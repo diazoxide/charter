@@ -3209,12 +3209,13 @@ class _Tabs:
     reports and this repository deletes.
     """
 
-    __slots__ = ("_cols", "_here", "_more")
+    __slots__ = ("_cols", "_here", "_more", "_add")
 
     def __init__(self) -> None:
         self._cols: dict[int, str] = {}
         self._here = ""
         self._more: frozenset[int] = frozenset()
+        self._add: frozenset[int] = frozenset()
 
     def forget(self) -> None:
         """Back to a bar nobody has drawn — for a test, and only a test.
@@ -3225,7 +3226,7 @@ class _Tabs:
         """
         self.publish({}, "")
 
-    def publish(self, columns: dict, here: str, more=()) -> None:
+    def publish(self, columns: dict, here: str, more=(), add=()) -> None:
         """Record what the paint that just happened put on each column, and where you are.
 
         *columns* maps a column of the component's OWN canvas — the rectangle `ctx.width`
@@ -3256,6 +3257,13 @@ class _Tabs:
         leave a count inert that the paint has just drawn. There is no way to write down
         one of the three here, so there is nothing for a second method to keep in step.
 
+        *add* is the columns of the add-chat affordance (:data:`ADD_CHAT`), on the one
+        rung and the one bar that draws it. A fourth thing rather than a second sentinel
+        inside *more* for :meth:`more_at`'s own reason: they are different questions with
+        different answers — one says *show me the rest of what is here*, the other says
+        *make a new one* — and a caller told "this cell is special" would have to ask a
+        second question anyway to know which.
+
         A `frozenset` and not a range, because the two counts are two disjoint runs and
         the narrow rung's is a third — and because :meth:`more_at` asks about ONE column,
         which is the same question `_cols` answers and should be the same kind of lookup.
@@ -3263,6 +3271,7 @@ class _Tabs:
         self._cols = dict(columns)
         self._here = here
         self._more = frozenset(more)
+        self._add = frozenset(add)
 
     def switch_to(self, col: int):
         """The tab a click at canvas column *col* should switch this frame to, or ``None``.
@@ -3310,6 +3319,28 @@ class _Tabs:
         both.
         """
         return col in self._more
+
+    def add_at(self, col: int) -> bool:
+        """Whether column *col* is the affordance that makes a NEW chat.
+
+        *"`+` button not working for creating new session."* :data:`ADD_CHAT` was a
+        SENTENCE — `+ charter <harness> opens another` — which is true, which names the
+        command that does it, and which begins with a `+` on a row of clickable tabs. It
+        was read as a button, which is the only way it could have been read.
+
+        **The two things this is not.** It is not :meth:`switch_to`: there is no chat to
+        switch to yet, which is the whole point of pressing it. It is not :meth:`more_at`
+        either — that stands for chats that EXIST and are off the row, and opening a picker
+        over them is the opposite of making a new one. Three questions, three methods, and
+        a column that is none of them answers no to all three.
+
+        **They cannot be drawn on one row, which is structural rather than lucky.**
+        :func:`_bar` draws the affordance only on the rung where every name fits, and draws
+        a `+N` only on the rung where they do not — so a row carrying `+` never carries
+        `+9`, and the two fields that both begin with a `+` are never on screen together to
+        be confused with each other.
+        """
+        return col in self._add
 
 
 #: The one tab strip this process's bar draws into. See :class:`_Tabs` for why there is
@@ -3603,7 +3634,7 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     gap = _bar_gap()
     gapw = tui.width(gap)
 
-    def row(body: str = "", drawn=(), before: str = "", more=()) -> list[str]:
+    def row(body: str = "", drawn=(), before: str = "", more=(), add=()) -> list[str]:
         """This rung's row, and the column map for the tabs it actually drew.
 
         **Every way out of the ladder goes through here**, which is what keeps "the map
@@ -3628,8 +3659,10 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         :data:`TABS` for :func:`_tab_columns`' whole reason: the rung that composed the
         row is the only thing that knows where it put them, and a second walk of the
         ladder to find them again is a second answer to what is on the row.
+
+        *add* is the same for :data:`ADD_CHAT`, on the one rung that draws it.
         """
-        TABS.publish(_tab_columns(tui.width(lead + before), drawn, gapw), here, more)
+        TABS.publish(_tab_columns(tui.width(lead + before), drawn, gapw), here, more, add)
         return [lead + before + body] if body else []
 
     if not names:
@@ -3666,7 +3699,11 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     room = width - tui.width(lead)
     joined = gap.join(marked)
     if note and tui.width(joined) + gapw + tui.width(note) <= room:
-        return row(gap.join(painted) + gap + note, zip(names, marked))
+        # The affordance's own columns, measured off this composition — :func:`_span`'s
+        # reason, and the same walk the counts get one rung down. It is the ONLY rung that
+        # draws it, which is why a `+` and a `+9` are never on one row.
+        return row(gap.join(painted) + gap + note, zip(names, marked),
+                   add=_span(tui.width(lead + joined + gap), note))
     if tui.width(joined) <= room:
         return row(gap.join(painted), zip(names, marked))
     if at >= 0:
@@ -3727,20 +3764,35 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     return row()
 
 
-#: What the chat bar says instead of a second name when this workspace has one chat.
+#: The chat bar's add-chat affordance (§3.6) — a BUTTON now, and one cell of it.
 #:
-#: §3.6: the bar "hides itself when there is one chat, showing only the add-chat
-#: affordance". It names the command that opens a second one TODAY — `charter <harness>`
-#: in this workspace joins the session as a second window, which is what Stage 5a shipped
-#: — rather than a palette row this stage does not have. A reminder naming something that
-#: does not work is worse than no reminder.
+#: *"`+` button not working for creating new session."*
 #:
-#: **Read from INSIDE the frame, which is what keeps it true.** A charter started in a
-#: frame's own pane has `$TMUX` set, so it takes `commands_frame._launch_in_operator_tmux`
-#: and adds a window to the session it is already in. From a terminal OUTSIDE the frame
-#: the same command now focuses that workspace instead of adding to it (§4k, open-or-
-#: focus) — a different question, asked somewhere this row is not on screen.
-ADD_CHAT = "+ charter <harness> opens another"
+#: **This was a sentence and the sentence was the defect.** It read `+ charter <harness>
+#: opens another`, which is true, which names the command that does it, and which begins
+#: with a `+` at the end of a row of clickable tabs. Every terminal an operator has used
+#: puts a `+` there and every one of them means *new*. So it was pressed, and a sentence
+#: cannot be pressed. `commands_frame.cmd_new_chat` is what it starts now
+#: (`frame/builtins._bar_events`), and `_Tabs.add_at` is which cell.
+#:
+#: **A bare `+` rather than `+ new`, and the cost is stated rather than hidden.** What is
+#: lost is the sentence naming the command an operator could type instead — and what is
+#: gained is that they do not have to, which is the whole change. `docs/frame.md` keeps
+#: the sentence, where it can be as long as it needs to be; a strip competing for columns
+#: is the wrong surface for a paragraph. Every extra cell here is a cell off the names,
+#: and the names are the readout.
+#:
+#: **ASCII, for :data:`_BAR_RULE`'s reason and not merely :data:`_BAR_MARK`'s.** A click on
+#: this row is resolved by COLUMN, so a glyph a terminal may draw two cells wide moves
+#: every field after it. `+` is one cell everywhere, and it is the last field on the row,
+#: so even its own width is not load-bearing — which is exactly the argument that would
+#: make somebody reach for a prettier glyph, and the reason the rule is stated as the row's
+#: rather than as this constant's.
+#:
+#: **It cannot share a row with a `+N`**, which is what keeps the two `+` fields from being
+#: confused: :func:`_bar` draws this only on the rung where every name fits, and draws a
+#: count only on the rung where they do not.
+ADD_CHAT = "+"
 
 
 def chats_bar(fid: str, width: int) -> list[str]:
@@ -3757,8 +3809,7 @@ def chats_bar(fid: str, width: int) -> list[str]:
     """
     from . import chats as chats_mod
     names = [c.id for c in chats_mod.roster(fid)]
-    return _bar("chats", names, fid, width,
-                note=ADD_CHAT if len(names) < 2 else "")
+    return _bar("chats", names, fid, width, note=ADD_CHAT)
 
 
 def workspaces_bar(fid: str, width: int) -> list[str]:
@@ -3767,6 +3818,14 @@ def workspaces_bar(fid: str, width: int) -> list[str]:
     :func:`chats_bar`'s rules and its ladder, one noun over. The name is the FRAME's
     (`switch.current_workspace` → `state.workspace_for`), never one this pane resolved for
     itself — #512, and the same rung order `_top` reads two rows up.
+
+    **No `+`, and that is a decision rather than an omission.** A new CHAT is nothing but a
+    press: its id is allocated, its workspace is the one this chat is in for life (§4j), and
+    there is nothing for an operator to type or for charter to validate. A new WORKSPACE is
+    a directory and a NAME — `workspace.valid_name`, `workspace.ensure`, and #518's whole
+    argument that "a picker that creates on a typo leaves litter". A `+` here would have to
+    open something that takes a name, which is `charter workspace create` and is not a
+    thing a one-row strip can be.
     """
     from . import switch as switch_mod
     return _bar("workspaces", switch_mod.workspaces(),

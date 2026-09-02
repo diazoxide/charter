@@ -28,9 +28,9 @@ session does **not** move that session's current window, which is the fact that 
 focusing safe where adding was not.
 
 To open a second chat in a workspace you are already in, run `charter <harness>` from inside
-the frame. That is what the chat bar's own `+ charter <harness> opens another` names, and it
-is unchanged — a charter started in a frame's pane is inside a tmux and takes the window
-path, not this one.
+the frame — or press the chat bar's `+`, which is what *The chat bar's `+` makes a chat* in
+this same release does for you. Either way it is unchanged by this entry: a charter started
+in a frame's pane is inside a tmux and takes the window path, not this one.
 
 **A launch that names something to run still runs it.** Attaching answers "put me in `foo`";
 it cannot answer "run *this* in `foo`", and a focus taken over one would silently throw away

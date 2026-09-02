@@ -6627,6 +6627,76 @@ def _clients_on(socket: str, session: str) -> list[str]:
     return out.stdout.split()
 
 
+#: The half of a "cannot open" that is the same whatever is being opened — said after
+#: each caller's own subject, so `_open_workspace`'s names the workspace and
+#: `cmd_new_chat`'s names nothing, and neither has to keep the rest of the sentence in step
+#: with the other. One string, because it is one FACT: this plane cannot name a harness to
+#: run.
+NO_HARNESS = ("this chat records no harness this charter can launch, and this plane "
+              "declares no `[harness] default`")
+
+
+def _same_harness_as(fid: str):
+    """The harness a chat opened FROM *fid* should run, or ``None`` when there is none.
+
+    **The one question neither a workspace tab nor a chat bar's `+` can carry.** Both are a
+    single press with nothing typed into it, so the only answer available that the operator
+    has actually expressed is the tool they are already in: the chat they pressed from
+    recorded its own (`state.record_identity`, `$CHARTER_HARNESS`), which makes the press
+    mean "another one of these".
+
+    Two rungs and no third. A chat whose identity predates that record — or whose recorded
+    harness this charter cannot launch — falls back to `[harness] default`, and a plane
+    that declares none is refused by name rather than opened under something nobody chose.
+
+    **One function because it was two identical blocks, and the deletion sweep is what
+    found that.** `cmd_new_chat` was written from :func:`_open_workspace` and copied its
+    five lines; the sweep charged the copy and reported the `or {}` below as a survivor —
+    unpinned *there*, while `tests/test_a_workspace_tab_opens_what_it_names
+    .TheOpenUsesTheHarnessTheOperatorIsAlreadyIn
+    .test_a_plane_whose_harness_table_is_missing_entirely_is_not_a_crash` had pinned it
+    *here* all along. One function, one place for that case to reach, and no second copy
+    for the next sweep to charge.
+
+    **The `or {}` stays, and it was nearly deleted.** `instance.harness_of` is annotated
+    `-> dict` and measurably answers one for `{}` and for `{"harness": None}`, so the
+    branch looks unreachable through a plane's own config — but that is an argument about
+    ONE producer of the value, and the case above asserts the whole detached path survives
+    `config.HARNESS` being `None`, where an `AttributeError` goes to `/dev/null` and the
+    press does nothing. A guard an existing case makes observable is not this function's
+    to remove.
+
+    The two callers still say their own sentences (:data:`NO_HARNESS` is the half they
+    share), because one names a workspace and the other names nothing.
+    """
+    ident = state.identity(fid).get("CHARTER_HARNESS", "")
+    h = next((x for x in harness.all() if x.name == ident and x.cli_name), None)
+    if h is not None:
+        return h
+    fallback = (config.HARNESS or {}).get("default")
+    return next((x for x in harness.all() if x.cli_name == fallback), None)
+
+
+def _launch_root(ws: str):
+    """The directory a launch for workspace *ws* should run in.
+
+    `cmd_launch` reads the frame's cwd off `os.getcwd()`, so a caller that starts one has
+    to stand in the right place first — and the right place is what `charter --workspace
+    <ws>` typed in it would have used.
+
+    **The plane's own root when that workspace has no directory yet**, which is a real
+    state rather than a defensive one: `switch.workspaces` folds
+    `config.DEFAULT_WORKSPACE` into its list whether or not its directory exists —
+    `workspace.ensure` makes it on demand — so a plane that has never made one still
+    offers a tab and a `+` for it. `config.ROOT` is where charter would have created it.
+
+    Shared by :func:`_open_workspace` and :func:`cmd_new_chat` for
+    :func:`_same_harness_as`' reason: it was the same two lines twice.
+    """
+    where = workspace.workspace_dir(ws)
+    return where if where.is_dir() else config.ROOT
+
+
 def _open_workspace(fid: str, ws: str, *, socket: str,
                     window: str) -> tuple[str, str] | None:
     """Open *ws* on this plane without attaching to it — ``(session id, chat id)``, or
@@ -6719,19 +6789,12 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
                             f"hand if it is yours: tmux -L {socket} attach -t "
                             f"{state.workspace_prefix(ws)}")
         return None
-    ident = state.identity(fid).get("CHARTER_HARNESS", "")
-    h = next((x for x in harness.all() if x.name == ident and x.cli_name), None)
+    h = _same_harness_as(fid)
     if h is None:
-        fallback = (config.HARNESS or {}).get("default")
-        h = next((x for x in harness.all() if x.cli_name == fallback), None)
-    if h is None:
-        _say_on_screen(fid, f"cannot open '{ws}': this chat records no harness this "
-                            "charter can launch, and this plane declares no `[harness] "
-                            "default`")
+        _say_on_screen(fid, f"cannot open '{ws}': {NO_HARNESS}")
         return None
     from types import SimpleNamespace
-    where = workspace.workspace_dir(ws)
-    root = where if where.is_dir() else config.ROOT
+    root = _launch_root(ws)
     # Every field `cmd_launch` and `_choose_workspace` read is named rather than left to a
     # `getattr` default — `_reopen_args`'s rule, which is what makes this a contract that
     # can be read instead of a puzzle. `workspace` is set outright so `_picker_wanted` can
@@ -8667,3 +8730,168 @@ def _say_it_was_quit(fid: str) -> None:
     back = len([c for c in m.all_chats() if c.resume])
     util.info(f"charter: this plane was quit — {n} chat(s) recorded, {back} with a "
               f"conversation to resume.\n  put it back with: charter reopen")
+
+
+#: What the chat bar's `+` says when this frame is a window in a tmux the operator already
+#: had, where charter cannot make a chat for them.
+#:
+#: **The refusal is `switch.to_workspace`'s shape and its reason** (`slots._top` asks the
+#: same question to decide whether to draw the hotkey hint at all): on charter's own server
+#: a workspace IS a session and a chat is a window in it, so :func:`cmd_new_chat` adds one.
+#: Inside a tmux the operator already has, charter writes no session option, no key binding
+#: and nothing session-scoped — the launcher's whole `_launch_in_operator_tmux` contract —
+#: and a chat there is a window in a session charter does not own. It names the command
+#: that DOES work there rather than saying no on its own, which is the same courtesy every
+#: other refusal in this module extends.
+NO_CHAT_HERE = ("this frame is a window in a tmux you already had, where charter does not "
+                "make chats for you — open another with `charter <harness>` in this "
+                "workspace")
+
+#: What it says when this plane cannot prove the workspace's session is its own.
+#:
+#: **§3.3's guarantee, at a new door.** One tmux server serves every plane on this machine
+#: (eleven sessions from three projects on the operator's own socket the week this was
+#: written) and `cmd_launch` decides between starting a session and joining one with
+#: `if session in live_sessions:`, a NAME test over all of them. So a `+` that ran the
+#: launcher without this check could add a window to ANOTHER plane's live session — another
+#: project's frame, across every isolation boundary charter has. `_plane_session` is the
+#: one question that answers it, matched on this plane's own chat directories rather than
+#: on a session name, and it is `_open_workspace`'s guard read the other way round: that one
+#: refuses a name it CAN see on the server, this one refuses to proceed without one it can
+#: prove is ours.
+NO_SESSION_HERE = ("charter cannot prove this workspace's tmux session is this plane's, so "
+                   "it will not add a chat to it — it is probably another plane's")
+
+
+def cmd_new_chat(args) -> int:
+    """`charter frame-new-chat` — a second chat in the workspace this chat is in.
+
+    **The `+` on the chat bar, and the command it runs.** §3.6 asks the chat bar to carry
+    an "add-chat affordance"; what it carried was the SENTENCE `charter <harness>` opens
+    another, which is true, is not a button, and was read as one — *"`+` button not working
+    for creating new session"*. `slots.ADD_CHAT` is a `+` now and this is what it starts.
+
+    **It is `charter <harness>` in this workspace, run for the operator.** `cmd_launch`
+    already builds a chat as a `new-window` in a workspace's live session — that is what
+    the second `charter claude` in a workspace has always done (`joining`, and
+    `layout.chat_window_argv`) — and it already selects the new window and drops the
+    panels of the chat being left. So nothing here is a new mechanism; what is new is
+    reaching it from a pointer, which needs the one thing no CLI spelling has: a launch
+    that does not want to BE the operator's terminal.
+
+    :func:`_open_workspace` opened that seam (`_wants_attach`, `attach=False`) and is the
+    precedent for every line below, including the measurement that it works at all: a
+    process with `start_new_session=True` and all three streams on `/dev/null` can run
+    `new-window`, a window option and `select-window` on tmux 3.7c and at the 3.2 floor,
+    with nothing killed and the client landing where it was sent.
+
+    **What is deliberately NOT shared with it.** That function refuses a workspace whose
+    name is already a live session, because it is opening a workspace this plane does not
+    have open and any session of that name is somebody else's. This one is about the
+    workspace this chat is standing in, whose session this plane certainly does have open —
+    so the guard is inverted: :data:`NO_SESSION_HERE` refuses to proceed unless
+    `_plane_session` can prove the session is ours. Same §3.3 rule, opposite sign, and
+    written out rather than shared because a helper taking a flag for which way to point
+    would be one function claiming to answer two questions.
+
+    **Four ways this stops, each with its own sentence on the frame's own attention row**
+    (:func:`_say_on_screen`), because this runs detached with its streams on `/dev/null`
+    and has no other surface: a frame inside the operator's own tmux
+    (:data:`NO_CHAT_HERE`), a session this plane cannot prove is its own
+    (:data:`NO_SESSION_HERE`), a chat recording no harness charter can launch, and a
+    workspace directory charter cannot enter. A `+` that silently did nothing is the
+    complaint this whole change is answering, so a `+` that silently fails would be the
+    same complaint one release later.
+
+    **Always 0**, for `cmd_palette`'s reason: this is started by a click and by a palette
+    row, never by a shell that reads its status, and the one caller that could see a code
+    is a `run-shell` whose non-zero prints INTO THE HARNESS PANE — charter drawing in the
+    one rectangle ADR 0018 says it never draws.
+
+    *args* carries `--chat`, which is where the click happened (`_pressers_chat`, whose
+    `$CHARTER_SESSION_ID` fallback is what a hand-typed `charter frame-new-chat` inside a
+    frame resolves through).
+    """
+    fid = _pressers_chat(args)
+    if not fid:
+        util.err("charter frame-new-chat: no frame — run it inside a charter frame, or "
+                 "pass --chat <id>")
+        return 0
+    socket = state.frame_server(fid) or SOCKET
+    if tmuxctl.is_operator_socket(socket, own=SOCKET):
+        _say_on_screen(fid, NO_CHAT_HERE)
+        return 0
+    ws = state.workspace_for(fid)
+    seat = _plane_session(socket, ws=ws)
+    if seat is None:
+        _say_on_screen(fid, NO_SESSION_HERE)
+        return 0
+    # Which harness, and it is the one question a `+` cannot carry — `_open_workspace`'s
+    # paragraph, unchanged: the chat the operator pressed FROM recorded its own
+    # (`state.record_identity`), and using it makes the click mean "another chat, same
+    # tool", which is the only answer available that they have actually expressed.
+    h = _same_harness_as(fid)
+    if h is None:
+        _say_on_screen(fid, f"cannot open another chat: {NO_HARNESS}")
+        return 0
+    from types import SimpleNamespace
+    root = _launch_root(ws)
+    # Every field `cmd_launch` and `_choose_workspace` read is named rather than left to a
+    # `getattr` default — `_open_workspace`'s rule and its reasons, one noun over.
+    # `workspace` is set outright so `_picker_wanted` can never raise a prompt on a path
+    # with no operator waiting, `pick` is false for the same reason and for #518's pointer,
+    # `rest` is empty so the harness starts at its own prompt with nothing sent to it, and
+    # `attach` is the seam this command exists on the far side of.
+    # **The window the new chat is laid out for — and never an empty `-t`.**
+    # `_window_size` hands its target straight to `display-message -t`, and an EMPTY
+    # target does not fail: it resolves to the tmux server's CURRENT window, which on a
+    # socket serving eleven sessions from three projects is very likely another plane's.
+    # `_open_workspace` carried exactly that `state.harness_pane(fid) or ""`, the deletion
+    # sweep survived the `or ""`, and asking why is what found the hazard — there the
+    # caller had already proved a pane, so the fallback was unreachable.
+    #
+    # **Here it is reachable**, which is why this is a pair of readings and not a `or ""`:
+    # a chat launched by a charter that predates `state.record_harness_pane`, or one whose
+    # state directory was truncated, genuinely has no pane of its own. So it is this
+    # chat's pane, else the pane :func:`_plane_session` has *just proved* is live in this
+    # workspace — the window a client in this workspace is looking at, which is
+    # `_open_workspace`'s own answer to the same question — else NOTHING. `_launch_size`
+    # reads `None` as "measure your own terminal", which for a detached process is the
+    # documented 80x24. A frame charter could not measure comes up small; one measured off
+    # a stranger's terminal comes up wrong, and only one of those is recoverable by
+    # resizing the window.
+    #
+    # `chats.pane_of` and not `state.harness_pane`, because it is the reader that holds
+    # the value to `tmuxctl.PANE_ID_RE` — this is a `-t` target coming off disk, which is
+    # #475's boundary exactly.
+    pane = chats.pane_of(fid) or chats.pane_of(seat[1])
+    launch = SimpleNamespace(harness=h.cli_name, rest=[], no_frame=False,
+                             workspace=ws, pick=False, attach=False,
+                             size=_window_size(socket, pane) if pane else None)
+    here_dir = os.getcwd()
+    try:
+        os.chdir(root)
+    except OSError:
+        # **The directory is not named, and that is one fewer thing to get right.**
+        # `_open_workspace`'s twin says `contain.readable(str(root)) or 'its directory'`,
+        # whose `or` is a branch nothing can reach — `root` is a path under `config.ROOT`
+        # and always renders as something — so it is a survivor wearing a fallback. The
+        # operator knows which workspace they pressed `+` in; what they do not know is that
+        # charter could not get into it, and that is the whole of what this says.
+        _say_on_screen(fid, "cannot open another chat: charter cannot enter this "
+                            "workspace's directory")
+        return 0
+    try:
+        rc = cmd_launch(launch)
+    finally:
+        try:
+            os.chdir(here_dir)
+        except OSError:
+            pass
+    if rc != 0:
+        # Said rather than swallowed, for `_open_workspace`'s reason: `cmd_launch`'s own
+        # `util.err` went to `/dev/null` with everything else this process writes, so
+        # without this line a press would simply do nothing — the exact complaint this
+        # command exists to answer, arriving through the door built to answer it.
+        _say_on_screen(fid, f"could not open another chat — the launcher returned {rc}")
+    return 0

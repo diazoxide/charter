@@ -333,8 +333,23 @@ def _repos_events(fid: str):
 _CHAT_SWITCH = ("frame-chat",)
 _WORKSPACE_SWITCH = ("frame-switch", "--workspace")
 
+#: What a press on the chat bar's `+` starts — `commands_frame.cmd_new_chat`.
+#:
+#: **A command of its own and not `charter <harness>`**, and the reason is what a detached
+#: process is: `_spawn` gives its child all three streams on `/dev/null`, and `cmd_launch`
+#: reads a non-tty stdout as "this process cannot be the operator's terminal" and
+#: `os.execvp`s the bare harness into it. `attach=False` is the seam that says "build the
+#: frame, do not become the terminal", it has existed since `_open_workspace` needed it
+#: (§4k), and until now no CLI spelling could ask for it. This is that spelling.
+#:
+#: **No name and no `--chat`.** There is nothing to name: a chat's id is allocated and its
+#: workspace is the one this chat is in for life (§4j). And `_spawn` sets the child's own
+#: `$CHARTER_SESSION_ID` to *fid*, which `_pressers_chat` falls back to — the same reason
+#: :data:`_CHAT_SWITCH` carries no `--chat` either.
+_NEW_CHAT = ("frame-new-chat",)
 
-def _bar_events(fid: str, command: tuple[str, ...]):
+
+def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None = None):
     """A tab bar's handler: a left click on a tab switches this frame to it.
 
     **A click here SWITCHES, where a click on the repo table only ever SELECTS, and that
@@ -423,6 +438,33 @@ def _bar_events(fid: str, command: tuple[str, ...]):
     `overlay.MOUSE_ON` for one pointer kind as for two, so declaring it would cost nothing
     and mean nothing — which is precisely what makes it wrong to declare.
 
+    **A press on the chat bar's `+` starts a new chat**, which is the third gesture this
+    one handler carries and the only one that CREATES.
+
+    *"`+` button not working for creating new session."* It was a sentence — `+ charter
+    <harness> opens another` — that named the command and began with a `+` at the end of a
+    row of clickable tabs, so it was pressed. `slots.ADD_CHAT` is a `+` now and this starts
+    :data:`_NEW_CHAT`.
+
+    **§4i is met and not waived, and it is worth checking again because this one is not
+    reversible by the same gesture.** The press is still the half that is never delivered
+    unpaired, which is the load-bearing clause. What a second press makes is a second chat
+    rather than an undo — but making one is not the irreversible half §4i is about: nothing
+    is destroyed, the chat it came from keeps running with its harness and its conversation
+    (§4b's own promise, which the workspace tabs already rest on), and closing a chat you
+    did not want is `charter frame-close`. Compare the gesture §4i actually forbids on a
+    pointer: `charter frame-quit`, which stops every harness on the plane, and which is
+    behind a palette row with a confirmation for exactly that reason.
+
+    **`add` is `None` for the workspaces bar and that is structural rather than a branch.**
+    `slots.workspaces_bar` passes no note, so no rung ever publishes an affordance column
+    for it and `add_at` cannot answer true — but the argument for a workspace `+` is a
+    DIFFERENT one and it is written where the decision is (`slots.workspaces_bar`): a chat
+    is nothing but a press, a workspace is a directory and a name #518 refuses to create on
+    a typo. So this handler is handed the answer as data rather than deriving it from what
+    the renderer happened to draw, which is what keeps the two bars from degrading
+    differently the day one of them starts drawing a note it did not have.
+
     *command* is which of the two switches this bar starts (:data:`_CHAT_SWITCH`,
     :data:`_WORKSPACE_SWITCH`). One handler and two lines of data rather than two
     handlers, because everything above is true of both bars and a second copy would be
@@ -449,6 +491,9 @@ def _bar_events(fid: str, command: tuple[str, ...]):
             return False
         name = _slots.TABS.switch_to(ev.col)
         if name is None:
+            if add is not None and _slots.TABS.add_at(ev.col):
+                _spawn(util.self_relaunch_argv(*add), fid=fid)
+                return False
             if _slots.TABS.more_at(ev.col):
                 # The same argv `_strip_events` spawns for a door, for its reasons — one
                 # answer to "how does a frame surface open the palette", shared rather than
@@ -849,7 +894,7 @@ def build(fid: str = "") -> Registry:
     reg.register(Component(
         id="chats", title="chats", edge="top", size=Fixed(1),
         needs=(), render=_chats,
-        events=("click",), on_event=_bar_events(fid, _CHAT_SWITCH)))
+        events=("click",), on_event=_bar_events(fid, _CHAT_SWITCH, add=_NEW_CHAT)))
     reg.register(Component(
         id="workspaces", title="workspaces", edge="top", size=Fixed(1),
         needs=(), render=_workspaces,

@@ -390,8 +390,10 @@ nothing is started and nothing moves. Where nobody is attached — you closed th
 never had one — the same command opens a chat exactly as before. It is `code <path>`'s
 behaviour: the flag means one thing whether or not the workspace happens to be running.
 
-To open a *second* chat in a workspace you are already in, run `charter <harness>` from
-inside the frame — that is the add-chat affordance the chat bar names, and it is unchanged.
+To open a *second* chat in a workspace you are already in, press the `+` at the end of the
+chat bar, or run `charter <harness>` from inside the frame. Both do the same thing: a new
+window in the workspace's session, with your terminal on it and the chat you left running
+behind you.
 
 **A launch that names something to run still runs it.** Attaching answers "put me in
 `foo`"; it cannot answer "run *this* in `foo`", so `charter frame -- <cmd>` and
@@ -512,6 +514,22 @@ per seam out of the names it can draw. The separator is an ASCII `|` and not the
 draw it two cells wide where charter measured one — and on a row whose clicks are resolved
 by *column*, ten separators drawn a cell wide each would put your press ten columns off the
 tab you aimed at.
+
+**The chat bar ends in a `+`, and pressing it opens another chat.** Same workspace, same
+harness you are already in, its id allocated for you — which is why it takes nothing and
+asks nothing. It runs `charter frame-new-chat`, which is `charter <harness>` in this
+workspace with one difference: it builds the frame without becoming your terminal, because
+the process behind a click is not one.
+
+It stops, and says why on the attention row, in four cases: your frame is a window in a
+tmux you already had (charter makes no chats for you there — `charter <harness>` in the
+workspace still does); charter cannot prove the workspace's tmux session is this plane's
+rather than another project's; this chat records no harness charter can launch and your
+plane declares no `[harness] default`; or charter cannot enter the workspace's directory.
+
+**The workspace bar has no `+`, deliberately.** A new chat is nothing but a press. A new
+workspace is a directory and a *name*, which is `charter workspace create` — and a picker
+that creates on a typo leaves litter.
 
 **They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
 exactly what `F2` → `chat` does — the same command, the same five refusals, the same
