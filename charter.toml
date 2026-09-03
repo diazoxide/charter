@@ -66,6 +66,33 @@ mouse = true
 # like. Three words: `off`, `dark`, `light`.
 chrome = "dark"
 
+# The three keys `chrome` alone cannot answer, and why this plane needs all of them (#792).
+#
+# `chrome = "dark"` above sets a BACKGROUND. It cannot set a foreground, because the sixteen
+# ANSI names have no fixed RGB — `brightblack` is dark grey on most themes and light tan on
+# this terminal — and charter has no way to find out which: OSC 11 through tmux answers
+# nothing, and `$COLORTERM` inside a pane describes the terminal that started the SERVER. A
+# computed "legible" foreground would be a guess wearing the word for a measurement, so
+# charter refuses to pick one and this line picks it instead.
+#
+# This terminal has a LIGHT ground, and every component below says `bg = "black"`. So without
+# `text` every uncoloured cell is this terminal's own dark foreground on black — the one
+# combination that cannot be read. `text = "white"` is the whole fix and charter will not
+# choose it, because `black` is this file's word, not charter's.
+text = "white"
+
+# `dim` off. Measured on this plane's own frame with `capture-pane -e`: ESC[2m appeared twelve
+# times in one pane, against green eight, yellow three, magenta one — the most frequent thing
+# charter paints, by a wide margin. On a light ground it is also the least readable, and a
+# terminal that IGNORES SGR 2 draws those rules at full brightness instead, which is the other
+# half of the "invisible then too visible borders" this plane reported.
+dim = false
+
+# `warn` off yellow. The accent triple resolves against the OPERATOR's palette, and yellow on
+# a tan ground is the classic unreadable pair — named as a known gap by #768 and served through
+# `chrome.recipes()` since #792. `ok` and `bad` stay green and red, which read here.
+warn = "blue"
+
 # The arrangement, written out. `[[frame.component]]` supersedes `slots` above when it is
 # usable, and each table keeps its component's SHIPPED rectangle — omitting `edge`/`size`
 # is what asks for the default rather than overriding it. An arrangement is refused WHOLE
@@ -78,9 +105,9 @@ chrome = "dark"
 # forms. Sixteen names and not 256 is a decision: a committed `bg` is read on a machine
 # whose theme its author never saw, so it resolves against the OPERATOR's palette.
 #
-# Every pane charter draws is `brightblack` and the harness pane is left alone, which is
+# Every pane charter draws is `black` and the harness pane is left alone, which is
 # the whole look: charter's chrome is grey, the work area is the terminal's own. The pair
-# inverts on focus (`brightblack` active is `black`), so the focused panel is the one that
+# inverts on focus (`black` active is `black`), so the focused panel is the one that
 # differs from its neighbours rather than the one that lights up.
 #
 # `pad` is horizontal only and comes OUT of the content budget, not on top of it: a
@@ -101,7 +128,7 @@ chrome = "dark"
 
 [[frame.component]]
 use = "identity"
-bg  = "brightblack"
+bg  = "black"
 pad = 1
 key = "F5"
 
@@ -120,32 +147,32 @@ key = "F5"
 use  = "workspaces"
 edge = "top"
 size = 1
-bg   = "brightblack"
+bg   = "black"
 pad  = 1
 
 [[frame.component]]
 use  = "chats"
 edge = "top"
 size = 1
-bg   = "brightblack"
+bg   = "black"
 pad  = 1
 
 [[frame.component]]
 use = "attention"
-bg  = "brightblack"
+bg  = "black"
 pad = 1
 key = "F6"
 
 [[frame.component]]
 use  = "repos"
 size = 15
-bg   = "brightblack"
+bg   = "black"
 pad = 2
 key = "F8"
 
 [[frame.component]]
 use = "sidebar"
-bg  = "brightblack"
+bg  = "black"
 pad = 1
 key = "F7"
 

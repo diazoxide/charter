@@ -1,0 +1,5 @@
+# A CHARTER WORKTREE IS NOT AN ISOLATED PLANE — THIS IS BROADER THAN 'DO N
+
+_2026-09-02 23:58 · persistent_
+
+A CHARTER WORKTREE IS NOT AN ISOLATED PLANE — THIS IS BROADER THAN 'DO NOT TOUCH .charter'. Measured on the 0.55.0 release: from a git worktree at /Users/aharon/IdeaProjects/charter-wt-*, config.ROOT and config.STATE_DIR still resolved to /Users/aharon/IdeaProjects/charter/.charter, because charter/root.py makes plane identity follow the MAIN working tree, not the cwd. So ANY 'charter <cmd>' invoked from a release/feature worktree writes the operator's REAL plane. A worktree gives you file isolation and gives you NO plane isolation. Note the asymmetry: news.checkout_dir() IS worktree-relative, so some paths follow the worktree while plane state does not — do not generalise from one to the other. Safe pattern used instead: call the library function in-process (news.stamp(), the same one cmd_news_stamp calls) rather than shelling out to the CLI. Assert config.STATE_DIR before anything that mutates plane state, from a worktree TOO.

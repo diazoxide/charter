@@ -1,0 +1,5 @@
+# GIT'S CONFIG SCOPING BREAKS CHARTER'S GOLDEN RULE 0 FOR SUBMODULES, SO C
+
+_2026-09-02 21:26 · persistent_
+
+GIT'S CONFIG SCOPING BREAKS CHARTER'S GOLDEN RULE 0 FOR SUBMODULES, SO CHARTER MUST SAY RATHER THAN DO. 'git clone' does NOT read the local config of the repo it is standing in, and a submodule fetch IS a nested clone. Measured on git 2.50.1: protocol.file.allow in the SUPERPROJECT'S LOCAL config -> never read, submodule update --init FAILS; via -c or GLOBAL -> succeeds; local submodule.<name>.url -> succeeds (the PARENT resolves URLs). So charter cannot set up a safe submodule fetch from local config the way it does for everything else, and a submodule URL comes out of .gitmodules — a file inside the repo just cloned — which is exactly what #335's allowlist exists to prevent charter from handing to git. Decision (#822): clone/sync/status/worktree SAY which submodules they left empty; they do not initialise them. Note 'git worktree add' initialises NO gitlinks, so worktree misses them 100% of the time even from a complete clone.

@@ -1,0 +1,5 @@
+# A FIX FOR A CLASS OF BUG IS UNUSUALLY LIKELY TO CONTAIN THAT BUG — now S
+
+_2026-08-31 01:37 · persistent_
+
+A FIX FOR A CLASS OF BUG IS UNUSUALLY LIKELY TO CONTAIN THAT BUG — now SEVEN measured instances. #754 (2026-08-31) is the sharpest yet and closes the loop on itself: the whole PR exists because sibling mutants of one line reported identically, and its own tag-discriminator TRUNCATED THE EDIT AT 40 CHARS, which re-merged two siblings — because 'after' is everything the mutant KEEPS, so drop-conjunct siblings share a long PREFIX and a prefix cut collides exactly where the bug lived. The single surviving collision in the whole tree was in tools/sweep.py:706, _regex_shape's OWN four-conjunct guard. It was caught by RE-MEASURING all 11,338 mutations after the fix, not by reasoning about it, and the guard that broke is now the fixture case where a plain cut fails two tests. Operational rule: after fixing a class of defect, re-run the measurement that FOUND the class over the fixed tree — do not reason about whether your fix is exempt. Related: [[naming-a-defect-class-does-not-immunise-you-agai]].

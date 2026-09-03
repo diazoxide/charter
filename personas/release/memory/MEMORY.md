@@ -46,3 +46,6 @@ Written by the persona as it learns; committed and shared.
 - [The retry ref is a real choice: --ref v<X.Y.Z> retries the exact publish](the-retry-ref-is-a-real-choice-ref-v-x-y-z-retri.md)
 - [0.54.0 was the first release whose notes exceeded GitHub's 125,000-char](0-54-0-was-the-first-release-whose-notes-exceede.md)
 - [Resolved on the 0.54.0 release PR (#705): test_the_bound_is_an_exception](resolved-on-the-0-54-0-release-pr-705-test-the-b.md)
+- [A git worktree of the charter repo is NOT an isolated control plane: con](a-git-worktree-of-the-charter-repo-is-not-an-iso.md)
+- [macOS has no 'timeout' command. 'timeout N python3 -m unittest discover](macos-has-no-timeout-command-timeout-n-python3-m.md)
+- [A release has a FIFTH version site the charter never listed: docs/assets](a-release-has-a-fifth-version-site-the-charter-n.md)
