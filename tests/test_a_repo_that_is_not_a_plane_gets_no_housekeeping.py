@@ -74,6 +74,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -155,6 +156,18 @@ _MUST_STILL_REFUSE = (
      "takes text charter PERSISTS"),
     ("A on the Read/Grep route", "pretooluse-read",
      {"file_path": ".charter/vaults/db.json"}, "would print plaintext"),
+)
+
+
+#: Denials whose subject is a control plane, so out here they must say nothing at all.
+#: ``(name, command, extra payload keys)``.
+#:
+#: A denial that explains a control plane which does not exist on that machine is the
+#: complaint 0.42 gated A2 for, and it is the direction this file can get wrong without
+#: noticing: :class:`NothingIsSaid` would pass while charter refused a stranger's `git tag`.
+_PLANE_ONLY_DENIALS = (
+    ("A2: one credential", "git clone git@github.com:o/r.git", {}),
+    ("A4: release floor", "git tag v1.0.0", {"permission_mode": hooks.UNATTENDED_MODE}),
 )
 
 
@@ -269,6 +282,93 @@ class NothingIsWritten(StrangersRepo):
                 self.assertUntouched(f"`{cmd}`")
 
 
+class ReachingTheWriteTheGateWithholds(StrangersRepo):
+    """Three handlers whose gate :class:`NothingIsWritten` could not see, because with an
+    ordinary payload in an empty directory they write nothing either way.
+
+    The deletion sweep found all three — `if not _in_a_plane(): return 0` deleted, suite
+    still green — and each needed a fixture rather than an assertion. **The fixtures are
+    not contrivances.** Outside a plane ``config.STATE_DIR`` is ``<cwd>/.charter``, so the
+    files charter looks for there are files a repository you cloned can simply contain, and
+    committed. That is the same finding as the persona tool-gate one class down, reached
+    through the bookkeeping instead of through the tool-gate: with the gates gone, charter
+    reads a stranger's repo's ``.charter/`` and acts on what it says.
+
+    Every case asserts the effect it is preventing is REACHABLE — proven by deleting the
+    gate and watching the effect appear — because a fixture that never reached the write
+    would pass against unfixed code, which is how all three got here.
+    """
+
+    def test_a_prompt_in_someone_elses_git_repo_leaves_no_session_pointer(self):
+        """`userpromptsubmit` records a config baseline on the first prompt. Reaching that
+        write needs the cwd to be a **git repository**, because `freshness.head_sha()`
+        answers `None` otherwise and the nudge returns before writing — which is exactly
+        why the empty-directory sweep saw nothing. Measured with the gate removed: it
+        creates `<state>/sessions/<sid>.configver`.
+
+        The report called this hook "genuinely quiet". It is quiet about OUTPUT; in any
+        repository that is a git repository it was writing into it.
+        """
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+        root = str(config.ROOT)
+        subprocess.run(["git", "init", "-q", "-b", "main", root],
+                       check=True, capture_output=True, env=env)
+        (config.ROOT / "README").write_text("base\n")
+        subprocess.run(["git", "-C", root, "add", "-A"],
+                       check=True, capture_output=True, env=env)
+        subprocess.run(["git", "-C", root, "-c", "commit.gpgsign=false",
+                        "commit", "-qm", "base"], check=True, capture_output=True, env=env)
+        from charter import freshness
+        self.assertTrue(freshness.head_sha(),
+                        "precondition: the write is only reachable in a git repo")
+        self.before = _tree(config.ROOT)
+        rc, out = _run(hooks.userpromptsubmit, self.payloads()["userpromptsubmit"])
+        self.assertEqual((0, ""), (rc, out))
+        self.assertUntouched("`charter hook userpromptsubmit` in a git repo")
+
+    def test_a_committed_ask_marker_is_not_consumed(self):
+        """`posttooluse_bash` looks for a pending-ask marker under the state directory and
+        **unlinks** it — the unlink is the idempotency, so consuming one is a real change
+        to the tree. Out here that marker is a file the checkout supplied.
+
+        The handler writes nothing today, which is why the sweep could delete its gate for
+        free; that is an argument for asserting the property now rather than in the
+        changelist that finally adds a nudge on the Bash tool.
+        """
+        marker = Path(config.SESSIONS_DIR) / "s852.tu1.routing-ask.ask-pending"
+        config.private_mkdir(marker.parent)
+        marker.write_text("")
+        self.assertTrue(marker.is_file(), "precondition: the marker must exist to be taken")
+        self.before = _tree(config.ROOT)
+        payload = dict(self.payloads()["posttooluse-bash"], tool_use_id="tu1")
+        rc, out = _run(hooks.posttooluse_bash, payload)
+        self.assertEqual((0, ""), (rc, out))
+        self.assertTrue(marker.is_file(), "charter consumed a marker from a repo it does "
+                                          "not own")
+        self.assertUntouched("`charter hook posttooluse-bash`")
+
+    def test_a_committed_routing_mark_neither_asks_nor_is_consumed(self):
+        """`pretooluse_edit`'s routing half reads a mark naming the roster shown this turn,
+        **unlinks** it, and asks the user to approve editing rather than dispatching.
+
+        Both halves matter and both are asserted, because this is the one of the three that
+        SPEAKS: with the gate removed, a `.route-pending` file sitting in a cloned
+        repository makes charter interrupt a session about personas belonging to a plane
+        that is not there — a prompt assembled entirely out of a stranger's repo.
+        """
+        mark = Path(config.SESSIONS_DIR) / "s852.route-pending"
+        config.private_mkdir(mark.parent)
+        mark.write_text("steward,forge")
+        self.assertTrue(mark.is_file(), "precondition: the mark must exist to be taken")
+        self.before = _tree(config.ROOT)
+        rc, out = _run(hooks.pretooluse_edit, self.payloads()["pretooluse-edit"])
+        self.assertEqual(0, rc)
+        self.assertEqual("", out, "charter asked about a roster that does not exist here")
+        self.assertTrue(mark.is_file(), "charter consumed a mark from a repo it does not own")
+        self.assertUntouched("`charter hook pretooluse-edit`")
+
+
 class NothingIsSaid(StrangersRepo):
     def test_no_handler_speaks_into_a_session_with_no_plane_to_act_on(self):
         for name, fn in sorted(hooks._HANDLERS.items()):
@@ -319,11 +419,22 @@ class TheGuardsStillRefuse(StrangersRepo):
         """The precondition that separates "the guards fire" from "everything fires". A2
         was gated in 0.42 precisely because denying an SSH clone in an unrelated repo
         explains a control plane that does not exist there; a change that armed everything
-        outside a plane would pass the case above and break this one."""
-        payload = dict(self.payloads()["pretooluse"])
-        payload["tool_input"] = {"command": "git clone git@github.com:o/r.git"}
-        _, out = _run(hooks.pretooluse, payload)
-        self.assertEqual("", out)
+        outside a plane would pass the case above and break this one.
+
+        **A4 is here because it is the one whose gate a test could not see.** The others
+        consult the plane inside their own reason function, so out here they answer `None`
+        with or without the gate. `_release_floor_reason` does not: it keys on
+        ``_unattended(data)`` — a fact about the HOST's permission mode, not about a plane —
+        so it returns a refusal outside a plane and only the ``if plane`` withholds it. The
+        deletion sweep found exactly that (`collapse-ifexp`, the `else` branch), and the
+        payload it needed is the one no case here was sending: an unattended one.
+        """
+        for name, cmd, extra in _PLANE_ONLY_DENIALS:
+            with self.subTest(guard=name):
+                payload = dict(self.payloads()["pretooluse"], **extra)
+                payload["tool_input"] = {"command": cmd}
+                _, out = _run(hooks.pretooluse, payload)
+                self.assertEqual("", out, f"{name} spoke where there is no plane")
 
 
 class InsideAPlaneNothingIsLost(StrangersRepo):
@@ -392,13 +503,18 @@ class InsideAPlaneNothingIsLost(StrangersRepo):
                 self.assertEqual("deny", verdict["permissionDecision"])
                 self.assertIn(fragment, verdict["permissionDecisionReason"])
 
-    def test_the_plane_only_denial_fires_here(self):
+    def test_the_plane_only_denials_fire_here(self):
         """The other half of `test_a_plane_only_denial_is_still_silent_outside_a_plane`:
-        A2 is quiet out there because there is no plane, not because it stopped working."""
-        payload = dict(self.payloads()["pretooluse"])
-        payload["tool_input"] = {"command": "git clone git@github.com:o/r.git"}
-        _, out = _run(hooks.pretooluse, payload)
-        self.assertEqual("deny", json.loads(out)["hookSpecificOutput"]["permissionDecision"])
+        these are quiet out there because there is no plane, not because they stopped
+        working. Without this pair, gating them and deleting them look identical."""
+        for name, cmd, extra in _PLANE_ONLY_DENIALS:
+            with self.subTest(guard=name):
+                payload = dict(self.payloads()["pretooluse"], **extra)
+                payload["tool_input"] = {"command": cmd}
+                _, out = _run(hooks.pretooluse, payload)
+                self.assertTrue(out, f"{name} said nothing inside a plane")
+                verdict = json.loads(out)["hookSpecificOutput"]
+                self.assertEqual("deny", verdict["permissionDecision"])
 
 
 if __name__ == "__main__":
