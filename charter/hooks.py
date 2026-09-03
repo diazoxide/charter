@@ -5269,12 +5269,19 @@ def context_block(cwd=None) -> str:
     `config.HAS_CONTROL_PLANE`. So there is no path on which this renders into a repo
     charter does not own.
 
-    A gate here was tried and reverted, because `cmd_init` writes the marker and wires the
-    harnesses **without re-deriving config** — `config.HAS_CONTROL_PLANE` is still the
-    False it was computed with at import — so gating turned a fresh `charter init` into a
-    context file reading "_No control-plane context._" on a plane charter had just created.
-    That staleness is its own defect and belongs in its own change; suppressing the
-    symptom here would only have hidden it.
+    A gate here was tried and reverted, and that is worth keeping written down because the
+    reason it was tried has since been fixed while the reason it stays out has not. It was
+    reverted because `cmd_init` wrote the marker and wired the harnesses **without
+    re-deriving config**: `config.HAS_CONTROL_PLANE` was still the False computed at
+    import, so gating turned a fresh `charter init` into a context file reading "_No
+    control-plane context._" on a plane charter had just created. That staleness was its
+    own defect (#858) — one of nineteen derived settings left stale, not the lone case it
+    looked like from here — and #861 fixed it at the source rather than here.
+
+    **It stays out anyway, on the paragraph above rather than on that one.** With #861 in,
+    the gate no longer breaks a fresh `init` (measured both ways), so what a gate would add
+    now is a branch nothing can reach: dead code wearing a guard's clothes. The deletion
+    sweep would report it as a survivor and would be right to.
     """
     data = {"cwd": str(cwd)} if cwd else {}
     try:
