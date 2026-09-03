@@ -67,6 +67,12 @@ cd workspaces/<workspace>/<repo> && claude
 There the repo's full configuration loads natively, and `charter` still works from inside
 it when the control plane is needed.
 
+Charter puts its own layer in the clone for that session — the plane's settings and its
+`.claude/agents/`, which the clone's git root would otherwise cut off — and hides those
+exact paths in the clone's `.git/info/exclude`. So a session rooted in the repo can
+delegate to a persona, and the repo's `git status` is unaffected. `charter workspace
+reinit` is the repair if a clone is missing it.
+
 ## Guardrails
 
 - Confirm the working directory is `workspaces/<active>/<repo>` before a build or a commit.

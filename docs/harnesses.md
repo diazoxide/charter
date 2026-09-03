@@ -70,10 +70,17 @@ opencode and Codex get nothing here and say why: their config is machine-global,
 charter's layer is already live in every workspace and two workspaces on one machine
 cannot be made to differ. That ceiling is in `charter harness list` beside the others.
 
-Nothing is written into a **clone** — `workspaces/<ws>/<repo>/` is a repo charter does not
-own, and `git add -A` there would stage it. So a session inside a clone gets charter from
-the plugin, and **cannot delegate to a persona**: the plugin ships no `agents/`, and a
-clone's own git root stops the walk-up that would have found the plane's.
+**A clone gets the same layer, plus what the walk-up could not carry there.**
+`workspaces/<ws>/<repo>/` is a repo of its own, so a session inside it loses the settings
+*and* the plane's `.claude/agents/` — the walk-up stops at that git root. Charter writes
+both, and hides them in the clone's own `.git/info/exclude`: per-checkout, never
+committed, not itself tracked, and the one file a guest may write. Charter never edits the
+clone's `.gitignore`, hides only the exact paths it generated (never a `.claude/` glob,
+which would take your own untracked files with it), never touches a file it did not write,
+and removes its files and its exclude block when the workspace goes. `git status` in your
+repo is unaffected, and nothing charter wrote can be staged. Linked worktrees included —
+their `info/exclude` is the main repo's, which is also why removal is not just a
+`rm -rf`.
 
 ## `charter statusline --watch`
 
