@@ -447,6 +447,29 @@ class AWorktreeIsAGuestToo(CloneLayer):
         self.assertEqual(workspace.git_dir(sub), sub / ".." / "modules-vendored")
         self.assertTrue(workspace.git_dir(sub).is_dir())
 
+    def test_a_gitdir_path_containing_a_colon_is_read_whole(self):
+        """`split(":", 1)`, never `rsplit`. A directory name may contain a colon, and
+        splitting from the right hands back the tail of the PATH instead of the value —
+        a `.git` file that points somewhere real, read as pointing nowhere."""
+        odd = workspace.workspace_dir(self.ws) / "mod:ules"
+        odd.mkdir()
+        sub = workspace.workspace_dir(self.ws) / "colon"
+        sub.mkdir()
+        (sub / ".git").write_text("gitdir: ../mod:ules\n")
+        self.assertEqual(workspace.git_dir(sub), sub / ".." / "mod:ules")
+
+    def test_a_git_file_written_with_crlf_still_points_somewhere(self):
+        """`.strip()`, never `lstrip`. `splitlines` takes the `\n` and leaves the `\r`,
+        so a pointer file written on Windows keeps a carriage return on the end of the
+        path — and a `Path` with a trailing `\r` is a directory that does not exist."""
+        real = workspace.workspace_dir(self.ws) / "modules-crlf"
+        real.mkdir()
+        sub = workspace.workspace_dir(self.ws) / "fromwindows"
+        sub.mkdir()
+        (sub / ".git").write_bytes(b"gitdir: ../modules-crlf\r\n")
+        self.assertEqual(workspace.git_dir(sub), sub / ".." / "modules-crlf")
+        self.assertTrue(workspace.git_dir(sub).is_dir())
+
     def test_a_git_file_that_says_nothing_is_not_a_checkout(self):
         junk = workspace.workspace_dir(self.ws) / "junk"
         junk.mkdir()

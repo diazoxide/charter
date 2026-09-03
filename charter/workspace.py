@@ -1343,8 +1343,11 @@ def _walkup_files() -> dict[str, str]:
         # not there yields nothing, and a directory entry, a dangling symlink and a
         # binary file are one answer here — "not text charter can mirror" — which the
         # read already gives. A predicate in front of it is a branch the deletion sweep
-        # can remove without changing a single answer, which is what makes it noise.
-        for f in sorted(d.rglob("*")):
+        # can remove without changing a single answer, which is what makes it noise —
+        # and so was the `sorted()` that used to wrap this, for the same reason: every
+        # entry is an independent key in a dict, and `_layer_status` sorts what it
+        # reports anyway. The sweep found it as a survivor and was right.
+        for f in d.rglob("*"):
             try:
                 text = f.read_text()
             except (OSError, UnicodeDecodeError):
