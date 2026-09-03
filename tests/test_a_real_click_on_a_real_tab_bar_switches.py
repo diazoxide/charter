@@ -482,16 +482,12 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         self.assertEqual(state.frame_workspace(self.fid), self.HERE)
 
 
-@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
-class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCase):
-    """The `chats` bar: click a name, the client is on that chat's window.
+class _ARealChatBarOverTwoChats(_ARealFrameWithBars):
+    """One frame, one `chats` bar, two chats — the fixture both buttons are pressed on.
 
-    **This is the half that moves a CLIENT rather than a file**, and it is the one #684 is
-    about: membership comes from this plane's own chat directories (`state.frame_workspace`,
-    a file), the target is a recorded pane ID and never a session NAME, and `cmd_chat`
-    establishes where both chats actually are before it aims anything anywhere — because
-    `select-window` at another session's pane returns 0 and moves that session while this
-    client stays put.
+    Held apart from the cases so the two gestures are measured against ONE frame rather
+    than two: same bar, same chats, same client, same `mouse = true` config out of
+    `conf_text`. It has no test methods of its own, so it is discovered and runs nothing.
     """
 
     WS = "alpha"
@@ -528,6 +524,19 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCas
             _await(lambda: self.there in self._bar_row(self.bar)),
             f"the chat bar never painted both chats: {self._bar_row(self.bar)!r}")
         self.assertEqual(self._active(), self.harness)
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealClickOnTheChatBarMovesTheClient(_ARealChatBarOverTwoChats, unittest.TestCase):
+    """The `chats` bar: click a name, the client is on that chat's window.
+
+    **This is the half that moves a CLIENT rather than a file**, and it is the one #684 is
+    about: membership comes from this plane's own chat directories (`state.frame_workspace`,
+    a file), the target is a recorded pane ID and never a session NAME, and `cmd_chat`
+    establishes where both chats actually are before it aims anything anywhere — because
+    `select-window` at another session's pane returns 0 and moves that session while this
+    client stays put.
+    """
 
     def test_clicking_the_other_chats_tab_moves_the_client_to_its_window(self):
         """`select-window` at the target chat's own harness PANE — a pane id resolves to
@@ -606,6 +615,163 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealFrameWithBars, unittest.TestCas
         time.sleep(2.0)
         self.assertEqual(self._current_window(self.WS), window)
         self.assertEqual(self._active(), self.harness)
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARealRightClickOnTheChatBarOpensARealMenu(_ARealChatBarOverTwoChats,
+                                               unittest.TestCase):
+    """Button 2 on a real tab, through a real client, really draws a menu — #846.
+
+    **This is the link no unit test can stand in for, and it is the only claim in this
+    feature that was ever in doubt.** That charter's handler answers a `right` event is
+    `tests/test_a_right_click_on_a_tab_acts_on_that_tab.py`; what could not be settled
+    there is whether button 2 ever arrives at all. tmux might route it to a binding, or
+    swallow it, or hand it over as X10 — and `#{mouse_any_flag}` is what decides, on a
+    pane in another window that this test's own client is not looking at.
+
+    It arrives. Measured here on a real server, a real client on a real pty, a real
+    `charter panel chats` holding the pane, and a real detached `charter frame-palette
+    --tab <chat>` that splits a real overlay pane and paints a real menu into it.
+
+    **Nothing here presses Enter, and that is deliberate rather than incidental.** The
+    last row of the surface these cases draw is `chat: close`, and going through with it
+    stops a harness. What is asserted is the surface — that it exists, that it is about
+    the tab that was pressed, and that opening it moved nothing.
+
+    The class inherits its whole fixture from the left-click cases above, so the two
+    gestures are measured against one frame: same bar, same two chats, same client, same
+    `mouse = true` config out of `conf_text`.
+    """
+
+    #: SGR's number for the right button. `overlay._SGR_BUTTONS` maps it to `right`, and
+    #: this is the far end of the same trip: what the terminal writes is what tmux
+    #: forwards, and 2 is what a real right-click is spelled with.
+    BUTTON = 2
+
+    def _menu_pane(self) -> str:
+        """The pane the menu opened in, or `""` — whatever this window has that the frame
+        did not.
+
+        Off tmux's own listing and never off charter's record: `state.panes` names the
+        PANELS a re-layout wrote, and an overlay is deliberately not one of them
+        (`overlay.OVERLAY_OPTION` is a pane option, so the answer dies with the pane). A
+        pane appearing is the same observable `tests/test_a_real_click_opens_the_real
+        _palette.py` uses for the doorway on the attention row.
+        """
+        for pane in self._panes(self.WS):
+            if pane not in (self.harness, self.bar):
+                return pane
+        return ""
+
+    def _await_menu(self, tab: str) -> str:
+        self.assertTrue(
+            _await(lambda: bool(self._menu_pane())),
+            "no pane was ever opened, so button 2 never reached the panel")
+        pane = self._menu_pane()
+        self.assertTrue(
+            _await(lambda: f"chat: close {tab}" in self._shown(pane)),
+            f"the pane that opened never drew {tab}'s menu: {self._shown(pane)!r}")
+        return pane
+
+    def test_a_right_press_on_another_chats_tab_opens_that_chats_menu(self):
+        """The whole chain: a button-2 report written to the client's pty, decoded by a
+        `charter panel chats` process, resolved through `slots._Tabs.tab_at`, spawned as
+        `charter frame-palette --tab <chat>`, split into an overlay pane by a THIRD
+        process, and painted."""
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.there}"),
+                    button=self.BUTTON)
+        shown = self._shown(self._await_menu(self.there))
+        self.assertIn(f"chat {self.there}", shown)
+        self.assertIn("chat: previous transcript", shown)
+
+    def test_a_right_press_on_the_tab_you_are_ON_opens_its_menu(self):
+        """`slots._Tabs.tab_at`'s one difference from `switch_to`, end to end. The left
+        click on this same cell is asserted three cases up to move nothing at all."""
+        self._click(self.bar, col=self._column_of(self.bar, f"*{self.here}"),
+                    button=self.BUTTON)
+        self.assertIn(f"chat {self.here}", self._shown(self._await_menu(self.here)))
+
+    def test_opening_the_menu_switches_nothing(self):
+        """A right-click is not a slow left-click. The client stays on the window it was
+        on, and the chat the menu is ABOUT keeps its own harness — the tab is still there
+        to be closed, or not, by the keypress that has not happened."""
+        window = self._current_window(self.WS)
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.there}"),
+                    button=self.BUTTON)
+        self._await_menu(self.there)
+        self.assertEqual(self._current_window(self.WS), window)
+        self.assertIn(self.other_harness,
+                      self._tmux("list-panes", "-a", "-F", "#{pane_id}").stdout.split())
+
+    def test_the_menu_takes_the_keyboard_and_the_harness_survives(self):
+        """**A menu is modal, and this is the one gesture on a bar that is.** A switch
+        leaves the keyboard on a harness (#634); a menu must take it, or the rows it just
+        drew could not be chosen from — `overlay.modal_argvs` selects the overlay pane and
+        zooms it over the window. The harness is not touched: it is still a pane, and
+        `overlay.HATCH_KEY` is what gives it back."""
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.there}"),
+                    button=self.BUTTON)
+        pane = self._await_menu(self.there)
+        self.assertTrue(_await(lambda: self._active() == pane),
+                        f"the menu drew but the keyboard stayed on {self._active()}")
+        self.assertIn(self.harness, self._panes(self.WS))
+
+    def test_escape_closes_the_menu_and_stops_nothing(self):
+        """**The way out, and the assertion that the menu commits nothing by existing.**
+
+        `overlay.Surface.run` treats Escape as a cancel and answers no row, so
+        `frame/tabmenu.act` is never reached — which matters more on this surface than on
+        any other, because the row under the cursor when Escape is pressed is one keypress
+        from a confirmation that stops a harness. What comes back is the pane:
+        `commands_frame._close_palette` selects the harness, kills the overlay and re-arms
+        the hatch, as one chained tmux command.
+        """
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.there}"),
+                    button=self.BUTTON)
+        pane = self._await_menu(self.there)
+        os.write(self.fd, b"\x1b")
+        self.assertTrue(
+            _await(lambda: pane not in self._panes(self.WS)),
+            "Escape left the menu's pane standing, holding a live process")
+        self.assertTrue(_await(lambda: self._active() == self.harness),
+                        f"the menu closed but the keyboard stayed on {self._active()}")
+        self.assertIn(self.other_harness,
+                      self._tmux("list-panes", "-a", "-F", "#{pane_id}").stdout.split())
+
+    def test_a_right_press_on_the_heading_opens_nothing(self):
+        """`  chats  ` is about no chat. A cell the strip drew no tab into is absent from
+        `slots._Tabs`' map whatever asks about it, so this costs not even an interpreter
+        start — which is what makes the empty pane list below a real assertion rather than
+        a race this case happened to win.
+
+        **What this case deliberately does NOT assert is where the keyboard ended up, and
+        that is a measurement rather than an omission.** tmux's own default binding for
+        this key, read back off a real 3.7c with `list-keys -T root`, is::
+
+            MouseDown3Pane if-shell -F -t = "#{||:#{mouse_any_flag},…}"
+                             { select-pane -t = ; send-keys -M }
+                             { display-menu … }
+
+        The branch that forwards the report **selects the pane first**. That is #634's
+        defect, one button over and still open: with `[frame] mouse = true`, a right-click
+        on any charter panel moves the keyboard to it before the byte arrives. It is
+        pre-existing — it is what tmux has always done to button 3 — and it costs nothing
+        on the gesture this feature is for, because a menu that opens takes the keyboard
+        anyway and `commands_frame._close_palette` selects the harness on the way out. It
+        costs a MISS one left click, or `overlay.HATCH_KEY`.
+
+        Charter binds nothing here, which is `frame/builtins._MENU_BUTTON`'s own note:
+        `MouseDown1Pane`'s fix works because its else-branch is tmux's own two commands
+        written out, and button 3's else-branch is a `display-menu` a page long that
+        differs between versions. Asserting the steal here would enshrine it; asserting
+        its absence would be red. So this asserts what is contractual — nothing opened —
+        and says why the third line is missing.
+        """
+        self._click(self.bar, col=self._column_of(self.bar, "chats"),
+                    button=self.BUTTON)
+        time.sleep(2.0)
+        self.assertEqual(self._menu_pane(), "")
+        self.assertIn(self.harness, self._panes(self.WS))
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")

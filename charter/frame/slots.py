@@ -3403,6 +3403,36 @@ class _Tabs:
         name = self._cols.get((row, col))
         return None if name == self._here else name
 
+    def tab_at(self, row: int, col: int):
+        """The tab drawn at cell (*row*, *col*) — **including the one you are on**.
+
+        **The same map :meth:`switch_to` reads, without its one subtraction**, and the
+        difference between the two is the difference between the two gestures rather than
+        a relaxation of a rule. A left click SWITCHES, so "the tab you are already on"
+        answers nothing: re-switching is 41 tmux invocations and ~360 ms of panes being
+        torn down and split again, all of it to arrive where you already were. A right
+        click opens a menu ABOUT a tab (`frame/tabmenu.py`), and the commonest chat an
+        operator closes is the one they are in — `F2 → chat: close` has always meant
+        exactly that — so a menu that refused the marked tab would refuse the ordinary
+        click.
+
+        **It is a second method and not a flag on the first**, for :meth:`add_at`'s
+        reason: they are different questions with different answers, and a caller told
+        "this cell is special" would have to ask a second question anyway to know which.
+        Every caller of `switch_to` feeds what it answers to a command that switches; a
+        `switch_to(..., here=True)` would put the tab you are on into that argv on the day
+        somebody passed the flag by mistake.
+
+        **A cell nothing drew into is still nothing**, structurally rather than by a
+        guard: `_cols` is a mapping, so a column the strip drew no tab into is absent
+        whether it is `-1`, `4096`, a `_BAR_GAP`, either `+N` count or the `+` that makes
+        a chat — see the class docstring, and :meth:`more_at` and :meth:`add_at` for the
+        two fields that are drawn there and are deliberately not tabs. No cell answers two
+        of the three, which `_bar` makes true by building all four sets from one walk of
+        one composition.
+        """
+        return self._cols.get((row, col))
+
     def more_at(self, row: int, col: int) -> bool:
         """Whether cell (*row*, *col*) is a field standing for names the strip could not
         draw.

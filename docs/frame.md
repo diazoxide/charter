@@ -228,6 +228,31 @@ and putting them back to arrive where you were. So does clicking the heading, th
 two names, or the empty space past the last tab: those are cells no tab was drawn into, and
 charter will not pick the nearest name for you.
 
+**Right-click a chat tab and you get a menu about that chat.** Two rows — `chat: previous
+transcript` and, last, `chat: close` — both about the tab under the pointer rather than the
+chat you happen to be in, so you can close a chat from its own tab without switching to it
+first. Close is a doorway, not a button: pressing it draws the same warning `F2 → chat:
+close` draws, naming the chat and what stopping it costs, and the keypress on *that* is what
+stops the harness. Escape leaves, `F12` always leaves, and nothing is stopped by a pointer.
+
+Right-click on the tab you *are* on works too — closing the chat you are in is the ordinary
+case of closing one. Right-click on the heading, on the `+`, on a `+N` count or on empty
+space does nothing at all, and the `workspaces` bar has no menu: a workspace has neither a
+transcript nor a chat to close.
+
+**`F2` still has every one of those rows**, and that is deliberate: a right-click menu is
+invisible until you try it, so it is a faster route to two things and never the only one.
+
+**And whether right-click reaches charter at all is your terminal's decision.** tmux
+forwards it — measured on 3.2 and 3.7c, with `[frame] mouse` off and on, with no binding
+involved — but many terminal emulators serve their own context menu on button 2 instead of
+sending it to the application. iTerm2's default profile is one. If yours does, nothing
+breaks and nothing is refused: the menu simply never appears, and `F2` is unchanged. One
+cost worth knowing with `mouse = true`: tmux selects the pane under the pointer before
+forwarding a right-click, so a right-click that lands on a panel and opens nothing leaves
+your keyboard on that panel. A click on the harness, or `F12`, puts it back. (Left clicks
+have not done this since charter rebound `MouseDown1Pane` — see above.)
+
 **The `+N` counts are the exception, and they open the palette.** A `+9` stands for names
 that are not on the row, so there is nothing there to switch *to* — but it is the field
 you are most likely to try, and charter now hands off to the surface that can answer:
