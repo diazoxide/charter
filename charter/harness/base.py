@@ -209,15 +209,29 @@ class Harness:
     #: in-repo paths does a nested checkout stop seeing. A harness may declare this without
     #: declaring a rule it has not measured.
     #:
-    #: Directories and single files both, because harnesses spell it both ways — Claude
-    #: Code's ``.claude/agents`` is a tree and opencode's ``opencode.json`` is one file at
-    #: the root — and the mirror reads whichever it finds.
+    #: Directories and single files both. Every shipped harness spells this as a
+    #: directory today, and the mirror still reads a plain file first, because half the
+    #: in-repo surfaces charter has measured ARE single files at a repository root
+    #: (opencode's ``opencode.json``, Codex's ignored ``.codex/config.toml``). The whole
+    #: point of the member is that a harness charter has not met declares its own spelling,
+    #: and a mirror that answered "nothing" for a file would be silently wrong for the next
+    #: one — `rglob` on a file yields nothing at all.
     #:
-    #: A path here is a claim that the plane's copy is safe to place in a repo charter does
-    #: not own. Project INSTRUCTIONS are the line: ``CLAUDE.md`` and any equivalent are
-    #: deliberately absent, because dropping the plane's instructions into somebody else's
-    #: repo, to be read there as that repo's, is a claim of a different size from mirroring
-    #: a settings key. A guest hides its own files; it does not narrate the host's.
+    #: **A path here is a claim that the plane's copy is safe to place in a repository
+    #: charter does not own**, and two kinds of thing are deliberately not:
+    #:
+    #: * **Grants.** Charter mirrors CAPABILITY — agents, skills, commands — never
+    #:   permission. `charter guard` writes this plane's rules into a harness's own config
+    #:   file, so mirroring that file would put an ``allow`` in force in a repository
+    #:   nobody granted it in. :data:`claude_code.WORKSPACE_KEYS` already refuses exactly
+    #:   this for Claude Code, and this mechanism writing into the same directory must not
+    #:   answer it two opposite ways for two harnesses. Where a harness's config file mixes
+    #:   the two, a mirror is the wrong instrument — it cannot drop a key — and
+    #:   :meth:`workspace_files` is the one that can.
+    #: * **Project instructions.** ``CLAUDE.md`` and any equivalent: dropping the plane's
+    #:   instructions into somebody else's repo, to be read there as that repo's, is a
+    #:   claim of a different size from mirroring a settings key. A guest hides its own
+    #:   files; it does not narrate the host's.
     inherited_paths: tuple[str, ...] = ()
 
     #: The value this harness puts in ``$CHARTER_HARNESS``. Its identity everywhere.

@@ -729,15 +729,38 @@ class OpenCodeHarness(Harness):
         "`~/.config/opencode/` and the plugin, which every directory on this machine "
         "reads. opencode DOES read an in-repo `opencode.json` at the repository root and "
         "`.opencode/agent/` from the project (measured, 1.18.23); charter mirrors the "
-        "plane's copies of those into a workspace's checkouts and writes neither here")
+        "plane's `.opencode/agent/` into a workspace's checkouts, and neither writes nor "
+        "mirrors `opencode.json` — that is where `charter guard` keeps this plane's own "
+        "permission grants")
 
     #: What a checkout inside a workspace stops seeing, in opencode's spelling (#868).
     #:
-    #: Both measured against opencode 1.18.23 with a real session: malformed JSON at
-    #: ``<repo>/opencode.json`` fails the run outright (`Error: Config file at
-    #: <repo>/opencode.json is not valid JSON(C)`), and a sentinel at
+    #: Measured against opencode 1.18.23 with a real session: a sentinel at
     #: ``<repo>/.opencode/agent/probe.md`` is a project agent where a control repository
-    #: has none.
+    #: has none. That is the surface #868 is about — the plane's agents, which a clone's
+    #: own git root cuts off exactly as it cuts off Claude Code's.
+    #:
+    #: **`opencode.json` is measured, is read, and is deliberately NOT here.** opencode
+    #: does read it at a repository root — malformed JSON at ``<repo>/opencode.json`` fails
+    #: the run outright — so a clone genuinely stops seeing the plane's copy, and #868's
+    #: own table lists it. Charter still does not mirror it, because of what is in it:
+    #: :meth:`_apply_rule` writes `charter guard`'s rules there, so a plane's copy holds
+    #: `permission` — and ``charter guard allow "npm test *"`` puts
+    #: ``{"bash": {"npm test *": "allow"}}`` in that file. Copying it into a checkout would
+    #: put an ALLOW in force in a repository nobody granted it in.
+    #:
+    #: Charter already answered this question one harness over and answered it the other
+    #: way: :data:`claude_code.WORKSPACE_KEYS` mirrors three keys of the plane's settings
+    #: into a checkout and refuses `permissions`, *"because copying a grant sideways into a
+    #: directory nobody granted it in puts a permission in force where no one clicked for
+    #: it"*. The same mechanism writing into the same directory must not answer it two
+    #: opposite ways for two harnesses.
+    #:
+    #: The split is capability versus grant, and it is why `inherited_paths` mirrors while
+    #: `workspace_files` generates: a mirror cannot drop a key. A generated guest
+    #: `opencode.json` carrying the safe half is the honest way to close the rest, and it
+    #: is a separate piece of work — charter's own opencode layer is machine-global and
+    #: already reaches a checkout, so nothing of CHARTER's is missing there today.
     #:
     #: **This does not touch the ceiling in :data:`WORKSPACE_SCOPE` above and does not
     #: contradict it.** That ceiling is about a workspace DIRECTORY, which is not a
@@ -745,7 +768,7 @@ class OpenCodeHarness(Harness):
     #: is already live there and cannot be made to DIFFER between two. A clone at
     #: `workspaces/<ws>/<repo>/` is a repository root, which is exactly why it was getting
     #: nothing, and exactly why charter can write here.
-    inherited_paths = (".opencode/agent", "opencode.json")
+    inherited_paths = (".opencode/agent",)
 
     cli_name = "opencode"
     binary = "opencode"

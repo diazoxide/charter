@@ -84,8 +84,9 @@ Both do read something from a project, and charter says which rather than implyi
 project carries nothing — measured with real sessions, because a management CLI is not one:
 opencode reads an `opencode.json` at the **repository root** and `.opencode/agent/`
 (1.18.23); Codex reads `.codex/skills/` and ignores a project `.codex/config.toml`
-(0.147.0). Charter writes nothing machine-global on the operator's behalf, and inside a
-workspace's checkouts it writes to exactly those surfaces — see below.
+(0.147.0). Charter writes nothing machine-global on the operator's behalf. Inside a
+workspace's checkouts it mirrors the plane's copy of each *capability* surface, and of the
+config files above it mirrors none — see below.
 
 **A clone gets the same layer, plus what the walk-up could not carry there.**
 `workspaces/<ws>/<repo>/` is a repo of its own, so a session inside it loses the settings
@@ -106,13 +107,21 @@ names none of it:
 | harness | carried into a checkout | binary |
 |---|---|---|
 | Claude Code | `.claude/agents`, `.claude/skills` | 2.1.259 |
-| opencode | `.opencode/agent`, `opencode.json` | 1.18.23 |
+| opencode | `.opencode/agent` | 1.18.23 |
 | Codex | `.codex/skills` | 0.147.0 |
 
-A harness registered tomorrow is carried the day it declares a surface. Two things are
-deliberately absent from every row: a project `.codex/config.toml`, because Codex ignores
-it and writing it would look like wiring while being inert; and `CLAUDE.md` or any
-equivalent, because a guest hides its own files and does not narrate the host's.
+A harness registered tomorrow is carried the day it declares a surface. What charter mirrors
+is **capability** — agents, skills, commands — and three things are deliberately absent:
+
+- **A harness's config file.** `opencode.json` is read at a repository root, so a clone does
+  stop seeing the plane's copy — and `charter guard` keeps this plane's `permission` grants
+  in that same file. Copying it would put an `allow` in force in a repository nobody granted
+  it in, which is what `.claude/settings.json`'s three mirrored keys already refuse for
+  Claude Code. A mirror cannot drop a key; that is the difference between the two lists.
+- **A project `.codex/config.toml`**, because Codex ignores it — writing it would look like
+  wiring while being inert.
+- **`CLAUDE.md` or any equivalent**, because a guest hides its own files and does not
+  narrate the host's.
 
 ## `charter statusline --watch`
 

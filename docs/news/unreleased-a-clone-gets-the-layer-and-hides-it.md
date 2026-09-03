@@ -69,8 +69,8 @@ hides and removes works from whatever a harness declares, so a harness registere
 is covered the day it declares one. The list of *what a git boundary cuts off* used to be
 two Claude Code paths spelled out in `workspace.py`; it is now `Harness.inherited_paths`,
 measured against the installed binaries — `.claude/agents` and `.claude/skills` (2.1.259),
-`.opencode/agent` and `opencode.json` (1.18.23), `.codex/skills` (0.147.0). See *a clone
-carries every harness's layer*, in this same release.
+`.opencode/agent` (1.18.23), `.codex/skills` (0.147.0). See *a clone carries every harness's
+layer*, in this same release.
 
 **CLAUDE.md is deliberately not carried in.** It walks up on the same rule, so the gap is
 real for it too — and it is the one file a repo of its own is most likely to have opinions

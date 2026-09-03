@@ -56,10 +56,12 @@ hides its own files, it does not narrate the host's.
 
 **And it is every harness's layer, not Claude Code's.** What a clone cuts off is spelled by
 each harness, measured against the installed binary: `.claude/agents/` and `.claude/skills/`
-(Claude Code 2.1.259), `.opencode/agent/` and `opencode.json` at the repository root
-(opencode 1.18.23), `.codex/skills/` (codex-cli 0.147.0 — a project `.codex/config.toml` is
-ignored, so charter writes none). A harness registered tomorrow is carried the day it
-declares a surface.
+(Claude Code 2.1.259), `.opencode/agent/` (opencode 1.18.23), `.codex/skills/` (codex-cli
+0.147.0). A harness registered tomorrow is carried the day it declares a surface. What
+travels is **capability**, never a grant: `opencode.json` is read at a repository root and is
+carried by nothing, because `charter guard` keeps this plane's permission rules in it and
+copying those sideways would put an `allow` in force in a repo nobody granted it in — the
+same reason `.claude/settings.json`'s mirror is three keys and not the file.
 
 That is about a **clone**. A workspace **directory** is a different question, and there the
 ceiling stands: only Claude Code binds config to the directory a session starts in.
