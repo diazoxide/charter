@@ -80,6 +80,7 @@ one does.
 
 from __future__ import annotations
 
+import ast
 import fcntl
 import os
 import pty
@@ -382,6 +383,58 @@ def _refusal(fd: int) -> str:
 #: healthy one does.
 _DEADLINE = 20.0
 
+#: The gap before the FIRST re-read of a condition, and the largest gap between any two,
+#: in seconds. Every wait in this module used a flat `0.1` (a few used `0.05`), and
+#: :data:`_DEADLINE`'s own note is what makes that the wrong shape: a wait here "returns
+#: the instant its condition holds", except that it cannot — it returns at the next tick,
+#: so the tick is a floor under every wait in the module whether or not anything is
+#: actually slow.
+#:
+#: **Measured, because the size of that floor is the whole argument for changing it.**
+#: One run of this module on a workstation spends **16.6 s of its 29.6 s inside
+#: `time.sleep`**, across 154 calls averaging 102 ms — and re-polling the same conditions
+#: at 2 ms instead brought the same 102 tests, all passing, to **23.6 s**. So roughly six
+#: of those seconds were not waiting for tmux; they were waiting for the next look. On CI
+#: (`ubuntu-latest`, 3.12) the module is 21.5 s, of which 57 tests finish inside a single
+#: 100 ms tick — the floor is most of what the other 45 pay.
+#:
+#: **Doubling rather than a smaller flat number**, because the two failure modes are not
+#: symmetrical and a flat 2 ms picks the wrong one: `_await_client` runs a `tmux
+#: list-clients` per look, so a flat fine tick would spawn ~4,000 processes against
+#: `_DEADLINE` for a client that never registers. Doubling from `_POLL_FIRST` reaches
+#: `_POLL_MAX` in seven looks (~226 ms) and settles there, so a condition that holds early
+#: is seen early and a wait that runs long costs what it always did — about 205 looks over
+#: a 20 s deadline against the 200 the flat tick took.
+_POLL_FIRST = 0.002
+_POLL_MAX = 0.1
+
+
+class _Poll:
+    """How long to wait before looking at a condition again — see :data:`_POLL_FIRST`.
+
+    A *construction* rather than a shorter guess (#650's rule, the same one
+    `_TmuxServerFixture._hold_the_server` is built on): nothing here shortens a deadline,
+    weakens an assertion or decides that something has settled. Every loop that uses this
+    keeps its own `_DEADLINE`, keeps its own condition, and a machine where that condition
+    never holds spends exactly the deadline it spent before and fails with the same
+    message. The only thing that changes is how often the loop LOOKS, which is not a fact
+    about the code under test.
+
+    One per loop, never shared: the gap is the loop's own history, and two loops sharing
+    an instance would have the second start where the first left off.
+    """
+
+    __slots__ = ("gap",)
+
+    def __init__(self) -> None:
+        self.gap = _POLL_FIRST
+
+    def again(self) -> None:
+        """Wait out this look's gap, and widen it for the next one."""
+        time.sleep(self.gap)
+        self.gap = min(self.gap * 2, _POLL_MAX)
+
+
 #: What a trial helper answers for a death tmux never had the child's status for: a
 #: trial that measured NOTHING, which is neither a pass nor a failure.
 #:
@@ -404,15 +457,34 @@ def _await_file(path: str, timeout: float = _DEADLINE) -> bool:
     the same missing file (see `TmuxIntegration._require_pane_died_fires`, which is what
     tells those two apart).
     """
-    deadline = time.monotonic() + timeout
+    deadline, poll = time.monotonic() + timeout, _Poll()
     while time.monotonic() < deadline and not os.path.exists(path):
-        time.sleep(0.1)
+        poll.again()
     return os.path.exists(path)
 
 
-def _await_text(path: str, timeout: float = _DEADLINE) -> str:
+def _await_text(path: str, timeout: float = _DEADLINE, settled=None) -> str:
     """Wait for *path* to hold NON-EMPTY text and return it stripped — `""` if it never
     does.
+
+    *settled* is how a caller expecting NOTHING stops paying a deadline for it. It is a
+    predicate meaning **"no later moment can change this answer"** — not "probably done
+    by now", which is the thing a fixed wait is and the thing this module refuses
+    everywhere else. Once it holds, the file is read one last time (the loop breaks into
+    the same final read a spent deadline reaches) and that reading is the answer.
+
+    The one caller is the `remain-on-exit` negative control, and its predicate is that
+    tmux has DESTROYED the pane: a destroyed pane is a pane tmux kept no corpse for, which
+    is the same fact as "`pane-died` was not run for it and now cannot be" — see
+    `_hook_reaches_a_shim`, whose docstring has stated that argument since before anything
+    used it. The control used to buy the same thing with `timeout=5.0`, which is worse in
+    both directions: it spent five seconds on every healthy run (5.0 s of the module's
+    21.5 s on CI — its single most expensive test), and on a machine slow enough to fire
+    the hook at 5.1 s it would have PASSED on the wait running out. Bounded by the fact
+    instead, it can have the full `_DEADLINE` and still return in milliseconds.
+
+    ``None`` leaves every other caller exactly as it was: a positive wait has no such
+    fact to read, which is the whole reason it waits.
 
     **`_await_file` is not enough wherever the assertion is about CONTENT.** A shell
     redirection (`echo "$v" > "$path"`, which is exactly what
@@ -423,7 +495,7 @@ def _await_text(path: str, timeout: float = _DEADLINE) -> str:
     does — still spends the deadline and still returns `""`, and the caller's assertion
     on the content fails exactly as it did before, saying the same thing.
     """
-    deadline = time.monotonic() + timeout
+    deadline, poll = time.monotonic() + timeout, _Poll()
     while time.monotonic() < deadline:
         try:
             text = Path(path).read_text().strip()
@@ -431,7 +503,9 @@ def _await_text(path: str, timeout: float = _DEADLINE) -> str:
             text = ""
         if text:
             return text
-        time.sleep(0.1)
+        if settled is not None and settled():
+            break
+        poll.again()
     try:
         return Path(path).read_text().strip()
     except OSError:
@@ -448,7 +522,7 @@ def _await_client(session: str, exclude: frozenset, pid: int) -> str:
     :data:`_ATTACH_TIMEOUT` is only the backstop for a client that neither registers nor
     exits.
     """
-    deadline = time.monotonic() + _ATTACH_TIMEOUT
+    deadline, poll = time.monotonic() + _ATTACH_TIMEOUT, _Poll()
     while time.monotonic() < deadline:
         out = _tmux("list-clients", "-t", session, "-F", "#{client_name}")
         fresh = {n.strip() for n in out.stdout.splitlines() if n.strip()} - exclude
@@ -459,7 +533,7 @@ def _await_client(session: str, exclude: frozenset, pid: int) -> str:
                 return ""   # the client exited rather than attaching — a refusal
         except OSError:
             return ""
-        time.sleep(0.1)
+        poll.again()
     return ""
 
 
@@ -472,13 +546,129 @@ def _await_dead(pane: str, timeout: float = _DEADLINE) -> int | None:
     was still alive when time ran out — which the caller asserts on, since every command
     handed to this module's own helper is built to die at once.
     """
-    deadline = time.monotonic() + timeout
+    deadline, poll = time.monotonic() + timeout, _Poll()
     while time.monotonic() < deadline:
         code = commands_frame._query_pane_dead_status(SOCKET, pane)
         if code is not None:
             return code
-        time.sleep(0.1)
+        poll.again()
     return None
+
+
+class HowThisModuleWaits(unittest.TestCase):
+    """The two properties #843 turns on, asserted rather than left to a stopwatch.
+
+    **No tmux, and that is deliberate.** What changed is how often this module LOOKS at a
+    condition and when it stops looking — neither is a fact about tmux, and pinning them
+    against a real server would make the assertions about a machine's load instead. The
+    conditions themselves, the deadlines and the assertions every caller makes on the
+    answers are all exactly what they were; if any of those had changed, the 102 tests
+    around this class would be the ones to say so.
+
+    Both cases are red on the version this fixed: the first reads gaps that were a flat
+    `0.1`, and the second passes an argument `_await_text` did not take.
+    """
+
+    def test_a_wait_looks_again_soon_and_then_backs_off(self):
+        """A condition that holds early is seen early — and one that does not costs no
+        more looks than the flat tick did.
+
+        The measured defect is that a wait "returns the instant its condition holds"
+        only up to the tick: at a flat 0.1 the first look after the initial one is 100 ms
+        away whatever the machine is doing, and one run of this module spent 16.6 s of
+        29.6 s inside `time.sleep`.
+        """
+        gaps = []
+        with mock.patch.object(time, "sleep", gaps.append):
+            poll = _Poll()
+            for _ in range(12):
+                poll.again()
+        self.assertEqual(gaps[0], _POLL_FIRST,
+                         "the first look back is as far away as it ever was")
+        self.assertEqual(gaps[:4], [_POLL_FIRST, _POLL_FIRST * 2,
+                                    _POLL_FIRST * 4, _POLL_FIRST * 8])
+        self.assertEqual(gaps[-1], _POLL_MAX, "the gap must settle, not keep growing")
+        self.assertLessEqual(
+            sum(gaps[:7]), _POLL_MAX * 3,
+            "seven looks should cost about what one flat tick used to, or a wait that "
+            "resolves quickly has not actually got cheaper")
+        # A fresh one starts fine again: the gap is a loop's own history and two loops
+        # sharing an instance would have the second start where the first left off.
+        second = []
+        with mock.patch.object(time, "sleep", second.append):
+            _Poll().again()
+        self.assertEqual(second, [_POLL_FIRST])
+
+    def test_a_wait_told_nothing_can_change_stops_instead_of_spending_the_deadline(self):
+        """`_await_text(settled=…)` answers as soon as the fact holds.
+
+        Timed by counting LOOKS, not by a stopwatch: a wall-clock assertion here would be
+        a test about this machine. `_DEADLINE` is 20 s and `_Poll` reaches `_POLL_MAX` in
+        seven looks, so an unsettled wait takes some two hundred of them; the point is
+        that a settled one takes one.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = os.path.join(tmp, "never-written")
+            looks = []
+            self.assertEqual(
+                _await_text(marker, _DEADLINE,
+                            settled=lambda: (looks.append(1), True)[1]),
+                "", "nothing wrote the marker, so the answer is still no argv")
+            self.assertEqual(len(looks), 1,
+                             "the wait asked whether anything could still change, was "
+                             "told no, and read the file one last time")
+
+    #: Every `time.sleep(<a number>)` this module is allowed to contain, by the seconds it
+    #: names — the waits that exist to show something does NOT happen, which
+    #: :data:`_DEADLINE`'s own note says must keep their own short, deliberate numbers.
+    #: A wait for absence cannot be shortened by looking more often; there is nothing to
+    #: look at. Everything else here polls, and polling goes through :class:`_Poll`.
+    DELIBERATE = [0.2, 0.2, 0.4, 0.5, 1.0]
+
+    def test_no_wait_in_this_module_polls_at_a_flat_interval(self):
+        """The anti-vacuity half: `_Poll` is not worth having if a call site can quietly
+        keep its own `time.sleep(0.1)`.
+
+        Reads this module's own source, because that is the only place the question can
+        be asked — a flat tick at one of twenty loops is invisible to every assertion
+        above and shows up only as a slow suite, which is the defect #843 reported.
+        Failure here does not mean the sleep is wrong: it means it is either a wait for
+        absence, and belongs in :attr:`DELIBERATE` with the reason written beside it, or
+        it is a poll, and belongs to a `_Poll`.
+        """
+        tree = ast.parse(Path(__file__).read_text())
+        found = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "sleep" and node.args):
+                continue
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)):
+                found.append(float(arg.value))
+        self.assertEqual(
+            sorted(found), sorted(self.DELIBERATE),
+            "this module sleeps for a literal number of seconds somewhere it is not "
+            "listed. A wait for something to HAPPEN polls (`_Poll`); only a wait for "
+            "something NOT to happen names its own number, and those are enumerated in "
+            "`DELIBERATE` above")
+
+    def test_a_settled_wait_still_reports_what_arrived_before_it_settled(self):
+        """Settling ends the WAIT, never the reading — the file is read once more on the
+        way out, so an argv that landed in the same instant is not thrown away.
+
+        This is the half that keeps the negative control able to fail: a hook that really
+        did reach the shim must still be reported, or "nothing was delivered" would be
+        true of every run by construction.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = os.path.join(tmp, "written-late")
+
+            def settled() -> bool:
+                Path(marker).write_text("charter -P -m charter panel")
+                return True
+
+            self.assertEqual(_await_text(marker, _DEADLINE, settled=settled),
+                             "charter -P -m charter panel")
 
 
 #: Anything tmux drew that is not TEXT: a CSI/OSC escape sequence, a charset selection,
@@ -573,11 +763,11 @@ class _Screen:
         carries the rest of the argument: tmux cannot paint a response to a key without
         having first read every key written before it.
         """
-        deadline = time.monotonic() + timeout
+        deadline, poll = time.monotonic() + timeout, _Poll()
         while time.monotonic() < deadline:
             if self.drawn_so_far() > mark:
                 return True
-            time.sleep(0.05)
+            poll.again()
         return self.drawn_so_far() > mark
 
     def await_drawn(self, needle: str, timeout: float = _DEADLINE) -> bool:
@@ -587,11 +777,11 @@ class _Screen:
         instant the text is on screen, so the number is what a loaded runner may take and
         never what a healthy one does; the caller asserts on the answer.
         """
-        deadline = time.monotonic() + timeout
+        deadline, poll = time.monotonic() + timeout, _Poll()
         while time.monotonic() < deadline:
             if self.saw(needle):
                 return True
-            time.sleep(0.05)
+            poll.again()
         return self.saw(needle)
 
 
@@ -606,12 +796,12 @@ def _await_pane_changed(session: str, before: str, timeout: float = _DEADLINE) -
     changing is tmux itself reporting that B's key landed on B's pane. Returns *before*
     unchanged if it never does, and the caller fails on that.
     """
-    deadline = time.monotonic() + timeout
+    deadline, poll = time.monotonic() + timeout, _Poll()
     while time.monotonic() < deadline:
         now = _tmux("capture-pane", "-p", "-t", session).stdout
         if now != before:
             return now
-        time.sleep(0.05)
+        poll.again()
     return _tmux("capture-pane", "-p", "-t", session).stdout
 
 
@@ -797,7 +987,7 @@ class _VoidDeaths:
         not-run, and `_the_array_never_ran` is what then refuses to accept that reading
         unless the pane really is in the one state it is allowed to mean.
         """
-        deadline = time.monotonic() + timeout
+        deadline, poll = time.monotonic() + timeout, _Poll()
         while True:
             got = self._srv("show-options", "-v", *self._probe_where(scope, pane),
                             self._PROBE_OPTION)
@@ -805,7 +995,7 @@ class _VoidDeaths:
                 return True
             if time.monotonic() >= deadline:
                 return False
-            time.sleep(0.1)
+            poll.again()
 
     def _arm_array_probe(self, pane: str, *, scope: str = _ON_THE_PANE) -> None:
         """Install the CONSTANT-action `pane-died` probe hook on *pane*. **The one
@@ -1049,7 +1239,7 @@ class _TmuxServerFixture(_VoidDeaths):
         Path(gate).touch()
 
     def _hook_reaches_a_shim(self, *, socket, pane, gate, interpreter_dir,
-                             timeout=_DEADLINE, probe=False):
+                             timeout=_DEADLINE, probe=False, settled=None):
         """Arm *pane*'s respawn hook with a shim as charter's interpreter, open the gate,
         and return whatever argv the shim recorded (``None`` if it never ran).
 
@@ -1058,10 +1248,21 @@ class _TmuxServerFixture(_VoidDeaths):
         chooses what shape of path that is.
 
         *timeout* is the full `_DEADLINE` for a caller expecting the hook to fire — a
-        slow machine must come back slow, never wrong. A caller expecting NOTHING passes
-        a shorter one and earns the right to by establishing separately that the pane is
-        GONE: once tmux has destroyed a pane, `pane-died` for it can no longer fire at
-        any deadline, so waiting longer proves nothing that the pane's absence does not.
+        slow machine must come back slow, never wrong. A caller expecting NOTHING keeps
+        that deadline and passes *settled*: once tmux has destroyed a pane, `pane-died`
+        for it can no longer fire at any deadline, so waiting longer proves nothing that
+        the pane's absence does not — and the absence is a fact tmux can be ASKED for,
+        which a stopwatch is not.
+
+        **That earlier read as a shorter *timeout*, and the swap is the point.** The
+        argument above licenses ending the wait early; a five-second deadline is not that
+        argument, it is a guess that the pane will be gone inside five seconds. It was
+        wrong in both directions: the wait was paid in full on every healthy run — 5.0 s,
+        this module's single most expensive test on CI — and a machine that fired the hook
+        at 5.1 s would have made the control PASS on the timer expiring, which is the
+        "test that cannot fail" shape this module has shipped several ways. Read as a
+        fact, the same control answers in milliseconds and keeps the full deadline for the
+        machine that needs it.
 
         *probe* asks for `_arm_array_probe`'s constant-action hook to be armed BESIDE
         charter's own — after it, since an unindexed `set-hook` replaces the array — for
@@ -1088,7 +1289,7 @@ class _TmuxServerFixture(_VoidDeaths):
             return None
         # The shim's own `printf … > marker` creates before it writes, so the readiness
         # condition is TEXT rather than existence — see `_await_text`.
-        recorded = _await_text(marker, timeout)
+        recorded = _await_text(marker, timeout, settled=settled)
         if not recorded:
             return None
         return recorded.split()
@@ -2096,10 +2297,10 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         seconds changed nothing, because a fixed sleep does not spend a deadline. The
         same panel, given this poll, paints and passes. A sleep is not a shorter wait; it
         is a different thing from a wait."""
-        deadline = time.monotonic() + timeout
+        deadline, poll = time.monotonic() + timeout, _Poll()
         seen = self._capture(target)
         while time.monotonic() < deadline and needle not in seen:
-            time.sleep(0.1)
+            poll.again()
             seen = self._capture(target)
         return seen
 
@@ -2225,9 +2426,9 @@ class PanelIntegration(PersonaIso, unittest.TestCase):
         self._remain_on_exit("panel-oldshape")
         Path(gate).write_text("x")
 
-        deadline = time.monotonic() + _DEADLINE
+        deadline, poll = time.monotonic() + _DEADLINE, _Poll()
         while time.monotonic() < deadline and self._dead("panel-oldshape") != "1":
-            time.sleep(0.1)
+            poll.again()
         self.assertEqual(self._dead("panel-oldshape"), "1",
                          "the control process never died — nothing is being measured")
 
@@ -2575,10 +2776,10 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         on, so this waits for the actual needle, not a fixed delay standing in
         for "probably done by now".
         """
-        deadline = time.monotonic() + timeout
+        deadline, poll = time.monotonic() + timeout, _Poll()
         content = self._capture(pane)
         while time.monotonic() < deadline and needle not in content:
-            time.sleep(0.1)
+            poll.again()
             content = self._capture(pane)
         return content
 
@@ -2883,14 +3084,14 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
         r = _tmux("resize-window", "-t", fid, "-x", "160", "-y", "80")
         self.assertEqual(r.returncode, 0, r.stderr)
 
-        deadline = time.monotonic() + _DEADLINE
+        deadline, poll = time.monotonic() + _DEADLINE, _Poll()
         height = before
         while time.monotonic() < deadline:
             height = int(_tmux("display-message", "-p", "-t", panes["repos"],
                                "#{pane_height}").stdout.strip() or before)
             if height < before:
                 break
-            time.sleep(0.1)
+            poll.again()
         self.assertLess(height, before,
                         f"the table is {height} rows after the window GREW from 40 to "
                         f"80 — tmux's own redistribution only ever stretches on a grow, "
@@ -2958,9 +3159,9 @@ class FourEdgeIntegration(PersonaIso, unittest.TestCase):
             alone caught a re-layout mid-flight, with five panes up and the map still
             naming two.
             """
-            deadline = time.monotonic() + _DEADLINE
+            deadline, poll = time.monotonic() + _DEADLINE, _Poll()
             while time.monotonic() < deadline and sorted(state.panes(fid)) != sorted(slots):
-                time.sleep(0.1)
+                poll.again()
             self.assertEqual(sorted(state.panes(fid)), sorted(slots),
                              f"{what}: the frame's own record names "
                              f"{sorted(state.panes(fid))}")
@@ -3550,11 +3751,11 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         return window_id, pane_id
 
     def _wait_until(self, predicate, timeout=_DEADLINE):
-        deadline = time.monotonic() + timeout
+        deadline, poll = time.monotonic() + timeout, _Poll()
         while time.monotonic() < deadline:
             if predicate():
                 return True
-            time.sleep(0.05)
+            poll.again()
         return False
 
     def _require_pane_options(self, pane_id):
@@ -3837,16 +4038,29 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
             OP_SOCKET_PATH, "split-window", "-t", pane_id, "-v", "-l", "1",
             "-P", "-F", "#{pane_id}", "--", *_gate_argv(gate, "exit 4"))).stdout.strip()
         self.assertTrue(panel.startswith("%"), panel)
+
+        def destroyed() -> bool:
+            """Has tmux taken the pane away? The DETERMINISTIC half of this control.
+
+            tmux cannot fire `pane-died` for a pane it has already destroyed, and a pane
+            it destroyed is a pane it kept no corpse for — so once this holds, no later
+            moment can put an argv in the marker, and a wait that continues is a wait for
+            nothing. Handed to `_hook_reaches_a_shim` as its *settled* rather than
+            approximated by a five-second deadline, which is what stood here.
+            """
+            return _run(tmuxctl.server_argv(
+                OP_SOCKET_PATH, "display-message", "-p", "-t", panel,
+                "#{pane_id}")).stdout.strip() != panel
+
         seen = self._hook_reaches_a_shim(
             socket=OP_SOCKET_PATH, pane=panel, gate=gate,
-            interpreter_dir=os.path.join(self._gate_dir, "bare interp"), timeout=5.0)
-        # The DETERMINISTIC half, asserted first: the pane is gone. After that no
-        # deadline can change the answer below — tmux cannot fire `pane-died` for a pane
-        # it has already destroyed — which is what makes the short wait above sound.
-        self.assertTrue(self._wait_until(
-            lambda: _run(tmuxctl.server_argv(
-                OP_SOCKET_PATH, "display-message", "-p", "-t", panel,
-                "#{pane_id}")).stdout.strip() != panel),
+            interpreter_dir=os.path.join(self._gate_dir, "bare interp"),
+            settled=destroyed)
+        # And asserted on its own account, because `settled` is allowed to never hold:
+        # `_await_text` would then spend the whole deadline and answer `""`, which is the
+        # same `None` the assertion below reads — so without this line a pane that tmux
+        # KEPT would satisfy the control instead of failing it.
+        self.assertTrue(self._wait_until(destroyed),
             "the pane was still there, so this is not the state the control is about")
         self.assertIsNone(
             seen, "a pane on a server at tmux's own default kept its corpse and fired "
@@ -4738,7 +4952,7 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         # measures as one: wrong on 0 of 600 shots at this loop's 0.1s cadence and on 5 of
         # 600 at 0.01s, because what it really asks is whether a paint stalled for longer
         # than the gap between two polls.
-        deadline = time.time() + 10
+        deadline, poll = time.time() + 10, _Poll()
         shot = ""
         typed = False
         while time.time() < deadline:
@@ -4764,7 +4978,7 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                               _PAINT_MARK).returncode, 0,
                     "tmux would not type the paint mark into the frame")
                 typed = True
-            time.sleep(0.1)
+            poll.again()
         self._outer("kill-session", "-t", host)
         self._srv("kill-session", "-t", session)
         return shot
@@ -4966,10 +5180,10 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
         # mechanism it exists to document. It waits for a fact read back FROM TMUX, never
         # for a duration: the deadline below only bounds how long "it never retired" takes
         # to report, and reaching it is a failure rather than a pass.
-        deadline = time.monotonic() + _DEADLINE
+        deadline, poll = time.monotonic() + _DEADLINE, _Poll()
         gone = probe("list-sessions")
         while gone.returncode == 0 and time.monotonic() < deadline:
-            time.sleep(0.05)
+            poll.again()
             gone = probe("list-sessions")
         self.assertNotEqual(gone.returncode, 0,
                             "the server outlived its last session for the whole of "
@@ -5128,11 +5342,11 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
             # a mark typed at the harness is part of the content the FIRST redraw is
             # still drawing, and would prove only that one pane had arrived. Same
             # precondition `_screenshot`'s gate arms on, for the same reason.
-            deadline = time.monotonic() + _DEADLINE
+            deadline, poll = time.monotonic() + _DEADLINE, _Poll()
             shot = ""
             while not _rule_states(shot) and time.monotonic() < deadline:
                 shot = outer_screen()
-                time.sleep(0.05)
+                poll.again()
             if not _rule_states(shot):
                 raise unittest.SkipTest(
                     "this machine rendered no pane border through a nested tmux client "
@@ -5148,11 +5362,11 @@ class ChromeIsOneColour(_TmuxServerFixture, PersonaIso, unittest.TestCase):
                 self.assertEqual(
                     self._srv("send-keys", "-l", "-t", harness, mark).returncode, 0,
                     "tmux would not type this round's mark into the frame")
-                deadline = time.monotonic() + _DEADLINE
+                deadline, poll = time.monotonic() + _DEADLINE, _Poll()
                 shot = ""
                 while mark not in shot and time.monotonic() < deadline:
                     shot = outer_screen()
-                    time.sleep(0.05)
+                    poll.again()
                 self.assertIn(mark, shot,
                               f"round {round_}'s mark never came back through the nested "
                               "client, so nothing here was ordered against anything")
@@ -5826,11 +6040,11 @@ class _ChatsOnOneSession:
                          "#{pane_pid}").stdout.strip()
 
     def _wait_until(self, predicate, timeout=_DEADLINE) -> bool:
-        deadline = time.monotonic() + timeout
+        deadline, poll = time.monotonic() + timeout, _Poll()
         while time.monotonic() < deadline:
             if predicate():
                 return True
-            time.sleep(0.05)
+            poll.again()
         return False
 
 
@@ -6717,12 +6931,12 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
         only that something was not.
         """
         seen = ""
-        deadline = time.monotonic() + _DEADLINE
+        deadline, poll = time.monotonic() + _DEADLINE, _Poll()
         while time.monotonic() < deadline:
             seen = self._srv("capture-pane", "-p", "-t", pane).stdout
             if needle in seen:
                 return seen
-            time.sleep(0.1)
+            poll.again()
         return seen
 
     def test_each_chat_keeps_its_own_escape_hatch_across_a_switch(self):
