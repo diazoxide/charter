@@ -552,7 +552,16 @@ class WhoRecordsAndWhoDoesNot(unittest.TestCase):
     The gate is asked as a predicate rather than discovered inside the launcher, because
     every one of these five is a way of NOT being the operator's terminal, and a guard that
     passes only because a different guard caught the case is one this repository deletes.
+
+    **`config.FRAME` is stated rather than inherited**, which is this suite's own recurring
+    defect (#459): these cases are not `PersonaIso`, so the ambient value is whatever plane
+    the suite happens to be running inside, and a machine that had written `record = false`
+    would turn every "it records" case here red for a reason that is about a config file.
     """
+
+    def setUp(self) -> None:
+        self.enterContext(mock.patch.dict(config.FRAME,
+                                          {"record": True, "restore": True}))
 
     def test_a_launch_that_is_the_terminal_records(self):
         with mock.patch("sys.stdout.isatty", return_value=True):
@@ -600,7 +609,14 @@ class WhoRecordsAndWhoDoesNot(unittest.TestCase):
 
 
 class WhenBareCharterPutsThePlaneBack(unittest.TestCase):
-    """`commands_frame._restores_the_plane` — and the one case it must never fire in."""
+    """`commands_frame._restores_the_plane` — and the one case it must never fire in.
+
+    `config.FRAME` stated rather than inherited, for the class above's reason.
+    """
+
+    def setUp(self) -> None:
+        self.enterContext(mock.patch.dict(config.FRAME,
+                                          {"record": True, "restore": True}))
 
     def test_a_bare_launch_that_is_the_terminal_restores(self):
         self.assertTrue(commands_frame._restores_the_plane(_launch_args()))
