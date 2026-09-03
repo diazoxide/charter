@@ -35,6 +35,7 @@ from unittest import mock
 
 from charter import commands, config, doctor, workspace
 from charter import commands_workspace as cw
+from charter.harness import claude_code, registry
 
 from tests import _isolation
 from tests.test_a_workspace_carries_charters_layer import _plane_settings
@@ -165,6 +166,47 @@ class TheLayerArrives(CloneLayer):
         rows = dict(workspace.wire_harnesses(self.ws))
         self.assertEqual(rows["svc/.claude/settings.json"], "created")
         self.assertEqual(rows["svc/.git/info/exclude"], "created")
+
+
+class APathThatWouldEscapeTheCheckout(CloneLayer):
+    """`_harness_files`' containment refusal, which nothing reached.
+
+    The sweep returned the whole `if … continue` as a survivor, and the guard is worth
+    more here than it was one directory up: a `rel` carrying `..` escaping a WORKSPACE
+    directory lands somewhere else in the plane, and a `rel` escaping a CLONE lands in a
+    repo charter is a guest in — outside the tree it is allowed to write at all, with an
+    `info/exclude` entry that could never hide it because the path is not under the
+    checkout.
+
+    The harness contract already says paths stay inside. A contract nothing enforces is a
+    comment, and this is the one place every harness's answer passes through.
+    """
+
+    def files(self, rel: str) -> dict:
+        rogue = SimpleNamespace(workspace_files=lambda: {rel: "not charter's to place\n"})
+        with mock.patch.object(registry, "all",
+                               return_value=[rogue, claude_code.ClaudeCodeHarness()]):
+            return dict(workspace._guest_files(self.clone))
+
+    def test_a_relative_path_climbing_out_is_dropped(self):
+        self.assertEqual(sorted(self.files("../escaped.json")), [".claude/settings.json"])
+
+    def test_a_path_that_climbs_out_and_lands_back_inside_is_kept(self):
+        """The honest other half. Containment is decided by where the join LANDS, not by
+        whether the spelling contains `..` — `../svc/x.json` from this checkout resolves
+        back into it, so it is inside and it is written. Said out loud because a reader
+        who assumes the test is "reject any `..`" would then be surprised by the guard's
+        real shape, and would write the next harness against the wrong contract."""
+        self.assertEqual(sorted(self.files("../svc/nested.json")),
+                         ["../svc/nested.json", ".claude/settings.json"])
+
+    def test_nothing_is_written_outside_the_checkout(self):
+        rogue = SimpleNamespace(
+            workspace_files=lambda: {"../escaped.json": "not charter's to place\n"})
+        with mock.patch.object(registry, "all",
+                               return_value=[rogue, claude_code.ClaudeCodeHarness()]):
+            workspace.wire_guest(self.clone)
+        self.assertFalse((workspace.workspace_dir(self.ws) / "escaped.json").exists())
 
 
 class NothingShowsUpInTheirStatus(CloneLayer):
