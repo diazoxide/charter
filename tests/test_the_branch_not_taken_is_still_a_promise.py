@@ -675,6 +675,65 @@ class ReopeningOneChatSaysWhatItChanged(PersonaIso):
         self.assertIn(f"comes back in {config.ROOT}", line)
         self.assertNotIn("its workspace directory", line)
 
+    def test_a_chat_with_no_workspace_still_comes_back_where_it_was(self):
+        """**The other half of that same fallback, and the sweep found it missing.**
+        Every case above hands the no-workspace branch a cwd it cannot use, so the plane
+        root answered every time and `c.cwd` was never the answer — the whole expression
+        collapsed to `config.ROOT` with the suite still green.
+
+        It matters because it is the only thing this chat has. There is no workspace to
+        land in, so a restore that ignored a perfectly good recorded directory would move
+        the chat for no reason at all and then have nothing better to offer it."""
+        where = ws_mod.ensure("alpha") / "somewhere"
+        where.mkdir()
+
+        _out, said, seen = self._reopen(_chat(workspace="", cwd=str(where)))
+
+        self.assertTrue(seen, "the chat is reopened")
+        self.assertFalse([s for s in said if "comes back in" in s],
+                         "it came back where it was, so there was nothing to report")
+
+    def test_a_clone_that_has_gone_falls_back_to_the_workspace_not_to_a_refusal(self):
+        """`os.path.isdir(c.cwd)` beside `workspace.contains`, which the sweep survived
+        without.
+
+        The two ask different things. `contains` is path arithmetic — it answers *yes* for
+        ``workspaces/<ws>/<repo>`` whether or not that clone is still on disk — so a chat
+        recorded in a clone somebody has since removed passes containment. Without the
+        existence check it would be sent straight back to the missing directory, `os.chdir`
+        would refuse it, and a chat that could perfectly well have come back in its
+        workspace would not come back at all."""
+        clone = ws_mod.ensure("alpha") / "some-repo"
+
+        self.assertTrue(ws_mod.contains("alpha", clone),
+                        "or this case is not about a path containment accepts")
+        self.assertFalse(clone.exists(), "and one that is not there")
+
+        out, said, _seen = self._reopen(_chat(cwd=str(clone)))
+
+        self.assertIsNotNone(out, "it comes back rather than being refused")
+        self.assertFalse([s for s in said if "cannot enter" in s])
+        line = next(s for s in said if "comes back in" in s)
+        self.assertIn(str(ws_mod.workspace_dir("alpha")), line)
+
+    def test_a_workspace_charter_cannot_make_is_a_chat_it_does_not_reopen(self):
+        """`except OSError` around `workspace.ensure`, which nothing made fail before.
+
+        It is `OSError` alone and no longer `(ValueError, OSError)`: `ensure` raises
+        `ValueError` for a name `valid_name` refuses, and `_restore_root` has already asked
+        `valid_name` of that same value, so the two cannot disagree and that half was
+        unreachable. What is left is a plane whose ``workspaces/`` cannot be written to —
+        and the honest end is the chat NOT coming back, rather than being dropped into the
+        plane root and called restored."""
+        with mock.patch.object(commands_frame.workspace, "ensure",
+                               side_effect=OSError(13, "refused")):
+            out, said, seen = self._reopen(_chat(cwd="/nowhere-at-all"))
+
+        self.assertIsNone(out)
+        self.assertEqual(seen, [], "the launcher was never reached")
+        line = next(s for s in said if "cannot enter" in s)
+        self.assertIn(str(ws_mod.workspace_dir("alpha")), line)
+
     def test_a_chat_with_no_id_is_reported_as_coming_back_empty(self):
         """`leave.RESUMES if rest else 'empty'`. Both halves, because the constant half was
         the only one any case had ever rendered."""

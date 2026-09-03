@@ -9192,18 +9192,36 @@ def _restore_root(c):
     has a bigger problem than one chat, and saying so beats dropping the chat into the
     plane root and calling it restored.
     """
+    # **`os.path.isdir` alone, with no `c.cwd and` in front of it**, in both places below.
+    # The deletion sweep survived that conjunct and it was right to: `reopen._chat` reads
+    # every text field as ``raw.get(k) if isinstance(..., str) else ""``, so `cwd` off the
+    # manifest is a `str` and nothing else, and `os.path.isdir("")` is already `False`.
+    # A guard that cannot change an answer is dead code wearing a guard's clothes.
     if not workspace.valid_name(c.workspace):
         # A chat that names no workspace has no boundary to land in, so the recorded cwd is
         # still the best answer available and the plane root is still the fallback. Off the
         # manifest this cannot happen — `reopen._usable` refuses such a record and
         # `leave.NOT_REOPENED` already said why — so this is the direct caller's branch,
         # kept total rather than left to raise on a value the record can hold.
-        return c.cwd if c.cwd and os.path.isdir(c.cwd) else config.ROOT
-    if c.cwd and os.path.isdir(c.cwd) and workspace.contains(c.workspace, c.cwd):
+        return c.cwd if os.path.isdir(c.cwd) else config.ROOT
+    # **`os.path.isdir` as well as `workspace.contains`, and the two are not the same
+    # question.** `contains` is path arithmetic — it answers *yes* for
+    # ``workspaces/<ws>/<repo>`` whether or not that clone is still on disk — so a chat
+    # recorded in a clone somebody has since removed would be sent back to a directory that
+    # is not there, `os.chdir` would refuse it, and the chat would not be reopened at all.
+    # Its workspace is the better answer, and asking whether the directory EXISTS is what
+    # reaches it.
+    if os.path.isdir(c.cwd) and workspace.contains(c.workspace, c.cwd):
         return c.cwd
     try:
         return workspace.ensure(c.workspace)
-    except (ValueError, OSError):
+    except OSError:
+        # **`OSError` and not `(ValueError, OSError)`.** `ensure` raises `ValueError` for a
+        # name `valid_name` refuses — which the guard at the top of this function has
+        # already asked of the same value, so the two cannot disagree and that half was
+        # unreachable. What is left is a plane whose ``workspaces/`` cannot be written to,
+        # and it is reported rather than swallowed: the directory comes back unmade,
+        # `os.chdir` refuses it, and `_reopen_one` says the chat was not reopened.
         return workspace.workspace_dir(c.workspace)
 
 
