@@ -33,7 +33,8 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, tui, util
-from charter.frame import builtin_actions, builtins, leave, overlay, slots, tabmenu
+from charter.frame import (builtin_actions, builtins, component, leave, overlay,
+                           palette, slots, state, tabmenu)
 
 from tests._isolation import PersonaIso
 from tests.test_frame_chat_switch import _plant
@@ -451,6 +452,60 @@ class CloseIsConfirmedAndItNamesTheTabYouClicked(_AWatchedSpawn, unittest.TestCa
         self.assertEqual([r.refused for r in rows], [True])
         self.assertFalse(tabmenu.chose(rows[0], "api.9", fid=self.FID))
         self.assertEqual(self.spawned, [])
+
+
+class TheRowIdsAreNotActionIdsAndTheFallbacksAreReachable(PersonaIso, unittest.TestCase):
+    """The two things nobody reads and both of which decide something.
+
+    `tests/test_what_a_quit_says_is_spelled_where_it_is_asserted.py` makes the identical
+    pair of claims about `frame/leave.py`'s ids, and this is that file's argument one
+    surface over: the properties that are load-bearing first, the literals second, because
+    the sweep's re-tuning preserves punctuation and every shape assertion below holds for
+    `ubc:dmptf` too.
+    """
+
+    def test_no_menu_row_id_can_be_an_action_id(self):
+        """The `:` is the whole mechanism. A provider that shipped an action called
+        `tab:close` could take the keypress that closes a chat; `component.usable_id` is
+        what makes that unsayable, and it is what `palette.matches` gates id-matching on —
+        so neither id is reachable by typing either."""
+        for rid in (tabmenu.TRANSCRIPT_ID, tabmenu.CLOSE_ID):
+            self.assertFalse(component.usable_id(rid), rid)
+        for row in tabmenu.catalogue("api.2"):
+            self.assertFalse(palette.matches(row.id, row))
+
+    def test_the_two_shapes_are_these_two_strings(self):
+        """The hand-spelled half, and the only thing that kills a `retune-string` mutant."""
+        self.assertEqual(tabmenu.TRANSCRIPT_ID, "tab:transcript")
+        self.assertEqual(tabmenu.CLOSE_ID, "tab:close")
+        self.assertEqual(tabmenu.TAB_OPTION, "--tab")
+
+    def test_the_two_titles_and_the_heading_are_these_words(self):
+        """Operator-visible prose, spelled where it is asserted. A menu that stopped naming
+        the tab would still pass every `assertIn(TAB, …)` above if the name were the only
+        thing left in the string."""
+        self.assertEqual(tabmenu.label("api.2"), "chat api.2")
+        self.assertEqual(tabmenu.transcript_title("api.2"),
+                         "chat: previous transcript — api.2")
+        self.assertEqual(tabmenu.close_title("api.2"),
+                         "chat: close api.2 — stop it and do not bring it back")
+
+    def test_a_pane_that_was_told_nothing_still_hands_the_harness_back(self):
+        """**Every fallback in `handback` is reachable, and this is the state that reaches
+        them.** A pane split below `tmuxctl.PANE_ENV_FLOOR` is given no `-e` payload at
+        all, so `$CHARTER_SESSION_ID` is whatever the shared server holds — which may be
+        nothing — and a frame charter has lost the record of answers `None` for its
+        harness pane. `None` is not `""`: it would reach a tmux target as the four
+        characters `None`, naming a pane that cannot exist, where `""` is what every
+        charter reader already treats as absent."""
+        self.assertEqual(tabmenu.handback({}), ("", commands_frame.SOCKET, "", ""))
+
+    def test_a_pane_that_was_told_everything_uses_what_it_was_told(self):
+        _plant("api.1", workspace="api", pane="%7")
+        state.record_server("api.1", "sock-of-its-own")
+        self.assertEqual(
+            tabmenu.handback({"CHARTER_SESSION_ID": "api.1", "TMUX_PANE": "%9"}),
+            ("api.1", "sock-of-its-own", "%7", "%9"))
 
 
 class AnEmulatorThatEatsButtonTwoCostsNothing(_ABarThatWasDrawn, unittest.TestCase):

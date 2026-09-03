@@ -291,6 +291,47 @@ def act(row, target: str, *, fid: str) -> None:
         commands_frame._say_on_screen(fid, row.note)
 
 
+def handback(env) -> tuple[str, str, str, str]:
+    """Who this pane is, and the three ids that give the harness back.
+
+    ``(fid, socket, harness, overlay_pane)``: which frame this pane belongs to, which
+    tmux it is on, which pane the keyboard goes back to, and which pane to kill —
+    `commands_frame._close_palette`'s three arguments, resolved in one place so that
+    :func:`draw` can put the whole of them in a ``finally`` that cannot itself raise.
+
+    **Every one of the four falls back, and not one fallback is decorative.**
+
+    * `$CHARTER_SESSION_ID` is absent whenever the pane was split with no ``-e`` payload,
+      which is every tmux below `tmuxctl.PANE_ENV_FLOOR` — `commands_frame
+      ._relayout_pane_env` answers ``None`` there and `overlay.open_argv` sets nothing, so
+      the pane inherits whatever the shared server happens to hold. ``""`` is what every
+      charter reader already treats as absent.
+    * The socket falls back to charter's own for `builtin_actions._server`'s reason: a
+      frame with no recorded server is one launched by a charter that predates
+      `state.record_server`, and charter's own socket is where it will be — never
+      "nowhere", which would aim the teardown at no server at all.
+    * `state.harness_pane` answers ``None`` for a frame charter has lost the record of,
+      and ``None`` is not ``""``: it would be formatted into a tmux target as the four
+      characters `None`, naming a pane that cannot exist. `frame/overlay.py` measured what
+      an EMPTY target costs instead — `kill-pane -t ""` kills the pane the command is
+      running against — which is why `overlay.hatch_command` emits no `kill-pane` at all
+      rather than one with nothing in it.
+    * `$TMUX_PANE` is absent in any process tmux did not start, which is every test of
+      this function and would be a hand-typed `charter frame-palette --pane`.
+
+    *env* is passed rather than read, so all four are reachable from a test — the reason
+    `commands_frame._relayout_pane_env` takes *fid* as an argument instead of reading it
+    back out of a variable one tmux server shares between every frame on the machine.
+    """
+    from .. import commands_frame
+    from . import state
+    fid = env.get("CHARTER_SESSION_ID", "")
+    return (fid,
+            state.frame_server(fid) or commands_frame.SOCKET,
+            state.harness_pane(fid) or "",
+            env.get("TMUX_PANE", ""))
+
+
 def draw(args) -> int:
     """Be the tab menu: draw the rows, take a choice, act on it, hand the pane back.
 
@@ -309,18 +350,17 @@ def draw(args) -> int:
     machine; the tab travels on the argv because it is not the frame — it is a name the
     panel resolved out of a click map, and the pane the menu is drawn in was carved off
     THIS frame's harness so that a menu about another tab still appears where the operator
-    is looking.
+    is looking. :func:`handback` is the whole of the first half, resolved before the
+    ``try`` so the ``finally`` below has nothing left to compute and nothing left to
+    raise.
 
     **Always 0**, for `cmd_palette`'s reason: a non-zero return from a `run-shell` child
     is printed INTO THE HARNESS PANE and drops it into copy-mode, which is charter drawing
     in the one rectangle ADR 0018 says it never draws.
     """
     from .. import commands_frame
-    from . import state
-    fid = os.environ.get("CHARTER_SESSION_ID", "")
+    fid, socket, harness, overlay_pane = handback(os.environ)
     target = wanted(args)
-    socket = state.frame_server(fid) or commands_frame.SOCKET
-    harness = state.harness_pane(fid) or ""
     try:
         surface = palette.Palette(catalogue=catalogue(target), label=label(target),
                                   mouse=True)
@@ -345,5 +385,5 @@ def draw(args) -> int:
             act(chosen, target, fid=fid)
     finally:
         commands_frame._close_palette(socket, harness=harness,
-                                      overlay_pane=os.environ.get("TMUX_PANE", ""))
+                                      overlay_pane=overlay_pane)
     return 0
