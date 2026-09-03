@@ -432,9 +432,10 @@ def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None 
     did not declare before it ever reaches here. A branch on a kind that cannot arrive is
     a line no input could turn red.
 
-    **`scroll` is not declared, and that is not an omission.** A bar is one row with
-    nothing to scroll; a handler for it could only ever answer False, and the wheel is not
-    a gesture to hang a switch on. `events.Dispatcher.open` charges the same
+    **`scroll` is not declared, and that is not an omission.** A strip draws into the rows
+    its pane has and counts what is left over, so there is nothing below its last row to
+    scroll to — a handler for it could only ever answer False, and the wheel is not a
+    gesture to hang a switch on. `events.Dispatcher.open` charges the same
     `overlay.MOUSE_ON` for one pointer kind as for two, so declaring it would cost nothing
     and mean nothing — which is precisely what makes it wrong to declare.
 
@@ -489,12 +490,12 @@ def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None 
         from .builtin_actions import _spawn
         if not ev.pressed or ev.name != _ACT_BUTTON:
             return False
-        name = _slots.TABS.switch_to(ev.col)
+        name = _slots.TABS.switch_to(ev.row, ev.col)
         if name is None:
-            if add is not None and _slots.TABS.add_at(ev.col):
+            if add is not None and _slots.TABS.add_at(ev.row, ev.col):
                 _spawn(util.self_relaunch_argv(*add), fid=fid)
                 return False
-            if _slots.TABS.more_at(ev.col):
+            if _slots.TABS.more_at(ev.row, ev.col):
                 # The same argv `_strip_events` spawns for a door, for its reasons — one
                 # answer to "how does a frame surface open the palette", shared rather than
                 # copied. Falsy afterwards for this handler's own reason: the palette's
@@ -688,20 +689,27 @@ def _persona_events(fid: str):
 
 
 def _chats(ctx) -> list[str]:
-    """The chat bar — `slots.chats_bar` at this pane's OWN width.
+    """The chat bar — `slots.chats_bar` in this pane's OWN rectangle.
 
-    `ctx.width`, unlike the four wrapped whole-pane renderers (:func:`_panel`), which
-    measure their own tty and ignore it. A bar written for the contract can read the
-    geometry the contract carries, and this is the first charter component that does.
+    `ctx.width` and `ctx.height`, unlike the four wrapped whole-pane renderers
+    (:func:`_panel`), which measure their own tty and ignore both. A bar written for the
+    contract can read the geometry the contract carries, and this is the first charter
+    component that does.
+
+    **The height is not decoration** (#829). A strip is one row when its names fit on one
+    and as many rows as its pane was given when they do not, and the pane is that tall
+    because `layout.slot_sizes` was told what these same names need
+    (`slots.bar_rows_wanted`). Passing the width alone would leave the rows the launcher
+    just bought blank — the sizer-and-renderer disagreement #500 shipped one pane over.
     """
     from . import slots
-    return slots.chats_bar(ctx.fid, ctx.width)
+    return slots.chats_bar(ctx.fid, ctx.width, ctx.height)
 
 
 def _workspaces(ctx) -> list[str]:
-    """The workspace bar — `slots.workspaces_bar` at this pane's own width."""
+    """The workspace bar — `slots.workspaces_bar` in this pane's own rectangle."""
     from . import slots
-    return slots.workspaces_bar(ctx.fid, ctx.width)
+    return slots.workspaces_bar(ctx.fid, ctx.width, ctx.height)
 
 
 def _personas(ctx) -> list[str]:
@@ -885,9 +893,12 @@ def build(fid: str = "") -> Registry:
     # like from the outside. `_bar_events` is what receives them and why a click here
     # SWITCHES where a click on the table only selects.
     #
-    # `click` alone rather than `("scroll", "click")` like `repos`: a bar is one row and
-    # there is nothing to scroll it to, so a `scroll` declaration could only reach a
-    # handler that always answered False. `repos` declares both because it moves a
+    # `click` alone rather than `("scroll", "click")` like `repos`: a strip holds every
+    # name it has room for and counts the rest, so there is nothing to scroll it to and a
+    # `scroll` declaration could only reach a handler that always answered False. That is
+    # still true now a strip can be more than one row (#829): the rows it grows are the
+    # rows its PANE has, so there is never content below the last of them — what does not
+    # fit is a `+N`, and a `+N` opens the palette. `repos` declares both because it moves a
     # viewport; the shared reason that constant's comment gives — one `MOUSE_ON` serves
     # both — is why declaring the second one costs nothing, never a reason to declare one
     # that does nothing.

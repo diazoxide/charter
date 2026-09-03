@@ -170,7 +170,7 @@ class AWalkStartsTheSwitchATabClickStarts(_AStripAKeyboardCanWalk):
         row = builtins.build(FID).get("chats").on_event
         from charter.frame import overlay, slots
         slots.chats_bar(FID, 200)
-        col = next(c for c in range(200) if slots.TABS.switch_to(c) == "api.3")
+        col = next(c for c in range(200) if slots.TABS.switch_to(0, c) == "api.3")
         row(overlay.Event(overlay.CLICK, "left", row=0, col=col, pressed=True))
         self.assertEqual(by_keyboard, self.spawned.pop())
 

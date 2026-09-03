@@ -2049,8 +2049,8 @@ def _spawn_gather(fid: str, ws: str) -> None:
         return
 
 
-def _slot_sizes(fid: str, slots: list[str], *,
-                window_rows: int, pane_cols: int) -> dict[str, int]:
+def _slot_sizes(fid: str, slots: list[str], *, window_rows: int, pane_cols: int,
+                order: list[str], window_cols: int) -> dict[str, int]:
     """`layout.slot_sizes` for a frame that has a plane behind it — the only place in
     charter where a committed arrangement becomes a pane height.
 
@@ -2082,11 +2082,34 @@ def _slot_sizes(fid: str, slots: list[str], *,
     the frame did not have, and `_reassert_sizes` on every `window-resized`. They differ
     only in how the table pane's width is arrived at, which is why that arrives here as
     *pane_cols* already measured rather than as a window to measure.
+
+    **A tab strip is a third such fact and it arrives the same way** (#829). How many rows
+    a strip needs is a function of the names this plane has — `chats.roster`,
+    `switch.workspaces` — so it is a plane read, which is what this function is the
+    boundary for, and `frame_slots.bar_rows_wanted` is the one place it is made. The
+    ceiling on it is `layout.BAR_MAX_ROWS`, carried down from here rather than read there,
+    for `layout.repos_rows`' reason about *pinned_rows*: a policy applied at both ends is a
+    bound one end cannot make observable.
+
+    *order* is the split ORDER, which is not always *slots* — `_relayout` re-splits a
+    permutation of the recorded panes and it is that permutation which decides how wide a
+    pane ends up (#500). It is what the strips' own widths are derived from
+    (`layout.pane_cols`), the same list the caller already hands `layout.repos_cols` for
+    the table's, and it is a separate argument rather than *slots* reused precisely because
+    those two lists differ on one of the three paths.
+
+    Nothing extra is read for a frame that places no bar, which is charter's own and very
+    nearly everyone's: the comprehension below is empty and `layout.slot_sizes` is handed
+    an empty map it does not spend.
     """
     return layout.slot_sizes(
         slots, window_rows=window_rows,
         content_rows=frame_slots.repos_rows_wanted(fid, pane_cols=pane_cols),
-        pinned_rows=layout.pinned_repo_rows())
+        pinned_rows=layout.pinned_repo_rows(),
+        bar_rows={slot: frame_slots.bar_rows_wanted(
+            fid, slot, cap=layout.BAR_MAX_ROWS,
+            pane_cols=layout.pane_cols(order, slot, window_cols=window_cols))
+            for slot in slots if slot in frame_slots.BARS})
 
 
 def _launch_sizes(fid: str, slots: list[str], *,
@@ -2129,7 +2152,8 @@ def _launch_sizes(fid: str, slots: list[str], *,
     Through :func:`_slot_sizes`, which is where the plane's own pinned height is read and
     why this is not a call to `layout.slot_sizes` directly.
     """
-    return _slot_sizes(fid, slots, window_rows=window_rows,
+    return _slot_sizes(fid, slots, window_rows=window_rows, order=slots,
+                       window_cols=window_cols,
                        pane_cols=layout.repos_cols(slots, window_cols=window_cols))
 
 
@@ -5533,7 +5557,8 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
             socket, slots=missing, fid=fid, harness_pane=harness_pane, env=None,
             pane_env=pane_env, v=v,
             sizes=_slot_sizes(
-                fid, want, window_rows=window_rows,
+                fid, want, window_rows=window_rows, window_cols=window_cols,
+                order=list(keep) + missing,
                 pane_cols=layout.repos_cols(list(keep) + missing,
                                             window_cols=window_cols))))
         _arm_panel_respawn(socket, fid=fid,
@@ -5755,7 +5780,7 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
     # for the tmux measurement that makes this an order rather than a preference.
     _apply_sizes(socket, panes=panes, sizes=layout.column_sizes(order), flag="-x")
     sizes = _slot_sizes(
-        fid, order, window_rows=window_rows,
+        fid, order, window_rows=window_rows, order=order, window_cols=window_cols,
         pane_cols=_variable_pane_cols(socket, panes=panes, window_cols=window_cols))
     # Pass two: the ROWS, and the harness below them.
     _apply_sizes(socket, panes=panes, sizes=sizes, flag="-y")

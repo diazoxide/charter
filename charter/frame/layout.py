@@ -229,6 +229,28 @@ SLOT_EDGE = _SHIPPED.edge
 #: granted, out of the one pane that matters.
 HARNESS_MIN_ROWS = 12
 
+#: The most rows a tab strip may be sized to when its names will not fit on one (#829).
+#:
+#: **A ceiling, and the budget is a separate question.** What a strip may actually spend
+#: is what the harness can spare above :data:`HARNESS_MIN_ROWS`, and :func:`slot_sizes` is
+#: where that is worked out; this is the statement that a strip is a strip however many
+#: rows are going spare. Both are needed: a plane with forty chats in a hundred-row window
+#: has rows to burn, and a forty-chat strip is not a readout any more — it is the list,
+#: and the list is `charter frame-palette`, which reaches every chat at every width.
+#:
+#: **Three, measured through the same cut `slots._bar` draws with**, over this
+#: repository's own fifteen workspaces: they need 2 rows at 160 columns, 3 at 120, 4 at
+#: 100 and 6 at 80. So three draws every workspace this plane has at every width #725
+#: measured an operator running at, and stops short of the width where the strip would be
+#: taking six rows off the harness to become a list.
+#:
+#: Read by `commands_frame._slot_sizes` and handed to `frame.slots.bar_rows_wanted` as its
+#: *cap*, never applied twice: this module caps a strip at what the harness can spare and
+#: the SIZER caps it at what a strip is, and a second `min` here would be a bound no input
+#: could make observable — the survivor `tools/sweep.py` reports and this repository
+#: deletes.
+BAR_MAX_ROWS = 3
+
 #: One row per pane border. tmux charges a horizontal split one row for the divider on
 #: top of the pane's own height — measured on 3.7c: a 50-row window split `-l 8` reads
 #: back as a 41-row harness and an 8-row panel, which is 49. Counted explicitly rather
@@ -589,13 +611,38 @@ def repos_cols(slots: list[str] | tuple[str, ...], *, window_cols: int) -> int:
 
     With no `repos` in *slots* this answers the width one WOULD be split to, which is
     what :func:`visible_slots` asks it before deciding whether the slot survives at all.
+
+    :func:`pane_cols` is the walk; this names the one slot charter's own geometry has
+    always asked it about, so the twenty-odd callers that say `repos_cols` keep saying it.
     """
+    return pane_cols(slots, "repos", window_cols=window_cols)
+
+
+def pane_cols(slots: list[str] | tuple[str, ...], slot: str, *,
+              window_cols: int) -> int:
+    """How wide *slot*'s pane is, split in *slots*' order in a *window_cols* window.
+
+    :func:`repos_cols` generalised to any slot, and generalised rather than copied because
+    the second caller wants the identical rule: a tab strip is sized from the names it can
+    draw at its own width (`slots.bar_rows_wanted`), and a strip split after `right` is
+    carved out of a pane the sidebar has already narrowed by 23 columns. That is #500 word
+    for word, one slot over — and #500 is what a second copy of this loop would be
+    reproducing rather than reusing.
+
+    Everything :func:`repos_cols` says about the walk holds here and is said there: order
+    in, order out; a slot split AFTER *slot* costs it nothing; a *slot* absent from the
+    list is answered with the width one WOULD be split to.
+
+    *slot* is resolved through :func:`_key` like every other name this module is handed, so
+    a caller may ask about `identity` or about `top` and get one answer rather than two.
+    """
+    stop = _key(slot)
     out = window_cols
-    for slot in slots:
-        if _key(slot) == "repos":
+    for name in slots:
+        if _key(name) == stop:
             break
-        if _edge_of(slot) in _COLUMN_EDGES:
-            out -= _size_of(slot) + _BORDER_COLS
+        if _edge_of(name) in _COLUMN_EDGES:
+            out -= _size_of(name) + _BORDER_COLS
     return max(0, out)
 
 
@@ -848,8 +895,63 @@ def resize_flag(slot) -> str | None:
     return "-y" if edge in _ROW_EDGES else None
 
 
+def _grown(sizes: dict[str, int], wanted: dict[str, int], *,
+           window_rows: int) -> dict[str, int]:
+    """*sizes* with each strip in *wanted* grown toward the rows its names need — as far
+    as the harness can spare and no further (#829).
+
+    **The budget is the harness's SURPLUS, and that is the whole of the row policy #740
+    settled.** A strip growing is a strip taking rows off the harness, so what it may take
+    is exactly what the harness has above :data:`HARNESS_MIN_ROWS` once every other pane
+    has the height :func:`slot_sizes` just gave it — :func:`harness_rows` of the ungrown
+    map, minus that floor. A window with nothing spare grows nothing, in silence, which is
+    the same degrade `visible_slots` makes one rung down.
+
+    **The repo table is NOT what pays**, and the ordering is `_DROP_ORDER`'s: the bars are
+    given up before `repos` when rows run short, so they cannot be fed from it when rows
+    are plentiful. `repos` already has its content's height by the time this is called and
+    keeps it; the rows come out of the harness's own slack and the harness keeps its floor
+    by construction, because that floor is what was subtracted to get the budget.
+
+    **A row at a time, in *sizes*' own order, so a short budget is SHARED.** Two strips
+    both wanting a second row with one row going spare is a real case — a plane that
+    places both bars in a window with one row of slack — and handing it all to whichever
+    was split first would leave the other looking broken for a reason nothing on screen
+    explains. Round-robin gives the first strip the first row, the second the second, and
+    both strips their second row before either gets a third.
+
+    *wanted* is a number a CALLER measured, never a policy read here — `slots
+    .bar_rows_wanted` is the measurement and `commands_frame._slot_sizes` is the one place
+    it is made, for the reason :func:`repos_rows` gives about *pinned_rows*. So there is no
+    :data:`BAR_MAX_ROWS` in this function: the ceiling is applied where the want is
+    measured, and applying it twice would be a bound no input could make observable.
+
+    Names *wanted* carries that *sizes* does not are dropped, on :func:`slot_sizes`'
+    filter-don't-refuse discipline — a slot that is not being drawn is not a pane to grow.
+
+    **This GROWS and never trims**, which is why the shortfall is tested for positivity in
+    the loop rather than filtered out of the map: a plane that pinned its strip to three
+    rows in its own `[[frame.component]]` table asked for three rows (#687), and a
+    measurement saying its names fit on one is not that operator changing their mind. There
+    is no early return for an empty map either — the loop does not run and the answer is
+    the map it was handed, so a guard in front of it is a line no input could make
+    observable, which is the survivor `tools/sweep.py` reports and this repository deletes.
+    """
+    short = {slot: n - sizes[slot] for slot, n in wanted.items() if slot in sizes}
+    budget = harness_rows(sizes, window_rows=window_rows) - HARNESS_MIN_ROWS
+    out = dict(sizes)
+    while budget > 0 and any(n > 0 for n in short.values()):
+        for slot in list(short):
+            if short[slot] > 0 and budget > 0:
+                out[slot] += 1
+                short[slot] -= 1
+                budget -= 1
+    return out
+
+
 def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int,
-               pinned_rows: int | None = None) -> dict[str, int]:
+               pinned_rows: int | None = None,
+               bar_rows: dict[str, int] | None = None) -> dict[str, int]:
     """Every slot in *slots* mapped to the size it should be given — rows for the
     horizontal strips, columns for the side.
 
@@ -865,6 +967,14 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int,
     arithmetic passes — is a plane that pinned nothing, which is charter's own and very
     nearly everyone's.
 
+    *bar_rows* is the same kind of value one slot family over: how many rows each tab
+    strip's own names need at its own pane width, measured by `slots.bar_rows_wanted` and
+    carried here rather than read, for exactly *pinned_rows*' reason. `None` — the default,
+    and what every caller asking about the arithmetic passes — is a frame with no strip
+    that overflows, which is every frame that places no bar and every plane whose names
+    fit. :func:`_grown` is what spends it, and what refuses to spend rows the harness has
+    not got.
+
     Unknown slot names are dropped rather than raised on, matching `visible_slots`'
     filter-don't-refuse discipline: `[frame] slots` is committed, untrusted input, and by
     the time a list reaches here it has already been through `instance.FRAME_SLOTS`.
@@ -878,7 +988,7 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int,
         cells = _size_of(slot)
         if cells is not None:
             out[slot] = cells
-    return out
+    return _grown(out, bar_rows or {}, window_rows=window_rows)
 
 
 def harness_rows(sizes: dict[str, int], *, window_rows: int) -> int:

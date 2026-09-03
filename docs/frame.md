@@ -538,14 +538,28 @@ it.
 
 ### The two bars, and why they are off unless you ask
 
-`chats` and `workspaces` are one-row components: the chat bar names every chat in this
-workspace with yours marked, and the workspace bar does the same for the plane. Where the
-names do not all fit the bar draws the page yours falls on and counts what is off each end
+`chats` and `workspaces` are tab strips: the chat bar names every chat in this workspace
+with yours marked, and the workspace bar does the same for the plane. Where the names do
+not all fit the bar draws the page yours falls on and counts what is off each end
 (`+5  *harness-wrapper   news-dispatch-guard  …  +7`); narrower still it says only where you
 are (`2/3`). It never shows half a name.
 
 Fifteen workspaces need 274 columns to fit on one row, so on a real terminal the bar is
 usually drawing a page. At 120 columns it draws six of them, at 160 eight, at 200 ten.
+
+**A strip that cannot fit its names on one row is given another one — up to three.** It is
+one row whenever the names fit, so a plane whose strip is not overflowing never loses a row
+to this; and the rows it does take come out of what your session has above its own 12-row
+floor, so a short terminal grows nothing at all. Fifteen workspaces take two rows at 160
+columns and three at 120, and every name on every row is clickable. Resize the terminal and
+the strip follows: widen it past 274 columns and the strip gives its extra rows back.
+
+Below tmux 3.3 that last part does not happen on its own. `window-resized` is a hook tmux
+added in 3.3, so charter has nothing to trigger a recompute on and the strip keeps the
+height it was given when the frame was launched — which is still the right height for the
+width it launched at. `charter frame-resize`, run in the frame's own window, puts every
+panel back at once, and it is the same command the frame already tells you about in that
+band.
 
 **The tab you are on is drawn as a block**, in reverse video — your own terminal's two
 colours exchanged, so it is right on every theme and needs no `[frame] chrome`. The `*`
@@ -1920,10 +1934,11 @@ charter cannot honour.
 **The chat and workspace bars take a real height too, by the same rule.** Charter places
 neither of them by default, so neither has a slot whose geometry is derived at import;
 their height is read off your arrangement at every launch, exactly like the repo table's
-pin. So `size = 3` on `chats` gives you a three-row bar. They draw one row of names — the
-rest is empty surface, which is a thing you may want under a `bg` and is otherwise a waste
-of rows. The same whole-number rule applies: anything charter cannot turn into cells takes
-the arrangement out of play.
+pin. So `size = 3` on `chats` gives you a three-row bar. It is a FLOOR rather than a
+ceiling: a strip whose names need more rows than you pinned still grows into what the
+window can spare, and a strip whose names fit on one row still draws one and leaves the
+rest as empty surface — a thing you may want under a `bg`. The same whole-number rule
+applies: anything charter cannot turn into cells takes the arrangement out of play.
 
 **Your pin is still capped so your session keeps its 12 rows.** tmux does not refuse an
 over-large pane height, it grants it out of the neighbour, and the neighbour is your agent

@@ -516,7 +516,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         row = self._draw(200, here="nowhere")
         for name in self.NAMES:
             for col in self._cells(row, name):
-                self.assertEqual(slots.TABS.switch_to(col), name,
+                self.assertEqual(slots.TABS.switch_to(0, col), name,
                                  f"column {col} of {row!r}")
 
     def test_the_mark_belongs_to_the_tab_it_marks(self):
@@ -532,12 +532,12 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         """
         row = self._draw(200, here="api.2")
         blank = self._cells(row, " api.3").start
-        self.assertEqual(slots.TABS.switch_to(blank), "api.3",
+        self.assertEqual(slots.TABS.switch_to(0, blank), "api.3",
                          "the blank mark in front of an inactive tab is not part of it")
         star = self._cells(row, "*api.2").start
-        self.assertIsNone(slots.TABS.switch_to(star), "the tab you are on switched")
+        self.assertIsNone(slots.TABS.switch_to(0, star), "the tab you are on switched")
         self._draw(200, here="nowhere")
-        self.assertEqual(slots.TABS.switch_to(star), "api.2",
+        self.assertEqual(slots.TABS.switch_to(0, star), "api.2",
                          "the marked tab's own mark column belongs to no tab")
 
     def test_the_gap_between_two_tabs_resolves_to_nothing(self):
@@ -547,7 +547,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         row = self._draw(200, here="nowhere")
         end = self._cells(row, "api.1").stop
         for col in range(end, end + slots._BAR_GAP):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_the_heading_resolves_to_nothing(self):
         """`  chats  ` is about no chat, exactly as the repo table's heading row is about
@@ -557,7 +557,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         # tab (`test_the_mark_belongs_to_the_tab_it_marks`), so a heading measured to the
         # first letter would assert the opposite of that case one cell over.
         for col in range(self._cells(row, " api.1").start):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_the_empty_space_past_the_last_tab_resolves_to_nothing(self):
         """Most of a wide bar is blank. A click out there has to answer falsy rather than
@@ -565,7 +565,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         index counting from the end — would do."""
         row = self._draw(200, here="nowhere")
         for col in range(len(row), 200):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_the_tab_you_are_already_on_resolves_to_nothing(self):
         """Re-selecting what is already selected is not news — `_repos_events`' sentence,
@@ -574,7 +574,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         double-click from switching twice."""
         row = self._draw(200, here="api.2")
         for col in self._cells(row, "api.2"):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_neither_overflow_count_switches_to_anything(self):
         """A `+N` stands for names that are NOT on the row, so there is nothing there to
@@ -596,7 +596,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self.assertEqual(len(counts), 2, f"this width is not a page in the middle: {row!r}")
         for count in counts:
             for col in self._cells(row, count):
-                self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+                self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_both_overflow_counts_are_a_cell_that_opens_the_picker(self):
         """*"when workspaces are more we are showing `+N` now in tabs — but user can't
@@ -618,7 +618,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self.assertEqual(len(counts), 2, f"this width is not a page in the middle: {row!r}")
         for count in counts:
             for col in self._cells(row, count):
-                self.assertTrue(slots.TABS.more_at(col),
+                self.assertTrue(slots.TABS.more_at(0, col),
                                 f"the {count} is still inert at column {col}: {row!r}")
 
     def test_nothing_but_a_count_is_a_cell_that_opens_the_picker(self):
@@ -630,7 +630,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         row = _plain(self._draw(80, names=names, here="workspace-07"))
         counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
                   if f.strip().startswith("+")]
-        opening = {c for c in range(200) if slots.TABS.more_at(c)}
+        opening = {c for c in range(200) if slots.TABS.more_at(0, c)}
         expected = {col for count in counts for col in self._cells(row, count)}
         self.assertEqual(opening, expected,
                          f"a cell that is not a count opens the picker: {row!r}")
@@ -658,7 +658,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self.assertTrue(drawn, f"no switchable tab on the page: {row!r}")
         for name in drawn:
             for col in self._cells(row, name):
-                self.assertEqual(slots.TABS.switch_to(col), name,
+                self.assertEqual(slots.TABS.switch_to(0, col), name,
                                  f"column {col} of {row!r}")
 
     def test_the_rung_that_says_only_where_you_are_has_no_tabs_at_all(self):
@@ -666,7 +666,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         row = _plain(self._draw(16, here="api.2"))
         self.assertEqual(row.strip(), "chats  2/3", repr(row))
         for col in range(0, 200):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_the_rung_that_says_only_where_you_are_still_opens_the_picker(self):
         """**The width where this matters most.** A frame narrow enough to fall to `2/3`
@@ -679,10 +679,10 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         measured rather than the whole row being made live."""
         row = _plain(self._draw(16, here="api.2"))
         for col in self._cells(row, "2/3"):
-            self.assertTrue(slots.TABS.more_at(col), f"column {col} of {row!r}")
+            self.assertTrue(slots.TABS.more_at(0, col), f"column {col} of {row!r}")
         for col in self._cells(row, "chats"):
-            self.assertFalse(slots.TABS.more_at(col), f"the heading opened a picker")
-        self.assertFalse(slots.TABS.more_at(tui.width(row) + 5),
+            self.assertFalse(slots.TABS.more_at(0, col), f"the heading opened a picker")
+        self.assertFalse(slots.TABS.more_at(0, tui.width(row) + 5),
                          "the space past the row opened a picker")
 
     def test_a_rung_that_draws_nothing_opens_nothing(self):
@@ -692,9 +692,9 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         is empty."""
         self._draw(80, names=[f"workspace-{i:02d}" for i in range(15)],
                    here="workspace-07")
-        self.assertTrue(any(slots.TABS.more_at(c) for c in range(80)))
+        self.assertTrue(any(slots.TABS.more_at(0, c) for c in range(80)))
         self.assertEqual(self._draw(11), "")
-        self.assertEqual([c for c in range(200) if slots.TABS.more_at(c)], [],
+        self.assertEqual([c for c in range(200) if slots.TABS.more_at(0, c)], [],
                          "a bar that drew no row kept the counts it is no longer drawing")
 
     def test_a_narrowed_bar_forgets_the_tabs_it_is_no_longer_drawing(self):
@@ -704,10 +704,10 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         screen. Every rung publishes, including the two that draw no tab."""
         wide = self._draw(200, here="nowhere")
         col = self._cells(wide, "api.3").start
-        self.assertEqual(slots.TABS.switch_to(col), "api.3")
+        self.assertEqual(slots.TABS.switch_to(0, col), "api.3")
         for width in (30, 16, 11):
             self._draw(width, here="api.2")
-            self.assertIsNone(slots.TABS.switch_to(col),
+            self.assertIsNone(slots.TABS.switch_to(0, col),
                               f"width {width} kept a stale tab")
 
     def test_a_bar_with_no_names_at_all_publishes_no_tabs(self):
@@ -717,7 +717,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self._draw(200, here="nowhere")
         self.assertEqual(slots._bar("chats", [], "api.1", 200), [])
         for col in range(0, 200):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col}")
 
     def test_the_add_chat_affordance_is_not_a_tab(self):
         """It makes a chat; it does not switch to one. There is no chat there yet, which
@@ -726,7 +726,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
                                 note=slots.ADD_CHAT))
         self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
         for col in self._cells(row, slots.ADD_CHAT):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_the_add_chat_affordance_is_a_cell_that_makes_a_chat(self):
         """*"`+` button not working for creating new session."*
@@ -737,10 +737,10 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         row = _plain(self._draw(120, names=["api.1"], here="nowhere",
                                 note=slots.ADD_CHAT))
         cells = list(self._cells(row, slots.ADD_CHAT))
-        self.assertEqual([c for c in range(200) if slots.TABS.add_at(c)], cells,
+        self.assertEqual([c for c in range(200) if slots.TABS.add_at(0, c)], cells,
                          f"the `+` is not the one cell that makes a chat: {row!r}")
         for col in cells:
-            self.assertFalse(slots.TABS.more_at(col),
+            self.assertFalse(slots.TABS.more_at(0, col),
                              "the `+` was published as an overflow count as well")
 
     def test_a_plus_and_a_plus_n_are_never_on_the_same_row(self):
@@ -768,9 +768,9 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         its `+` cell through a resize would make a chat from a column the operator can see
         holds a name."""
         self._draw(120, names=["api.1"], here="api.1", note=slots.ADD_CHAT)
-        self.assertTrue(any(slots.TABS.add_at(c) for c in range(120)))
+        self.assertTrue(any(slots.TABS.add_at(0, c) for c in range(120)))
         self._draw(120, names=["api.1"], here="api.1")
-        self.assertEqual([c for c in range(200) if slots.TABS.add_at(c)], [],
+        self.assertEqual([c for c in range(200) if slots.TABS.add_at(0, c)], [],
                          "the bar kept an affordance it stopped drawing")
 
     def test_no_row_at_any_width_ever_draws_or_maps_a_column_left_of_zero(self):
@@ -799,7 +799,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
                                      f"{names} at {width}: a count went negative: {row!r}")
                     for col in range(-4, 0):
                         self.assertIsNone(
-                            slots.TABS.switch_to(col),
+                            slots.TABS.switch_to(0, col),
                             f"{names} at {width}: column {col} is a tab: {row!r}")
 
     def test_a_column_nothing_drew_answers_nothing_however_far_out(self):
@@ -808,10 +808,10 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         would have answered with the LAST tab, hiding a wrong reading behind a plausible
         name, and the row's last column IS a tab here so that wrong answer is available."""
         row = self._draw(200, here="nowhere")
-        self.assertEqual(slots.TABS.switch_to(len(row) - 1), "api.3",
+        self.assertEqual(slots.TABS.switch_to(0, len(row) - 1), "api.3",
                          "the last drawn column is not a tab, so -1 measures nothing")
         for col in (-1, -99, 10_000):
-            self.assertIsNone(slots.TABS.switch_to(col), f"column {col} of {row!r}")
+            self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
     def test_the_map_carries_the_name_on_disk_and_not_the_repaired_one(self):
         """`contain.one_line` is a REPAIR for drawing (#472), and what a click has to hand
@@ -825,7 +825,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self.assertNotEqual(drawn, raw, "this name needs no repair, so it measures none")
         at = row.index(drawn)
         for col in range(at, at + tui.width(drawn)):
-            self.assertEqual(slots.TABS.switch_to(col), raw,
+            self.assertEqual(slots.TABS.switch_to(0, col), raw,
                              f"column {col} of {row!r} carries the drawn name")
 
     def test_a_second_press_on_the_column_you_just_switched_from_does_nothing(self):
@@ -850,12 +850,12 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
                     # Redrawn each time round: the strip is one object, so the paint the
                     # first press resolves against has to be the one in front of it.
                     self._draw(width, names=names, here="workspace-07")
-                    self.assertEqual(slots.TABS.switch_to(col), name)
+                    self.assertEqual(slots.TABS.switch_to(0, col), name)
                     after = self._draw(width, names=names, here=name)
                     self.assertIsNone(
-                        slots.TABS.switch_to(col),
+                        slots.TABS.switch_to(0, col),
                         f"{width}: pressing column {col} twice switched twice — "
-                        f"{name} then {slots.TABS.switch_to(col)}\n"
+                        f"{name} then {slots.TABS.switch_to(0, col)}\n"
                         f"  before {row!r}\n  after  {after!r}")
 
 
@@ -911,11 +911,11 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
         self.assertEqual(painted, "*api.2")
         start = tui.width(row[:row.index(self.ON)])
         for col in range(start, start + tui.width(painted)):
-            self.assertIsNone(slots.TABS.switch_to(col),
+            self.assertIsNone(slots.TABS.switch_to(0, col),
                               f"column {col} is inside the block and is not the tab you "
                               f"are on: {row!r}")
-        self.assertEqual(slots.TABS.switch_to(start - 1), None)
-        self.assertEqual(slots.TABS.switch_to(start + tui.width(painted)), None)
+        self.assertEqual(slots.TABS.switch_to(0, start - 1), None)
+        self.assertEqual(slots.TABS.switch_to(0, start + tui.width(painted)), None)
 
     def test_the_paint_costs_the_row_no_cell_at_all(self):
         """Which is why it could be added to a strip that is already competing for columns.
@@ -965,7 +965,7 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
                     at = plain.index(name) - tui.width(slots._BAR_MARK[0])
                     want = None if name == "workspace-07" else name
                     for col in range(at, at + 1 + tui.width(name)):
-                        self.assertEqual(slots.TABS.switch_to(col), want,
+                        self.assertEqual(slots.TABS.switch_to(0, col), want,
                                          f"{width}: column {col} of {plain!r}")
 
 
@@ -1046,7 +1046,7 @@ class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
         self.assertIn(slots._BAR_RULE, plain)
         for col, ch in enumerate(plain):
             if ch == slots._BAR_RULE:
-                self.assertIsNone(slots.TABS.switch_to(col),
+                self.assertIsNone(slots.TABS.switch_to(0, col),
                                   f"the seam at column {col} answered for a tab: {plain!r}")
 
     def test_every_column_of_a_ruled_row_answers_for_the_tab_under_it(self):
@@ -1066,7 +1066,7 @@ class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
                     at = plain.index(name) - tui.width(slots._BAR_MARK[0])
                     want = None if name == "workspace-07" else name
                     for col in range(at, at + 1 + tui.width(name)):
-                        self.assertEqual(slots.TABS.switch_to(col), want,
+                        self.assertEqual(slots.TABS.switch_to(0, col), want,
                                          f"{width}: column {col} of {plain!r}")
 
     def test_the_ladder_pays_for_the_rules_rather_than_overflowing(self):
@@ -1124,7 +1124,7 @@ class ThisPlaneIsWhyTheRungIsWindowed(unittest.TestCase):
         rows = slots._bar("workspaces", list(self.NAMES), self.HERE, width)
         row = rows[0] if rows else ""
         self.assertLessEqual(tui.width(row), width, repr(row))
-        return row, {slots.TABS.switch_to(col) for col in range(width)} - {None}
+        return row, {slots.TABS.switch_to(0, col) for col in range(width)} - {None}
 
     def test_rung_one_still_needs_two_hundred_and_seventy_four_columns(self):
         """The number the whole change is about. Measured off the ladder, so it follows
@@ -1212,7 +1212,7 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
                 row = _plain(rows[0]) if rows else ""
                 self.assertFalse(row.rstrip().endswith(slots.ADD_CHAT),
                                  f"{width}: the workspace bar drew a `+`: {row!r}")
-                self.assertEqual([c for c in range(width) if slots.TABS.add_at(c)], [],
+                self.assertEqual([c for c in range(width) if slots.TABS.add_at(0, c)], [],
                                  f"{width}: the workspace bar published an affordance")
 
     def test_only_this_workspaces_chats_are_on_the_bar(self):
