@@ -254,6 +254,14 @@ class WhatACommandListCostsTheOperatorsScreen(unittest.TestCase):
         made = self._tmux("new-session", "-d", "-s", "s", "-x", "200", "-y", "50",
                           "-P", "-F", "#{pane_id}", "--", "cat")
         self.assertEqual(made.returncode, 0, made.stderr)
+        # **The status line off, and that is what makes the byte counts below a
+        # measurement rather than a coin toss.** tmux redraws the status line on its own
+        # clock — `status-interval` is 15 seconds by default — so a probe that watches
+        # the client for a second has about a one-in-fifteen chance of catching a repaint
+        # nothing here asked for, which is exactly the shape that passes on a laptop and
+        # goes red on CI once a fortnight. The panes run `cat` and write nothing, so with
+        # this off the only thing that can draw on the client is the command under test.
+        self._tmux("set-option", "-g", "status", "off")
         self.harness = made.stdout.strip()
         split = self._tmux("split-window", "-t", self.harness, "-h", "-l", "22",
                            "-P", "-F", "#{pane_id}", "--", "cat")
