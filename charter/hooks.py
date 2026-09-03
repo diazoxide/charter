@@ -4271,6 +4271,106 @@ def _in_a_plane() -> bool:
     return bool(_cfg.HAS_CONTROL_PLANE)
 
 
+# --------------------------------------------------------------------------- #
+# The chat's own turn — the one thing about a harness that only a hook can see.  #
+#                                                                               #
+# charter does not own the harness's SCREEN (ADR 0018 permits `capture-pane` at  #
+# exactly two moments, both of them moments the pane is about to stop existing). #
+# It owns the harness's HOOKS, and a hook process runs inside the chat's pane,   #
+# whose window the launcher created with `-e CHARTER_SESSION_ID=<chat id>`       #
+# (`commands_frame._session_id_env_argv`, `frame/layout.py`). So a hook already  #
+# knows exactly which chat it is in, and the three edges of a turn — it began,   #
+# it is still going, it ended — are three hooks charter is already dispatched    #
+# into. `frame/slots.py` draws them; `charter/inflight.py` holds them.           #
+# --------------------------------------------------------------------------- #
+
+
+def _chat_id() -> str | None:
+    """Which chat this hook is running inside, or ``None`` when it is not inside one.
+
+    ``$CHARTER_SESSION_ID`` and nothing else, which is the same rung
+    `frame/notify.plane_changed` reads one line into its own body: inside a frame that
+    variable holds the FRAME's id (`session.current` says so explicitly — it *shadows*
+    Claude Code's own session id there), and outside one it is unset, which is the common
+    case since most sessions run with no frame at all.
+
+    **Neither stripped nor defaulted here**, and both omissions are the same rule. The
+    value goes to `inflight._turn_file`, which is the seam that turns it into a PATH and
+    has to answer for whatever a caller hands it — so it normalises, and a second
+    normalisation on the way in would be one nothing could observe. An unset variable reads
+    as ``None``, which the emptiness test in the three functions below already refuses; a
+    value of blanks reaches `_turn_file`, which strips it and refuses what is left.
+    """
+    return os.environ.get("CHARTER_SESSION_ID")
+
+
+def _turn_begin() -> None:
+    """This chat's harness has started working. `userpromptsubmit` and nothing else.
+
+    **Gated on the harness charter will hear the END from, and that gate is the whole of
+    the honesty here.** The falling edge is a `Stop` hook. Claude Code fires one; opencode
+    sets ``$CHARTER_SESSION_ID`` on its tool hooks and has no session-stop event at all,
+    and Codex is tool-hooks only. A mark charter can raise and cannot lower is not a
+    "working" light — it is a recency mark, claiming *now* while measuring *recently*, and
+    the operator cannot tell which one they are looking at. `state.harness_session` already
+    answers ``None`` rather than guessing for exactly these harnesses, and a chat charter
+    cannot honestly animate shows what it shows today: nothing.
+
+    So the gate is on ``$CHARTER_HARNESS``, which `commands_frame._frame_env` sets on every
+    chat it launches, and an ABSENT one is refused with the rest. "charter does not know
+    which harness this is" and "charter knows this harness reports no stop" reach the same
+    picture on purpose — the four-reasons-one-answer rule `state.harness_session` states.
+
+    Plane-gated with its callers (#852): the mark lands under ``config.STATE_DIR``, which
+    outside a plane is a `.charter/` in a stranger's checkout.
+    """
+    chat = _chat_id()
+    if not chat or not _in_a_plane():
+        return
+    try:
+        from .harness import claude_code
+        # No `or ""` and no `.strip()`: `None` and every other value already compare
+        # unequal, and `commands_frame._frame_env` writes this variable from a module
+        # constant through `tmux -e`, so there is no whitespace for a repair to remove.
+        if os.environ.get("CHARTER_HARNESS") != claude_code.NAME:
+            return
+        from . import inflight
+        inflight.turn_begin(chat)
+    except Exception:  # noqa: BLE001 - a readout must never break a turn
+        pass
+
+
+def _turn_bump() -> None:
+    """This chat's turn is still going — refresh its TTL, never raise a mark.
+
+    Called from every `pretooluse*` and `posttooluse*` handler, which is what makes
+    `inflight.TURN_STALE_SECONDS` a bound on a stretch with NO tool call rather than a
+    bound on a turn. `inflight.turn_bump` does nothing when there is no mark, so this
+    needs no harness gate of its own: only :func:`_turn_begin` can create one, and it is
+    where the gate lives.
+    """
+    chat = _chat_id()
+    if not chat or not _in_a_plane():
+        return
+    try:
+        from . import inflight
+        inflight.turn_bump(chat)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _turn_end() -> None:
+    """This chat's harness has stopped. `stop` and nothing else — see :func:`stop`."""
+    chat = _chat_id()
+    if not chat or not _in_a_plane():
+        return
+    try:
+        from . import inflight
+        inflight.turn_end(chat)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _trace(event, session, **f):
     """Record one tally row. **A no-op outside a plane, and that is the one place a
     verdict and its bookkeeping come apart** (#852).
@@ -4426,6 +4526,7 @@ def pretooluse_read() -> int:
     that they must never disagree about what a vault is. Deciding is fallible and is
     excused; *refusing* is not, and now cannot be: see :func:`_deny`.
     """
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     data = _read_stdin()
     _touch_piece(data)
     try:
@@ -4563,6 +4664,10 @@ def pretooluse() -> int:
         # `.charter/` charter would be creating in a stranger's checkout to hold it.
         _mark_guard_seen()
         _touch_piece(data)
+    # OUTSIDE the `if plane:` above, and that is not an oversight: `_turn_bump` carries the
+    # plane gate itself, because `pretooluse_read` — which is deliberately ungated — calls
+    # it too. A second `if plane` here would be a conjunct no input could make observable.
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     ti = data.get("tool_input") or {}
     cmd = ti.get("command", "") or ""
     cwd = data.get("cwd") or ""
@@ -5461,6 +5566,7 @@ def posttooluse() -> int:
     # was not a plane (#852).
     if not _in_a_plane():
         return 0
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5621,6 +5727,7 @@ def pretooluse_dispatch() -> int:
     """
     if not _in_a_plane():
         return 0  # no personas to overlap, and `inflight.start` would write a claim file
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     data = _read_stdin()
     # Clear the routing mark first — the dispatch IS the routing, and clearing ahead of the
     # early returns below means a read-only fan-out counts as routing too.
@@ -5696,6 +5803,7 @@ def posttooluse_bash() -> int:
     # gate belongs here now, not in the changelist that finally adds the nudge.
     if not _in_a_plane():
         return 0
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     from .frame import notify
     notify.plane_changed()
     _ask_approved(_read_stdin())
@@ -5716,6 +5824,7 @@ def posttooluse_skill() -> int:
     """
     if not _in_a_plane():
         return 0  # `skilluse.record` tallies against this plane's personas
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5805,6 +5914,7 @@ def posttooluse_message() -> int:
     """
     if not _in_a_plane():
         return 0  # the tally, and the agent-id map beside it, belong to a plane
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5831,6 +5941,7 @@ def posttooluse_dispatch() -> int:
     # `?? personas/` carrying this machine's hostname in anything else (#852).
     if not _in_a_plane():
         return 0
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -6136,6 +6247,7 @@ def pretooluse_edit() -> int:
     # the roster this plane declares, and there is no roster outside a plane (#852).
     if not _in_a_plane():
         return 0
+    _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     data = _read_stdin()
     # A hard deny, before the routing ask: this one is a permission question, and asking
     # the agent to approve a write that widens the agent's own permissions is no guard.
@@ -6274,6 +6386,7 @@ def userpromptsubmit() -> int:
     # `.charter/sessions/<sid>.configver` into it on the first prompt (#852).
     if not _in_a_plane():
         return 0
+    _turn_begin()     # the turn's RISING edge — the one moment the harness reports
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -6303,6 +6416,55 @@ def userpromptsubmit() -> int:
             "hookEventName": "UserPromptSubmit",
             "additionalContext": "\n\n".join(parts),
         }})
+    return 0
+
+
+def stop() -> int:
+    """The turn is over — the FALLING edge, and the whole of what was missing.
+
+    The rising edge has been on disk since `userpromptsubmit` first called
+    `frame.notify.plane_changed`; `Stop` in `hooks/hooks.json` ran `charter workspace
+    _autosave` and this dispatch table had no entry at all, so nothing charter kept could
+    ever be *lowered*. Everything a turn-scoped readout needs was already here except this.
+
+    **`Stop` and not `SubagentStop`.** They are wired to the same autosave beside this one
+    because a memo is worth writing when either fires, and they are emphatically not the
+    same event here: a dispatched sub-agent finishing does not end the turn that dispatched
+    it, and clearing the mark on `SubagentStop` would blink the tab off in the middle of
+    work that is still going — several times over, on a fan-out.
+
+    **It says nothing and refuses nothing.** `Stop` can block, by exit 2 or by
+    ``{"decision": "block"}``, and blocking here would make the harness keep going on the
+    strength of a *drawing* charter failed to update. This handler exists to stop claiming
+    something; a claim it could not retract is not worth a turn.
+
+    **It reads no stdin, and that is measured rather than assumed.** Every other handler
+    reads the payload because it needs it; this one does not — the chat is
+    ``$CHARTER_SESSION_ID``, out of the pane's own environment, so a malformed or truncated
+    payload must not be able to leave a chat marked as working forever. Nor is a hook that
+    never drains its stdin a new shape on this event: `charter workspace _autosave` has been
+    wired to `Stop` and `SubagentStop` in `hooks/hooks.json` since long before this, and it
+    is an ordinary argparse command that reads nothing.
+
+    **No `notify.plane_changed()` either, and its absence is the design working.** That call
+    bumps the frame's version so panels repaint, and the panels that care about this one
+    already repaint without it: clearing the mark moves the tracker directory's mtime, which
+    is exactly the number `frame/panel.py` watches for the chat strip
+    (`inflight.turn_stamp`), and `_watch`'s falling edge turns "was ticking, is not now"
+    into the one repaint that takes the spinner off. A version bump here would be a second
+    mechanism for an edge that already has one.
+
+    **The plane gate is `_turn_end`'s and is deliberately not repeated here** (#852). The
+    mark lives under `config.STATE_DIR`, which outside a plane is a `.charter/` in a
+    stranger's checkout — so clearing one there would be charter deleting a file a cloned
+    repository supplied, which is `posttooluse_bash`'s ask-marker finding one directory
+    over. The gate sits at the SEAM rather than at the call sites for :func:`_trace`'s
+    reason, and here it is not a preference: `pretooluse_read` is ungated by design and
+    calls `_turn_bump`, so the three helpers have to answer for themselves. Asking twice
+    would leave whichever is asked second a line no input could make observable — which is
+    the shape this repository deletes rather than documents.
+    """
+    _turn_end()
     return 0
 
 
@@ -6515,6 +6677,7 @@ _HANDLERS = {
     "posttooluse-skill": posttooluse_skill,
     "posttooluse-dispatch": posttooluse_dispatch,
     "posttooluse-message": posttooluse_message,
+    "stop": stop,
 }
 
 

@@ -134,6 +134,10 @@ def _payloads(cwd: str, sid: str) -> dict[str, dict]:
                                  "tool_response": "agentId: a1b2c3d4e5f6"},
         "posttooluse-message": {"cwd": cwd, "session_id": sid, "tool_name": "SendMessage",
                                 "tool_input": {"to": "reviewer"}},
+        # `Stop` carries no tool at all — it is the end of the turn, not the end of a
+        # call — so the payload names none. `stop_hook_active` is what the host sends and
+        # what a handler that decided to block would have to read; charter's never blocks.
+        "stop": {"cwd": cwd, "session_id": sid, "stop_hook_active": False},
     }
 
 

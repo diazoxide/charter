@@ -361,3 +361,228 @@ def prune_all() -> int:
         except OSError:
             continue
     return gone
+
+
+# --------------------------------------------------------------------------- #
+# A CHAT'S OWN TURN.                                                          #
+#                                                                             #
+# Everything above is keyed by AGENT and says nothing about where the work is  #
+# happening: a record is `{"agent", "kind", "ts"}` — "no fid, no chat, no      #
+# workspace" (:func:`prune_all`). That is the right shape for what it feeds    #
+# (the dispatch-overlap nudge, `bottom`'s ⏳ N) and the wrong shape for the     #
+# question a tab strip asks, which is *is THIS chat's harness working*. So     #
+# this is a second tracker rather than a fifth :data:`DISPATCH` kind: the      #
+# records have a different key, a different horizon and a different reader,    #
+# and folding them into one directory would put chat ids in front of the       #
+# nudge that reads agent names back to an operator as a sentence — #420's own  #
+# failure, arriving through the other axis.                                    #
+#                                                                             #
+# It shares the SHAPE and nothing else: one directory whose mtime is the       #
+# cheap gate (:func:`turn_stamp`, :func:`stamp`'s twin), one small file per    #
+# live record, an age past which charter stops claiming anything, and          #
+# best-effort everywhere — a tracker that breaks a turn is worse than one that #
+# misses a turn.                                                               #
+# --------------------------------------------------------------------------- #
+
+#: How long a turn charter never saw the end of keeps claiming to be working.
+#:
+#: **The falling edge is a `Stop` hook, and a turn can end without one.** Pressing Esc
+#: mid-turn fires no `Stop` at all, so without this a chat that was interrupted would
+#: spin for the rest of the plane's life. Every `pretooluse*`/`posttooluse*` handler
+#: refreshes the mark (`hooks._turn_bump`), so this is not "how long may a turn take" —
+#: it is **how long a live turn may go without touching a single tool**, which is a much
+#: shorter thing. A turn issuing tool calls refreshes its own mark indefinitely and is
+#: never cut off by this number.
+#:
+#: **Its own constant, not :data:`PRESUMED_DEAD_SECONDS`, for the reason that number's own
+#: header gives about #308**: two jobs with opposite horizons sharing one number is what
+#: made the old single TTL wrong. That one is a DISPLAY threshold — the record survives it
+#: and is drawn differently (`45m?`) — because "a dispatch that has outlived every
+#: reasonable expectation" is the most interesting thing that tracker holds. This one is
+#: the opposite: past it charter does not know whether the harness is working, and the
+#: honest picture for *does not know* is the same as for *is not* — nothing drawn at all,
+#: which is `state.harness_session`'s rule one surface over.
+#:
+#: **Ten minutes, and the trade is stated rather than measured away.** A long TOOLLESS
+#: think bumps nothing, so a TTL short enough to catch an abandoned turn also blinks off
+#: during deep thinking; the two cannot both be had from this signal. Both errors cost the
+#: operator the same single switch to look, and they differ in how they end: a blink-off
+#: is repaired by the turn's very next tool call, while a stale spinner stands until this
+#: number runs out. So it is set generously against the cadence it actually measures — ten
+#: minutes with no tool call whatsoever is far outside what a working turn does — and no
+#: further, because the direction charter errs in is *not claiming* (`inflight`'s own
+#: `⋯ stalled` stops animating for exactly this reason).
+TURN_STALE_SECONDS = 10 * 60
+
+
+def _turn_dir() -> Path:
+    from . import config
+    return config.STATE_DIR / "chat-turns"
+
+
+def _turn_file(chat: str | None) -> Path | None:
+    """The one file that stands for *chat*'s turn, or ``None`` for a name that cannot
+    have one.
+
+    The name comes from ``$CHARTER_SESSION_ID`` inside a harness pane, which the frame
+    launcher set (`commands_frame._session_id_env_argv`) and which anything in that shell
+    can therefore also set to something else — so this is where a chosen string would
+    become a chosen PATH, and it is the only place that has to answer for it.
+
+    **:func:`_safe_name` is asked as a QUESTION here, never used as a mangling**, and that
+    is what lets the file's NAME be the chat's id. It admits exactly the alphabet a chat id
+    travels to tmux under (`frame/chats.ID_RE`), so a value it would change is a value that
+    is not a chat id — refused — and one it would leave alone is a name this directory can
+    hold losslessly. :func:`working_chats` therefore reads the id off the directory entry
+    and never opens a file, and there is no mangled form for a reader to have to invert.
+    ``../../.ssh/authorized_keys`` is refused rather than flattened, which is the same
+    answer `chats.check` gives a name off an argv.
+
+    Refusing rather than repairing costs one real case and it is stated rather than hidden:
+    `_safe_name` truncates at 64 characters, so a chat id longer than that has no mark. A
+    chat with no mark shows what every chat showed before this existed.
+
+    ``.`` and ``..`` pass that question — they are made entirely of admitted characters —
+    and are refused by name, because a chat "called" ``..`` would have :func:`turn_end`
+    unlink the tracker's parent directory rather than a record.
+    """
+    # ``str | None`` rather than ``str``, and `(chat or "")` beside it, because
+    # `hooks._chat_id` answers with `os.environ.get` unrepaired — an unset
+    # ``$CHARTER_SESSION_ID`` is a `None` this seam is the right place to absorb.
+    # :func:`start` spells the same line for the same reason one tracker up.
+    chat = (chat or "").strip()
+    if not chat or _safe_name(chat) != chat or chat in (".", ".."):
+        return None
+    return _turn_dir() / chat
+
+
+def turn_stamp() -> int | None:
+    """:func:`stamp` for the turn tracker — one ``stat``, or ``None`` for no directory.
+
+    Same contract and the same two halves, so `frame/panel.py` can cache against it the
+    way it already caches against the other: the mtime moves when a record is CREATED or
+    REMOVED, which is the only way the SET of working chats can change, and it does NOT
+    move when :func:`turn_bump` refreshes one — a refresh changes no answer, only a
+    deadline. The deadline half is the caller's, exactly as it is for :func:`stamp`: a
+    mark crossing :data:`TURN_STALE_SECONDS` changes what charter may claim while touching
+    no file at all, so the panel also re-reads when the earliest such deadline passes.
+
+    That split is what keeps an idle plane at one syscall per tick: no marks means no
+    deadline to hold and nothing to compare against.
+    """
+    try:
+        return _turn_dir().stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def turn_begin(chat: str | None) -> None:
+    """Mark *chat*'s harness as working. The RISING edge, and its only writer is the
+    `UserPromptSubmit` hook.
+
+    **Creating is deliberately separate from refreshing** (:func:`turn_bump`). A tool hook
+    fires for a sub-agent's tools as well as the session's own, and it fires in whatever
+    turn happens to be running; if a tool hook could CREATE a mark, a chat would start
+    claiming to be working on evidence that a tool ran rather than on evidence that a turn
+    began — and there would then be no single moment charter could point at as the start.
+    A prompt is that moment, it is the one edge the harness reports unambiguously, and it
+    is already on disk (`hooks.userpromptsubmit`).
+
+    **The file is empty, and `config.touch_for` is what makes it.** A mark carries its
+    meaning in EXISTING and in its mtime — which is that helper's own sentence, and here
+    it is exact: the id is the file's name (:func:`_turn_file`), the TTL is its mtime, and
+    there is nothing left for bytes to say. `touch_for` and not `Path.touch` because
+    everything under `config.STATE_DIR` is charter's own state, and a bare `touch` creates
+    at ``0o666 & ~umask`` in a directory charter does not always own (#331, #505).
+
+    Best-effort: a tracker that cannot write is a strip that shows nothing, which is what
+    it showed before this existed.
+    """
+    p = _turn_file(chat)
+    if p is None:
+        return
+    try:
+        from . import config
+        config.private_mkdir(_turn_dir())
+        config.touch_for(p)
+    except OSError:
+        return
+
+
+def turn_bump(chat: str | None) -> None:
+    """Refresh *chat*'s mark — the TTL only, never the mark itself.
+
+    One ``utime`` on a file that already exists, and **nothing at all when it does not**:
+    that missing-file case is the whole reason this is not :func:`turn_begin` with a
+    different name. It is also why a refresh is free for the panel — `utime` does not move
+    the directory's mtime, so :func:`turn_stamp` does not move and nothing re-reads.
+
+    Called from every `pretooluse*` and `posttooluse*` handler, which is what makes
+    :data:`TURN_STALE_SECONDS` a bound on a toolless STRETCH rather than on a turn.
+    """
+    p = _turn_file(chat)
+    if p is None:
+        return
+    try:
+        os.utime(p)
+    except OSError:
+        return
+
+
+def turn_end(chat: str | None) -> None:
+    """Clear *chat*'s mark. The FALLING edge — `hooks.stop`, and nothing else.
+
+    `SubagentStop` deliberately does not call this: a sub-agent finishing does not end
+    the turn that dispatched it, and clearing here would blink the tab off in the middle
+    of work that is still going.
+    """
+    p = _turn_file(chat)
+    if p is None:
+        return
+    try:
+        p.unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def working_chats() -> list[tuple[str, float]]:
+    """``(chat, last_seen)`` per chat whose harness charter can still claim is working.
+
+    :func:`live_records` one tracker over, and the same two readers: `frame/panel.py`
+    takes the times, to know when its cached answer expires with no file having changed;
+    `frame/slots.py` takes the names, to decide which tabs get a spinner.
+
+    A mark past :data:`TURN_STALE_SECONDS` is **deleted here** rather than merely skipped,
+    and that is the opposite of what :func:`live_records` does with a presumed-dead
+    dispatch — on purpose. There, an outlived record is the most interesting thing the
+    tracker holds and is kept so it can be drawn. Here there is nothing to draw: past the
+    TTL charter does not know, so the record has no reader left, and deleting it moves the
+    directory mtime — which turns an expiry that no file announced into an ordinary
+    :func:`turn_stamp` change for every panel watching. A chat that never gets a `Stop`
+    would otherwise leave one file behind for good.
+
+    **One `stat` per entry and no file is ever opened**, because the id is the entry's own
+    name — see :func:`_turn_file` for why that is lossless rather than convenient. So this
+    costs a `readdir` and one `stat` per working chat, and a plane with nothing working
+    does not get here at all.
+    """
+    d = _turn_dir()
+    if not d.exists():
+        return []
+    out: list[tuple[str, float]] = []
+    now = time.time()
+    for p in d.iterdir():
+        try:
+            seen = p.stat().st_mtime
+            # `>` and not `>=`, and the deletion sweep asks which. Only the DIRECTION is
+            # pinned, deliberately: `now - seen` is a float measured against a ten-minute
+            # constant, so the two spellings differ on one instant no run arrives at, and
+            # both say the same thing about the chat — it has gone the whole TTL without a
+            # tool call. A test asserting one of them would be pinning a coin-flip.
+            if now - seen > TURN_STALE_SECONDS:
+                p.unlink(missing_ok=True)
+                continue
+        except OSError:
+            continue
+        out.append((p.name, seen))
+    return out

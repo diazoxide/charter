@@ -139,6 +139,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "charter hook stop --plugin-version 0.55.0",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "charter workspace _autosave >/dev/null 2>&1",
             "timeout": 15
           }

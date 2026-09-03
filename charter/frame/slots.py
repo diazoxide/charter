@@ -109,6 +109,24 @@ def spinner_frame(now: float | None = None) -> str:
     return SPINNER[int(t / SPINNER_PERIOD) % len(SPINNER)]
 
 
+def tab_spinner_frame(now: float | None = None) -> str:
+    """Which frame of :data:`TAB_SPINNER` this instant shows.
+
+    :func:`spinner_frame`'s twin over the other sequence, and a second function rather
+    than a *seq* parameter on the first: a caller that could pass a sequence could pass
+    :data:`SPINNER` — braille, which is not held to this row's width rule — and the whole
+    of :data:`TAB_SPINNER`'s docstring is about which characters may go on a strip whose
+    click map is per column. One name, one sequence, one place the rule is written down.
+
+    Every tab spinning on a strip shows the SAME frame at any instant, because both read
+    the clock rather than a per-tab counter. That is the readable answer as well as the
+    cheap one: a row of tabs pulsing out of step reads as noise, and a row pulsing
+    together reads as *these two are working*.
+    """
+    t = time.monotonic() if now is None else now
+    return TAB_SPINNER[int(t / SPINNER_PERIOD) % len(TAB_SPINNER)]
+
+
 def verbosity(fid: str) -> str:
     """How much this frame's panels say: ``"terse"`` or ``"normal"``.
 
@@ -3212,6 +3230,60 @@ SLOTS = {"top": _top, "bottom": _bottom, "repos": _repos, "right": _right}
 #: columns the names are competing for.
 _BAR_MARK = ("*", " ")
 
+#: The frames a chat tab cycles through while that chat's harness is working (#853).
+#:
+#: **It takes the mark's cell rather than adding one, and that is the whole of why a
+#: spinner is affordable on a strip whose click map is per COLUMN.** Every tab already
+#: carries a one-cell prefix (:data:`_BAR_MARK`) and every frame here is one cell, so a
+#: chat starting a turn changes not one column of the strip's arithmetic: the cut
+#: (:func:`_cuts`), the row count (:func:`bar_rows_wanted`) and the map
+#: (:func:`_tab_columns`) all answer exactly what they answered when nothing was working.
+#: A spinner drawn *beside* a name instead would re-cut the strip the moment a sibling
+#: started thinking, and the cell an operator was about to press would hold another chat's
+#: name — the double-press #767 exists to prevent, arriving through a spinner.
+#:
+#: **The ACTIVE chat keeps its `*` and never shows this**, which is a limit rather than an
+#: oversight. There is one cell and the two facts compete for it; `*` wins because it is
+#: the only one of the two that has no other way to be seen. `chrome.block` paints the
+#: active tab in reverse video, but `[frame] chrome = "off"` is the shipped default and
+#: `panel._write` strips SGR under `NO_COLOR`, so on a plain plane the `*` is the ONLY
+#: thing saying where you are (:func:`_compose` says so at the paint). The chat you are
+#: typing in, meanwhile, is the one whose harness you can watch directly. The readout is
+#: for the chats you are not looking at.
+#:
+#: **Which glyphs, and the two that were asked for and refused.** The request was Claude
+#: Code's own spinner, `· ✢ ✶ ✳ ✽ ✻`. `tui.width` answers 1 for all six, and `tui.width` is
+#: not the whole question on this row: it reads the East-Asian tables, and an *Ambiguous*
+#: character is one a terminal may draw two cells wide while those tables say one. That is
+#: the failure :data:`_BAR_RULE` is ASCII to avoid and the one `statusline._persona_chips`
+#: records breaking this project's layout twice. Measured with `unicodedata`:
+#:
+#: ==========  ========  =====  ==========================================
+#: glyph       codepoint  EAW   verdict
+#: ==========  ========  =====  ==========================================
+#: ``·``       U+00B7    **A**  refused — Ambiguous
+#: ``✢``       U+2722    N      kept
+#: ``✳``       U+2733    N      refused — carries an emoji presentation
+#:                              (``✳️``, U+2733 U+FE0F), so a terminal with
+#:                              an emoji fallback font may draw it wide
+#: ``✶``       U+2736    N      kept
+#: ``✽``       U+273D    **A**  refused — Ambiguous
+#: ``✻``       U+273B    N      kept
+#: ==========  ========  =====  ==========================================
+#:
+#: What survives is Neutral, which is the property `statusline`'s own marker test asserts
+#: (`▪▸▫`, chosen after `◈`/`◆` shipped broken) and the strongest one available short of
+#: ASCII. **None of them is a character a chat id may contain** (`chats.ID_RE` is
+#: ``[A-Za-z0-9._-]``), and that is a separate requirement with its own reason: the mark
+#: sits flush against the name, so an ASCII pulse like ``.oOo`` would draw ``Oapi.3`` and
+#: put a character that could be part of a name where the operator reads the name.
+#:
+#: Three frames, cycled out and back so the sparkle grows and shrinks the way the
+#: requested one does. It reads off the same clock as :data:`SPINNER` — see
+#: :data:`SPINNER_PERIOD`, whose argument (short enough to be seen, long enough to be
+#: worth a repaint) is about `panel.TICK` and is the same argument here.
+TAB_SPINNER = "✢✶✻✶"
+
 #: Columns a bar spends between two names. Two, so a name reads as one name — a single
 #: space runs `api.1 api.2` together at the widths where this matters most.
 #:
@@ -3699,7 +3771,7 @@ def _cuts(fields: list[str], room: int, gap: int) -> list[int]:
 
 
 def _bar(head: str, names: list[str], here: str, width: int, *,
-         note: str = "", rows: int = 1) -> list[str]:
+         note: str = "", rows: int = 1, busy=()) -> list[str]:
     """One bar: *head*, then *names* with *here* marked, in *rows* x *width* cells.
 
     :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
@@ -3709,14 +3781,17 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     (:func:`bar_rows_wanted`), and a sizing question that published a click map would have
     the launcher's answer overwrite the panel's — a map describing a strip nobody is
     looking at.
+
+    *busy* is :func:`_compose`'s and is passed straight through — see there.
     """
-    lines, cols, more, add = _compose(head, names, here, width, note=note, rows=rows)
+    lines, cols, more, add = _compose(head, names, here, width,
+                                      note=note, rows=rows, busy=busy)
     TABS.publish(cols, here, more, add)
     return lines
 
 
 def _compose(head: str, names: list[str], here: str, width: int, *,
-             note: str = "", rows: int = 1):
+             note: str = "", rows: int = 1, busy=()):
     """The strip *head*/*names*/*here* composes to, and the cells its tabs landed in.
 
     Answers ``(lines, columns, more, add)`` — the rows to draw, the ``(row, col)`` map
@@ -3797,6 +3872,18 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
     *note* is an extra field drawn after the names when there is room for it whole — the
     "add chat" affordance, and nothing else today. Dropped first, before any name, because
     it is a reminder and the names are the readout.
+
+    *busy* is the names whose harness is working right now (#853) — chat ids, straight off
+    `inflight.working_chats`. Each one drawn on the strip gets :data:`TAB_SPINNER` in the
+    cell :data:`_BAR_MARK` would otherwise leave blank, so **the ladder above cannot see
+    it**: every field is the width it was without it, the cut is the cut it always was, and
+    :func:`bar_rows_wanted` — which runs in the LAUNCHER, where nothing knows or should
+    know which chat is thinking — composes the same rows it will draw. That is why *busy*
+    defaults to empty here rather than being read inside: the sizer and the renderer ask
+    one arithmetic, and only the renderer has an opinion about the clock.
+
+    Empty for the `workspaces` strip, which is not a strip of chats and has no harness to
+    be working.
 
     **Every rung answers with its own cell map**, which is what makes the bar clickable at
     all and is the same discipline `_repos` keeps for the table's rows: the handler
@@ -3901,7 +3988,20 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
     # the raw name beside the drawn field: a click has to switch to what is on disk.
     at = names.index(here) if here in names else -1
     shown = [contain.one_line(n) for n in names]
-    marked = [f"{_BAR_MARK[0] if i == at else _BAR_MARK[1]}{n}"
+    # **The mark's cell carries the spinner too, and it is decided on the RAW name for the
+    # reason the paragraph above gives about the index**: `busy` holds chat ids off disk,
+    # `shown` holds text `contain.one_line` may have repaired, and matching a mark against
+    # the repaired form would follow the repair rather than the identity.
+    #
+    # `i != at` before the membership test, so the active tab keeps its `*` — see
+    # :data:`TAB_SPINNER` for why that one cell goes to the mark rather than to the
+    # spinner. Read once, outside the comprehension: every tab on a strip shows the same
+    # frame (`tab_spinner_frame`), and reading the clock per name would let a wide strip
+    # start a row on one frame and finish it on the next. Read unconditionally, too: an
+    # `if busy` in front of it would change no output at all, only one `time.monotonic()`,
+    # which is the equivalent mutant this repository deletes rather than documents.
+    frame = tab_spinner_frame()
+    marked = [f"{_BAR_MARK[0] if i == at else (frame if names[i] in busy else _BAR_MARK[1])}{n}"
               for i, n in enumerate(shown)]
     # **The same fields twice: one set to MEASURE and one set to DRAW.** `chrome.block`
     # adds no cell — `tui.width` counts no SGR — so the two are the same width by
@@ -4066,6 +4166,28 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
 ADD_CHAT = "+"
 
 
+def working_chats() -> frozenset:
+    """Which chats' harnesses are working right now — a set of chat ids, possibly empty.
+
+    The renderer's half of the turn tracker (`inflight.working_chats`), and a wrapper
+    rather than a direct call for the reason every read on this repaint path has one:
+    **never raises.** A panel that threw out of `render` loses its pane, and a tracker
+    charter cannot read is "nothing is working" — which degrades to the strip that was
+    drawn before this feature existed rather than to a hole in the frame.
+
+    A set rather than the tracker's `(chat, last_seen)` pairs: what a strip does with this
+    is one membership test per name, and the times are the PANEL's half of the same read
+    (`panel._working`, which needs them to know when its cached answer expires). Two
+    readers of one tracker, each taking the part it has a use for — `inflight.live_records`
+    and `inflight.live` are the same split one tracker over.
+    """
+    from .. import inflight
+    try:
+        return frozenset(chat for chat, _seen in inflight.working_chats())
+    except Exception:  # noqa: BLE001 - a readout must never cost a pane
+        return frozenset()
+
+
 def _chats_strip(fid: str):
     """What the chat strip is a strip OF — its heading, its names, the one you are typing
     in, and its note.
@@ -4196,9 +4318,16 @@ def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     *rows* is the pane's height, which the strip grows into only as far as its names need.
     It defaults to one because one is the shape every caller had before #829 and the shape
     a strip whose names fit still has.
+
+    **The one field on this strip that moves on its own** (#853): a chat whose harness is
+    working shows :data:`TAB_SPINNER` where an idle one shows a blank. That is why `chats`
+    is in :data:`BAR_ANIMATED` and why `panel._watch` gives it a ticking gate of its own —
+    a gate `slots.ANIMATED`'s cannot serve, since that one asks about plane-wide in-flight
+    dispatches and this chat's notice dwell, and neither is "a sibling chat's harness
+    started working".
     """
     head, names, here, note = _chats_strip(fid)
-    return _bar(head, names, here, width, note=note, rows=rows)
+    return _bar(head, names, here, width, note=note, rows=rows, busy=working_chats())
 
 
 def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
@@ -4231,6 +4360,28 @@ def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
 #: for exactly the names in here — so a renderer that gains a spinner without joining this
 #: set, or leaves one behind without leaving it, is red rather than silently still.
 ANIMATED = frozenset({"bottom"})
+
+#: Which BAR slots draw something that changes on its own — the tab spinner, and today
+#: `chats` and only `chats` (:data:`TAB_SPINNER`, through :func:`working_chats`).
+#:
+#: **A second set rather than a `chats` added to :data:`ANIMATED`, because the two name
+#: different GATES and not merely different slots.** `panel._watch` ticks an `ANIMATED`
+#: slot while `_running(inflight_cache) or _notice_pending(fid)` — plane-wide in-flight
+#: dispatches, and this frame's own switch-notice dwell. Neither has anything to do with
+#: whether a sibling chat's harness is thinking: a plane with no dispatch running would
+#: never tick, and a plane with one running would tick the strip for half an hour with
+#: every tab idle. Folding the two together would make each condition wake the other's
+#: pane, which is exactly the unscoped repaint `ANIMATED` was written to prevent.
+#:
+#: So `chats` gets `panel._working`'s gate — `inflight.turn_stamp`, one `stat` — and
+#: `bottom` keeps `panel._running`'s. A slot may legitimately end up in both sets one day;
+#: `_watch` ORs them and neither membership implies the other.
+#:
+#: Kept honest the same way :data:`ANIMATED` is, by
+#: `tests.test_a_chat_tab_shows_its_harness_working.OnlyTheChatStripSpins`: every slot is
+#: rendered twice at two clock readings with a chat marked as working, and the output must
+#: differ for exactly the names in here.
+BAR_ANIMATED = frozenset({"chats"})
 
 
 def unimplemented(configured) -> list[str]:

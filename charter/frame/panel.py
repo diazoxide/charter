@@ -595,6 +595,87 @@ def _running(cache: dict) -> int:
         return 0
 
 
+def _new_working_cache() -> dict:
+    """:func:`_new_inflight_cache` for the turn tracker — the state :func:`_working`
+    carries between ticks, in the same shape and for the same reason.
+
+    Its own cache rather than a second field on the other one: the two watch different
+    directories, expire on different horizons and are read by different slots, and a
+    single dict would have every `bottom` panel paying for the chat tracker's `stat` and
+    every `chats` panel paying for the dispatch tracker's — which is precisely the
+    unscoped cost `slots.ANIMATED` exists to prevent, arriving one level down.
+
+    **``recheck``'s starting value is never read, and it is here anyway.** The deadline is
+    only consulted while something is working (`working` is the left operand of an `and`
+    that short-circuits at 0), and the two are assigned together — so no call can reach
+    this ``0.0``. It stays because the cache has one SHAPE, the three keys
+    :func:`_new_working_cache`'s twin has, and a dict that omits a key its own reader
+    indexes is a landmine for the next edit rather than a saving. The deletion sweep
+    reports it and it is the same answer for `_new_inflight_cache`, which shipped it.
+    """
+    return {"stamp": None, "working": 0, "recheck": 0.0}
+
+
+def _working(cache: dict) -> int:
+    """How many chats' harnesses are working right now — one `stat` when nothing changed.
+
+    :func:`_running` one tracker over, and deliberately the same three-part cache, because
+    the two questions have the same shape: an answer that changes when a record is created
+    or removed (`inflight.turn_stamp`, whose mtime moves on exactly those two events), and
+    an answer that ALSO changes with no file moving at all, when a mark crosses
+    `inflight.TURN_STALE_SECONDS` — so the earliest such deadline is held beside it and
+    consulted only while something is actually working. An idle plane pays one `stat`.
+
+    **A refresh is free, and that is a property of the writer.** `inflight.turn_bump` calls
+    `utime` on a file that already exists, which does not move the directory's mtime — so a
+    turn issuing tool calls once a second re-reads nothing here. Only a turn STARTING and a
+    turn ENDING cost this panel a read of the directory, which is the same "the set moved"
+    rule `inflight.stamp` states for the other tracker.
+
+    Counts chats, not marks — one per chat by construction, since the file's name is the
+    chat's. The number itself is never drawn: `_watch` asks only whether it is non-zero,
+    and `slots.working_chats` re-reads for the names, which is the same split
+    :func:`_running` has against `slots._inflight_field`. Kept as a count rather than a
+    bool because the cache has to distinguish "nothing is working" from "nothing has been
+    read yet", and 0 does that without a second sentinel — `_new_inflight_cache`'s own
+    argument about `None`.
+
+    **Plane-scoped rather than workspace-scoped, and the cost of that is stated.** A mark
+    says which CHAT is working and the strip draws only the chats of its own workspace, so
+    a chat working in another workspace ticks this panel while changing nothing it draws —
+    one repaint of `slots.chats_bar` (429.8µs measured, 0.21% of a core at 5Hz) for as long
+    as that turn runs. Narrowing it would put `chats.roster` on the gate path, which is the
+    424µs this design exists to keep behind a 4.6µs `stat`; and on a plane with one
+    workspace, which is the ordinary shape, every working chat is on the strip anyway.
+
+    Never raises, for :func:`_running`'s reason: this sits in a run loop where an exception
+    ends the pane, and a tracker charter cannot read is stillness, which is what this whole
+    feature promises when it does not know.
+    """
+    from .. import inflight
+    try:
+        stamp = inflight.turn_stamp()
+        # `>=` for `inflight.working_chats`' reason, one deadline over: the boundary is a
+        # float equality, both spellings make the same claim about the mark, and what is
+        # pinned is the direction. `_running` above spells it identically.
+        stale = cache["working"] and time.time() >= cache["recheck"]
+        if stamp == cache["stamp"] and not stale:
+            return cache["working"]
+        marks = inflight.working_chats()
+        cache["stamp"] = stamp
+        cache["working"] = len(marks)
+        cache["recheck"] = min((seen for _chat, seen in marks),
+                               default=0.0) + inflight.TURN_STALE_SECONDS
+        return cache["working"]
+    except Exception:
+        # The stamp is NOT reset — :func:`_running` carries the full argument, and it is
+        # the same one: it is only ever assigned after a read that completed, so leaving it
+        # describes the last directory state charter understood and the next change to the
+        # set re-reads, instead of retrying a raising read five times a second.
+        cache["working"] = 0
+        return 0
+
+
 def _install_sigwinch(resized: dict) -> object:
     """Arm the resize handler, returning whatever was installed before it so `run` can
     put it back rather than leaking a handler past this process's own lifetime — a
@@ -762,6 +843,7 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
     """
     resized = {"flag": True}  # the first pass always paints, resized or not
     inflight_cache = _new_inflight_cache()
+    working_cache = _new_working_cache()
     # Scoped to THIS slot, and the `and` short-circuits: a panel whose renderer draws
     # nothing that moves never repaints for the spinner and never even pays the `stat`
     # that would have told it to. `_watch` runs one process per slot, so an unscoped
@@ -769,6 +851,11 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
     # byte-identical output, and `right` costs 4.8ms a render to do it (see
     # `slots.ANIMATED`).
     animates = slot in slots.ANIMATED
+    # The chat strip's own gate, and a SECOND name rather than a widened first one
+    # (`slots.BAR_ANIMATED` carries the argument). The two conditions are unrelated —
+    # plane-wide in-flight work against this plane's chat turns — so a panel pays for
+    # exactly the one its renderer draws, and a panel in neither set pays for neither.
+    spins = slot in slots.BAR_ANIMATED
     old_handler = _install_sigwinch(resized)
     try:
         # INSIDE the `try`, and that placement is the whole of the second paragraph
@@ -782,10 +869,16 @@ def _watch(slot: str, fid: str, *, once: bool, paint=None, evs=None) -> int:
             evs.open()
         seen, handled, was_ticking = "", False, False
         while True:
-            # `animates and ...` still short-circuits, so a `top`, `left` or `right`
-            # panel pays neither the `stat` nor the notice read — see `animates` above.
-            ticking = animates and (bool(_running(inflight_cache))
-                                    or _notice_pending(fid))
+            # Both `and`s short-circuit, so a panel pays for exactly the gates its own
+            # renderer draws from: `top` and `right` are in neither set and pay neither
+            # `stat` nor the notice read, `bottom` pays the dispatch tracker's and `chats`
+            # the turn tracker's — see `animates` and `spins` above. Written as one
+            # expression rather than two `if`s because what it computes is one fact:
+            # whether what this panel would draw NOW differs from what is on screen for a
+            # reason no version bump, resize or event will announce.
+            ticking = (animates and (bool(_running(inflight_cache))
+                                     or _notice_pending(fid))
+                       or spins and bool(_working(working_cache)))
             # `or was_ticking` is the FALLING EDGE (#727), and it is one term rather
             # than two because both clock-driven fields need exactly the same thing.
             # Without it, the tick after the last in-flight record cleared had no reason

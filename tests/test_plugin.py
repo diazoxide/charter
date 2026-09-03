@@ -119,6 +119,12 @@ class TestPluginManifest(unittest.TestCase):
             # Resumes: more work handed to a persona already running. Its own matcher
             # because `Task|Agent` fires when a sub-agent is CREATED and never again.
             ("PostToolUse", "charter hook posttooluse-message --plugin-version"),
+            # The turn's FALLING edge (#853). `Stop` and NOT `SubagentStop`: a sub-agent
+            # finishing does not end the turn that dispatched it, so clearing the chat's
+            # working mark there would blink the tab off mid-fan-out. It rides the same
+            # entry as the autosave and goes FIRST — the autosave carries a 15s timeout
+            # and this is a readout the operator is looking at.
+            ("Stop", "charter hook stop --plugin-version"),
             ("Stop", "charter workspace _autosave"),             # debounced auto-save
             ("SubagentStop", "charter workspace _autosave"),     # ditto, per dispatch
         ]
@@ -159,7 +165,7 @@ class TestPluginManifest(unittest.TestCase):
         version string in a test, which is how a stale one gets waved through.
         """
         engine = {"sessionstart": 5, "userpromptsubmit": 5, "pretooluse": 10,
-                  "posttooluse": 5, "posttooluse-dispatch": 5}
+                  "posttooluse": 5, "posttooluse-dispatch": 5, "stop": 5}
         expected = {f"charter hook {name} --plugin-version {__version__}": t
                     for name, t in engine.items()}
         expected["charter workspace _reconcile >/dev/null 2>&1"] = 5

@@ -70,6 +70,16 @@ _UNREACHABLE = {
     # invalid, question, bash, read, glob, grep, edit, write, task, webfetch, todowrite,
     # skill — no `SendMessage`, so there is nothing to dispatch on.
     "posttooluse-message": "opencode 1.18.21 has no SendMessage tool",
+    # #853's falling edge. The generated plugin hooks exactly three events —
+    # `shell.env`, `tool.execute.before` and `tool.execute.after` (`opencode.SHIM`) —
+    # and there is no session-stop event among them, nor anywhere in opencode's plugin
+    # surface at 1.18.21, to hook. This one is not a gap left open either: `stop` is the
+    # falling edge of a mark whose RISING edge is `userpromptsubmit`, two rows up, which
+    # opencode cannot dispatch for its own reason. So neither edge fires there and no
+    # chat on that harness is ever marked as working — which is the honest answer rather
+    # than a degraded one, and is why `hooks._turn_begin` gates on the harness by name.
+    "stop": "no session-stop event: the shim hooks shell.env and tool.execute.*, and "
+            "the rising edge (`userpromptsubmit`) is unreachable there too",
 }
 
 
