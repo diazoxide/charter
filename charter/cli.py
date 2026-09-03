@@ -1877,7 +1877,11 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     second, looser condition here is how the two come to disagree about what "interactive"
     means.
     """
-    if argv and not all(tok in _BARE_FLAGS for tok in argv):
+    # `all` over an empty iterable is True, so bare `charter` falls through this without
+    # an `argv and` in front of it — and the deletion sweep found that conjunct as a
+    # survivor for exactly that reason. A guard that only restates what the next one
+    # already says is the shape this repository deletes.
+    if not all(tok in _BARE_FLAGS for tok in argv):
         return argv, None
     from . import config
 

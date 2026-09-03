@@ -62,12 +62,38 @@ QUIET = 2.0
 #: a second would be four extra `stat`-sized reads per chat per second for no earlier write.
 POLL = 0.5
 
+#: How long :meth:`Recorder.stop` waits for the loop to come back before giving up on it.
+#:
+#: Two seconds, and it is a fact about the WRITE rather than about :data:`POLL`: a tick that
+#: is already under way is inside `_plane_live`, whose `list-windows` carries a five-second
+#: timeout of its own, so no arithmetic over the poll interval says anything useful about
+#: how long the loop might legitimately take to return. What this number is for is the other
+#: end — a write stuck on a wedged filesystem must not stand between an operator and their
+#: shell, and the cost of giving up early is a daemon thread that dies with the process.
+#:
+#: It was `max(poll * 4, 1.0)`, and the deletion sweep reported BOTH halves as survivors:
+#: neither the product nor the floor decides anything any test can see, because neither is
+#: derived from anything. A number nothing can pin is a number that should not be computed.
+JOIN = 2.0
 
-def fingerprint() -> tuple[tuple[str, str], ...]:
-    """Every chat on this plane and the version it is at, sorted.
+
+def fingerprint() -> frozenset[tuple[str, str]]:
+    """Every chat on this plane and the version it is at, as a SET.
 
     **`state.version` and nothing else**, so "has this chat changed" has one answer rather
     than one for the panels and one for the recorder.
+
+    **A frozenset rather than a sorted tuple, and the deletion sweep is what settled it.**
+    This value is only ever compared for equality (`Debounce.saw`), so what it has to be is
+    a function of the FACTS and not of the order `os.scandir` happened to hand them over in.
+    It was `sorted(...)`, and the sweep reported `sorted` → `list` as a survivor. Measured
+    on this machine (APFS) rather than argued: readdir order is a function of the name set —
+    identical across a `rmdir`/`mkdir` reclaim of the same ordinal (the case
+    `frame/reopen.py` says happens *very often*) and across a chat added and removed between
+    two readings — so `sorted` was defending against something that cannot arrive, which is
+    a survivor wearing a guard. POSIX still promises nothing about that order, so the answer
+    is not to delete the sort and depend on the measurement: it is to stop asking. A set has
+    no order to be wrong about, and it says what this value is.
 
     Held to `chats.ID_RE` and `is_dir()` rather than to `chats.is_chat`, and that is a
     deliberate widening: `is_chat` reads a second file per chat (`state._launcher_pid`) to
@@ -87,8 +113,8 @@ def fingerprint() -> tuple[tuple[str, str], ...]:
         names = [e.name for e in os.scandir(state._root())
                  if e.is_dir() and chats.ID_RE.fullmatch(e.name)]
     except OSError:
-        return ()
-    return tuple((n, state.version(n)) for n in sorted(names))
+        return frozenset()
+    return frozenset((n, state.version(n)) for n in names)
 
 
 #: What :class:`Debounce` has seen before it has seen anything. Its own object rather
@@ -212,12 +238,13 @@ class Recorder:
 
         Joined rather than abandoned: the caller is about to reap the very directories the
         loop reads (`cmd_launch`'s closing `state.reap`), and a thread still inside `tick`
-        would be recording a plane that is being deleted. Bounded, because a write stuck on
-        a wedged filesystem must not stand between an operator and their shell.
+        would be recording a plane that is being deleted. Bounded by :data:`JOIN`, because a
+        write stuck on a wedged filesystem must not stand between an operator and their
+        shell.
         """
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=max(self.poll * 4, 1.0))
+            self._thread.join(timeout=JOIN)
 
     def alive(self) -> bool:
         """Whether the watch is still running — asked of the thread rather than of a flag,

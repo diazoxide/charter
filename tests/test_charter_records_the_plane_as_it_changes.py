@@ -40,6 +40,8 @@ state, so the hazard `tests/_planeguard.py` exists for is at its sharpest here.
 from __future__ import annotations
 
 import io
+import json
+import os
 import subprocess
 import threading
 import unittest
@@ -48,7 +50,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import cli, commands_frame, config, instance
-from charter.frame import record, reopen, state
+from charter.frame import leave, record, reopen, state
 
 from tests._isolation import PersonaIso
 
@@ -145,12 +147,12 @@ class TheFingerprintIsTheBumpsThatAlreadyExist(PersonaIso, unittest.TestCase):
         config.private_mkdir(state._root())
         config.write_for(state._root() / "reopen.json", "{}\n")
         config.write_for(state._root() / "alpha.1.transcript", "hi\n")
-        self.assertEqual(record.fingerprint(), ())
+        self.assertEqual(record.fingerprint(), frozenset())
 
     def test_a_plane_with_no_frame_root_at_all_answers_empty(self):
         """A machine that has never launched a frame. A reader on a poll loop may not
         raise for it — `state.version`'s own promise, one directory out."""
-        self.assertEqual(record.fingerprint(), ())
+        self.assertEqual(record.fingerprint(), frozenset())
 
 
 class TheRecorderIsOneWriterPerProcess(unittest.TestCase):
@@ -660,7 +662,9 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         reopen.write([_frame("alpha", "alpha.1")], focus="alpha")
 
     def _launch(self, *, chats_live=(), reopen_rc=0, **kw):
-        with mock.patch.multiple(commands_frame,
+        said = io.StringIO()
+        self.said = said
+        with redirect_stderr(said), mock.patch.multiple(commands_frame,
                                  _live_sessions=mock.DEFAULT,
                                  _live_chats=mock.DEFAULT,
                                  _choose_workspace=mock.DEFAULT,
@@ -709,10 +713,15 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
 
     def test_a_restore_that_started_nothing_falls_through_to_a_launch(self):
         """Refusing to open anything because the record could not be acted on would leave
-        an operator who asked for a terminal without one."""
+        an operator who asked for a terminal without one — and it says so on the way past,
+        because a launch that quietly did something else is #752's own defect."""
         rc, reopened = self._launch(reopen_rc=1)
         reopened.assert_called_once()
         self.assertEqual(rc, 1)
+        self.assertIn(
+            "charter: nothing this plane recorded could be started — opening a chat "
+            "instead. The record is left in place; `charter reopen` says why.",
+            self.said.getvalue())
 
 
 class WhatAnAutomaticRestoreSays(PersonaIso, unittest.TestCase):
@@ -1081,6 +1090,15 @@ class ALaunchRecordsForAsLongAsItHoldsTheTerminal(PersonaIso, unittest.TestCase)
         watch, fid = self.seen[0]
         self.assertEqual(watch.chat, fid)
 
+    def test_a_launch_the_gate_refuses_records_nothing(self):
+        """`cmd_launch` asks `_records_the_plane` and acts on the answer. Without the ask,
+        every launch there is — a probe, a pipeline, a workspace tab's detached one —
+        becomes a writer, which is the whole thing keeping panels out of this avoids."""
+        with mock.patch.dict(config.FRAME, {"record": False}):
+            self._launch()
+        self.assertTrue(self.seen)
+        self.assertIsNone(self.seen[0][0])
+
     def test_the_watch_is_gone_when_the_launch_is(self):
         """It has to be: the last thing a launch does is `state.reap`, which removes the
         directories the watch reads."""
@@ -1160,3 +1178,256 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         with mock.patch.object(commands_frame, "_chat_seats") as seats:
             self.assertFalse(commands_frame._plane_is_running())
         seats.assert_not_called()
+
+
+def _doomed(**kw):
+    """One `leave.Doomed` with every field defaulted, so a case states only what it means."""
+    base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
+                cwd="", resume="", server=commands_frame.SOCKET, live=True, active=False,
+                exit_code=None, closed=False, homeless=False, cwd_gone=False)
+    base.update(kw)
+    return leave.Doomed(**base)
+
+
+class WhatTheSweepAskedFor(PersonaIso, unittest.TestCase):
+    """The guards the deletion sweep could not tell from dead code, pinned one by one.
+
+    Each case here exists because deleting one line left the suite green. They are grouped
+    rather than scattered so the next reader can see what the sweep charged this change with
+    and what each answer was.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.assertIn("edm-test-", str(config.STATE_DIR))
+
+    def test_the_fingerprint_of_an_unchanged_plane_does_not_depend_on_scandir(self):
+        """A SET, so the order `os.scandir` hands entries over in cannot be read as a
+        change and answered with a write.
+
+        **This holds by construction rather than by a guard, and that is the finding**: the
+        sweep reported `sorted` → `list` as a survivor, and measuring readdir on this
+        machine said why — order is a function of the name set, identical across a reclaim
+        of the same ordinal and across churn, so the sort was defending against something
+        that cannot arrive. POSIX promises nothing about that order, so the answer was to
+        stop depending on it rather than to pin a sort. This case is what says so."""
+        state.frame_dir("alpha.1", create=True)
+        state.bump("alpha.1")
+        state.frame_dir("alpha.2", create=True)
+        state.bump("alpha.2")
+        first = record.fingerprint()
+
+        real = os.scandir
+        with mock.patch("os.scandir", lambda p: list(reversed(list(real(p))))):
+            self.assertEqual(record.fingerprint(), first)
+
+    def test_exactly_three_missing_chats_are_all_named(self):
+        """`<=`, not `<`. At the boundary the shorter comparison names two of three and
+        then counts "and 0 more", which is a sentence about nothing."""
+        self.assertEqual(commands_frame._named_briefly(["a.1", "b.1", "c.1"]),
+                         "a.1, b.1, c.1")
+        self.assertEqual(commands_frame._named_briefly(["a.1", "b.1", "c.1", "d.1"]),
+                         "a.1, b.1, c.1 and 1 more")
+
+    def test_a_chat_whose_id_cannot_name_a_transcript_offers_none(self):
+        """`dest is not None`. `reopen.transcript_path` answers ``None`` for an id that is
+        not one, and this function's whole contract is that it degrades per chat — so
+        asking that ``None`` whether it is a file would be the record taking the plane down
+        over a name it was written to survive."""
+        kept = commands_frame._record_the_plane(
+            [_doomed(chat="../evil", workspace="alpha")],
+            focus="alpha", active=set(), windows={}, capture=False)
+
+        self.assertEqual(kept, 1)
+        self.assertEqual(reopen.read().frames, (),
+                         "and the reader drops the entry, which is the other half")
+
+    def test_a_quit_still_collects_the_transcripts_its_record_stops_naming(self):
+        """The `if capture:` around `prune_transcripts` — the half that must NOT be dropped
+        with the half it guards. A transcript is a file in the frame root and a quit's own
+        record is its only collector."""
+        state.frame_dir("alpha.1", create=True)
+        config.write_for(reopen.transcript_path("alpha.1"), "kept\n")
+        stale = reopen.transcript_path("alpha.9")
+        config.write_for(stale, "collected\n")
+
+        with mock.patch.object(commands_frame, "_capture_transcript", return_value=False):
+            commands_frame._record_the_plane([_doomed(chat="alpha.1")], focus="alpha",
+                                             active=set(), windows={})
+
+        self.assertFalse(stale.exists(), "a quit is the collector, and it did not collect")
+        self.assertTrue(reopen.transcript_path("alpha.1").is_file())
+
+    def test_a_terminal_with_no_chat_writes_an_empty_focus_and_not_a_null(self):
+        """`or ""`. `reopen.read` coerces a non-string focus back to `""`, so the parsed
+        answer cannot tell the two apart — the file can, and the file is what a charter of
+        another version reads."""
+        _plant("alpha.1", ws="alpha")
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            seats.return_value = _seats({"alpha.1": "@0"}, set())
+            commands_frame.record_the_plane_now("")
+
+        self.assertEqual(json.loads(reopen.path().read_text())["focus"], "")
+
+
+class ThePlaneThatSaysNothingRecordsAndRestores(PersonaIso, unittest.TestCase):
+    """The shipped answer, asserted at the READ sites and not only at the config boundary.
+
+    **Three survivors said the default was assumed rather than pinned.** `[frame] record`
+    and `[frame] restore` both default true — a decision, not an accident — and a suite that
+    only ever sets them explicitly would leave a fresh plane doing whatever the fallback
+    happened to be, forever, with nothing to notice.
+
+    Two directions, two keys, and the absence of the key is one of them: `config.FRAME` is a
+    module attribute, and a caller that assigns a whole mapping over it is not resolving
+    anything (`tests/test_frame_border_surface._frame` builds `{"components": [...]}` and
+    patches it in). A bare subscript there is a `KeyError` out of the launcher's entry path.
+
+    `PersonaIso` with no `charter.toml` written, so `config.FRAME` really is the plane that
+    declared nothing rather than the plane the suite is running inside.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.assertIn("edm-test-", str(config.STATE_DIR))
+        self.assertFalse((config.ROOT / "charter.toml").exists(),
+                         "the premise: this plane declares nothing at all")
+
+    def test_a_plane_that_declares_nothing_records(self):
+        with mock.patch("sys.stdout.isatty", return_value=True):
+            self.assertTrue(commands_frame._records_the_plane(_launch_args()))
+
+    def test_a_plane_that_declares_nothing_restores(self):
+        self.assertTrue(commands_frame._restores_the_plane(_launch_args()))
+
+    def test_a_config_mapping_that_carries_neither_key_still_records(self):
+        """The absent key, which is not the same fact as the declared default: a resolved
+        config always carries both, and a hand-built mapping assigned over `config.FRAME`
+        carries whatever its author needed."""
+        with mock.patch.object(config, "FRAME", {"components": []}), \
+                mock.patch("sys.stdout.isatty", return_value=True):
+            self.assertTrue(commands_frame._records_the_plane(_launch_args()))
+
+    def test_a_config_mapping_that_carries_neither_key_still_restores(self):
+        with mock.patch.object(config, "FRAME", {"components": []}):
+            self.assertTrue(commands_frame._restores_the_plane(_launch_args()))
+
+    def test_a_config_mapping_that_carries_neither_key_still_records_a_reopen(self):
+        """`cmd_reopen`'s own read of the same key, which is a third site and a third
+        chance to get the default wrong."""
+        reopen.write([_frame("alpha", "alpha.1")], focus="alpha")
+        seen: list = []
+
+        def _launcher(args):
+            args.reopening.fid = "alpha.9"
+            return 0
+
+        with mock.patch.object(config, "FRAME", {"components": []}), \
+                mock.patch.object(commands_frame, "cmd_launch", side_effect=_launcher), \
+                mock.patch.object(commands_frame, "_plane_is_running",
+                                  return_value=False), \
+                mock.patch.object(commands_frame.sys.stdout, "isatty",
+                                  return_value=True), \
+                mock.patch.object(commands_frame.tmuxctl, "version",
+                                  return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "operator_server",
+                                  return_value=None), \
+                mock.patch.object(commands_frame, "_attach_after_reopen",
+                                  side_effect=lambda *_a: seen.append(record.running()) or 0):
+            self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 0)
+        self.addCleanup(record.stop)
+
+        self.assertIsNotNone(seen[0], "a plane that said nothing reopened without a record")
+
+
+class TheQuietPeriodIsWhatABumpAtAllocationCosts(PersonaIso, unittest.TestCase):
+    """`record.QUIET` — the whole consistency argument for recording on bumps.
+
+    A quit gets a consistent picture for free: it stops the world first. Recording as the
+    plane changes gives that up, and the quiet period is what buys it back — so the claim
+    that has to be true is not "the arithmetic debounces" (`Debounce`'s own cases) but
+    **"the record is never the plane mid-launch"**.
+
+    The state that makes it concrete is `cmd_launch`'s own: `state.new_chat_id` claims the
+    directory and `state.bump` moves the version BEFORE tmux has made the window, so a
+    reading taken at that instant names a chat with no window and no harness — a plane that
+    never existed. This drives a recorder through exactly that sequence.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.assertIn("edm-test-", str(config.STATE_DIR))
+        self.windowed = False
+
+    def _seats(self, _socket):
+        return _seats({"alpha.1": "@0"}, set()) if self.windowed else []
+
+    def test_a_chat_that_is_allocated_but_not_yet_windowed_is_not_recorded(self):
+        """The bump lands at allocation; the window arrives later. A record taken on the
+        bump alone would name a chat tmux has never heard of."""
+        _plant("alpha.1", ws="alpha")
+        state.bump("alpha.1")
+        r = record.Recorder(commands_frame.record_the_plane_now, quiet=2.0,
+                            clock=lambda: 0.0)
+
+        with mock.patch.object(commands_frame, "_chat_seats", side_effect=self._seats):
+            r.tick(now=0.0)                      # the allocation's own bump
+            r.tick(now=1.9)                      # still inside the quiet period
+
+        self.assertIsNone(reopen.read(), "the plane was recorded before it existed")
+
+    def test_once_the_window_is_there_the_quiet_period_records_it(self):
+        """The other direction, so the case above is a delay and not a refusal."""
+        _plant("alpha.1", ws="alpha")
+        state.bump("alpha.1")
+        r = record.Recorder(commands_frame.record_the_plane_now, quiet=2.0,
+                            clock=lambda: 0.0)
+
+        with mock.patch.object(commands_frame, "_chat_seats", side_effect=self._seats):
+            r.tick(now=0.0)
+            self.windowed = True
+            r.tick(now=2.0)
+
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
+
+    def test_the_quiet_period_outlasts_the_window_it_exists_to_skip(self):
+        """The number, stated against the thing it excludes rather than by feel. `POLL` is
+        how often the frame process looks; `QUIET` has to be longer than a launch's own
+        allocate-to-window gap, or the debounce is decoration."""
+        self.assertGreater(record.QUIET, record.POLL)
+        self.assertGreaterEqual(record.QUIET, 2.0)
+
+
+class AStopGivesUpRatherThanHanging(unittest.TestCase):
+    """`record.JOIN` — the bound on the join, pinned by the one state that can see it.
+
+    The number itself is not derivable from anything (it replaced a `max(poll * 4, 1.0)`
+    the sweep reported as a survivor in BOTH directions, because neither half was), but its
+    EXISTENCE is: a write stuck on a wedged filesystem must not stand between an operator
+    and their shell, and without a timeout the join is that wait, unbounded.
+    """
+
+    def test_a_write_that_never_returns_does_not_hold_the_launcher(self):
+        held = threading.Event()
+        released = threading.Event()
+
+        def write(_chat: str) -> bool:
+            held.set()
+            # Bounded, and the bound is DATA rather than a round number: it has to outlast
+            # `record.JOIN` for the case to mean anything, and it has to end at all so a
+            # failing run cannot leak the thread. It is the fake's, not production's — the
+            # mutation this pins (`join()` with no timeout) is caught by this returning,
+            # not by the suite hanging, which the sweep can only report as unmeasured.
+            released.wait(record.JOIN + 3)
+            return True
+
+        r = record.Recorder(write, read=lambda: (("a", "1"),), quiet=0.0, poll=0.001)
+        r.start()
+        try:
+            self.assertTrue(held.wait(timeout=5), "the recorder never reached the write")
+            r.stop()                    # returns because the join is bounded
+            self.assertTrue(r.alive(), "the thread is still stuck, and stop said so")
+        finally:
+            released.set()
+            record.stop()

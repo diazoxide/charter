@@ -4653,6 +4653,16 @@ def _records_the_plane(args) -> bool:
     exactly when the record matters. What is left is the launcher that stays awake for the
     life of the frame — this function's whole job is to say when that is what this is.
 
+    **`.get(key, True)` and not a bare subscript**, and the deletion sweep is what settled
+    it — as a survivor first and then as a measurement. `instance.frame_of` starts from
+    `FRAME_DEFAULTS`, so every config it RESOLVES carries the key and the fallback looks
+    dead. `config.FRAME` is a module attribute, though, and a caller that assigns a whole
+    mapping over it is not resolving anything: `tests/test_frame_border_surface._frame`
+    builds `{"components": [...]}` and patches it in, and a bare subscript there is a
+    `KeyError` out of the launcher's entry path — which is `_bare_launch`'s own recorded
+    reason for `config.HARNESS or {}`, one setting over. The default is what the fallback
+    spells, and it is pinned rather than assumed (see the tests named for this).
+
     Five ways of not being it, and none of them is implied by another:
 
     * `--probe` answers before the launcher touches anything (`cmd_launch`'s first line);
