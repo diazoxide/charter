@@ -629,6 +629,24 @@ draw it two cells wide where charter measured one — and on a row whose clicks 
 by *column*, ten separators drawn a cell wide each would put your press ten columns off the
 tab you aimed at.
 
+**A chat whose harness is working spins where an idle one shows a blank.** The mark column
+in front of each name carries it — `✢`, `✶`, `✻` and back — so the strip is exactly as wide
+while three chats are thinking as while none is, and no tab moves under a press. The chat
+you are typing in keeps its `*` instead: it is the one whose harness you can watch
+directly, and the `*` is the only thing that survives `NO_COLOR`.
+
+charter reads this off the harness's hooks, never off its screen. Claude Code reports the
+start of a turn (`UserPromptSubmit`) and the end of one (`Stop`); a chat running a harness
+that reports no stop — opencode and Codex both hook tool calls only — shows nothing at all
+rather than a mark charter could raise and never lower.
+
+Two costs, both real. A turn interrupted with Esc fires no `Stop`, so its tab keeps spinning
+until the mark decays — **ten minutes**, refreshed by every tool call the turn makes, so
+what has to elapse is ten minutes with no tool call at all. The same number is why a turn
+that thinks for longer than that with no tool call blinks off and comes back on its next
+one. There is no third answer available from a hook channel that reports prompts and tool
+calls: charter can be late to stop claiming, or early, and it is set to be early.
+
 **The chat bar ends in a `+`, and pressing it opens another chat.** Same workspace, same
 harness you are already in, its id allocated for you — which is why it takes nothing and
 asks nothing. It runs `charter frame-new-chat`, which is `charter <harness>` in this
