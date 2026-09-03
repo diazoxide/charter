@@ -132,15 +132,19 @@ def _payloads(cwd: str, sid: str) -> dict[str, dict]:
 #:
 #: The expected fragments are typed out here rather than imported: a test that reads the
 #: constant it is checking goes green against a constant edited to nothing.
+#:
+#: ``(the guard's name, hook, tool_input, a phrase its refusal must carry)``.
 _MUST_STILL_REFUSE = (
-    ("pretooluse", {"command": "cat .charter/vaults/db.json"},
-     "would print plaintext"),
-    ("pretooluse", {"command": 'gh issue create --body "$(cat notes.md)"'},
+    ("A: vault leak on Bash", "pretooluse",
+     {"command": "cat .charter/vaults/db.json"}, "would print plaintext"),
+    ("A5: live substitution on a forge command", "pretooluse",
+     {"command": 'gh issue create --body "$(cat notes.md)"'},
      "publishes prose a reader sees"),
-    ("pretooluse", {"command": 'charter workspace remember "$(cat notes.md)"'},
+    ("A6: live substitution on charter's own", "pretooluse",
+     {"command": 'charter workspace remember "$(cat notes.md)"'},
      "takes text charter PERSISTS"),
-    ("pretooluse-read", {"file_path": ".charter/vaults/db.json"},
-     "would print plaintext"),
+    ("A on the Read/Grep route", "pretooluse-read",
+     {"file_path": ".charter/vaults/db.json"}, "would print plaintext"),
 )
 
 
@@ -226,8 +230,8 @@ class NothingIsWritten(StrangersRepo):
         `.charter/persona-state/trace/<sid>.jsonl` there. A tally is read by `charter
         persona stats` against a plane, and there is no plane here to read it.
         """
-        for hook, ti, _ in _MUST_STILL_REFUSE:
-            with self.subTest(command=sorted(ti.values())[0]):
+        for name, hook, ti, _ in _MUST_STILL_REFUSE:
+            with self.subTest(guard=name):
                 self.before = _tree(config.ROOT)
                 payload = dict(self.payloads()[hook])
                 payload["tool_input"] = ti
@@ -271,8 +275,8 @@ class TheGuardsStillRefuse(StrangersRepo):
     """Quiet is not the same as disarmed, and this is the half that says so."""
 
     def test_the_ungated_refusals_still_deny_with_no_plane_anywhere(self):
-        for hook, ti, fragment in _MUST_STILL_REFUSE:
-            with self.subTest(command=sorted(ti.values())[0]):
+        for name, hook, ti, fragment in _MUST_STILL_REFUSE:
+            with self.subTest(guard=name):
                 payload = dict(self.payloads()[hook])
                 payload["tool_input"] = ti
                 _, out = _run(hooks._HANDLERS[hook], payload)
@@ -334,8 +338,8 @@ class InsideAPlaneNothingIsLost(StrangersRepo):
     def test_the_ungated_refusals_are_unchanged_inside_a_plane(self):
         """Trap: gating the plane work must not move which branch the guard chain reaches.
         These are the same four cases as outside, asserted to answer identically."""
-        for hook, ti, fragment in _MUST_STILL_REFUSE:
-            with self.subTest(command=sorted(ti.values())[0]):
+        for name, hook, ti, fragment in _MUST_STILL_REFUSE:
+            with self.subTest(guard=name):
                 payload = dict(self.payloads()[hook])
                 payload["tool_input"] = ti
                 _, out = _run(hooks._HANDLERS[hook], payload)
