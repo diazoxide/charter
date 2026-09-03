@@ -37,6 +37,18 @@ class Deficit(NamedTuple):
     remedy: str = ""
 
 
+#: The :attr:`Deficit.key` a harness uses to say it cannot hold per-workspace
+#: configuration at all — its config is machine-global, so two workspaces on one machine
+#: cannot be made to differ.
+#:
+#: A named constant rather than a string each side spells, because the two sides are far
+#: apart: the harness declares it, and `workspace.harness_layer` reads it to decide
+#: whether to ask that harness for files. A misspelling on either side would report a
+#: workspace as carrying a layer it has never had — the "looks wired and is not" shape
+#: #177 and #433 already cost this repo twice.
+WORKSPACE_SCOPE = "workspace-scope"
+
+
 class Harness:
     """One agent runtime charter can run inside."""
 
@@ -126,6 +138,40 @@ class Harness:
         name.
         """
         return []
+
+    def workspace_files(self) -> dict[str, str]:
+        """What this harness needs inside a directory charter OWNS — ``{relpath: text}``.
+
+        The fifth member, and the argument for it is that :meth:`wire` answers a different
+        question about a different file. `wire` writes into somebody else's tree — the
+        plane root, whose `.claude/settings.json` is user-owned and git-tracked — so its
+        contract is *if absent, never repair*, and its answer is a write. A workspace
+        directory is charter's own (`workspace.ensure` makes it, `.charter-structure`
+        stamps it), so its files are **generated**: they must be regenerable when the
+        plane moves, and they must be READABLE without writing, because `doctor` reports
+        their staleness from the SessionStart hook and a check that writes is not a check.
+        A `dry_run` flag on `wire` would have bought the second of those and neither of
+        the first two, and it would have put a branch inside every harness's writer for a
+        root only one of them can use.
+
+        So this returns the CONTENT and nothing else. Materialising it — the ownership
+        marker, the digest, refusing a file charter did not write — is one generic loop in
+        `charter/workspace.py` rather than a copy per harness, which is the same reason
+        :meth:`ask_rule` returns a rule instead of writing one.
+
+        **Empty means "nothing to put here", and a harness that empties it because it
+        CANNOT must also declare :data:`WORKSPACE_SCOPE`.** Those are opposite facts that
+        an empty dict alone spells identically — `registry.deficits`' own complaint — and
+        the caller renders them differently: nothing, versus a named ceiling. The base
+        default is empty because charter has no idea what an unmet harness needs, and
+        `TestEveryRegisteredHarnessEitherCarriesFilesOrNamesTheCeiling` is what fails on
+        the day one answers neither.
+
+        Paths are RELATIVE and must stay inside the directory: they are joined onto a
+        workspace root, and `..` in one would put charter's writes outside the boundary
+        this whole mechanism exists to draw.
+        """
+        return {}
 
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Move THIS harness's installed charter artifact to the running CLI's version.

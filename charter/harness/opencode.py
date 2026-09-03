@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 
 from .. import __version__
-from .base import Deficit, Harness
+from .base import WORKSPACE_SCOPE, Deficit, Harness
 
 NAME = "opencode"
 
@@ -689,6 +689,18 @@ class OpenCodeHarness(Harness):
                 "or throw, so charter's own tool-time asks (the routing and "
                 "overlapping-dispatch nudges) allow and are not shown. Denials are "
                 "unaffected — they throw, and every guard that refuses still refuses."),
+        # NOT the same shape as the three above, and worth saying so: those are surfaces
+        # opencode lacks. This one is a surface it has *too widely*. Charter's layer is
+        # already live in every workspace directory here — which is why #850 is a
+        # Claude-Code-only defect — and the price of that reach is that two workspaces on
+        # one machine cannot be made to differ. Charter reports the ceiling rather than
+        # printing a tick beside Claude Code's, because "already everywhere" and
+        # "isolated per workspace" are different answers and only one of them was asked
+        # for.
+        Deficit(WORKSPACE_SCOPE,
+                "config is machine-global (`~/.config/opencode/`), so charter's layer is "
+                "already live in every workspace directory and cannot be made to DIFFER "
+                "between two of them — a workspace is not an isolation boundary here."),
     )
 
     cli_name = "opencode"

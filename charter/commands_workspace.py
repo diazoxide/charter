@@ -1200,6 +1200,33 @@ def cmd_workspace_reinit(args) -> int:
     healed = 0
     for n in names:
         before = workspace.reinit(n)
+        # The HARNESS LAYER, reported as its own line rather than folded into the
+        # structure one (#850). It is a separate fact — a workspace whose layout is
+        # current can still hold a `.claude/settings.json` generated before the plane's
+        # own settings moved — and it is the one this command silently repaired while
+        # printing "nothing to do" until it was said out loud.
+        #
+        # Subscripted, not `.get("layer") or ()`. The fallback was defending against a
+        # shape charter itself builds one function away: `workspace.reinit` sets `layer`
+        # unconditionally, before its own first return, so no call can hand this loop a
+        # dict without it. The deletion sweep found the `or ()` as a survivor and there
+        # was no test to write — a fixture would have had to stub `reinit` into returning
+        # something `reinit` cannot return. `h.workspace_files() or {}` one module over
+        # keeps its fallback for the opposite reason and that is the distinction: that
+        # one guards a THIRD PARTY's answer, and a harness charter did not write can
+        # return anything at all.
+        for rel, did in before["layer"]:
+            if did == "foreign":
+                util.warn(f"'{n}': {rel} was not written by charter — left completely "
+                          f"untouched. Remove it if you want charter's own again.")
+            elif did == "blocked":
+                util.err(f"'{n}': {rel} could not be written — something is in the way at "
+                         f"that path. charter never deletes or renames existing content.")
+            else:
+                healed += 1
+                util.ok(f"Reinitialized '{n}' → "
+                        f"{'wrote' if did == 'created' else 'refreshed'} {rel} "
+                        f"(charter's harness layer).")
         if before["ok"]:
             continue
         healed += 1

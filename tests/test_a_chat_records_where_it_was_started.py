@@ -165,20 +165,17 @@ class _Answered:
         self.returncode = returncode
 
 
-class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
-    """`cmd_launch` driven all the way to its return, on both paths.
+class _DrivesTheLauncher:
+    """`cmd_launch`, run to its return with every tmux call answered — the fixture.
 
-    **Written because the deletion sweep asked for it.** Three branches in that tail are the
-    whole of what `Reopening` changes, and every one of them was unpinned: open-or-focus,
-    the `attach`, and the sentence `cmd_launch` says on the operator's behalf when their
-    plane was quit. `TheReopenPathSuppressesFourThingsInTheLauncher` asserts the PREDICATE
-    those branch on and says in its own docstring that the tail "cannot be reached without a
-    real tmux session and a real `attach`". The sweep disagreed, and it was right: the tail
-    is reachable with every tmux call answered and `attach` stubbed, which is what this does.
+    A mixin rather than a base case, so a second class can drive the launcher without
+    inheriting the first one's assertions: `unittest` collects methods from base classes,
+    and a driver that was also a `TestCase` would run every test on it again under each
+    name that borrowed it.
 
     Nothing here starts a server. `tmuxctl.run` answers `%0` to everything and
     `tmuxctl.interact` is the attach — so what is under test is charter's own branching,
-    which is exactly what the mutations were about.
+    which is exactly what the mutations that asked for this fixture were about.
     """
 
     def _launch(self, *, reopening=None, live_workspace=False, rest=(), fresh=False,
@@ -255,6 +252,21 @@ class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
         rec = reopen.Chat(chat=chat, workspace=workspace, persona="", harness="claude-code",
                           cwd="", resume="", transcript="", active=False)
         return commands_frame.Reopening(rec)
+
+
+class TheLauncherSTailIsWhereAReopenDiffers(_DrivesTheLauncher, PersonaIso,
+                                            unittest.TestCase):
+    """`cmd_launch` driven all the way to its return, on both paths.
+
+    **Written because the deletion sweep asked for it.** Three branches in that tail are the
+    whole of what `Reopening` changes, and every one of them was unpinned: open-or-focus,
+    the `attach`, and the sentence `cmd_launch` says on the operator's behalf when their
+    plane was quit. `TheReopenPathSuppressesFourThingsInTheLauncher` asserts the PREDICATE
+    those branch on and says in its own docstring that the tail "cannot be reached without a
+    real tmux session and a real `attach`". The sweep disagreed, and it was right: the tail
+    is reachable with every tmux call answered and `attach` stubbed, which is what
+    `_DrivesTheLauncher` does.
+    """
 
     def test_an_ordinary_launch_attaches_and_asks_about_open_or_focus(self):
         calls = self._launch()
@@ -359,6 +371,51 @@ class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
             self._launch(reopening=self._reopening())
 
         self.assertNotIn("charter reopen", buf.getvalue())
+
+
+class TheLauncherStillLaunchesWhenTheBoundaryCannotBeMade(_DrivesTheLauncher, PersonaIso,
+                                                          unittest.TestCase):
+    """`try: workspace.ensure(ws)` / `except (ValueError, OSError): pass` in `_launch`.
+
+    The isolation boundary is made before a chat is put inside it (#850), and the catch
+    around it is the "best effort, and it must be" the line's own comment argues for.
+    Nothing exercised it: every case reaching that line had a workspace charter could
+    create, so the sweep replaced the clause with an exception nothing raises and the
+    suite stayed green.
+
+    **What the catch buys is not a tidy traceback.** This runs before the frame exists, so
+    the failure it would otherwise become is a traceback printed into a terminal that
+    switches to tmux's alternate screen milliseconds later — the operator sees their chat
+    fail to start and nothing saying why, on the surface where `util.warn` was already
+    measured landing 86 bytes too early to be read. `_launch_root` degrades the same way
+    for the two callers that chdir first, and its clause is pinned by
+    `test_a_name_that_cannot_be_a_workspace_still_falls_back_to_the_plane`; this is the
+    launch that does not chdir, and it is the other half of the same promise.
+
+    Both members are asked because both are real and they are different failures.
+    `workspace.ensure` raises `ValueError` for a name that cannot be a workspace —
+    `$CHARTER_WORKSPACE=..` reaches it untouched — and `OSError` for a `workspaces/`
+    charter cannot write. `doctor`'s `workspace layer` row is where either is reported,
+    which is the whole reason the launcher is allowed to say nothing here.
+    """
+
+    def _launch_unable_to_ensure(self, exc):
+        """The launch, with the boundary refusing. The patch is on the module attribute
+        `_launch` reads, so the refusal arrives exactly where the operator's would."""
+        with mock.patch.object(commands_frame.workspace, "ensure", side_effect=exc):
+            return self._launch()
+
+    def test_a_workspaces_directory_that_cannot_be_written_still_starts_the_chat(self):
+        calls = self._launch_unable_to_ensure(OSError("read-only file system"))
+
+        self.assertTrue(calls["attached"], "the chat never reached the operator's terminal")
+        self.assertEqual(calls["rc"], 0)
+
+    def test_a_name_that_cannot_be_a_workspace_still_starts_the_chat(self):
+        calls = self._launch_unable_to_ensure(ValueError("invalid workspace name '..'"))
+
+        self.assertTrue(calls["attached"], "the chat never reached the operator's terminal")
+        self.assertEqual(calls["rc"], 0)
 
 
 if __name__ == "__main__":       # pragma: no cover

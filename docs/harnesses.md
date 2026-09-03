@@ -38,8 +38,8 @@ offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 | | how it is installed | how it updates | what it cannot carry | what to do about it |
 | --- | --- | --- | --- | --- |
 | Claude Code | the plugin (`claude plugin install charter@charter`) | `claude plugin update charter@charter` | — | — |
-| opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, compared byte for byte (`read_bytes`) with the one charter generates; anything else in that plugin directory is named too, and nothing charter did not write is ever overwritten | no status bar; no per-turn prompt hook; no ask at tool time; **no isolation from other plugins** | `charter statusline --watch`; mid-session notes ride tool output already; charter's own tool-time asks allow and are not shown — denials are unaffected; a second plugin in that directory shares charter's globals and can disable its guards, so `doctor` names it — charter reports the realm, it cannot contain it |
-| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
+| opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, compared byte for byte (`read_bytes`) with the one charter generates; anything else in that plugin directory is named too, and nothing charter did not write is ever overwritten | no status bar; no per-turn prompt hook; no ask at tool time; no per-workspace config; **no isolation from other plugins** | `charter statusline --watch`; mid-session notes ride tool output already; charter's own tool-time asks allow and are not shown — denials are unaffected; a second plugin in that directory shares charter's globals and can disable its guards, so `doctor` names it — charter reports the realm, it cannot contain it |
+| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions; no project-level config at all, so no per-workspace config | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
 
 You never have to remember that third column — `charter update` asks the harness you are in
 and names its command (or, for opencode, just moves it). It is written down because a
@@ -53,9 +53,27 @@ exist costs more to chase than an honest gap.
 
 ## Wiring, and when it happens
 
-`charter init` writes each harness's wiring into the plane, and `charter clone` /
-`charter worktree add` arm every tree as it is created, because a session starts in a clone
-and not in the plane root. Nothing to install per harness, with one exception.
+`charter init` writes each harness's wiring into the plane. Nothing to install per harness,
+with one exception (Codex, below).
+
+**Plus one generated file per workspace, and only for Claude Code.** Claude Code reads
+project settings from the session's working directory and does not walk up, so a chat
+launched in `workspaces/<ws>/` — which is where the `+` and every workspace tab put it —
+would otherwise get no plugin, no status line and no `$CHARTER_HARNESS`. Charter mirrors
+the plane's `enabledPlugins`, `statusLine` and `env` into
+`workspaces/<ws>/.claude/settings.json` at launch, records what it wrote in a
+`.charter-generated` sidecar, and never touches a file whose hash it cannot vouch for.
+`charter doctor`'s `workspace layer` row reports staleness; `charter workspace reinit` is
+the repair.
+
+opencode and Codex get nothing here and say why: their config is machine-global, so
+charter's layer is already live in every workspace and two workspaces on one machine
+cannot be made to differ. That ceiling is in `charter harness list` beside the others.
+
+Nothing is written into a **clone** — `workspaces/<ws>/<repo>/` is a repo charter does not
+own, and `git add -A` there would stage it. So a session inside a clone gets charter from
+the plugin, and **cannot delegate to a persona**: the plugin ships no `agents/`, and a
+clone's own git root stops the walk-up that would have found the plane's.
 
 ## `charter statusline --watch`
 

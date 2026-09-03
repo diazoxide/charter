@@ -5020,6 +5020,24 @@ def _launch(args) -> int:
     ws, rc, picked = _choose_workspace(args)
     if rc is not None:
         return rc
+    # **The isolation boundary exists before a chat is put inside it** (#850).
+    # `_choose_workspace` CREATES only on the picker's create branch; a launch that
+    # resolved silently — `charter claude`, `charter claude -w api`, every reopen — had a
+    # workspace name and possibly no directory to go with it, and the chat below then
+    # recorded that name beside whatever cwd the operator happened to be standing in.
+    # `_launch_root` answers the same question for the two callers that chdir first; this
+    # is it for the launch that does not, and both go through `ensure` so there is one
+    # creator rather than two.
+    #
+    # **Best effort, and it must be**: this runs before the frame exists, so a `util.err`
+    # here would be printed into a terminal that is about to switch to tmux's alternate
+    # screen (see the `tmuxctl.FLOOR` note above for the same measurement). A workspace
+    # charter could not create is exactly the state `_launch_root` already degrades to,
+    # and `doctor`'s `workspace layer` row is where it is reported.
+    try:
+        workspace.ensure(ws)
+    except (ValueError, OSError):
+        pass
     # Inside a tmux the operator already has, the frame is a WINDOW in THEIR server —
     # same layout, no second tmux, no second prefix key (ADR 0018 and the design spec
     # both settle this; `docs/frame.md` describes what it costs). Read from `$TMUX`,
@@ -7311,17 +7329,35 @@ def _launch_root(ws: str):
     to stand in the right place first — and the right place is what `charter --workspace
     <ws>` typed in it would have used.
 
-    **The plane's own root when that workspace has no directory yet**, which is a real
-    state rather than a defensive one: `switch.workspaces` folds
-    `config.DEFAULT_WORKSPACE` into its list whether or not its directory exists —
-    `workspace.ensure` makes it on demand — so a plane that has never made one still
-    offers a tab and a `+` for it. `config.ROOT` is where charter would have created it.
+    **`workspace.ensure`, not "the plane root if the directory is missing"** (#850). The
+    fallback was real rather than defensive — `switch.workspaces` folds
+    `config.DEFAULT_WORKSPACE` into its list whether or not its directory exists, so a
+    plane that has never made one still offers a tab and a `+` for it — and it created a
+    disagreement at the moment of launch that nothing downstream could resolve: the chat
+    recorded `workspace = <name>` and `cwd = <plane root>`, so every reader that asks
+    "which workspace am I in" got one answer and every reader that asks "where am I"
+    got the other. It also put a chat's cwd at the plane root, which ADR 0008 says is not
+    a work tree, and #850's own boundary — charter's layer, materialised per workspace —
+    cannot exist for a directory that does not.
+
+    `workspace.ensure` is the validating creator `_choose_workspace` already uses, and it
+    scaffolds: `workspaces/<ws>/` comes back holding its structure marker and the harness
+    layer, so the chat about to be started there gets charter at all.
+
+    **Still degrades, never raises.** This is on a launch path reached from a tab press
+    with no operator waiting on it, and `ensure` raises `ValueError` for a name that
+    cannot be a workspace (`$CHARTER_WORKSPACE=..` reaches `state.workspace_for`'s last
+    rung untouched — see `workspace.exists`) and `OSError` for a `workspaces/` charter
+    cannot write. The plane root is where charter would have created it, which is the
+    same answer this always gave, now given only when creating is impossible.
 
     Shared by :func:`_open_workspace` and :func:`cmd_new_chat` for
     :func:`_same_harness_as`' reason: it was the same two lines twice.
     """
-    where = workspace.workspace_dir(ws)
-    return where if where.is_dir() else config.ROOT
+    try:
+        return workspace.ensure(ws)
+    except (ValueError, OSError):
+        return config.ROOT
 
 
 def _open_workspace(fid: str, ws: str, *, socket: str,

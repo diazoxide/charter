@@ -10,6 +10,7 @@ made while working on them, and a written account of what the task is for.
       workspace.json    the committed manifest: which repos, which branches
       memory/           durable notes, one file per fact, with a MEMORY.md index
       todos/            what this task still means to do
+      .claude/          charter's harness layer, generated (see below)
 
 `default` always exists. `charter workspace create <name> --use` starts another.
 
@@ -21,6 +22,34 @@ something in it does (`charter clone -w default`, `charter workspace use default
 `—` for its repos, because a table that draws a "you are here" mark has to have a row for
 where you are — and because the `F2` picker inside a frame offers exactly the same names.
 The name is `[workspace] default` if your `charter.toml` sets one.
+
+## A chat standing here gets charter
+
+Claude Code reads project settings from the session's working directory and **does not walk
+up** for them. A chat launched in `workspaces/<name>/` — which is where the `+` and every
+workspace tab put it — would therefore get no plugin, no status line and no
+`$CHARTER_HARNESS`, while its agents and skills arrived anyway, because those *do* walk up
+and this directory is not a git boundary.
+
+So charter generates one file here, at launch: `.claude/settings.json`, holding the plane's
+own `enabledPlugins`, `statusLine` and `env` and nothing else. Skills come with the plugin
+and agents already walk up; a second copy of either would shadow the plugin's.
+
+It is **charter's file, and only while it stays charter's**. A `.charter-generated` sidecar
+records a hash of what charter wrote. A file that still matches is refreshed when the
+plane's settings move; one that does not is yours — left completely untouched, never
+repaired, and named by `charter doctor`'s `workspace layer` row. `charter workspace reinit`
+(or `--all`) is the repair.
+
+**Nothing is written into a clone.** `workspaces/<name>/<repo>/` is a repo charter does not
+own, and `git add -A` there would stage whatever charter left behind. The limit that
+follows: a session inside a clone gets charter from the plugin, and **cannot delegate to a
+persona** — the plugin ships no `agents/`, and the clone's own git root stops the walk-up.
+
+Only Claude Code binds config to a project root. opencode and Codex read machine-global
+config, so charter's layer is already live in every workspace on those — and, by the same
+fact, cannot be made to differ between two of them. `charter harness list` names that
+ceiling.
 
 ## Which workspace am I in
 

@@ -223,15 +223,17 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
                          f"a window was measured with no pane to measure it from: "
                          f"{self.calls}")
 
-    def test_a_workspace_with_no_directory_yet_runs_from_the_planes_root(self):
+    def test_a_workspace_with_no_directory_yet_is_made_before_the_chat_goes_in_it(self):
         """**A real state, not a defensive one.** `switch.workspaces` folds
         `config.DEFAULT_WORKSPACE` into its list whether or not its directory exists —
-        `workspace.ensure` makes it on demand — so a plane that has never made one still
-        draws a tab for it and still offers a `+` in it. `config.ROOT` is where charter
-        would have created it, and it is where the launcher is run from.
+        so a plane that has never made one still draws a tab for it and still offers a
+        `+` in it.
 
-        The `else` this reaches was a sweep survivor: every other case here runs in a
-        workspace whose directory the fixture made.
+        It used to run the launcher from `config.ROOT`, and the chat then recorded
+        `workspace = alpha` beside `cwd = <plane root>` — a disagreement created at the
+        moment of launch, which also put the chat outside the directory #850's harness
+        layer lives in. `_launch_root` calls `workspace.ensure`, so the boundary exists
+        before a chat is put inside it.
         """
         seen: list[str] = []
 
@@ -244,8 +246,9 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=self._tmux), \
                 mock.patch("charter.commands_frame.cmd_launch", side_effect=fake_launch):
             commands_frame.cmd_new_chat(mock.Mock(chat=self.FID))
-        self.assertEqual(seen, [str(config.ROOT.resolve())],
-                         "a workspace with no directory did not fall back to the root")
+        self.assertEqual(seen, [str((config.WORKSPACES_DIR / "alpha").resolve())],
+                         "the launch did not run in the workspace the tab names")
+        self.assertTrue((config.WORKSPACES_DIR / "alpha").is_dir())
 
     def test_the_launch_runs_in_the_workspaces_own_directory(self):
         """`cmd_launch` reads `os.getcwd()` for the frame's cwd, and a panel process is

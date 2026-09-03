@@ -379,15 +379,31 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
         # (`tests/_tmuxsocket.py` measures the same trap for a socket path).
         self.assertEqual(seen, [os.path.realpath(config.WORKSPACES_DIR / "beta")])
 
-    def test_a_workspace_with_no_directory_of_its_own_falls_back_to_the_plane_root(self):
-        """The other half of the same expression. A workspace can be named by a chat
-        record and by the bar without having a directory yet, and a `chdir` into a path
-        that is not there would refuse the open for a workspace that is perfectly usable —
-        so the plane root is the answer, which is where a bare `charter` starts."""
+    def test_a_workspace_with_no_directory_of_its_own_is_made_rather_than_stood_beside(self):
+        """The other half of the same expression, and #850 changed which half. A workspace
+        can be named by a chat record and by the bar without having a directory yet; the
+        old answer was the plane root, which opened the tab into a directory that is not
+        the workspace it names — the chat then recorded `workspace = beta` beside
+        `cwd = <plane root>`, and stood outside the directory charter's per-workspace
+        layer lives in. `workspace.ensure` makes it, which is what a `charter --workspace
+        beta` typed in the plane would have done."""
         import shutil as _sh
         _sh.rmtree(config.WORKSPACES_DIR / "beta")
         seen = []
         self._run_watching_cwd(seen)
+        self.assertEqual(seen, [os.path.realpath(config.WORKSPACES_DIR / "beta")])
+        self.assertTrue((config.WORKSPACES_DIR / "beta").is_dir())
+
+    def test_a_workspace_charter_cannot_create_still_falls_back_to_the_plane_root(self):
+        """`ensure` raises for a `workspaces/` it cannot write, and this runs detached
+        with its streams on `/dev/null` — so it degrades to the answer it always gave
+        rather than taking the open down with a traceback nobody will ever see."""
+        import shutil as _sh
+        _sh.rmtree(config.WORKSPACES_DIR / "beta")
+        seen = []
+        with mock.patch("charter.commands_frame.workspace.ensure",
+                        side_effect=OSError(13, "denied")):
+            self._run_watching_cwd(seen)
         self.assertEqual(seen, [os.path.realpath(config.ROOT)])
 
     def test_a_directory_charter_cannot_enter_is_refused_before_the_launch(self):
@@ -410,17 +426,18 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
         constant the code interpolates, which would be green under any containment at
         all: the raw two-line form must not appear, and the message must stay one line.
         """
-        # It has to EXIST, and getting that wrong is what this comment is for: `root` is
-        # `where if where.is_dir() else config.ROOT`, so a bad path that is not a real
-        # directory is replaced by the plane root and never reaches the sentence at all.
-        # The first version of this test made exactly that mistake and passed against an
-        # uncontained message. A newline is legal in a POSIX filename, so the directory is
-        # real.
+        # It has to be the path `_launch_root` HANDS BACK, and getting that wrong is what
+        # this comment is for: the first version of this test replaced a path that was not
+        # a real directory, which the fallback of the day swapped for the plane root, so
+        # it passed against an uncontained message. `_launch_root` is `workspace.ensure`
+        # since #850 — it creates rather than falling back — so this stubs the creator and
+        # the path it returns is the one that reaches the sentence. A newline is legal in a
+        # POSIX filename, so the directory is real and the `chdir` genuinely reaches it.
         bad = Path(str(config.WORKSPACES_DIR / "beta") + "\nworkspace → evil")
         bad.mkdir(parents=True, exist_ok=True)
-        self.addCleanup(bad.rmdir)
+        self.addCleanup(lambda: __import__("shutil").rmtree(bad, ignore_errors=True))
         self.assertTrue(bad.is_dir(), "the fixture's bad path must be a real directory")
-        with mock.patch("charter.commands_frame.workspace.workspace_dir",
+        with mock.patch("charter.commands_frame.workspace.ensure",
                         return_value=bad), \
                 mock.patch("charter.commands_frame.os.chdir",
                            side_effect=OSError(13, "denied")):
