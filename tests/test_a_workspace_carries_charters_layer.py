@@ -348,6 +348,33 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class OneMisbehavingHarnessDoesNotEmptyTheLayer(WorkspaceLayer):
+    """`h.workspace_files() or {}` — the fallback, and why it is tolerance rather than a
+    guard against something that happens.
+
+    No registered harness can reach it: `base.Harness.workspace_files` answers `{}` by
+    default and neither opencode nor Codex overrides it, so `None` requires a harness that
+    violates its own annotation. The sweep found the `or {}` as a survivor for that reason.
+
+    **It is kept because `_layer_files` iterates the whole registry.** A harness answering
+    `None` is a bug in that harness; without the fallback it is a `TypeError` that empties
+    the layer for **every** workspace and every other harness, so one broken integration
+    takes charter's own files down with it. `registry.deficits`' complaint is that an empty
+    dict and a ceiling are opposite facts — this is the third: a *wrong* answer, which must
+    cost only its own harness.
+
+    Charter still fails loudly about it elsewhere:
+    `test_every_registered_harness_either_carries_files_or_names_the_ceiling` is what goes
+    red the day a registered harness answers neither.
+    """
+
+    def test_a_harness_answering_none_costs_only_itself(self):
+        broken = SimpleNamespace(workspace_files=lambda: None)
+        real = claude_code.ClaudeCodeHarness()
+        with mock.patch.object(registry, "all", return_value=[broken, real]):
+            files = workspace._layer_files(self.ws)
+        self.assertEqual(sorted(files), [".claude/settings.json"],
+                         "a harness returning None emptied the whole layer")
 class WhatThePlaneHasToOfferIsAskedThreeWays(WorkspaceLayer):
     """`ClaudeCodeHarness.workspace_files` — the three states that answer nothing.
 
