@@ -982,13 +982,15 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int,
     arithmetic passes — is a plane that pinned nothing, which is charter's own and very
     nearly everyone's.
 
-    *bar_rows* is the same kind of number one slot family over: how many rows a tab strip's
-    own names need at its own pane width, measured by `slots.bar_rows_wanted` and carried
-    here rather than read, for exactly *pinned_rows*' reason. `None` — the default,
-    and what every caller asking about the arithmetic passes — is a frame with no strip
-    that overflows, which is every frame that places no bar and every plane whose names
-    fit. :func:`_grown` is what spends it, and what refuses to spend rows the harness has
-    not got.
+    *bar_rows* is the same kind of number one slot family over: how many rows a slot's own
+    content needs at its own pane width, measured by `slots.bar_rows_wanted` and carried
+    here rather than read, for exactly *pinned_rows*' reason. It may name every slot in
+    *slots*, and does: a slot with no strip to draw answers `1`, which is at or under every
+    slot's own height, so :func:`_grown` spends nothing on it. `None` — the default, and
+    what every caller asking about the arithmetic passes — is a frame with no strip that
+    overflows, which is every frame that places no bar and every plane whose names fit.
+    :func:`_grown` is what spends it, and what refuses to spend rows the harness has not
+    got.
 
     Unknown slot names are dropped rather than raised on, matching `visible_slots`'
     filter-don't-refuse discipline: `[frame] slots` is committed, untrusted input, and by

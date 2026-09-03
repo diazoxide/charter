@@ -287,6 +287,32 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
                     self.assertFalse(slots.TABS.more_at(r, c))
                     self.assertFalse(slots.TABS.add_at(r, c))
 
+    def test_the_heading_names_the_strip_once_and_not_once_per_row(self):
+        """The rows under the first are BLANK to the width of the heading, not the heading
+        again — `chats` repeated down the left of a three-row strip is the same word three
+        times where names are competing for columns.
+
+        **Nothing else here can see this**, which is why it is its own case and why the
+        deletion sweep found it: `slots._compose` blanks those cells with
+        ``" " * tui.width(lead)``, so the heading and its blank are the same WIDTH by
+        construction and every column assertion in this class is unmoved by drawing one in
+        place of the other. Only the text tells them apart.
+        """
+        for cols, rows in ((120, 3), (160, 2), (100, 3)):
+            drawn = [tui.strip_ansi(r) for r in self._strip(cols, rows)]
+            with self.subTest(cols=cols, rows=rows):
+                self.assertGreater(len(drawn), 1, "this width drew no second row")
+                head = "workspaces"
+                self.assertIn(head, drawn[0])
+                self.assertEqual([r for r in drawn if head in r], [drawn[0]],
+                                 f"the heading is drawn on more than the first row: "
+                                 f"{drawn!r}")
+                lead = tui.width(slots._inset() + head + "  ")
+                for r, line in enumerate(drawn[1:], start=1):
+                    self.assertEqual(line[:lead], " " * lead,
+                                     f"row {r} does not start with the heading's blank: "
+                                     f"{line!r}")
+
     def test_a_row_the_strip_did_not_draw_answers_nothing(self):
         """A pane taller than the names need draws fewer rows than it has, and the rows
         below the last are cells nothing was drawn into. `panel._write` leaves them to
@@ -364,6 +390,44 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
         for line in rows:
             self.assertLessEqual(tui.width(line), 40, repr(line))
         self.assertNotIn(wide, "".join(tui.strip_ansi(r) for r in rows))
+
+    def test_a_run_that_starts_mid_list_carries_no_add_chat_affordance(self):
+        """`_Tabs.add_at`'s structural promise, at the one shape that can break it.
+
+        The affordance rides only a run holding the WHOLE list — neither count drawn. A run
+        that reaches the END of the list but starts partway into it has no trailing count
+        and a leading one, and that is the state where "is there a `+N` anywhere" and "is
+        there a trailing field" stop being the same question. 120 columns cuts these
+        fifteen into three pages, so a mark on the third draws that page alone with `+11`
+        in front of it and nothing after it.
+        """
+        rows = self._strip(120, 1, here=NAMES[13], note=slots.ADD_CHAT)
+        drawn = tui.strip_ansi(rows[0])
+        self.assertIn("+11", drawn, f"this is not the run the case is about: {drawn!r}")
+        self.assertFalse(drawn.rstrip().endswith(slots.ADD_CHAT),
+                         f"a `+` rode a run that starts mid-list: {drawn!r}")
+        self.assertEqual({c for c in range(120) if slots.TABS.add_at(0, c)}, set(),
+                         "the affordance claims a cell on a run it is not drawn on")
+
+    def test_no_cell_that_stands_for_names_off_the_strip_also_makes_a_chat(self):
+        """*Two questions, three methods, and a cell that is neither answers no to both* —
+        held over every width and every row count rather than at the one width the rung
+        happens to be tested at.
+
+        **The harm is `EVENT_KINDS`' "fires wrongly" and it is silent**: `_bar_events` asks
+        `switch_to` first and `add_at` second, so a `+9` that also answered `add_at` would
+        MAKE A CHAT where the operator asked to see the ones they have — and the row would
+        look exactly the same either way, because both fields are drawn as a `+`.
+        """
+        for cols in range(20, 300, 3):
+            for rows in (1, 2, 3):
+                for here in (NAMES[0], NAMES[5], NAMES[13]):
+                    self._strip(cols, rows, here=here, note=slots.ADD_CHAT)
+                    both = {(r, c) for r in range(rows) for c in range(cols)
+                            if slots.TABS.more_at(r, c) and slots.TABS.add_at(r, c)}
+                    with self.subTest(cols=cols, rows=rows, here=here):
+                        self.assertEqual(both, set(),
+                                         "a count cell also makes a chat")
 
     def test_no_row_of_a_grown_strip_is_wider_than_the_pane(self):
         """The ladder's own refusal, applied to every row rather than the first: a run

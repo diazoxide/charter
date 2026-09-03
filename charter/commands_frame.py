@@ -2091,6 +2091,23 @@ def _slot_sizes(fid: str, slots: list[str], *, window_rows: int, pane_cols: int,
     for `layout.repos_rows`' reason about *pinned_rows*: a policy applied at both ends is a
     bound one end cannot make observable.
 
+    **Every slot is asked, and there is deliberately no `slot in BARS` filter in front of
+    it.** There was one, and the deletion sweep reported dropping it as a survivor — the
+    two spellings of "a slot that draws no strip wants nothing" cannot both be observable,
+    and the one that stays is the one that DOES the answering. `bar_rows_wanted` answers
+    `1` for a name it has no strip for; no slot can ever be sized below one cell
+    (`component.cells` refuses it and `layout.repos_rows` floors the table at
+    `SLOT_SIZE["repos"]`), so a want of `1` is at or under every slot's own height and
+    `layout._grown` grows nothing for it. Measured over 3,648 sizings — four pin
+    configurations, three split orders, thirty-eight window heights and eight widths —
+    filtered and unfiltered answer the identical map every time, and an unfiltered
+    comprehension asks about `top`, `bottom`, `repos` and `right` exactly once each and is
+    told `1` for all four.
+
+    Deleting it is also what makes that answer REACHED: the refusal in `bar_rows_wanted` is
+    a production path now rather than a defensive line, and
+    `tests/test_a_tab_strip_grows_a_row_when_its_tabs_overflow` asks it directly.
+
     *order* is the split ORDER, which is not always *slots* — `_relayout` re-splits a
     permutation of the recorded panes and it is that permutation which decides how wide a
     pane ends up (#500). It is what the strips' own widths are derived from
@@ -2109,7 +2126,7 @@ def _slot_sizes(fid: str, slots: list[str], *, window_rows: int, pane_cols: int,
         bar_rows={slot: frame_slots.bar_rows_wanted(
             fid, slot, cap=layout.BAR_MAX_ROWS,
             pane_cols=layout.pane_cols(order, slot, window_cols=window_cols))
-            for slot in slots if slot in frame_slots.BARS})
+            for slot in slots})
 
 
 def _launch_sizes(fid: str, slots: list[str], *,
