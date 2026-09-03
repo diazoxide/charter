@@ -15,9 +15,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, config
+from charter import commands
 from charter.harness import opencode
-from tests import _envguard
+from tests import _envguard, _isolation
 
 
 class InitWiresBothHarnesses(unittest.TestCase):
@@ -33,9 +33,10 @@ class InitWiresBothHarnesses(unittest.TestCase):
         home = self.root / "xdg"
         home.mkdir(parents=True, exist_ok=True)
         self.enterContext(mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(home)}))
-        args = SimpleNamespace(forge="github", owner="acme", host=None)
-        with mock.patch.object(config, "ROOT", self.root):
-            commands.cmd_init(args)
+        # Every derived setting, not just `ROOT` — see `_isolation.point_config_at`:
+        # `cmd_init` re-derives where the marker lands (#858).
+        _isolation.point_config_at(self, self.root)
+        commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
 
     def test_the_opencode_plugin_is_installed_not_dropped_in_the_plane(self):
         """`init` installs opencode's plugin where opencode reads it for every project.
@@ -57,8 +58,7 @@ class InitWiresBothHarnesses(unittest.TestCase):
         settings["env"]["OTEL_METRICS_EXPORTER"] = "otlp"
         settings["env"]["CHARTER_HARNESS"] = "hand-edited"
         p.write_text(json.dumps(settings))
-        with mock.patch.object(config, "ROOT", self.root):
-            commands.cmd_reinit(SimpleNamespace())
+        commands.cmd_reinit(SimpleNamespace())
         again = json.loads(p.read_text())
         self.assertEqual(again["env"]["OTEL_METRICS_EXPORTER"], "otlp")
         self.assertEqual(again["env"]["CHARTER_HARNESS"], "hand-edited")

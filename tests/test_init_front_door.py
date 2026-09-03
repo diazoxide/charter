@@ -16,10 +16,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
-from charter import commands, config, instance
-from tests import _envguard
+from charter import commands, instance
+from tests import _envguard, _isolation
 
 
 class InitFrontDoorIso(unittest.TestCase):
@@ -30,14 +29,16 @@ class InitFrontDoorIso(unittest.TestCase):
         _envguard.unset_all()
 
         self.root = Path(tempfile.mkdtemp(prefix="charter-fd-")).resolve()
+        # Every derived setting, not just `ROOT` — see `_isolation.point_config_at`:
+        # `cmd_init` re-derives where the marker lands (#858).
+        _isolation.point_config_at(self, self.root)
 
     def _init(self, **kw):
         args = SimpleNamespace(forge=kw.get("forge", "github"),
                                owner=kw.get("owner", "acme"),
                                host=None,
                                front_door=kw.get("front_door", "steward"))
-        with mock.patch.object(config, "ROOT", self.root):
-            return commands.cmd_init(args)
+        return commands.cmd_init(args)
 
     def charter_of(self, name: str) -> str:
         return (self.root / "personas" / name / "persona.md").read_text()

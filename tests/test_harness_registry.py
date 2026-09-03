@@ -15,9 +15,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, config
+from charter import commands
 from charter.harness import base, registry
-from tests import _envguard
+from tests import _envguard, _isolation
 
 
 class Registry(unittest.TestCase):
@@ -60,8 +60,10 @@ class InitIsHarnessAgnostic(unittest.TestCase):
 
         root = Path(tempfile.mkdtemp(prefix="charter-fake-h-")).resolve()
         self.addCleanup(lambda: __import__("shutil").rmtree(root, True))
-        with mock.patch.dict(registry.KINDS, {"fake": FakeHarness}), \
-                mock.patch.object(config, "ROOT", root):
+        # Every derived setting, not just `ROOT` — see `_isolation.point_config_at`:
+        # `cmd_init` re-derives where the marker lands (#858).
+        _isolation.point_config_at(self, root)
+        with mock.patch.dict(registry.KINDS, {"fake": FakeHarness}):
             commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
         self.assertTrue((root / ".fake-wiring").is_file(),
                         "cmd_init wired only the harnesses it names by hand")

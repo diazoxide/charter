@@ -2254,6 +2254,36 @@ def cmd_init(args) -> int:
     else:
         toml_path.write_text(_render_charter_toml(forge_kind, owner, host))
         created.append(_root.MARKER)
+        # THE ANSWER JUST CHANGED, SO RE-DERIVE IT HERE (#858).
+        #
+        # `charter.config` resolves the plane once, at import, through
+        # `root.find_root_or_cwd` — which is right for every command except this one.
+        # `init` is the command whose own first act turns the answer over: the line above
+        # is what `root.find_root` looks for, so from here on this directory IS a plane
+        # and `config.HAS_CONTROL_PLANE` still said it was not, along with everything
+        # `derive` reads out of the file (`GROUP` is the `--owner` this very run wrote).
+        #
+        # Nothing visibly broke on it, because every helper below takes *root* as an
+        # argument and is handed the right directory — `_ensure_front_door` says so in its
+        # own docstring. That made it a trap rather than a fault: the first code path to
+        # ask "am I in a plane?" is correct everywhere except inside `init`, and #857 was
+        # that path — a harness context file gated on `HAS_CONTROL_PLANE` came out empty
+        # from a fresh `init`, and the gate was reverted rather than shipped.
+        #
+        # `config.use(root)` and NOT a fresh resolution, which is the tempting spelling and
+        # would be wrong: `root._outermost` hops outward through an enclosing plane's
+        # `workspaces/`, so a plane scaffolded inside one — `workspaces/<ws>/charter`, what
+        # charter's own dogfooding produces — would re-derive to the plane ABOVE it and
+        # `init` would spend the rest of its run reporting on a plane it did not create.
+        # `init` acts on the root it chose; the re-derivation follows that root.
+        #
+        # Once, here, rather than making `HAS_CONTROL_PLANE` a call at its ~25 read sites.
+        # The value changes at exactly one point in charter's life and this is it; a call
+        # everywhere would pay a stat per read to model an event with one cause, and would
+        # let the answer move mid-command for reasons nobody chose. `root._outermost`'s
+        # "loop until the answer stops moving" is not a precedent for that — it iterates
+        # inside ONE resolution and then the answer is fixed, which is what this is too.
+        config.use(root)
         if not owner:
             util.warn(f"No --owner given — {_root.MARKER}'s [[forge]] block has no "
                       f"owner/group set. Add one before `charter discover`.")
