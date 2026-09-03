@@ -132,8 +132,26 @@ def wanted(args) -> str:
     it already refuses the empty string, and a second guard nothing could turn red is the
     line this repository deletes (`commands_frame._pressers_chat` says so about the
     identical shape).
+
+    **And no `strip`, unlike `_pressers_chat` and `cmd_close`, which read the same kind of
+    value on a different trip.** Those two take `#{@charter_chat}` expanded by tmux INTO A
+    SHELL-QUOTED `run-shell` string, where padding is a thing a format can produce. This
+    one cannot be padded and the deletion sweep is what asked the question. Measured: the
+    only producer is `slots._Tabs.tab_at`, whose names come off `chats.of_workspace`,
+    which reaches them through `chats.is_chat` — *"the id is held to `ID_RE` here, because
+    this is where a name off `os.scandir` enters charter's vocabulary"*. A directory
+    literally named ``api.2 `` beside `api.1` and `api.2`, with this workspace recorded on
+    it, is excluded from the roster, is drawn on no bar and is answered by no cell. From
+    there the value travels in an argv list (`util.self_relaunch_argv`, `builtin_actions
+    ._spawn`'s `Popen`) and as separate `split-window --` arguments, neither of which is
+    shell-interpreted.
+
+    So a `strip` here would be a repair for damage that cannot arrive — and worse than
+    idle: if a padded name ever did reach it, stripping would silently retarget the menu
+    at a DIFFERENT chat, which is #838's defect exactly. Refusing is the answer that
+    cannot act on the wrong one.
     """
-    tab = (getattr(args, "tab", None) or "").strip()
+    tab = getattr(args, "tab", None) or ""
     return tab if chats.ID_RE.fullmatch(tab) else ""
 
 
@@ -271,10 +289,18 @@ def opens(row, target: str, *, live) -> "palette.Palette | None":
 def act(row, target: str, *, fid: str) -> None:
     """Act on the row Enter landed on, and say the reason when it could not run.
 
-    **One function because the two halves are one decision**, and because the surface a
+    **One function because the three halves are one decision**, and because the surface a
     refusal would otherwise be drawn on is the pane :func:`draw` is about to kill. The
     frame's own attention row is a different pane and a different process, so the sentence
     survives this one (`commands_frame._say_on_screen`).
+
+    **A ``None`` row is a cancel and is answered here rather than at the call site.**
+    `overlay.Surface.run` answers ``None`` for Escape, for `overlay.HATCH_KEY`, and for
+    the pane's writer going away — the one answer that can never become a wedge — and it
+    is the commonest way this surface ends, because the row under the cursor when Escape
+    is pressed is one keypress from a confirmation that stops a harness. Nothing was
+    chosen, so there is nothing to start and nothing to say. Keeping it here rather than
+    in :func:`draw` is what makes it a line a test can turn red: `draw` needs a tty.
 
     **A row with nothing to say says nothing**, and the guard is not tidiness: the notice
     is a WRITE, so an empty one would blank whatever the attention row was already
@@ -285,7 +311,7 @@ def act(row, target: str, *, fid: str) -> None:
     other.
     """
     from .. import commands_frame
-    if chose(row, target, fid=fid):
+    if row is None or chose(row, target, fid=fid):
         return
     if row.note:
         commands_frame._say_on_screen(fid, row.note)
@@ -377,12 +403,10 @@ def draw(args) -> int:
                          live=commands_frame._plane_live(
                              commands_frame._plane_servers())[0])
 
-        chosen = palette.own_the_tty(surface, then=_then)
-        if chosen is not None:
-            # `None` is Escape, `F12`, or the pane's writer going away — `Surface.run`'s
-            # cancel, and the one answer that can never become a wedge. Nothing was
-            # chosen, so there is nothing to act on and nothing to say.
-            act(chosen, target, fid=fid)
+        # `act` takes the cancel too (`own_the_tty` answers `None` for Escape, for the
+        # hatch, and for a pane whose writer is gone), so there is no branch here that a
+        # test would need a tty to reach.
+        act(palette.own_the_tty(surface, then=_then), target, fid=fid)
     finally:
         commands_frame._close_palette(socket, harness=harness,
                                       overlay_pane=overlay_pane)

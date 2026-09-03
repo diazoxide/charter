@@ -288,6 +288,8 @@ class TheMenuIsTheTwoRowsThatHaveATabToSitOn(_AWatchedSpawn, unittest.TestCase):
         path.write_text("what was on screen\n", encoding="utf-8")
         row = tabmenu.catalogue(self.TAB)[0]
         self.assertFalse(row.refused)
+        self.assertEqual(row.note, "",
+                         "a row that CAN run carries no reason it cannot")
         self.assertTrue(tabmenu.chose(row, self.TAB, fid=self.FID))
         self.assertEqual(
             self.spawned,
@@ -320,6 +322,34 @@ class TheMenuIsTheTwoRowsThatHaveATabToSitOn(_AWatchedSpawn, unittest.TestCase):
     def test_a_tab_that_can_be_named_is_carried_to_the_pane(self):
         self.assertEqual(tabmenu.wanted(_Args(tab=self.TAB)), self.TAB)
         self.assertEqual(tabmenu.forward(_Args(tab=self.TAB)), ("--tab", self.TAB))
+
+    def test_a_padded_name_is_refused_rather_than_trimmed_into_another_chat(self):
+        """**No `strip`, and that is a decision the sweep asked for.**
+
+        `commands_frame._pressers_chat` and `cmd_close` do strip, because their value is a
+        tmux format expanded into a shell-quoted `run-shell` string. This one cannot be
+        padded: its only producer is `slots._Tabs.tab_at`, and `chats.is_chat` holds every
+        name off `os.scandir` to `chats.ID_RE` before it reaches a roster. Trimming would
+        therefore repair nothing — and if a padded name ever did arrive, it would silently
+        retarget the menu at a DIFFERENT chat, which is #838's defect. Refusing cannot.
+        """
+        self.assertEqual(tabmenu.wanted(_Args(tab=f" {self.TAB} ")), "")
+        self.assertEqual(tabmenu.wanted(_Args(tab=f"{self.TAB}\t")), "")
+
+    def test_a_padded_directory_never_reaches_the_menu_in_the_first_place(self):
+        """The measurement the case above rests on, asserted rather than asserted-about:
+        `chats.of_workspace` is where a name off `os.scandir` enters charter's vocabulary,
+        and it refuses one `ID_RE` cannot spell — so no cell of any bar answers it."""
+        from charter.frame import chats, slots
+        state.frame_dir(f"{self.TAB} ", create=True)
+        state.record_workspace(f"{self.TAB} ", "api")
+        self.assertNotIn(f"{self.TAB} ", chats.of_workspace("api"))
+        slots.TABS.forget()
+        self.addCleanup(slots.TABS.forget)
+        with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "api"}, clear=False):
+            slots.chats_bar(self.FID, 200)
+        self.assertNotIn(f"{self.TAB} ",
+                         {slots.TABS.tab_at(0, c) for c in range(200)})
 
     def test_the_palette_that_is_not_a_tab_menu_forwards_nothing(self):
         """`F2` carries no `--tab`, so `frame-palette --pane` is spelled exactly as it was
@@ -432,6 +462,20 @@ class CloseIsConfirmedAndItNamesTheTabYouClicked(_AWatchedSpawn, unittest.TestCa
         self.assertEqual(said, [])
         self.assertEqual(self.spawned, [])
 
+    def test_a_cancel_starts_nothing_and_says_nothing(self):
+        """**Escape, `F12`, or the pane's writer going away** — `overlay.Surface.run`
+        answers `None` for all three, and it is the commonest way this surface ends,
+        because the row under the cursor when Escape is pressed is one keypress from a
+        confirmation that stops a harness. Nothing was chosen, so nothing is started and
+        nothing is said."""
+        said = []
+        self.enterContext(mock.patch.object(
+            commands_frame, "_say_on_screen",
+            side_effect=lambda fid, message, **kw: said.append((fid, message))))
+        tabmenu.act(None, self.TAB, fid=self.FID)
+        self.assertEqual(said, [])
+        self.assertEqual(self.spawned, [])
+
     def test_a_row_that_ran_says_nothing_at_all(self):
         """What a started action surfaces through is `inflight`, the frame's existing
         spinner, and never a second sentence here — `_draw_palette`'s rule kept."""
@@ -499,6 +543,25 @@ class TheRowIdsAreNotActionIdsAndTheFallbacksAreReachable(PersonaIso, unittest.T
         characters `None`, naming a pane that cannot exist, where `""` is what every
         charter reader already treats as absent."""
         self.assertEqual(tabmenu.handback({}), ("", commands_frame.SOCKET, "", ""))
+
+    def test_the_reachable_half_is_a_frame_id_that_came_back_empty(self):
+        """**Which of these fallbacks production really reaches, measured rather than
+        assumed.** `layout._env_argv` emits `-e NAME=` for every name including an empty
+        one, and tmux exports it — measured on 3.7c, the name is present in the split
+        pane's environment with an empty value — and `_relayout_pane_env` never declines
+        to build the payload at all, because `tmuxctl.PANE_ENV_FLOOR` is 3.0 and charter's
+        own floor is 3.2. So the two `env` names are always PRESENT; what is reachable is
+        an empty VALUE, which is what `commands_frame._pressers_chat` answers for a frame
+        whose `--chat` arrived empty and whose `$CHARTER_SESSION_ID` did too.
+
+        That state is this case, and it is what reaches the other two fallbacks: charter's
+        own socket for a frame with no recorded server (`builtin_actions._server`'s rule),
+        and `""` rather than `None` for a harness pane charter has lost the record of —
+        the state `builtin_actions.NO_LAYOUT` exists to describe.
+        """
+        self.assertEqual(
+            tabmenu.handback({"CHARTER_SESSION_ID": "", "TMUX_PANE": "%3"}),
+            ("", commands_frame.SOCKET, "", "%3"))
 
     def test_a_pane_that_was_told_everything_uses_what_it_was_told(self):
         _plant("api.1", workspace="api", pane="%7")
