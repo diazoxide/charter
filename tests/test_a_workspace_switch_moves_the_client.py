@@ -297,6 +297,28 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         self.assertTrue(self.laid_out.call_args_list[0][1]["want"])
         self.assertEqual(self.laid_out.call_args_list[1][1]["want"], [])
 
+    def test_a_switch_that_lands_back_on_this_chat_keeps_its_panels(self):
+        """The one state where the two re-layouts are the SAME frame, and #844's ordering
+        is what makes it worth a line of its own.
+
+        `_chat_showing` reads the landing chat off the SERVER, while `here` came from this
+        chat's own recorded harness pane — and `_plane_session`'s docstring names the
+        residual where those disagree: a pane id restarts at `%0` when a server does, so a
+        `%N` recorded for a chat that is over can name a live pane in another session. The
+        two readings then say this client is in `$1` and that `$2`'s current window is
+        drawing *this* chat.
+
+        With the arrival dressed last, the teardown was undone by accident. With it
+        dressed FIRST, an unguarded teardown would split this frame's panels back in and
+        then kill them — leaving the operator on the bare harness pane #844 is about. So
+        the chat left behind is compared, not assumed.
+        """
+        self._switch(self._ordinary(landing=[f"$2\t1\t{self.FID}"]))
+        self.assertEqual([c[0][0] for c in self.laid_out.call_args_list], [self.FID])
+        self.assertTrue(self.laid_out.call_args_list[0][1]["want"],
+                        "the chat this switch landed on was stripped of its panels by "
+                        "the teardown meant for the chat being LEFT")
+
     def test_the_outcome_is_said_on_the_chat_the_operator_landed_on(self):
         """A notice is drawn by a panel out of a frame's own state, so it has to be
         written to the frame the operator will be reading. Said on `alpha.1` it would go

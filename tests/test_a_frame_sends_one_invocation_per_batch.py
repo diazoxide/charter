@@ -486,27 +486,31 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
         after the strips. A chain runs in the order it is given, so it still is.
         """
         fake = self._switch()
-        rows = [_tmuxchain.commands(inv) for inv in fake.invocations]
-        rows = [cmds for cmds in rows
+        lists = [_tmuxchain.commands(inv) for inv in fake.invocations]
+        rows = [i for i, cmds in enumerate(lists)
                 if len(cmds) > 1 and all("resize-pane" in c for c in cmds)]
         self.assertEqual(len(rows), 1,
                          "the arriving frame's rows are not one command list")
-        targets = [c[c.index("-t") + 1] for c in rows[0]]
+        in_list = lists[rows[0]]
+        self.assertTrue(all(c[-2] == "-y" for c in in_list), in_list)
+        targets = [c[c.index("-t") + 1] for c in in_list]
         self.assertEqual(targets[-1], "%2",
                          "the harness pane is not the last resize in the list — "
                          "`resize-pane -y` moves one boundary, so it has to be")
-        self.assertTrue(all(c[-2] == "-y" for c in rows[0]), rows[0])
         # And the read #510 put between the two passes is still a read of its own, still
         # after the columns and still before these rows. Collapsing THAT away is what this
-        # merge deliberately did not do.
-        verbs = [_tmuxchain.commands(inv) for inv in fake.invocations]
-        flat = [inv for inv in verbs]
-        widths = [i for i, cmds in enumerate(flat)
+        # merge deliberately did not do — a list that only reads repaints nothing, so
+        # leaving it where the measurement needs it costs the operator no repaint.
+        widths = [i for i, cmds in enumerate(lists)
                   if any(commands_frame._PANE_WIDTH_FORMAT in c for c in cmds)]
-        cols = [i for i, cmds in enumerate(flat)
+        cols = [i for i, cmds in enumerate(lists)
                 if any("resize-pane" in c and "-x" in c for c in cmds)]
-        self.assertTrue(cols and widths and cols[0] < widths[0]
-                        < flat.index(rows[0]), (cols, widths))
+        self.assertTrue(cols, "the arriving frame asserted no column at all")
+        self.assertTrue(widths, "#510's measurement of the variable pane is gone")
+        self.assertLess(cols[0], widths[0],
+                        "the columns no longer land before the pane is measured (#510)")
+        self.assertLess(widths[0], rows[0],
+                        "the rows no longer come after the measurement (#510)")
 
     def test_the_arriving_chat_is_dressed_before_the_one_being_left_is_tidied(self):
         """#844's ordering, pinned where the invocation counts are: **every** split of the

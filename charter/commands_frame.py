@@ -5933,7 +5933,8 @@ def _variable_pane_cols(socket: str, *, panes: dict[str, str], window_cols: int)
     return layout.repos_cols(list(panes), window_cols=window_cols)
 
 
-def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pane: str,
+def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
+                    harness_pane: str | None,
                     window_cols: int, window_rows: int) -> None:
     """Re-apply every pane in *panes* the size `layout.slot_sizes` says it should have in
     a *window_cols* x *window_rows* window.
@@ -6005,6 +6006,15 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
 
     *harness_pane* is checked like every other id here and for the same reason: it is read
     off disk (`state.harness_pane`) by `cmd_resize`, which is exactly the shape #475 was.
+    **`None` is one of the values that record really answers with**, and the annotation
+    says so rather than leaving `or ""` looking like belt and braces: it is the half of
+    the check that decides whether a frame with no recorded harness pane resizes its
+    panels or dies, because `_PANE_ID_RE.fullmatch(None)` raises and this runs inside
+    `_relayout`, above the resize hook and above the `select-pane` that takes the keyboard
+    back off a panel. Neither caller can produce it today — `_relayout_target` answers
+    `None` for the whole frame rather than a tuple with one in it, and `cmd_resize` spells
+    its own `or ""` — which is why the deletion sweep found the line unpinned and
+    `test_reassert_sizes_takes_no_harness_pane_at_all_without_raising` now drives it.
 
     `report=False` throughout: a pane that has since died (the operator closed it, a panel
     crashed between the map being read and this running) makes `resize-pane` fail, and that
@@ -7035,7 +7045,7 @@ def cmd_chat(args) -> int:
         _say_on_screen(fid, f"cannot switch: tmux selected chat '{target}' but this "
                             "client did not move, so this chat keeps its panels")
         return 0
-    # **The ARRIVAL first, and the departure tidied behind it** (#844). Steps 2 and 3 ran
+    # **The ARRIVAL first, and the departure tidied behind it** (#844). Steps 2 and 4 ran
     # the other way round for as long as this function has existed, and the docstring
     # above has always said they are independent — so the order was never load-bearing,
     # it was just the order they were written in. Measured end to end on tmux 3.7c with a
@@ -7336,7 +7346,10 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
     independent, and the operator is already looking at the ARRIVING window while both
     run, so every invocation spent tidying the one they left is time they spend on a bare
     full-screen harness pane. Against this repository's own fakes, four panels at 200x50,
-    the client moved at invocation 4 and the panels appeared at invocation 17.
+    the client moves at invocation 4 and the panels appeared at invocation 17 — they
+    appear at 10. Step 3 is also the one place the two chats can turn out to be the same
+    one, and it says so rather than relying on which of them runs last: see the guard on
+    it, and `_plane_session` for the recycled pane id that gets there.
 
     **The teardown is gated on the client having MOVED, not on a command having exited 0**
     — #684's rule, re-asked here because the failure it names exists here too:
@@ -7480,9 +7493,19 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
     # the thing this must not do, and that has never been about the order.
     if landed:
         _say_on_screen(landed, said, ok=True)
-    left = _relayout_target(fid)
-    if left is not None:
-        _apply_arrangement(fid, where=left, want=[])
+    # **And the chat left behind is never the chat landed on**, which the order above is
+    # what makes worth saying (#844). `_chat_showing` reads the landing chat off the
+    # SERVER while `here` came from this chat's own recorded pane, and `_plane_session`'s
+    # docstring names the residual where those two disagree: a pane id restarts at `%0`
+    # when a server does, so a `%3` recorded for a chat that is over can name a live pane
+    # belonging to another session. In that state `landed` really can be *fid* — and with
+    # the arrival dressed first, an unguarded teardown would split this frame's panels
+    # back in and then kill them, leaving the operator on the bare harness pane this whole
+    # issue is about. Dressing last used to absorb that by accident; this says it.
+    if landed != fid:
+        left = _relayout_target(fid)
+        if left is not None:
+            _apply_arrangement(fid, where=left, want=[])
 
 
 def _pressers_chat(args) -> str:

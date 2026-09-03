@@ -1315,15 +1315,42 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         assertion cannot be satisfied by somebody else's guard. The HARNESS pane is
         hostile here too, and for the same reason: `cmd_resize` reads that one off disk as
         well, and #515 gave this function a `resize-pane -t <harness>` of its own."""
+        targets = self._sizes_for(harness_pane="%0;kill-server")
+        self.assertEqual(targets, ["%1"], targets)
+
+    def test_reassert_sizes_takes_no_harness_pane_at_all_without_raising(self):
+        """The other value `state.harness_pane` really answers with, and the one the
+        deletion sweep found nothing driving: **`None`**.
+
+        `harness_pane or ""` is what makes the shape check above total, and it is not
+        belt-and-braces over the check — it is the half that decides whether a frame with
+        no recorded harness pane resizes its panels or dies. `_PANE_ID_RE.fullmatch(None)`
+        raises `TypeError`, and this runs inside `_relayout`, so the panel sizes above it
+        would be applied and everything after it — the harness's own row, the resize hook,
+        the `select-pane` that takes the keyboard off a panel — would not.
+
+        Driven here rather than through a caller because neither caller can produce it:
+        `_relayout_target` answers `None` for the whole frame rather than a tuple with a
+        `None` in it, and `cmd_resize` spells its own `or ""` before the call. That is
+        exactly `_panel_died_hook_argv`'s rule and #475's history — a builder documented
+        as "safe because my caller checked" grows a second caller — asked of the type
+        `state.harness_pane` is annotated to return rather than of the two strings its
+        callers happen to hand over today.
+        """
+        targets = self._sizes_for(harness_pane=None)
+        self.assertEqual(targets, ["%1"], targets)
+
+    def _sizes_for(self, *, harness_pane) -> list[str]:
+        """Which panes `_reassert_sizes` really resized, called directly with a map whose
+        second id is hostile and a *harness_pane* the caller chooses."""
         calls = []
         with mock.patch("charter.frame.tmuxctl.run", _tmuxchain.recorder(calls)):
             commands_frame._reassert_sizes(
                 "charter", fid=self.fid,
                 panes={"top": "%1", "bottom": "%2;kill-server"},
-                harness_pane="%0;kill-server",
+                harness_pane=harness_pane,
                 window_cols=200, window_rows=50)
-        targets = [c[c.index("-t") + 1] for c in calls if "resize-pane" in c]
-        self.assertEqual(targets, ["%1"], calls)
+        return [c[c.index("-t") + 1] for c in calls if "resize-pane" in c]
 
     def test_the_harness_pane_gets_focus_back(self):
         """`split-window` makes each new pane ACTIVE — without this the operator is left
