@@ -3270,12 +3270,20 @@ def _bar_gap() -> str:
 
 
 class _Tabs:
-    """Which name each COLUMN of a bar's row is about, and which of them you are on.
+    """Which name each CELL of a bar is about, and which of them you are on.
 
     :class:`_Viewport` one axis over, and it exists for the reason that class states for
-    the repo table: a pointer event arrives as a NUMBER (`frame/events.py`), and the only
-    thing that knows what is at that number is the pass that composed the row. For a
-    table the number is a row; a bar is horizontal, so here it is a column.
+    the repo table: a pointer event arrives as a pair of NUMBERS (`frame/events.py`), and
+    the only thing that knows what is at them is the pass that composed the strip.
+
+    **The key is `(row, col)` and it was `col` alone until #829.** A strip is one row when
+    its names fit on one and as many as its pane was given when they do not, so "which
+    name is at column 40" stopped having an answer the moment there could be a second row
+    of names under the first. A column-keyed map on a two-row strip does not degrade — it
+    answers the row above about a click on the row below, which is `component.EVENT_KINDS`'
+    *fires wrongly* rather than *never fires*, and the whole reason :data:`_BAR_RULE` is
+    ASCII. There is no default row for the same reason: a caller that forgot to say which
+    row it is asking about must be a `TypeError` here, not a switch to the wrong tab.
 
     **A bar needs it MORE than the table does, because the ladder is not invertible.**
     :func:`_bar` has four rungs and three of them draw a different set of names — every
@@ -3312,10 +3320,10 @@ class _Tabs:
     __slots__ = ("_cols", "_here", "_more", "_add")
 
     def __init__(self) -> None:
-        self._cols: dict[int, str] = {}
+        self._cols: dict[tuple[int, int], str] = {}
         self._here = ""
-        self._more: frozenset[int] = frozenset()
-        self._add: frozenset[int] = frozenset()
+        self._more: frozenset[tuple[int, int]] = frozenset()
+        self._add: frozenset[tuple[int, int]] = frozenset()
 
     def forget(self) -> None:
         """Back to a bar nobody has drawn — for a test, and only a test.
@@ -3327,12 +3335,13 @@ class _Tabs:
         self.publish({}, "")
 
     def publish(self, columns: dict, here: str, more=(), add=()) -> None:
-        """Record what the paint that just happened put on each column, and where you are.
+        """Record what the paint that just happened put in each cell, and where you are.
 
-        *columns* maps a column of the component's OWN canvas — the rectangle `ctx.width`
-        describes, which is what `events.Dispatcher._on_canvas` delivers a click in — to
-        the name of the tab drawn there. Absent means the operator clicked a cell this
-        bar drew no tab into: the heading, the gap between two tabs, EITHER `+N` count,
+        *columns* maps a ``(row, column)`` of the component's OWN canvas — the rectangle
+        `ctx.width` and `ctx.height` describe, which is what `events.Dispatcher._on_canvas`
+        delivers a click in — to the name of the tab drawn there. Absent means the operator
+        clicked a cell this bar drew no tab into: the heading, the blank under it on a
+        strip that grew a second row, the gap between two tabs, EITHER `+N` count,
         the `n/N`, the empty space past the last name. `events.Dispatcher._on_canvas` applies
         the identical rule one axis over for the pad, and `_Viewport.publish` applies it
         for the table's heading row.
@@ -3365,7 +3374,7 @@ class _Tabs:
         second question anyway to know which.
 
         A `frozenset` and not a range, because the two counts are two disjoint runs and
-        the narrow rung's is a third — and because :meth:`more_at` asks about ONE column,
+        the narrow rung's is a third — and because :meth:`more_at` asks about ONE cell,
         which is the same question `_cols` answers and should be the same kind of lookup.
         """
         self._cols = dict(columns)
@@ -3373,8 +3382,8 @@ class _Tabs:
         self._more = frozenset(more)
         self._add = frozenset(add)
 
-    def switch_to(self, col: int):
-        """The tab a click at canvas column *col* should switch this frame to, or ``None``.
+    def switch_to(self, row: int, col: int):
+        """The tab a click at canvas cell (*row*, *col*) should switch to, or ``None``.
 
         **The rule lives here rather than in the handler**, which is `_Viewport.move`'s
         choice for its own answer: "a click on the tab you are already on does nothing"
@@ -3386,16 +3395,17 @@ class _Tabs:
         again, all of it to arrive where you already were.
 
         **One comparison, and there is deliberately no `name is None` beside it.** A
-        column nothing drew into is absent from the mapping, so ``get`` answers ``None``,
+        cell nothing drew into is absent from the mapping, so ``get`` answers ``None``,
         and ``None`` is never a name any caller publishes — so the expression below
         already answers ``None`` for it. A guard in front of that is a line no input can
         make observable, which is exactly what the deletion sweep reports as a survivor.
         """
-        name = self._cols.get(col)
+        name = self._cols.get((row, col))
         return None if name == self._here else name
 
-    def more_at(self, col: int) -> bool:
-        """Whether column *col* is a field standing for names this row could not draw.
+    def more_at(self, row: int, col: int) -> bool:
+        """Whether cell (*row*, *col*) is a field standing for names the strip could not
+        draw.
 
         **The other half of "a click on a cell nothing was drawn into does nothing".** A
         `+9` is not nothing: the operator can see it, it says there are nine more, and it
@@ -3415,13 +3425,13 @@ class _Tabs:
         point: that method answers "which name", and every caller of it feeds the name to
         a command that switches. A count has no name — that is what makes it a count — so
         a sentinel would be a value every one of those callers would have to learn to not
-        switch to. Two questions, two methods, and a column that is neither answers no to
+        switch to. Two questions, two methods, and a cell that is neither answers no to
         both.
         """
-        return col in self._more
+        return (row, col) in self._more
 
-    def add_at(self, col: int) -> bool:
-        """Whether column *col* is the affordance that makes a NEW chat.
+    def add_at(self, row: int, col: int) -> bool:
+        """Whether cell (*row*, *col*) is the affordance that makes a NEW chat.
 
         *"`+` button not working for creating new session."* :data:`ADD_CHAT` was a
         SENTENCE — `+ charter <harness> opens another` — which is true, which names the
@@ -3432,15 +3442,16 @@ class _Tabs:
         switch to yet, which is the whole point of pressing it. It is not :meth:`more_at`
         either — that stands for chats that EXIST and are off the row, and opening a picker
         over them is the opposite of making a new one. Three questions, three methods, and
-        a column that is none of them answers no to all three.
+        a cell that is none of them answers no to all three.
 
-        **They cannot be drawn on one row, which is structural rather than lucky.**
-        :func:`_bar` draws the affordance only on the rung where every name fits, and draws
-        a `+N` only on the rung where they do not — so a row carrying `+` never carries
-        `+9`, and the two fields that both begin with a `+` are never on screen together to
-        be confused with each other.
+        **They cannot be drawn on one strip, which is structural rather than lucky.**
+        :func:`_bar` draws the affordance only where the whole list is on the strip — the
+        rung that fits every name on one row, or a grown strip whose rows hold them all —
+        and draws a `+N` only where it is not. So a strip carrying `+` never carries a
+        `+9` on any of its rows, and the two fields that both begin with a `+` are never on
+        screen together to be confused with each other.
         """
-        return col in self._add
+        return (row, col) in self._add
 
 
 #: The one tab strip this process's bar draws into. See :class:`_Tabs` for why there is
@@ -3450,12 +3461,14 @@ class _Tabs:
 TABS = _Tabs()
 
 
-def _tab_columns(start: int, drawn, gap: int) -> dict:
-    """Which canvas column each drawn tab owns — the map :meth:`_Tabs.publish` takes.
+def _tab_columns(row: int, start: int, drawn, gap: int) -> dict:
+    """Which canvas cell each drawn tab owns — the map :meth:`_Tabs.publish` takes.
 
-    *drawn* is the ``(name, field)`` pairs the rung actually put on the row, in the order
+    *drawn* is the ``(name, field)`` pairs the rung actually put on *row*, in the order
     it put them: the raw name a click switches to, and the text that was drawn for it.
-    *start* is the column the first field begins in, and *gap* is how many cells the rung
+    *row* is which row of the strip they were drawn on — 0 on a strip of one row, and the
+    reason the map is keyed by a pair (:class:`_Tabs`). *start* is the column the first
+    field begins in, and *gap* is how many cells the rung
     put between two of them (:func:`_bar_gap`). So this walks the composition once more
     rather than guessing at it, and the two things that could have been guessed wrong
     are settled here in one place: **the mark belongs to the tab it marks** (it is drawn
@@ -3483,49 +3496,58 @@ def _tab_columns(start: int, drawn, gap: int) -> dict:
     trade `builtin_actions._SELECT_STEPS` makes when it writes its two starting points
     down as data rather than deriving them from a sign.
     """
-    cols: dict[int, str] = {}
+    cols: dict[tuple[int, int], str] = {}
     at = start - gap
     for name, field in drawn:
         at += gap
         width = tui.width(field)
         for col in range(at, at + width):
-            cols[col] = name
+            cols[(row, col)] = name
         at += width
     return cols
 
 
-def _span(start: int, text: str) -> range:
-    """The columns *text* occupies when it is drawn starting at column *start*.
+def _span(row: int, start: int, text: str) -> list[tuple[int, int]]:
+    """The cells *text* occupies when it is drawn on *row* starting at column *start*.
 
     Two lines, and it exists so the fields that are NOT tabs are measured by the same rule
     the tabs are (:func:`_tab_columns`): `tui.width` and never `len`, off the string the
     rung actually composed and never off a search of the finished row.
 
-    **An absent field is an empty range rather than a special case.** ``_span(n, "")``
-    contributes no column, so :func:`_bar` can hand both counts to the same expression
+    **An absent field is an empty span rather than a special case.** ``_span(r, n, "")``
+    contributes no cell, so :func:`_bar` can hand both counts to the same expression
     whether or not the page it cut carries either — which is the branch that would
     otherwise have to be written twice and got right twice.
     """
-    return range(start, start + tui.width(text))
+    return [(row, col) for col in range(start, start + tui.width(text))]
 
 
-def _page(fields: list[str], at: int, room: int, gap: int) -> tuple[int, int]:
-    """The half-open run of *fields* the tab at index *at* is drawn with, inside *room*.
+def _cuts(fields: list[str], room: int, gap: int) -> list[int]:
+    """Where each row's worth of *fields* starts and stops, inside *room* — the page
+    boundaries the windowed rung is cut along.
 
     :func:`_bar`'s windowed rung. *fields* are the already-marked, already-contained tab
-    texts; the answer is a slice of them wide enough to draw, with room left for the two
-    counts that stand for what it leaves out.
+    texts; the answer is the cut points, ``[0, …, len(fields)]``, so page *i* is
+    ``fields[out[i]:out[i + 1]]`` and each page is wide enough to draw with room left for
+    the two counts that stand for what it leaves out.
+
+    **It answers the whole cut rather than one page, and that is #829.** A strip is one
+    row when its names fit on one and as many rows as its pane was given when they do not,
+    so `_bar` needs the page its mark falls in AND the pages next to it. Handing back one
+    page and calling this again for the next would be the same walk done twice with two
+    chances to disagree; the cut is one list and `_bar` takes a run out of it.
 
     *gap* is how many cells go between two fields — :func:`_bar_gap`, resolved once by
     :func:`_bar` and handed to the cut, the composition and the map together, so that a
     plane which draws its rules cannot cut a page for one gap and draw it with another.
 
-    **The pages do not depend on *at*, and that is the whole design.** The list is cut
-    into consecutive pages left to right — greedily, as many whole names as fit, then the
-    next page from where that one stopped — and this returns whichever page the marked tab
-    falls in. So the page is a pure function of the NAMES, the WIDTH and the gap, and
-    switching to a tab that is on the page redraws that page unchanged with only the `*`
-    moved. The gap belongs in that list and changes nothing about the property: it is
+    **The pages depend on nothing but the names, the width and the gap, and that is the
+    whole design.** The list is cut into consecutive pages left to right — greedily, as
+    many whole names as fit, then the next page from where that one stopped. Nothing about
+    WHERE THE MARK IS enters the cut, so switching to a tab that is on a drawn page redraws
+    that page unchanged with only the `*` moved. That is what :func:`_bar` then leans on
+    twice: to pick the page the mark falls in on a one-row strip, and to pick the RUN of
+    pages it falls in on a strip that grew. The gap belongs in that list and changes nothing about the property: it is
     fixed for the life of a frame, so it cannot move a page out from under a pointer — the
     same standard the WIDTH is held to, which moves only on a resize that redraws the row
     anyway.
@@ -3643,13 +3665,36 @@ def _page(fields: list[str], at: int, room: int, gap: int) -> tuple[int, int]:
     # guarantee is that the row is never reduced to the tab you are standing on while
     # there was room for another, which is the harm: at every width from 150 columns up,
     # the marked page holds at least two names where it used to hold one.
-    i = bisect.bisect_right(cuts, at) - 1
-    return cuts[i], cuts[i + 1]
+    return cuts
 
 
 def _bar(head: str, names: list[str], here: str, width: int, *,
-         note: str = "") -> list[str]:
-    """One bar row: *head*, then *names* with *here* marked, inside *width* columns.
+         note: str = "", rows: int = 1) -> list[str]:
+    """One bar: *head*, then *names* with *here* marked, in *rows* x *width* cells.
+
+    :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
+    :data:`TABS`, so "the map describes what is on screen" is a property of two lines
+    rather than an agreement between six returns. The split is #829's: the launcher has to
+    ask how many rows this strip's names need before any pane exists
+    (:func:`bar_rows_wanted`), and a sizing question that published a click map would have
+    the launcher's answer overwrite the panel's — a map describing a strip nobody is
+    looking at.
+    """
+    lines, cols, more, add = _compose(head, names, here, width, note=note, rows=rows)
+    TABS.publish(cols, here, more, add)
+    return lines
+
+
+def _compose(head: str, names: list[str], here: str, width: int, *,
+             note: str = "", rows: int = 1):
+    """The strip *head*/*names*/*here* composes to, and the cells its tabs landed in.
+
+    Answers ``(lines, columns, more, add)`` — the rows to draw, the ``(row, col)`` map
+    :meth:`_Tabs.publish` takes, and the two cell sets that are not tabs. :func:`_bar` is
+    the caller that publishes; nothing here writes anything down.
+
+    *rows* is how many rows the PANE has, which the strip grows into only as far as its
+    names need (#829). One is the shipped shape and every rung below is unchanged at it.
 
     **One function for both bars, so the two cannot degrade differently.** That is why it
     exists rather than each renderer composing its own: `workspaces` and `chats` sit on
@@ -3662,8 +3707,31 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     2. **The PAGE the one you are in falls on, plus a count at each end** (`+5  …  +9`).
        Every name on the row goes WHOLE, which is `_fit_fields`' own discipline one row
        over: a list cut off mid-name is a list where `api-staging` and `api-standby` are
-       the same string, and half a name is worse than an honest count. :func:`_page` is
+       the same string, and half a name is worse than an honest count. :func:`_cuts` is
        the cut and carries why it is a page rather than a window centred on *here*.
+
+       **On a strip of *rows* rows this rung draws *rows* consecutive pages**, and the run
+       is picked the way the page is: the pages are grouped into runs of *rows* from the
+       start of the list, and the strip draws the run its marked page falls in. That keeps
+       the property the single page has and the whole cut exists for — a run is a function
+       of the NAMES, the WIDTH and the row count alone, so switching to a tab that is drawn
+       redraws the same run with only the `*` moved, and no cell the operator just pressed
+       holds a different name a moment later. A leading `+N` goes on the FIRST row of the
+       run and a trailing one on the LAST, because that is where the names they stand for
+       actually are.
+
+       **The last run can be short, and that is a stated cost rather than an oversight.**
+       Runs are cut from the START of the list, so a list of four pages drawn three rows at
+       a time has a last run of one — and a frame standing on it draws one row in a
+       three-row pane. Filling that run by starting it at ``pages - rows`` instead was
+       measured and is the WRONG trade: it makes a run depend on which page the mark is on
+       at the boundary (from the tail run, pressing a tab drawn on page 2 would repaint as
+       the run starting at page 0), so the cell the operator just pressed holds a different
+       name a moment later — the double-press this whole cut exists to stop, arriving one
+       axis over. Blank rows at the bottom of a strip are what a short run costs; a switch
+       to the wrong tab is what filling it would. It is also only reachable while the row
+       count is CAPPED: `bar_rows_wanted` asks for the rows that hold the whole list, and a
+       run that is the whole list is never short.
 
        **This rung used to draw the marked name alone**, and on a real plane that made
        the whole bar inert: fifteen workspaces need 274 columns for rung 1, so every
@@ -3700,22 +3768,22 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     "add chat" affordance, and nothing else today. Dropped first, before any name, because
     it is a reminder and the names are the readout.
 
-    **Every rung publishes its own column map** (:data:`TABS`), which is what makes the
-    bar clickable at all and is the same discipline `_repos` keeps for the table's rows:
-    the handler resolves a click against WHAT WAS DRAWN rather than against what it
-    thinks would have been. Only the names actually on the row get columns — the heading,
-    the gaps, BOTH `+N` counts, the `n/N` and the affordance are cells this bar drew no
-    tab into and a click on one of them switches nothing. **The rungs that draw NOTHING
-    publish too**, and that is the half `_Viewport.blank` exists for one axis over: a bar
-    that kept its last map through a resize down to `2/3`, or down to no row at all, would
-    switch to a tab the operator can see is not on screen.
+    **Every rung answers with its own cell map**, which is what makes the bar clickable at
+    all and is the same discipline `_repos` keeps for the table's rows: the handler
+    resolves a click against WHAT WAS DRAWN rather than against what it thinks would have
+    been. Only the names actually on the strip get cells — the heading, the blank under it,
+    the gaps, BOTH `+N` counts, the `n/N` and the affordance are cells this bar drew no tab
+    into and a click on one of them switches nothing. **The rungs that draw NOTHING answer
+    too**, with an empty map, and that is the half `_Viewport.blank` exists for one axis
+    over: a bar that kept its last map through a resize down to `2/3`, down to one row, or
+    down to no row at all, would switch to a tab the operator can see is not on screen.
 
     **The windowed rung sharpens that rather than softening it.** It draws a different
-    slice of the names at every width, so a map kept across a resize would answer with a
-    name that is genuinely somewhere else on the row — not merely absent from it. The map
-    is published from the composition itself (`row`'s *before*, and :func:`_tab_columns`
-    walking the fields the rung actually joined), so there is no second walk of the ladder
-    to disagree with the first.
+    slice of the names at every width and at every row count, so a map kept across a resize
+    would answer with a name that is genuinely somewhere else on the strip — not merely
+    absent from it. The map is built from the composition itself (`rung`'s *before*, and
+    :func:`_tab_columns` walking the fields each row actually joined), so there is no
+    second walk of the ladder to disagree with the first.
     """
     # **`head` and `note` are NOT contained, and the deletion sweep is what settled it.**
     # Both are charter's own literals — `"chats"`, `"workspaces"`, :data:`ADD_CHAT` — and
@@ -3725,8 +3793,16 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     # contained, below, which is where the open alphabet actually is.
     from . import chrome
     lead = _inset() + head + " " * _BAR_GAP
+    # **The rows under the first start where the first row's tabs do.** The heading names
+    # the strip once — a `chats` repeated down the left of a three-row strip is the same
+    # word three times where names are competing for columns — and the blank under it is
+    # what keeps every row's tabs in one column, so a run of pages reads as one block
+    # rather than as three rows that happen to be adjacent. It is also what lets every page
+    # be cut against ONE `room`: a second row starting further left would be a wider row
+    # than the cut was made for, and the cut is what a click's stability rests on.
+    under = " " * tui.width(lead)
     # **Resolved ONCE, here, and handed to everything below it.** The cut
-    # (:func:`_page`), the composition and the map (:func:`_tab_columns`) all need to
+    # (:func:`_cuts`), the composition and the map (:func:`_tab_columns`) all need to
     # agree about how wide the seam between two tabs is, and `charter.toml` is re-read
     # behind :func:`_bar_gap` — so three readings is three chances for the map to describe
     # a row that was drawn with a different gap. This is `_Viewport.blank`'s discipline
@@ -3734,36 +3810,53 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     gap = _bar_gap()
     gapw = tui.width(gap)
 
-    def row(body: str = "", drawn=(), before: str = "", more=(), add=()) -> list[str]:
-        """This rung's row, and the column map for the tabs it actually drew.
+    def rung(drawn_rows=(), more=(), add=()):
+        """This rung's rows, and the cell map for the tabs they actually drew.
 
         **Every way out of the ladder goes through here**, which is what keeps "the map
-        describes the row" a property of one line rather than an agreement between six
-        returns. `_repos` learnt that the expensive way: three of its four exits cleared
-        the click map and none of them cleared the scroll bound, and `_Viewport.blank` is
-        the method that finding produced.
+        describes the strip" a property of one function rather than an agreement between
+        six returns. `_repos` learnt that the expensive way: three of its four exits
+        cleared the click map and none of them cleared the scroll bound, and
+        `_Viewport.blank` is the method that finding produced.
 
-        An empty *body* is the rung that draws nothing — rung 4, and a bar with no names.
-        It still publishes, for the reason the docstring above gives.
+        *drawn_rows* is one ``(before, body, drawn)`` per row of the strip, top down. No
+        rows at all is the rung that draws nothing — rung 4, and a bar with no names. It
+        still returns a map, an empty one, for the reason the docstring above gives.
 
-        *before* is what a rung draws between the heading and its FIRST tab — the leading
-        `+3` of the windowed rung, and nothing else today. It is passed rather than glued
-        onto *body* by the caller because the map is measured from where the first tab
-        starts: a rung that composed its own prefix would be publishing columns three
-        cells left of the names it drew, which is a click landing on the tab beside the one
-        the operator pressed. Every other rung starts its tabs at the lead and says so by
-        not passing it.
+        *before* is what a row draws between its lead and its FIRST tab — the leading `+3`
+        of the windowed rung, and nothing else today. It is passed rather than glued onto
+        *body* by the caller because the map is measured from where the first tab starts: a
+        rung that composed its own prefix would be publishing columns three cells left of
+        the names it drew, which is a click landing on the tab beside the one the operator
+        pressed. Every other row starts its tabs at the lead and says so by passing "".
 
-        *more* is the columns of the fields that stand for names this rung could NOT draw
+        *more* is the cells of the fields that stand for names this rung could NOT draw
         — both `+N` counts, and the `n/N`. Passed here rather than worked out inside
         :data:`TABS` for :func:`_tab_columns`' whole reason: the rung that composed the
-        row is the only thing that knows where it put them, and a second walk of the
-        ladder to find them again is a second answer to what is on the row.
+        strip is the only thing that knows where it put them, and a second walk of the
+        ladder to find them again is a second answer to what is on screen.
 
         *add* is the same for :data:`ADD_CHAT`, on the one rung that draws it.
         """
-        TABS.publish(_tab_columns(tui.width(lead + before), drawn, gapw), here, more, add)
-        return [lead + before + body] if body else []
+        cols: dict = {}
+        lines: list[str] = []
+        for r, (before, body, drawn) in enumerate(drawn_rows):
+            head_cells = lead if r == 0 else under
+            cols.update(_tab_columns(r, tui.width(head_cells + before), drawn, gapw))
+            lines.append(head_cells + before + body)
+        return lines, cols, more, add
+
+    def row(body: str = "", drawn=(), before: str = "", more=(), add=()):
+        """A rung that draws ONE row, said the way three of the four rungs say it.
+
+        :func:`rung`'s single-row case, and a wrapper rather than a shape every rung has to
+        spell: three of the four draw exactly one row and said so before #829 gave the
+        fourth some more, and rewriting them to hand over a one-element list of triples
+        would be three call sites edited to say what they already said. An empty *body* is
+        the rung that draws nothing — rung 4, and a bar with no names — which is no rows at
+        all rather than one blank one.
+        """
+        return rung([(before, body, drawn)] if body else [], more, add)
 
     if not names:
         return row()
@@ -3799,11 +3892,11 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     room = width - tui.width(lead)
     joined = gap.join(marked)
     if note and tui.width(joined) + gapw + tui.width(note) <= room:
-        # The affordance's own columns, measured off this composition — :func:`_span`'s
-        # reason, and the same walk the counts get one rung down. It is the ONLY rung that
-        # draws it, which is why a `+` and a `+9` are never on one row.
+        # The affordance's own cells, measured off this composition — :func:`_span`'s
+        # reason, and the same walk the counts get one rung down. It is drawn only where
+        # the whole list is on the strip, which is why a `+` and a `+9` are never on one.
         return row(gap.join(painted) + gap + note, zip(names, marked),
-                   add=_span(tui.width(lead + joined + gap), note))
+                   add=_span(0, tui.width(lead + joined + gap), note))
     if tui.width(joined) <= room:
         return row(gap.join(painted), zip(names, marked))
     if at >= 0:
@@ -3812,7 +3905,17 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         # body this composes IS `joined` — so the rung above asks exactly what this one
         # asks and always answers first. The sweep found the old conditional as a survivor
         # for that reason and the shape has not changed.
-        first, last = _page(marked, at, room, gapw)
+        cuts = _cuts(marked, room, gapw)
+        # **The run of pages this strip's *rows* rows draw, and the page the mark is on is
+        # in it by construction.** The pages are grouped from the start of the list into
+        # runs of *rows*, so the run is `bisect`'s page index divided by the row count —
+        # a function of the names, the width and the row count and of nothing that moves
+        # when the operator switches. `rows == 1` makes every run one page, which is
+        # exactly the answer this rung gave before it could grow.
+        marked_page = bisect.bisect_right(cuts, at) - 1
+        run = (marked_page // rows) * rows
+        stop = min(run + rows, len(cuts) - 1)
+        first, last = cuts[run], cuts[stop]
         # Neither count is a tab. `+9` stands for names that are not on the row, so there
         # is nothing there to switch to and saying so is better than picking one of them —
         # `_Viewport.publish`'s rule for `…(+N more)`, one axis over. **Two of them, and
@@ -3830,28 +3933,66 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         # about what a `+9` looks like it does.
         leading = f"+{first}" if first else ""
         trailing = f"+{len(names) - last}" if last < len(names) else ""
-        before = f"{leading}{gap}" if leading else ""
-        tabs = gap.join(marked[first:last])
-        after = f"{gap}{trailing}" if trailing else ""
-        body = tabs + after
-        # Where the two counts landed, taken from the composition above rather than
-        # searched for in the finished string — :func:`_tab_columns`' discipline for the
-        # names, kept for the fields that are not names. :func:`_span` answers an empty
-        # range for a count this page does not carry, so there is no branch here to get
-        # wrong: a page at the start of the list has no leading count and contributes no
-        # columns.
+        # **The affordance rides the run that holds the WHOLE list**, and only that one.
+        # `_Tabs.add_at`'s structural promise is that a strip carrying `+` carries no `+N`
+        # anywhere, and this is where it is kept: neither count exists exactly when the run
+        # starts at the head of the list and reaches its end, which is the multi-row form
+        # of the rung above. A `+` beside a `+9` on two rows of one strip would be the two
+        # `+` fields on screen together that the promise exists to prevent.
+        # The affordance rides only a run that holds the WHOLE list — no leading count and
+        # no trailing one — which is `_Tabs.add_at`'s structural promise in the shape a
+        # strip with rows needs it: a `+` and a `+9` are never on screen together, and a
+        # second ROW is on screen with the first. `note` is already `""` where a caller
+        # passed none, so the conjunct testing it again was a line no input could make
+        # observable and is not written.
+        tail = note if not leading and not trailing else ""
+        # **Which row each field that is NOT a name goes on, decided ONCE and not per
+        # row.** The leading count belongs beside the first tab drawn and the trailing one
+        # after the last, because that is where the names they stand for actually are; on a
+        # one-row strip both land on the one row, which is the answer this rung gave before
+        # it could grow. Written as two edits to a list of blanks rather than as a
+        # `r == 0`/`last_row` test inside the loop: the loop below is then straight-line,
+        # and four conditional expressions that each had to be got right per row become two
+        # statements that are true of the run.
+        span = range(run, stop)
+        befores = [""] * len(span)
+        afters = [""] * len(span)
+        if leading:
+            befores[0] = f"{leading}{gap}"
+        if trailing or tail:
+            afters[-1] = f"{gap}{trailing or tail}"
         start = tui.width(lead)
-        counts = [*_span(start, leading),
-                  *_span(start + tui.width(before + tabs + gap), trailing)]
-        # Measured, not assumed. :func:`_page` puts at least one name on a page, so a name
+        plain, painted_rows, ends = [], [], []
+        for r, page in enumerate(span):
+            lo, hi = cuts[page], cuts[page + 1]
+            tabs = gap.join(marked[lo:hi])
+            ends.append(start + tui.width(befores[r] + tabs + gap))
+            plain.append((befores[r], tabs + afters[r]))
+            painted_rows.append((befores[r], gap.join(painted[lo:hi]) + afters[r],
+                                 list(zip(names[lo:hi], marked[lo:hi]))))
+        # Where the fields that are not names landed, taken from the composition above
+        # rather than searched for in the finished string — :func:`_tab_columns`'
+        # discipline for the names, kept for the rest. **No branch here at all**:
+        # :func:`_span` answers an empty span for an empty string, and `leading`, `trailing`
+        # and `tail` are already `""` where this run does not carry them, so a run at the
+        # head of the list contributes no leading cells by arithmetic rather than by a
+        # test somebody has to keep true.
+        # **`bottom` and not `last`**, which is a name this rung already gave to the index
+        # one past the last NAME on the run: `trailing` is computed from that one and
+        # everything below is about a ROW, and two meanings for one word on a strip whose
+        # whole subject is which row a field is on is the reading error to refuse.
+        bottom = len(plain) - 1
+        counts = _span(0, start, leading) + _span(bottom, ends[bottom], trailing)
+        add = _span(bottom, ends[bottom], tail)
+        # Measured, not assumed. :func:`_cuts` puts at least one name on a page, so a name
         # wider than the whole row composes a body that overflows — and this ladder gives a
-        # rung up rather than drawing part of anything. Measured on the PLAIN body for the
-        # reason `painted` states: the two are the same width, and the one that is the same
-        # width by construction is the one to hold a refusal on.
-        if tui.width(before + body) <= room:
-            return row(gap.join(painted[first:last]) + after,
-                       zip(names[first:last], marked[first:last]), before=before,
-                       more=counts)
+        # rung up rather than drawing part of anything. Measured on the PLAIN rows for the
+        # reason `painted` states: they are the same width as the painted ones, and the one
+        # that is the same width by construction is the one to hold a refusal on. EVERY row
+        # is measured, not just the first: a run whose second page overflows is a strip
+        # drawing part of a name on a row nothing else would have looked at.
+        if all(tui.width(before + body) <= room for before, body in plain):
+            return rung(painted_rows, more=counts, add=add)
     counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
     if tui.width(counted) <= room:
         # **The narrow rung is a count too, and it is the one where this matters most.**
@@ -3860,7 +4001,7 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
         # all. A frame narrow enough to fall here had a strip that could be pointed at and
         # not pressed; it opens the palette now, which is the surface that works at every
         # width.
-        return row(counted, more=_span(tui.width(lead), counted))
+        return row(counted, more=_span(0, tui.width(lead), counted))
     return row()
 
 
@@ -3895,27 +4036,20 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
 ADD_CHAT = "+"
 
 
-def chats_bar(fid: str, width: int) -> list[str]:
-    """Which chats this workspace holds and which one you are typing in.
-
-    **A readout, never the mechanism** (§3.6). The palette reaches every chat in two
-    keystrokes at every width, including widths where this row cannot be drawn at all —
-    which is why the row may degrade to a count and then to nothing, and why
-    `layout._DROP_ORDER` gives it up before `top`.
+def _chats_strip(fid: str):
+    """What the chat strip is a strip OF — its heading, its names, the one you are typing
+    in, and its note.
 
     Never raises for a plane it cannot read: `chats.roster` already answers with the chat
     asking and nothing else for a frame root it could not scan, and `_bar` answers `[]`
     for an empty list.
     """
     from . import chats as chats_mod
-    names = [c.id for c in chats_mod.roster(fid)]
-    return _bar("chats", names, fid, width, note=ADD_CHAT)
+    return "chats", [c.id for c in chats_mod.roster(fid)], fid, ADD_CHAT
 
 
-def workspaces_bar(fid: str, width: int) -> list[str]:
-    """Which workspaces this plane has and which one this frame is drawing.
-
-    :func:`chats_bar`'s rules and its ladder, one noun over. The name is the FRAME's
+def _workspaces_strip(fid: str):
+    """:func:`_chats_strip` one noun over. The name is the FRAME's
     (`switch.current_workspace` → `state.workspace_for`), never one this pane resolved for
     itself — #512, and the same rung order `_top` reads two rows up.
 
@@ -3928,8 +4062,123 @@ def workspaces_bar(fid: str, width: int) -> list[str]:
     thing a one-row strip can be.
     """
     from . import switch as switch_mod
-    return _bar("workspaces", switch_mod.workspaces(),
-                switch_mod.current_workspace(fid), width)
+    return ("workspaces", switch_mod.workspaces(),
+            switch_mod.current_workspace(fid), "")
+
+
+#: The slots that draw a TAB STRIP, mapped to what each one is a strip of.
+#:
+#: :data:`SLOTS` one component family over, and a table rather than a pair of literals for
+#: that constant's reason: it is what makes "which slots have a height that follows their
+#: content" a question :func:`bar_rows_wanted` can answer for a name, and what makes a
+#: third strip added to charter reach the sizer on the day it is written rather than the
+#: day somebody remembers this file. The deletion sweep can see an entry removed from
+#: here; it could see nothing at all in a comment.
+BARS = {"chats": _chats_strip, "workspaces": _workspaces_strip}
+
+
+def bar_rows_wanted(fid: str, slot: str, *, pane_cols: int, cap: int) -> int:
+    """How many rows *slot*'s tab strip needs to draw every name it has, in a
+    *pane_cols*-column PANE — never fewer than one and never more than *cap* (#829).
+
+    *"panes are resizable — and user can resize and it should show more tabs opened on new
+    resized rows."* A strip cannot make its own pane taller: tmux owns pane geometry and
+    both bars declare `Fixed(1)`, so the row an overflowing strip needs has to be asked for
+    by the LAUNCHER (`layout.slot_sizes`, through `commands_frame._slot_sizes`) and this is
+    the question it asks.
+
+    **One answer to "how tall is this strip", read by both sides of it** —
+    :func:`repos_rows_wanted`'s whole argument, one slot family over, and it is stronger
+    here because this asks the renderer itself. The rung a strip lands on is a four-step
+    ladder with a greedy cut inside it; a second arithmetic that predicted the row count
+    from the names and the width would be a second implementation of that ladder, and the
+    two would disagree the first time a rung moved. :func:`_compose` is the ladder, so what
+    this counts is what the pane will actually hold.
+
+    It composes and never publishes, which is what :func:`_compose` exists for: this runs
+    in the LAUNCHER's process and in the `frame-resize` child, and a sizing question that
+    wrote :data:`TABS` would leave a map describing a strip nobody is looking at.
+
+    *cap* is a caller's, never a policy read here — `layout.BAR_MAX_ROWS`, threaded exactly
+    the way `layout.repos_rows` takes *pinned_rows* and for the same reason: applying a
+    ceiling here AND in `layout._grown` would be a bound no input could make observable,
+    which is the survivor `tools/sweep.py` reports and this repository deletes. It also
+    bounds the loop, so a plane with two hundred chats costs *cap* compositions and not
+    two hundred.
+
+    **The component's own pad comes off *pane_cols* first**, for the reason
+    :func:`repos_rows_wanted` gives about #500: `_chats` composes at :func:`content_width`,
+    so a padded pane's strip is planned for `pane_cols - 2 * pad` and asking the unpadded
+    question would size this pane from a number the renderer never sees.
+
+    **The answer is the tallest height the strip FILLS, and there is deliberately no "does
+    it hold every name yet" test beside it.** There was one — an early ``return rows`` the
+    moment the map held every name — and the deletion sweep reported dropping it as a
+    SURVIVOR. Measured rather than argued: over 406,000 inputs (32 name lists, every mark,
+    every width from 0 to 300, five ceilings) the two answer the same number every time,
+    and they must. A run holds every name exactly when the cut has no more pages than the
+    strip has rows; at that height the run IS the whole list, so the strip fills every row
+    it was given and the line below records it. A greater height cannot beat it either —
+    there are no more pages to draw, so the strip draws fewer rows than it is offered and
+    that height is not recorded. An equivalent mutant and dead code are the same finding,
+    and this repository deletes rather than pins.
+
+    What is left says the whole rule, and it covers two shapes at once: the rungs below the
+    windowed one draw `2/3` or nothing whatever they are offered — a frame too narrow to
+    draw one name is too narrow to draw one on row two — and a run that falls at the end of
+    the cut can be shorter than the rows it was given (see :func:`_compose`). Measuring
+    ROWS rather than rungs is also what covers a rung added below this one on the day it is
+    written: what is being bought is rows.
+
+    One for a *slot* that draws no strip — a caller that asked about `repos` gets the
+    height the pane already has, which is `layout.slot_sizes`' own filter-don't-refuse
+    degrade rather than a raise on a name out of a committed file. One, too, for a *cap*
+    below one: `filled` is the floor and the loop simply does not run, so there is no
+    `max` in front of the range for no input to make observable.
+    """
+    # **Not spelled `strip`**, though it is the natural word for what a `BARS` entry
+    # answers about. `tools/sweep.py`'s `swap-synonym` operator reads `strip` as the string
+    # method and offers `lstrip` for it, so a local of that name spends a mutation on a
+    # question about nothing — the same word collision #842 records one guard over, where
+    # `tests/test_claims`' `_REDACT_VERB` reads `strip` as a promise to redact.
+    entry = BARS.get(slot)
+    if entry is None:
+        return 1
+    head, names, here, note = entry(fid)
+    width = pane_cols - 2 * pad_for(slot, pane_cols)
+    filled = 1
+    for rows in range(1, cap + 1):
+        lines, _cols, _more, _add = _compose(head, names, here, width,
+                                             note=note, rows=rows)
+        if len(lines) == rows:
+            filled = rows
+    return filled
+
+
+def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
+    """Which chats this workspace holds and which one you are typing in.
+
+    **A readout, never the mechanism** (§3.6). The palette reaches every chat in two
+    keystrokes at every width, including widths where this row cannot be drawn at all —
+    which is why the row may degrade to a count and then to nothing, and why
+    `layout._DROP_ORDER` gives it up before `top`.
+
+    *rows* is the pane's height, which the strip grows into only as far as its names need.
+    It defaults to one because one is the shape every caller had before #829 and the shape
+    a strip whose names fit still has.
+    """
+    head, names, here, note = _chats_strip(fid)
+    return _bar(head, names, here, width, note=note, rows=rows)
+
+
+def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
+    """Which workspaces this plane has and which one this frame is drawing.
+
+    :func:`chats_bar`'s rules and its ladder, one noun over — see :func:`_workspaces_strip`
+    for what it draws and why it draws no `+`.
+    """
+    head, names, here, note = _workspaces_strip(fid)
+    return _bar(head, names, here, width, note=note, rows=rows)
 
 
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no

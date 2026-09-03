@@ -552,7 +552,8 @@ class TheBoundaryIsWhereThePlaneIsRead(unittest.TestCase):
         answer is plausible."""
         with mock.patch.dict(config.FRAME, _arrangement(size=15)), \
                 mock.patch("charter.frame.slots.repos_rows_wanted", return_value=3):
-            got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200)
+            got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
+                                             order=SLOTS, window_cols=200)
         self.assertEqual(got["repos"], 15)
 
     def test_a_plane_that_pins_nothing_still_gets_its_clone_count_through(self):
@@ -560,7 +561,8 @@ class TheBoundaryIsWhereThePlaneIsRead(unittest.TestCase):
         passed `pinned_rows` and dropped `content_rows` would pass the case above."""
         with mock.patch.dict(config.FRAME, _arrangement()), \
                 mock.patch("charter.frame.slots.repos_rows_wanted", return_value=3):
-            got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200)
+            got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
+                                             order=SLOTS, window_cols=200)
         self.assertEqual(got["repos"], 3)
 
     def test_the_resize_hook_sizes_the_strip_from_the_pin_and_not_the_clone_count(self):

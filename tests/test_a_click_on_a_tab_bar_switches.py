@@ -154,7 +154,7 @@ class AClickOnAChatTabStartsTheChatSwitch(_ABarThatWasDrawn, unittest.TestCase):
         row = slots.chats_bar("api.1", self.WIDTH)[0]
         self.assertNotIn("web.1", row)
         for col in range(0, self.WIDTH):
-            self.assertNotEqual(slots.TABS.switch_to(col), "web.1", f"column {col}")
+            self.assertNotEqual(slots.TABS.switch_to(0, col), "web.1", f"column {col}")
 
     def test_a_tab_the_command_will_refuse_is_still_handed_to_the_command(self):
         """**The refusal belongs where it can be SAID**, which is not here.
@@ -214,7 +214,7 @@ class AClickOnAWorkspaceTabStartsTheWorkspaceSwitch(_ABarThatWasDrawn,
         process would have resolved for itself out of a shared server's environment."""
         self.assertIn("*beta", self.row)
         for col in range(0, self.WIDTH):
-            self.assertNotEqual(slots.TABS.switch_to(col), "beta", f"column {col}")
+            self.assertNotEqual(slots.TABS.switch_to(0, col), "beta", f"column {col}")
         self.assertEqual(self.spawned, [])
 
 
@@ -579,13 +579,13 @@ class APressOnThePlusMakesAChat(_ABarThatWasDrawn, unittest.TestCase):
         The chat bar is asked the same question with the same hand-made map, so this is
         not "the workspaces handler ignores everything" wearing an assertion.
         """
-        slots.TABS.publish({}, "", add=[7])
+        slots.TABS.publish({}, "", add=[(0, 7)])
         self.spawned.clear()
         self._handler("workspaces", "f1")(_press(7))
         self.assertEqual(self.spawned, [],
                          "the workspace bar's handler makes chats — it is only the "
                          "renderer that is stopping it")
-        slots.TABS.publish({}, "", add=[7])
+        slots.TABS.publish({}, "", add=[(0, 7)])
         self._handler("chats", "f1")(_press(7))
         self.assertEqual([argv[-1] for argv, _fid in self.spawned], ["frame-new-chat"],
                          "the control failed: the chat bar's handler is not wired either")

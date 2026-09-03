@@ -122,9 +122,15 @@ class Declared(unittest.TestCase):
         sidebar rather than a pane: it is bounded like `todos` and for the same reason —
         a column that is one list has no room to let a second one grow without end.
 
-        The two bars are `Fixed(1)` on `top`, §3.6's own literals: a bar is one row or it
-        is nothing, and a `Content()` bar would be a row that appeared and disappeared as
-        a sibling chat opened, moving every pane below it."""
+        The two bars are `Fixed(1)` on `top`, §3.6's own literals: one row is what a strip
+        starts at, and a `Content()` bar would be a row that appeared and disappeared as a
+        sibling chat opened, moving every pane below it. **A strip that overflows is taller
+        than this and it is still `Fixed(1)` here** (#829): the extra rows are a size
+        `layout.slot_sizes` grants out of the harness's own slack, so the declaration stays
+        the floor and the growth stays somewhere a short window can refuse it. A `Content()`
+        declaration would put both bars in `layout.VARIABLE_ROW_SLOTS`, which is also which
+        pane `commands_frame._apply_sizes` leaves unasserted — three such panes in one stack
+        and only one may be the remainder."""
         got = {c.id: (c.edge, c.size) for c in self.reg.all()}
         self.assertEqual(got, {
             "identity": ("top", component.Fixed(1)),
