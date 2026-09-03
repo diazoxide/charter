@@ -209,6 +209,48 @@ class APathThatWouldEscapeTheCheckout(CloneLayer):
         self.assertFalse((workspace.workspace_dir(self.ws) / "escaped.json").exists())
 
 
+class TheReportIsInAStableOrder(CloneLayer):
+    """A checkout holds MORE than one generated file now, so ordering stopped being
+    invisible the day agents were mirrored in.
+
+    `doctor` prints the first four findings and elides the rest; an order that comes out
+    of a dict is a truncated report whose contents change with insertion, for a tree where
+    nothing changed. The exclude block has the same property with an operator reading it,
+    and `unwire_guest`'s answer is what a caller prints back.
+    """
+
+    def agents(self, *names: str) -> None:
+        d = config.ROOT / ".claude" / "agents"
+        d.mkdir(parents=True, exist_ok=True)
+        for n in names:
+            (d / n).write_text(f"# {n}\n")
+
+    def test_the_layer_rows_are_sorted(self):
+        self.agents("zulu.md", "alpha.md", "mike.md")
+        rels = [rel for rel, _status in workspace.guest_layer(self.clone)]
+        self.assertEqual(rels, sorted(rels))
+        # Spelled out as well as compared: `sorted(rels) == rels` also holds for a list of
+        # one, and this class exists because there is now more than one.
+        self.assertEqual(rels[0], ".claude/agents/alpha.md")
+
+    def test_the_block_lists_the_paths_sorted(self):
+        self.agents("zulu.md", "alpha.md", "mike.md")
+        self.wire()
+        listed = [ln for ln in self.excludes().splitlines() if ln.startswith("/")]
+        self.assertEqual(listed[:3], ["/.claude/agents/alpha.md",
+                                      "/.claude/agents/mike.md",
+                                      "/.claude/agents/zulu.md"])
+
+    def test_what_unwiring_reports_removing_is_sorted(self):
+        self.agents("zulu.md", "alpha.md", "mike.md")
+        self.wire()
+        removed = workspace.unwire_guest(self.clone)
+        self.assertEqual(removed[:-1], sorted(removed[:-1]))
+        self.assertEqual(removed[0], ".claude/agents/alpha.md")
+        self.assertEqual(removed[-1], workspace.GENERATED_MARKER,
+                         "the marker goes last — it is what vouches for the rest")
+
+
 class NothingShowsUpInTheirStatus(CloneLayer):
     """The constraint that makes the feature admissible: the operator's own `git status`."""
 
