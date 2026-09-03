@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, persona
+from charter import workspace as ws_mod
 from charter.frame import leave, reopen, state
 
 from tests._isolation import PersonaIso
@@ -44,7 +45,8 @@ def _doomed(**kw):
     """
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="/tmp", resume="", server=SERVER, live=True, active=False,
-                exit_code=None, closed=False, homeless=False, cwd_gone=False)
+                exit_code=None, closed=False, homeless=False, cwd_gone=False,
+                cwd_outside=False)
     base.update(kw)
     return leave.Doomed(**base)
 
@@ -76,10 +78,14 @@ class TheWarningNamesWhatEachChatLoses(PersonaIso, unittest.TestCase):
         self.assertFalse(leave.resumable_harness(""))
 
     def test_a_missing_workspace_is_reported_and_never_re_homed(self):
+        """Still the chat's own workspace and still reported — what #867 changed is that
+        its DIRECTORY is remade rather than the chat being stood in the plane root, which
+        is repairing the boundary, not moving the chat out of it."""
         note = leave.note(_doomed(resume="c", workspace="gone", homeless=True))
 
         self.assertIn("gone", note)
         self.assertIn(leave.RESUMES, note)
+        self.assertIn("remade", note)
 
     def test_a_chat_with_no_workspace_record_is_told_it_cannot_be_reopened(self):
         # The one chat this design cannot bring back, and the note promises nothing —
@@ -95,10 +101,35 @@ class TheWarningNamesWhatEachChatLoses(PersonaIso, unittest.TestCase):
                          f"{leave.NOT_REOPENED} · already ended on its own (3)")
 
     def test_a_directory_that_has_gone_names_the_fallback(self):
+        """And the fallback is the WORKSPACE, since #867 — a row still promising the plane
+        root would be promising something the restore stopped doing."""
         note = leave.note(_doomed(resume="c", cwd="/nowhere", cwd_gone=True))
 
         self.assertIn("/nowhere", note)
-        self.assertIn("plane root", note)
+        self.assertIn("reopens in its workspace", note)
+        self.assertNotIn("plane root", note)
+
+    def test_a_directory_outside_the_workspace_says_the_chat_will_be_moved(self):
+        """The clause #867 added, and the reason it had to exist: this state used to cost
+        the operator nothing to be told about, because the restore stood the chat back in
+        that directory. It now moves it, and a preview that said nothing would be option
+        (b) — *"loses information and silently moves you"* — arriving on the quit surface
+        instead of the restore one."""
+        note = leave.note(_doomed(resume="c", cwd="/elsewhere", cwd_outside=True))
+
+        self.assertIn("/elsewhere", note)
+        self.assertIn("outside its workspace", note)
+
+    def test_a_directory_inside_the_workspace_is_not_worth_a_clause(self):
+        """`cwd_outside=False` — the ordinary chat, whose directory comes back as it is."""
+        self.assertEqual(leave.note(_doomed(resume="c", cwd="/tmp")), leave.RESUMES)
+
+    def test_no_directory_recorded_names_the_workspace_too(self):
+        """The third cwd clause, which the same reword moved off the plane root."""
+        note = leave.note(_doomed(resume="c", cwd=""))
+
+        self.assertIn("no directory recorded", note)
+        self.assertIn("reopens in its workspace", note)
 
     def test_a_chat_that_already_ended_says_with_which_code(self):
         self.assertIn("(7)", leave.note(_doomed(resume="c", exit_code=7)))
@@ -297,7 +328,13 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         self.assertEqual(self.calls[0].rest, [])
         self.assertEqual(len(self.calls), 1, "it was reopened rather than dropped")
 
-    def test_the_workspace_and_the_directory_are_the_recorded_ones(self):
+    def test_a_recorded_directory_outside_the_workspace_is_not_where_it_comes_back(self):
+        """#867, end to end: the workspace is the isolation boundary, so that is where the
+        launcher is standing — not in the directory the record happens to carry.
+
+        The fixture is the operator's own `harness-wrapper.1`, in miniature: a chat that
+        says ``workspace = alpha`` and ``cwd =`` somewhere else entirely, which is the state
+        typing `charter` in the plane root produced before the tab machinery existed."""
         where = config.ROOT / "somewhere"
         where.mkdir()
         self._record(self._chat(workspace="alpha", cwd=str(where)))
@@ -305,14 +342,46 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         self.assertEqual(self._reopen(), 0)
 
         self.assertEqual(self.calls[0].workspace, "alpha")
-        self.assertEqual(self.calls[0].cwd, str(where.resolve()))
+        self.assertEqual(self.calls[0].cwd,
+                         str(ws_mod.workspace_dir("alpha").resolve()))
 
-    def test_a_directory_that_has_gone_falls_back_to_the_plane_root(self):
+    def test_a_recorded_directory_inside_the_workspace_is_kept_exactly(self):
+        """The other half of the same rule, and the reason the test is containment rather
+        than equality: a chat recorded in ``workspaces/<ws>/<repo>`` is standing in one of
+        that workspace's clones ON PURPOSE, and hauling it up to the workspace root would
+        be a new silent move put in place of the old one."""
+        clone = ws_mod.ensure("alpha") / "some-repo"
+        clone.mkdir()
+        self._record(self._chat(workspace="alpha", cwd=str(clone)))
+
+        self.assertEqual(self._reopen(), 0)
+
+        self.assertEqual(self.calls[0].cwd, str(clone.resolve()))
+
+    def test_a_directory_that_has_gone_falls_back_to_the_workspace(self):
+        """It used to fall back to the plane root, which #867 is the end of: a workspace
+        the chat named is a better answer than the one directory every workspace shares."""
         self._record(self._chat(cwd="/nowhere-at-all"))
 
         self.assertEqual(self._reopen(), 0)
 
-        self.assertEqual(self.calls[0].cwd, str(config.ROOT.resolve()))
+        self.assertEqual(self.calls[0].cwd,
+                         str(ws_mod.workspace_dir("alpha").resolve()))
+
+    def test_a_workspace_with_no_directory_yet_is_made_before_the_chat_lands_in_it(self):
+        """#867's second half. `_launch_root` answers `config.ROOT` for a workspace that has
+        no directory — a real state, since `switch.workspaces` offers `default` whether or
+        not its directory exists — so a restore that reused it would put the chat in the
+        plane root by a second route while reporting the workspace."""
+        self.assertFalse(ws_mod.workspace_dir("alpha").exists(),
+                         "or this case is not about a workspace that has to be made")
+        self._record(self._chat(cwd="/nowhere-at-all"))
+
+        self.assertEqual(self._reopen(), 0)
+
+        self.assertTrue(ws_mod.workspace_dir("alpha").is_dir())
+        self.assertEqual(self.calls[0].cwd,
+                         str(ws_mod.workspace_dir("alpha").resolve()))
 
     def test_the_launcher_is_left_standing_where_it_started(self):
         import os

@@ -71,6 +71,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, contain, util
+from charter import workspace as ws_mod
 from charter.frame import builtin_actions, component, leave, palette, reopen, state
 
 from tests._isolation import PersonaIso
@@ -86,7 +87,8 @@ HOSTILE = "claude\x1b[2Jcode\nrm -rf /"
 def _doomed(**kw):
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="/tmp", resume="", server=SERVER, live=True, active=False,
-                exit_code=None, closed=False, homeless=False, cwd_gone=False)
+                exit_code=None, closed=False, homeless=False, cwd_gone=False,
+                cwd_outside=False)
     base.update(kw)
     return leave.Doomed(**base)
 
@@ -331,8 +333,15 @@ class AValueOffTheManifestCannotOwnTheLine(PersonaIso):
         self.assertContained(line)
 
     def test_a_directory_charter_cannot_enter_is_shown_not_executed(self):
-        """The third wrapper, on the value that reached `os.chdir` and refused."""
-        where = config.ROOT / "gone"
+        """The third wrapper, on the value that reached `os.chdir` and refused.
+
+        **The hostile path is INSIDE the workspace**, and that is #867 rather than a
+        detail: a restore only stands in a recorded cwd it has contained
+        (`_restore_root`), so the manifest value that can still reach `os.chdir` is one
+        under ``workspaces/<ws>/``. A fixture standing outside it would now measure the
+        workspace directory charter composed itself, which no manifest can influence and
+        which needs no wrapper."""
+        where = ws_mod.workspace_dir("alpha") / "clone"
         with mock.patch.object(commands_frame.os, "chdir",
                                side_effect=OSError(13, "refused")), \
                 mock.patch.object(commands_frame.os.path, "isdir", return_value=True):

@@ -90,12 +90,25 @@ class Doomed(NamedTuple):
     #: :func:`plan` has one place that drops it.
     closed: bool
     #: Whether the workspace this chat belongs to still has a directory on disk
-    #: (`workspace.exists`, the one predicate the repo pane asks too — #752). §4j forbids
-    #: re-homing a chat, so a missing workspace is *reported*, never repaired; a RENAMED
-    #: one is not missing at all, because `workspace.rename` repoints the chat (#795).
+    #: (`workspace.exists`, the one predicate the repo pane asks too — #752). A RENAMED
+    #: workspace is not missing at all, because `workspace.rename` repoints the chat
+    #: (#795).
+    #:
+    #: **§4j still forbids re-homing and a reopen still does not do it** — the chat comes
+    #: back in the workspace it named, under the id it named. What changed with #867 is
+    #: that the DIRECTORY is remade (`workspace.ensure`) instead of the chat being stood in
+    #: the plane root, which is repairing the boundary rather than moving the chat out of
+    #: it. Its clones are still gone, so the row goes on saying the workspace was missing.
     homeless: bool
     #: Whether the recorded cwd is still a directory.
     cwd_gone: bool
+    #: Whether the recorded cwd is a directory OUTSIDE this chat's workspace — the state
+    #: #867 is about, and the one a preview used to say nothing at all about. A restore
+    #: lands in the workspace (`commands_frame._restore_root`), so a cwd standing outside
+    #: it is a chat that WILL be moved, and the row that promises what a reopen gives back
+    #: has to say so. ``False`` for a cwd that is gone, for one that was never recorded and
+    #: for a chat with no workspace: none of those is a chat standing somewhere else.
+    cwd_outside: bool
 
 
 class Plan(NamedTuple):
@@ -166,6 +179,11 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
             closed=False,
             homeless=bool(ws) and not ws_mod.exists(ws),
             cwd_gone=bool(cwd) and not os.path.isdir(cwd),
+            # `ws_mod.contains` and not a `workspaces/<ws>/` prefix test, because it is the
+            # same predicate `commands_frame._restore_root` decides with — the promise and
+            # the act have to be one reading, which is this record's whole reason.
+            cwd_outside=(bool(cwd) and bool(ws) and os.path.isdir(cwd)
+                         and not ws_mod.contains(ws, cwd)),
         ))
     return Plan(chats=tuple(out), focus=focus)
 
@@ -315,11 +333,21 @@ def note(c: Doomed) -> str:
         return JOIN.join([NOT_REOPENED] + _ended(c))
     parts = [_resume_clause(c)]
     if c.homeless:
-        parts.append(f"workspace '{c.workspace}' is gone — reopens saying so")
+        parts.append(f"workspace '{c.workspace}' is gone — reopens in a remade, empty one")
+    # **All three cwd clauses now end in the workspace, and that is #867 rather than a
+    # reword.** A reopen used to stand the chat in its recorded cwd and fall back to the
+    # plane root, so "reopens in the plane root" was what a lost directory cost; it now
+    # lands in the workspace, which is the isolation boundary the chat belongs to, and a
+    # row still promising the plane root would be promising something charter stopped
+    # doing. The third clause is new because the state it names used to cost nothing to
+    # say: a cwd standing OUTSIDE the workspace was restored verbatim, and is now moved.
     if c.cwd_gone:
-        parts.append(f"its directory {c.cwd} is gone — reopens in the plane root")
+        parts.append(f"its directory {c.cwd} is gone — reopens in its workspace")
+    elif c.cwd_outside:
+        parts.append(f"it is standing in {c.cwd}, outside its workspace — reopens in the "
+                     f"workspace")
     elif not c.cwd:
-        parts.append("no directory recorded — reopens in the plane root")
+        parts.append("no directory recorded — reopens in its workspace")
     return JOIN.join(parts + _ended(c))
 
 

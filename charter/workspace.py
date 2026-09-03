@@ -295,6 +295,47 @@ def from_path(path=None) -> str | None:
     return parts[0] if len(parts) >= 2 else None
 
 
+def contains(name: str, path) -> bool:
+    """Whether *path* is inside workspace *name*'s own subtree — #867.
+
+    **The isolation boundary as a containment question, which is a different one from
+    :func:`from_path`.** That function asks "which workspace's *tree* is this", and
+    answers ``None`` for ``workspaces/<ws>`` itself, deliberately: the workspace directory
+    is the container and not a repo, and a status line naming a workspace for a path with
+    no repo in it would be claiming a tree that is not there. This asks the question a
+    *boundary* has to answer, where the container counts — so it is that predicate plus the
+    directory itself, rather than a loosening of it.
+
+    Used by `commands_frame._restore_root`, to decide whether a recorded cwd is one a
+    restore may keep, and by `frame/leave.plan`, so the quit preview promises the same
+    thing the restore then does. Spelled once for `_launch_root`'s reason: it was about to
+    be the same three lines twice, in two modules that must not come to disagree.
+
+    **A prefix test on `workspaces/<ws>/` would be wrong**, and that is why this delegates
+    rather than joining paths. A worktree lives at ``<[plane] worktrees>/<ws>/<repo>/…``,
+    outside ``workspaces/`` entirely, and is every bit as much that workspace's own tree as
+    a clone is; `from_path` already tries both roots (`worktree.locate`), and a second
+    reading here would be a second answer to go stale.
+
+    Resolved on both sides, like :func:`contain.within_data`: a recorded cwd came off
+    `os.getcwd()`, which returns a path with the links already walked, while
+    ``WORKSPACES_DIR`` is joined from the plane root as configured — and on macOS a plane
+    under ``/var/folders`` is reached through a link to ``/private/var``. Comparing the two
+    as text answers *outside* for a path that is plainly inside.
+
+    Never creates and never raises, like every predicate here: an unresolvable path is
+    simply not contained.
+    """
+    if not valid_name(name) or not path:
+        return False
+    if from_path(path) == name:
+        return True
+    try:
+        return os.path.realpath(path) == os.path.realpath(workspace_dir(name))
+    except (OSError, ValueError):
+        return False
+
+
 def clone_of(path=None) -> tuple[str, str] | None:
     """``(workspace, repo)`` when *path* is inside a **clone**, else ``None``.
 

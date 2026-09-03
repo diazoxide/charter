@@ -1184,7 +1184,8 @@ def _doomed(**kw):
     """One `leave.Doomed` with every field defaulted, so a case states only what it means."""
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="", resume="", server=commands_frame.SOCKET, live=True, active=False,
-                exit_code=None, closed=False, homeless=False, cwd_gone=False)
+                exit_code=None, closed=False, homeless=False, cwd_gone=False,
+                cwd_outside=False)
     base.update(kw)
     return leave.Doomed(**base)
 

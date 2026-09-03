@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, inflight, util
+from charter import workspace as ws_mod
 from charter.frame import chats, leave, reopen, state
 
 from tests._isolation import PersonaIso
@@ -66,7 +67,7 @@ def _doomed(**kw):
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="/tmp", resume="", server=commands_frame.SOCKET, live=True,
                 active=False, exit_code=None, closed=False, homeless=False,
-                cwd_gone=False)
+                cwd_gone=False, cwd_outside=False)
     base.update(kw)
     return leave.Doomed(**base)
 
@@ -595,18 +596,56 @@ class ReopeningOneChatSaysWhatItChanged(PersonaIso):
         self.assertEqual(seen[0].harness, "claude")
         self.assertTrue(any("reopening it under claude" in s for s in said))
 
-    def test_a_directory_that_has_gone_falls_back_to_the_plane_root_and_says_so(self):
-        """`if where != c.cwd:` — the warning that only exists when the fallback fired."""
+    def test_a_directory_that_has_gone_is_named_beside_the_one_it_comes_back_in(self):
+        """`_was_standing_in`'s middle branch — a cwd that was recorded and has since
+        gone."""
         out, said, seen = self._reopen(_chat(cwd="/nowhere-at-all"))
 
         self.assertIsNotNone(out)
-        self.assertTrue(any("directory" in s and "reopening in" in s for s in said))
+        line = next(s for s in said if "comes back in" in s)
+        self.assertIn("/nowhere-at-all", line)
+        self.assertIn("is gone", line)
+        self.assertIn(str(ws_mod.workspace_dir("alpha")), line)
 
-    def test_a_directory_that_is_there_says_nothing_about_it(self):
+    def test_a_directory_that_was_never_recorded_says_that_rather_than_naming_none(self):
+        """`_was_standing_in`'s first branch. A chat launched by a charter older than
+        `state.record_cwd` carries ``""``, and a line reading *"it had been standing in"*
+        with nothing after it would be charter naming a directory it never had."""
+        _out, said, _seen = self._reopen(_chat(cwd=""))
+
+        line = next(s for s in said if "comes back in" in s)
+        self.assertIn("no directory was ever recorded for it", line)
+
+    def test_a_directory_outside_the_workspace_names_where_it_had_been_standing(self):
+        """#867's own case, and the third branch: the cwd is a perfectly good directory,
+        it is simply not the chat's workspace. The plane root is exactly how the operator's
+        `harness-wrapper.1` got there, so it is what the fixture stands in."""
         _out, said, _seen = self._reopen(_chat(cwd=str(config.ROOT)))
 
-        self.assertFalse([s for s in said if "reopening in" in s],
-                         "a fallback that did not fire has nothing to report")
+        line = next(s for s in said if "comes back in" in s)
+        self.assertIn(f"it had been standing in {config.ROOT}", line)
+        self.assertIn(f"its workspace directory {ws_mod.workspace_dir('alpha')}", line)
+
+    def test_a_directory_inside_the_workspace_says_nothing_and_moves_nothing(self):
+        """The chat that was already where it belongs, which is most of them: a restore
+        that reported a move it did not make would put #867's line on every launch."""
+        clone = ws_mod.ensure("alpha") / "some-repo"
+        clone.mkdir()
+
+        _out, said, _seen = self._reopen(_chat(cwd=str(clone)))
+
+        self.assertFalse([s for s in said if "comes back in" in s],
+                         "a restore that moved nothing has nothing to report")
+
+    def test_a_chat_with_no_workspace_is_not_told_it_landed_in_one(self):
+        """The `landing` conditional. `_restore_root`'s no-workspace branch falls back to
+        the plane root, and calling that *"its workspace directory"* would be charter
+        claiming a boundary this chat does not have."""
+        _out, said, _seen = self._reopen(_chat(workspace="", cwd="/nowhere-at-all"))
+
+        line = next(s for s in said if "comes back in" in s)
+        self.assertIn(f"comes back in {config.ROOT}", line)
+        self.assertNotIn("its workspace directory", line)
 
     def test_a_chat_with_no_id_is_reported_as_coming_back_empty(self):
         """`leave.RESUMES if rest else 'empty'`. Both halves, because the constant half was
@@ -618,17 +657,28 @@ class ReopeningOneChatSaysWhatItChanged(PersonaIso):
         self.assertTrue(any(f"· {leave.RESUMES}" in s for s in said))
 
     def test_a_chat_whose_workspace_is_gone_is_reported_as_missing(self):
-        """`" · workspace is missing" if c.workspace and not workspace_dir(...).is_dir()`.
-        Both conjuncts: a chat with no workspace at all says nothing (it is `_usable`'s
-        business, and this line would name the empty string), and one whose workspace
-        directory is there says nothing either."""
+        """`" · workspace was missing — remade empty" if homeless`. Both conjuncts: a chat
+        with no workspace at all says nothing (it is `_usable`'s business, and this line
+        would name the empty string), and one whose workspace directory is there says
+        nothing either."""
         _out, said, _seen = self._reopen(_chat(workspace="ghost"))
-        self.assertTrue(any("workspace is missing" in s for s in said))
+        self.assertTrue(any("workspace was missing" in s for s in said))
 
-        from charter import workspace as ws_mod
         config.private_mkdir(ws_mod.workspace_dir("alpha"))
         _out, said, _seen = self._reopen(_chat(workspace="alpha"))
-        self.assertFalse([s for s in said if "workspace is missing" in s])
+        self.assertFalse([s for s in said if "workspace was missing" in s])
+
+    def test_the_workspace_a_restore_remade_is_still_reported_as_having_been_gone(self):
+        """**Asked before `_restore_root`, which is the whole of this case.** #867 makes the
+        restore CREATE the workspace directory it is about to stand the chat in, so a note
+        read off disk afterwards would answer "present" for every chat and delete the only
+        warning a deleted workspace gets — silently, and with the code still there to read.
+        """
+        _out, said, _seen = self._reopen(_chat(workspace="ghost"))
+
+        self.assertTrue(ws_mod.workspace_dir("ghost").is_dir(),
+                        "or this case is not about a workspace the restore had to make")
+        self.assertTrue(any("workspace was missing" in s for s in said))
 
     def test_a_chat_with_no_workspace_hands_the_launcher_none_and_not_an_empty_name(self):
         """`workspace=c.workspace or None` — `cmd_launch` reads `None` as "resolve one" and
