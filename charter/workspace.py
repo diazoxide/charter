@@ -1324,6 +1324,25 @@ def _layer_files(name: str) -> dict[str, str]:
 #: opinions about. Dropping the plane's project instructions into a repo charter does not
 #: own, to be read as that repo's instructions, is a claim of a different size from
 #: mirroring a settings key; a guest may hide its own files, not narrate the host's.
+#:
+#: **These two paths are Claude Code's spelling, and that is a stated LIMIT rather than
+#: an assumption that it is the only harness.** Everything else on this path is
+#: harness-agnostic: the mechanism below writes, marks, hides and removes whatever
+#: :func:`_harness_files` returns, which is every registered harness's own
+#: `workspace_files()` — so a harness that answers with files gets them into a clone the
+#: day it answers, with no change here. Only this list is hard-coded, because it is not
+#: any harness's answer: it is the plane's OWN directories, and charter has to know their
+#: names to find them.
+#:
+#: The other two harnesses do read project-level surfaces, measured against the installed
+#: binaries (codex-cli 0.147.0, opencode 1.18.23): opencode reads `opencode.json` and
+#: `.opencode/agent/` at a project root, and Codex reads `.codex/skills/` (though not a
+#: project `.codex/config.toml`). So the same cut-off exists for them in a clone and is
+#: NOT closed here. It is not closed by adding their directory names to this tuple
+#: either: what a harness needs in a tree is `workspace_files()`'s question, and
+#: answering it for them from this module is the mistake `harness/registry.py` exists to
+#: stop — charter naming a harness's files on its behalf, in a file that has to be
+#: edited every time another harness is added.
 WALKUP_DIRS = (".claude/agents", ".claude/skills")
 
 

@@ -82,6 +82,12 @@ repo is unaffected, and nothing charter wrote can be staged. Linked worktrees in
 their `info/exclude` is the main repo's, which is also why removal is not just a
 `rm -rf`.
 
+The *mechanism* is harness-agnostic: whatever a harness declares it needs in a tree is
+written, marked, hidden and removed the same way. The two mirrored directories are Claude
+Code's, and that is a limit rather than a claim about the others — opencode reads
+`opencode.json` and `.opencode/agent/` at a project root, and Codex reads
+`.codex/skills/`, so a clone cuts those off too and charter does not yet carry them in.
+
 ## `charter statusline --watch`
 
 The one worth knowing. It repaints the plane state in place in any spare terminal — no
