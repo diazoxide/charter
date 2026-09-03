@@ -831,11 +831,38 @@ to record it is exactly the invasive quit this exists to prevent, so that refuse
 nothing.
 
 **`charter reopen` puts the recorded plane back.** Every workspace, every chat, each one's
-persona and the directory it was started in — and, for Claude Code, the conversation, by
+persona and the directory it belongs in — and, for Claude Code, the conversation, by
 resuming it. It attaches you to the workspace you pressed quit in, on the chat that was in
 front of you. The record describes one quit and is consumed chat by chat, so running it
 twice does not double your tabs — and if some chat could not be started, exactly that chat
 stays recorded, so a second `charter reopen` retries just it.
+
+**A chat comes back in its workspace, and is told when that is not where it had been.** The
+record stores the directory the harness was actually standing in; the restore lands in
+`workspaces/<ws>/`, which is the isolation boundary the chat belongs to. The two agree for
+every chat opened through the frame. Where they disagree — a chat started by typing
+`charter` in the plane root, before the tab machinery existed, and carrying that as its
+directory ever since — a restore that reproduced it faithfully would be reproducing a state
+already agreed wrong, on every launch rather than once. So it lands in the workspace and
+says where it had been:
+
+```
+⚠ charter reopen: harness-wrapper.1 comes back in its workspace directory
+  …/workspaces/harness-wrapper — it had been standing in /Users/aharon/IdeaProjects/charter
+```
+
+**A directory *inside* the workspace is kept exactly as it is**, because the test is
+containment and not equality: a chat recorded in `workspaces/<ws>/<repo>` is standing in one
+of that workspace's clones on purpose, and moving it up to the workspace root would be a new
+silent move in place of the old one. Worktrees count as well, wherever `[plane] worktrees`
+puts them. Nothing is said about a chat that was already where it belongs.
+
+**The workspace directory is made before the chat is put in it.** A workspace with no
+directory yet is ordinary — `default` is offered whether or not anybody has made one — and
+falling back to the plane root there would be the same wrongness by a second route. A
+workspace whose directory has been deleted is remade the same way, empty, and the chat's
+line says so; its clones are still gone, and charter still never re-homes a chat into a
+workspace it did not name.
 
 Run it from an ordinary shell. **Inside a tmux you already have it refuses**, because charter
 builds a frame there as a window on your own server and that launcher stays awake for the
@@ -906,8 +933,9 @@ it.
 own session id from Claude Code's status-line hook, which is the only harness that supplies
 one — so it is the only harness whose conversation charter can ask for back. A chat that
 cannot be resumed still comes back: its directory, its workspace and its persona return, and
-only the conversation is gone. A chat whose *workspace* has been deleted comes back too, and
-says the workspace is missing; charter never quietly re-homes a chat.
+only the conversation is gone. A chat whose *workspace* has been deleted comes back too, into
+a remade and empty one, and says the workspace was missing; charter never quietly re-homes a
+chat, and a workspace it re-makes is the chat's own.
 
 **`F2 → chat: previous transcript`** opens what a chat had on screen before it was last
 stopped, in a pager, in a window of its own. tmux history dies with its session and
