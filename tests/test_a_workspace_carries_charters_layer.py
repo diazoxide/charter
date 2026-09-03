@@ -348,6 +348,65 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class AMarkerCharterCannotReadIsNotAMarker(WorkspaceLayer):
+    """`_read_marker` — three ways the sidecar fails, and they must all mean the same thing.
+
+    The marker answers *did charter write this file?*, so a marker charter cannot read has
+    to answer **no**, and `harness_layer` must then call the file `foreign` and leave it.
+    Getting that backwards is the destructive direction: a wrong *yes* overwrites work.
+
+    Three failures the sweep found unpinned. **Missing** is the ordinary case and is
+    covered elsewhere. **Unparseable** and **not-a-dict** are different: a truncated write
+    leaves bytes that are not JSON, and a file whose top level is a list or a string parses
+    fine and then answers nothing to `marker.get(rel)`. Without the `isinstance` that is an
+    `AttributeError` out of a reader whose whole contract is to degrade.
+
+    The `except` is narrow on purpose — `check_memory_indexes`' recorded reason is that a
+    broad catch here once swallowed a `NameError` and reported OK.
+    """
+
+    def _marker(self):
+        return workspace.workspace_dir(self.ws) / workspace.GENERATED_MARKER
+
+    def test_bytes_that_are_not_json_read_as_no_marker(self):
+        self._marker().write_text("{ truncated")
+        self.assertEqual(workspace._read_marker(self.ws), {})
+
+    def test_bytes_that_are_not_text_read_as_no_marker(self):
+        self._marker().write_bytes(b"\xff\xfe not utf-8")
+        self.assertEqual(workspace._read_marker(self.ws), {})
+
+    def test_valid_json_that_is_not_an_object_reads_as_no_marker(self):
+        for doc in ("[]", '"a string"', "3", "null"):
+            self._marker().write_text(doc)
+            self.assertEqual(workspace._read_marker(self.ws), {}, doc)
+
+    def test_an_edited_file_whose_marker_cannot_be_read_is_foreign_and_survives(self):
+        """The consequence, not the return value. `ok` is decided by CONTENT equality, so
+        an unreadable marker changes nothing while the file still matches — the marker only
+        separates `stale` (charter's, the plane moved) from `foreign` (somebody else's).
+        Edit the file AND break the marker and charter must choose `foreign`, because the
+        wrong answer here overwrites work."""
+        self.settings().write_text("{ \"env\": {} }")
+        self._marker().write_text("[]")
+        rows = dict(workspace.harness_layer(self.ws))
+        self.assertEqual(rows[".claude/settings.json"], "foreign")
+        before = self.settings().read_text()
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(self.settings().read_text(), before,
+                         "charter overwrote a file it could not vouch for")
+
+    def test_a_file_charter_cannot_read_says_so_rather_than_guessing(self):
+        """The `unreadable` status — the FILE, not the marker. Bytes that are not text
+        cannot be compared against what charter would write, and `write_layer` treats it
+        exactly as `foreign`: left alone."""
+        self.settings().write_bytes(b"\xff\xfe not utf-8")
+        rows = dict(workspace.harness_layer(self.ws))
+        self.assertEqual(rows[".claude/settings.json"], "unreadable")
+        before = self.settings().read_bytes()
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(self.settings().read_bytes(), before,
+                         "charter overwrote bytes it could not read")
 class OneMisbehavingHarnessDoesNotEmptyTheLayer(WorkspaceLayer):
     """`h.workspace_files() or {}` — the fallback, and why it is tolerance rather than a
     guard against something that happens.
