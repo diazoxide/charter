@@ -572,6 +572,222 @@ class TheRowsQuietStates(WorkspaceLayer):
             r = doctor.check_workspace_harness()
         self.assertNotIn("machine-global", r.detail)
         self.assertNotIn("  (", r.detail, "an empty aside still printed its brackets")
+
+    def test_a_plane_with_nothing_to_mirror_says_so_rather_than_counting_zero(self):
+        """`if not total` — the branch whose deletion the suite could not see.
+
+        Falling through renders the sentence below it with the number it has, and
+        ``0 generated file(s) across all workspaces, all current`` is a true count wearing
+        the wrong row: it tells an operator their workspaces are mirroring the plane
+        correctly when the plane has nothing to mirror and no workspace holds a file at
+        all. The two states differ in what the next command should be — `reinit` repairs
+        the first and can do nothing about the second — so the row has to tell them apart.
+        """
+        (config.ROOT / ".claude" / "settings.json").write_text(json.dumps(
+            {"permissions": {"allow": ["Bash(ls:*)"]}}))
+        self.assertTrue(workspace.list_workspaces(),
+                        "no workspace at all — the count below would be zero either way")
+        r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, doctor.OK)
+        self.assertIn("nothing to mirror — the plane declares no plugin, status line or "
+                      "env of its own", r.detail)
+        self.assertNotIn("generated file(s)", r.detail)
+
+
+class TheDetailNamesFourFindingsAndThenSaysSo(WorkspaceLayer):
+    """`", ".join(findings[:4]) + (", …" if len(findings) > 4 else "")` — the truncation,
+    pinned at its boundary and not only in its direction.
+
+    Two survivors sat on this one expression and the sweep read them together, because
+    either alone can be written off: a case with five findings pins the ellipsis but not
+    where the cut is — `len(findings) >= 4` renders it there too — and a case with four
+    pins the cut but not that the ellipsis ever appears. So both counts are here. FOUR is
+    the last that fits whole; FIVE is the first that is abbreviated.
+
+    **The count is the row's budget, not a detail.** This is one doctor line an operator
+    reads in a terminal, `[:4]` is what fits on it, and the two failures either side are
+    both silent: a boundary one low prints `…` over findings that were all named, and the
+    ellipsis lost means a fifth broken workspace is dropped from the row with nothing
+    saying anything was left out.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A real plane, for `DoctorSaysSo`'s reason: without one the row short-circuits on
+        # `HAS_CONTROL_PLANE` and every count below is measured against a row that never
+        # looked at a workspace.
+        _isolation.make_plane(self)
+        _plane_settings(config.ROOT)
+        workspace.ensure(self.ws)
+
+    def _detail_for(self, n: int) -> str:
+        """The row's detail with exactly *n* findings — *n* workspaces missing their file.
+
+        `self.ws` stays current on purpose: it counts towards `total` and contributes no
+        finding, so the number under test is the number of things WRONG rather than the
+        number of workspaces.
+        """
+        for i in range(n):
+            ws = f"w{i}"
+            workspace.ensure(ws)
+            (workspace.workspace_dir(ws) / ".claude" / "settings.json").unlink()
+        r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail.count("(missing)"), min(n, 4),
+                         f"asked for {n} findings and the row named a different number")
+        return r.detail
+
+    def test_four_findings_are_all_named_and_nothing_says_there_are_more(self):
+        detail = self._detail_for(4)
+        for i in range(4):
+            self.assertIn(f"w{i}/.claude/settings.json (missing)", detail)
+        self.assertNotIn("…", detail,
+                         "four fit — the row promised a fifth finding it does not have")
+
+    def test_a_fifth_finding_is_abbreviated_rather_than_dropped_in_silence(self):
+        detail = self._detail_for(5)
+        self.assertTrue(detail.endswith(", …"),
+                        f"a finding was dropped with nothing saying so: {detail}")
+
+
+class ARowThatCouldNotRunSaysSoRatherThanEndingTheDoctor(WorkspaceLayer):
+    """`except (OSError, ValueError)` around the whole workspace walk — both members.
+
+    Neither is theoretical, and what they cost is not this row. `check_workspace_harness`
+    runs from the SessionStart hook alongside every other check: an exception out of it is
+    not a missing row, it is every row after it never printed, on a path the operator did
+    not ask for and cannot see.
+
+    **OSError is the operating system's.** `list_workspaces` walks `workspaces/`, and a
+    directory it cannot read raises there. It is asked with a stub rather than a `chmod`
+    deliberately: `chmod` is a no-op for root, root is who a container may run this suite
+    as, and a guard whose test passes for the wrong reason on somebody's machine is the
+    exact failure this file's tripwire exists for.
+
+    **ValueError is a registered harness's.** The walk reaches every harness's
+    `workspace_files()` through `harness_layer`, and
+    `OneMisbehavingHarnessDoesNotEmptyTheLayer` already settles what charter owes a
+    third-party integration that misbehaves: one broken harness costs its own answer and
+    not everybody else's. This is that rule applied one level up — it must not cost the
+    doctor either.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _isolation.make_plane(self)
+        _plane_settings(config.ROOT)
+        workspace.ensure(self.ws)
+
+    def test_a_workspaces_directory_that_cannot_be_read_is_reported_not_checked(self):
+        with mock.patch.object(workspace, "list_workspaces",
+                               side_effect=OSError("workspaces/ is unreadable")):
+            r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail, "not checked (workspaces/ is unreadable)")
+        self.assertEqual(r.hint, doctor._NOT_CHECKED_HINT)
+
+    def test_a_harness_that_raises_costs_its_own_answer_and_not_the_doctor(self):
+        def _boom():
+            raise ValueError("this harness cannot say")
+
+        broken = SimpleNamespace(name="broken", deficits=[], workspace_files=_boom)
+        with mock.patch.object(registry, "all", return_value=[broken]):
+            r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail, "not checked (this harness cannot say)")
+
+
+class APathThatWouldLeaveTheWorkspaceIsNeverWritten(WorkspaceLayer):
+    """`if wd.resolve() not in target.parents: continue` — asked with a path that escapes.
+
+    `_layer_files`' own docstring says why the clause is there — *"the harness contract
+    says paths stay inside; a contract nothing enforces is a comment, and this is the one
+    place every harness's answer passes through"* — and nothing put a path through it that
+    the contract forbids. Every registered harness names `.claude/settings.json`, which
+    is inside, so deleting the whole guard left the suite green and the sweep said so.
+
+    `AWorkspaceRootReachedThroughASymlink` pins the `.resolve()` inside the clause from
+    the other side: drop it and the guard fires for EVERY file. That is the case where the
+    clause wrongly refuses. This is the case it exists for, and the two together are why
+    it is one clause with two normalised sides rather than either alone.
+
+    **What it costs is not a stray file.** `wire_harnesses` writes what `_layer_files`
+    returns, so a `rel` climbing out of the workspace is charter generating into a
+    directory it never claimed — the plane root's own `.claude/settings.json` is one `..`
+    away, git-tracked and the operator's, and `commands._ensure_statusline`'s never-repair
+    restraint is written against exactly that write.
+    """
+
+    def test_a_relative_path_climbing_out_of_the_workspace_is_dropped(self):
+        rogue = SimpleNamespace(workspace_files=lambda: {"../escaped.json": "{}\n"})
+        real = claude_code.ClaudeCodeHarness()
+        with mock.patch.object(registry, "all", return_value=[rogue, real]):
+            files = workspace._layer_files(self.ws)
+            rows = workspace.wire_harnesses(self.ws)
+        self.assertEqual(sorted(files), [".claude/settings.json"],
+                         "a path outside the workspace was accepted into the layer")
+        self.assertEqual([rel for rel, _ in rows], [".claude/settings.json"])
+        escaped = workspace.workspace_dir(self.ws).parent / "escaped.json"
+        self.assertFalse(escaped.exists(),
+                         "charter generated a file outside the workspace it was wiring")
+
+
+class TheRowsComeBackInOneOrder(WorkspaceLayer):
+    """`sorted(_layer_files(name).items())` — path order, not registry order.
+
+    `list` passes every test this suite had, because the one harness that carries files
+    carries exactly one. The sweep found the `sorted` as a survivor for that reason, and
+    it is not cosmetic: `_layer_files` merges the whole registry into one dict, so without
+    the sort the rows arrive in whatever order harnesses happen to have been registered
+    in — which `registry.all` is free to change and no caller of this function knows.
+
+    Two readers depend on the order being the path's. `doctor.check_workspace_harness`
+    prints the first four findings and abbreviates the rest, so registry order decides
+    WHICH four an operator is shown; `cmd_workspace_reinit` prints one line per file, and
+    a repair whose report reshuffles between runs cannot be diffed against the last one.
+    """
+
+    def test_files_from_two_harnesses_are_reported_in_path_order(self):
+        late = SimpleNamespace(workspace_files=lambda: {"z-late.json": "{}\n"})
+        early = SimpleNamespace(workspace_files=lambda: {"a-early.json": "{}\n"})
+        with mock.patch.object(registry, "all", return_value=[late, early]):
+            rows = workspace.harness_layer(self.ws)
+        self.assertEqual([rel for rel, _ in rows], ["a-early.json", "z-late.json"],
+                         "the rows came back in the order the harnesses were registered")
+
+
+class AMarkerThatCannotBeWrittenCostsOnlyTheMarker(WorkspaceLayer):
+    """`except OSError: pass` around the marker write — the one catch in `wire_harnesses`
+    that is not about the operator's file.
+
+    The write above it has its own catch and its own test
+    (`test_a_path_charter_cannot_write_is_reported_and_never_forced`, which reports
+    `blocked`); this one is the sidecar, and it is silent on purpose. By the time it runs
+    the layer is already on disk and correct — the marker only records that charter wrote
+    it — so raising here would turn a workspace that was successfully wired into a failed
+    `charter workspace reinit`, and `scaffold` calls this on every launch.
+
+    A DIRECTORY at the marker's path is the fixture because it is the one refusal no
+    permission bit decides: `write_text` on a directory raises `IsADirectoryError` for
+    every user including root, where a `chmod 500` fixture silently succeeds for root and
+    measures nothing. The cost of losing the marker is real and is charged next run —
+    charter no longer recognises its own file and reads it as the operator's — which is
+    why this is `pass` and not repair.
+    """
+
+    def test_a_directory_where_the_marker_goes_does_not_cost_the_layer(self):
+        wd = workspace.workspace_dir(self.ws)
+        marker = wd / workspace.GENERATED_MARKER
+        self.settings().unlink()
+        marker.unlink()
+        marker.mkdir()
+
+        rows = workspace.wire_harnesses(self.ws)
+
+        self.assertEqual(rows, [(".claude/settings.json", "created")])
+        self.assertTrue(self.settings().is_file(),
+                        "the layer was lost to a marker that could not be written")
+        self.assertTrue(marker.is_dir(), "charter removed what was in its way")
 class WhatReinitSaysAboutTheLayer(WorkspaceLayer):
     """`cmd_workspace_reinit`'s per-file report — every outcome that reaches it.
 

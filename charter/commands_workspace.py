@@ -1205,7 +1205,17 @@ def cmd_workspace_reinit(args) -> int:
         # current can still hold a `.claude/settings.json` generated before the plane's
         # own settings moved — and it is the one this command silently repaired while
         # printing "nothing to do" until it was said out loud.
-        for rel, did in before.get("layer") or ():
+        #
+        # Subscripted, not `.get("layer") or ()`. The fallback was defending against a
+        # shape charter itself builds one function away: `workspace.reinit` sets `layer`
+        # unconditionally, before its own first return, so no call can hand this loop a
+        # dict without it. The deletion sweep found the `or ()` as a survivor and there
+        # was no test to write — a fixture would have had to stub `reinit` into returning
+        # something `reinit` cannot return. `h.workspace_files() or {}` one module over
+        # keeps its fallback for the opposite reason and that is the distinction: that
+        # one guards a THIRD PARTY's answer, and a harness charter did not write can
+        # return anything at all.
+        for rel, did in before["layer"]:
             if did == "foreign":
                 util.warn(f"'{n}': {rel} was not written by charter — left completely "
                           f"untouched. Remove it if you want charter's own again.")
