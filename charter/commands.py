@@ -408,7 +408,30 @@ def cmd_clone(args) -> int:
         # exit code stays 0 because the repo really is cloned (#817).
         report_submodule_drift(dest, r["name"])
         _hint_repo_docs(dest, r)
+    _wire_clones(ws)
     return 1 if failures else 0
+
+
+def _wire_clones(ws: str) -> None:
+    """Give every checkout in *ws* charter's layer, hidden in its own `info/exclude`.
+
+    Here rather than only in `workspace.ensure`, which `cmd_clone` runs BEFORE the clones
+    exist: without this the layer would arrive one command late, and the command it
+    arrived on would be an unrelated one.
+
+    **Announced, once, per checkout that got something.** charter has just written files
+    into a repo the operator owns; the reason `git status` there stays clean is charter's
+    doing, and a mechanism whose entire visible signature is its own absence is one nobody
+    can find when they want it gone. Silent when nothing was written, which is every
+    re-clone into an already-wired workspace.
+    """
+    for tree in workspace.guest_trees(ws):
+        rows = workspace.wire_guest(tree)
+        made = [rel for rel, status in rows if status in ("created", "refreshed")]
+        if made:
+            util.info(f"{tree.name}: charter's layer written ({len(made)} file(s)) and "
+                      f"hidden in that repo's .git/info/exclude — `git status` there is "
+                      f"unaffected, and nothing charter wrote can be committed.")
 
 
 #: Concurrent clones. The same number `_build_batch` uses for its API probes, so there is

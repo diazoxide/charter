@@ -87,10 +87,23 @@ opencode reads an `opencode.json` at the **repository root** and `.opencode/agen
 (0.147.0). Charter writes into none of them today, and writes nothing machine-global on the
 operator's behalf either.
 
-Nothing is written into a **clone** — `workspaces/<ws>/<repo>/` is a repo charter does not
-own, and `git add -A` there would stage it. So a session inside a clone gets charter from
-the plugin, and **cannot delegate to a persona**: the plugin ships no `agents/`, and a
-clone's own git root stops the walk-up that would have found the plane's.
+**A clone gets the same layer, plus what the walk-up could not carry there.**
+`workspaces/<ws>/<repo>/` is a repo of its own, so a session inside it loses the settings
+*and* the plane's `.claude/agents/` — the walk-up stops at that git root. Charter writes
+both, and hides them in the clone's own `.git/info/exclude`: per-checkout, never
+committed, not itself tracked, and the one file a guest may write. Charter never edits the
+clone's `.gitignore`, hides only the exact paths it generated (never a `.claude/` glob,
+which would take your own untracked files with it), never touches a file it did not write,
+and removes its files and its exclude block when the workspace goes. `git status` in your
+repo is unaffected, and nothing charter wrote can be staged. Linked worktrees included —
+their `info/exclude` is the main repo's, which is also why removal is not just a
+`rm -rf`.
+
+The *mechanism* is harness-agnostic: whatever a harness declares it needs in a tree is
+written, marked, hidden and removed the same way. The two mirrored directories are Claude
+Code's, and that is a limit rather than a claim about the others — opencode reads
+`opencode.json` and `.opencode/agent/` at a project root, and Codex reads
+`.codex/skills/`, so a clone cuts those off too and charter does not yet carry them in.
 
 ## `charter statusline --watch`
 

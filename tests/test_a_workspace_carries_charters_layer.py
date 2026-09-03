@@ -84,15 +84,28 @@ class WhatIsWritten(WorkspaceLayer):
         self.assertEqual([rel for rel, _status in rows], [".claude/settings.json"])
 
 
-class NothingReachesAClone(WorkspaceLayer):
-    def test_a_clone_inside_the_workspace_is_left_alone(self):
-        """`workspaces/<ws>/<repo>/` is a repo charter does not own — `git add -A` there
-        would stage whatever charter left behind."""
+class WhatReachesAClone(WorkspaceLayer):
+    """This file used to record *"nothing is written into a clone"* as a permanent limit,
+    and #870 lifted it: the clone is where the walk-up stops, so it is where the gap is
+    widest. The class stays as the place that says the limit is gone — the mechanism that
+    replaced it (`info/exclude`, removal, worktrees) has its own suite in
+    `test_a_clone_gets_the_layer_and_hides_it.py`."""
+
+    def test_a_clone_inside_the_workspace_gets_the_layer(self):
         clone = workspace.workspace_dir(self.ws) / "api-service"
         (clone / ".git").mkdir(parents=True)
         workspace.wire_harnesses(self.ws)
-        self.assertFalse((clone / ".claude").exists())
-        self.assertFalse((clone / workspace.GENERATED_MARKER).exists())
+        self.assertTrue((clone / ".claude" / "settings.json").is_file())
+        self.assertTrue((clone / workspace.GENERATED_MARKER).is_file())
+
+    def test_a_directory_that_is_not_a_checkout_is_still_left_alone(self):
+        """The boundary did not move to "anything under a workspace". A plain directory
+        is part of the workspace charter already owns and needs no layer of its own."""
+        plain = workspace.workspace_dir(self.ws) / "notes-dir"
+        plain.mkdir(parents=True)
+        workspace.wire_harnesses(self.ws)
+        self.assertFalse((plain / ".claude").exists())
+        self.assertFalse((plain / workspace.GENERATED_MARKER).exists())
 
     def test_a_clone_directory_is_not_a_workspace_directory(self):
         clone = workspace.workspace_dir(self.ws) / "api-service"

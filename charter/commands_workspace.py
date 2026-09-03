@@ -256,6 +256,11 @@ def cmd_workspace_remove(args) -> int:
     if open_todos:
         util.warn(f"Discarding {open_todos} open todo(s) with '{name}' — nothing else holds them.")
 
+    # Before the rmtree, never after: charter's generated files go with the directory,
+    # but a LINKED WORKTREE's `.git/info/exclude` is the main repo's and lives somewhere
+    # else on disk entirely — rmtree would leave charter's block behind in a repo that is
+    # still there, naming paths that no longer exist (#870).
+    workspace.unwire_guests(name)
     shutil.rmtree(wd)
     util.ok(f"Removed workspace '{name}' and its clones.")
     if workspace.resolve() == name and workspace.source() in ("session", "active-file"):

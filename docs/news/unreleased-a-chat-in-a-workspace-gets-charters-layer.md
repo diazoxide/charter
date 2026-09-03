@@ -37,9 +37,12 @@ with the plugin and agents already walk up; a second copy of either would shadow
 plugin's own non-deterministically, and Claude Code says so in its own words — *"is already
 taken by X, which takes precedence"*.
 
-**Nothing at all inside a clone.** `workspaces/<ws>/<repo>/` is a repo charter does not
-own, and `git add -A` there would stage whatever charter left behind. The limit that
-follows is stated rather than discovered: **in a clone you cannot delegate to a persona.**
+**Nothing at all inside a clone — and that limit did not survive the same release.** It
+was stated here rather than discovered: `workspaces/<ws>/<repo>/` is a repo charter does
+not own, `git add -A` there would stage whatever charter left behind, and so *in a clone
+you cannot delegate to a persona*. #870 answers it in the same version, by paying the cost
+this entry says below is not incurred — see *a clone gets the layer, and hides it in the
+clone's `info/exclude`*.
 
 ## Written when, and owned how
 
@@ -92,11 +95,11 @@ and worktree for a harness that reads one global file anyway — *"all correct, 
 answering a question that does not need asking"*. This writes config that is **meant** to
 differ per workspace, into a directory charter itself creates.
 
-Two of that design's costs come back and one does not. The staleness bookkeeping is here,
-and is paid for by the `doctor` row above. The `.git/info/exclude` entry per checkout is
-not: `/workspaces/*/*` is already in the plane's `.gitignore` and the managed LIVE block
-un-ignores four named paths, none of them `.claude/`. Nothing generated here can reach a
-commit.
+The staleness bookkeeping comes back, and is paid for by the `doctor` row above. The
+`.git/info/exclude` entry per checkout does not arrive **for the workspace directory**:
+`/workspaces/*/*` is already in the plane's `.gitignore` and the managed LIVE block
+un-ignores four named paths, none of them `.claude/`. Nothing generated there can reach a
+commit. One directory deeper it does arrive, and #870 is the entry that argues for it.
 
 ## To adopt
 

@@ -224,6 +224,62 @@ def is_tree(path: Path) -> bool:
     return _unreadable(lambda: (Path(path) / ".git").exists())
 
 
+def git_dir(root: Path) -> Path | None:
+    """The real git directory of the checkout at *root*, or ``None`` if there is none.
+
+    ``<root>/.git`` is a DIRECTORY in a clone and a FILE reading ``gitdir: <path>`` in a
+    linked worktree — the same distinction :func:`is_clone` draws on purpose. Anything
+    that needs to WRITE into git's own directory has to resolve the second form, because
+    treating `<root>/.git/` as a directory does not fail loudly there: `mkdir -p` happily
+    creates `.git/info/` *beside* the `.git` file's parent and git reads none of it.
+    """
+    dot = root / ".git"
+    if _unreadable(lambda: dot.is_dir()):
+        return dot
+    try:
+        text = dot.read_text()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in text.splitlines():
+        if line.startswith("gitdir:"):
+            g = Path(line.split(":", 1)[1].strip())
+            if not g.is_absolute():
+                g = root / g
+            return g if _unreadable(lambda: g.is_dir()) else None
+    return None
+
+
+def git_exclude_file(root: Path) -> Path | None:
+    """The ``info/exclude`` git actually READS for the checkout at *root*.
+
+    The COMMON directory's, which for a linked worktree is not its own gitdir. Git treats
+    ``info/`` as shared between a repo and its worktrees, so a pattern written to
+    ``.git/worktrees/<name>/info/exclude`` is read by nobody: measured on git 2.x — the
+    file stays listed as untracked there, and the identical pattern in the main repo's
+    ``.git/info/exclude`` hides it in the worktree. ``commondir`` is the pointer git
+    itself leaves for this, holding a path relative to the worktree's gitdir (``../..``).
+
+    That asymmetry is also why removal is not "delete the directory": a worktree's
+    exclude file lives OUTSIDE the workspace, in a repo `shutil.rmtree` never reaches —
+    see :func:`unwire_guests`.
+    """
+    g = git_dir(root)
+    if g is None:
+        return None
+    try:
+        common = (g / "commondir").read_text().strip()
+    except (OSError, UnicodeDecodeError):
+        common = ""
+    if common:
+        # No absolute/relative branch: `Path("/a/.git/worktrees/x") / "/elsewhere"` IS
+        # `/elsewhere`, so joining answers both spellings and a branch here would be one
+        # the deletion sweep could remove without changing an answer. `normpath` rather
+        # than `resolve` because `commondir` is git's own `../..` and resolving would
+        # also follow symlinks, which `config.use` deliberately does not.
+        g = Path(os.path.normpath(g / common))
+    return g / "info" / "exclude"
+
+
 def is_clone(path: Path) -> bool:
     """A real clone, not a worktree. Git itself draws the line: a clone's ``.git`` is a
     DIRECTORY, a linked worktree's ``.git`` is a FILE pointing at the shared gitdir. So a
@@ -1111,17 +1167,26 @@ def scaffold(name: str) -> None:
 # ADR 0015 deleted a per-tree design of this shape and the caution is real, so   #
 # the difference is worth stating: what it deleted wrote the same GLOBAL answer  #
 # into every checkout, for a harness that reads one global file anyway. This     #
-# writes config that is MEANT to differ per workspace, into a directory charter  #
-# itself creates. What is re-incurred from that design is the staleness          #
-# bookkeeping below — and not its `.git/info/exclude` entry per checkout, which  #
-# is the cost that never arrives here: `/workspaces/*/*` is already in the       #
-# plane's `.gitignore` (`_ensure_gitignore`) and the managed LIVE block          #
-# un-ignores four named paths, none of them `.claude/`. Nothing generated here   #
-# can reach a commit.                                                            #
+# writes config that is MEANT to differ per tree, into trees that genuinely      #
+# differ. What is re-incurred from that design is the staleness bookkeeping      #
+# below and, for a guest checkout only, its `.git/info/exclude` entry.           #
 #                                                                               #
-# Nothing is written into a CLONE — `workspaces/<ws>/<repo>/` is a repo charter  #
-# does not own, and `git add -A` there would stage it. The stated limit that     #
-# follows: in a clone you cannot delegate to a persona.                          #
+# Inside the workspace DIRECTORY that entry is still not needed and still not    #
+# written: `/workspaces/*/*` is already in the plane's `.gitignore`              #
+# (`_ensure_gitignore`) and the managed LIVE block un-ignores four named paths,  #
+# none of them `.claude/`. Nothing generated there can reach a commit.           #
+#                                                                               #
+# A CLONE is the other half, and it is where the gap is widest (#870).           #
+# `workspaces/<ws>/<repo>/` is a repo of its own, so the walk-up that carries    #
+# agents and skills into the workspace directory STOPS at the clone's root and   #
+# a chat launched there gets none of the layer — not the settings, and not the   #
+# personas either. charter writes it anyway, and pays the cost the workspace     #
+# directory does not owe: every generated path is registered in that checkout's  #
+# `.git/info/exclude`, which is per-checkout, never committed and not itself     #
+# tracked. It is the one file a guest may write. charter never touches the       #
+# clone's `.gitignore`, never stages anything there, and hides only the exact    #
+# paths it generated — see `_charter_owned` for why the block is a list of files #
+# rather than a `.claude/` glob.                                                 #
 # --------------------------------------------------------------------------- #
 
 #: The charter-owned sidecar recording what charter last generated in a workspace, as
@@ -1194,6 +1259,36 @@ def harness_deficits() -> list[tuple[str, object]]:
     return out
 
 
+def _harness_files(base: Path) -> dict[str, str]:
+    """:func:`_layer_files`' body, asked of any directory charter is about to write into.
+
+    Takes a path rather than a workspace name because a guest checkout has no name in
+    `WORKSPACES_DIR` — and the containment check below is the reason this is one function
+    and not two: it is what keeps a harness's ``..`` out of the tree it is joined onto,
+    and a copy of it per target is a copy that can drift out of step.
+    """
+    from .harness import registry as _registry
+
+    out: dict[str, str] = {}
+    for h in _registry.all():
+        for rel, text in (h.workspace_files() or {}).items():
+            target = (base / rel).resolve()
+            # ONE clause, not two. `target == base.resolve()` was here to drop a `rel`
+            # naming the target directory itself, and it can never be the clause
+            # that decides: a path is never in its own `.parents`, so whenever the
+            # equality holds the containment test has already fired. The deletion
+            # sweep found it as a survivor and it was masked, not unpinned.
+            #
+            # The `.resolve()` that remains is load-bearing and is pinned by
+            # `AWorkspaceRootReachedThroughASymlink`: `config.use` hands its root
+            # through unresolved, so under a symlinked plane `base` is not among the
+            # resolved `target`'s parents and every file would be dropped.
+            if base.resolve() not in target.parents:
+                continue
+            out[rel] = text
+    return out
+
+
 def _layer_files(name: str) -> dict[str, str]:
     """``{relative path: text}`` every registered harness needs inside workspace *name*.
 
@@ -1207,35 +1302,102 @@ def _layer_files(name: str) -> dict[str, str]:
     harness contract says paths stay inside; a contract nothing enforces is a comment,
     and this is the one place every harness's answer passes through.
     """
-    from .harness import registry as _registry
+    return _harness_files(workspace_dir(name))
 
-    wd = workspace_dir(name)
+
+#: The plane-root directories Claude Code WALKS UP for, and where that walk stops.
+#:
+#: Agents and skills are found by searching the session's cwd and its parents, and the
+#: search stops at a git boundary. `workspaces/<ws>/` sits inside the plane's own repo, so
+#: both already arrive there untouched — which is why `claude_code.WORKSPACE_KEYS` is
+#: right not to copy them and `test_nothing_else_is_materialised_into_the_workspace` is
+#: right to forbid it. `workspaces/<ws>/<repo>/` is a repo of its own, so the walk stops
+#: at its root and NEITHER arrives. That is the whole of #870: the same layer, one
+#: directory deeper, is missing the half that a workspace directory got for free.
+#:
+#: `enabledPlugins` alone does not close it. The plugin brings charter's own skills, and
+#: it cannot bring this plane's `.claude/agents/` — those are generated from `personas/`
+#: by `persona sync-agents` and are as local to a plane as its personas are. Without them
+#: a chat in a clone loads charter and still cannot delegate to a persona, which is
+#: exactly the limit this module used to record as permanent.
+#:
+#: **CLAUDE.md is deliberately not here.** It walks up on the same rule, so the gap is
+#: real for it too — and it is the one file a repo of its own is most likely to have
+#: opinions about. Dropping the plane's project instructions into a repo charter does not
+#: own, to be read as that repo's instructions, is a claim of a different size from
+#: mirroring a settings key; a guest may hide its own files, not narrate the host's.
+#:
+#: **These two paths are Claude Code's spelling, and that is a stated LIMIT rather than
+#: an assumption that it is the only harness.** Everything else on this path is
+#: harness-agnostic: the mechanism below writes, marks, hides and removes whatever
+#: :func:`_harness_files` returns, which is every registered harness's own
+#: `workspace_files()` — so a harness that answers with files gets them into a clone the
+#: day it answers, with no change here. Only this list is hard-coded, because it is not
+#: any harness's answer: it is the plane's OWN directories, and charter has to know their
+#: names to find them.
+#:
+#: The other two harnesses do read project-level surfaces, measured against the installed
+#: binaries (codex-cli 0.147.0, opencode 1.18.23): opencode reads `opencode.json` and
+#: `.opencode/agent/` at a project root, and Codex reads `.codex/skills/` (though not a
+#: project `.codex/config.toml`). So the same cut-off exists for them in a clone and is
+#: NOT closed here. It is not closed by adding their directory names to this tuple
+#: either: what a harness needs in a tree is `workspace_files()`'s question, and
+#: answering it for them from this module is the mistake `harness/registry.py` exists to
+#: stop — charter naming a harness's files on its behalf, in a file that has to be
+#: edited every time another harness is added.
+WALKUP_DIRS = (".claude/agents", ".claude/skills")
+
+
+def _walkup_files() -> dict[str, str]:
+    """``{relative path: text}`` for the plane directories a guest checkout cuts off.
+
+    A 1:1 mirror of what is on disk, for `workspace_files`' reason: these are generated
+    from `personas/` by somebody else's generator, so re-deriving them here would be a
+    second generator that drifts. Read as text and skipped when that fails — a binary or
+    unreadable file in `.claude/agents/` is not something charter can copy, and it must
+    not take the whole layer down with it.
+    """
     out: dict[str, str] = {}
-    for h in _registry.all():
-        for rel, text in (h.workspace_files() or {}).items():
-            target = (wd / rel).resolve()
-            # ONE clause, not two. `target == wd.resolve()` was here to drop a `rel`
-            # naming the workspace directory itself, and it can never be the clause
-            # that decides: a path is never in its own `.parents`, so whenever the
-            # equality holds the containment test has already fired. The deletion
-            # sweep found it as a survivor and it was masked, not unpinned.
-            #
-            # The `.resolve()` that remains is load-bearing and is pinned by
-            # `AWorkspaceRootReachedThroughASymlink`: `config.use` hands its root
-            # through unresolved, so under a symlinked plane `wd` is not among the
-            # resolved `target`'s parents and every file would be dropped.
-            if wd.resolve() not in target.parents:
+    for sub in WALKUP_DIRS:
+        d = config.ROOT / sub
+        # No `is_dir()` guard and no `is_file()` filter. `rglob` on a directory that is
+        # not there yields nothing, and a directory entry, a dangling symlink and a
+        # binary file are one answer here — "not text charter can mirror" — which the
+        # read already gives. A predicate in front of it is a branch the deletion sweep
+        # can remove without changing a single answer, which is what makes it noise —
+        # and so was the `sorted()` that used to wrap this, for the same reason: every
+        # entry is an independent key in a dict, and `_layer_status` sorts what it
+        # reports anyway. The sweep found it as a survivor and was right.
+        for f in d.rglob("*"):
+            try:
+                text = f.read_text()
+            except (OSError, UnicodeDecodeError):
                 continue
-            out[rel] = text
+            out[f"{sub}/{f.relative_to(d).as_posix()}"] = text
     return out
 
 
-def _read_marker(name: str) -> dict:
+def _guest_files(tree: Path) -> dict[str, str]:
+    """Everything charter generates inside the guest checkout *tree*.
+
+    The harness layer the workspace directory gets, PLUS the walk-up directories that
+    directory did not need — see :data:`WALKUP_DIRS`.
+    """
+    out = _harness_files(tree)
+    out.update(_walkup_files())
+    return out
+
+
+def _read_marker_at(base: Path) -> dict:
     try:
-        doc = json.loads((workspace_dir(name) / GENERATED_MARKER).read_text())
+        doc = json.loads((base / GENERATED_MARKER).read_text())
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
     return doc if isinstance(doc, dict) else {}
+
+
+def _read_marker(name: str) -> dict:
+    return _read_marker_at(workspace_dir(name))
 
 
 def harness_layer(name: str) -> list[tuple[str, str]]:
@@ -1258,11 +1420,18 @@ def harness_layer(name: str) -> list[tuple[str, str]]:
     settles for an unstamped shim: charter cannot tell a file it wrote before the marker
     existed from one somebody rewrote, and guessing wrong in that direction destroys work.
     """
-    wd = workspace_dir(name)
-    marker = _read_marker(name)
+    rows = _layer_status(workspace_dir(name), _layer_files(name), _read_marker(name))
+    for tree in guest_trees(name):
+        rows.extend((f"{tree.name}/{rel}", status) for rel, status in guest_layer(tree))
+    return rows
+
+
+def _layer_status(base: Path, want_all: dict[str, str],
+                  marker: dict) -> list[tuple[str, str]]:
+    """:func:`harness_layer`'s comparison, for one directory. READ ONLY."""
     rows: list[tuple[str, str]] = []
-    for rel, want in sorted(_layer_files(name).items()):
-        p = wd / rel
+    for rel, want in sorted(want_all.items()):
+        p = base / rel
         if not p.exists():
             rows.append((rel, "missing"))
             continue
@@ -1293,13 +1462,25 @@ def wire_harnesses(name: str) -> list[tuple[str, str]]:
 
     Called from :func:`scaffold`, so a launch gets it: `commands_frame._launch_root` runs
     `ensure` before the chat's cwd is read. `charter workspace reinit` is the repair.
+
+    Every guest checkout in the workspace is wired too, its rows prefixed with the
+    checkout's directory name — see :func:`wire_guest`. Doing it here rather than at a
+    second call site is what makes `reinit` the repair for a clone as well: a clone made
+    by an older charter, or one whose `info/exclude` somebody emptied, is brought back by
+    the command that already exists.
     """
-    wd = workspace_dir(name)
-    marker = _read_marker(name)
-    want_all = _layer_files(name)
+    rows = _materialise(workspace_dir(name), _layer_files(name))
+    for tree in guest_trees(name):
+        rows.extend((f"{tree.name}/{rel}", status) for rel, status in wire_guest(tree))
+    return rows
+
+
+def _materialise(base: Path, want_all: dict[str, str]) -> list[tuple[str, str]]:
+    """:func:`wire_harnesses`' write loop, for one directory — see it for the contract."""
+    marker = _read_marker_at(base)
     rows: list[tuple[str, str]] = []
     wrote = False
-    for rel, status in harness_layer(name):
+    for rel, status in _layer_status(base, want_all, marker):
         if status in ("foreign", "unreadable"):
             # The operator's file, and the marker entry for it stays exactly as it was:
             # charter has not written this path, so it has nothing new to vouch for.
@@ -1309,7 +1490,7 @@ def wire_harnesses(name: str) -> list[tuple[str, str]]:
             rows.append((rel, "present"))
             continue
         want = want_all[rel]
-        p = wd / rel
+        p = base / rel
         try:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(want)
@@ -1324,10 +1505,261 @@ def wire_harnesses(name: str) -> list[tuple[str, str]]:
         # `ensure` would make a workspace's mtimes move for a call that changed nothing,
         # which is the noise `_ensure_statusline` avoids one file over.
         try:
-            (wd / GENERATED_MARKER).write_text(json.dumps(marker, indent=2) + "\n")
+            (base / GENERATED_MARKER).write_text(json.dumps(marker, indent=2) + "\n")
         except OSError:
             pass
     return rows
+
+
+# --------------------------------------------------------------------------- #
+# guest checkouts — the layer one directory deeper, hidden in the checkout's     #
+# own `info/exclude` (#870). See this section's header comment for the boundary. #
+# --------------------------------------------------------------------------- #
+
+#: The delimiters of charter's managed block in a guest checkout's `info/exclude`.
+#:
+#: Delimited rather than "charter's lines are the ones charter recognises", which is the
+#: `_LIVE_BEGIN`/`_LIVE_END` precedent two hundred lines up and the same reason: an
+#: operator's own `.claude/settings.json` line, written before charter ever arrived, is
+#: indistinguishable from charter's by content alone — and removal would take it with it.
+#: The block is what makes the write idempotent AND the removal exact.
+_EXCLUDE_BEGIN = "# >>> charter (generated layer — `charter workspace reinit`) >>>"
+_EXCLUDE_END = "# <<< charter <<<"
+
+#: The line inside the block, for the person who finds it in a repo they own.
+_EXCLUDE_NOTE = ("# Files charter generated in this checkout so a chat here gets the "
+                 "plane's layer.\n"
+                 "# Listed one by one — charter hides only what it wrote, never a "
+                 "directory of yours.\n"
+                 "# This file is per-checkout and never committed; nothing your "
+                 "teammates clone is affected.")
+
+
+def guest_trees(name: str) -> list[Path]:
+    """Every checkout inside workspace *name* that charter is a GUEST in.
+
+    Clones AND linked worktrees, which is why this is not :func:`clones`. That function
+    answers "which repos am I working in", and git's clone/worktree distinction is load
+    bearing for it — a worktree must never be counted as a second repo. This one asks
+    "where would a chat's cwd be cut off from the plane's layer", and the answer is *any*
+    checkout: a worktree's root is a git boundary exactly as a clone's is.
+    """
+    try:
+        entries = sorted(workspace_dir(name).iterdir())
+    except OSError:
+        return []
+    # No `is_dir()` filter: `git_dir` already answers `None` for a plain file — its
+    # `.git` join raises `NotADirectoryError` — so a predicate here would be one more
+    # spelling of the same question, and the deletion sweep would be right to take it.
+    return [d for d in entries if git_dir(d) is not None]
+
+
+def _charter_owned(base: Path, marker: dict) -> list[str]:
+    """The paths under *base* charter generated and STILL recognises, marker included.
+
+    What goes in the exclude block, and the reason it is a list of files rather than a
+    `.claude/` glob: a guest repo may have its own `.claude/`, and hiding a directory
+    would hide the operator's files inside it from their own `git status` — charter
+    silently making somebody's untracked work invisible in their own repo is a worse
+    failure than the untracked noise this exists to prevent.
+
+    A path whose content no longer matches the marker is dropped for the same reason:
+    it is the operator's file now (`harness_layer` calls it ``foreign``), and charter
+    neither rewrites it nor hides it. Empty when charter has generated nothing here, so
+    a checkout with an all-foreign layer gets no block at all.
+    """
+    if not marker:
+        return []
+    out: list[str] = []
+    for rel in sorted(marker):
+        p = base / rel
+        try:
+            if p.exists() and marker[rel] != content_digest(p.read_text()):
+                continue
+        except (OSError, UnicodeDecodeError):
+            continue
+        out.append(rel)
+    return out + [GENERATED_MARKER]
+
+
+def _exclude_block(rels: list[str]) -> str:
+    if not rels:
+        return ""
+    return "\n".join([_EXCLUDE_BEGIN, _EXCLUDE_NOTE, *(f"/{r}" for r in rels),
+                      _EXCLUDE_END]) + "\n"
+
+
+def _replace_block(text: str, block: str) -> str:
+    """*text* with charter's block replaced by *block* (empty *block* removes it).
+
+    The whole of the idempotence requirement. Appending would duplicate every line on the
+    second `ensure`, and an `ensure` runs on every launch — `git status` in the operator's
+    repo would stay clean while their `info/exclude` grew without bound.
+
+    An UNTERMINATED block (begin marker, no end) is treated as running to end of file
+    and replaced whole. The alternative is to append a second block below it, which is
+    the duplication this function exists to prevent, wearing a crash for a hat.
+    """
+    lines = text.splitlines()
+    new = block.splitlines()
+    try:
+        i = lines.index(_EXCLUDE_BEGIN)
+    except ValueError:
+        # Nothing of charter's here and nothing to add: the file is handed back BYTE FOR
+        # BYTE rather than re-joined. Re-joining normalises a missing trailing newline,
+        # which would make `unwire_guest` rewrite the `info/exclude` of a checkout charter
+        # never wired — a write into somebody's repo for no reason at all.
+        if not new:
+            return text
+        out = lines + new
+    else:
+        j = next((k for k in range(i + 1, len(lines)) if lines[k] == _EXCLUDE_END),
+                 len(lines) - 1)
+        out = lines[:i] + new + lines[j + 1:]
+    return "\n".join(out) + "\n" if out else ""
+
+
+def _exclude_status(tree: Path, rels: list[str]) -> str:
+    """``ok`` · ``missing`` · ``stale`` · ``unreadable`` for the block in *tree*'s exclude."""
+    p = git_exclude_file(tree)
+    if p is None:
+        return "unreadable"
+    try:
+        text = p.read_text()
+    except FileNotFoundError:
+        text = ""
+    except (OSError, UnicodeDecodeError):
+        return "unreadable"
+    if _replace_block(text, _exclude_block(rels)) == text:
+        return "ok"
+    return "stale" if _EXCLUDE_BEGIN in text.splitlines() else "missing"
+
+
+def _register_excludes(tree: Path, rels: list[str]) -> str:
+    """Write charter's block into *tree*'s `info/exclude`. ``created``/``refreshed``/
+    ``present``/``blocked``."""
+    p = git_exclude_file(tree)
+    if p is None:
+        return "blocked"
+    try:
+        text = p.read_text()
+    except FileNotFoundError:
+        text = ""
+    except (OSError, UnicodeDecodeError):
+        return "blocked"
+    new = _replace_block(text, _exclude_block(rels))
+    if new == text:
+        return "present"
+    had = _EXCLUDE_BEGIN in text.splitlines()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(new)
+    except OSError:
+        return "blocked"
+    return "refreshed" if had else "created"
+
+
+def guest_layer(tree: Path) -> list[tuple[str, str]]:
+    """``(relative path, status)`` for the layer in guest checkout *tree* — READ ONLY.
+
+    :func:`harness_layer`'s statuses, plus one row for ``.git/info/exclude``. That row is
+    here rather than left as a silent side effect of writing because its absence is the
+    *whole* failure this design guards against: the files can all be current and the
+    operator still sees charter's noise in their own `git status`. A row nothing reports
+    is a guarantee nothing keeps.
+
+    The exclude row is omitted when charter has generated nothing here — there is then
+    nothing to hide, and reporting `missing` would demand a block naming no files.
+    """
+    marker = _read_marker_at(tree)
+    rows = _layer_status(tree, _guest_files(tree), marker)
+    owned = _charter_owned(tree, marker)
+    if owned:
+        rows.append((".git/info/exclude", _exclude_status(tree, owned)))
+    return rows
+
+
+def wire_guest(tree: Path) -> list[tuple[str, str]]:
+    """Materialise the layer into guest checkout *tree* and hide it there.
+
+    Files first, then the exclude block: the block lists what the marker says charter
+    owns, so it can only be written once the writing is done. Both halves are idempotent
+    and neither touches a path charter did not generate.
+    """
+    rows = _materialise(tree, _guest_files(tree))
+    owned = _charter_owned(tree, _read_marker_at(tree))
+    if owned:
+        rows.append((".git/info/exclude", _register_excludes(tree, owned)))
+    return rows
+
+
+def _prune_empty(d: Path, stop: Path) -> None:
+    """Remove *d* and its parents up to (never including) *stop*, while they are empty.
+
+    A `.claude/agents/` left standing after its last generated file is removed is charter
+    still visible in a repo it no longer has anything in.
+
+    No `.resolve()` on either side, and unlike `_harness_files` that is safe here rather
+    than an oversight: both paths are built from the SAME checkout root in
+    :func:`unwire_guest`, out of relative paths the layer already refused to let escape
+    it, so the comparison is between two spellings that cannot disagree.
+    """
+    # `stop in d.parents` alone: a path is never in its own parents, so it is also what
+    # stops the walk AT the checkout root.
+    while stop in d.parents:
+        try:
+            d.rmdir()
+        except OSError:
+            return
+        d = d.parent
+
+
+def unwire_guest(tree: Path) -> list[str]:
+    """Remove what charter generated in guest checkout *tree*. Returns the paths removed.
+
+    Only files whose current content still matches the marker: a path the operator has
+    since rewritten is theirs, and deleting it would be the same overwrite this design
+    refuses, one verb further on.
+    """
+    marker = _read_marker_at(tree)
+    removed: list[str] = []
+    for rel in sorted(marker):
+        p = tree / rel
+        try:
+            # No `is_file()` in front of the read, for `_walkup_files`' reason: a path
+            # already gone and a path that is a directory both raise here, and both mean
+            # the same thing — charter has nothing of its own to take away.
+            if marker[rel] != content_digest(p.read_text()):
+                continue
+            p.unlink()
+        except (OSError, UnicodeDecodeError):
+            continue
+        removed.append(rel)
+        _prune_empty(p.parent, tree)
+    try:
+        (tree / GENERATED_MARKER).unlink()
+        removed.append(GENERATED_MARKER)
+    except OSError:
+        pass
+    _register_excludes(tree, [])
+    return removed
+
+
+def unwire_guests(name: str) -> list[str]:
+    """Undo :func:`wire_guest` for every checkout in workspace *name*, before it goes.
+
+    `charter workspace remove` is a `shutil.rmtree`, which takes charter's generated files
+    with the workspace and would be the whole story if the exclude block lived inside it.
+    For a LINKED WORKTREE it does not: `info/exclude` is the main repo's, somewhere else
+    on disk entirely, and rmtree leaves charter's block sitting in a repo that is still
+    there — naming paths that no longer exist, in a file the operator did not write and
+    now cannot attribute. This is the call that keeps "removing the workspace removes what
+    charter added" true for both shapes.
+    """
+    out: list[str] = []
+    for tree in guest_trees(name):
+        out += [f"{tree.name}/{rel}" for rel in unwire_guest(tree)]
+    return out
 
 
 def remember(name: str, text: str, title: str | None = None) -> Path:
