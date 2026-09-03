@@ -69,11 +69,16 @@ root for a name that cannot be a workspace or a `workspaces/` charter cannot wri
 
 ## opencode and Codex are named, not skipped
 
-Their config is machine-global. opencode reads `~/.config/opencode/` for every project;
-Codex has **no project-level config at all** — a `.codex/config.toml` beside a project is
-ignored, measured by planting a deliberate type error in one and watching the config load
-anyway. So charter's layer is already live in a workspace on both, and there is nowhere for
-two workspaces on one machine to differ.
+A workspace **directory** is not a config scope for either. opencode reads
+`~/.config/opencode/` plus an `opencode.json` at the repository **root**; Codex has no
+project-level config **file** at all — a `.codex/config.toml` beside a project is ignored,
+measured by planting a deliberate type error in one and watching the config load anyway. So
+charter's layer is already live in a workspace on both, and there is nowhere for two
+workspaces on one machine to differ.
+
+(Both harnesses *do* read other things from a project — `.opencode/agent/` and
+`.codex/skills/` — which a later measurement established and this entry originally denied.
+Neither is a config scope, so the ceiling above is unchanged.)
 
 That is a ceiling, and each now declares it as a `Deficit` — visible in `charter harness
 list` and in the `workspace layer` row. Reporting one row for the harness that can and

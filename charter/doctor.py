@@ -1797,8 +1797,15 @@ def check_workspace_harness() -> Result:
     # A finished clause rather than a bare list of names, for `Deficit.detail`'s own
     # reason: the *why* is the harness's, and two names with no verb beside them read as
     # a failure.
-    aside = (f"  ({gaps}: config is machine-global, so a workspace cannot diverge — "
-             f"charter harness list)" if gaps else "")
+    # NOT "config is machine-global", which is what this said and is false of opencode:
+    # an `opencode.json` at the repository ROOT is read. What is true of both, and is the
+    # whole of what this aside claims, is that a workspace DIRECTORY is not a place either
+    # of them reads config from — so the conclusion survived the correction and only the
+    # reason had to go. The `why` belongs to the harness anyway (`Deficit.detail`,
+    # `charter harness list`); two names with no verb beside them read as a failure, and
+    # a verb charter invented for them read as a fact.
+    aside = (f"  ({gaps}: a workspace directory is not a config scope for them, so it "
+             f"cannot diverge — charter harness list)" if gaps else "")
 
     findings: list[str] = []
     foreign = False

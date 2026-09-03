@@ -44,9 +44,11 @@ class CodexCeilings(unittest.TestCase):
 
 class CodexIsNotWiredYet(unittest.TestCase):
     def test_wiring_writes_nothing_until_it_is_consented_to(self):
-        """Codex reads no project-level config — `.codex/config.toml` and `codex.toml` in
-        a project directory are both ignored, verified by planting a type error in each
-        and watching the config load succeed anyway. Its hooks live only in
+        """Codex reads no project-level config FILE — `.codex/config.toml` and
+        `codex.toml` in a project directory are both ignored, verified by planting a type
+        error in each and watching the config load succeed anyway. (A project
+        `.codex/skills/` IS read; that is a skills surface, not config.) Its hooks live
+        only in
         `~/.codex/config.toml`, so wiring it is a MACHINE-WIDE act that would fire
         charter's hooks in every repo on the machine. `init` must not do that silently:
         it is the failure ADR 0014 already records, where a guard "fired in unrelated

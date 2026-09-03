@@ -458,6 +458,24 @@ class TheHarnessesDeclareWhatWasMeasured(_isolation.PersonaIso):
             self.assertNotIn("no project-level config exists at all", h.layer_note)
             self.assertIn("DOES read an in-repo", h.layer_note)
 
+    def test_no_shipped_deficit_says_a_harness_ignores_the_project(self):
+        """The retraction, pinned where it can regress. The two `workspace-scope` deficits
+        kept their conclusion — a workspace **directory** is not a config scope for either
+        harness — and lost the grounds they had for it. *"Config is machine-global"* is
+        false of opencode (`opencode.json` at the repository root is read, and a malformed
+        one fails the run outright) and *"no project-level config exists at all"* was read
+        as "Codex ignores the project", which `.codex/skills/` refutes.
+
+        Both sentences reached `docs/harnesses.md`, `docs/workspaces.md`, a news entry and
+        `doctor`'s own aside before anybody re-measured. A wrong reason travels exactly as
+        far as a wrong conclusion, and costs the same: somebody stops looking."""
+        for h in registry.all():
+            for d in h.deficits:
+                self.assertNotIn("no project-level config exists at all", d.detail,
+                                 f"{h.name} still claims the project carries nothing")
+                self.assertNotIn("config is machine-global", d.detail,
+                                 f"{h.name}'s ceiling rests on a refuted measurement")
+
 
 class ThePartResolver(_isolation.PersonaIso):
     """`base.part_reaches` on its own, where the walk boundary can be stated exactly."""
@@ -680,84 +698,6 @@ class TheTrustClauseIsAssembledDeterministically(LayerCase):
     def test_one_gate_is_named_alone(self):
         self.rooted_at(self.clone())
         self.assertIn("hooks or the status line do not run here", self.detail())
-
-
-class GuardsThisBranchInheritedFromItsBase(LayerCase):
-    """Four survivors the sweep charged this branch that arrived with its base, #862.
-
-    Pinned **here** rather than in that branch's own test module, deliberately: #862 is
-    still open, and editing `tests/test_a_workspace_carries_charters_layer.py` from a
-    branch stacked on top of it buys a conflict for nothing. These assert behaviour, not
-    file layout, so they keep working after the rebase — and if #862 pins them itself, two
-    tests for one guard costs nothing. The fifth of the five was an equivalent mutant and
-    was deleted at the site (`commands_workspace._reinit`'s `or ()`).
-
-    A survivor is not somebody else's problem because it appeared on somebody else's line.
-    `tools/sweep.py` has no suppression list on purpose.
-    """
-
-    def _workspaces_missing_the_layer(self, n: int) -> None:
-        """Exactly *n* findings — counted, never assumed.
-
-        `setUp` leaves a bare `workspaces/fleet` behind, and it is a workspace as far as
-        `list_workspaces` is concerned, so "create four" quietly produced five and the
-        boundary case tested the wrong side of the boundary."""
-        import shutil
-
-        from charter import workspace as _workspace
-
-        shutil.rmtree(self.workspace, ignore_errors=True)
-        self.settings(self.plane)
-        for i in range(n):
-            name = f"ws{i}"
-            _workspace.ensure(name)
-            p = _workspace.workspace_dir(name) / ".claude" / "settings.json"
-            self.assertTrue(p.is_file(), "the fixture did not produce a layer to remove")
-            p.unlink()
-        self.assertEqual(_workspace.list_workspaces(), [f"ws{i}" for i in range(n)])
-
-    def test_more_findings_than_fit_are_marked_as_elided(self):
-        """`doctor` prints the first four. Without the marker a report of five reads as a
-        report of four, and the workspace nobody looked at is the one that stays broken."""
-        self._workspaces_missing_the_layer(5)
-        self.assertIn(", …", doctor.check_workspace_harness().detail)
-
-    def test_a_report_that_fits_is_not_marked_as_elided(self):
-        """The other half, and it is not reachable through the first: an ellipsis printed
-        unconditionally would say something was withheld from every complete report."""
-        self._workspaces_missing_the_layer(4)
-        self.assertNotIn(", …", doctor.check_workspace_harness().detail)
-
-    def test_a_tree_that_cannot_be_read_is_reported_as_not_checked(self):
-        """"Not checked" is the absence of information, not evidence of health — the
-        distinction `_NOT_CHECKED_HINT` exists to keep. Without the catch this is a
-        traceback out of the SessionStart preflight."""
-        from charter import workspace as _workspace
-
-        self.settings(self.plane)
-        _workspace.ensure("api")
-        with mock.patch.object(_workspace, "harness_layer",
-                               side_effect=OSError("permission denied")):
-            r = doctor.check_workspace_harness()
-        self.assertEqual(r.status, WARN)
-        self.assertIn("not checked", r.detail)
-
-    def test_the_layers_rows_come_back_in_a_stable_order(self):
-        """`harness_layer` feeds a report that prints only its first four rows, so which
-        four they are must not depend on the order a harness happened to build its dict
-        in. One file today; the guarantee is what makes a second one safe to add."""
-        from charter import workspace as _workspace
-
-        class _TwoFiles(base.Harness):
-            name = "two-files"
-
-            def workspace_files(self):
-                return {"z/second.json": "{}\n", "a/first.json": "{}\n"}
-
-        _workspace.ensure("api")
-        with mock.patch.object(registry, "all", return_value=[_TwoFiles()]):
-            rows = _workspace.harness_layer("api")
-        self.assertEqual([rel for rel, _st in rows], ["a/first.json", "z/second.json"])
 
 
 class TheRowIsInTheReport(LayerCase):

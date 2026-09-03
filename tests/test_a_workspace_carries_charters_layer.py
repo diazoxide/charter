@@ -163,7 +163,8 @@ class StalenessIsRegenerateAndCompare(WorkspaceLayer):
 
 class TheOtherHarnessesGetADeficit(WorkspaceLayer):
     def test_opencode_and_codex_declare_the_workspace_scope_ceiling(self):
-        """Their config is global — Codex has no project-level config at all — so
+        """Neither reads config from a workspace DIRECTORY — Codex reads no project
+        config file at all, and opencode's is keyed to the repository root — so
         per-workspace divergence is not buildable for them. Silence would read as three
         ticks."""
         keyed = {h.name: [d for d in h.deficits if d.key == base.WORKSPACE_SCOPE]
@@ -358,7 +359,7 @@ class TheCeilingReportedIsTheOneAboutWorkspaces(WorkspaceLayer):
 
     The consequence is a sentence rather than a crash, which is why it would have survived
     a reader too: `check_workspace_harness` renders the match as
-    *"(codex: config is machine-global, so a workspace cannot diverge)"*. Drop the filter
+    *"(codex: a workspace directory is not a config scope for them)"*. Drop the filter
     and that explanation is attached to Codex's **status bar** — a true fact about a
     different limitation, printed as the reason a workspace cannot hold its own config.
     """
@@ -559,8 +560,8 @@ class TheRowsQuietStates(WorkspaceLayer):
 
     def test_the_deficit_aside_names_the_harnesses_that_cannot_diverge(self):
         r = doctor.check_workspace_harness()
-        self.assertIn("config is machine-global, so a workspace cannot diverge — "
-                      "charter harness list", r.detail)
+        self.assertIn("a workspace directory is not a config scope for them, so it "
+                      "cannot diverge — charter harness list", r.detail)
 
     def test_a_plane_whose_harnesses_can_all_isolate_gets_no_aside(self):
         """The `else` half, which no registry this repository ships can reach: opencode and
@@ -570,7 +571,7 @@ class TheRowsQuietStates(WorkspaceLayer):
         between a clean row and one carrying a trailing parenthetical about nothing."""
         with mock.patch.object(workspace, "harness_deficits", return_value=[]):
             r = doctor.check_workspace_harness()
-        self.assertNotIn("machine-global", r.detail)
+        self.assertNotIn("not a config scope", r.detail)
         self.assertNotIn("  (", r.detail, "an empty aside still printed its brackets")
 
     def test_a_plane_with_nothing_to_mirror_says_so_rather_than_counting_zero(self):

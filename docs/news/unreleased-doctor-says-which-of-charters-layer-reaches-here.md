@@ -109,7 +109,10 @@ Charter still writes **nothing** into `~/.config/opencode/` or `~/.codex/config.
 writes no machine-global state on the operator's behalf, which is a decision and not an
 oversight.
 
-The `workspace-scope` deficits still carry the older, broader wording, and that wording
-also lives in `docs/harnesses.md`, `docs/workspaces.md` and an earlier staged entry.
-Correcting all of it is a change of its own; the harnesses' `layer_note` states the
-measured facts in the meantime rather than contradicting its neighbour in silence.
+The two `workspace-scope` deficits kept their conclusion and lost their reason. Neither
+harness can hold **per-workspace** config, and that is still true — a workspace directory
+is not a config scope for either — but *"config is machine-global"* and *"no project-level
+config exists at all"* were the wrong grounds for it, and a reader following either
+sentence would have stopped looking for a surface that is there. `charter doctor`'s aside,
+`docs/harnesses.md`, `docs/workspaces.md` and the earlier entry that carried the same claim
+all say the narrower thing now.

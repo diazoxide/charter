@@ -48,8 +48,12 @@ class Deficit(NamedTuple):
 
 
 #: The :attr:`Deficit.key` a harness uses to say it cannot hold per-workspace
-#: configuration at all — its config is machine-global, so two workspaces on one machine
-#: cannot be made to differ.
+#: configuration — a workspace directory is not a config scope for it, so two workspaces on
+#: one machine cannot be made to differ. NOT a claim that the harness ignores a project:
+#: opencode and Codex both declare this key and both read something from a repository
+#: (:attr:`Harness.layer_note` says what). Config scope and project scope are two things,
+#: and conflating them is what sent an earlier reading of this key into the docs as "no
+#: project-level config at all".
 #:
 #: A named constant rather than a string each side spells, because the two sides are far
 #: apart: the harness declares it, and `workspace.harness_layer` reads it to decide

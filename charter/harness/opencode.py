@@ -697,27 +697,33 @@ class OpenCodeHarness(Harness):
         # printing a tick beside Claude Code's, because "already everywhere" and
         # "isolated per workspace" are different answers and only one of them was asked
         # for.
+        #
+        # **The REASON was rewritten, not the conclusion.** This said opencode's config is
+        # machine-global full stop, and that is false: an `opencode.json` at the
+        # REPOSITORY ROOT is read — a malformed one fails the run outright, `Error: Config
+        # file at <repo>/opencode.json is not valid JSON(C)` — and `.opencode/agent/` is
+        # read from the project (measured, 1.18.23, with a real session; `opencode agent
+        # list` alone is a management CLI and answers for the wrong thing). What is still
+        # true is what the ceiling claims: a workspace DIRECTORY is not a repository root,
+        # so every workspace under the plane resolves to the plane's own root and no two
+        # of them can be made to differ.
         Deficit(WORKSPACE_SCOPE,
-                "config is machine-global (`~/.config/opencode/`), so charter's layer is "
-                "already live in every workspace directory and cannot be made to DIFFER "
-                "between two of them — a workspace is not an isolation boundary here."),
+                "project config is keyed to the REPOSITORY ROOT (`opencode.json` there, "
+                "plus machine-global `~/.config/opencode/`), and a workspace directory is "
+                "not a repository root — every workspace under the plane resolves to the "
+                "plane's own root, so charter's layer is already live in all of them and "
+                "cannot be made to DIFFER between two."),
     )
 
     #: Charter writes NO in-repo layer for opencode today, so there is nothing for
     #: `doctor`'s `session layer` row to look for and the row says where the layer does
     #: come from instead.
     #:
-    #: **The second sentence is a correction, and it matters more than the first.** The
-    #: `WORKSPACE_SCOPE` deficit above says opencode's config is machine-global full stop.
-    #: Measured against opencode 1.18.23 with a real session — not `opencode agent list`
-    #: alone, since a management CLI is not a session — that is too broad: an
-    #: `opencode.json` at the REPOSITORY ROOT is read (a malformed one fails the run
-    #: outright, ``Error: Config file at <repo>/opencode.json is not valid JSON(C)``), and
-    #: `.opencode/agent/` is read from the project. So an in-repo surface exists and
-    #: charter simply does not use it yet. Stating that here rather than silently
-    #: contradicting the neighbour: correcting the deficit's own wording moves
-    #: `docs/harnesses.md`, `docs/workspaces.md` and a staged news entry with it, which is
-    #: a change of its own and not this row's to make.
+    #: **The second sentence is the one that matters.** An in-repo surface exists here and
+    #: charter simply does not use it yet — measured against opencode 1.18.23 with a real
+    #: session, not with `opencode agent list`, because a management CLI is not a session
+    #: and answers for the wrong thing. Naming the surface is what stops "charter writes
+    #: no layer here" from being read as "there is nowhere to write one".
     layer_note = (
         "charter writes no in-repo layer for opencode — it arrives from "
         "`~/.config/opencode/` and the plugin, which every directory on this machine "
