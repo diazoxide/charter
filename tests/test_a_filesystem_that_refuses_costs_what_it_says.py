@@ -46,6 +46,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import commands_frame, config, inflight, persona, util
+from charter import workspace as ws_mod
 from charter.frame import leave, reopen, state
 
 from tests._isolation import PersonaIso
@@ -369,10 +370,12 @@ class AReopenThatCannotStandSomewhereSaysSo(_FrameRoot):
         self.assertEqual(out.fid, "alpha.1")
         self.assertEqual(len(calls), 1)
         # And the cost, stated rather than tidied away: the process really is left in the
-        # recorded directory. Nothing in `_reopen_one` can fix that — the `finally` already
-        # tried — so the honest assertion is that it happened, and `setUp`'s cleanup is
-        # what puts the RUNNER back before the tmp plane is removed.
-        self.assertEqual(os.getcwd(), str(config.ROOT.resolve()))
+        # directory the restore chose — the chat's WORKSPACE since #867, which is also what
+        # the recorded plane root is no longer. Nothing in `_reopen_one` can fix that — the
+        # `finally` already tried — so the honest assertion is that it happened, and
+        # `setUp`'s cleanup is what puts the RUNNER back before the tmp plane is removed.
+        self.assertEqual(os.getcwd(),
+                         str(ws_mod.workspace_dir("alpha").resolve()))
 
 
 if __name__ == "__main__":

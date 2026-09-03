@@ -71,6 +71,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, contain, util
+from charter import workspace as ws_mod
 from charter.frame import builtin_actions, component, leave, palette, reopen, state
 
 from tests._isolation import PersonaIso
@@ -86,7 +87,8 @@ HOSTILE = "claude\x1b[2Jcode\nrm -rf /"
 def _doomed(**kw):
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="/tmp", resume="", server=SERVER, live=True, active=False,
-                exit_code=None, closed=False, homeless=False, cwd_gone=False)
+                exit_code=None, closed=False, homeless=False, cwd_gone=False,
+                cwd_outside=False)
     base.update(kw)
     return leave.Doomed(**base)
 
@@ -330,9 +332,59 @@ class AValueOffTheManifestCannotOwnTheLine(PersonaIso):
         line = next(s for s in said if "directory" in s)
         self.assertContained(line)
 
+    def test_a_recorded_directory_that_is_still_there_is_shown_not_executed(self):
+        """**`_was_standing_in`'s third branch has its own wrapper, and the case above
+        cannot reach it.** That one hands in a path `os.path.isdir` refuses, which is the
+        *"is gone"* sentence; this is the one #867 exists for — a cwd that is a perfectly
+        good directory and simply not the chat's workspace, named so the operator can see
+        where the chat had been. Two sentences, two wrappers, and the deletion sweep
+        survived the second one until this case existed.
+
+        `isdir` is patched rather than a hostile directory being created, because the
+        property is about the SENTENCE and a filesystem that accepts an escape in a name is
+        not something a test should need."""
+        with mock.patch.object(commands_frame.os.path, "isdir", return_value=True):
+            said = self._warnings(self._chat(cwd=HOSTILE))
+
+        line = next(s for s in said if "it had been standing in" in s)
+        self.assertContained(line)
+
+    def test_the_directory_a_restore_landed_in_is_shown_not_executed(self):
+        """**Both wrappers on `landing`, and the value is NOT the manifest's** — which is
+        the whole reason this case has to say what it is measuring.
+
+        `where` is composed by charter: the workspace's own directory, or `config.ROOT`
+        for a chat that names no workspace. What makes it worth containing anyway is that
+        both are built from the PLANE ROOT, which is `$CHARTER_ROOT` or a directory the
+        operator made — not a charter literal. So the escape can arrive, by a different
+        door from the manifest's, and the same wrapper answers for both.
+
+        The report line is reached but the launcher never is: `os.chdir` refuses the path,
+        which is the third wrapper's own case one line further down."""
+        hostile_root = f"{config.ROOT}{HOSTILE}"
+        with mock.patch.object(commands_frame, "_restore_root",
+                               return_value=hostile_root):
+            said = self._warnings(self._chat(cwd=str(config.ROOT)))
+            homeless = self._warnings(self._chat(workspace="", cwd=str(config.ROOT)))
+
+        line = next(s for s in said if "its workspace directory" in s)
+        self.assertContained(line)
+        # The `else` half, which names the path with no claim in front of it: a chat with
+        # no workspace has no workspace directory to have landed in.
+        other = next(s for s in homeless if "comes back in" in s)
+        self.assertNotIn("its workspace directory", other)
+        self.assertContained(other)
+
     def test_a_directory_charter_cannot_enter_is_shown_not_executed(self):
-        """The third wrapper, on the value that reached `os.chdir` and refused."""
-        where = config.ROOT / "gone"
+        """The third wrapper, on the value that reached `os.chdir` and refused.
+
+        **The hostile path is INSIDE the workspace**, and that is #867 rather than a
+        detail: a restore only stands in a recorded cwd it has contained
+        (`_restore_root`), so the manifest value that can still reach `os.chdir` is one
+        under ``workspaces/<ws>/``. A fixture standing outside it would now measure the
+        workspace directory charter composed itself, which no manifest can influence and
+        which needs no wrapper."""
+        where = ws_mod.workspace_dir("alpha") / "clone"
         with mock.patch.object(commands_frame.os, "chdir",
                                side_effect=OSError(13, "refused")), \
                 mock.patch.object(commands_frame.os.path, "isdir", return_value=True):

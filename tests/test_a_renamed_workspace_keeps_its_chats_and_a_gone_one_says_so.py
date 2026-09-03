@@ -91,7 +91,7 @@ class AWorkspaceIsThereOrItIsNot(PersonaIso, unittest.TestCase):
     """`workspace.exists` — the one predicate three surfaces now ask.
 
     It was spelled inline twice before this (`frame/leave.plan`'s `homeless`, and the
-    `· workspace is missing` note `commands_frame._reopen_one` prints), both of them fed
+    `· workspace was missing` note `commands_frame._reopen_one` prints), both of them fed
     from `state.own_workspace`, which name-checks its answer. The pane does NOT get its
     workspace from there — `state.workspace_for`'s last rung is a bare
     `workspace.resolve()`, which hands back `$CHARTER_WORKSPACE` stripped and otherwise

@@ -9309,6 +9309,123 @@ def _consume(m, done, *, quiet: bool = False) -> None:
                 "recorded — `charter reopen` again to retry just those")
 
 
+def _restore_root(c):
+    """The directory a restore of recorded chat *c* stands in — its WORKSPACE's — #867.
+
+    **The record stores the literal cwd and the restore lands in the isolation boundary**,
+    which is the pair the grilling behind #845 settled. #849 built the recording half; this
+    is the other one, and it is a deliberate reversal of what a reopen used to do.
+
+    Reusing the recorded cwd verbatim was option (a), and it was rejected for being
+    *faithful to a state everyone has already agreed is wrong*: a chat started by typing
+    `charter` in the plane root — before the tab machinery existed — recorded the plane
+    root, and every restore since has reproduced that one old disagreement. Measured on the
+    operator's own plane: ``harness-wrapper.1`` with ``ws=harness-wrapper`` and ``cwd=``
+    the plane root, beside two chats opened through the frame that were both correct.
+    Landing in the workspace and forgetting the cwd was option (b), rejected for losing
+    information and moving the operator in silence. This is (c): land in the workspace, and
+    let `_reopen_one` say where the chat had actually been.
+
+    **The test is containment, never equality**, and that is the half that is easy to get
+    wrong. A chat recorded in ``workspaces/<ws>/<repo>`` is standing in one of that
+    workspace's clones on purpose, and hauling it up to the workspace root would be a new
+    silent move in place of the old one — the same defect wearing the fix's clothes. The
+    disagreement worth correcting is a cwd *outside* the subtree. `workspace.contains` is
+    that question, and it is asked rather than spelled here because a worktree lives
+    outside ``workspaces/`` altogether and is just as much the workspace's own tree.
+
+    **`workspace.ensure`, not `_launch_root`**, and that is #867's second half. Both
+    answer "where would a launch for this workspace run", but `_launch_root` falls back to
+    `config.ROOT` for a workspace with no directory yet — a real state, since
+    `switch.workspaces` offers `default` whether or not its directory exists. Reusing it
+    would let the very defect being closed back in through a second door, and by the worse
+    route: a restore that reports landing in the workspace while standing in the plane
+    root. Making the boundary before putting a chat inside it is what #850 settles for the
+    launch path; this is the same treatment on the restore path.
+
+    **A workspace charter cannot make hands its directory back unmade**, and that is the
+    honest end rather than an oversight: `os.chdir` then refuses it and `_reopen_one`
+    reports the chat as not reopened. A plane whose ``workspaces/`` cannot be written to
+    has a bigger problem than one chat, and saying so beats dropping the chat into the
+    plane root and calling it restored.
+    """
+    # **`os.path.isdir` alone, with no `c.cwd and` in front of it**, in both places below.
+    # The deletion sweep survived that conjunct and it was right to: `reopen._chat` reads
+    # every text field as ``raw.get(k) if isinstance(..., str) else ""``, so `cwd` off the
+    # manifest is a `str` and nothing else, and `os.path.isdir("")` is already `False`.
+    # A guard that cannot change an answer is dead code wearing a guard's clothes.
+    if not workspace.valid_name(c.workspace):
+        # A chat that names no workspace has no boundary to land in, so the recorded cwd is
+        # still the best answer available and the plane root is still the fallback. Off the
+        # manifest this cannot happen — `reopen._usable` refuses such a record and
+        # `leave.NOT_REOPENED` already said why — so this is the direct caller's branch,
+        # kept total rather than left to raise on a value the record can hold.
+        return c.cwd if os.path.isdir(c.cwd) else config.ROOT
+    # **`os.path.isdir` as well as `workspace.contains`, and the two are not the same
+    # question.** `contains` is path arithmetic — it answers *yes* for
+    # ``workspaces/<ws>/<repo>`` whether or not that clone is still on disk — so a chat
+    # recorded in a clone somebody has since removed would be sent back to a directory that
+    # is not there, `os.chdir` would refuse it, and the chat would not be reopened at all.
+    # Its workspace is the better answer, and asking whether the directory EXISTS is what
+    # reaches it.
+    if os.path.isdir(c.cwd) and workspace.contains(c.workspace, c.cwd):
+        return c.cwd
+    try:
+        return workspace.ensure(c.workspace)
+    except OSError:
+        # **`OSError` and not `(ValueError, OSError)`.** `ensure` raises `ValueError` for a
+        # name `valid_name` refuses — which the guard at the top of this function has
+        # already asked of the same value, so the two cannot disagree and that half was
+        # unreachable. What is left is a plane whose ``workspaces/`` cannot be written to,
+        # and it is reported rather than swallowed: the directory comes back unmade,
+        # `os.chdir` refuses it, and `_reopen_one` says the chat was not reopened.
+        return workspace.workspace_dir(c.workspace)
+
+
+def _same_directory(a, b) -> bool:
+    """Whether *a* and *b* name the same place on disk — so a restore that moved nothing
+    says nothing.
+
+    **A string compare is not this question.** A record's `cwd` came off `os.getcwd()`,
+    which returns the links already walked, while the workspace directory is joined from
+    the plane root as configured — and on macOS a plane under ``/var/folders`` is reached
+    through a link to ``/private/var``. Compared as text those two disagree for a chat that
+    has not moved an inch, which would print #867's own report line on every restore in the
+    test harness and on any plane behind a linked mount.
+
+    **An empty *b* is never the same place as anything.** A chat with no recorded directory
+    at all HAS moved — from nowhere in particular into its workspace — and that is worth
+    the sentence rather than silence. Spelled here because `os.path.realpath("")` answers
+    the *process's* cwd, which is a third directory that has nothing to do with either.
+    """
+    if not b:
+        return False
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except (OSError, ValueError):
+        return False
+
+
+def _was_standing_in(c) -> str:
+    """How a restore names the directory it is NOT putting chat *c* back into.
+
+    Three states, kept apart because they are three different things to know and an
+    operator acts differently on each: a cwd charter never recorded (a chat launched by a
+    charter older than `state.record_cwd`), one that has since gone, and one that is still
+    there and simply outside the workspace. The last is what #867 is actually about, and it
+    is the one where naming the path answers the operator's question — *why is this chat
+    somewhere else now* — rather than merely apologising for it.
+
+    Contained on the way out (`contain.readable`) because the value came off a plain file
+    that outlives the process, and this sentence reaches a terminal.
+    """
+    if not c.cwd:
+        return "no directory was ever recorded for it"
+    if not os.path.isdir(c.cwd):
+        return f"its recorded directory {contain.readable(c.cwd)} is gone"
+    return f"it had been standing in {contain.readable(c.cwd)}"
+
+
 def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     """Put one recorded chat back. The launch's own record, or ``None`` when it did not run.
 
@@ -9330,6 +9447,12 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     parameter for it would be a second way to say the same thing. Restored in a `finally`:
     the next chat in the manifest has its own directory, and a launcher left standing in
     somebody else's is exactly the silent wrongness §4e's cwd item exists to close.
+
+    **Which directory that is, is `_restore_root`'s answer and not the record's** (#867):
+    the workspace, unless the recorded cwd is already inside it. What is left here is the
+    one sentence that decision owes the operator — where the chat came back, and where it
+    had been — because a restore that moves somebody without saying so is option (b), and
+    option (b) is the one #845's grilling threw out.
     """
     h = next((x for x in harness.all() if x.name == c.harness), None)
     if h is None or not h.cli_name:
@@ -9349,12 +9472,21 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     rest: list[str] = []
     if c.resume and leave.resumable_harness(c.harness):
         rest = ["--resume", c.resume]
-    where = c.cwd if c.cwd and os.path.isdir(c.cwd) else str(config.ROOT)
-    if where != c.cwd:
+    # **Asked BEFORE `_restore_root`, which MAKES the workspace directory when it is gone**
+    # (#867). The note below is about the plane the operator left, not about the one this
+    # function has just repaired — asked after the `ensure` it would answer "present" for
+    # every chat, and the only warning a deleted workspace gets would vanish silently.
+    homeless = workspace.valid_name(c.workspace) and not workspace.exists(c.workspace)
+    where = _restore_root(c)
+    if not _same_directory(where, c.cwd):
+        # "its workspace directory" is a claim, so it is only made where it is true: the
+        # branch of `_restore_root` that has no workspace to name lands somewhere for a
+        # different reason and says so in plainer words.
+        landing = (f"its workspace directory {contain.readable(where)}"
+                   if workspace.valid_name(c.workspace) else contain.readable(where))
         _report(quiet, util.warn,
-                f"charter reopen: {c.chat}'s directory "
-                f"{contain.readable(c.cwd) or 'was never recorded'} — reopening in "
-                f"{where}")
+                f"charter reopen: {c.chat} comes back in {landing} — "
+                f"{_was_standing_in(c)}")
     r = Reopening(c)
     argv_args = _reopen_args(c, harness_name=h.cli_name, rest=rest, reopening=r)
     here = os.getcwd()
@@ -9378,8 +9510,7 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
         return None
     _report(quiet, util.info,
             f"  {c.chat} → {r.fid} · {leave.RESUMES if rest else 'empty'}"
-            + (" · workspace is missing" if c.workspace
-               and not workspace.exists(c.workspace) else ""))
+            + (" · workspace was missing — remade empty" if homeless else ""))
     return r
 
 

@@ -120,8 +120,8 @@ true; you decide.
 for the seconds it was always right for, in a workspace that exists.
 
 **One predicate, three surfaces.** `charter quit` already recorded a chat whose workspace had
-gone (`homeless`) and `charter reopen` already printed `· workspace is missing`. Both spelled
-the question inline; all three now ask `workspace.exists`, so the frame and the quit path
-cannot come to disagree about whether a workspace is there.
+gone (`homeless`) and `charter reopen` already noted it on that chat's line. Both spelled the
+question inline; all three now ask `workspace.exists`, so the frame and the quit path cannot
+come to disagree about whether a workspace is there.
 
 Closes #752, #795.

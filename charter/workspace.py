@@ -247,7 +247,7 @@ def exists(name: str) -> bool:
 
     **The name check is part of the predicate and not the caller's job, and that is what
     is new here.** The same question was spelled inline in `frame/leave.plan` (`homeless`)
-    and in `commands_frame._reopen_one`'s `· workspace is missing`, and both are fed from
+    and in `commands_frame._reopen_one`'s `· workspace was missing`, and both are fed from
     `state.own_workspace`, which name-checks every rung it returns — so a bare
     `workspace_dir(ws).is_dir()` was safe *there* because of something true one call up.
     The pane's name comes from `state.workspace_for`, whose LAST rung is a bare
@@ -293,6 +293,50 @@ def from_path(path=None) -> str | None:
         return None
     # `workspaces/<ws>` alone is the container, not a tree — only a repo inside it counts.
     return parts[0] if len(parts) >= 2 else None
+
+
+def contains(name: str, path) -> bool:
+    """Whether *path* is inside workspace *name*'s own subtree — #867.
+
+    **The isolation boundary as a containment question, which is a different one from
+    :func:`from_path`.** That function asks "which workspace's *tree* is this", and
+    answers ``None`` for ``workspaces/<ws>`` itself, deliberately: the workspace directory
+    is the container and not a repo, and a status line naming a workspace for a path with
+    no repo in it would be claiming a tree that is not there. This asks the question a
+    *boundary* has to answer, where the container counts — so it is that predicate plus the
+    directory itself, rather than a loosening of it.
+
+    Used by `commands_frame._restore_root`, to decide whether a recorded cwd is one a
+    restore may keep, and by `frame/leave.plan`, so the quit preview promises the same
+    thing the restore then does. Spelled once for `_launch_root`'s reason: it was about to
+    be the same three lines twice, in two modules that must not come to disagree.
+
+    **A prefix test on `workspaces/<ws>/` would be wrong**, and that is why this delegates
+    rather than joining paths. A worktree lives at ``<[plane] worktrees>/<ws>/<repo>/…``,
+    outside ``workspaces/`` entirely, and is every bit as much that workspace's own tree as
+    a clone is; `from_path` already tries both roots (`worktree.locate`), and a second
+    reading here would be a second answer to go stale.
+
+    Resolved on both sides, like :func:`contain.within_data`: a recorded cwd came off
+    `os.getcwd()`, which returns a path with the links already walked, while
+    ``WORKSPACES_DIR`` is joined from the plane root as configured — and on macOS a plane
+    under ``/var/folders`` is reached through a link to ``/private/var``. Comparing the two
+    as text answers *outside* for a path that is plainly inside.
+
+    Never creates and never raises, like every predicate here: an unresolvable path is
+    simply not contained. **`from_path` is inside the guard and not in front of it**, which
+    is the difference between promising that and merely intending it — it catches
+    ``(OSError, RuntimeError)`` and `Path.resolve` raises `ValueError` on a path with an
+    embedded NUL, which is a value a hand-edited `reopen.json` can carry to both callers.
+    """
+    if not valid_name(name) or not path:
+        return False
+    try:
+        if from_path(path) == name:
+            return True
+        return os.path.realpath(path) == os.path.realpath(workspace_dir(name))
+    except (OSError, ValueError):
+        return False
 
 
 def clone_of(path=None) -> tuple[str, str] | None:
