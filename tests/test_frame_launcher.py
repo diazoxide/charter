@@ -1808,6 +1808,13 @@ class _FakeTmux:
             # The one READ in the launcher's admin sequence whose answer another command
             # is built out of (#848) — see `_menu_button_bind_argv`. It cannot join the
             # batch below it for exactly that reason.
+            #
+            # **The stdout is the same whatever `keys_rc` says, deliberately.** A failing
+            # tmux usually prints nothing, but a timeout after partial output and a
+            # `tmuxctl.DECODE_ERRORS` replacement both leave readable bytes behind a
+            # non-zero code — so the claim under test is charter reading the RETURN CODE
+            # rather than the bytes, and a fake that emptied stdout here would make that
+            # claim unpinnable.
             return subprocess.CompletedProcess(cmd, self.keys_rc, stdout=self.root_keys,
                                                stderr="" if self.keys_rc == 0
                                                else "no server running")
@@ -2795,7 +2802,11 @@ class Launch(PersonaIso, unittest.TestCase):
     def test_a_read_that_fails_costs_the_bind_and_not_the_launch(self):
         """What is lost is the fix; what is left is what every charter before #848
         shipped. `tmuxctl.run` names the failed read itself, so this asserts the launch
-        continued rather than that it was silent about it."""
+        continued rather than that it was silent about it.
+
+        The fake still prints a readable table behind the non-zero code (see its
+        `list-keys` branch), so what this pins is that charter reads the RETURN CODE and
+        not the bytes."""
         fake = _FakeTmux(exit_code=0, keys_rc=1)
         self.assertEqual(_launch(fake), 0)
         self.assertEqual([c for c in fake.calls if "bind-key" in c], [])

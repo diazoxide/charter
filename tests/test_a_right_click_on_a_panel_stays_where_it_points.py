@@ -269,6 +269,18 @@ class TheReadThatJoinsThem(unittest.TestCase):
         with patched:
             self.assertIsNone(commands_frame._menu_button_bind_argv(socket="charter"))
 
+    def test_the_return_code_decides_and_not_the_bytes(self):
+        """**A non-zero return means charter did not read this table**, whatever came out
+        of it — the rule `tmuxctl.run`'s own docstring states for every other caller, said
+        here because this is the one place a half-answer would be *plausible*. A timeout
+        after partial output, or a `DECODE_ERRORS` replacement that made a line parse
+        anyway, would otherwise be wrapped into a `bind-key` built from a listing tmux
+        never finished printing.
+        """
+        _seen, patched = self._answering(_LINE_37C, code=1)
+        with patched:
+            self.assertIsNone(commands_frame._menu_button_bind_argv(socket="charter"))
+
     def test_a_server_that_already_carries_the_wrap_binds_nothing(self):
         """The second frame on a socket. Nothing to do is not a failure: the binding it
         would install is already installed, by the frame that got there first."""
