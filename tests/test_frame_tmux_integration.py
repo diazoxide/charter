@@ -106,7 +106,7 @@ from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
 from tests import _tmuxreap
-from tests._isolation import PersonaIso, make_plane, run_hook
+from tests._isolation import PersonaIso, PlaneIso, make_plane, run_hook
 from tests._planeguard import allow_background_children
 # Imported rather than re-declared: a second copy of the stub that keeps a launch's
 # detached `frame-gather` child off the developer's real plane is a copy that can drift
@@ -1949,7 +1949,7 @@ class TmuxIntegration(_TmuxServerFixture, PersonaIso):
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
-class PanelIntegration(PersonaIso, unittest.TestCase):
+class PanelIntegration(PlaneIso, unittest.TestCase):
     """`charter panel` end to end, closing the exact gap that let a launcher spawning
     real panel panes (Task 6) and a `charter panel` command (Task 7) ship across two
     whole tasks with a fully green suite even if the two had never actually agreed on
@@ -2402,7 +2402,7 @@ def _init_repo(path: Path, branch: str) -> Path:
 
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed on this machine")
-class FourEdgeIntegration(PersonaIso, unittest.TestCase):
+class FourEdgeIntegration(PlaneIso, unittest.TestCase):
     """Task 5 (#385), the closing proof for this whole plan: a frame configured with
     EVERY slot comes up with every pane alive and drawing REAL content, and
     repaints after a real `state.bump`. Tasks 1-4 were each unit-tested — a mocked

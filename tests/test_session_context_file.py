@@ -16,10 +16,10 @@ from pathlib import Path
 
 from charter import hooks
 from charter.harness import opencode, registry
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, PlaneIso
 
 
-class ContextBlock(PersonaIso):
+class ContextBlock(PlaneIso):
     def test_it_carries_the_active_personas_role(self):
         self.make_persona("steward", role="Control Plane Steward")
         (self.tmp / ".charter").mkdir(parents=True, exist_ok=True)

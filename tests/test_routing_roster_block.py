@@ -16,7 +16,7 @@ import unittest
 from unittest import mock
 
 from charter import config, dispatch, hooks, persona
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 #: Trips the commitment classifier: an action verb plus a real fork (open-ended wording).
 WORK = "refactor the statusline column widths, maybe something cleaner"
@@ -28,7 +28,7 @@ def _context(r) -> str:
     return (r or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
 
 
-class RosterCase(PersonaIso):
+class RosterCase(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
         # The workspace confirm nudge is a different signal with its own several hundred

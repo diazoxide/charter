@@ -12,10 +12,10 @@ from __future__ import annotations
 import unittest
 
 from charter import hooks, persona
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
-class MemoryInjectionBoundedCase(PersonaIso):
+class MemoryInjectionBoundedCase(PlaneIso):
     def setUp(self):
         super().setUp()
         self.make_persona("dev", role="Dev", vault="d")

@@ -23,14 +23,14 @@ import unittest
 from unittest import mock
 
 from charter import config, hooks, persona, todos, workspace
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
 def _context(r) -> str:
     return (r or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
 
 
-class TodoInjectionCase(PersonaIso):
+class TodoInjectionCase(PlaneIso):
     """A session standing in workspace `alpha`, with a persona active.
 
     The workspace is pinned through ``$CHARTER_WORKSPACE`` rather than a session pointer for
@@ -182,7 +182,7 @@ class TestItAddsToTheBriefingRatherThanReplacingIt(TodoInjectionCase):
         self.assertIn("reference **data**", self.inject())
 
 
-class TestItDoesNotDisplaceTheWorkspaceGate(PersonaIso):
+class TestItDoesNotDisplaceTheWorkspaceGate(PlaneIso):
     """Deliberately unpinned — no ``$CHARTER_WORKSPACE`` — so the workspace-confirm nudge
     fires. That nudge is the start-of-session action gate, and it is the signal a todo list
     printed at the same moment is most likely to bury."""

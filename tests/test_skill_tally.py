@@ -24,10 +24,10 @@ import unittest
 from datetime import datetime, timezone
 
 from charter import hooks, persona, skilluse
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
-class TallyCase(PersonaIso):
+class TallyCase(PlaneIso):
     def declare(self, name="dev", skills=None):
         self.make_persona(name, role="Dev", vault="none")
         if skills:

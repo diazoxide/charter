@@ -42,7 +42,7 @@ import unittest
 from unittest import mock
 
 from charter import config, persona, toolgate
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 #: A backslash, built rather than written: this file is read by a guard that scans for
 #: escaped state-directory paths, and the point of the tests below is to spell them.
@@ -54,7 +54,7 @@ BS = chr(92)
 SID = "sess-toolgate-test"
 
 
-class GateCase(PersonaIso):
+class GateCase(PlaneIso):
     def gate(self, command: str, sid: str | None = SID):
         return toolgate.decide(command, sid)
 

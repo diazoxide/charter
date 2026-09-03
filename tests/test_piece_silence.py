@@ -24,13 +24,13 @@ from types import SimpleNamespace
 
 from charter import hooks, pieces, workspace, worktree
 from charter import commands_worktree as cwt
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 _GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
 
 
-class SilenceCase(PersonaIso):
+class SilenceCase(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
         self.enterContext(redirect_stdout(io.StringIO()))

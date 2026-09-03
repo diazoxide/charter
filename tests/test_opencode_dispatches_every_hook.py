@@ -38,7 +38,7 @@ from pathlib import Path
 
 from charter import config, hooks
 from charter.harness import opencode
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -278,7 +278,7 @@ _OPENCODE_ARGS = {
 }
 
 
-class TheHandlersReadTheArgumentNamesOpencodeSENDS(PersonaIso):
+class TheHandlersReadTheArgumentNamesOpencodeSENDS(PlaneIso):
     """Routing is half the fix; reading the right KEY is the other half.
 
     Every case here drives the REAL handler with the payload the shim will really build —

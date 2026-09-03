@@ -25,17 +25,25 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from charter import config, doctor, guardseen, hooks
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
-class SeenCase(PersonaIso):
+class SeenCase(PlaneIso):
+    """Both halves of the fixture, and they answer different questions.
+
+    The BASE supplies the plane. Since #852 `pretooluse` records a sighting only inside
+    one, so on a root with no `charter.toml` every row here would read "never seen" — the
+    guard silent for the right reason, which is indistinguishable from the guard broken.
+
+    The CHDIR supplies the directory. `check_guard_seen` asks whether a settings file
+    still declares the guard, and since #851 that question is answered by the directory
+    the session is rooted in rather than by the plane it resolved — so a fixture that only
+    redirects `config.ROOT` would have this row reading the developer's own checkout, and
+    these rows turning on whatever is wired there.
+    """
+
     def setUp(self) -> None:
-        super().setUp()
-        # Rooted at the plane. `check_guard_seen` asks whether a settings file still
-        # declares the guard, and since #851 that question is answered by the directory
-        # the session is rooted in rather than by the plane it resolved — so a fixture
-        # that only redirects `config.ROOT` would have this row reading the developer's
-        # own checkout, and these rows turning on whatever is wired there.
+        super().setUp()          # PersonaIso's isolation, then `make_plane`
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(config.ROOT)
 

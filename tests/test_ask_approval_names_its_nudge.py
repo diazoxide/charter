@@ -40,7 +40,7 @@ from unittest import mock
 
 from charter import config, hooks, trace
 from tests import test_dispatch_ask_is_counted as _sites
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 from tests.test_plugin import _hooks_json as _manifest
 
 SESSION = "s-375"
@@ -51,7 +51,7 @@ def _decision(r):
     return (r or {}).get("hookSpecificOutput", {}).get("permissionDecision")
 
 
-class TwoNudgesInOnePlane(PersonaIso):
+class TwoNudgesInOnePlane(PlaneIso):
     """Both surviving nudges, live in ONE session — the condition #375 names as the one
     under which the aggregate counter is actually wrong. Each fixture asserts the nudge
     really fired before anything is counted: both fire only under a specific arrangement
