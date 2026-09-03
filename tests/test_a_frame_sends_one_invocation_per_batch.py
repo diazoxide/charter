@@ -41,8 +41,16 @@ four sent as one list are one. `docs/frame.md` carries the same table for a read
 
 from __future__ import annotations
 
+import fcntl
+import os
+import pty
 import shutil
+import signal
+import struct
 import subprocess
+import termios
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -202,6 +210,178 @@ class WhatARealTmuxDoesWithACommandList(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
 
 
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class WhatACommandListCostsTheOperatorsScreen(unittest.TestCase):
+    """**#844's premise, asked of a real tmux with a real attached client rather than
+    believed** — and it is the reason a list is the unit worth counting at all.
+
+    #780 established that tmux redraws once per command LIST. #844 asked the next
+    question, because the answer decides whether merging two lists is worth anything: does
+    a list whose writes change NOTHING still redraw? The issue behind this assumed the
+    opposite — that a `resize-pane` to a size a pane already has is free because it
+    delivers no SIGWINCH to the pane. It delivers none; measured here, it costs the client
+    a full repaint anyway.
+
+    Measured by hand on tmux 3.7c and at the 3.2 floor, 200x50, three panes, before this
+    class existed, and identically on both versions:
+
+    ==========================================  =============  =============
+    one invocation carrying                     3.7c           3.2
+    ==========================================  =============  =============
+    `resize-pane -x 22` on a 22-wide pane       1672 bytes     1811 bytes
+    a real `resize-pane -x 30`                  1648 bytes     1787 bytes
+    three no-op `resize-pane`s in ONE list      1672 bytes     1811 bytes
+    `display-message -p` (a pure read)          0              0
+    ==========================================  =============  =============
+
+    So the count that decides how much of the operator's window appears to re-render is
+    the number of write-carrying LISTS — not the number of commands in them, not whether
+    any of them moved a boundary. That is what makes `_reassert_sizes`' harness row worth
+    merging into the row pass, and it is what a future tmux would have to change for that
+    merge to stop being worth anything.
+
+    **Needs a client, which is what separates it from
+    :class:`WhatARealTmuxDoesWithACommandList`** — there is no screen to repaint without
+    one. It skips rather than fails where tmux will not attach one, naming what it could
+    not get: a machine that cannot fork a pty client has measured nothing here, and a
+    trial that measured nothing is not a result to assert on.
+    """
+
+    SOCKET = _tmuxreap.name("redraw-cost")
+
+    def setUp(self):
+        self._tmux("kill-server")
+        made = self._tmux("new-session", "-d", "-s", "s", "-x", "200", "-y", "50",
+                          "-P", "-F", "#{pane_id}", "--", "cat")
+        self.assertEqual(made.returncode, 0, made.stderr)
+        self.harness = made.stdout.strip()
+        split = self._tmux("split-window", "-t", self.harness, "-h", "-l", "22",
+                           "-P", "-F", "#{pane_id}", "--", "cat")
+        self.assertEqual(split.returncode, 0, split.stderr)
+        self.side = split.stdout.strip()
+        self.addCleanup(self._reap)
+        self._attach()
+
+    def _reap(self):
+        self._tmux("kill-server")
+        (_tmuxreap.socket_dir() / self.SOCKET).unlink(missing_ok=True)
+
+    def _tmux(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["tmux", "-L", self.SOCKET, *args],
+                              capture_output=True, text=True, timeout=20)
+
+    def _attach(self) -> None:
+        """A real pty client at 200x50, and a thread recording every byte tmux draws on
+        it. Skips where no terminal type will attach — see the class docstring."""
+        for term in ("xterm-256color", "screen", "vt100"):
+            pid, fd = pty.fork()
+            if pid == 0:                                      # pragma: no cover - child
+                try:
+                    os.environ["TERM"] = term
+                    os.execvp("tmux", ["tmux", "-L", self.SOCKET, "attach", "-t", "s"])
+                finally:
+                    os._exit(127)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
+            self.addCleanup(self._close, pid, fd)
+            for _ in range(200):
+                seen = self._tmux("list-clients", "-t", "s", "-F", "#{client_name}")
+                if seen.returncode == 0 and seen.stdout.strip():
+                    self.drawn: list[int] = []
+                    self._reading = True
+                    threading.Thread(target=self._read, args=(fd,),
+                                     daemon=True).start()
+                    time.sleep(1.0)
+                    return
+                time.sleep(0.02)
+        self.skipTest("no tmux client would attach on this machine, and there is no "
+                      "screen to measure a repaint on without one")
+
+    def _close(self, pid: int, fd: int) -> None:
+        self._reading = False
+        try:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+    def _read(self, fd: int) -> None:                     # pragma: no cover - thread
+        while self._reading:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                return
+            if not data:
+                return
+            self.drawn.append(len(data))
+
+    def _bytes_drawn(self, *invocations: list[str]) -> int:
+        """How many bytes tmux draws on the client for *invocations*, run in order.
+
+        Settled before and after: the panes run `cat` and write nothing of their own, so
+        everything counted here is tmux redrawing, and the sleeps are what keep one
+        probe's tail out of the next one's total.
+        """
+        time.sleep(0.5)
+        self.drawn.clear()
+        for argv in invocations:
+            out = self._tmux(*argv)
+            self.assertEqual(out.returncode, 0, out.stderr)
+        time.sleep(0.5)
+        return sum(self.drawn)
+
+    def test_a_write_that_changes_nothing_still_repaints_the_whole_client(self):
+        """The measurement #844 turns on. `resize-pane -x 22` on a pane that is already 22
+        columns wide moves no boundary and delivers no SIGWINCH — and costs the client the
+        same repaint a real resize does."""
+        real = self._bytes_drawn(["resize-pane", "-t", self.side, "-x", "30"])
+        if not real:
+            self.skipTest("this client redrew nothing for a REAL resize, so it has "
+                          "measured nothing about a no-op one")
+        back = self._bytes_drawn(["resize-pane", "-t", self.side, "-x", "22"])
+        noop = self._bytes_drawn(["resize-pane", "-t", self.side, "-x", "22"])
+        self.assertGreater(noop, 0,
+                           "a no-op `resize-pane` drew nothing on the client — the merge "
+                           "in `_reassert_sizes` was made because it draws a full "
+                           "repaint, and this tmux no longer agrees")
+        self.assertGreater(noop, back // 2,
+                           f"a no-op resize ({noop} B) cost far less than a real one "
+                           f"({back} B), so a list of them is not the repaint #844 "
+                           "merged two lists to avoid")
+
+    def test_one_list_of_no_op_resizes_costs_one_repaint_where_three_cost_three(self):
+        """The half that makes the merge worth making: the repaint is per LIST.
+
+        Three `resize-pane`s that change nothing, sent one at a time, cost three repaints;
+        the same three in one invocation cost one. `_reassert_sizes` sends a frame's rows
+        and then the harness's own row, and since #844 that is one list rather than two.
+        """
+        one = ["resize-pane", "-t", self.side, "-x", "22"]
+        two = ["resize-pane", "-t", self.harness, "-y", "50"]
+        separately = self._bytes_drawn(one, two, one)
+        together = self._bytes_drawn(one + [";"] + two + [";"] + one)
+        self.assertGreater(separately, 0, "nothing was drawn at all — nothing measured")
+        self.assertLess(together, separately / 2,
+                        f"three writes as one list drew {together} B where three "
+                        f"invocations drew {separately} B — tmux no longer redraws once "
+                        "per command list, which is what every batch here is built on")
+
+    def test_a_pure_read_costs_the_client_nothing(self):
+        """The other side of the same rule, and the reason #510's `display-message`
+        between the two size passes is not what `_reassert_sizes` had to collapse: a list
+        that only READS draws nothing at all, so leaving it where the measurement needs it
+        costs the operator no repaint."""
+        drew = self._bytes_drawn(["display-message", "-p", "-t", self.side,
+                                  "#{pane_width}"])
+        self.assertEqual(drew, 0,
+                         "a pure `display-message -p` repainted the client, so a read is "
+                         "no longer free and #510's read between the size passes is now "
+                         "costing what a write costs")
+
+
 class TheFakesSplitExactlyWhatCharterJoined(unittest.TestCase):
     """`tests/_tmuxchain.commands` is the inverse of `tmuxctl.chain`, and this is what
     says so — because every other test in the suite now believes it.
@@ -273,14 +453,85 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
         self.assertEqual(sorted(state.panes(_the_chat(fake))),
                          ["bottom", "repos", "right", "top"])
 
-    def test_a_four_panel_switch_sends_twenty_three_invocations(self):
-        """The `charter frame-chat` path: tear four panels down, select the window, split
-        four fresh ones in.
+    def test_a_four_panel_switch_sends_twenty_two_invocations(self):
+        """The `charter frame-chat` path: select the window, split four fresh panels in,
+        then tear the four the operator left down. It was 58, then 23, and is 22.
 
-        The teardown's eight commands (a disarm and a kill per panel) are one invocation,
-        each end's window dressing is one, the four splits are one, every new pane's
-        options are one, and the four respawn hooks are one.
+        Each end's window dressing is one invocation, the four splits are one, every new
+        pane's options are one, the four respawn hooks are one, the teardown's eight
+        commands (a disarm and a kill per panel) are one, and — since #844 — a frame's
+        rows and the harness's own row are one rather than two.
         """
+        fake = self._switch()
+        self.assertEqual(len(fake.invocations), 22,
+                         [" ".join(c[3:])[:70] for c in fake.invocations])
+        self.assertEqual(len([c for c in fake.calls if "kill-pane" in c]), 4)
+        self.assertEqual(len([c for c in fake.calls if "split-window" in c]), 4)
+
+    def test_a_frames_rows_and_its_harnesss_row_are_one_command_list(self):
+        """#844's collapse, and the one thing a count alone would not say: which list.
+
+        `_reassert_sizes` sends the columns, reads the variable pane's width (#510's
+        measurement, which must stay a read between the passes), and then sends the rows.
+        The harness's own height is the last write of that second pass and used to be an
+        invocation of its own — so a frame's rows landed as two command lists and cost the
+        operator two whole-client repaints. Measured on tmux 3.7c and at the 3.2 floor
+        with a real attached client at 200x50: **every list carrying a write redraws the
+        client**, and a `resize-pane` to a size the pane already has is no exception (1672
+        bytes on 3.7c, 1811 at the floor — what a real resize costs), while a list of
+        three no-op resizes costs exactly one of those.
+
+        The ORDER inside the list is asserted too, and it is the half that had to survive
+        the merge: `resize-pane -y` moves one boundary (#515), so the harness is asserted
+        after the strips. A chain runs in the order it is given, so it still is.
+        """
+        fake = self._switch()
+        rows = [_tmuxchain.commands(inv) for inv in fake.invocations]
+        rows = [cmds for cmds in rows
+                if len(cmds) > 1 and all("resize-pane" in c for c in cmds)]
+        self.assertEqual(len(rows), 1,
+                         "the arriving frame's rows are not one command list")
+        targets = [c[c.index("-t") + 1] for c in rows[0]]
+        self.assertEqual(targets[-1], "%2",
+                         "the harness pane is not the last resize in the list — "
+                         "`resize-pane -y` moves one boundary, so it has to be")
+        self.assertTrue(all(c[-2] == "-y" for c in rows[0]), rows[0])
+        # And the read #510 put between the two passes is still a read of its own, still
+        # after the columns and still before these rows. Collapsing THAT away is what this
+        # merge deliberately did not do.
+        verbs = [_tmuxchain.commands(inv) for inv in fake.invocations]
+        flat = [inv for inv in verbs]
+        widths = [i for i, cmds in enumerate(flat)
+                  if any(commands_frame._PANE_WIDTH_FORMAT in c for c in cmds)]
+        cols = [i for i, cmds in enumerate(flat)
+                if any("resize-pane" in c and "-x" in c for c in cmds)]
+        self.assertTrue(cols and widths and cols[0] < widths[0]
+                        < flat.index(rows[0]), (cols, widths))
+
+    def test_the_arriving_chat_is_dressed_before_the_one_being_left_is_tidied(self):
+        """#844's ordering, pinned where the invocation counts are: **every** split of the
+        window the operator has just arrived at comes before **every** kill in the window
+        they left.
+
+        It ran the other way round, and `cmd_chat`'s own docstring has always said the two
+        re-layouts are independent — so nothing had ever pinned the order and nothing
+        needed to change for this but the two blocks swapping places. What it cost was
+        measured end to end on tmux 3.7c with a real attached client and four panels at
+        200x50: the client moves at invocation 3, and the arriving frame's panels used to
+        appear at invocation 15 — **66 ms** during which the operator is looking at a bare
+        full-screen harness pane while charter tidies a window nobody can see. They appear
+        at invocation 8 now, 38 ms after the move.
+        """
+        fake = self._switch()
+        splits = [i for i, c in enumerate(fake.calls) if "split-window" in c]
+        kills = [i for i, c in enumerate(fake.calls) if "kill-pane" in c]
+        self.assertEqual(len(splits), 4)
+        self.assertEqual(len(kills), 4)
+        self.assertLess(max(splits), min(kills),
+                        [" ".join(c[3:])[:60] for c in fake.calls])
+
+    def _switch(self) -> _FakeServer:
+        """One four-panel `cmd_chat` from `api.1` to `api.2`, and the fake it spent."""
         _plant("api.1", workspace="api", pane="%1")
         _plant("api.2", workspace="api", pane="%2")
         state.record_server("api.1", commands_frame.SOCKET)
@@ -295,10 +546,7 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
                                             "CHARTER_WORKSPACE": "api"}, clear=False):
             self.assertEqual(
                 commands_frame.cmd_chat(SimpleNamespace(chat_id="api.2")), 0)
-        self.assertEqual(len(fake.invocations), 23,
-                         [" ".join(c[3:])[:70] for c in fake.invocations])
-        self.assertEqual(len([c for c in fake.calls if "kill-pane" in c]), 4)
-        self.assertEqual(len([c for c in fake.calls if "split-window" in c]), 4)
+        return fake
 
 
 def _the_chat(fake) -> str:

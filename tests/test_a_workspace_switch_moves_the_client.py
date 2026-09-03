@@ -272,7 +272,30 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         _a_chat("beta.2", ws="beta", pane="%3")
         self._switch(self._ordinary(landing=["$2\t0\tbeta.1", "$2\t1\tbeta.2"]))
         self.assertEqual([c[0][0] for c in self.laid_out.call_args_list],
-                         [self.FID, "beta.2"])
+                         ["beta.2", self.FID])
+
+    def test_the_workspace_arrived_at_is_dressed_before_the_one_left_is_tidied(self):
+        """#844, and it is `cmd_chat`'s ordering one scope out.
+
+        The two re-layouts are independent — §4b says so and this module's other cases
+        assert each on its own — so nothing pinned which went first, and what decided it
+        was the order they were written in. The operator is already looking at the
+        ARRIVING window by the time either runs: `switch-client` has moved their client
+        several invocations earlier. So every invocation spent tidying the workspace they
+        left is time they spend watching a bare full-screen harness pane — measured end to
+        end on tmux 3.7c with a real attached client and four panels at 200x50, 66 ms of
+        it on the chat path this shares its shape with.
+
+        Asserted as an ORDER rather than as two independent calls, because that is the
+        whole change: both calls were already made, and both still are.
+        """
+        self._switch(self._ordinary())
+        self.assertEqual([c[0][0] for c in self.laid_out.call_args_list],
+                         ["beta.1", self.FID],
+                         "the workspace being left is tidied before the one arrived at "
+                         "is dressed")
+        self.assertTrue(self.laid_out.call_args_list[0][1]["want"])
+        self.assertEqual(self.laid_out.call_args_list[1][1]["want"], [])
 
     def test_the_outcome_is_said_on_the_chat_the_operator_landed_on(self):
         """A notice is drawn by a panel out of a frame's own state, so it has to be

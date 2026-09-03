@@ -934,6 +934,12 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "`charter frame-palette` and `charter frame-switch --persona`, and a mouse "
             "report still has to be put on a real client's terminal for tmux to route it "
             "anywhere. `os._exit`s in its `finally`.",
+        "tests/test_a_frame_sends_one_invocation_per_batch.py:execvp":
+            "The same `tmux attach` inside a `pty.fork` child, for the reason #844's "
+            "measurement is ABOUT: what a command list costs the operator is what tmux "
+            "DRAWS for it, and there is no screen to draw on without a real client on a "
+            "real terminal — a detached server repaints nothing at all. `os._exit`s in "
+            "its `finally`.",
     }
 
     _WATCHED = ("execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp",
