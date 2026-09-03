@@ -274,3 +274,20 @@ reports that is not real argues against a capability it actually has.
   nothing is indistinguishable from a broken integration (`tests/test_doctor_absent_is_not_health.py`).
 * ADR 0014 stands as written. It records why the principle exists; this extends it, which
   its own closing line invites — *"should be revisited rather than defended."*
+
+## The per-tree design came back, and the lesson is what let it (#850, #870)
+
+*"Twice the design was built on where charter could put a file, rather than on where the
+harness looks for one"* is the sentence above, and it is a test rather than a prohibition.
+Charter now writes into `workspaces/<ws>/` and into every checkout under it — the shape
+this ADR deleted — and it passes that test where opencode's plugin failed it: Claude Code
+reads project settings **from the session's working directory**, and its walk-up for
+`.claude/agents/` and `.claude/skills/` **stops at a git boundary**. Both were measured, not
+assumed. What was deleted wrote one global answer into trees whose harness read a global
+file anyway; this writes a per-tree answer into trees whose harness reads per-tree.
+
+The costs come back with it, and are paid rather than waved through: staleness bookkeeping
+(the `workspace layer` row in `doctor`) and, for a checkout charter is a guest in, the
+`.git/info/exclude` entry. The workspace directory needs no entry — `/workspaces/*/*` is
+already in the plane's `.gitignore` — so the entry exists exactly where the tree is not
+charter's, which is also the only place it was ever the right price.
