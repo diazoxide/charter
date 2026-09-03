@@ -14,12 +14,20 @@ Measured on 0.55.0, each handler run once as a real subprocess at a cwd with no
 ===================== ================================================================
 handler               left behind in somebody else's repo
 ===================== ================================================================
-sessionstart          ``.charter/sessions/<sid>.tools``, ``.charter/sessions/<sid>.gate``
-userpromptsubmit      ``.charter/sessions/<sid>.configver``
-pretooluse            ``.charter/guard-seen.json``
-posttooluse           ``.charter/sessions/<sid>.memnudge``
-posttooluse-dispatch  ``personas/_dispatch/<month>.<hostname>.jsonl``, ``.charter/…``
+sessionstart          ``<state>/sessions/<sid>.tools``, ``<state>/sessions/<sid>.gate``
+userpromptsubmit      ``<state>/sessions/<sid>.configver``
+pretooluse            ``<state>/guard-seen.json``
+pretooluse-dispatch   ``<state>/dispatch-inflight/<agent>.<id>.json``
+posttooluse           ``<state>/sessions/<sid>.memnudge``
+posttooluse-skill     the persona skill tally
+posttooluse-message   the persona resume tally
+posttooluse-dispatch  ``personas/_dispatch/<month>.<hostname>.jsonl``, plus
+                      ``<state>/agent-personas.json`` and a trace row
 ===================== ================================================================
+
+``<state>`` is ``config.STATE_DIR``, which outside a plane is ``<cwd>/.charter``. Seven of
+the eleven, not the one the report named — which is the argument for gating the handlers
+rather than the two nudges: five of those seven would have survived the minimum fix.
 
 ``git status`` in that repo then reads ``?? .charter/`` — and, for the dispatch tally,
 ``?? personas/`` at a path no `.gitignore` anywhere covers, carrying the operator's
@@ -52,7 +60,9 @@ them all.**
    live-substitution guards on a forge command (A5) and on charter's own (A6). A fix that
    made charter quiet by making it toothless would pass 1 and 2 and fail here.
 4. :class:`InsideAPlaneNothingIsLost` — the same payloads, in a real plane, still write,
-   still speak and still grant. Without this, deleting the features would pass 1–3.
+   still speak and still grant. Without this, deleting the features would pass 1–3. Every
+   case in it already passed before the gate existed, which is what makes them a record of
+   behaviour rather than a wish.
 
 The refusal strings are **hand-spelled**, never compared against the constant that produces
 them: a test asserting ``reason == hooks._SINGLE_CREDENTIAL_FIX`` passes against a constant
