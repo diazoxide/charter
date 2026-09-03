@@ -1520,11 +1520,13 @@ def guest_trees(name: str) -> list[Path]:
     "where would a chat's cwd be cut off from the plane's layer", and the answer is *any*
     checkout: a worktree's root is a git boundary exactly as a clone's is.
     """
-    wd = workspace_dir(name)
     try:
-        entries = sorted(d for d in wd.iterdir() if d.is_dir())
+        entries = sorted(workspace_dir(name).iterdir())
     except OSError:
         return []
+    # No `is_dir()` filter: `git_dir` already answers `None` for a plain file — its
+    # `.git` join raises `NotADirectoryError` — so a predicate here would be one more
+    # spelling of the same question, and the deletion sweep would be right to take it.
     return [d for d in entries if git_dir(d) is not None]
 
 
@@ -1672,11 +1674,12 @@ def _prune_empty(d: Path, stop: Path) -> None:
 
     A `.claude/agents/` left standing after its last generated file is removed is charter
     still visible in a repo it no longer has anything in.
+
+    No `.resolve()` on either side, and unlike `_harness_files` that is safe here rather
+    than an oversight: both paths are built from the SAME checkout root in
+    :func:`unwire_guest`, out of relative paths the layer already refused to let escape
+    it, so the comparison is between two spellings that cannot disagree.
     """
-    try:
-        d, stop = d.resolve(), stop.resolve()
-    except OSError:
-        return
     # `stop in d.parents` alone: a path is never in its own parents, so it is also what
     # stops the walk AT the checkout root.
     while stop in d.parents:

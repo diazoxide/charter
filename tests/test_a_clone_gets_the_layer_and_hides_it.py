@@ -454,6 +454,72 @@ class AWorktreeIsAGuestToo(CloneLayer):
         self.assertIsNone(workspace.git_dir(junk))
 
 
+class WhatCannotBeReadOrWritten(CloneLayer):
+    """The refusals. Each is an honest answer charter gives instead of forcing a write
+    into a repo it does not own — and each is a branch nothing else in this file reaches."""
+
+    def test_a_checkout_whose_git_dir_vanished_reads_as_unreadable(self):
+        """Reachable, not defensive: an operator can `rm -rf .git` (or move the repo out
+        from under a worktree) between one wire and the next. charter cannot then tell
+        whether its files are hidden, and saying `unreadable` is the difference between
+        that and saying they are."""
+        self.wire()
+        shutil.rmtree(self.clone / ".git")
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[".git/info/exclude"],
+                         "unreadable")
+
+    def test_unwiring_a_checkout_whose_git_dir_vanished_still_takes_the_files(self):
+        """The files are charter's wherever git went. Removal must not stall on a block
+        it can no longer find."""
+        self.wire()
+        shutil.rmtree(self.clone / ".git")
+        removed = workspace.unwire_guest(self.clone)
+        self.assertIn(".claude/settings.json", removed)
+        self.assertFalse((self.clone / ".claude").exists())
+
+    def test_an_exclude_that_is_not_a_file_is_reported_rather_than_forced(self):
+        self.wire()
+        p = workspace.git_exclude_file(self.clone)
+        p.unlink()
+        p.mkdir()
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[".git/info/exclude"],
+                         "unreadable")
+        self.assertEqual(self.wire()[".git/info/exclude"], "blocked")
+
+    def test_an_exclude_charter_cannot_write_is_reported_and_never_forced(self):
+        """Readable, unwritable — the half a `read_text` failure does not reach. `blocked`
+        rather than a silent success is what keeps `doctor` from calling a checkout hidden
+        that is not."""
+        self.wire()
+        p = workspace.git_exclude_file(self.clone)
+        p.write_text("*.tmp\n")
+        p.parent.chmod(0o500)
+        p.chmod(0o444)
+        self.addCleanup(p.parent.chmod, 0o700)
+        self.assertEqual(self.wire()[".git/info/exclude"], "blocked")
+        self.assertEqual(p.read_text(), "*.tmp\n")
+
+    def test_a_generated_path_replaced_by_a_directory_does_not_raise(self):
+        """`.claude/settings.json` as a DIRECTORY. Every read charter makes of it fails,
+        and the layer still has to answer for the rest of the checkout."""
+        self.wire()
+        p = self.clone / ".claude" / "settings.json"
+        p.unlink()
+        p.mkdir()
+        rows = dict(workspace.guest_layer(self.clone))
+        self.assertEqual(rows[".claude/settings.json"], "unreadable")
+        self.assertEqual(dict(self.wire())[".claude/settings.json"], "foreign")
+
+    def test_a_workspace_that_does_not_exist_has_no_guests(self):
+        self.assertEqual(workspace.guest_trees("never-made"), [])
+
+    def test_a_plain_file_beside_the_clones_is_not_a_guest(self):
+        f = workspace.workspace_dir(self.ws) / "notes.md"
+        f.write_text("a note\n")
+        self.assertIsNone(workspace.git_dir(f))
+        self.assertNotIn(f, workspace.guest_trees(self.ws))
+
+
 class RemovingTheWorkspaceRemovesWhatCharterAdded(CloneLayer):
     def test_unwiring_a_clone_takes_its_files_and_its_block(self):
         self.wire()
