@@ -793,6 +793,26 @@ class TheBlockDelimitersAreAnOnDiskContract(unittest.TestCase):
             "# >>> charter (generated layer — `charter workspace reinit`) >>>")
         self.assertEqual(workspace._EXCLUDE_END, "# <<< charter <<<")
 
+    def test_the_note_makes_its_three_claims_to_the_person_who_finds_it(self):
+        """The sentences are spelled out by hand, for `test_the_uninitialised_submodule_is
+        _named`'s reason: a test built from the same constant agrees with any wording it
+        takes, and the wording IS the deliverable here. This note is the only thing an
+        operator who opens their own `info/exclude` has to go on — a block of paths with
+        no explanation, in a file they did not write, is indistinguishable from something
+        that should be deleted.
+
+        Each claim is one the code keeps and this suite proves elsewhere: charter wrote
+        them (`OwnershipIsLegible`), only what charter wrote is hidden
+        (`AFileCharterDidNotWrite`), and nothing here can reach a teammate
+        (`NothingShowsUpInTheirStatus`)."""
+        note = workspace._EXCLUDE_NOTE
+        self.assertIn("Files charter generated in this checkout so a chat here gets the "
+                      "plane's layer.", note)
+        self.assertIn("charter hides only what it wrote, never a directory of yours.",
+                      note)
+        self.assertIn("This file is per-checkout and never committed; nothing your "
+                      "teammates clone is affected.", note)
+
     def test_every_line_charter_adds_that_is_not_a_path_is_a_comment(self):
         """`info/exclude` is a pattern file. A delimiter that is not a comment is a
         PATTERN, and `# >>> charter …` without its `#` would have git matching paths
