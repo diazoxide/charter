@@ -348,6 +348,24 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class TheBoundaryAsksTheNameFirst(WorkspaceLayer):
+    """`is_workspace_dir` — the parent comparison alone is not the boundary.
+
+    Its own docstring names the case and nothing tested it, which is why the sweep found
+    the `valid_name` guard as a survivor: ``WORKSPACES_DIR / ".."`` **is the plane root**,
+    and its parent is `WORKSPACES_DIR`, so a comparison alone answers *yes* for the one
+    directory the whole mechanism exists to keep its hands off. The plane root's
+    `.claude/settings.json` is user-owned and git-tracked; generating into it is the
+    failure `commands._ensure_statusline`'s never-repair restraint is written against.
+    """
+
+    def test_the_plane_root_reached_as_dot_dot_is_not_a_workspace(self):
+        self.assertFalse(workspace.is_workspace_dir(config.WORKSPACES_DIR / ".."))
+
+    def test_a_name_that_cannot_be_a_workspace_is_refused_beside_real_ones(self):
+        self.assertTrue(workspace.is_workspace_dir(config.WORKSPACES_DIR / self.ws))
+        for bad in ("..", ".", ".hidden"):
+            self.assertFalse(workspace.is_workspace_dir(config.WORKSPACES_DIR / bad), bad)
 class TheRowsQuietStates(WorkspaceLayer):
     """The states of `check_workspace_harness` that say **nothing is wrong**.
 

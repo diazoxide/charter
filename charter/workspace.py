@@ -1120,10 +1120,12 @@ def is_workspace_dir(path) -> bool:
     p = Path(path)
     if not valid_name(p.name):
         return False
-    try:
-        return p.parent == config.WORKSPACES_DIR
-    except OSError:
-        return False
+    # NO `try` around the comparison. `PurePath.__eq__` is a string compare on the
+    # normalised parts — it never touches the filesystem, so it cannot raise `OSError`,
+    # and a catch there is a branch nothing can reach. Measured against a NUL byte, a lone
+    # surrogate, 4000 slashes and the empty string: every one answers `False` rather than
+    # raising. The deletion sweep found the narrowed catch as a survivor and was right.
+    return p.parent == config.WORKSPACES_DIR
 
 
 def harness_deficits() -> list[tuple[str, object]]:
