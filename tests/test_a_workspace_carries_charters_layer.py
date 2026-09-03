@@ -348,6 +348,45 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class WhatThePlaneHasToOfferIsAskedThreeWays(WorkspaceLayer):
+    """`ClaudeCodeHarness.workspace_files` — the three states that answer nothing.
+
+    All three were sweep survivors, and they are not one question: *no settings file at
+    all*, *a settings file charter cannot parse*, and *a settings file with none of the
+    three mirrored keys* are different planes, and the middle one is the one charter must
+    not guess over. Its own docstring is the specification — *"Empty here means the
+    workspace gets no file and no marker at all, which is the honest rendering of 'there is
+    nothing to mirror'; writing an empty `{}` would look like a layer."*
+
+    The `k in settings` filter is the third: without it a plane declaring one of the three
+    keys would carry the other two as absent entries, and a workspace would hold a document
+    asserting something the plane never said.
+    """
+
+    def test_a_plane_with_no_settings_file_offers_nothing(self):
+        (config.ROOT / ".claude" / "settings.json").unlink()
+        self.assertEqual(claude_code.ClaudeCodeHarness().workspace_files(), {})
+
+    def test_a_plane_whose_settings_cannot_be_parsed_offers_nothing(self):
+        (config.ROOT / ".claude" / "settings.json").write_text("{ not json")
+        self.assertEqual(claude_code.ClaudeCodeHarness().workspace_files(), {},
+                         "charter guessed over a file somebody is holding")
+
+    def test_a_plane_declaring_none_of_the_three_keys_offers_nothing(self):
+        (config.ROOT / ".claude" / "settings.json").write_text(json.dumps(
+            {"permissions": {"allow": ["Bash(ls:*)"]}}))
+        self.assertEqual(claude_code.ClaudeCodeHarness().workspace_files(), {},
+                         "an empty document would look like a layer")
+
+    def test_only_the_keys_the_plane_actually_declares_travel(self):
+        (config.ROOT / ".claude" / "settings.json").write_text(json.dumps(
+            {"env": {"CHARTER_HARNESS": "claude-code"},
+             "permissions": {"allow": ["Bash(ls:*)"]}}))
+        files = claude_code.ClaudeCodeHarness().workspace_files()
+        doc = json.loads(next(iter(files.values())))
+        self.assertEqual(list(doc), ["env"])
+        self.assertNotIn("statusLine", doc)
+        self.assertNotIn("permissions", doc)
 class TheBoundaryAsksTheNameFirst(WorkspaceLayer):
     """`is_workspace_dir` — the parent comparison alone is not the boundary.
 
