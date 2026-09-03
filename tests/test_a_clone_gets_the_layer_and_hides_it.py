@@ -688,6 +688,20 @@ class RemovingTheWorkspaceRemovesWhatCharterAdded(CloneLayer):
         workspace.unwire_guest(self.clone)
         self.assertEqual(p.read_text(), "*.tmp")
 
+    def test_unwiring_the_only_thing_in_the_file_leaves_it_empty(self):
+        """An `info/exclude` holding nothing but charter's block — a repo whose template
+        was empty, or one somebody cleaned out before charter arrived. Removing the block
+        has to leave an EMPTY file and not a file containing one blank line: every later
+        `_replace_block` compares against what it reads, so a stray newline is a
+        difference, and the difference makes charter rewrite a file it has nothing left to
+        say about — once per launch, in a repo it does not own."""
+        p = workspace.git_exclude_file(self.clone)
+        p.write_text("")
+        self.wire()
+        self.assertIn(workspace._EXCLUDE_BEGIN, p.read_text())
+        workspace.unwire_guest(self.clone)
+        self.assertEqual(p.read_text(), "")
+
     def test_unwiring_never_deletes_a_file_the_operator_took_over(self):
         """Deleting it would be the same overwrite this design refuses, one verb on."""
         self.wire()
