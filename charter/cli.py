@@ -742,6 +742,21 @@ def _add_frame_parsers(sub) -> None:
         parser.add_argument("--pick", action="store_true",
                             help="Choose the workspace before the harness starts, even "
                                  "if one is already selected.")
+        # #845. Shares `--no-frame`'s `_OWN_FLAGS` treatment below for the same reason:
+        # this is charter's own word and must not be grafted onto the harness's verbatim
+        # argv, where `claude --fresh` would be an unknown flag to Claude Code.
+        #
+        # **It says "this run does not participate", in both directions.** Once bare
+        # `charter` puts the recorded plane back, a plane an operator wanted to abandon
+        # comes back on every launch and the only escape is deleting a file they have to
+        # know about first. Skipping the restore alone would not be that escape: the same
+        # run would go on RECORDING, and two seconds later the record it declined to act on
+        # is the one it just overwrote — a loss nothing makes visible until the operator
+        # asks for the plane back. So the flag turns both halves off, and `[frame] record`
+        # is what a plane sets when it wants a fresh plane recorded from the start.
+        parser.add_argument("--fresh", action="store_true",
+                            help="Do not restore the recorded plane, and do not record "
+                                 "over it: start one chat and leave the record alone.")
         parser.set_defaults(harness=name, func=commands_frame.cmd_launch)
 
     # Snapshot, not a live read of `sub.choices` inside the loop — see this function's
@@ -1679,7 +1694,19 @@ def _frame_command_names() -> set[str]:
 #: harness named `""`, bare `frame`) hands `["--probe"]` to `bypass`, which
 #: `os.execvp("--probe", ...)` turns into a `FileNotFoundError` — confirmed by running
 #: `charter frame --probe` with this entry left out before adding it.
-_OWN_FLAGS = ("--no-frame", "--probe", "--pick", "-h", "--help")
+_OWN_FLAGS = ("--no-frame", "--probe", "--pick", "--fresh", "-h", "--help")
+
+#: The launcher flags bare ``charter`` may carry — the ones that are about the LAUNCH
+#: rather than about a harness that has not been named yet (#845). `_bare_launch` rewrites
+#: ``charter --fresh`` into ``charter <default> --fresh``, so the flag is parsed by exactly
+#: the parser that declares it and nothing here needs to know what it means.
+#:
+#: Deliberately not `_OWN_FLAGS`: `--probe`, `-h` and `--help` all have answers of their own
+#: on a bare `charter` (argparse's usage message), and rewriting them into a harness launch
+#: would take those answers away. `--workspace` is absent for a different reason — it takes
+#: a value, so it is two tokens, and `charter -w foo` is a launch that names something,
+#: which is exactly the shape `_restores_the_plane` excludes anyway.
+_BARE_FLAGS = ("--fresh",)
 
 #: The launcher's own flags that take a VALUE — `--workspace <name>` (#518). Kept apart
 #: from `_OWN_FLAGS` because the two are consumed differently and getting that wrong is
@@ -1810,6 +1837,13 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     picker, `$CHARTER_HARNESS`, `--probe` and the frame, all of which are already settled
     for the typed form.
 
+    **It carries :data:`_BARE_FLAGS`, and nothing else** (#845). ``charter --fresh`` is a
+    launch that opts out of #845's record, and there is no harness name in front of it for
+    the flag to belong to — so the rewrite puts one there and the flag rides along behind
+    it, in the one position `_split_frame_argv` reads charter's own flags in. That is the
+    whole widening: an argv holding anything else, `--fresh` alongside a subcommand
+    included, is a command the operator typed and is returned untouched.
+
     **Four things stop it, and each is reachable on its own.**
 
     *A subcommand was typed.* Nothing here runs, `--version` included. It is a flag on the
@@ -1843,7 +1877,11 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     second, looser condition here is how the two come to disagree about what "interactive"
     means.
     """
-    if argv:
+    # `all` over an empty iterable is True, so bare `charter` falls through this without
+    # an `argv and` in front of it — and the deletion sweep found that conjunct as a
+    # survivor for exactly that reason. A guard that only restates what the next one
+    # already says is the shape this repository deletes.
+    if not all(tok in _BARE_FLAGS for tok in argv):
         return argv, None
     from . import config
 
@@ -1869,7 +1907,12 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
         return argv, None
     if not sys.stdout.isatty():
         return argv, None
-    return [default], None
+    # The flags the operator typed ride along, after the harness name rather than before
+    # it: `_split_frame_argv` recognises `_OWN_FLAGS` only in the run immediately following
+    # `charter <name>`, which is the same position a typed `charter claude --fresh` puts
+    # them in. So the rewrite produces tokens indistinguishable from the typed form, which
+    # is this function's whole contract.
+    return [default, *argv], None
 
 
 def main(argv=None) -> int:

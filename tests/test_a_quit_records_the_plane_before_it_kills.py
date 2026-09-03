@@ -384,7 +384,7 @@ class TheQuitsOwnSentenceIsSaidByTheLauncher(PersonaIso, unittest.TestCase):
         from contextlib import redirect_stderr
         buf = io.StringIO()
         with redirect_stderr(buf):
-            commands_frame._say_it_was_quit(fid)
+            commands_frame._say_the_plane_is_recorded(fid)
         return buf.getvalue()
 
     def test_a_launcher_whose_chat_was_quit_names_the_command_that_undoes_it(self):

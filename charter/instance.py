@@ -1712,6 +1712,28 @@ FRAME_FIELDS = {
     "warn": ("yellow", "warn"),
     "bad": ("red", "bad"),
     "hotkey": ("F2", "hotkey"),
+    #: Whether the frame process writes the plane down as it changes (#845), so that a
+    #: machine that went down has a record to be put back from. On, because the alternative
+    #: is that everything between the last quit and a crash is gone — and the record is one
+    #: small file written on a debounce, which is the cheapest half of this pair.
+    #:
+    #: One word, so `docs/frame.md`'s hyphen rule (`history-limit`, not `history_limit`)
+    #: does not arise. Never `save`: `charter save` commits and pushes a tree, and a key
+    #: called `save` under `[frame]` would make every message about either one ambiguous.
+    #: `reopen.write` and 0.55.0's own news entry already say *record*.
+    "record": (True, "record"),
+    #: Whether bare `charter` puts the recorded plane back rather than opening one chat
+    #: (#845). **Its own key rather than a second reading of `record`, because the two are
+    #: separable and the asymmetry is real**: recording costs a little I/O and changes
+    #: nothing an operator sees, while restoring changes what happens when they type
+    #: `charter`. Somebody may reasonably want the plane recorded — so `charter reopen` has
+    #: something to act on when they ASK — without `charter` alone resurrecting yesterday's
+    #: six chats. One key makes that position unreachable.
+    #:
+    #: On, because a plane recorded and never offered back is a feature nobody would find:
+    #: `charter reopen` is a command an operator has to already know about, and #845 is a
+    #: request for the plane to come back without being asked.
+    "restore": (True, "restore"),
     "history_limit": (50000, "history-limit"),
     "min_cols": (100, "min-cols"),
     "min_rows": (20, "min-rows"),

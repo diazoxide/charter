@@ -149,8 +149,8 @@ import time
 
 from . import config, contain, harness, inflight, instance, tui, util, workspace
 from .frame import (actions as frame_actions, builtin_actions, chats, choose, component,
-                    gather, layout, leave, overlay, pane, palette, picker, state, switch,
-                    tabmenu, tmuxctl)
+                    gather, layout, leave, overlay, pane, palette, picker, record, state,
+                    switch, tabmenu, tmuxctl)
 # Aliased because `cmd_reopen` is a function in this module and `reopen` reads as one: the
 # module answers what a quit RECORDED and the command is what puts it back, and a bare
 # `reopen.read()` beside `cmd_reopen` invites a reader to think one is the other.
@@ -3187,6 +3187,11 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     # `state.record_workspace`), so this launcher is the only thing that ever knows.
     state.record_workspace(fid, ws)
     state.bump(fid)
+    # And the record this process keeps, if it is keeping one (#845), now knows which chat
+    # this terminal is on. This path is a frame process too — it stays awake for the life of
+    # the frame, reading the harness's exit status itself — so it records exactly as the
+    # private-server path does, and the id is allocated here for the same reason.
+    record.focus_on(fid)
     # Kicked here, before a single tmux split — the child gathers while tmux is still
     # carving panes, so on an ordinary launch the cache is already on disk by the time
     # the first panel process paints. See `_spawn_gather`.
@@ -4536,6 +4541,10 @@ def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> in
     same way `cmd_launch`'s own attach is.
     """
     _pin_workspace(ws, chat, picked)
+    # Which chat this terminal is on, for the record this process is now keeping (#845).
+    # A focus opens nothing, so this is the only place its answer can come from — without
+    # it a focused launch would record the plane with no focus at all.
+    record.focus_on(chat)
     attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", session_id)
     attached = tmuxctl.interact(attach_cmd)
     if attached.returncode != 0:
@@ -4635,7 +4644,159 @@ def _launch_size(args) -> tuple[int, int] | None:
     return (cols, rows) if cols > 0 and rows > 0 else None
 
 
+def _records_the_plane(args) -> bool:
+    """Whether THIS launch is the process that writes the plane down (#845).
+
+    **The frame process, and nothing else.** Panels are separate processes and six of them
+    notice one bump, so recording where a bump is noticed is six writers racing one file; a
+    designated panel is worse, because it stops recording when that panel dies, which is
+    exactly when the record matters. What is left is the launcher that stays awake for the
+    life of the frame — this function's whole job is to say when that is what this is.
+
+    **`.get(key, True)` and not a bare subscript**, and the deletion sweep is what settled
+    it — as a survivor first and then as a measurement. `instance.frame_of` starts from
+    `FRAME_DEFAULTS`, so every config it RESOLVES carries the key and the fallback looks
+    dead. `config.FRAME` is a module attribute, though, and a caller that assigns a whole
+    mapping over it is not resolving anything: `tests/test_frame_border_surface._frame`
+    builds `{"components": [...]}` and patches it in, and a bare subscript there is a
+    `KeyError` out of the launcher's entry path — which is `_bare_launch`'s own recorded
+    reason for `config.HARNESS or {}`, one setting over. The default is what the fallback
+    spells, and it is pinned rather than assumed (see the tests named for this).
+
+    Five ways of not being it, and none of them is implied by another:
+
+    * `--probe` answers before the launcher touches anything (`cmd_launch`'s first line);
+    * `--no-frame` is an `os.execvp`, so there is no frame and, a moment later, no charter;
+    * a non-tty stdout is `bypass`, the same exec, and is how `charter 2>&1 | head` asks
+      whether charter is installed (#687/#690);
+    * `_wants_attach` is false for a launch that was never going to be anybody's terminal —
+      `_open_workspace`'s detached `frame-switch`, and every chat a reopen builds;
+    * `[frame] record = false` is the operator saying not to.
+
+    And `--fresh`, which is a decision rather than a category: *this run does not
+    participate*. Recording under it would destroy, on a debounce timer, the record the same
+    run declined to restore from — and nothing would say so until the operator asked for the
+    plane back and found yesterday's instead of the day before's.
+    """
+    return (bool(config.FRAME.get("record", True))
+            and not getattr(args, "fresh", False)
+            and not getattr(args, "probe", False)
+            and not getattr(args, "no_frame", False)
+            and _wants_attach(args)
+            and sys.stdout.isatty())
+
+
+def _restores_the_plane(args) -> bool:
+    """Whether this launch may put the recorded plane back instead of opening a chat.
+
+    **Its own key, and its own question.** `[frame] restore` is not `[frame] record` read
+    twice: recording costs a little I/O and changes nothing an operator sees, while
+    restoring changes what happens when they type `charter` — so a plane may reasonably
+    record without resurrecting, and this predicate never consults the other key.
+
+    A launch carrying a `rest` is excluded because it asked for something in particular:
+    `charter claude --resume <id>` and `charter frame -- <cmd>` name a command, and
+    answering either with six other chats is an override rather than a restore. It is the
+    same gate `_workspace_to_focus`'s own `if not rest` keeps, for the same reason.
+
+    **What this does NOT ask is whether the plane is live** — that is the caller's, because
+    the answer costs two tmux round trips it has already paid for. See :func:`cmd_launch`.
+    """
+    return (bool(config.FRAME.get("restore", True))
+            and not getattr(args, "fresh", False)
+            and not getattr(args, "rest", None)
+            and _wants_attach(args))
+
+
+#: What an automatic restore says when the whole recorded plane came back. **One line**,
+#: and that is the decision rather than the formatting: `charter reopen` is a deliberate
+#: act, so its per-chat report is read; this happens when somebody typed `charter` and
+#: wanted a terminal, and a wall of text there is noise at the worst possible moment.
+#: Silence is not the alternative — that is #752's defect exactly, a frame quietly drawing
+#: less than it should.
+RESTORED_ALL = "charter: restored the {n} chat(s) this plane last recorded"
+
+#: The same line when part of the plane did not come back — **the rest, named, on the one
+#: line**. Refusing the whole restore over one chat was the alternative, and it makes one
+#: dead workspace cost the other five; saying nothing is #752's defect.
+#:
+#: **It does not offer `charter reopen` as a retry, and that is measured rather than
+#: cautious.** `_consume` does leave exactly the chats still owed in the record — but this
+#: process is now also RECORDING, so about :data:`frame.record.QUIET` seconds later the
+#: record is the plane that is running and the leftovers are gone. An operator sitting
+#: inside the frame this restore just attached them to cannot type anything in that window,
+#: so a line pointing there would be pointing at something that is not there by the time it
+#: is read. The names are what the line can carry truthfully.
+RESTORED_SOME = ("charter: restored {n} of the {total} chats this plane last recorded — "
+                 "{missing} did not come back")
+
+#: How many of the missing are named before the line starts counting instead. Three, because
+#: this is the compact line and the names are `chats.ID_RE` short — `alpha.1` — so three of
+#: them and a count is still one readable line at any terminal width.
+MISSING_NAMED = 3
+
+
+def _named_briefly(names) -> str:
+    """*names*, joined for one line, with anything past :data:`MISSING_NAMED` counted.
+
+    The values are chat ids off the record, and `reopen._usable` has already held every one
+    of them to `chats.ID_RE` on the way in — so this is a join rather than a boundary, and a
+    hostile manifest cannot reach the line through it.
+    """
+    kept = list(names)
+    if len(kept) <= MISSING_NAMED:
+        return ", ".join(kept)
+    return ", ".join(kept[:MISSING_NAMED]) + f" and {len(kept) - MISSING_NAMED} more"
+
+#: What a launch says when the record could not be acted on at all. It opens a chat anyway:
+#: the operator asked for a terminal, and refusing to give them one because a record is
+#: unusable would be the restore taking the launch hostage.
+NOT_RESTORED = ("charter: nothing this plane recorded could be started — opening a chat "
+                "instead. The record is left in place; `charter reopen` says why.")
+
+
+def _restore_the_plane(args) -> int | None:
+    """Put the recorded plane back. The launch's return code, or ``None`` to carry on.
+
+    ``None`` for a plane with nothing recorded — the ordinary first launch — and for a
+    restore that started nothing, which falls through to opening one chat rather than
+    leaving an operator who asked for a terminal without one.
+
+    `cmd_reopen` drives it, unchanged and in full: a second implementation of "put a
+    recorded chat back" would be a second answer to the workspace, the persona, the resume
+    flag and the cwd, and it would drift on the first change to either. The only thing this
+    adds is `quiet`, which is what turns its per-chat report into the one line above.
+    """
+    from types import SimpleNamespace
+    m = reopen_state.read()
+    if m is None or not m.frames:
+        return None
+    rc = cmd_reopen(SimpleNamespace(quiet=True))
+    if rc == 0:
+        return 0
+    util.warn(NOT_RESTORED)
+    return None
+
+
 def cmd_launch(args) -> int:
+    """One launcher, shared by every registered harness and by `charter frame --`.
+
+    The body is :func:`_launch`; this is the wrapper that makes the process holding the
+    operator's terminal the plane's recorder for as long as it holds it (#845). Expressed
+    as a wrapper rather than as a `try`/`finally` inside the launcher because the launcher
+    returns from a dozen places — a recorder started on one of them and stopped on another
+    is how a watch outlives the frame it was watching.
+
+    Stopped on the way out, and joined there (`record.Recorder.stop`): the launcher's own
+    last act is `state.reap`, which removes the very directories the watch reads.
+    """
+    if not _records_the_plane(args):
+        return _launch(args)
+    with record.recording(record_the_plane_now):
+        return _launch(args)
+
+
+def _launch(args) -> int:
     """One launcher, shared by every registered harness and by `charter frame --`."""
     if getattr(args, "probe", False):
         # First, and read-only: nothing below this line — resolving a harness, touching
@@ -4801,6 +4962,30 @@ def cmd_launch(args) -> int:
     if can_reap:
         state.reap(live_before, server=SOCKET)
 
+    # **Put the recorded plane back** (#845), and the gate that matters is `not
+    # live_before` rather than anything about this workspace. With recording on, the record
+    # is CURRENT instead of a relic of the last quit — so a second terminal typing `charter`
+    # while the plane runs would reopen every chat it can already see, and a reopened chat
+    # gets a fresh ordinal, so nothing on screen would tell the duplicates from the
+    # originals. Nothing live anywhere on this plane is the only reading under which a
+    # restore cannot double something.
+    #
+    # `not live_before` also implies `can_reap` — an empty `live_sessions` makes it true —
+    # so the wedged-server case (sessions listed, windows refused) is excluded by the same
+    # expression rather than by a second guard.
+    #
+    # **After the reap** for the reason the reap itself is here: `cmd_reopen` allocates a
+    # fresh ordinal per chat, and the directories the record describes are dead ones a reap
+    # is entitled to take. The manifest is a FILE and survives it (`frame/reopen.py`).
+    #
+    # **Before open-or-focus**, which is unreachable on this branch anyway — nothing is live
+    # for a client to be looking at — but stated in this order because it is the order the
+    # two questions are asked in: is there a plane to put back, then is there one to join.
+    if not live_before and _restores_the_plane(args):
+        rc = _restore_the_plane(args)
+        if rc is not None:
+            return rc
+
     # **Open or focus** (§4k), and it is asked HERE — after the reap, before the
     # allocation — for both of its neighbours' reasons. After the reap, so the chat
     # directories `_workspace_to_focus` reads are the ones that survived it rather than
@@ -4923,6 +5108,11 @@ def cmd_launch(args) -> int:
         _restore_recorded_chat(restoring.chat, fid)
     state.clear_respawn(fid)
     state.bump(fid)
+    # And the record this process keeps now knows which chat it is standing in (#845) —
+    # `Reopening.fid`'s own shape and for its own reason: the id is allocated here and
+    # nowhere earlier, and inferring it from the frame root would be reading back a fact
+    # this function has in hand. A no-op on every launch that is not recording.
+    record.focus_on(fid)
     # Kicked before tmux is asked for anything, so the gather runs alongside the session
     # start rather than in front of it. See `_spawn_gather`.
     _spawn_gather(fid, ws)
@@ -5327,10 +5517,15 @@ def cmd_launch(args) -> int:
     # rather than a tidiness. `new_chat_id` walks upward from 1 and `reap` frees the ordinals
     # a quit's chats held, so a reopen very often gets the SAME ids back — and every one of
     # its own launches would then find itself named in the manifest it is in the middle of
-    # acting on, and print "this plane was quit; put it back with `charter reopen`" while
-    # `charter reopen` was putting it back.
+    # acting on, and name `charter reopen` while `charter reopen` was putting it back.
+    #
+    # **And only for a chat that is actually over** (#845). The record now names every chat
+    # that is RUNNING as well, so without the second half an operator who detached from a
+    # live harness would be told their plane was recorded and offered `charter reopen`, one
+    # line above the launcher's own "detached — the harness is still running". `live_after`
+    # is the same reading that decides which of those two lines is printed below.
     if _wants_attach(args):
-        _say_it_was_quit(fid)
+        _say_the_plane_is_recorded(fid, over=fid not in live_after)
     if code is not None:
         return code
     if refused_to_attach:
@@ -8352,7 +8547,8 @@ def cmd_quit(args) -> int:
     return 0
 
 
-def _record_the_plane(doomed, *, focus: str, active, windows) -> int | None:
+def _record_the_plane(doomed, *, focus: str, active, windows,
+                      capture: bool = True) -> int | None:
     """Capture and record *doomed*. The number of chats recorded, or ``None``.
 
     Split out of :func:`cmd_quit` so that "what a quit writes down" is one function a test
@@ -8362,6 +8558,14 @@ def _record_the_plane(doomed, *, focus: str, active, windows) -> int | None:
     ``None`` for a manifest that did not land, which is the one thing that stops a quit.
     Everything else degrades per chat and is visible in what comes back: a capture that
     failed leaves the transcript field empty, so the reopen simply has nothing to offer.
+
+    **`capture=False` is #845's running plane, and it is exactly two differences.** A record
+    taken while everything is still running does not `capture-pane` — that is one subprocess
+    per chat per write at a hundred times a quit's rate, for the one restore item §4f says
+    is *offered and never replayed* — and it does not prune, because a sweep on that
+    timetable would collect the capture of a chat between a close and its reopen. What it
+    still does is NAME the capture a quit already left on disk, so a running plane's record
+    landing on top of a quit's does not silently withdraw the offer.
     """
     frames: list = []
     entries: dict[str, list] = {}
@@ -8382,7 +8586,15 @@ def _record_the_plane(doomed, *, focus: str, active, windows) -> int | None:
         transcript = ""
         dest = reopen_state.transcript_path(c.chat)
         pane_id = state.harness_pane(c.chat) or ""
-        if dest is not None and _PANE_ID_RE.fullmatch(pane_id) and c.chat in windows.get(
+        if not capture:
+            # The file rather than a capture, and `is_file()` rather than the manifest's own
+            # previous entry: the name is derived from the chat id either way
+            # (`reopen.TRANSCRIPT_SUFFIX`), so asking the directory is asking the same
+            # question one step closer to the answer — and it stays right when the previous
+            # manifest is one charter could not read.
+            if dest is not None and dest.is_file():
+                transcript = dest.name
+        elif dest is not None and _PANE_ID_RE.fullmatch(pane_id) and c.chat in windows.get(
                 server, {}):
             if _capture_transcript(server, pane_id, dest):
                 transcript = dest.name
@@ -8397,11 +8609,49 @@ def _record_the_plane(doomed, *, focus: str, active, windows) -> int | None:
         frames.append(reopen_state.Frame(workspace=ws, chats=tuple(entries[ws])))
     if not reopen_state.write(frames, focus=focus):
         return None
-    # Keyed on what was RECORDED and not on what was stopped: a transcript is a file in the
-    # frame root, and the only collector it has is this call. Keeping one for a chat no
-    # manifest names would leave it there for good.
-    reopen_state.prune_transcripts({c.chat for f in frames for c in f.chats})
+    if capture:
+        # Keyed on what was RECORDED and not on what was stopped: a transcript is a file in
+        # the frame root, and the only collector it has is this call. Keeping one for a chat
+        # no manifest names would leave it there for good.
+        reopen_state.prune_transcripts({c.chat for f in frames for c in f.chats})
     return sum(len(f.chats) for f in frames)
+
+
+def record_the_plane_now(chat: str) -> bool:
+    """Write down the plane as it stands. ``True`` when the record landed.
+
+    **`cmd_quit`'s own reading, without the stopping** — `leave.plan` over the frame root
+    and one `list-windows` per server, so "what a chat is" and "which of them are live" have
+    one answer on this plane rather than one for the quit and one for the recorder.
+
+    *chat* is the chat this process's terminal is standing in, and it becomes the manifest's
+    `focus` — the workspace a reopen attaches to. Read through `state.own_workspace`, which
+    is the membership question (#733) and the same one `cmd_quit` asks of the chat the
+    palette was opened in. ``""`` is a real answer for a launcher that has not claimed an id
+    yet, and `_attach_after_reopen` already falls back from it to the chat that was on
+    screen.
+
+    **A plane with nothing live is not recorded**, and that is a refusal rather than an
+    empty write. It is the state a plane is in for the instant between a quit's manifest and
+    the launcher noticing its attach ended, and replacing a quit's record with an empty one
+    there would destroy exactly the thing this feature exists to keep.
+    """
+    # **Asked of the disk before it is asked of tmux.** A plane with no chat directories has
+    # nothing to record whatever a server says, and this runs on a poll: `_plane_live` is a
+    # `list-windows` per server, and spending one to be told the plane is empty is the
+    # cheapest call to not make. It also keeps a recorder that outlives its frame — a launch
+    # whose every chat was reaped — from going on asking a tmux server about a plane that
+    # is not there.
+    if not leave.plane_chats():
+        return False
+    servers = _plane_servers()
+    live, windows, active = _plane_live(servers)
+    focus = state.own_workspace(chat) or ""
+    doomed = leave.stopping(leave.plan(live=live, focus=focus))
+    if not doomed:
+        return False
+    return _record_the_plane(doomed, focus=focus, active=active, windows=windows,
+                             capture=False) is not None
 
 
 def _stop_chats(doomed, *, windows) -> int:
@@ -8575,6 +8825,43 @@ def _restore_recorded_chat(rec, fid: str) -> None:
         return
 
 
+#: What `charter reopen` says when this plane is already running, and #845 is what made it
+#: reachable. The record used to exist only after a quit, so there was never a live plane
+#: for it to describe; it is written as the plane CHANGES now, so a `charter reopen` typed
+#: out of habit — after closing a terminal, say, which only detaches — would put a second
+#: copy of every running chat on the plane. A reopened chat gets a fresh ordinal, so nothing
+#: on screen would tell the copies from the originals, and for Claude Code both copies would
+#: `--resume` the same conversation.
+#:
+#: It names the two things that ARE what the operator wanted, because "already running" on
+#: its own reads as a refusal to do the thing rather than as an answer.
+REOPEN_ON_A_LIVE_PLANE = (
+    "charter reopen: this plane is already running — reopening it would open a second copy "
+    "of every chat, and a reopened chat gets a new id, so nothing on screen would tell the "
+    "copies apart. Attach to what is there (`tmux -L charter attach`), or quit it first "
+    "(`F2 → charter: quit`). Nothing was reopened, and the record is left in place.")
+
+
+def _plane_is_running() -> bool:
+    """Whether any chat on this plane is live right now.
+
+    **The disk is asked first**, and it is a complete answer rather than an optimisation: a
+    live chat always has a directory, because `state.new_chat_id` claims its ordinal with
+    the `mkdir` (see that function). No directories is no chats, and it costs a `scandir`
+    instead of a `list-windows` per server.
+
+    **A server that will not answer reads as "nothing live", which is the opposite of
+    `leave.plan`'s direction and is right here for the opposite reason.** A quit must not
+    silently record nothing, so an unanswerable server makes it assume the worst. A reopen
+    is wanted precisely when there is no server at all — after a restart — so assuming the
+    worst there would refuse the command in the one situation it exists for.
+    """
+    if not leave.plane_chats():
+        return False
+    live, _windows, _active = _plane_live(_plane_servers())
+    return bool(live)
+
+
 #: What `charter reopen` says when there is nothing recorded. It names the thing that
 #: writes one, because "nothing to reopen" on its own reads like a defect to an operator who
 #: has just restarted their machine and lost a frame — the honest answer is that a plane is
@@ -8586,6 +8873,26 @@ NOTHING_RECORDED = (
 
 
 def cmd_reopen(args) -> int:
+    """`charter reopen`, recording the plane it puts back for as long as it holds the
+    terminal.
+
+    The body is :func:`_reopen_plane`; this is `cmd_launch`'s own wrapper, and it is needed
+    here for a sharper reason than symmetry. A reopen attaches (`_attach_after_reopen`), so
+    this process IS the frame process for the plane it just built — and `_consume` has by
+    then deleted the record that drove it. Without a recorder here, the one plane that most
+    obviously deserves one would have nothing behind it until the next quit.
+
+    Every chat it builds passes `attach=False` into `cmd_launch`, so none of THOSE starts a
+    recorder (`_records_the_plane`), and the automatic restore reaching this from inside a
+    launch finds one already running (`record.recording`).
+    """
+    if not config.FRAME.get("record", True):
+        return _reopen_plane(args)
+    with record.recording(record_the_plane_now):
+        return _reopen_plane(args)
+
+
+def _reopen_plane(args) -> int:
     """`charter reopen` — put back the plane the last quit recorded.
 
     **What comes back, per chat: the workspace, the persona, the harness and the
@@ -8667,22 +8974,61 @@ def cmd_reopen(args) -> int:
                  "at the first. Run it from an ordinary shell. Nothing was reopened, and "
                  "the record is left in place.")
         return 1
+    # **After the two refusals above and before anything is started** (#845). It is last of
+    # the three because it is the only one that costs a tmux round trip, and it is asked at
+    # all because the record is no longer a relic of a quit: see
+    # :data:`REOPEN_ON_A_LIVE_PLANE`. Bare `charter`'s own restore reaches this function
+    # only with nothing live (`cmd_launch`'s `not live_before`), so this is a second reading
+    # of one rule rather than a second rule.
+    if _plane_is_running():
+        util.err(REOPEN_ON_A_LIVE_PLANE)
+        return 1
+    quiet = getattr(args, "quiet", False)
     back: list[Reopening] = []
     for f in m.frames:
         for c in f.chats:
-            r = _reopen_one(c)
+            r = _reopen_one(c, quiet=quiet)
             if r is not None:
                 back.append(r)
     if not back:
         util.err("charter reopen: none of the recorded chats could be started — the "
                  "record is left in place so this can be tried again.")
         return 1
-    util.ok(f"charter: reopened {len(back)} of {len(m.all_chats())} chats")
-    _consume(m, {r.chat.chat for r in back})
+    total = len(m.all_chats())
+    # **The refusal above is said either way, and that is deliberate.** `quiet` shortens a
+    # report of what HAPPENED; it does not make a restore that did nothing silent, which is
+    # #752's defect and the reason `_restore_the_plane` can fall through to a launch and
+    # still have told the operator something.
+    if quiet:
+        done = {r.chat.chat for r in back}
+        util.ok(RESTORED_ALL.format(n=len(back)) if len(back) == total
+                else RESTORED_SOME.format(
+                    n=len(back), total=total,
+                    missing=_named_briefly(c.chat for c in m.all_chats()
+                                           if c.chat not in done)))
+    else:
+        util.ok(f"charter: reopened {len(back)} of {total} chats")
+    _consume(m, {r.chat.chat for r in back}, quiet=quiet)
     return _attach_after_reopen(m, back)
 
 
-def _consume(m, done) -> None:
+def _report(quiet: bool, say, message: str) -> None:
+    """Say *message* through *say*, unless this is the automatic restore.
+
+    **One place the suppression happens, rather than an `if not quiet` at each of the six
+    sentences.** Six branches would be six things the deletion sweep asks a test for, all
+    answering the same question; this is one, and what it costs is that a caller has to
+    build a message it may not print — which is a formatted string, on a path that has just
+    spawned a tmux session.
+
+    It suppresses the per-CHAT report and nothing else. `cmd_reopen`'s own refusals are said
+    either way: a restore that did nothing has to say so wherever it was asked from (#752).
+    """
+    if not quiet:
+        say(message)
+
+
+def _consume(m, done, *, quiet: bool = False) -> None:
     """Take the chats in *done* out of the manifest, and drop it when nothing is left.
 
     **Consumed rather than deleted, because a partial reopen has two halves and only one of
@@ -8704,11 +9050,12 @@ def _consume(m, done) -> None:
         reopen_state.forget()
         return
     if reopen_state.write(left, focus=m.focus, at=m.at):
-        util.warn(f"charter reopen: {sum(len(f.chats) for f in left)} chat(s) still "
-                  "recorded — `charter reopen` again to retry just those")
+        _report(quiet, util.warn,
+                f"charter reopen: {sum(len(f.chats) for f in left)} chat(s) still "
+                "recorded — `charter reopen` again to retry just those")
 
 
-def _reopen_one(c) -> "Reopening | None":
+def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     """Put one recorded chat back. The launch's own record, or ``None`` when it did not run.
 
     **The harness is resolved off the registry by its own `name`**, which is what
@@ -8735,30 +9082,34 @@ def _reopen_one(c) -> "Reopening | None":
         fallback = (config.HARNESS or {}).get("default")
         h = next((x for x in harness.all() if x.cli_name == fallback), None)
         if h is None:
-            util.warn(f"charter reopen: {c.chat} recorded harness "
-                      f"{contain.readable(c.harness) or 'nothing'}, which this charter "
-                      f"cannot launch, and this plane declares no `[harness] default` — "
-                      f"not reopened")
+            _report(quiet, util.warn,
+                    f"charter reopen: {c.chat} recorded harness "
+                    f"{contain.readable(c.harness) or 'nothing'}, which this charter "
+                    f"cannot launch, and this plane declares no `[harness] default` — "
+                    f"not reopened")
             return None
-        util.warn(f"charter reopen: {c.chat} recorded harness "
-                  f"{contain.readable(c.harness) or 'nothing'} — reopening it under "
-                  f"{h.cli_name}, this plane's default")
+        _report(quiet, util.warn,
+                f"charter reopen: {c.chat} recorded harness "
+                f"{contain.readable(c.harness) or 'nothing'} — reopening it under "
+                f"{h.cli_name}, this plane's default")
     rest: list[str] = []
     if c.resume and leave.resumable_harness(c.harness):
         rest = ["--resume", c.resume]
     where = c.cwd if c.cwd and os.path.isdir(c.cwd) else str(config.ROOT)
     if where != c.cwd:
-        util.warn(f"charter reopen: {c.chat}'s directory "
-                  f"{contain.readable(c.cwd) or 'was never recorded'} — reopening in "
-                  f"{where}")
+        _report(quiet, util.warn,
+                f"charter reopen: {c.chat}'s directory "
+                f"{contain.readable(c.cwd) or 'was never recorded'} — reopening in "
+                f"{where}")
     r = Reopening(c)
     argv_args = _reopen_args(c, harness_name=h.cli_name, rest=rest, reopening=r)
     here = os.getcwd()
     try:
         os.chdir(where)
     except OSError:
-        util.warn(f"charter reopen: cannot enter {contain.readable(where)} — {c.chat} not "
-                  "reopened")
+        _report(quiet, util.warn,
+                f"charter reopen: cannot enter {contain.readable(where)} — {c.chat} not "
+                "reopened")
         return None
     try:
         rc = cmd_launch(argv_args)
@@ -8768,11 +9119,13 @@ def _reopen_one(c) -> "Reopening | None":
         except OSError:
             pass
     if rc != 0 or not r.fid:
-        util.warn(f"charter reopen: {c.chat} did not come back (launcher returned {rc})")
+        _report(quiet, util.warn,
+                f"charter reopen: {c.chat} did not come back (launcher returned {rc})")
         return None
-    util.info(f"  {c.chat} → {r.fid} · {leave.RESUMES if rest else 'empty'}"
-              + (" · workspace is missing" if c.workspace
-                 and not workspace.exists(c.workspace) else ""))
+    _report(quiet, util.info,
+            f"  {c.chat} → {r.fid} · {leave.RESUMES if rest else 'empty'}"
+            + (" · workspace is missing" if c.workspace
+               and not workspace.exists(c.workspace) else ""))
     return r
 
 
@@ -8815,6 +9168,11 @@ def _attach_after_reopen(m, back) -> int:
         wanted = next((r for r in back if r.chat.workspace == m.focus), None)
     if wanted is None:
         wanted = next((r for r in back if r.chat.active), back[0])
+    # The chat this reopen is about to hand the operator, which is where this process's own
+    # record says the terminal is standing (#845). It has to be said here rather than in
+    # `_reopen_one`: every chat a reopen builds passes through that function, and the last
+    # one to run is not the one the operator ends up on.
+    record.focus_on(wanted.fid)
     session = state.workspace_prefix(wanted.chat.workspace)
     pane_id = state.harness_pane(wanted.fid) or ""
     if _PANE_ID_RE.fullmatch(pane_id):
@@ -8949,8 +9307,20 @@ def _start_leaving(fid: str, verb: str) -> None:
         util.self_relaunch_argv(f"frame-{verb}", "--chat", fid), fid=fid)
 
 
-def _say_it_was_quit(fid: str) -> None:
-    """Tell the operator their plane was recorded, on the shell they are back in.
+#: What the launcher tells an operator it has just handed a shell back to.
+#:
+#: **It says "is recorded" and not "was quit", and #845 is what made the difference
+#: load-bearing.** While a quit was the only writer, a manifest naming this chat WAS a quit
+#: by construction. Now the frame process records the plane as it changes, so the same
+#: reading is true of every chat that ever ran — and the sentence would have announced a
+#: quit on every ordinary detach. What is still true, and is the whole of what the operator
+#: can act on, is that the plane is on disk and one command puts it back.
+RECORDED_PLANE = ("charter: this plane is recorded — {n} chat(s) recorded, {back} with a "
+                  "conversation to resume.\n  put it back with: charter reopen")
+
+
+def _say_the_plane_is_recorded(fid: str, *, over: bool = True) -> None:
+    """Tell the operator their plane is recorded, on the shell they are back in.
 
     **The gap this closes was found by asking where the quit's own sentence goes, and the
     answer was nowhere.** `charter: quit` is started detached with `stdout` and `stderr` on
@@ -8963,19 +9333,26 @@ def _say_it_was_quit(fid: str) -> None:
 
     `cmd_launch` is the process that hands them that shell, so it is the one that can say
     it. Gated on the MANIFEST naming this chat, which is what makes the sentence true rather
-    than likely: a launcher whose harness merely exited, or whose operator detached, reaches
-    the same lines and says nothing.
+    than likely.
+
+    **And on *over*, which #845 added because the manifest stopped being able to answer
+    it.** While a quit was the only writer, a record naming this chat meant the plane had
+    been stopped; now the frame process records it as it changes, so the record names every
+    chat that is RUNNING too — and without this the launcher would tell an operator who
+    detached from a live harness that their plane was over, one line above its own
+    "detached — the harness is still running". *over* is the caller's own `fid not in
+    live_after`, the same reading that decides which of those two lines it prints.
 
     Never raises and never guesses: a manifest charter cannot read is one it says nothing
     about, exactly as `reopen.read` answers `None` for it.
     """
+    if not over:
+        return
     m = reopen_state.read()
     if m is None or not any(c.chat == fid for c in m.all_chats()):
         return
-    n = len(m.all_chats())
-    back = len([c for c in m.all_chats() if c.resume])
-    util.info(f"charter: this plane was quit — {n} chat(s) recorded, {back} with a "
-              f"conversation to resume.\n  put it back with: charter reopen")
+    util.info(RECORDED_PLANE.format(n=len(m.all_chats()),
+                                    back=len([c for c in m.all_chats() if c.resume])))
 
 
 #: What the chat bar's `+` says when this frame is a window in a tmux the operator already
