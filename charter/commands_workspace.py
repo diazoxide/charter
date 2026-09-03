@@ -1205,14 +1205,18 @@ def cmd_workspace_reinit(args) -> int:
         # current can still hold a `.claude/settings.json` generated before the plane's
         # own settings moved — and it is the one this command silently repaired while
         # printing "nothing to do" until it was said out loud.
-        for rel, was in before.get("layer") or ():
-            if was == "foreign":
+        for rel, did in before.get("layer") or ():
+            if did == "foreign":
                 util.warn(f"'{n}': {rel} was not written by charter — left completely "
                           f"untouched. Remove it if you want charter's own again.")
+            elif did == "blocked":
+                util.err(f"'{n}': {rel} could not be written — something is in the way at "
+                         f"that path. charter never deletes or renames existing content.")
             else:
                 healed += 1
-                util.ok(f"Reinitialized '{n}' → {'wrote' if was == 'missing' else 'refreshed'} "
-                        f"{rel} (charter's harness layer).")
+                util.ok(f"Reinitialized '{n}' → "
+                        f"{'wrote' if did == 'created' else 'refreshed'} {rel} "
+                        f"(charter's harness layer).")
         if before["ok"]:
             continue
         healed += 1

@@ -1569,12 +1569,17 @@ def reinit(name: str) -> dict:
     baseline files and stamp the version marker. Additive: never destroys existing
     content. Returns the pre-reinit status (what was missing / the old version)."""
     before = structure_status(name)
-    # The harness layer, READ before `scaffold` writes it — a repair that reports what it
-    # found has to look first. It is not folded into `ok`: `structure_status` answers
-    # "is this workspace's LAYOUT current", a question `needs_reinit` and the status line
-    # both key off, and a layer that has gone stale because the plane's settings moved is
-    # not a workspace built by an older charter. Two facts, two keys.
-    before["layer"] = [(rel, st) for rel, st in harness_layer(name) if st != "ok"]
+    # The harness layer, written HERE rather than left to `scaffold`'s own call, because
+    # the repair has to report what it DID and only the writer knows that: a `.claude`
+    # that cannot be made comes back `blocked`, and reading the pre-state instead would
+    # have printed "wrote it" over a write that never happened. `scaffold` below re-runs
+    # it and gets `present` for everything, which is what idempotent means.
+    #
+    # Not folded into `ok`: `structure_status` answers "is this workspace's LAYOUT
+    # current", which `needs_reinit` and the status line both key off, and a layer that
+    # went stale because the plane's settings moved is not a workspace built by an older
+    # charter. Two facts, two keys.
+    before["layer"] = [(rel, st) for rel, st in wire_harnesses(name) if st != "present"]
     scaffold(name)  # creates memory/refs/workspace.md if missing + stamps the marker
     # Structure is not only what lives inside the workspace directory: which of its paths
     # are SHARED is part of the layout too, and that lives in the managed .gitignore block.

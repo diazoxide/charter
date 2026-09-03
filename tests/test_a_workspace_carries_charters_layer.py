@@ -237,6 +237,25 @@ class ReinitRepairs(WorkspaceLayer):
         commands_workspace.cmd_workspace_reinit(SimpleNamespace(name=self.ws, all=False))
         self.assertIn("later@market", self.settings().read_text())
 
+    def test_reinit_says_what_it_DID_rather_than_what_it_found(self):
+        """A `.claude` that is a file cannot be made into a directory, and charter never
+        deletes or renames existing content. Reading the pre-state would have printed
+        "wrote it" over a write that never happened — and a tick is what stops you
+        checking."""
+        import shutil
+
+        shutil.rmtree(workspace.workspace_dir(self.ws) / ".claude")
+        (workspace.workspace_dir(self.ws) / ".claude").write_text("not a directory\n")
+        rows = dict(workspace.reinit(self.ws)["layer"])
+        self.assertEqual(rows[".claude/settings.json"], "blocked")
+        self.assertEqual((workspace.workspace_dir(self.ws) / ".claude").read_text(),
+                         "not a directory\n")
+
+    def test_a_current_layer_is_not_announced(self):
+        """Idempotent means quiet: a second `reinit` has nothing to say about the layer."""
+        commands_workspace.cmd_workspace_reinit(SimpleNamespace(name=self.ws, all=False))
+        self.assertEqual(workspace.reinit(self.ws)["layer"], [])
+
 
 class DoctorSaysSo(WorkspaceLayer):
     def setUp(self) -> None:
