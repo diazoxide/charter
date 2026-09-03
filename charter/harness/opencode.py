@@ -715,15 +715,22 @@ class OpenCodeHarness(Harness):
                 "cannot be made to DIFFER between two."),
     )
 
-    #: Charter writes NO in-repo layer for opencode today, so there is nothing for
+    #: Charter declares NO :class:`LayerPart` for opencode, so there is nothing for
     #: `doctor`'s `session layer` row to look for and the row says where the layer does
     #: come from instead.
     #:
-    #: **The second sentence is the one that matters.** An in-repo surface exists here and
-    #: charter simply does not use it yet — measured against opencode 1.18.23 with a real
-    #: session, not with `opencode agent list`, because a management CLI is not a session
-    #: and answers for the wrong thing. Naming the surface is what stops "charter writes
-    #: no layer here" from being read as "there is nowhere to write one".
+    #: **Empty because the discovery RULE is unmeasured, not because nothing is written.**
+    #: Since #868 charter mirrors the plane's `.opencode/agent/` into a workspace's
+    #: checkouts (:attr:`inherited_paths`). What `LayerPart` cannot yet say is by which
+    #: rule opencode finds it: its project config is keyed to the repository ROOT, which is
+    #: neither of the two rules charter has measured, and declaring it as a walking part
+    #: would report a layer as reachable from an intermediate directory opencode never
+    #: reads there — the one direction `part_reaches` says that row must never be wrong in.
+    #:
+    #: Measured against opencode 1.18.23 with a real session, not with `opencode agent
+    #: list`, because a management CLI is not a session and answers for the wrong thing.
+    #: Naming the surface is what stops "charter declares no layer here" from being read as
+    #: "there is nowhere to write one".
     layer_note = (
         "charter writes no in-repo layer for opencode — it arrives from "
         "`~/.config/opencode/` and the plugin, which every directory on this machine "
