@@ -895,10 +895,13 @@ def _git_root_of(here: Path) -> Path | None:
     """
     try:
         res = _git_in(here, "rev-parse", "--show-toplevel")
-    except Exception:
-        # `util.run` raises `ProcTimeout` on a stalled network mount and `ProcError` never
-        # (check=False), but a missing `git` reaches here as an OSError from the exec
-        # itself. A preflight row must render something.
+    except (util.ProcTimeout, OSError):
+        # The same two `check_plane_root` catches, for the same two reasons: `util.run`
+        # raises `ProcTimeout` on a stalled network mount, and a missing or unusable
+        # `git` reaches here as an OSError from the exec itself. Narrow rather than
+        # `Exception`, per `check_memory_indexes`: a broad catch there once swallowed a
+        # `NameError` and reported OK. `ProcError` is not among them — `_git_in` passes
+        # `check=False`, so a non-zero exit comes back as a result and is read below.
         return None
     top = res.stdout.strip()
     if res.returncode != 0 or not top:
@@ -986,7 +989,11 @@ def check_session_layer() -> Result:
     # A `charter doctor` typed in a plain terminal has no harness to report for, and
     # picking one would be a guess — so it answers for each, which is also the only
     # rendering that shows an operator what a *different* harness would find here.
-    live = _registry.get(current) if current else None
+    # No `if current` guard. `registry.get` already answers ``None`` for a name that is
+    # None (`KINDS.get(name or "")`), so the guard could never decide anything — the
+    # deletion sweep charged it as a survivor and was right: an equivalent mutant and dead
+    # code are the same finding.
+    live = _registry.get(current)
     harnesses = [live] if live else _registry.all()
 
     bound = _git_root_of(here)
@@ -1018,7 +1025,13 @@ def check_session_layer() -> Result:
     # gate. Repeating it per harness would put a sentence about Claude Code's trust model
     # under opencode's name, which is the kind of borrowed answer this row refuses above.
     if own_repo and gated:
-        what = " / ".join(sorted({h.trust_gate for h in gated}))
+        # Registration order, deduplicated — `dict.fromkeys` and NOT a set, which has no
+        # order a reader or a test can rely on: string hashing is randomised per process,
+        # so two harnesses naming two gates would render this sentence differently from
+        # one run to the next. Registration order rather than alphabetical because that is
+        # the order `registry.all` hands them over and the order every other harness
+        # listing in charter prints.
+        what = " / ".join(dict.fromkeys(h.trust_gate for h in gated))
         lines.append(
             f"trust: {bound} is a git root of its own, so it carries its own trust "
             f"acceptance — until that is given, {what} do not run here whatever any "

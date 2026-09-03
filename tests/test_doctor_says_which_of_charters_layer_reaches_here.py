@@ -532,11 +532,24 @@ class ThePartResolver(_isolation.PersonaIso):
             self.here, None))
 
     def test_a_json_document_that_is_not_an_object_carries_no_keys(self):
+        """The array **holds the key name**, and that is the whole test. `[]` proves
+        nothing: `"env" in []` is already False, so a check that had dropped the type
+        filter entirely would pass over it — the deletion sweep found exactly that and
+        was right. `["env"]` separates "this document declares env" from "this document
+        happens to contain the string"."""
         p = self.here / ".claude" / "settings.json"
         p.parent.mkdir(parents=True)
-        p.write_text("[]")
+        p.write_text(json.dumps(["env"]))
         self.assertFalse(base.part_reaches(
             self.part(False, ".claude/settings.json", keys=("env",)), self.here, None))
+
+    def test_a_path_that_cannot_be_read_is_not_found(self):
+        """`Path.exists` swallows ENOENT and ENOTDIR and does NOT swallow EACCES, so a
+        `.claude/` under an ancestor this process cannot traverse raises here. `doctor`
+        runs from the SessionStart hook: a row must render something."""
+        with mock.patch.object(Path, "exists", side_effect=PermissionError("nope")):
+            self.assertFalse(base.part_reaches(
+                self.part(False, ".claude/agents"), self.here, None))
 
     def test_an_unreadable_document_is_not_a_declaration(self):
         p = self.here / ".claude" / "settings.json"
@@ -550,6 +563,201 @@ class ThePartResolver(_isolation.PersonaIso):
         (self.here / ".claude" / "agents").mkdir(parents=True)
         self.assertTrue(base.part_reaches(
             self.part(False, ".claude/agents"), self.here, None))
+
+
+class WhereTheWalkStopsIsAskedOfGit(LayerCase):
+    """`_git_root_of` on its own. Everything above it — which directories the walk covers,
+    whether the trust condition fires — is decided by what this function answers, so its
+    refusals are stated here rather than inferred through a row."""
+
+    def _proc(self, returncode: int, stdout: str):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    def test_a_directory_in_no_repository_has_no_git_root(self):
+        """git exits non-zero outside a repository. Read as an answer instead, `Path("")`
+        resolves to the CURRENT directory — so every loose directory would report itself
+        as its own git root and the trust condition would fire everywhere."""
+        with mock.patch.object(doctor, "_git_in", return_value=self._proc(128, "")):
+            self.assertIsNone(doctor._git_root_of(self.plane))
+
+    def test_an_empty_answer_is_not_a_root_either(self):
+        """The other half of the same refusal, and not reachable through the first: a
+        zero exit with nothing on stdout is what a git built without the subcommand, or
+        one whose output was swallowed, leaves behind."""
+        with mock.patch.object(doctor, "_git_in", return_value=self._proc(0, "  \n")):
+            self.assertIsNone(doctor._git_root_of(self.plane))
+
+    def test_a_real_repository_answers_with_itself(self):
+        self.assertEqual(doctor._git_root_of(self.plane), self.plane)
+
+    def test_a_clone_answers_with_the_clone_and_not_the_plane(self):
+        here = self.clone()
+        self.assertEqual(doctor._git_root_of(here), here)
+
+    def test_a_git_that_hangs_or_is_missing_does_not_take_the_row_with_it(self):
+        """`check_plane_root`'s two, for its reasons: a stalled network mount raises
+        `ProcTimeout`, and a missing git raises OSError out of the exec. This runs from
+        the SessionStart hook."""
+        from charter import util
+
+        for boom in (util.ProcTimeout(["git"], 5.0), OSError("no git")):
+            with self.subTest(boom=type(boom).__name__):
+                with mock.patch.object(doctor, "_git_in", side_effect=boom):
+                    self.assertIsNone(doctor._git_root_of(self.plane))
+
+
+class SettingsAreReadOnceAndDefensively(LayerCase):
+    """`_settings_docs` is the single reader every structured question about the session's
+    settings goes through, so what it refuses decides what several rows can claim."""
+
+    def test_a_settings_file_that_is_not_an_object_yields_no_plugin_ids(self):
+        """A JSON array parses fine and has no `.get`. Without the type filter this is an
+        `AttributeError` out of a preflight check — the row does not warn, it crashes."""
+        p = self.workspace / ".claude" / "settings.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps([{"enabledPlugins": {"charter@charter": True}}]))
+        self.rooted_at(self.workspace)
+        self.assertEqual(doctor._enabled_plugin_ids(), set())
+
+    def test_an_unreadable_settings_file_is_skipped_not_raised(self):
+        p = self.workspace / ".claude" / "settings.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{ not json")
+        self.rooted_at(self.workspace)
+        self.assertEqual(doctor._settings_docs(), [])
+
+    def test_the_documents_come_back_in_the_order_the_host_reads_them(self):
+        self.settings(self.workspace, {"env": {"A": "1"}})
+        (self.workspace / ".claude" / "settings.local.json").write_text(
+            json.dumps({"env": {"B": "2"}}))
+        self.rooted_at(self.workspace)
+        self.assertEqual([d["env"] for d in doctor._settings_docs()],
+                         [{"A": "1"}, {"B": "2"}])
+
+
+class _StubHarness(base.Harness):
+    """A harness charter has never met, so the row's per-harness rendering can be driven
+    without waiting for a fourth real one to be registered."""
+
+    def __init__(self, name: str, gate: str) -> None:
+        self.name = name
+        self.trust_gate = gate
+        self.layer = (base.LayerPart("settings", (".nowhere",), False, "why"),)
+
+
+class TheTrustClauseIsAssembledDeterministically(LayerCase):
+    """Two harnesses can gate on two different things, and the sentence that joins them
+    must read the same on every run. A `set` has no order a reader or a test can rely on
+    — string hashing is randomised per process — so the row's own text would move between
+    runs, which is the defect this repo already pins column widths and roster order
+    against."""
+
+    def _detail_for(self, stubs) -> str:
+        with mock.patch.object(registry, "all", return_value=stubs):
+            os.environ.pop("CHARTER_HARNESS", None)
+            self.rooted_at(self.clone())
+            return self.detail()
+
+    def test_two_gates_are_named_in_registration_order(self):
+        detail = self._detail_for([_StubHarness("z-harness", "zeta"),
+                                   _StubHarness("a-harness", "alpha")])
+        self.assertIn("zeta / alpha", detail)
+
+    def test_registration_order_and_not_alphabetical_order(self):
+        """The same two, registered the other way round. Sorting would render both cases
+        identically and this pair is what tells them apart."""
+        detail = self._detail_for([_StubHarness("a-harness", "alpha"),
+                                   _StubHarness("z-harness", "zeta")])
+        self.assertIn("alpha / zeta", detail)
+
+    def test_two_harnesses_gating_on_the_same_thing_say_it_once(self):
+        detail = self._detail_for([_StubHarness("one", "hooks"),
+                                   _StubHarness("two", "hooks")])
+        self.assertIn("until that is given, hooks do not run", detail)
+
+    def test_one_gate_is_named_alone(self):
+        self.rooted_at(self.clone())
+        self.assertIn("hooks or the status line do not run here", self.detail())
+
+
+class GuardsThisBranchInheritedFromItsBase(LayerCase):
+    """Four survivors the sweep charged this branch that arrived with its base, #862.
+
+    Pinned **here** rather than in that branch's own test module, deliberately: #862 is
+    still open, and editing `tests/test_a_workspace_carries_charters_layer.py` from a
+    branch stacked on top of it buys a conflict for nothing. These assert behaviour, not
+    file layout, so they keep working after the rebase — and if #862 pins them itself, two
+    tests for one guard costs nothing. The fifth of the five was an equivalent mutant and
+    was deleted at the site (`commands_workspace._reinit`'s `or ()`).
+
+    A survivor is not somebody else's problem because it appeared on somebody else's line.
+    `tools/sweep.py` has no suppression list on purpose.
+    """
+
+    def _workspaces_missing_the_layer(self, n: int) -> None:
+        """Exactly *n* findings — counted, never assumed.
+
+        `setUp` leaves a bare `workspaces/fleet` behind, and it is a workspace as far as
+        `list_workspaces` is concerned, so "create four" quietly produced five and the
+        boundary case tested the wrong side of the boundary."""
+        import shutil
+
+        from charter import workspace as _workspace
+
+        shutil.rmtree(self.workspace, ignore_errors=True)
+        self.settings(self.plane)
+        for i in range(n):
+            name = f"ws{i}"
+            _workspace.ensure(name)
+            p = _workspace.workspace_dir(name) / ".claude" / "settings.json"
+            self.assertTrue(p.is_file(), "the fixture did not produce a layer to remove")
+            p.unlink()
+        self.assertEqual(_workspace.list_workspaces(), [f"ws{i}" for i in range(n)])
+
+    def test_more_findings_than_fit_are_marked_as_elided(self):
+        """`doctor` prints the first four. Without the marker a report of five reads as a
+        report of four, and the workspace nobody looked at is the one that stays broken."""
+        self._workspaces_missing_the_layer(5)
+        self.assertIn(", …", doctor.check_workspace_harness().detail)
+
+    def test_a_report_that_fits_is_not_marked_as_elided(self):
+        """The other half, and it is not reachable through the first: an ellipsis printed
+        unconditionally would say something was withheld from every complete report."""
+        self._workspaces_missing_the_layer(4)
+        self.assertNotIn(", …", doctor.check_workspace_harness().detail)
+
+    def test_a_tree_that_cannot_be_read_is_reported_as_not_checked(self):
+        """"Not checked" is the absence of information, not evidence of health — the
+        distinction `_NOT_CHECKED_HINT` exists to keep. Without the catch this is a
+        traceback out of the SessionStart preflight."""
+        from charter import workspace as _workspace
+
+        self.settings(self.plane)
+        _workspace.ensure("api")
+        with mock.patch.object(_workspace, "harness_layer",
+                               side_effect=OSError("permission denied")):
+            r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, WARN)
+        self.assertIn("not checked", r.detail)
+
+    def test_the_layers_rows_come_back_in_a_stable_order(self):
+        """`harness_layer` feeds a report that prints only its first four rows, so which
+        four they are must not depend on the order a harness happened to build its dict
+        in. One file today; the guarantee is what makes a second one safe to add."""
+        from charter import workspace as _workspace
+
+        class _TwoFiles(base.Harness):
+            name = "two-files"
+
+            def workspace_files(self):
+                return {"z/second.json": "{}\n", "a/first.json": "{}\n"}
+
+        _workspace.ensure("api")
+        with mock.patch.object(registry, "all", return_value=[_TwoFiles()]):
+            rows = _workspace.harness_layer("api")
+        self.assertEqual([rel for rel, _st in rows], ["a/first.json", "z/second.json"])
 
 
 class TheRowIsInTheReport(LayerCase):
