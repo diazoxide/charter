@@ -24,6 +24,7 @@ Secrets are deliberately *not* part of this — vaults are cross-workspace.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1039,7 +1040,8 @@ def scaffold_memory(name: str) -> Path:
 
 def scaffold(name: str) -> None:
     """Create a workspace's baseline structure: memory/ (per-file DB + index), refs/, the
-    workspace.md charter, and the structure-version marker. Idempotent + additive."""
+    workspace.md charter, the harness layer, and the structure-version marker. Idempotent
+    + additive."""
     scaffold_memory(name)
     refs = refs_dir(name)
     refs.mkdir(parents=True, exist_ok=True)
@@ -1048,7 +1050,226 @@ def scaffold(name: str) -> None:
         rr.write_text(f"# {name} — task references\n\nDrop docs, links, and snippets for "
                       f"this task here (local, gitignored).\n")
     scaffold_charter(name)  # workspace.md — the living vision/context/glossary charter
+    wire_harnesses(name)    # the harness layer — see `harness_layer`
     _structure_marker(name).write_text(str(STRUCTURE_VERSION) + "\n")  # stamp the layout version
+
+
+# --------------------------------------------------------------------------- #
+# the harness layer — what a chat standing in `workspaces/<ws>/` needs to get   #
+# charter at all (#850).                                                        #
+#                                                                               #
+# Claude Code reads project settings from the session's working directory and    #
+# does not walk up, so a chat launched there loaded no plugin, ran no status     #
+# line and had no `$CHARTER_HARNESS` — while its agents and skills DID arrive,   #
+# because those walk up and a workspace directory is not a git boundary. Half a  #
+# layer, and the half that was missing is the half that runs.                    #
+#                                                                               #
+# ADR 0015 deleted a per-tree design of this shape and the caution is real, so   #
+# the difference is worth stating: what it deleted wrote the same GLOBAL answer  #
+# into every checkout, for a harness that reads one global file anyway. This     #
+# writes config that is MEANT to differ per workspace, into a directory charter  #
+# itself creates. What is re-incurred from that design is the staleness          #
+# bookkeeping below — and not its `.git/info/exclude` entry per checkout, which  #
+# is the cost that never arrives here: `/workspaces/*/*` is already in the       #
+# plane's `.gitignore` (`_ensure_gitignore`) and the managed LIVE block          #
+# un-ignores four named paths, none of them `.claude/`. Nothing generated here   #
+# can reach a commit.                                                            #
+#                                                                               #
+# Nothing is written into a CLONE — `workspaces/<ws>/<repo>/` is a repo charter  #
+# does not own, and `git add -A` there would stage it. The stated limit that     #
+# follows: in a clone you cannot delegate to a persona.                          #
+# --------------------------------------------------------------------------- #
+
+#: The charter-owned sidecar recording what charter last generated in a workspace, as
+#: ``{relative path: sha256 of the text charter wrote}``.
+#:
+#: **A sidecar and not a key inside the vendor's JSON**, which is the same reason
+#: symlinking `.claude/` was wrong: that file's schema belongs to Claude Code, an unknown
+#: key in it is charter making a claim on somebody else's document, and a validator that
+#: rejects unknown keys would make charter's bookkeeping a startup failure. `persona
+#: sync-agents` can put its marker INSIDE the file it generates because Markdown has a
+#: comment syntax; JSON has none, which is precisely why this exists as a file.
+#:
+#: `.charter-structure` is the precedent for a charter-owned marker file in a workspace,
+#: and this sits beside it for the same reason: one directory, one place to look.
+GENERATED_MARKER = ".charter-generated"
+
+
+def content_digest(text: str) -> str:
+    """The hash the marker records for one generated file.
+
+    Named and public because the writer and the ownership test must not be two spellings
+    of "the same content" — a marker written one way and read another reports every file
+    charter wrote as somebody else's, which is the direction that costs work.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def is_workspace_dir(path) -> bool:
+    """Is *path* one of THIS plane's workspace directories?
+
+    The boundary the whole mechanism draws, asked in one place. A clone under a workspace
+    (`workspaces/<ws>/<repo>/`) answers **no** — it is somebody else's repo — and so does
+    the plane root, whose `.claude/settings.json` is user-owned, git-tracked and governed
+    by the never-repair restraint `commands._ensure_statusline` records.
+
+    :func:`valid_name` is asked first for :func:`exists`' reason: ``WORKSPACES_DIR / ".."``
+    is the plane root, so a parent-directory comparison alone answers *yes* for a name
+    that is not a workspace and can never be one.
+    """
+    p = Path(path)
+    if not valid_name(p.name):
+        return False
+    try:
+        return p.parent == config.WORKSPACES_DIR
+    except OSError:
+        return False
+
+
+def harness_deficits() -> list[tuple[str, object]]:
+    """``(harness name, Deficit)`` for every registered harness that cannot isolate.
+
+    Their config is machine-global, so per-workspace divergence is not buildable for them
+    at all. Reported rather than skipped in silence: `base.Deficit` exists for exactly
+    this — *"a capability that is simply missing reads as a broken integration"* — and a
+    report showing one row for the harness that can and nothing for the two that cannot
+    would be read as three ticks.
+    """
+    from .harness import base as _base
+    from .harness import registry as _registry
+
+    out: list[tuple[str, object]] = []
+    for h in _registry.all():
+        gap = next((d for d in h.deficits if d.key == _base.WORKSPACE_SCOPE), None)
+        if gap is not None:
+            out.append((h.name, gap))
+    return out
+
+
+def _layer_files(name: str) -> dict[str, str]:
+    """``{relative path: text}`` every registered harness needs inside workspace *name*.
+
+    Nothing here names a harness — the registry is iterated, so a harness added to
+    ``KINDS`` is covered the day it is registered, which is the reason
+    `harness/registry.py` records for its own existence. A harness that cannot hold
+    per-workspace config returns nothing AND declares :data:`base.WORKSPACE_SCOPE`;
+    :func:`harness_deficits` is what turns the second half into a sentence.
+
+    A relative path that would escape the workspace is dropped rather than written. The
+    harness contract says paths stay inside; a contract nothing enforces is a comment,
+    and this is the one place every harness's answer passes through.
+    """
+    from .harness import registry as _registry
+
+    wd = workspace_dir(name)
+    out: dict[str, str] = {}
+    for h in _registry.all():
+        for rel, text in (h.workspace_files() or {}).items():
+            target = (wd / rel).resolve()
+            if target == wd.resolve() or wd.resolve() not in target.parents:
+                continue
+            out[rel] = text
+    return out
+
+
+def _read_marker(name: str) -> dict:
+    try:
+        doc = json.loads((workspace_dir(name) / GENERATED_MARKER).read_text())
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def harness_layer(name: str) -> list[tuple[str, str]]:
+    """``(relative path, status)`` for every file the harness layer wants — READ ONLY.
+
+    ``"ok"`` · ``"missing"`` · ``"stale"`` · ``"foreign"`` · ``"unreadable"``.
+
+    **Regenerate and compare**, which is `persona lint --only stale`'s test verbatim
+    (`commands_persona._agent_sync_issues`) rather than a second notion of staleness. A
+    stored diff would answer the wrong question: the generator's own output drifts — the
+    plane's status line changes, a plugin is enabled — so what "current" means is whatever
+    the generator says *today*, and the only way to know that is to run it.
+
+    **Read only, because `doctor` calls this from the SessionStart hook.** A check that
+    writes is not a check: it would report every workspace healthy by having just healed
+    it, which is the "looks wired" shape this repo keeps paying for.
+
+    ``foreign`` is the operator's file — content charter cannot vouch for against the
+    marker. Charter never repairs it and never overwrites it, the restraint ADR 0015
+    settles for an unstamped shim: charter cannot tell a file it wrote before the marker
+    existed from one somebody rewrote, and guessing wrong in that direction destroys work.
+    """
+    wd = workspace_dir(name)
+    marker = _read_marker(name)
+    rows: list[tuple[str, str]] = []
+    for rel, want in sorted(_layer_files(name).items()):
+        p = wd / rel
+        if not p.exists():
+            rows.append((rel, "missing"))
+            continue
+        try:
+            have = p.read_text()
+        except (OSError, UnicodeDecodeError):
+            rows.append((rel, "unreadable"))
+            continue
+        if have == want:
+            rows.append((rel, "ok"))
+        elif marker.get(rel) == content_digest(have):
+            rows.append((rel, "stale"))
+        else:
+            rows.append((rel, "foreign"))
+    return rows
+
+
+def wire_harnesses(name: str) -> list[tuple[str, str]]:
+    """Materialise the harness layer into workspace *name*. ``(relative path, status)``.
+
+    ``"created"`` · ``"refreshed"`` · ``"present"`` · ``"foreign"`` · ``"blocked"``.
+
+    **Refresh, not create-once.** `ensure_shim`'s restraint was right about the operator's
+    files and wrong about charter's own: a plugin generated by 0.40.0 survived every
+    upgrade afterwards while `doctor` reported the tree wired (ADR 0015). A file whose
+    digest is in the marker is charter's, and charter brings its own files up to date.
+    A file whose digest is not is the operator's, and is left exactly as found.
+
+    Called from :func:`scaffold`, so a launch gets it: `commands_frame._launch_root` runs
+    `ensure` before the chat's cwd is read. `charter workspace reinit` is the repair.
+    """
+    wd = workspace_dir(name)
+    marker = _read_marker(name)
+    want_all = _layer_files(name)
+    rows: list[tuple[str, str]] = []
+    wrote = False
+    for rel, status in harness_layer(name):
+        if status in ("foreign", "unreadable"):
+            # The operator's file, and the marker entry for it stays exactly as it was:
+            # charter has not written this path, so it has nothing new to vouch for.
+            rows.append((rel, "foreign"))
+            continue
+        if status == "ok":
+            rows.append((rel, "present"))
+            continue
+        want = want_all[rel]
+        p = wd / rel
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(want)
+        except OSError:
+            rows.append((rel, "blocked"))
+            continue
+        marker[rel] = content_digest(want)
+        wrote = True
+        rows.append((rel, "created" if status == "missing" else "refreshed"))
+    if wrote:
+        # Only when something was actually generated. Rewriting the marker on every
+        # `ensure` would make a workspace's mtimes move for a call that changed nothing,
+        # which is the noise `_ensure_statusline` avoids one file over.
+        try:
+            (wd / GENERATED_MARKER).write_text(json.dumps(marker, indent=2) + "\n")
+        except OSError:
+            pass
+    return rows
 
 
 def remember(name: str, text: str, title: str | None = None) -> Path:
@@ -1281,8 +1502,9 @@ def read_vision(name: str) -> str:
 # workspace picks up the three new un-ignore lines. Without it a plane that went LIVE
 # before this version keeps a block that never mentions `changes`, and the records simply
 # never travel — the same silent half-failure `todos/` had.
-STRUCTURE_VERSION = 3  # v2: memory is a per-file DB (MEMORY.md index), not a lone notes.md
+STRUCTURE_VERSION = 4  # v2: memory is a per-file DB (MEMORY.md index), not a lone notes.md
                        # v3: the managed .gitignore block shares `changes/` (not its log)
+                       # v4: the workspace carries charter's harness layer (#850)
 _STRUCTURE_MARKER = ".charter-structure"
 _LEGACY_STRUCTURE_MARKER = ".edm-structure"   # pre-rename; migrated in place on read
 
@@ -1347,6 +1569,12 @@ def reinit(name: str) -> dict:
     baseline files and stamp the version marker. Additive: never destroys existing
     content. Returns the pre-reinit status (what was missing / the old version)."""
     before = structure_status(name)
+    # The harness layer, READ before `scaffold` writes it — a repair that reports what it
+    # found has to look first. It is not folded into `ok`: `structure_status` answers
+    # "is this workspace's LAYOUT current", a question `needs_reinit` and the status line
+    # both key off, and a layer that has gone stale because the plane's settings moved is
+    # not a workspace built by an older charter. Two facts, two keys.
+    before["layer"] = [(rel, st) for rel, st in harness_layer(name) if st != "ok"]
     scaffold(name)  # creates memory/refs/workspace.md if missing + stamps the marker
     # Structure is not only what lives inside the workspace directory: which of its paths
     # are SHARED is part of the layout too, and that lives in the managed .gitignore block.

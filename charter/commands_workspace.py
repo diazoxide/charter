@@ -1200,6 +1200,19 @@ def cmd_workspace_reinit(args) -> int:
     healed = 0
     for n in names:
         before = workspace.reinit(n)
+        # The HARNESS LAYER, reported as its own line rather than folded into the
+        # structure one (#850). It is a separate fact — a workspace whose layout is
+        # current can still hold a `.claude/settings.json` generated before the plane's
+        # own settings moved — and it is the one this command silently repaired while
+        # printing "nothing to do" until it was said out loud.
+        for rel, was in before.get("layer") or ():
+            if was == "foreign":
+                util.warn(f"'{n}': {rel} was not written by charter — left completely "
+                          f"untouched. Remove it if you want charter's own again.")
+            else:
+                healed += 1
+                util.ok(f"Reinitialized '{n}' → {'wrote' if was == 'missing' else 'refreshed'} "
+                        f"{rel} (charter's harness layer).")
         if before["ok"]:
             continue
         healed += 1

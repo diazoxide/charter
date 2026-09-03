@@ -26,7 +26,7 @@ import os
 import tomllib
 from pathlib import Path
 
-from .base import Deficit, Harness
+from .base import WORKSPACE_SCOPE, Deficit, Harness
 
 NAME = "codex"
 
@@ -138,6 +138,16 @@ class CodexHarness(Harness):
                 "`$CHARTER_SESSION_ID` reaches a shell; the workspace lock falls back to "
                 "the terminal-pane key. Hooks are unaffected — their payload carries "
                 "`session_id` directly."),
+        # The sharpest of the three, and the one that is a fact about Codex rather than
+        # about a widget: it has NO project-level config at all. A `.codex/config.toml`
+        # or `codex.toml` beside a project is ignored — measured by planting a deliberate
+        # type error in each and watching the config load anyway (ADR 0015 records the
+        # same measurement for the hooks). So there is nowhere for a per-workspace answer
+        # to live, and charter says so rather than printing a tick beside Claude Code's.
+        Deficit(WORKSPACE_SCOPE,
+                "no project-level config exists at all — a `.codex/config.toml` beside a "
+                "project is ignored, so `~/.codex/config.toml` is the only answer and "
+                "every workspace on this machine necessarily shares it."),
     )
 
     cli_name = "codex"

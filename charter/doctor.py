@@ -1582,6 +1582,86 @@ def check_workspace_clones() -> Result:
                         "— never a live query, this runs at SessionStart."))
 
 
+def check_workspace_harness() -> Result:
+    """Does every workspace still carry charter's layer, and is it the current one? (#850)
+
+    A chat launched in `workspaces/<ws>/` gets its settings from that directory and
+    nowhere else — Claude Code does not walk up for them — so the generated
+    `.claude/settings.json` there is the whole of whether that chat has a status line, a
+    plugin and a `$CHARTER_HARNESS`. It is generated from the plane's own settings, so it
+    goes stale the moment the plane's do, and nothing else notices.
+
+    **Regenerate and compare** (`workspace.harness_layer`), which is
+    `persona lint --only stale`'s test rather than a second notion of staleness — see that
+    function for why a stored diff answers the wrong question.
+
+    **Reads, never writes.** This runs from the SessionStart hook, and a check that healed
+    what it found would report every workspace current by having just made it so.
+
+    **The two harnesses that cannot isolate are NAMED, not omitted.** Their config is
+    machine-global, so a per-workspace answer has nowhere to live; printing one row for
+    Claude Code and nothing for them reads as three ticks, which is the failure
+    `base.Deficit` exists to prevent. They sit in the detail rather than in the hint,
+    because they are a standing property of those harnesses and not something to go and
+    fix — `charter harness list` is where the full sentence lives.
+
+    WARN, never FAIL: a workspace without the layer is a chat that will be poorer than it
+    should be, not a broken machine — and `charter workspace reinit` is one command.
+    """
+    from . import config as _config
+    from . import workspace as _workspace
+
+    name = "workspace layer"
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail="no control plane found")
+
+    gaps = ", ".join(h for h, _d in _workspace.harness_deficits())
+    # A finished clause rather than a bare list of names, for `Deficit.detail`'s own
+    # reason: the *why* is the harness's, and two names with no verb beside them read as
+    # a failure.
+    aside = (f"  ({gaps}: config is machine-global, so a workspace cannot diverge — "
+             f"charter harness list)" if gaps else "")
+
+    findings: list[str] = []
+    foreign = False
+    total = 0
+    try:
+        for ws in _workspace.list_workspaces():
+            rows = _workspace.harness_layer(ws)
+            total += len(rows)
+            for rel, status in rows:
+                if status == "ok":
+                    continue
+                if status == "foreign":
+                    foreign = True
+                findings.append(f"{ws}/{rel} ({status})")
+    except (OSError, ValueError) as e:
+        # Narrow, per `check_memory_indexes`: a broad catch here once swallowed a
+        # NameError and reported OK, and a check that silently does nothing is worse than
+        # no check.
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+
+    if not findings:
+        if not total:
+            return Result(name, OK,
+                          detail=f"nothing to mirror — the plane declares no plugin, "
+                                 f"status line or env of its own{aside}")
+        return Result(name, OK,
+                      detail=f"{total} generated file(s) across all workspaces, "
+                             f"all current{aside}")
+    # No leading arrow — `Result.render` writes one. `check_workspace_clones` carries its
+    # own and therefore prints two; that is a wart rather than the convention (76 of the
+    # 77 hints in this file start with the command), and not one to copy.
+    hint = f"charter workspace reinit --all{aside}"
+    if foreign:
+        hint += ("   A 'foreign' file is one charter did not write: it is left completely "
+                 "untouched and never repaired. Remove it to have charter generate its "
+                 "own again.")
+    return Result(name, WARN,
+                  detail=", ".join(findings[:4]) + (", …" if len(findings) > 4 else ""),
+                  hint=hint)
+
+
 #: The optional prompt before every cross-repo landing, named by :func:`check_changes` and
 #: **never written by charter**.
 #:
@@ -2693,7 +2773,7 @@ def _checks():
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
                 check_plane_root(), check_session_root(),
                 check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
-                check_workspace_clones(), check_changes(),
+                check_workspace_clones(), check_workspace_harness(), check_changes(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
                 check_memory_indexes(), check_personas(), check_persona_grant(),
@@ -2732,7 +2812,8 @@ _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
     "git auth", "charter.toml", "schema", "plane root", "session root", "harness", "frame",
-    "plane-root guard", "guard seen", "nested plane", "workspace clones", "changes",
+    "plane-root guard", "guard seen", "nested plane", "workspace clones",
+    "workspace layer", "changes",
     "inventory", "vaults", "vault registry", "version lock", "memory indexes",
     "personas", "persona grant", "front door", "news", "ask rules", "shadowed docs",
     "credential paths", "mcp", "plugin", "plugin files",

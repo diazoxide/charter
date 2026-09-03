@@ -34,7 +34,8 @@ class HarnessDeficits(unittest.TestCase):
 
     def test_opencode_names_the_capabilities_it_cannot_carry(self):
         keys = {d.key for d in harness.deficits(harness.OPENCODE)}
-        self.assertEqual(keys, {"status-bar", "prompt-hook", "ask-decisions"})
+        self.assertEqual(keys, {"status-bar", "prompt-hook", "ask-decisions",
+                                "workspace-scope"})
 
     def test_the_guards_that_refuse_are_not_a_ceiling(self):
         """`ask-decisions` is a narrow claim and must stay narrow. A DENY is carried in
