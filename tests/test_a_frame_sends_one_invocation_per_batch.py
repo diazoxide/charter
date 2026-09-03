@@ -504,20 +504,27 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
     A count that has to be edited is a count somebody has to look at.
     """
 
-    def test_a_four_panel_launch_sends_fifteen_invocations_up_to_the_attach(self):
+    def test_a_four_panel_launch_sends_sixteen_invocations_up_to_the_attach(self):
         """The whole private-server launch, up to and including `attach`. It was 44.
 
         Against THIS MODULE'S fake, which is what makes the number assertable at all; a
-        real launch on a real server makes two more reads than the fake does (46 -> 17
-        measured), and the shape of the saving is the same one.
+        real launch on a real server makes two more reads than the fake does, and the
+        shape of the saving is the same one.
 
-        Five batches carry 33 of the 47 commands: the ten writes that tell the window and
-        session what they are, the window's own dressing, the four splits, every pane's
-        own options, and the four respawn hooks.
+        Five batches carry most of the commands: the eleven writes that tell the window
+        and session what they are, the window's own dressing, the four splits, every
+        pane's own options, and the four respawn hooks.
 
         Unbatched, and named here so a reader can see what is left rather than guess: two
         reaping reads, `new-session`, the eager death check, `list-panes`, the resize
-        hook, the window-seat read, `select-window`, `select-pane`, `attach`.
+        hook, the window-seat read, `list-keys`, `select-window`, `select-pane`, `attach`.
+
+        **`list-keys` is the sixteenth and it is a READ whose answer a later WRITE is
+        built out of** (#848: charter wraps tmux's own `MouseDown3Pane` rather than
+        replacing it). That is the one shape #780's batching cannot fold away — the bind
+        does not exist until the read has answered — so it is a round trip that was
+        chosen rather than one that was left behind. The bind itself costs nothing extra:
+        it rides in the batch that `source-file`s the config.
         """
         fake = _FakeTmux(panel_pane_ids={"top": "%11", "bottom": "%12",
                                          "right": "%13", "repos": "%14"},
@@ -525,8 +532,11 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
         with mock.patch.dict(config.FRAME, {"slots": list(_FOUR)}):
             self.assertEqual(_launch(fake, cols=200, rows=50), 0)
         attach = next(i for i, c in enumerate(fake.invocations) if "attach" in c)
-        self.assertEqual(attach + 1, 15,
+        self.assertEqual(attach + 1, 16,
                          [" ".join(c[3:])[:70] for c in fake.invocations[:attach + 1]])
+        self.assertEqual(
+            len([c for c in fake.invocations[:attach + 1] if "list-keys" in c]), 1,
+            "the menu button's read is one round trip and must not become one per key")
         # And every command is still issued — batching moved them, it did not drop them.
         self.assertEqual(len([c for c in fake.calls if "split-window" in c]), 4)
         self.assertEqual(sorted(state.panes(_the_chat(fake))),

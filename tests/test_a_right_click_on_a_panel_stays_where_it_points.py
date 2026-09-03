@@ -71,6 +71,8 @@ from unittest import mock
 from charter import commands_frame
 from charter.frame import tmuxctl
 
+from tests._tmuxsocket import OPERATOR_SOCKET
+
 #: One real `list-keys -T root` line off a real tmux 3.7c, its `display-menu` cut after the
 #: first two rows — the length is the one thing about it this file does not need, and the
 #: real-tmux half reads the whole thing off a real server rather than off a literal here.
@@ -225,9 +227,8 @@ class TheBindCharterBuilds(unittest.TestCase):
         """Charter talks to two servers and binds keys on exactly one of them
         (`tmuxctl.server_argv`). A socket PATH is the operator's own tmux, and this is the
         head that decides which one a `bind-key` lands on."""
-        argv = commands_frame._menu_button_argv(socket="/private/tmp/tmux-502/default",
-                                                default="x")
-        self.assertEqual(argv[:3], ["tmux", "-S", "/private/tmp/tmux-502/default"])
+        argv = commands_frame._menu_button_argv(socket=OPERATOR_SOCKET, default="x")
+        self.assertEqual(argv[:3], ["tmux", "-S", OPERATOR_SOCKET])
 
 
 class TheReadThatJoinsThem(unittest.TestCase):

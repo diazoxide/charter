@@ -2367,8 +2367,8 @@ def component_arrangement(section, *,
     `frame/overlay.py`'s ``HATCH_KEY`` and `frame/tmuxctl.py`'s ``MOUSE_KEYS`` in the set
     of keys charter has already taken, and a component may have none of them. ``None``
     means the caller has no palette key to reserve, which is what resolving an arrangement
-    outside a `[frame]` section has; the hatch and the two mouse keys are reserved
-    regardless, because charter binds all three for every frame on its own server.
+    outside a `[frame]` section has; the hatch and the three mouse keys are reserved
+    regardless, because charter binds all four for every frame on its own server.
     """
     # **The absent key is the one branch that must never produce a reason**, and it is
     # asked before the value is looked at rather than inferred from the value being
@@ -2407,13 +2407,16 @@ def component_arrangement(section, *,
     # command, `charter --version` included, and must stay as cheap as it was.
     # `frame/tmuxctl.py` costs nothing extra: `frame/overlay.py` imports it already.
     #
-    # The two MOUSE keys are here for the hatch's reason with the sign flipped. `conf_text`
-    # writes them BEFORE the toggles, so tmux's last-wins leaves the COMPONENT's key alive
+    # The three MOUSE keys are here for the hatch's reason with the sign flipped. Charter
+    # binds them BEFORE the toggles, so tmux's last-wins leaves the COMPONENT's key alive
     # and charter's mouse handling silently gone — the wheel stops entering copy-mode and,
     # since #634, a click on a panel goes back to taking the keyboard off the harness. One
     # dead binding, nothing anywhere saying which, and the frame still launching at rc 0.
     # Named off `tmuxctl.MOUSE_KEYS` rather than spelled here, so the key this refuses is
-    # the same object `conf_text` binds.
+    # the same object charter binds. The third of them (`MouseDown3Pane`, #848) is the one
+    # where the loss is not charter's own line: that bind carries tmux's OWN pane menu as
+    # its else-branch, so a component claiming the key would replace the operator's Copy
+    # Line, Paste, Kill and Zoom with a panel toggle.
     #
     # `if k` drops a falsy *hotkey* — ``None`` for every caller with no palette key to
     # reserve — and it is the ONE place this set's invariant is established: `bound` holds

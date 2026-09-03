@@ -244,6 +244,10 @@ DETECTORS: dict[str, str] = {
 LINE_SCANNERS: dict[str, str] = {
     "report._ATX_HEADING": "asked of `lines[0].strip()` — there is no newline left to match",
     "hooks._INDEX_LINE_RE": "asked of `.splitlines()` output — no trailing newline",
+    "commands_frame._MENU_BIND_RE":
+        "asked of one line of `list-keys -T root` at a time, off `.split(\"\\n\")` — no "
+        "trailing newline is left, and the `\\s*$` before the end absorbs a `\\r` from a "
+        "tmux whose output crossed a pty rather than leaving it in the bind text",
 }
 
 #: **Substitutions** — anchored patterns that never render a VERDICT. `.sub` asks where a
