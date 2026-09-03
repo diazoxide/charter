@@ -14,10 +14,10 @@ from unittest import mock
 from charter import hooks, workspace
 from charter.frame import gather, notify, state
 
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
-class Notify(PersonaIso, unittest.TestCase):
+class Notify(PlaneIso, unittest.TestCase):
     def test_a_change_bumps_the_running_frame(self):
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
             before = state.version("f-1")
@@ -153,7 +153,7 @@ class Notify(PersonaIso, unittest.TestCase):
 _TRIGGERS = ("sessionstart", "userpromptsubmit", "posttooluse")
 
 
-class EveryLivenessTriggerBumps(PersonaIso, unittest.TestCase):
+class EveryLivenessTriggerBumps(PlaneIso, unittest.TestCase):
     """`hooks/hooks.json` scopes the bare-named `posttooluse` handler to
     `Write|Edit|MultiEdit` alone — Bash, Skill, Task/Agent and SendMessage each route to
     their OWN `posttooluse-*` handler (`posttooluse-bash`, `-skill`, `-dispatch`,

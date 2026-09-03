@@ -35,12 +35,12 @@ import unittest
 from pathlib import Path
 
 from charter import config, hooks, inflight, trace
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 SESSION = "s-dispatch"
 
 
-class DispatchAskCase(PersonaIso):
+class DispatchAskCase(PlaneIso):
     """A plane that DOES use worktree isolation — the fixture this defect needs."""
 
     def setUp(self) -> None:

@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest import mock
 
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 from charter import hooks, config, persona
 
 
@@ -127,7 +127,10 @@ class TestCommittingInACloneIsNotNudged(InAControlPlane):
                                    {"tool_input": {"command": "git add personas/dev/memory/"}, "cwd": str(self.tmp)}))
 
 
-class TestGateFallthrough(PersonaIso):
+class TestGateFallthrough(PlaneIso):
+    # `PlaneIso`: the persona tool-gate is plane-gated since #852 — it GRANTS, and
+    # outside a plane `personas/` belongs to whatever repo you cloned. Without a
+    # plane `test_undeclared_tool_silent` would also pass for the wrong reason.
     def test_declared_tool_allowed(self):
         self.make_persona("dev", role="Dev", vault="dev", tools="kubectl")
         with mock.patch.dict(os.environ, {"CHARTER_PERSONA": "dev"}):
@@ -140,7 +143,7 @@ class TestGateFallthrough(PersonaIso):
             self.assertIsNone(run_hook(hooks.pretooluse, {"tool_input": {"command": "helm list"}}))
 
 
-class TestSessionStart(PersonaIso):  # C
+class TestSessionStart(PlaneIso):  # C
     def test_injects_active_persona_memory(self):
         self.make_persona("dev", role="Dev", vault="dev")
         persona.remember("dev", "fact one", title="one")
@@ -167,7 +170,7 @@ class TestSessionStart(PersonaIso):  # C
             self.assertIsNone(run_hook(hooks.sessionstart, {"session_id": "t"}))
 
 
-class TestMemorySecretScan(PersonaIso):  # D
+class TestMemorySecretScan(PlaneIso):  # D
     def _write_path(self, name):
         p = config.PERSONAS_DIR / "dev" / "memory" / name
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +200,7 @@ class TestMemorySecretScan(PersonaIso):  # D
                                    "tool_input": {"file_path": str(p), "content": "token = sk-zzzzzzzzzz"}}))
 
 
-class TestCommitmentGate(PersonaIso):  # F — ask before you build
+class TestCommitmentGate(PlaneIso):  # F — ask before you build
     """The steward's quizzing was measured at 1-per-10 prompts with a daily rate swinging
     0.00–0.31: discretionary, so it fired on whim and went quiet during long grinds. This
     gate supplies the missing TRIGGER.

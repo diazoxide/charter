@@ -27,7 +27,7 @@ import unittest
 from unittest import mock
 
 from charter import hooks
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 WORK = "refactor the release tagging flow, maybe something cleaner"
 
@@ -40,7 +40,7 @@ def _reason(r) -> str:
     return (r or {}).get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
 
 
-class RequireCase(PersonaIso):
+class RequireCase(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "default"}))

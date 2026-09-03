@@ -22,14 +22,14 @@ import unittest
 from unittest import mock
 
 from charter import config, hooks, todos, workspace
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
 def _context(r) -> str:
     return (r or {}).get("hookSpecificOutput", {}).get("additionalContext", "")
 
 
-class NeighbourCase(PersonaIso):
+class NeighbourCase(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
         # Pin the active workspace so the confirm nudge (several hundred words about a

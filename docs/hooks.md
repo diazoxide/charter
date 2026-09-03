@@ -25,6 +25,33 @@ one thing a hook is allowed to shout about.
 | `PostToolUse` | `Task\|Agent` | tallies the dispatch |
 | `Stop`, `SubagentStop` | — | autosave a LIVE workspace |
 
+### Outside a control plane, none of that happens
+
+The plugin is enabled per user or per project, so these hooks fire in every repository you
+open, most of which are not control planes. In one of those, charter **writes nothing, says
+nothing and grants nothing** — every handler but the two below asks `hooks._in_a_plane` and
+returns on its first line. That matters because outside a plane `config.STATE_DIR` is
+`<cwd>/.charter`, so anything charter recorded — session pointers, the guard sighting, the
+dispatch and skill tallies — landed in somebody else's `git status`. A plane is somebody's
+repo; so is everything else.
+
+**The two exceptions are the refusals, and they are not silenced.** `PreToolUse:Read|Grep`
+carries nothing but a denial, so it has no gate at all; `PreToolUse:Bash` reads the gate
+rather than returning on it, because only half of what it does belongs to a plane. With no
+plane anywhere, the vault-leak guard still denies on Bash and on `Read`/`Grep`, and the
+live-substitution guards still deny on a forge command and on charter's own text-taking
+commands. Each of those refuses a fact about the shell or about a secret rather than a
+policy this plane holds — and `$CHARTER_HOME` puts a real vault directory within reach of a
+directory that
+holds no `charter.toml`. What does *not* fire out there is every guard whose subject is the
+plane itself: the single-credential rule, the two plane-root guards, the release floor, the
+state-write guard, and the persona tool-gate's auto-approval. A denial about a control
+plane that does not exist explains nothing to the person reading it.
+
+One consequence worth stating plainly: a refusal outside a plane is **delivered without
+being tallied**. The denial goes out; `hooks._trace` records nothing, because a trace is
+read by `charter persona stats` against a plane and there is none here to read it.
+
 ## The guards
 
 Every one of them **denies**. None of them asks — charter holds no nudge on the Bash tool,

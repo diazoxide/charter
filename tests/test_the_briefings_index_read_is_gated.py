@@ -34,10 +34,10 @@ import unittest
 from unittest import mock
 
 from charter import config, contain, hooks, persona
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, PlaneIso
 
 
-class TheIndexIsPlaneDataToo(PersonaIso):
+class TheIndexIsPlaneDataToo(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
         self.make_persona("helper")

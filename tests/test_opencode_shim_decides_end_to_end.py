@@ -35,7 +35,7 @@ from pathlib import Path
 
 from charter import config, hooks
 from charter.harness import opencode
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 _RUNTIME = shutil.which("bun") or shutil.which("node")
 _DRIVER = Path(__file__).parent / "fixtures" / "opencode_driver.mjs"
@@ -55,7 +55,7 @@ def _note(r) -> str:
 
 
 @unittest.skipIf(_RUNTIME is None, "neither bun nor node is installed")
-class ShimPayloadDrivesTheRealHandler(PersonaIso):
+class ShimPayloadDrivesTheRealHandler(PlaneIso):
     """One helper: the payload the real shim builds for one real opencode tool call."""
 
     def setUp(self) -> None:

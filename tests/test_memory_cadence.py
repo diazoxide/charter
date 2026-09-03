@@ -8,10 +8,10 @@ from __future__ import annotations
 import unittest
 
 from charter import hooks
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
-class MemoryCadenceCase(PersonaIso):
+class MemoryCadenceCase(PlaneIso):
     SID = "sess-cadence"
 
     def _edit(self, path):

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 from charter import commands, config, dispatch, hooks
 
 
@@ -66,7 +66,7 @@ class TestDispatchStore(PersonaIso):
         self.assertNotIn(dispatch.DIR_NAME, persona.list_personas())
 
 
-class TestDispatchHook(PersonaIso):
+class TestDispatchHook(PlaneIso):
     def _run(self, payload):
         with mock.patch.object(hooks, "_commit_dispatch"):  # don't touch git in tests
             return run_hook(hooks.posttooluse_dispatch, payload)

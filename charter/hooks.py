@@ -4225,7 +4225,68 @@ def _charter_substitution_hit(cmd: str | None) -> tuple[str, str] | None:
 # one source of truth rather than two, and interrupts nobody.
 
 
+def _in_a_plane() -> bool:
+    """Whether charter owns the directory this session is standing in (#852).
+
+    **The gate every handler below opens with, and the answer to "why only four call
+    sites".** ADR 0015 raises the objection and answers it: *"A plugin installed for every
+    project does run charter's hooks in repos with no control plane … the guards gate on
+    `config.HAS_CONTROL_PLANE` and stay silent outside a plane."* That was true of the four
+    denials A2/A3/A3b/A4 and of :func:`_state_write_reason`, and of nothing else. Measured
+    on 0.55.0, in an ordinary git repository with no ``charter.toml``, seven handlers wrote
+    into it — ``.charter/guard-seen.json``, ``.charter/sessions/<sid>.{tools,gate,configver,
+    memnudge}``, ``.charter/dispatch-inflight/``, ``.charter/persona-state/trace/`` and, at
+    a path no ``.gitignore`` anywhere covers, ``personas/_dispatch/<month>.<hostname>.jsonl``
+    — `sessionstart` injected a directive to open a workspace quiz in a repository with no
+    workspaces, and the persona tool-gate answered ``allow`` off a ``personas/*/persona.md``
+    that belonged to the checkout rather than to charter.
+
+    Outside a plane ``config.STATE_DIR`` is ``<cwd>/.charter``, so every one of those
+    landed in somebody else's ``git status``. `harness/opencode.py`'s `wire` already
+    states the rule this breaks, about a plane: *"A plane is somebody's repo, and charter's
+    housekeeping has no business in its `git status`."* It is no less true one level out.
+
+    **Gated at the HANDLERS rather than at each nudge, deliberately.** Fixing
+    `_workspace_confirm_nudge` and `_mark_guard_seen` — the two the report named — would
+    have left five more writers and the tool-gate untouched, and would have left the next
+    nudge to remember. The entry point is where the question "is there a plane" has one
+    answer for everything downstream of it, and
+    `tests/test_a_repo_that_is_not_a_plane_gets_no_housekeeping.py` drives the property off
+    :data:`_HANDLERS` so a handler added later inherits it instead of opting in.
+
+    **It is a gate, not an off switch, and :func:`pretooluse` is the difference.** A
+    handler that only refuses does not consult this: :func:`pretooluse_read` and, inside
+    :func:`pretooluse`, the leak guard (A) and the two live-substitution guards (A5, A6)
+    keep running with no plane anywhere. Each of those is a fact about the shell or about a
+    secret rather than a policy this plane happens to hold — `pretooluse` has said so in a
+    comment since 0.42 — and ``$CHARTER_HOME`` puts a real vault directory within reach of
+    a cwd that has no ``charter.toml``, so there is something out there to protect. Making
+    the plugin one blanket no-op would have bought ~0.2s per tool call by deleting a
+    secret-leak guard, which is a worse trade than the defect.
+
+    Reads the attribute rather than caching it: `config.use` re-derives, and a test that
+    turns its root into a plane mid-case must be answered, not remembered.
+    """
+    from . import config as _cfg
+    return bool(_cfg.HAS_CONTROL_PLANE)
+
+
 def _trace(event, session, **f):
+    """Record one tally row. **A no-op outside a plane, and that is the one place a
+    verdict and its bookkeeping come apart** (#852).
+
+    Refusing `cat .charter/vaults/db.json` in a repo charter does not own is right — the
+    denial goes out either way. Writing `.charter/persona-state/trace/<sid>.jsonl` there is
+    not: a trace is read by `charter persona stats` against a plane, and there is no plane
+    here to read it. So the refusal is delivered and nothing is recorded.
+
+    The gate lives in this function rather than at its six call sites in `pretooluse`
+    because this is the seam every tally already passes through — the same argument the
+    handler gates make one level up, applied to the one handler that legitimately keeps
+    running outside a plane.
+    """
+    if not _in_a_plane():
+        return
     try:
         from . import trace
         trace.record(event, session=session, **f)
@@ -4313,6 +4374,18 @@ _PATH_KEYS = ("file_path", "path", "notebook_path", "filePath", "notebookPath")
 
 def pretooluse_read() -> int:
     """Deny a file-reading TOOL that would print a vault's plaintext into the transcript.
+
+    **The one handler with NO plane gate, and that is a decision rather than an omission**
+    (#852). Every other entry point in :data:`_HANDLERS` opens with :func:`_in_a_plane`;
+    this one must not, for the reason its own subject gives. It shares a predicate with the
+    Bash leak guard — `_names_a_vault_path`, which `_leak_reason` also runs ungated — and
+    the two "must never disagree", which is the whole argument of the paragraph below about
+    #462. Gating one of a matched pair is how that bypass shipped the first time.
+
+    It is also safe to leave running: it writes nothing, tallies nothing and injects
+    nothing. Its only output is a refusal, and `$CHARTER_HOME` puts a real vault directory
+    within reach of a cwd that holds no ``charter.toml``, so there is a secret out here to
+    keep out of a transcript.
 
     `pretooluse` guards Bash by inspecting ``tool_input["command"]``. A
     ``Read(file_path=".charter/vaults/devops.json")`` carries no command and matched no
@@ -4469,12 +4542,27 @@ def _trace_head(cmd: str) -> str:
 
 
 def pretooluse() -> int:
+    """The Bash guard. **The one handler that is only PARTLY plane-gated** (#852).
+
+    Its refusals divide, and `_in_a_plane` documents the line at length: A2/A3/A3b/A4 and
+    every piece of bookkeeping here are about a control plane and are silent without one,
+    while A (the leak guard), A5 and A6 are facts about the shell and run in any directory.
+    So this reads the gate once, into *plane*, rather than returning early on it.
+    """
     data = _read_stdin()
-    # Reaching this handler at all is the proof no configuration can give: the guard is
-    # live, here, under this harness. `check_guard_wired` can only see the declaration, and
-    # a plane root was switched four times unguarded while that check reported a tick.
-    _mark_guard_seen()
-    _touch_piece(data)
+    # One read, five decisions. A2/A3/A3b/A4 each used to ask `config.HAS_CONTROL_PLANE`
+    # for themselves; asking once means the bookkeeping below cannot drift away from the
+    # denials, which is exactly how six other handlers ended up never asking at all.
+    plane = _in_a_plane()
+    if plane:
+        # Reaching this handler at all is the proof no configuration can give: the guard is
+        # live, here, under this harness. `check_guard_wired` can only see the declaration,
+        # and a plane root was switched four times unguarded while that check reported a
+        # tick. Gated because the sighting is ABOUT a plane — it is read back by `doctor`
+        # and the status line against `config.STATE_DIR`, which outside a plane is a
+        # `.charter/` charter would be creating in a stranger's checkout to hold it.
+        _mark_guard_seen()
+        _touch_piece(data)
     ti = data.get("tool_input") or {}
     cmd = ti.get("command", "") or ""
     cwd = data.get("cwd") or ""
@@ -4482,7 +4570,7 @@ def pretooluse() -> int:
     head = _trace_head(cmd)
     # Recording a memory via the CLI (`charter workspace/persona remember|note`) is invisible to
     # PostToolUse (it's Bash, not a Write) → reset the record-memory cadence here on intent.
-    if _MEM_RECORD_RE.search(cmd):
+    if plane and _MEM_RECORD_RE.search(cmd):
         _memnudge_reset(sid)
     # A: a secret would leak into the conversation → hard DENY (a real safety invariant).
     leak = _leak_reason(cmd, cwd)
@@ -4501,8 +4589,7 @@ def pretooluse() -> int:
     #
     # `_leak_reason` above stays unconditional on purpose: not printing a secret into the
     # transcript is a safety invariant, not a policy this plane happens to hold.
-    from . import config as _cfg
-    hit = _single_credential_hit(cmd) if _cfg.HAS_CONTROL_PLANE else None
+    hit = _single_credential_hit(cmd) if plane else None
     if hit:
         shape, detail = hit
         rc = _deny("PreToolUse", _SINGLE_CREDENTIAL_FIX + detail)
@@ -4515,7 +4602,7 @@ def pretooluse() -> int:
     # A3: the plane root is one shared working tree — refuse a branch move in it (#157).
     # Same gate as A2, and for the same reason: outside a plane there is no plane root, and
     # denying there would explain a control plane that does not exist on that machine.
-    branch = _plane_root_branch_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
+    branch = _plane_root_branch_reason(cmd, cwd) if plane else None
     if branch:
         rc = _deny("PreToolUse", branch)
         _trace("deny", sid, reason="plane-root-branch", cmd=head)
@@ -4524,7 +4611,7 @@ def pretooluse() -> int:
     # (#401). Same gate, a separate guard: A3's subject is "HEAD moved between branches"
     # and this one's is "commits were destroyed" — different prose, different remedy, and
     # this one only speaks when it has measured that something really would be lost.
-    wipe = _plane_root_reset_reason(cmd, cwd) if _cfg.HAS_CONTROL_PLANE else None
+    wipe = _plane_root_reset_reason(cmd, cwd) if plane else None
     if wipe:
         rc = _deny("PreToolUse", wipe)
         _trace("deny", sid, reason="plane-root-reset", cmd=head)
@@ -4533,7 +4620,7 @@ def pretooluse() -> int:
     # the clone nudge — that nudge matched `tag`/`push` and stopped releases by accident
     # until 0.46.0 turned its unattended `ask` into an `allow`. The nudge is gone (#371);
     # this guard stands on its own, which is what "on purpose" was always supposed to mean.
-    pub = _release_floor_reason(cmd, data) if _cfg.HAS_CONTROL_PLANE else None
+    pub = _release_floor_reason(cmd, data) if plane else None
     if pub:
         rc = _deny("PreToolUse", pub)
         _trace("deny", sid, reason="release-floor", cmd=head)
@@ -4565,7 +4652,21 @@ def pretooluse() -> int:
         return rc
     # B WAS HERE: the clone-commit nudge, removed in #371 — see the note where it lived.
     # Nothing on this handler asks any more; every remaining verdict is a deny or an allow.
-    # fall through to the allow-only persona tool-gate (unchanged behaviour)
+    # fall through to the allow-only persona tool-gate
+    #
+    # GATED, and it is the sharpest case in this file for why (#852). Every guard above is
+    # a REFUSAL, so running one where it does not belong costs a false denial. This one
+    # GRANTS: it answers `allow`, and the harness then runs the command without prompting.
+    # What it reads to decide is `personas/<n>/persona.md` plus the active-persona pointer
+    # — charter's own files inside a plane, and outside one just contents of whatever
+    # repository you cloned, since `config.PERSONAS_DIR` is `<cwd>/personas` there.
+    # Measured: a checked-in `personas/rogue/persona.md` declaring `tools: [curl]` beside a
+    # `.charter/active-persona` naming it was enough for `curl https://evil.example/x` to
+    # come back `allow`. A repo deciding which commands skip the prompt is authority, and
+    # `toolgate`'s own promise — "a bug here can't block work, only fail to smooth it" —
+    # holds only where the persona files are charter's to trust.
+    if not plane:
+        return 0
     try:
         from . import toolgate
         # `sid` is what bounds the answer to the tools declared BEFORE this session could
@@ -5159,6 +5260,28 @@ def context_block(cwd=None) -> str:
 
     Never raises and never acts: a failure here must cost a tree its context file, not
     the command that was writing it.
+
+    **Deliberately NOT plane-gated, unlike every handler in :data:`_HANDLERS`** (#852), and
+    the reason is reachability rather than taste. This is not a hook: nothing dispatches it
+    per tool call. Its only caller is `harness/opencode.py`'s `write_context`, whose only
+    callers are `commands._wire_harnesses` — reached from `cmd_init`, which has just
+    written the ``charter.toml``, and from a command that already refuses without
+    `config.HAS_CONTROL_PLANE`. So there is no path on which this renders into a repo
+    charter does not own.
+
+    A gate here was tried and reverted, and that is worth keeping written down because the
+    reason it was tried has since been fixed while the reason it stays out has not. It was
+    reverted because `cmd_init` wrote the marker and wired the harnesses **without
+    re-deriving config**: `config.HAS_CONTROL_PLANE` was still the False computed at
+    import, so gating turned a fresh `charter init` into a context file reading "_No
+    control-plane context._" on a plane charter had just created. That staleness was its
+    own defect (#858) — one of nineteen derived settings left stale, not the lone case it
+    looked like from here — and #861 fixed it at the source rather than here.
+
+    **It stays out anyway, on the paragraph above rather than on that one.** With #861 in,
+    the gate no longer breaks a fresh `init` (measured both ways), so what a gate would add
+    now is a branch nothing can reach: dead code wearing a guard's clothes. The deletion
+    sweep would report it as a survivor and would be right to.
     """
     data = {"cwd": str(cwd)} if cwd else {}
     try:
@@ -5168,6 +5291,13 @@ def context_block(cwd=None) -> str:
 
 
 def sessionstart() -> int:
+    # Nothing this handler does means anything without a plane: the workspace it asks you
+    # to confirm, the persona whose charter it injects, the memory digest, the piece, the
+    # tool-gate ceiling it freezes. Outside one it told a session with no control plane to
+    # open a quiz about charter workspaces, and left `.charter/sessions/<sid>.{tools,gate}`
+    # in the checkout to prove it had been there (#852, and `_in_a_plane`).
+    if not _in_a_plane():
+        return 0
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5325,6 +5455,12 @@ def memory_share_note() -> str:
 
 
 def posttooluse() -> int:
+    # Every branch below is about the plane's own stores: the memory/refs secret scan, the
+    # workspace-memo nudge, and the record-memory cadence whose counter lived at
+    # `.charter/sessions/<sid>.memnudge` — in the edited repository, when that repository
+    # was not a plane (#852).
+    if not _in_a_plane():
+        return 0
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5483,6 +5619,8 @@ def pretooluse_dispatch() -> int:
     Never denies. `isolation` is the caller's parameter and charter cannot set it;
     the most honest thing available is to say so at the moment of dispatch.
     """
+    if not _in_a_plane():
+        return 0  # no personas to overlap, and `inflight.start` would write a claim file
     data = _read_stdin()
     # Clear the routing mark first — the dispatch IS the routing, and clearing ahead of the
     # early returns below means a read-only fan-out counts as routing too.
@@ -5551,6 +5689,13 @@ def posttooluse_bash() -> int:
     narrowing the matcher with the host's `if:` condition (e.g. ``Bash(git *)``) is the
     obvious reduction, deferred only because it would raise charter's minimum host version.
     """
+    # Gated with its siblings (#852) even though it writes nothing today. The marker
+    # `_ask_approved` looks for is under `config.STATE_DIR`, so the day `pretooluse` raises
+    # the nudge this handler is waiting for, the approval it records lands wherever that
+    # resolves — and outside a plane that is a `.charter/` in a stranger's checkout. The
+    # gate belongs here now, not in the changelist that finally adds the nudge.
+    if not _in_a_plane():
+        return 0
     from .frame import notify
     notify.plane_changed()
     _ask_approved(_read_stdin())
@@ -5569,6 +5714,8 @@ def posttooluse_skill() -> int:
     workspace or client name would travel. `skilluse.record` swallows its own failures: a
     tally must never break a turn.
     """
+    if not _in_a_plane():
+        return 0  # `skilluse.record` tallies against this plane's personas
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5656,6 +5803,8 @@ def posttooluse_message() -> int:
     created — `main`, another session, a teammate's agent. Attributing those would be
     inventing a delegation that did not happen.
     """
+    if not _in_a_plane():
+        return 0  # the tally, and the agent-id map beside it, belong to a plane
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5677,6 +5826,11 @@ def posttooluse_message() -> int:
 
 
 def posttooluse_dispatch() -> int:
+    # The one whose write was not even hidden under `.charter/`: the tally is
+    # `personas/_dispatch/<month>.<hostname>.jsonl`, a committed path in the plane and a
+    # `?? personas/` carrying this machine's hostname in anything else (#852).
+    if not _in_a_plane():
+        return 0
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
@@ -5977,6 +6131,11 @@ def pretooluse_edit() -> int:
     work, because charter cannot know that (ADR 0016) — and a prompt that asserts it would
     be wrong often enough to be dismissed on sight.
     """
+    # `_state_write_reason` has carried this gate itself since it was written, for A2's
+    # reason. Asking once at the door covers the routing ask below it too — that one reads
+    # the roster this plane declares, and there is no roster outside a plane (#852).
+    if not _in_a_plane():
+        return 0
     data = _read_stdin()
     # A hard deny, before the routing ask: this one is a permission question, and asking
     # the agent to approve a write that widens the agent's own permissions is no guard.
@@ -6108,6 +6267,13 @@ def _commitment_nudge(prompt: str, sid: str | None, unattended: bool = False) ->
 
 
 def userpromptsubmit() -> int:
+    # Both nudges here read the plane and only the plane — `_config_update_nudge` diffs the
+    # control plane's own HEAD, `_commitment_nudge` weighs a prompt against this plane's
+    # roster. The report called this hook "genuinely quiet"; it is quiet about OUTPUT, and
+    # in any repository that is a git repository it was writing
+    # `.charter/sessions/<sid>.configver` into it on the first prompt (#852).
+    if not _in_a_plane():
+        return 0
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()

@@ -24,13 +24,13 @@ from types import SimpleNamespace
 
 from charter import hooks, pieces, workspace, worktree
 from charter import commands_worktree as cwt
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 _GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
 
 
-class SilenceCase(PersonaIso):
+class SilenceCase(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
         self.enterContext(redirect_stdout(io.StringIO()))
@@ -72,6 +72,20 @@ class TestLivenessIsRecordedForTheWorker(SilenceCase):
     def test_a_hook_records_liveness_with_no_action_by_the_worker(self):
         self.assertIsNone(pieces.last_seen("alpha", "svc", "slice"))
         self.touch()
+        self.assertIsNotNone(pieces.last_seen("alpha", "svc", "slice"))
+
+    def test_the_bash_guard_records_it_too_and_not_only_the_prompt_hook(self):
+        """`touch` above drives `UserPromptSubmit`. `PreToolUse` calls `_touch_piece` as
+        well, and nothing in the suite asserted it — deleting that call was invisible.
+
+        It is not a duplicate of the case above, it is the call that matters most: a turn
+        can run for an hour of tool calls without a second prompt, and liveness read off
+        the prompt hook alone would report that worker silent while it was working. Both
+        are asserted, because either one going quiet is the defect this store exists for.
+        """
+        self.assertIsNone(pieces.last_seen("alpha", "svc", "slice"))
+        run_hook(hooks.pretooluse, {"cwd": str(self.wt), "session_id": "worker-A",
+                                    "tool_input": {"command": "ls -la"}})
         self.assertIsNotNone(pieces.last_seen("alpha", "svc", "slice"))
 
     def test_liveness_is_overwritten_rather_than_appended(self):

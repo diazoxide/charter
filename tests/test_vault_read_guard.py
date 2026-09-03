@@ -25,7 +25,7 @@ from unittest import mock
 
 from charter import commands_secrets, config, hooks
 from charter.secrets import registry
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, make_plane, run_hook
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -168,6 +168,16 @@ class TestTheDenialIsNotSwallowed(ReadGuardCase):
     Bash sibling has no such wrapper, so the two vault guards failed in opposite directions
     in a module that argues they must never disagree.
     """
+
+    def setUp(self) -> None:
+        super().setUp()
+        # A PLANE, for `test_a_failing_trace_still_leaves_the_deny_standing` below. Since
+        # #852 `hooks._trace` is a no-op outside one, so without this the injected
+        # `trace.record` failure is never reached and the case passes without ever
+        # exercising the `except` it names — the exact vacuity its own docstring warns
+        # about one paragraph down. The read guard itself is ungated, so nothing else in
+        # this class changes answer.
+        make_plane(self)
 
     def test_a_broken_pipe_does_not_turn_a_deny_into_an_allow(self):
         deny = mock.Mock(side_effect=BrokenPipeError("closed"))

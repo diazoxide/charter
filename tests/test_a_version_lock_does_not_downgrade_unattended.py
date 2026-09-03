@@ -46,7 +46,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from charter import __version__, commands, config, hooks, instance
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 #: A pin below whatever is installed. Derived, never a literal: a hardcoded "0.0.1" would
 #: stop being a downgrade the day charter's own version dropped below it, which is absurd
@@ -124,7 +124,7 @@ class TheInstallerIsTheLastGate(unittest.TestCase):
         self.assertEqual(ran, [], "the refused value reached a subprocess")
 
 
-class SessionStartConformance(PersonaIso):
+class SessionStartConformance(PlaneIso):
     """Driven through the real hook entry point, with the installer stubbed."""
 
     def setUp(self) -> None:

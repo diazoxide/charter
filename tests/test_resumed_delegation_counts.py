@@ -22,7 +22,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from charter import dispatch, hooks
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 AGENT_ID = "a1b2c3d4e5f6a7b8"
 
@@ -31,7 +31,7 @@ def _ago(**kw) -> datetime:
     return datetime.now(timezone.utc) - timedelta(**kw)
 
 
-class ResumeCase(PersonaIso):
+class ResumeCase(PlaneIso):
     def dispatched(self, persona: str, agent_id: str = AGENT_ID):
         """The harness's own Task result carries the id it just created."""
         return run_hook(hooks.posttooluse_dispatch, {

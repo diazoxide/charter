@@ -9,14 +9,14 @@ from unittest import mock
 
 from charter import config, hooks, workspace
 from charter import commands_workspace as cw
-from tests._isolation import PersonaIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, run_hook
 
 
 def _ctx(r):
     return (r or {}).get("hookSpecificOutput", {}).get("additionalContext", "") if r else ""
 
 
-class TestCloneEditNudge(PersonaIso):
+class TestCloneEditNudge(PlaneIso):
     def _edit(self, path, session="s1"):
         return run_hook(hooks.posttooluse,
                         {"tool_name": "Write", "tool_input": {"file_path": path}, "session_id": session})

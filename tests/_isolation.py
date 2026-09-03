@@ -101,6 +101,35 @@ class PersonaIso(unittest.TestCase):
         return name
 
 
+class PlaneIso(PersonaIso):
+    """`PersonaIso` whose throwaway root **is** a control plane — the base for a case that
+    drives a hook handler.
+
+    `PersonaIso` deliberately writes no ``charter.toml``, which is right for most cases and
+    wrong for every case about a hook. Since #852 each handler in `hooks._HANDLERS` opens
+    with `hooks._in_a_plane`, because outside a plane ``config.STATE_DIR`` is
+    ``<cwd>/.charter`` and charter was leaving its session pointers, tallies and
+    ``guard-seen.json`` in whatever repository the plugin happened to be enabled in. So a
+    hook case on a root with no marker no longer asserts anything: the handler returns on
+    its first line and every expectation about what it wrote or said is vacuously about
+    silence.
+
+    This is `make_plane` given a name, so that "this case is about a hook, therefore it
+    needs a plane" is declared in the class list rather than repeated in twenty-seven
+    ``setUp``\\ s — and so the next hook case inherits the precondition instead of
+    discovering it as a mystery empty string.
+
+    **Not for a case that is ABOUT the gate.** `tests/test_hooks.py`'s
+    `TestGuardsAreScopedToAPlane` and
+    `tests/test_a_repo_that_is_not_a_plane_gets_no_housekeeping.py` want a root that is not
+    a plane, and they stay on `PersonaIso` where that is the stated fixture.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+
+
 def run_hook(fn, payload: dict):
     """Call a hook handler with ``payload`` on stdin; return parsed stdout JSON or None."""
     old = sys.stdin
