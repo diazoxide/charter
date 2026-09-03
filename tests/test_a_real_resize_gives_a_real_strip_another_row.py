@@ -29,18 +29,32 @@ which is why `charter frame-resize` typed by hand is the recovery
 from __future__ import annotations
 
 import os
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import config, instance
-from charter.frame import state
+from charter import commands_frame, config, instance
+from charter.frame import layout, state
 
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, make_plane
 from tests.test_frame_tmux_integration import (
-    _HAS_TMUX, SOCKET, _TmuxServerFixture, _tmux,
+    _HAS_TMUX, SOCKET, _REPO_ROOT, _TmuxServerFixture, _tmux,
 )
-from charter import commands_frame
+
+#: How long a real panel process is given to come up and repaint. Polled, never slept
+#: through: `_await` returns the moment the pane says what it was asked about, so a fast
+#: machine pays a few hundredths and a loaded one still passes.
+_DEADLINE = 30.0
+
+
+def _await(predicate, timeout: float = _DEADLINE) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
 
 #: The fifteen workspaces this repository's own plane has — the list #725 measured the
 #: windowed rung against. At 120 columns they need three rows and at 300 they need one,
@@ -133,6 +147,67 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
         self._reassert("shrink-strip", harness, panes, 300, 40)
         self.assertEqual(self._height(panes["workspaces"]), 1)
         self.assertEqual(self._height(harness), 27)
+
+    def test_a_real_panel_fills_the_row_the_resize_gave_it(self):
+        """The last link, and the only one a fake cannot stand in for: a real
+        `charter panel workspaces` process, in a real pane, redrawing into a row it did not
+        have a moment ago.
+
+        Everything else here is charter deciding a number and tmux honouring it. This is
+        the panel LEARNING the number — `SIGWINCH` for its own pane, `panel._watch`'s
+        repaint, `events.Dispatcher.note_resize`, and `ctx.height` reaching
+        `slots.chats_bar`'s sibling. A renderer handed the width alone would leave the row
+        the resize just bought blank, and nothing above would notice.
+
+        Asserted on what the pane SHOWS, captured from tmux: the `+7` that stood for the
+        seven workspaces one row could not draw is gone, and the seven names are there.
+        """
+        plane = make_plane(self)
+        for name in NAMES:
+            (Path(config.WORKSPACES_DIR) / name).mkdir(parents=True, exist_ok=True)
+        fid = "real-strip.1"
+        state.frame_dir(fid, create=True)
+        state.record_workspace(fid, "harness-wrapper")
+
+        # **The pane's own environment, stated with `-e` rather than inherited.** A tmux
+        # pane is born out of the SERVER's environment, not the client's, and `PYTHONPATH`
+        # is in no `update-environment` list — so a panel started without these two either
+        # imports the installed charter or resolves the developer's real plane, and this
+        # case would be measuring neither the tree it is in nor the plane it built.
+        existing = os.environ.get("PYTHONPATH", "")
+        pythonpath = os.pathsep.join([str(_REPO_ROOT)]
+                                     + ([existing] if existing else []))
+
+        r = _tmux("new-session", "-d", "-s", "real-strip", "-x", "160", "-y", "30",
+                  "-P", "-F", "#{pane_id}", "--", "sleep", "600")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        harness = r.stdout.strip()
+        env = dict(os.environ, CHARTER_ROOT=str(plane), PYTHONPATH=pythonpath)
+        env.pop("CHARTER_HOME", None)
+        env.pop("CHARTER_WORKSPACE", None)
+        r = _tmux("split-window", "-t", harness, "-v", "-b", "-l", "1",
+                  "-e", f"CHARTER_ROOT={plane}", "-e", f"PYTHONPATH={pythonpath}",
+                  "-P", "-F", "#{pane_id}", "--",
+                  *layout.panel_command(slot="workspaces", session=fid), env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pane = r.stdout.strip()
+
+        def shown():
+            return _tmux("capture-pane", "-p", "-t", pane).stdout
+
+        self.assertTrue(_await(lambda: "harness-wrapper" in shown()),
+                        f"the panel never drew its strip: {shown()!r}")
+        one = shown()
+        self.assertIn("+7", one, f"160 columns drew every name on one row: {one!r}")
+
+        self.assertEqual(_tmux("resize-pane", "-t", pane, "-y", "2").returncode, 0)
+        self.assertTrue(_await(lambda: "+7" not in shown()),
+                        f"the panel kept one row's worth of names in a two-row pane: "
+                        f"{shown()!r}")
+        two = shown()
+        for name in NAMES:
+            self.assertIn(name, two, f"{name} is on neither row: {two!r}")
+        self.assertEqual(len([ln for ln in two.splitlines() if ln.strip()]), 2, two)
 
     def test_a_short_window_keeps_its_harness_and_the_strip_stays_one_row(self):
         """The bound, against the server that would otherwise grant it. A 22-row window

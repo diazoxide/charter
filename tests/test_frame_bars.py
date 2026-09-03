@@ -58,7 +58,10 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
 
     def _row(self, width, names=None, here="api.2", **kw):
         rows = slots._bar("chats", list(names or self.NAMES), here, width, **kw)
-        self.assertLessEqual(len(rows), 1, "a bar is one row or it is none")
+        self.assertLessEqual(
+            len(rows), 1,
+            "a strip given one row draws one row or none — the rungs below are what it "
+            "gives up, never a second row it was not given (#829)")
         return rows[0] if rows else ""
 
     def test_a_wide_row_shows_every_name_with_the_one_you_are_in_marked(self):
