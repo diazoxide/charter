@@ -1053,10 +1053,10 @@ def _menu_button_argv(*, socket: str, default: str) -> list[str]:
     3.2, with a marked panel, the harness and a pane split by hand standing in for the
     operator's own, SGR button-2 reports injected into a real client on a real pty::
 
-        bind                     right-click a panel   right-click harness  right-click own split
-        tmux's own default       delivered, MOVED      untouched            tmux's pane menu
-        `MouseDown1Pane`'s shape  delivered, unchanged untouched            MOVED, NO MENU
-        this one                 delivered, unchanged  untouched            tmux's pane menu
+        bind                      right-click a panel   right-click harness  right-click own split
+        tmux's own default        delivered, MOVED      untouched            tmux's pane menu
+        `MouseDown1Pane`'s shape  delivered, unchanged  untouched            MOVED, and NO MENU
+        this one                  delivered, unchanged  untouched            tmux's pane menu
 
     The middle row is the fix #634 shipped for button 1, applied verbatim to button 3, and
     it is why this function reads the server instead: `select-pane -t =; send-keys -M` is
