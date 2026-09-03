@@ -316,20 +316,29 @@ class SuppressionSaysSoOnDemand(PersonaIso, unittest.TestCase):
             return doctor.check_frame()
 
     def test_the_frame_row_names_the_frame_that_is_drawing_instead(self):
+        """**Asserted on what the row PRINTS, never on which field it was put in (#856).**
+
+        This test read `row.hint`, and it was true and about the wrong thing:
+        `Result.render` drops a hint on a green row, so on the ordinary machine this test
+        covers — a current tmux, every slot implemented — the sentence it was checking for
+        reached nobody. Its own docstring promises the note is *explained somewhere*, and
+        `row.hint` is not somewhere; `row.render()` is the operator's actual reading
+        surface, and it is the only one that can keep that promise."""
         fid = f"demo-{os.getpid()}"
         state.bump(fid)
         state.record_server(fid, "charter")
         state.record_harness_pane(fid, "%7")
         row = self._row({"CHARTER_SESSION_ID": fid, "TMUX_PANE": "%7"})
-        self.assertIn(fid, row.hint or "",
-                      "a suppressed status line must be explained somewhere")
-        self.assertIn("blank", (row.hint or "").lower())
+        printed = row.render()
+        self.assertIn(fid, printed,
+                      "a suppressed status line must be explained somewhere the reader "
+                      "actually sees")
+        self.assertIn("blank", printed.lower())
 
     def test_a_session_that_is_not_suppressed_is_not_told_that_it_is(self):
         """The control, and the one that fails if the row simply always says it: an
         ordinary session's frame row must carry no such note."""
-        row = self._row({})
-        self.assertNotIn("blank", (row.hint or "").lower())
+        self.assertNotIn("blank", self._row({}).render().lower())
 
 
 class PanelFollowsWorkspaceUseOnAFrameWithNoRecord(PersonaIso, unittest.TestCase):

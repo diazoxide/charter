@@ -53,6 +53,19 @@ class Result:
 
         A row rendered with no width stated is as wide as itself, which is what a single
         `Result` printed on its own should be.
+
+        **A hint is a remedy, so a green row has none and does not print one.** ``→`` in
+        this table means *do this*; there is nothing to do about a check that passed, and a
+        column of green arrows is how the yellow ones stop being read. A fact a passing row
+        still needs to state goes in :attr:`detail`, on a ``↳`` continuation line — the
+        shape `check_harness` uses for its capability ceilings and `check_frame` for a
+        status line a frame is deliberately blanking.
+
+        That rule is only safe while it is loud, and for one release it was not:
+        `check_frame` passed its status-line note as a hint on the OK path and the note
+        was silently discarded on every healthy machine (#856). `TestAGreenRowKeepsNothingBack`
+        holds every check to it, so the next row to try this fails the suite rather than
+        losing a sentence.
         """
         code, glyph = _SYMBOL[self.status]
         if _color():
@@ -1094,12 +1107,26 @@ def check_frame() -> Result:
     # it: it is a statement of fact about right now, never a warning — which is also why
     # it is not a `ceilings` entry: every one of those is a capability this machine does
     # not have, and a suppressed status line is a capability working as designed.
-    quiet = _statusline_suppressed_note()
+    #
+    # **Said in the DETAIL, never in the hint (#856).** `Result.render` prints a hint only
+    # on a row that is not green, so on the clean path — a current tmux, every slot
+    # implemented, which is the ordinary machine and the one most likely to be running a
+    # frame — this note was constructed, handed to `Result`, and dropped without a trace.
+    # The one row written to admit the blank footer was silent in exactly the situation
+    # that produces one, which is the failure it exists to prevent, one level down.
+    #
+    # A `↳` continuation, the shape `check_harness` already uses for its ceilings, rather
+    # than a `→` remedy: in this table `→` means *do this* and `↳` means *and also this*,
+    # and a status line blanked because a frame is drawing is nothing to do anything about.
+    # That is the same distinction the paragraph above draws in refusing to make it a
+    # `ceilings` entry, now carried through to how it is printed.
+    quiet = _statusline_suppressed_note().strip()
+    detail = f"tmux {v[0]}.{v[1]}"
+    if quiet:
+        detail += f"\n        ↳ {quiet}"
     if ceilings:
-        return Result(name, WARN, detail=f"tmux {v[0]}.{v[1]}",
-                      hint=" ".join(ceilings) + quiet)
-    return Result(name, OK, detail=f"tmux {v[0]}.{v[1]}",
-                  hint=quiet.strip() or None)
+        return Result(name, WARN, detail=detail, hint=" ".join(ceilings))
+    return Result(name, OK, detail=detail)
 
 
 def _statusline_suppressed_note() -> str:
