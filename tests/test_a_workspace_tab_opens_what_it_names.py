@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -700,6 +701,77 @@ class ADetachedProcessCanBuildAWorkspace(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
+class AClientHungUpOnSaysTheServerExitedUnexpectedly(unittest.TestCase):
+    """The tmux fact :meth:`ARealTabOpensARealWorkspace._hold_the_server` is shaped
+    around, measured rather than inherited — and measured **deterministically**, which is
+    the point of doing it here rather than trusting #713's argument a second time.
+
+    #839 is a flake nobody has made fail on demand: it wants a runner loaded enough that a
+    tmux server which has already decided to exit is descheduled between "stopped serving"
+    and "closed its listening fd", and a client whose `connect` lands inside that window.
+    What that client then reports is not a race, though — it is a fact, and this pins it
+    with no server, no signals, no load and no `sleep`:
+
+    * a socket file at the path a `-L <name>` client looks at,
+    * a listener that **accepts** — which is the synchronisation, read back from the
+      kernel: the client really did connect, so it is past the point where it would have
+      built a server of its own,
+    * and then a hang-up instead of an answer, which is what a retiring tmux gives a
+      client it will never serve.
+
+    The answer is rc 1 and the three words #839's stack traces end with. So the message
+    that names charter names a client that reached a socket with nothing behind it, and
+    the way to stop drawing it is to stop leaving sockets like that between tests.
+
+    If a later tmux ever answered something else here, `_hold_the_server`'s argument
+    should be re-made rather than inherited — this is the assertion that would say so.
+    """
+
+    def test_a_client_that_connects_and_is_never_answered_says_it_lost_the_server(self):
+        name = _tmuxreap.name("hung-up-on")
+        path = Path(_tmuxsocket.socket_path(name))
+        # `S_IRWXU`, the mode tmux makes this directory with itself: it refuses a socket
+        # directory that anyone else can reach into, and a fresh machine may not have one.
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        # LIFO, so the listener is closed first and the file is only then removed — and
+        # removed only if nothing is bound to it, which is `_tmuxreap.reap`'s rule and
+        # matters on the one path where this test fails: a client that built a real server
+        # here would be holding this path, and a file removed from under it is a resident
+        # tmux nothing can find (#564).
+        self.addCleanup(self._drop, path)
+        self.addCleanup(listener.close)
+        listener.bind(str(path))
+        listener.listen(1)
+        client = subprocess.Popen(
+            ["tmux", "-L", name, "new-session", "-d", "-s", "s", "--", "cat"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(client.kill)
+        was = path.stat().st_ino
+        conn, _ = listener.accept()
+        conn.close()
+        out, err = client.communicate(timeout=30)
+        self.assertEqual(client.returncode, 1, f"{out!r} {err!r}")
+        self.assertEqual(
+            err.strip(), "server exited unexpectedly",
+            "this is the sentence #839's failures are made of, and a tmux that spells it "
+            "differently makes every argument built on it worth re-reading")
+        # A client that ends up building a server unlinks what it found and binds its own,
+        # which is what makes a fresh inode one server birth and what `_hold_the_server`
+        # counted twelve of. This one connected instead, so the socket it connected to is
+        # still the one bound above — and if it were not, nothing here measured a hang-up.
+        self.assertEqual(path.stat().st_ino, was,
+                         "the socket was rebuilt, so this client started a server of its "
+                         "own rather than being hung up on by one")
+
+    @staticmethod
+    def _drop(path: Path) -> None:
+        """Remove *path* unless something is still bound to it."""
+        if not _tmuxreap._listening(path):
+            path.unlink(missing_ok=True)
+
+
+@unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
 class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
     """**The operator's report, end to end, with nothing faked but the harness binary.**
 
@@ -716,9 +788,146 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
     process can start one at all.
 
     Verified on tmux 3.7c and at the 3.2 floor, identically on both.
+
+    **The server is HELD, and #839 is the bill for the version that rebuilt it per test**
+    — see :meth:`_hold_the_server`, which is #713's construction applied to this fixture.
     """
 
     HERE, THERE = "alpha", "beta"
+
+    #: This module's own server, unique per test PROCESS — `tests/_tmuxreap.py`'s
+    #: namespace, so a run killed before its cleanup is reaped by the next one rather than
+    #: collided with. A class attribute rather than a `setUp` local because
+    #: :meth:`tearDownClass` has to name the same socket, and `_tmuxreap.name` answers the
+    #: same string every time in one process.
+    SOCKET = _tmuxreap.name("open-ws-tab")
+
+    #: The session :meth:`_hold_the_server` opens and nothing else here ever touches. One
+    #: per server, the same name `_TmuxServerFixture.KEEPER` uses in
+    #: `tests/test_frame_tmux_integration.py`.
+    #:
+    #: It is never a target and never a subject: everything this class writes is `-t`'d at
+    #: a session or pane it created itself, the two cases that read `list-panes -a` filter
+    #: on :attr:`pane`, and `list-sessions` is only ever read with `assertIn` or against
+    #: :meth:`_sessions`, which states the keeper by name.
+    #:
+    #: **What charter makes of it, stated rather than assumed.** `_live_windows` — the
+    #: read behind `_reap_this_server` and every "is this chat still running" question —
+    #: asks for `@charter_chat` and a `cat` in a session nothing marked carries none, so
+    #: the keeper is invisible to it. `_live_sessions` is a different read and DOES see it:
+    #: it lists every session name on the socket, and `cmd_launch`'s §4k open-or-focus gate
+    #: asks whether the workspace it was given is in that set. So the one rule this name
+    #: has to obey is that it is not a workspace name — :attr:`HERE` and :attr:`THERE` are
+    #: `alpha` and `beta`, and a keeper called `alpha` would make the open under test
+    #: focus a `cat`.
+    KEEPER = "keep"
+
+    @classmethod
+    def _server(cls, *a):
+        """One tmux command on this class's socket, without needing an instance —
+        :meth:`tearDownClass` runs after the last one is gone."""
+        return subprocess.run(["tmux", "-L", cls.SOCKET, *a],
+                              capture_output=True, text=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        """The held server goes here, and its socket FILE goes with it.
+
+        Held for the class rather than for a test means nothing else will empty it, so
+        this is the only thing that ends it — and a `kill-server` that leaves the file
+        behind is the leak `tests/_tmuxreap.py` was written to count (14 resident servers
+        and 658 socket files, #564). It is also what makes the NEXT class on this socket
+        — this one's subclass — build a server rather than connect to one:
+        :meth:`_hold_the_server` explains why those are different.
+        """
+        cls._server("kill-server")
+        cls._drop_the_socket_file()
+
+    @classmethod
+    def _drop_the_socket_file(cls):
+        """Unlink this class's socket file, once nothing is bound to it any more.
+
+        **Gated, and `reap`'s own reasoning is the gate.** tmux does not unlink its socket
+        on the way out, so removing it is what stops the next client finding a path to
+        connect to. But removing one from under a server that did NOT die is #564 with
+        the evidence destroyed — a resident tmux holding a session, with no file left
+        naming it, invisible to every later reap. So this waits for the socket to stop
+        accepting and leaves the file where it is if it never does.
+
+        Waits on a fact read back from the socket, never for a duration: the deadline
+        only bounds how long "it would not die" takes to give up.
+
+        `_tmuxreap._listening` rather than a second `AF_UNIX` connect written here, and
+        rather than a `tmux` invocation that would have to be told apart from the very
+        race this is about: it is the suite's one spelling of "is anybody bound to this
+        path", and `tests/test_the_suite_reaps_its_own_tmux_servers.py` already asks it by
+        that name from outside the module.
+        """
+        path = Path(_tmuxsocket.socket_path(cls.SOCKET))
+        deadline = time.monotonic() + 10
+        while _tmuxreap._listening(path) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not _tmuxreap._listening(path):
+            path.unlink(missing_ok=True)
+
+    def _hold_the_server(self):
+        """One session on this class's socket that no test ever kills, so the server is
+        born ONCE per class instead of once per test.
+
+        **#713's construction, and #839 is what this fixture cost without it.** `tmux
+        new-session` on a socket whose file exists is a client that **connects**, not one
+        that builds; and `kill-server` ends the server while leaving that file behind.
+        So a fixture that killed the server at the end of every test handed the next
+        test's `new-session` a socket with a process on its way out at the other end of
+        it. Reach that process after it has stopped accepting and the client gets
+        `ECONNREFUSED`, unlinks, and starts a fresh server — the healthy path, and the
+        only one an idle machine ever sees. Reach it while it still holds its listening
+        fd and the `connect` SUCCEEDS, the command is handed to a server that will never
+        run it, and the client is hung up on instead of answered: tmux's own words for
+        that are **`server exited unexpectedly`**, rc 1
+        (:class:`AClientHungUpOnSaysTheServerExitedUnexpectedly` measures exactly that,
+        deterministically).
+
+        That is why it flaked rather than failed — nothing varies but whether a process
+        that has already decided to exit gets there before the next `connect` lands, and
+        on a loaded runner it does not. #839 caught three different methods across this
+        class and its subclass doing it in two days, all in `setUp`, all on the fixture's
+        own `new-session`, all cleared by a re-run at the same sha.
+
+        **How many draws that is, counted rather than guessed.** A rebuilding client
+        unlinks the stale socket and binds a new one, so a fresh inode at the socket path
+        is one server birth. Instrumented on the version this fixed, one run of this
+        module: **12 births** on this socket — one per test across this class and its
+        subclass. Held, it is one per class, and each of those two is a client meeting no
+        socket file at all (:meth:`_drop_the_socket_file`), which is a build and cannot be
+        a race.
+
+        **A construction, not a wait** (#650's rule): no `sleep`, no retry, no widened
+        assertion. Every `new-session` here still has its return code asserted, and a
+        `new-session` that fails for any real reason still fails this test with tmux's own
+        sentence.
+
+        Idempotent, and that is not tidiness either: `ATabClickedInsideCharactersOwnTmux`
+        kills this server outright when a click hangs, which is a failure rather than a
+        cleanup. The next test rebuilds from a socket path with nothing at it rather than
+        inheriting that failure's race.
+        """
+        self.assertNotIn(self.KEEPER, (self.HERE, self.THERE),
+                         "the keeper is a session on the socket under test, so a keeper "
+                         "named after a workspace would make `cmd_launch`'s open-or-focus "
+                         "gate focus it (`_live_sessions`) instead of opening anything")
+        if self._tmux("has-session", "-t", self.KEEPER).returncode == 0:
+            return
+        self._tmux("kill-server")
+        self._drop_the_socket_file()
+        held = self._tmux("new-session", "-d", "-s", self.KEEPER,
+                          "-x", "80", "-y", "24", "--", "cat")
+        self.assertEqual(held.returncode, 0, held.stderr)
+
+    def _sessions(self):
+        """Every session standing on this class's server, sorted."""
+        return sorted(s for s in self._tmux("list-sessions", "-F", "#{session_name}")
+                      .stdout.split() if s)
 
     def setUp(self):
         super().setUp()
@@ -744,10 +953,27 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
         # the meaning exactly (a launch that bypassed the frame started no session, so
         # every assertion below fails) while leaving a process alive to say so.
         self.enterContext(mock.patch("charter.commands_frame.bypass", return_value=127))
-        self.socket = _tmuxreap.name("open-ws-tab")
+        self.socket = self.SOCKET
         self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
-        self.addCleanup(self._teardown)
+        # `kids` first: `_teardown` reads it, and a `setUp` that dies between the two
+        # would turn one failure into an `AttributeError` in the cleanup that reports it.
         self.kids: list[tuple[int, int]] = []
+        self.addCleanup(self._teardown)
+        # The server, standing before this test's first `new-session` rather than built
+        # by it. See `_hold_the_server` — this is the whole of #839.
+        self._hold_the_server()
+        # **Isolation, asserted where it can still be read.** Holding the server means the
+        # sessions a test builds outlive its own `new-session`s unless something clears
+        # them, and this class's session names are its WORKSPACE names — fixed, and
+        # therefore refused a second time (`duplicate session`). `_teardown` clears every
+        # session but the keeper; if it ever stopped doing so, the next test would meet a
+        # `beta` full of the previous test's chats and `_live_chats` would read them as
+        # this plane's. That is a far worse failure than a red `new-session`, so it is
+        # caught here rather than left to be diagnosed.
+        self.assertEqual(
+            self._sessions(), [self.KEEPER],
+            f"the test before this one left a session standing on {self.socket}, so this "
+            f"one starts on a server that is not empty of it")
 
         # A harness that is a real binary and starts no conversation.
         binroot = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
@@ -784,11 +1010,19 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
                 os.close(fd)
             except OSError:
                 pass
-        self._tmux("kill-server")
+        # **The sessions this test built, and not the server under them** — #839. Every
+        # session but the keeper, so the fixed `alpha`/`beta` names are free for the next
+        # test and nothing of this one's is left for it to read, while the server itself
+        # never becomes a process on its way out for the next `new-session` to connect to
+        # (`_hold_the_server`). `tearDownClass` is what ends the server.
+        self._tmux("kill-session", "-a", "-t", self.KEEPER)
+        # Idempotent, so a test may run this by hand to measure what the next one meets
+        # (`test_the_teardown_between_two_tests_leaves_the_server_standing`) without the
+        # registered cleanup then killing a pty client twice.
+        self.kids = []
 
     def _tmux(self, *a):
-        return subprocess.run(["tmux", "-L", self.socket, *a],
-                              capture_output=True, text=True)
+        return self._server(*a)
 
     def _clients(self, session):
         return [c for c in self._tmux("list-clients", "-t", session,
@@ -846,6 +1080,39 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
         commands_frame._switch_client(self.fid, self.THERE,
                                       said=f"workspace → {self.THERE}")
         time.sleep(0.3)
+
+    def test_the_teardown_between_two_tests_leaves_the_server_standing(self):
+        """**#839's fix, asserted rather than trusted, and red on the version it fixed.**
+
+        The thing that flaked is not anything a test here asserts — it is the state one
+        test hands the next one, which no assertion could see. So this runs the cleanup
+        every test in this class ends with and looks at what is left: the same server
+        process, holding the keeper and nothing else.
+
+        Both halves fail on the version this fixed, and both are the defect. That
+        `_teardown` ended in `kill-server`, so the pid read back afterwards is `''` — the
+        next test's `new-session` was a client with no server to talk to, meeting the
+        socket FILE that `kill-server` leaves behind and connecting to whatever was still
+        at the other end of it. `_hold_the_server` is the argument at length; twelve
+        server births per run of this module were twelve draws in that race.
+
+        Inherited by :class:`ATabClickedInsideCharactersOwnTmux`, which shares this socket
+        and this teardown and had two of #839's three reported failures.
+        """
+        born = self._tmux("display-message", "-p", "#{pid}").stdout.strip()
+        self.assertTrue(born.isdigit(),
+                        f"this class's server was not standing before its own test "
+                        f"({born!r}) — `display-message` does not start one")
+        self._teardown()
+        self.assertEqual(
+            self._tmux("display-message", "-p", "#{pid}").stdout.strip(), born,
+            "the teardown took the server down with the sessions, so the next test on "
+            "this socket has to rebuild one — and a client that connects to a server "
+            "already on its way out is answered `server exited unexpectedly` (#839)")
+        self.assertEqual(
+            self._sessions(), [self.KEEPER],
+            "the teardown left one of this test's own sessions standing, so the next "
+            "test's `new-session` would be refused the name it needs")
 
     def test_the_workspace_opens_and_the_terminal_arrives_in_it(self):
         """**The report, answered.** A tab for a workspace that was not open now opens it
