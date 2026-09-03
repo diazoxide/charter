@@ -126,16 +126,26 @@ smaller version of this — it is destructive, because the same run would overwr
 skipped record two seconds later and nothing would say so until you asked for the plane back
 and got the wrong one. `charter claude --fresh` says the same thing about a named harness.
 
-## One limit this creates, stated rather than discovered
+## `charter reopen` now refuses a plane that is already running
 
-**`charter reopen` typed while the plane is running will now double it.** The record used to
-exist only after a quit, so there was never a live plane for it to describe; it is current
-now, and that command has no liveness gate of its own — bare `charter` has one, which is why
-the automatic restore cannot do this. Quit first, or attach (`tmux -L charter attach`),
-which is what you wanted in that situation anyway. A gate on `charter reopen` itself is a
-follow-up: it means a `list-windows` on charter's socket from that command's entry path, and
-every existing reopen test would read whatever tmux the developer running the suite happens
-to have — which is the shape `tests/_planeguard.py` exists to refuse.
+This is a footgun the feature creates, closed where it is created. The record used to exist
+only after a quit, so `charter reopen` never had a live plane to describe. Now it does — so
+typing it out of habit after closing a terminal (which only *detaches*) would put a second
+copy of every running chat on the plane, each with a fresh ordinal so nothing on screen
+tells the copies apart, and for Claude Code both copies resuming one conversation.
+
+```
+✗ charter reopen: this plane is already running — reopening it would open a second copy
+  of every chat, and a reopened chat gets a new id, so nothing on screen would tell the
+  copies apart. Attach to what is there (`tmux -L charter attach`), or quit it first
+  (`F2 → charter: quit`). Nothing was reopened, and the record is left in place.
+```
+
+It is the same rule bare `charter`'s restore already follows, read a second time rather than
+a second rule — and it asks the disk before it asks tmux, because a live chat always has a
+directory (`state.new_chat_id` claims its ordinal with the `mkdir`). A server that will not
+answer reads as *nothing live*, which is the opposite of what a quit assumes and is right
+for the opposite reason: a reopen is wanted precisely when there is no server at all.
 
 ## One sentence changed its words
 

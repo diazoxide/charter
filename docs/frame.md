@@ -813,6 +813,11 @@ builds a frame there as a window on your own server and that launcher stays awak
 life of each frame — so reopening several chats would stop at the first. It says so and
 leaves the record alone.
 
+**It refuses a plane that is already running, too.** The record describes the plane as it is
+now (see below), so reopening a live one would put a second copy of every chat beside the
+first, with a new id each so nothing on screen tells them apart. Attach to what is there
+(`tmux -L charter attach`) or quit it first. The record is left alone either way.
+
 ### The plane is recorded as it changes, and `charter` puts it back
 
 A quit is no longer the only moment the plane is written down. The process holding your

@@ -8815,6 +8815,43 @@ def _restore_recorded_chat(rec, fid: str) -> None:
         return
 
 
+#: What `charter reopen` says when this plane is already running, and #845 is what made it
+#: reachable. The record used to exist only after a quit, so there was never a live plane
+#: for it to describe; it is written as the plane CHANGES now, so a `charter reopen` typed
+#: out of habit — after closing a terminal, say, which only detaches — would put a second
+#: copy of every running chat on the plane. A reopened chat gets a fresh ordinal, so nothing
+#: on screen would tell the copies from the originals, and for Claude Code both copies would
+#: `--resume` the same conversation.
+#:
+#: It names the two things that ARE what the operator wanted, because "already running" on
+#: its own reads as a refusal to do the thing rather than as an answer.
+REOPEN_ON_A_LIVE_PLANE = (
+    "charter reopen: this plane is already running — reopening it would open a second copy "
+    "of every chat, and a reopened chat gets a new id, so nothing on screen would tell the "
+    "copies apart. Attach to what is there (`tmux -L charter attach`), or quit it first "
+    "(`F2 → charter: quit`). Nothing was reopened, and the record is left in place.")
+
+
+def _plane_is_running() -> bool:
+    """Whether any chat on this plane is live right now.
+
+    **The disk is asked first**, and it is a complete answer rather than an optimisation: a
+    live chat always has a directory, because `state.new_chat_id` claims its ordinal with
+    the `mkdir` (see that function). No directories is no chats, and it costs a `scandir`
+    instead of a `list-windows` per server.
+
+    **A server that will not answer reads as "nothing live", which is the opposite of
+    `leave.plan`'s direction and is right here for the opposite reason.** A quit must not
+    silently record nothing, so an unanswerable server makes it assume the worst. A reopen
+    is wanted precisely when there is no server at all — after a restart — so assuming the
+    worst there would refuse the command in the one situation it exists for.
+    """
+    if not leave.plane_chats():
+        return False
+    live, _windows, _active = _plane_live(_plane_servers())
+    return bool(live)
+
+
 #: What `charter reopen` says when there is nothing recorded. It names the thing that
 #: writes one, because "nothing to reopen" on its own reads like a defect to an operator who
 #: has just restarted their machine and lost a frame — the honest answer is that a plane is
@@ -8926,6 +8963,15 @@ def _reopen_plane(args) -> int:
                  "awake for the life of each frame, so reopening several chats would stop "
                  "at the first. Run it from an ordinary shell. Nothing was reopened, and "
                  "the record is left in place.")
+        return 1
+    # **After the two refusals above and before anything is started** (#845). It is last of
+    # the three because it is the only one that costs a tmux round trip, and it is asked at
+    # all because the record is no longer a relic of a quit: see
+    # :data:`REOPEN_ON_A_LIVE_PLANE`. Bare `charter`'s own restore reaches this function
+    # only with nothing live (`cmd_launch`'s `not live_before`), so this is a second reading
+    # of one rule rather than a second rule.
+    if _plane_is_running():
+        util.err(REOPEN_ON_A_LIVE_PLANE)
         return 1
     quiet = getattr(args, "quiet", False)
     back: list[Reopening] = []

@@ -1087,3 +1087,76 @@ class ALaunchRecordsForAsLongAsItHoldsTheTerminal(PersonaIso, unittest.TestCase)
         self._launch()
         self.assertIsNone(record.running())
         self.assertFalse(self.seen[0][0].alive())
+
+
+class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
+    """The footgun this feature creates, closed where it is created.
+
+    The record used to exist only after a quit, so `charter reopen` never had a live plane
+    to describe. It is written as the plane CHANGES now — so `charter reopen` typed out of
+    habit, after closing a terminal (which only detaches), would put a second copy of every
+    running chat on the plane, with a fresh ordinal each so nothing on screen tells the
+    copies apart, and for Claude Code both copies resuming one conversation.
+
+    **The sentence is spelled out by hand**, and the refusal is asserted by what it did NOT
+    do rather than only by what it said.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.assertIn("edm-test-", str(config.STATE_DIR))
+        reopen.write([_frame("alpha", "alpha.1")], focus="alpha")
+
+    def _reopen(self, *, seats):
+        def _launcher(args):
+            args.reopening.fid = "alpha.9"
+            return 0
+
+        said = io.StringIO()
+        with mock.patch.object(commands_frame, "cmd_launch",
+                               side_effect=_launcher) as launch, \
+                mock.patch.object(commands_frame, "_chat_seats", return_value=seats), \
+                mock.patch.object(commands_frame.sys.stdout, "isatty",
+                                  return_value=True), \
+                mock.patch.object(commands_frame.tmuxctl, "version",
+                                  return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "operator_server",
+                                  return_value=None), \
+                mock.patch.object(commands_frame, "_attach_after_reopen",
+                                  return_value=0), \
+                redirect_stderr(said):
+            rc = commands_frame.cmd_reopen(SimpleNamespace())
+        return rc, said.getvalue(), launch
+
+    def test_a_plane_with_a_chat_running_is_refused_and_nothing_is_started(self):
+        _plant("alpha.1", ws="alpha")
+
+        rc, out, launch = self._reopen(seats=_seats({"alpha.1": "@0"}, set()))
+
+        self.assertEqual(rc, 1)
+        launch.assert_not_called()
+        self.assertIn(
+            "charter reopen: this plane is already running — reopening it would open a "
+            "second copy of every chat, and a reopened chat gets a new id, so nothing on "
+            "screen would tell the copies apart. Attach to what is there (`tmux -L charter "
+            "attach`), or quit it first (`F2 → charter: quit`). Nothing was reopened, and "
+            "the record is left in place.", out)
+        self.assertIsNotNone(reopen.read(), "and the record is left to act on")
+
+    def test_a_server_that_will_not_answer_does_not_block_the_reopen(self):
+        """The opposite of `leave.plan`'s direction, and right for the opposite reason: a
+        reopen is wanted precisely when there is no server at all, so "could not ask" must
+        not refuse the command in the one situation it exists for."""
+        _plant("alpha.1", ws="alpha")
+
+        rc, _out, launch = self._reopen(seats=None)
+
+        self.assertEqual(rc, 0)
+        launch.assert_called()
+
+    def test_a_plane_with_no_chat_directories_asks_no_server_anything(self):
+        """A live chat always has a directory — `state.new_chat_id` claims its ordinal with
+        the `mkdir` — so no directories is a complete answer, not a guess."""
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            self.assertFalse(commands_frame._plane_is_running())
+        seats.assert_not_called()
