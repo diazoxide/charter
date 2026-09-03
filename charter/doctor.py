@@ -743,16 +743,34 @@ def _settings_files(root: Path | None = None) -> list[Path]:
             Path.home() / ".claude" / "settings.json"]
 
 
-def _enabled_plugin_ids(root: Path | None = None) -> set[str]:
-    """Plugin ids the host has ENABLED. Installed is not enabled (#177)."""
-    out: set[str] = set()
+def _settings_docs(root: Path | None = None) -> list[dict]:
+    """Every settings document the host resolves from *root*, parsed, unreadable ones dropped.
+
+    One reader for :func:`_settings_files`, because two of them drifted once already: the
+    hook half read the files as TEXT and the plugin half as JSON, and a `charter hook
+    pretooluse` line inside a comment-shaped string would have counted for one and not the
+    other. Anything asking a *structured* question about the session's settings asks here.
+
+    A file that is absent, unreadable or not a JSON object is simply not in the list.
+    "The host would read nothing from it" is the same answer in all three cases, and a
+    checker that treated a malformed file as a declaration would report a layer that is
+    not there.
+    """
+    out: list[dict] = []
     for p in _settings_files(root):
         try:
             doc = json.loads(p.read_text())
         except (OSError, ValueError, UnicodeDecodeError):
             continue
-        if not isinstance(doc, dict):
-            continue
+        if isinstance(doc, dict):
+            out.append(doc)
+    return out
+
+
+def _enabled_plugin_ids(root: Path | None = None) -> set[str]:
+    """Plugin ids the host has ENABLED. Installed is not enabled (#177)."""
+    out: set[str] = set()
+    for doc in _settings_docs(root):
         for pid, on in (doc.get("enabledPlugins") or {}).items():
             if on:
                 out.add(pid)
@@ -862,6 +880,152 @@ def check_session_root() -> Result:
                 f"        ↳ the plane is still this session's identity: personas, the "
                 f"vault, memory and workspaces resolve to {_config.ROOT} from anywhere "
                 f"inside it"))
+
+
+def _git_root_of(here: Path) -> Path | None:
+    """The git repository *here* stands in, or ``None`` when it is in none.
+
+    **A linked worktree answers with the WORKTREE**, not with the main clone, and that is
+    the answer both callers want: git's own boundary is the unit an agent runtime's
+    upward search stops at, and it is the unit trust is inherited to (#859).
+
+    Never raises and never blocks: this runs from the SessionStart hook, so it is timed
+    out like every other git question in this file (`_git_in`), and a repository charter
+    cannot interrogate answers ``None`` rather than a traceback.
+    """
+    try:
+        res = _git_in(here, "rev-parse", "--show-toplevel")
+    except Exception:
+        # `util.run` raises `ProcTimeout` on a stalled network mount and `ProcError` never
+        # (check=False), but a missing `git` reaches here as an OSError from the exec
+        # itself. A preflight row must render something.
+        return None
+    top = res.stdout.strip()
+    if res.returncode != 0 or not top:
+        return None
+    return _canonical(Path(top))
+
+
+def check_session_layer() -> Result:
+    """Can a session started HERE see charter's layer? (#869, #859)
+
+    An operator opened a chat in a workspace directory, found no skills, no agents and no
+    plugin, and **no row said why**. Every row was individually telling the truth: the
+    artefacts are discovered by different rules, so no single one of them could carry the
+    answer, and *"charter is set up"* was never one fact. Measured on Claude Code 2.1.259:
+
+    * ``.claude/settings.json`` — the session's own directory, **no walk-up**.
+    * ``.claude/agents/`` and ``.claude/skills/`` — walk up, **stopping at the git root**.
+    * ``CLAUDE.md`` — walks up and is **not** git-bounded, so it arrives almost anywhere.
+
+    That last rule is why such a chat reads as half-configured rather than as empty:
+    charter's prose reaches it and none of charter's machinery does. The row says so.
+
+    **About the LAYER, not the plugin, so `check_guard_wired`'s reasoning stays intact.**
+    That check argues — rightly — that *"Whether the plane runs as a plugin is an
+    implementation detail. Whether the guard fires is the fact the operator needs"*, and
+    nothing here reopens it. This row never reports on a plugin; it reports on what a
+    session standing in this directory can reach, which is a different question with a
+    different answer, and the guard keeps its own two rows.
+
+    **The rules live on the HARNESS, never here** (`base.LayerPart`, `Harness.layer`).
+    Written into this function they would be the hardcoded-literal-per-harness failure
+    `harness/registry.py` exists to end, and the day a fourth harness is registered it
+    would silently be reported under Claude Code's rules — verifying a proxy instead of
+    the fact, which is #168, #177, #261 and #851 in one line. A harness charter writes no
+    in-repo layer for says where its layer comes from instead (`Harness.layer_note`), and
+    one charter has never measured says exactly that rather than borrowing an answer.
+
+    **A fact, never a verdict.** `check_session_root`'s discipline, for its reason: a chat
+    rooted in a clone reaches none of this and that is the designed workflow — charter
+    deliberately writes nothing inside `workspaces/<ws>/<repo>/` — so a row that warned
+    there is a row operators learn to skip, the cry-wolf failure `check_memory_indexes`
+    and `check_harness` each record. Whatever is genuinely missing AND fixable warns on
+    its own row, where it can name its own remedy: `workspace layer` for a generated file
+    that has gone stale or vanished, `plane-root guard` for the guard.
+
+    **Trust is a CONDITION, not a verdict (#859).** The harness gates hook execution and
+    the status line on the directory being trusted, globally — the gate takes no argument
+    saying which settings source declared them — so *"a file this session reads declares
+    `charter hook pretooluse`"* and *"the guard will fire here"* are two facts, and an
+    untrusted directory answers yes to the first and no to the second. Charter asks the
+    question it **owns**: trust is inherited up to the git root, so a directory with a git
+    root of its own needs its own acceptance. That comes from `git rev-parse
+    --show-toplevel` and no host-private state. ``~/.claude.json`` is deliberately not
+    read — a missing project entry there means *never opened* just as readily as
+    *refused*, and reading absence as refusal would warn at planes that are fine, which is
+    the failure two other checks in this file already record. Weaker than a verdict on
+    purpose: it names a condition, and it cannot be wrong in the direction that matters.
+
+    It also says why `guard seen` cannot stand in. `guardseen` state lives under
+    `config.STATE_DIR`, so that row answers **per plane**: a guard that fired in the plane
+    last week still shows a recent sighting for a session rooted in a clone where nothing
+    has ever dispatched.
+    """
+    from . import config as _config
+    from .harness import base as _base
+    from .harness import registry as _registry
+
+    name = "session layer"
+    here = session_root()
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail=f"{here} — no control plane found")
+
+    current = _registry.current()
+    if current and _registry.get(current) is None:
+        # `check_harness` already warns about the unregistered runtime itself. What must
+        # not happen here is answering for it anyway: charter has not measured how this
+        # thing finds anything, and reporting Claude Code's rules over it would be a
+        # confident sentence about a binary nobody has run a probe against.
+        return Result(name, OK,
+                      detail=f"{here} — charter has no record of how {current} finds an "
+                             f"in-repo layer, so this row has nothing to say about it")
+
+    # The running harness when something names one; every registered harness otherwise.
+    # A `charter doctor` typed in a plain terminal has no harness to report for, and
+    # picking one would be a guess — so it answers for each, which is also the only
+    # rendering that shows an operator what a *different* harness would find here.
+    live = _registry.get(current) if current else None
+    harnesses = [live] if live else _registry.all()
+
+    bound = _git_root_of(here)
+    plane_bound = _git_root_of(Path(_config.ROOT))
+    # Its OWN git root — not merely "a git root". `workspaces/<ws>/` is a plain directory
+    # inside the plane's repository, so it rides the plane's acceptance and must not be
+    # warned about; a clone at `workspaces/<ws>/<repo>` and a linked worktree do not.
+    own_repo = bound is not None and bound != plane_bound
+
+    lines = [f"{here} — what a session started here would find in the repo"]
+    gated = []
+    for h in harnesses:
+        if not h.layer:
+            lines.append(f"{h.name}: " + (h.layer_note or
+                                          "charter has not measured how this harness finds "
+                                          "an in-repo layer"))
+            continue
+        if h.trust_gate:
+            gated.append(h)
+        bits = []
+        for part in h.layer:
+            if _base.part_reaches(part, here, bound):
+                bits.append(f"{part.what} ✓")
+            else:
+                bits.append(f"{part.what} ✗ — {part.why}")
+        lines.append(f"{h.name}: " + "; ".join(bits))
+
+    # Said once, after the per-harness lines, and only where a harness has a MEASURED
+    # gate. Repeating it per harness would put a sentence about Claude Code's trust model
+    # under opencode's name, which is the kind of borrowed answer this row refuses above.
+    if own_repo and gated:
+        what = " / ".join(sorted({h.trust_gate for h in gated}))
+        lines.append(
+            f"trust: {bound} is a git root of its own, so it carries its own trust "
+            f"acceptance — until that is given, {what} do not run here whatever any "
+            f"settings file declares. `guard seen` cannot answer it: that state lives "
+            f"under {_config.STATE_DIR}, so it is per PLANE and a sighting there says "
+            f"nothing about this directory")
+
+    return Result(name, OK, detail=("\n        ↳ ".join(lines)))
 
 
 def check_guard_wired() -> Result:
@@ -2771,7 +2935,7 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_session_root(),
+                check_plane_root(), check_session_root(), check_session_layer(),
                 check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(), check_workspace_harness(), check_changes(),
                 check_inventory(), check_vaults(),
@@ -2811,7 +2975,8 @@ def _checks():
 _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
-    "git auth", "charter.toml", "schema", "plane root", "session root", "harness", "frame",
+    "git auth", "charter.toml", "schema", "plane root", "session root", "session layer",
+    "harness", "frame",
     "plane-root guard", "guard seen", "nested plane", "workspace clones",
     "workspace layer", "changes",
     "inventory", "vaults", "vault registry", "version lock", "memory indexes",

@@ -13,10 +13,20 @@ start one — what an operator types, and what argv to exec (ADR 0018, issue #34
 fact lives here, on the harness, for the same reason the first three do: anywhere else
 it is a hardcoded literal per harness, the exact failure `registry.py` iterating
 ``KINDS`` exists to end. A fifth member needs the same kind of argument, not just a use.
+
+:attr:`Harness.layer`, :attr:`Harness.layer_note` and :attr:`Harness.trust_gate` are that
+argument for a fifth, sixth and seventh, and it is the same one. `doctor`'s `session
+layer` row answers *"can a session started in this directory see charter's layer?"* (#869)
+— and the rules that decide differ per harness AND per artefact, measured rather than
+documented. Written in `doctor` they would be exactly the hardcoded literal per harness
+this file exists to stop: a harness added to ``KINDS`` would silently be reported under
+Claude Code's discovery rules, which is the "verified a proxy instead of the fact"
+failure #168, #177, #261 and #851 are each an instance of.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import NamedTuple
 
@@ -49,8 +59,122 @@ class Deficit(NamedTuple):
 WORKSPACE_SCOPE = "workspace-scope"
 
 
+class LayerPart(NamedTuple):
+    """One artefact of charter's IN-REPO layer, and the rule a harness discovers it by.
+
+    Data rather than a method, because the interesting thing about these is that **two
+    parts of one harness's layer follow different rules**. Claude Code reads
+    ``.claude/settings.json`` from the session's own directory and does not walk up, while
+    ``.claude/agents/`` and ``.claude/skills/`` walk up and stop at the git boundary — so
+    "charter is set up here" was never one fact, and an operator staring at a chat with no
+    skills could not infer it from any single row (#869).
+
+    ``paths`` are relative to the directory being asked about; **any** of them satisfies
+    the part. ``keys`` narrows that to a JSON document carrying one of the named top-level
+    keys, which is what makes the answer about *charter's* layer rather than about a file
+    that happens to share its name: a directory can hold a ``.claude/settings.json`` that
+    is entirely somebody else's.
+
+    ``why`` is printed only when the part does **not** reach, and it names the measured
+    rule rather than a remedy. A row that says "missing" without saying which rule decided
+    sends the reader to the wrong directory, which is the whole cost #851 recorded.
+    """
+
+    what: str
+    paths: tuple[str, ...]
+    #: Walk up from the directory, stopping at the git root — or read the directory alone.
+    #: A bool and not an enum because charter has measured exactly two rules; a third
+    #: belongs here the day something measures it, not before.
+    walks: bool
+    why: str
+    keys: tuple[str, ...] = ()
+
+
+def _search_dirs(here: Path, bound: Path | None) -> list[Path]:
+    """The directories a lookup from *here* covers, stopping at *bound* inclusive.
+
+    ``None`` bound means no walk at all — one directory. That is also the answer for a
+    walking part whose directory is in **no** repository: where the walk stops there has
+    not been measured, and a guess would put an unmeasured claim in the row whose entire
+    job is to report measured rules. Under-claiming is the direction that cannot mislead.
+    """
+    if bound is None or bound == here or bound not in here.parents:
+        return [here]
+    out = [here]
+    for parent in here.parents:
+        out.append(parent)
+        if parent == bound:
+            break
+    return out
+
+
+def _json_object(p: Path) -> dict | None:
+    try:
+        doc = json.loads(p.read_text())
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def part_reaches(part: LayerPart, here: Path, bound: Path | None) -> bool:
+    """Would a session started in *here* find *part*? *bound* is where a walk stops.
+
+    *bound* is handed in rather than derived, and that is deliberate: `doctor` already
+    asks git for the repository root, and a second spelling of "where does the walk stop"
+    is how two answers about one directory come to disagree.
+
+    A path that cannot be read is not found. Absent, unreadable and "not a JSON object"
+    are one answer here — the host would resolve nothing from it either way — and treating
+    a malformed file as a declaration would report a layer that is not there, which is the
+    only direction this row must never be wrong in.
+    """
+    for d in _search_dirs(here, bound if part.walks else None):
+        for rel in part.paths:
+            p = d / rel
+            if not part.keys:
+                try:
+                    if p.exists():
+                        return True
+                except OSError:
+                    pass
+                continue
+            doc = _json_object(p)
+            if doc is not None and any(k in doc for k in part.keys):
+                return True
+    return False
+
+
 class Harness:
     """One agent runtime charter can run inside."""
+
+    #: Every part of charter's in-repo layer, with the rule this harness finds each by.
+    #:
+    #: Empty means charter writes **no** in-repo layer for this harness — which is not the
+    #: same as the harness having no in-repo surface, and :attr:`layer_note` is where that
+    #: difference gets said. Empty with an empty note means charter has not measured this
+    #: harness at all, and `doctor` prints that rather than a clean row: "no known gaps"
+    #: and "no knowledge" read identically otherwise, the distinction `registry.deficits`
+    #: already draws.
+    layer: tuple[LayerPart, ...] = ()
+
+    #: Where charter's layer comes from on a harness whose :attr:`layer` is empty, and
+    #: which in-repo surfaces that harness reads that charter does not write.
+    #:
+    #: A sentence rather than a flag, for `Deficit.detail`'s reason: a capability that is
+    #: simply absent reads as a broken integration, and the person who reads it that way
+    #: files a bug. It is also the honest place for a measurement that has moved — what a
+    #: harness reads from a project is a fact about a binary version, and it changes.
+    layer_note: str = ""
+
+    #: What this harness refuses to run in a directory that has not been TRUSTED, or ``""``
+    #: when charter has not measured a trust gate here.
+    #:
+    #: The gate takes no argument saying which settings source declared the thing it is
+    #: gating, so *"a file this session reads declares `charter hook pretooluse`"* and
+    #: *"the guard will fire here"* are two different facts and an untrusted directory
+    #: answers yes to the first and no to the second (#859). A harness charter has not
+    #: measured says nothing, which is not a claim that it has no gate.
+    trust_gate: str = ""
 
     #: The value this harness puts in ``$CHARTER_HARNESS``. Its identity everywhere.
     name: str = ""

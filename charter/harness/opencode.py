@@ -703,6 +703,27 @@ class OpenCodeHarness(Harness):
                 "between two of them — a workspace is not an isolation boundary here."),
     )
 
+    #: Charter writes NO in-repo layer for opencode today, so there is nothing for
+    #: `doctor`'s `session layer` row to look for and the row says where the layer does
+    #: come from instead.
+    #:
+    #: **The second sentence is a correction, and it matters more than the first.** The
+    #: `WORKSPACE_SCOPE` deficit above says opencode's config is machine-global full stop.
+    #: Measured against opencode 1.18.23 with a real session — not `opencode agent list`
+    #: alone, since a management CLI is not a session — that is too broad: an
+    #: `opencode.json` at the REPOSITORY ROOT is read (a malformed one fails the run
+    #: outright, ``Error: Config file at <repo>/opencode.json is not valid JSON(C)``), and
+    #: `.opencode/agent/` is read from the project. So an in-repo surface exists and
+    #: charter simply does not use it yet. Stating that here rather than silently
+    #: contradicting the neighbour: correcting the deficit's own wording moves
+    #: `docs/harnesses.md`, `docs/workspaces.md` and a staged news entry with it, which is
+    #: a change of its own and not this row's to make.
+    layer_note = (
+        "charter writes no in-repo layer for opencode — it arrives from "
+        "`~/.config/opencode/` and the plugin, which every directory on this machine "
+        "reads. opencode DOES read an in-repo `opencode.json` at the repository root and "
+        "`.opencode/agent/` from the project (measured, 1.18.23); charter writes neither")
+
     cli_name = "opencode"
     binary = "opencode"
 

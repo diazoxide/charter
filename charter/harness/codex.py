@@ -150,6 +150,28 @@ class CodexHarness(Harness):
                 "every workspace on this machine necessarily shares it."),
     )
 
+    #: Charter writes NO in-repo layer for Codex today, so there is nothing for `doctor`'s
+    #: `session layer` row to look for and the row says where the layer does come from.
+    #:
+    #: **And it narrows the deficit above, which is too broad as written.** *"No
+    #: project-level config exists at all"* is true of `config.toml` and false of the
+    #: project as a whole: measured against codex-cli 0.147.0 with a real `codex exec`
+    #: session, a sentinel skill at ``<repo>/.codex/skills/<name>/SKILL.md`` reaches the
+    #: model's context with **zero tool calls**, while a control repository without one
+    #: does not. A management CLI is not a session — `codex mcp list` ignores project
+    #: config and would have answered "no" with confidence — and a model asked whether it
+    #: can see a file will happily go and `sed` the file you just named, so the trace is
+    #: the evidence and not the answer.
+    #:
+    #: Said here rather than by rewriting the deficit: that wording also lives in
+    #: `docs/harnesses.md`, `docs/workspaces.md`, a staged news entry and
+    #: `test_codex_harness.py`, and moving all of them is a change of its own.
+    layer_note = (
+        "charter writes no in-repo layer for Codex — it arrives from "
+        "`~/.codex/config.toml` and the plugin, and a project `.codex/config.toml` is "
+        "ignored. Codex DOES read an in-repo `.codex/skills/` (measured, 0.147.0); "
+        "charter writes nothing there")
+
     cli_name = "codex"
     binary = "codex"
 
