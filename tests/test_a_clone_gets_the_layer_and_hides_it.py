@@ -629,13 +629,11 @@ class TheAnnouncement(CloneLayer):
         self.assertIn("info/exclude", err.getvalue())
 
     def test_a_second_clone_into_the_same_workspace_says_nothing(self):
-        import contextlib
-        import io
-
+        """Every `workspace restore` re-clones what is already there. A line per checkout
+        per run would be the announcement nobody reads by the time it matters."""
+        commands._wire_clones(self.ws)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            commands._wire_clones(self.ws)
-            err.truncate(0), err.seek(0)
             commands._wire_clones(self.ws)
         self.assertEqual(err.getvalue(), "")
 
