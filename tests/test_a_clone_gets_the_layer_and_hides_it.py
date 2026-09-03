@@ -233,6 +233,18 @@ class TheReportIsInAStableOrder(CloneLayer):
         # one, and this class exists because there is now more than one.
         self.assertEqual(rels[0], ".claude/agents/alpha.md")
 
+    def test_the_checkouts_come_back_in_a_stable_order(self):
+        """A workspace holds several repos, and every row `wire_harnesses` returns is
+        prefixed with the checkout's directory name. `iterdir` hands back the
+        FILESYSTEM's order, so a report that inherits it lists the same tree differently
+        on two machines — and differently again after a `workspace restore` re-creates
+        the directories in another sequence."""
+        for name in ("zebra", "alpha"):
+            _repo(workspace.workspace_dir(self.ws) / name)
+        trees = [t.name for t in workspace.guest_trees(self.ws)]
+        self.assertEqual(trees, sorted(trees))
+        self.assertEqual(trees[0], "alpha", "the first made was 'svc', not the first named")
+
     def test_the_block_lists_the_paths_sorted(self):
         self.agents("zulu.md", "alpha.md", "mike.md")
         self.wire()
