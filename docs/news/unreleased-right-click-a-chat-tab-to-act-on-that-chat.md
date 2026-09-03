@@ -33,7 +33,12 @@ With tmux's own mouse off no mouse binding fires at all. With it on, tmux's *def
 `MouseDown3Pane` tests `#{mouse_any_flag}` — which is 1 precisely because the panel asked
 for reporting — and takes its `send-keys -M` branch, so tmux's own menu does not appear
 either. The third row is the trap: **a custom `bind -n MouseDown3Pane` that omits `send -M`
-swallows the press.** Binding is what would have broken this. Charter binds nothing.
+swallows the press.** Binding is what would have broken this; nothing here needed one.
+
+What that same default branch also does is select the pane before forwarding, so a
+right-click on a panel used to take your keyboard with it. Charter now wraps that binding
+rather than replacing it — see *a right-click on a panel stays where it points* in this
+same release, which keeps the `send-keys -M` this feature rides on and adds nothing to it.
 
 The events were already decoded, already delivered and already named `right`; they were
 dropped by one comparison.

@@ -160,7 +160,9 @@ still does not. Both measured on 3.7c and 3.2:
 |---|---|---|
 | does a click reach the panel? | only while the active pane is asking your terminal to report — your harness decides | always, from the moment you attach |
 | does a click on a panel move your keyboard? | **no** | **no** |
+| does a *right*-click on a panel move your keyboard? | **no** | **no** |
 | does a click on the harness, or a pane you split, move your keyboard? | no — with its mouse off tmux runs no mouse binding at all | yes — tmux's own behaviour, untouched |
+| does a right-click on the harness, or a pane you split, still open tmux's pane menu? | yes — with its mouse off tmux runs no mouse binding at all | yes — tmux's own menu, untouched |
 | does the wheel move your keyboard? | no | no |
 | do you keep native drag-select? | while no mouse-requesting pane is active | no |
 | a click on a pane border | reaches nobody — a border is a cell in neither pane | reaches nobody |
@@ -168,6 +170,17 @@ still does not. Both measured on 3.7c and 3.2:
 The drag-select row is the trade `mouse = true` makes, and it has not changed and will not:
 it is how tmux works, not a default charter chose. What went away was a second cost that was
 never part of that trade — one key's default behaviour, in a server charter owns.
+
+**The right button took a release longer, and the reason is worth one sentence** because it
+is what the last row of that table is about. tmux's default for the left button is two
+commands, so charter could write out the half it wanted to keep. Its default for the right
+button ends in tmux's own pane menu — Copy Line, Paste, Horizontal Split, Kill, Zoom — which
+is a page long and *different on different tmux versions*, so a charter that wrote its own
+replacement would have deleted that menu from your harness and from every pane you split
+yourself, inside charter's own window, to fix a focus steal one click puts right. Charter
+reads your server's binding back instead and puts its own panel test in front of it. If you
+rebound that key yourself, your binding is what every pane charter did not create still
+runs.
 
 One consequence of that first column worth knowing, because it is new: a panel whose
 component declares `click` or `scroll` asks *its own* terminal to report, so if you select
@@ -247,11 +260,14 @@ invisible until you try it, so it is a faster route to two things and never the 
 forwards it — measured on 3.2 and 3.7c, with `[frame] mouse` off and on, with no binding
 involved — but many terminal emulators serve their own context menu on button 2 instead of
 sending it to the application. iTerm2's default profile is one. If yours does, nothing
-breaks and nothing is refused: the menu simply never appears, and `F2` is unchanged. One
-cost worth knowing with `mouse = true`: tmux selects the pane under the pointer before
-forwarding a right-click, so a right-click that lands on a panel and opens nothing leaves
-your keyboard on that panel. A click on the harness, or `F12`, puts it back. (Left clicks
-have not done this since charter rebound `MouseDown1Pane` — see above.)
+breaks and nothing is refused: the menu simply never appears, and `F2` is unchanged.
+
+A right-click that lands on a panel and opens nothing now costs you nothing either: it
+leaves your keyboard on the harness, the same as a left click has since charter rebound
+`MouseDown1Pane`. It did not always — tmux selects the pane under the pointer before
+forwarding a right-click, so until charter wrapped that binding too a miss cost you one
+click on the harness or an `F12`. Right-clicking a pane charter did *not* create still
+opens tmux's own pane menu, exactly as it always did; see the mouse table above.
 
 **The `+N` counts are the exception, and they open the palette.** A `+9` stands for names
 that are not on the row, so there is nothing there to switch *to* — but it is the field

@@ -266,8 +266,9 @@ _ACT_BUTTON = "left"
 #: not appear, because that binding tests `#{mouse_any_flag}` — which is 1 precisely
 #: because this pane asked for reporting — and takes its `send-keys -M` branch. **A custom
 #: `bind -n MouseDown3Pane` that omits `send -M` is the one thing that would swallow the
-#: press**, so charter binds nothing: `commands_frame.conf_text` names no mouse key, and
-#: adding one is what would break this rather than what would enable it.
+#: press**, which is the shape of every binding charter must not write for this key. The
+#: one it does write (#848, below) keeps `send-keys -M` as the branch a PANEL takes, so
+#: this row is unchanged by it.
 #:
 #: **It is deliberately NOT read by three of the four handlers below.** Right-click is a
 #: menu gesture and a menu needs something to be about; the repo table's rows, the two
@@ -275,23 +276,27 @@ _ACT_BUTTON = "left"
 #: and giving a second button a second one there would be inventing surfaces nobody asked
 #: for. `_bar_events` is the only reader, and only on the bar whose tabs are chats.
 #:
-#: **What the press DOES cost, measured here rather than assumed away.** tmux's default
-#: binding forwards the report, but it selects the pane first — read back off a real 3.7c
-#: with `list-keys -T root`, the forwarding branch is `{ select-pane -t = ; send-keys -M }`.
-#: So with `[frame] mouse = true` a right-click on any charter panel moves the keyboard to
-#: that panel before the byte arrives. **That is #634's defect one button over, it is
-#: pre-existing, and this change does not close it.** It costs nothing on the gesture this
-#: constant is for — a menu that opens takes the keyboard anyway, and
-#: `commands_frame._close_palette` selects the harness on the way out — and it costs a MISS
-#: one left click on the harness, or `overlay.HATCH_KEY`.
+#: **What the press USED to cost, and what closing it took** (#848). tmux's default binding
+#: forwards the report, but it selects the pane first — read back off a real 3.7c with
+#: `list-keys -T root`, the forwarding branch is `{ select-pane -t = ; send-keys -M }`. So
+#: with `[frame] mouse = true` a right-click on any charter panel moved the keyboard to
+#: that panel before the byte arrived: #634's defect one button over, and pre-existing.
+#: It cost nothing on the gesture this constant is for — a menu that opens takes the
+#: keyboard anyway, and `commands_frame._close_palette` selects the harness on the way out
+#: — and it cost a MISS one left click on the harness, or `overlay.HATCH_KEY`. The MISS is
+#: what made it worth closing, and it is the case the fix is pinned by
+#: (`tests/test_a_real_click_on_a_real_tab_bar_switches.py`'s heading press).
 #:
-#: Closing it is a change of its own and not a line here. `MouseDown1Pane`'s fix works
-#: because tmux's default for THAT key is two commands charter can write out verbatim in
+#: **It could not be closed the way `MouseDown1Pane` was, and that is the whole shape of
+#: the fix.** tmux's default for THAT key is two commands charter can write out verbatim in
 #: the else-branch (`commands_frame.conf_text`); button 3's else-branch is a `display-menu`
 #: a page long, built out of `#{mouse_word}`, `#{pane_marked}` and a dozen other formats,
 #: and it differs between the versions charter supports. A bind that dropped it would take
 #: tmux's own pane menu away from the harness and from the operator's own splits, inside
-#: charter's window, to fix a focus steal that a click puts right.
+#: charter's window, to fix a focus steal that a click puts right. So charter READS the
+#: server's own binding back and re-emits it as the else-branch of its own panel test,
+#: rather than writing one: `commands_frame._menu_button_bind_argv`, which is also why that
+#: bind is an argv issued at launch and not a line in `conf_text`.
 #:
 #: **And on a terminal that eats button 2 this constant simply never matches.** The
 #: measurement above injected bytes into a pty, which bypasses the terminal EMULATOR;

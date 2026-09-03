@@ -12,7 +12,13 @@ release, pane-relative, and no `bind -n` fires at all. With `mouse on`, tmux's *
 `MouseDown3Pane` tests `#{mouse_any_flag}`, which is 1 precisely because this pane asked
 for reporting, so it takes the `send-keys -M` branch and tmux's own menu never appears. A
 custom `bind -n MouseDown3Pane` that omitted `send -M` is the one thing that would swallow
-the press, so charter binds nothing.
+the press, so nothing here needed a bind to work.
+
+What that branch also does is `select-pane -t =` first, which took the keyboard off the
+harness on every right-click — #634's defect one button over, closed since by #848 with a
+binding that keeps the `send-keys -M` this file depends on and adds nothing to it. It is
+issued as its own `bind-key` argv (`commands_frame._menu_button_bind_argv`), never as a
+line in the config text, which is what the case below still asserts.
 
 **And exactly two palette rows are about a specific tab** — `chat: previous transcript`
 and `chat: close`. Everything else charter offers is about the frame (detach, the
@@ -596,18 +602,20 @@ class AnEmulatorThatEatsButtonTwoCostsNothing(_ABarThatWasDrawn, unittest.TestCa
                          (overlay.CLICK,))
         self.assertEqual(overlay.MOUSE_ON, "\x1b[?1006h\x1b[?1000h")
 
-    def test_charter_binds_no_mouse_key_for_the_menu_button(self):
-        """**Binding is what would break this, not what enables it.** tmux's own default
+    def test_the_menu_button_is_never_a_line_in_the_config_text(self):
+        """**A bind is what would break this, not what enables it.** tmux's own default
         `MouseDown3Pane` takes its `send -M` branch because `#{mouse_any_flag}` is 1 for a
         pane that asked for reporting; a custom `bind -n MouseDown3Pane` that omitted
-        `send -M` would swallow the press instead. charter's config text names no button-2
-        or button-3 key at all, and this is what would notice if one appeared.
+        `send -M` would swallow the press instead.
 
-        **The cost of binding nothing is measured and is not nothing** — tmux's forwarding
-        branch is `{ select-pane -t = ; send-keys -M }`, so with `[frame] mouse = true` a
-        right-click on a panel takes the keyboard before the byte arrives. That is #634 one
-        button over, it is pre-existing, and `frame/builtins._MENU_BUTTON` records why
-        closing it is a change of its own rather than a line in this one."""
+        **#848 added one, and the config text still names no button-2 or button-3 key** —
+        which is not an accident this case now tolerates but the property it now pins. That
+        bind wraps whatever the server already had, so it carries a page of tmux's own
+        `display-menu` as an argument; written into the text `source-file` parses, one
+        unbalanced brace in an operator's own binding would take `mouse`, `history-limit`
+        and the palette's hotkey down with it. It is issued as its own `bind-key` argv
+        instead (`commands_frame._menu_button_argv`), and this is what would notice a line
+        for it appearing here."""
         from charter import commands_frame
         text = commands_frame.conf_text(hotkey="F2", mouse=True, history_limit=2000,
                                         session=self.FID)
