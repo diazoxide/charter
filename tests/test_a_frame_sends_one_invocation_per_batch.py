@@ -218,9 +218,9 @@ class WhatACommandListCostsTheOperatorsScreen(unittest.TestCase):
     #780 established that tmux redraws once per command LIST. #844 asked the next
     question, because the answer decides whether merging two lists is worth anything: does
     a list whose writes change NOTHING still redraw? The issue behind this assumed the
-    opposite — that a `resize-pane` to a size a pane already has is free because it
-    delivers no SIGWINCH to the pane. It delivers none; measured here, it costs the client
-    a full repaint anyway.
+    opposite — that a `resize-pane` to a size a pane already has is free, because it
+    delivers no SIGWINCH to the pane. It delivers none; it costs the client a full repaint
+    anyway.
 
     Measured by hand on tmux 3.7c and at the 3.2 floor, 200x50, three panes, before this
     class existed, and identically on both versions:
@@ -245,100 +245,168 @@ class WhatACommandListCostsTheOperatorsScreen(unittest.TestCase):
     one. It skips rather than fails where tmux will not attach one, naming what it could
     not get: a machine that cannot fork a pty client has measured nothing here, and a
     trial that measured nothing is not a result to assert on.
+
+    **One server and one client for the whole class, and the reason is a measurement
+    rather than tidiness.** On attach, tmux asks the terminal what it can do and holds a
+    repaint back until it has an answer — and a pty with nothing behind it never sends
+    one, so the answer is a timeout. Measured on 3.7c and at the 3.2 floor, watching every
+    byte tmux put on a fresh pty client: bursts at **6 ms** and again at **5006 ms**, and
+    nothing in between or after. Inside that window the first command of any kind flushes
+    the held repaint — a pure `display-message -p` that draws **0** bytes on a settled
+    client draws **617** (3.7c) or **625** (3.2) at one second. A fixture that measured
+    inside it would be timing tmux's startup and calling it the cost of a command; a
+    per-test client would pay that five seconds three times over. So the client is built
+    once, :meth:`_settle_the_client` waits the window out, and the tests share it.
+
+    Nothing here leaves the panes anywhere but where it found them, which is what lets
+    them share: every probe either re-asserts a size the pane already has or puts one back
+    before it measures.
     """
 
     SOCKET = _tmuxreap.name("redraw-cost")
 
-    def setUp(self):
-        self._tmux("kill-server")
-        made = self._tmux("new-session", "-d", "-s", "s", "-x", "200", "-y", "50",
-                          "-P", "-F", "#{pane_id}", "--", "cat")
-        self.assertEqual(made.returncode, 0, made.stderr)
-        # **The status line off, and that is what makes the byte counts below a
-        # measurement rather than a coin toss.** tmux redraws the status line on its own
-        # clock — `status-interval` is 15 seconds by default — so a probe that watches
-        # the client for a second has about a one-in-fifteen chance of catching a repaint
-        # nothing here asked for, which is exactly the shape that passes on a laptop and
-        # goes red on CI once a fortnight. The panes run `cat` and write nothing, so with
+    #: How long tmux holds its first repaint back waiting for a terminal that will never
+    #: answer — 5006 ms, measured on both versions (see the class docstring), plus enough
+    #: margin for a loaded box. Waited out ONCE.
+    SETTLE = 9.0
+
+    #: Nothing new on the client for this long is what "settled" means everywhere below.
+    STILL = 0.6
+
+    @classmethod
+    def setUpClass(cls):
+        cls.drawn: list[int] = []
+        cls._reading = False
+        cls._client = None
+        cls._tmux_cmd("kill-server")
+        made = cls._tmux_cmd("new-session", "-d", "-s", "s", "-x", "200", "-y", "50",
+                             "-P", "-F", "#{pane_id}", "--", "cat")
+        if made.returncode != 0:
+            raise AssertionError(f"tmux would not start a session: {made.stderr!r}")
+        cls.harness = made.stdout.strip()
+        # **The status line off**, so tmux's own 15-second clock cannot put a repaint
+        # nobody asked for inside a probe. The panes run `cat` and write nothing, so with
         # this off the only thing that can draw on the client is the command under test.
-        self._tmux("set-option", "-g", "status", "off")
-        self.harness = made.stdout.strip()
-        split = self._tmux("split-window", "-t", self.harness, "-h", "-l", "22",
-                           "-P", "-F", "#{pane_id}", "--", "cat")
-        self.assertEqual(split.returncode, 0, split.stderr)
-        self.side = split.stdout.strip()
-        self.addCleanup(self._reap)
-        self._attach()
+        cls._tmux_cmd("set-option", "-g", "status", "off")
+        split = cls._tmux_cmd("split-window", "-t", cls.harness, "-h", "-l", "22",
+                              "-P", "-F", "#{pane_id}", "--", "cat")
+        if split.returncode != 0:
+            raise AssertionError(f"tmux would not split a pane: {split.stderr!r}")
+        cls.side = split.stdout.strip()
+        cls._attach()
 
-    def _reap(self):
-        self._tmux("kill-server")
-        (_tmuxreap.socket_dir() / self.SOCKET).unlink(missing_ok=True)
+    @classmethod
+    def tearDownClass(cls):
+        if cls._client is not None:
+            pid, fd = cls._client
+            cls._reading = False
+            try:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        cls._tmux_cmd("kill-server")
+        (_tmuxreap.socket_dir() / cls.SOCKET).unlink(missing_ok=True)
 
-    def _tmux(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(["tmux", "-L", self.SOCKET, *args],
+    @classmethod
+    def _tmux_cmd(cls, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["tmux", "-L", cls.SOCKET, *args],
                               capture_output=True, text=True, timeout=20)
 
-    def _attach(self) -> None:
-        """A real pty client at 200x50, and a thread recording every byte tmux draws on
-        it. Skips where no terminal type will attach — see the class docstring."""
+    @classmethod
+    def _attach(cls) -> None:
+        """A real pty client at 200x50, a thread recording every byte tmux draws on it,
+        and the startup window waited out. ``_client`` stays ``None`` where no terminal
+        type will attach, and every test then skips."""
         for term in ("xterm-256color", "screen", "vt100"):
             pid, fd = pty.fork()
             if pid == 0:                                      # pragma: no cover - child
                 try:
                     os.environ["TERM"] = term
-                    os.execvp("tmux", ["tmux", "-L", self.SOCKET, "attach", "-t", "s"])
+                    os.execvp("tmux", ["tmux", "-L", cls.SOCKET, "attach", "-t", "s"])
                 finally:
                     os._exit(127)
             fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
-            self.addCleanup(self._close, pid, fd)
-            for _ in range(200):
-                seen = self._tmux("list-clients", "-t", "s", "-F", "#{client_name}")
+            for _ in range(250):
+                seen = cls._tmux_cmd("list-clients", "-t", "s", "-F", "#{client_name}")
                 if seen.returncode == 0 and seen.stdout.strip():
-                    self.drawn: list[int] = []
-                    self._reading = True
-                    threading.Thread(target=self._read, args=(fd,),
-                                     daemon=True).start()
-                    time.sleep(1.0)
+                    cls._client = (pid, fd)
+                    cls._reading = True
+                    threading.Thread(target=cls._read, args=(fd,), daemon=True).start()
+                    cls._settle_the_client()
                     return
                 time.sleep(0.02)
-        self.skipTest("no tmux client would attach on this machine, and there is no "
-                      "screen to measure a repaint on without one")
+            try:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+                os.close(fd)
+            except OSError:
+                pass
 
-    def _close(self, pid: int, fd: int) -> None:
-        self._reading = False
-        try:
-            os.kill(pid, signal.SIGKILL)
-            os.waitpid(pid, 0)
-        except OSError:
-            pass
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-
-    def _read(self, fd: int) -> None:                     # pragma: no cover - thread
-        while self._reading:
+    @classmethod
+    def _read(cls, fd: int) -> None:                      # pragma: no cover - thread
+        while cls._reading:
             try:
                 data = os.read(fd, 65536)
             except OSError:
                 return
             if not data:
                 return
-            self.drawn.append(len(data))
+            cls.drawn.append(len(data))
+
+    @classmethod
+    def _settle_the_client(cls) -> None:
+        """Wait :data:`SETTLE` out and then for the screen to go quiet.
+
+        Not a probe that stops when a read draws nothing — that would be this class's own
+        third assertion made into its fixture, and a test pinned by its fixture asserts
+        nothing. The wait is a duration because what is being waited out IS a duration:
+        tmux's terminal-feature query timing out against a pty that cannot answer it.
+        """
+        deadline = time.monotonic() + cls.SETTLE
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+        cls._quiet()
+
+    @classmethod
+    def _quiet(cls, deadline: float = 15.0) -> None:
+        """Return once nothing has been drawn on the client for :data:`STILL`.
+
+        A ceiling rather than a wait: a client that never stops being drawn on would hang
+        this class, and the byte count that then fails an assertion is a truer report than
+        a test that does not return.
+        """
+        end = time.monotonic() + deadline
+        seen, since = len(cls.drawn), time.monotonic()
+        while time.monotonic() < end:
+            time.sleep(0.05)
+            if len(cls.drawn) != seen:
+                seen, since = len(cls.drawn), time.monotonic()
+            elif time.monotonic() - since >= cls.STILL:
+                return
+
+    def setUp(self):
+        if self._client is None:
+            self.skipTest("no tmux client would attach on this machine, and there is no "
+                          "screen to measure a repaint on without one")
 
     def _bytes_drawn(self, *invocations: list[str]) -> int:
         """How many bytes tmux draws on the client for *invocations*, run in order.
 
-        Settled before and after: the panes run `cat` and write nothing of their own, so
-        everything counted here is tmux redrawing, and the sleeps are what keep one
-        probe's tail out of the next one's total.
+        The panes run `cat` and write nothing of their own, the status line is off and the
+        startup window is long past, so with the screen settled either side of the run
+        everything counted here is tmux repainting for the commands under test.
         """
-        time.sleep(0.5)
+        self._quiet()
         self.drawn.clear()
         for argv in invocations:
-            out = self._tmux(*argv)
+            out = self._tmux_cmd(*argv)
             self.assertEqual(out.returncode, 0, out.stderr)
-        time.sleep(0.5)
+        self._quiet()
         return sum(self.drawn)
 
     def test_a_write_that_changes_nothing_still_repaints_the_whole_client(self):
@@ -369,6 +437,9 @@ class WhatACommandListCostsTheOperatorsScreen(unittest.TestCase):
         """
         one = ["resize-pane", "-t", self.side, "-x", "22"]
         two = ["resize-pane", "-t", self.harness, "-y", "50"]
+        # Asserted once and thrown away, so that what is measured below is three writes
+        # that certainly change nothing whichever test ran before this one.
+        self._bytes_drawn(one, two)
         separately = self._bytes_drawn(one, two, one)
         together = self._bytes_drawn(one + [";"] + two + [";"] + one)
         self.assertGreater(separately, 0, "nothing was drawn at all — nothing measured")
