@@ -188,11 +188,14 @@ class TheRegistryAnswersForAllOfThem(unittest.TestCase):
                              (".shared/skills", ".a/agents", ".b/agents"))
 
     def test_the_order_is_registration_order_and_not_a_hash(self):
-        """Two opposite registrations of the SAME pair, because one assertion would pass
+        """Two opposite registrations of the SAME pair, because ONE of them would pass
         about half the time by luck: `sorted` over a set, or a set at all, orders by hash,
-        and a guarantee that holds by coincidence is one nothing can pin. Order is what
-        decides which harness's copy wins when two name one path and the plane holds a file
-        at it, so it is a real answer rather than cosmetics."""
+        and a guarantee that holds by coincidence is one nothing can pin.
+
+        It is a real answer rather than cosmetics. `_inherited_files` walks these in order
+        into one dict, so where two declared paths overlap — a harness naming `.a` and
+        another `.a/sub` — the later write is the one a checkout gets. An order that came
+        out of a hash would make two `wire`s of an unchanged tree disagree."""
         first, second = _harness("a", ".a/x"), _harness("b", ".b/x")
         with mock.patch.object(registry, "all", return_value=[first, second]):
             self.assertEqual(registry.inherited_paths(), (".a/x", ".b/x"))
