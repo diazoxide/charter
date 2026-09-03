@@ -85,6 +85,14 @@ class CloneLayer(_isolation.PersonaIso):
         p = workspace.git_exclude_file(tree or self.clone)
         return p.read_text() if p and p.exists() else ""
 
+    def agents(self, *names: str) -> None:
+        """Personas in the plane, which is where `.claude/agents/` comes from — the half
+        of the layer a clone's git boundary cuts off."""
+        d = config.ROOT / ".claude" / "agents"
+        d.mkdir(parents=True, exist_ok=True)
+        for n in names:
+            (d / n).write_text(f"# {n}\n")
+
     def status(self, tree: Path | None = None) -> str:
         """``-uall``, not the default. Porcelain collapses an untracked directory to one
         `?? .claude/` line, which reads as "charter's noise is here" whether the file
@@ -219,12 +227,6 @@ class TheReportIsInAStableOrder(CloneLayer):
     and `unwire_guest`'s answer is what a caller prints back.
     """
 
-    def agents(self, *names: str) -> None:
-        d = config.ROOT / ".claude" / "agents"
-        d.mkdir(parents=True, exist_ok=True)
-        for n in names:
-            (d / n).write_text(f"# {n}\n")
-
     def test_the_layer_rows_are_sorted(self):
         self.agents("zulu.md", "alpha.md", "mike.md")
         rels = [rel for rel, _status in workspace.guest_layer(self.clone)]
@@ -273,13 +275,20 @@ class TheReportIsInAStableOrder(CloneLayer):
                                   f"/{workspace.GENERATED_MARKER}"])
 
     def test_what_unwiring_reports_removing_is_sorted(self):
-        self.agents("zulu.md", "alpha.md", "mike.md")
+        """The persona arrives AFTER the first wire, for `test_the_block_stays_sorted_when
+        _a_persona_arrives_later`'s reason: the marker is built in sorted order, so a
+        checkout wired once cannot tell `sorted(marker)` from `list(marker)`. It is what
+        a caller prints back to say what it removed from somebody's repo."""
         self.wire()
+        self.agents("alpha.md")
+        self.wire()
+        marker = json.loads((self.clone / workspace.GENERATED_MARKER).read_text())
+        self.assertEqual(list(marker), [".claude/settings.json",
+                                        ".claude/agents/alpha.md"],
+                         "fixture no longer diverges — this case would assert nothing")
         removed = workspace.unwire_guest(self.clone)
-        self.assertEqual(removed[:-1], sorted(removed[:-1]))
-        self.assertEqual(removed[0], ".claude/agents/alpha.md")
-        self.assertEqual(removed[-1], workspace.GENERATED_MARKER,
-                         "the marker goes last — it is what vouches for the rest")
+        self.assertEqual(removed, [".claude/agents/alpha.md", ".claude/settings.json",
+                                   workspace.GENERATED_MARKER])
 
 
 class NothingShowsUpInTheirStatus(CloneLayer):
@@ -574,15 +583,35 @@ class AWorktreeIsAGuestToo(CloneLayer):
         self.assertEqual(workspace.git_dir(sub), sub / ".." / "mod:ules")
 
     def test_a_git_file_written_with_crlf_still_points_somewhere(self):
-        """`.strip()`, never `lstrip`. `splitlines` takes the `\n` and leaves the `\r`,
-        so a pointer file written on Windows keeps a carriage return on the end of the
-        path — and a `Path` with a trailing `\r` is a directory that does not exist."""
+        """A pointer file written on Windows. This one is carried by `read_text`'s
+        universal newlines rather than by the strip — measured, after the deletion sweep
+        kept `lstrip` alive through an earlier version of this case that claimed
+        otherwise. Kept, because the OUTCOME is the thing worth holding and the mechanism
+        that delivers it is `read_text`'s default, which a later `newline=""` would
+        silently remove."""
         real = workspace.workspace_dir(self.ws) / "modules-crlf"
         real.mkdir()
         sub = workspace.workspace_dir(self.ws) / "fromwindows"
         sub.mkdir()
         (sub / ".git").write_bytes(b"gitdir: ../modules-crlf\r\n")
         self.assertEqual(workspace.git_dir(sub), sub / ".." / "modules-crlf")
+        self.assertTrue(workspace.git_dir(sub).is_dir())
+
+    def test_trailing_whitespace_after_the_path_is_dropped(self):
+        """`.strip()` and not `lstrip` — the RIGHT-hand half, which nothing else reaches.
+
+        A `.git` file is a plain text line, and the two things that put whitespace on the
+        end of one are a person editing it and a script writing it (`echo "gitdir: $p "`).
+        Git never does, which is exactly why this is worth a case rather than an
+        assumption: the failure is silent. A path carrying a trailing space is a directory
+        that does not exist, `git_dir` answers `None`, and charter then decides there is no
+        checkout here at all — no layer, no `info/exclude` entry, and nothing said."""
+        real = workspace.workspace_dir(self.ws) / "modules-spaced"
+        real.mkdir()
+        sub = workspace.workspace_dir(self.ws) / "handedited"
+        sub.mkdir()
+        (sub / ".git").write_text("gitdir: ../modules-spaced \t\n")
+        self.assertEqual(workspace.git_dir(sub), sub / ".." / "modules-spaced")
         self.assertTrue(workspace.git_dir(sub).is_dir())
 
     def test_a_git_file_that_says_nothing_is_not_a_checkout(self):
@@ -701,6 +730,22 @@ class RemovingTheWorkspaceRemovesWhatCharterAdded(CloneLayer):
         self.assertIn(workspace._EXCLUDE_BEGIN, p.read_text())
         workspace.unwire_guest(self.clone)
         self.assertEqual(p.read_text(), "")
+
+    def test_unwiring_steps_over_a_generated_path_it_cannot_read(self):
+        """A generated path replaced by a DIRECTORY. `unwire_guest` has no `is_file()` in
+        front of its read on purpose — a path already gone and a path that is a directory
+        mean the same thing there — so the catch is the whole of that decision, and
+        without it one such path aborts the removal and leaves the rest of charter's files
+        behind in a repo it is walking out of."""
+        self.agents("alpha.md")
+        self.wire()
+        p = self.clone / ".claude" / "settings.json"
+        p.unlink()
+        p.mkdir()
+        removed = workspace.unwire_guest(self.clone)
+        self.assertNotIn(".claude/settings.json", removed)
+        self.assertIn(".claude/agents/alpha.md", removed)
+        self.assertTrue(p.is_dir(), "charter removed a path it could not vouch for")
 
     def test_unwiring_never_deletes_a_file_the_operator_took_over(self):
         """Deleting it would be the same overwrite this design refuses, one verb on."""
