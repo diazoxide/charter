@@ -988,7 +988,7 @@ class AChatIdCharterCannotResolveWritesAndReadsNothing(PersonaIso):
 
 
 class TheLaunchHintCountsOnlyWhatCanResume(PersonaIso):
-    """`_say_it_was_quit` — the line `cmd_launch` prints when the chat it just opened is
+    """`_say_the_plane_is_recorded` — the line `cmd_launch` prints when the chat it just opened is
     named in a manifest nobody has reopened. Every existing case records one chat with an
     id, so `n` and `back` were the same number and the comprehension's filter decided
     nothing."""
@@ -1002,7 +1002,7 @@ class TheLaunchHintCountsOnlyWhatCanResume(PersonaIso):
         reopen.write([_frame("alpha", *chats_)], focus="alpha")
         said: list[str] = []
         with mock.patch.object(util, "info", side_effect=said.append):
-            commands_frame._say_it_was_quit(chats_[0].chat)
+            commands_frame._say_the_plane_is_recorded(chats_[0].chat)
         return said
 
     def test_the_second_number_is_how_many_have_a_conversation(self):
@@ -1016,7 +1016,7 @@ class TheLaunchHintCountsOnlyWhatCanResume(PersonaIso):
     def test_a_chat_the_manifest_does_not_name_is_said_nothing_about(self):
         reopen.write([_frame("alpha", _chat(chat="alpha.1"))], focus="alpha")
         with mock.patch.object(util, "info") as said:
-            commands_frame._say_it_was_quit("beta.9")
+            commands_frame._say_the_plane_is_recorded("beta.9")
 
         said.assert_not_called()
 

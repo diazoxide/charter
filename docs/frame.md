@@ -813,6 +813,56 @@ builds a frame there as a window on your own server and that launcher stays awak
 life of each frame — so reopening several chats would stop at the first. It says so and
 leaves the record alone.
 
+### The plane is recorded as it changes, and `charter` puts it back
+
+A quit is no longer the only moment the plane is written down. The process holding your
+terminal — the launcher that attached, or `charter reopen` itself — watches the same version
+bumps every panel already polls, and writes the record about two seconds after the plane
+stops changing. So a machine that goes down, a terminal that is killed, or a laptop that
+never comes back leaves a record of the chats you had, not a record of the last time you
+quit.
+
+It writes exactly what a quit writes: which chats existed, in which workspace, with which
+harness, persona and directory, and which one was on screen. It does **not** capture
+scrollback — that is one `capture-pane` per chat and it is what a quit is for — but it does
+name a capture a quit already left behind, so a record taken while you are working never
+withdraws an offer a quit made.
+
+**Bare `charter` restores it, and only when there is nothing to join.** If any chat is
+running anywhere on this plane, `charter` behaves exactly as it always did: it focuses the
+workspace you are in, or opens a chat. The restore happens on the launch that finds nothing
+running at all — the one after a restart — and it is the same `charter reopen` underneath,
+so every per-chat rule above holds. What differs is what it says:
+
+```
+✓ charter: restored the 4 chat(s) this plane last recorded
+```
+
+one line, because you typed `charter` and wanted a terminal. If part of the plane could not
+come back, the line says how much and leaves exactly those chats recorded, so `charter
+reopen` is both the explanation and the retry:
+
+```
+✓ charter: restored 3 of the 4 chats this plane last recorded — the rest are still
+  recorded; `charter reopen` says which could not come back, and retries them
+```
+
+**Two keys, both on**, because recording and restoring are separable: recording costs a
+little I/O and changes nothing you see, restoring changes what `charter` does. A plane can
+keep the record and still leave putting it back to you.
+
+```toml
+[frame]
+record  = true   # write the plane down as it changes
+restore = true   # bare `charter` puts it back when nothing is running
+```
+
+**`charter --fresh` opts one run out of both halves.** It does not restore, *and* it does
+not record over the record it skipped — so an experiment, a one-off chat, or a plane you
+want to walk away from costs you nothing you had. `charter claude --fresh` says the same
+thing about a named harness. The record is still there for `charter reopen` when you want
+it.
+
 **Resume is Claude Code only, and the warning says so per chat.** Charter records a harness's
 own session id from Claude Code's status-line hook, which is the only harness that supplies
 one — so it is the only harness whose conversation charter can ask for back. A chat that
@@ -1176,6 +1226,8 @@ density = "full"
 mouse = false
 chrome = "off"
 hotkey = "F2"
+record = true
+restore = true
 history-limit = 50000
 min-cols = 100
 min-rows = 20
@@ -2141,7 +2193,7 @@ whole number of cells on the repo table).
 Precedence, most explicit first: `[[frame.component]]`, then an explicit `slots`, then
 `density`, then the shipped default.
 
-`slots`/`density`/`mouse`/`chrome`/`hotkey` are spelled the same on both sides. `history-limit`,
+`slots`/`density`/`mouse`/`chrome`/`hotkey`/`record`/`restore` are spelled the same on both sides. `history-limit`,
 `min-cols` and `min-rows` are the three that are not: charter.toml spells them with a
 hyphen: the
 resolved settings charter's own code reads back use an underscore

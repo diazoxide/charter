@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -208,6 +209,21 @@ def write(frames, *, focus: str, at: int | None = None) -> bool:
     `Path.write_text`, because `os.replace` carries the SOURCE's mode onto the target
     (#582) and this is a state path.
 
+    **The temp file's NAME is `tempfile.mkstemp`'s and not this module's, and #845 is why.**
+    ``os.replace`` is atomic; the file it renames is not. While there was one temp name,
+    two writers wrote into the same bytes and the first to rename put the SECOND writer's
+    content in place — reporting, to the first, that its own record had landed. That was
+    already reachable (a quit races another quit; `_forget_transcript` races either), and
+    #845 makes it ordinary: the frame process now records on a debounce, from a thread, in
+    the same process as `cmd_reopen`'s own `_consume`. `mkstemp` is unique across processes
+    and threads by construction, which is a property to borrow rather than to re-derive out
+    of a pid and a counter — and it creates at 0600, which is the mode a state path wants
+    and the one `os.replace` will carry.
+
+    **Removed when the rename does not happen**, because a name nothing can predict is a
+    name nothing can collect: `prune_transcripts` is the only sweep the frame root has and
+    it touches nothing but `*.transcript`, so a temp left behind would stay for good.
+
     ``False`` for every way it can fail to land — no frame root, a filesystem that refuses
     the write, a value `json` cannot serialise. One answer, because the caller does the same
     thing with each: tell the operator the plane was not recorded, and let them decide
@@ -225,11 +241,20 @@ def write(frames, *, focus: str, at: int | None = None) -> bool:
         "frames": [{"workspace": f.workspace,
                     "chats": [c._asdict() for c in f.chats]} for f in frames],
     }
-    tmp = root / f"{MANIFEST}.tmp"
+    try:
+        fd, name = tempfile.mkstemp(dir=root, prefix=f"{MANIFEST}.", suffix=".tmp")
+        os.close(fd)
+    except OSError:
+        return False
+    tmp = Path(name)
     try:
         config.write_for(tmp, json.dumps(payload, indent=2, sort_keys=True) + "\n")
         os.replace(tmp, root / MANIFEST)
     except (OSError, TypeError, ValueError):
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         return False
     return True
 

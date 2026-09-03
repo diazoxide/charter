@@ -181,9 +181,11 @@ class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
     which is exactly what the mutations were about.
     """
 
-    def _launch(self, *, reopening=None, live_workspace=False, rest=()):
+    def _launch(self, *, reopening=None, live_workspace=False, rest=(), fresh=False,
+                still_live=True):
         """Run `cmd_launch` to its return. Answers what it asked, and records the calls."""
         calls = {"attached": False, "focused": False, "said": []}
+        asked: list[int] = []
 
         def _interact(argv, **kw):
             calls["attached"] = True
@@ -194,7 +196,7 @@ class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
             return None            # never actually focus; the call is the observation
 
         args = SimpleNamespace(harness="claude", rest=list(rest), no_frame=False,
-                               workspace="alpha", pick=False)
+                               workspace="alpha", pick=False, fresh=fresh)
         if reopening is not None:
             args.reopening = reopening
         sessions = {"alpha"} if live_workspace else set()
@@ -207,7 +209,15 @@ class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
             chat it had just built (`state.clear_claim` has already run by then, so nothing
             else is holding it). That is correct behaviour against a server with nothing on
             it, and it is not the server this test means.
+
+            *still_live* is what tells the two asks apart, and a quit is why it exists: the
+            launcher asks once on the way IN and once on the way OUT, and a plane that was
+            quit while this client was attached answers the second one with nothing. Without
+            it, no case here can reach the launcher's own "this chat is over" tail.
             """
+            asked.append(1)
+            if not still_live and len(asked) > 1:
+                return set()
             try:
                 return {d.name for d in state._root().iterdir() if d.is_dir()}
             except OSError:
@@ -307,9 +317,19 @@ class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
         self.assertNotIn("detached", buf.getvalue())
 
     def test_a_launch_whose_plane_was_quit_names_the_command_that_undoes_it(self):
-        # `if _wants_attach(args): _say_it_was_quit(fid)`. The chat this launch is about has
+        # `if _wants_attach(args): _say_the_plane_is_recorded(fid, over=…)`. The chat this launch is about has
         # to BE in the manifest, which for an ordinary launch means the ordinal it is handed
         # is one a quit recorded — the recycled-ordinal case, which is the common one.
+        #
+        # **`fresh=True`, and #845 is why the premise had to be said out loud.** Bare
+        # `charter` on a plane with nothing live now RESTORES the record instead of opening
+        # a chat, so a launch that reaches this tail on a recorded plane is exactly a launch
+        # that opted out — which is what `--fresh` is. Without the flag this case tested the
+        # restore, and the notice it is about never ran.
+        #
+        # **`still_live=False` for the other half of the same change.** The record now names
+        # running chats too, so the notice is gated on this chat being over — which is what
+        # a quit makes true and an ordinary detach does not.
         import io
         from contextlib import redirect_stderr
         reopen.write([reopen.Frame(workspace="alpha", chats=(
@@ -319,7 +339,7 @@ class TheLauncherSTailIsWhereAReopenDiffers(PersonaIso, unittest.TestCase):
         buf = io.StringIO()
 
         with redirect_stderr(buf):
-            self._launch()
+            self._launch(fresh=True, still_live=False)
 
         self.assertIn("charter reopen", buf.getvalue())
 
