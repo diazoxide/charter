@@ -8626,6 +8626,14 @@ def record_the_plane_now(chat: str) -> bool:
     the launcher noticing its attach ended, and replacing a quit's record with an empty one
     there would destroy exactly the thing this feature exists to keep.
     """
+    # **Asked of the disk before it is asked of tmux.** A plane with no chat directories has
+    # nothing to record whatever a server says, and this runs on a poll: `_plane_live` is a
+    # `list-windows` per server, and spending one to be told the plane is empty is the
+    # cheapest call to not make. It also keeps a recorder that outlives its frame — a launch
+    # whose every chat was reaped — from going on asking a tmux server about a plane that
+    # is not there.
+    if not leave.plane_chats():
+        return False
     servers = _plane_servers()
     live, windows, active = _plane_live(servers)
     focus = state.own_workspace(chat) or ""

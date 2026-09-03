@@ -490,6 +490,14 @@ class WhatARunningPlaneRecordsIsWhatAQuitRecords(PersonaIso, unittest.TestCase):
 
         self.assertEqual(reopen.read().all_chats()[0].transcript, "")
 
+    def test_a_plane_with_no_chats_at_all_asks_no_server_anything(self):
+        """This runs on a poll. A `list-windows` spent to be told the plane is empty is the
+        cheapest call not to make — and a recorder that outlived its frame would otherwise
+        go on asking a tmux server about a plane that is not there."""
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            self.assertFalse(commands_frame.record_the_plane_now("alpha.1"))
+        seats.assert_not_called()
+
     def test_a_plane_with_nothing_live_is_not_recorded_over(self):
         """The last thing a plane that has just been quit needs is its record replaced by
         an empty one. Nothing live is nothing to record, and the previous record stands."""
