@@ -1166,7 +1166,17 @@ def _layer_files(name: str) -> dict[str, str]:
     for h in _registry.all():
         for rel, text in (h.workspace_files() or {}).items():
             target = (wd / rel).resolve()
-            if target == wd.resolve() or wd.resolve() not in target.parents:
+            # ONE clause, not two. `target == wd.resolve()` was here to drop a `rel`
+            # naming the workspace directory itself, and it can never be the clause
+            # that decides: a path is never in its own `.parents`, so whenever the
+            # equality holds the containment test has already fired. The deletion
+            # sweep found it as a survivor and it was masked, not unpinned.
+            #
+            # The `.resolve()` that remains is load-bearing and is pinned by
+            # `AWorkspaceRootReachedThroughASymlink`: `config.use` hands its root
+            # through unresolved, so under a symlinked plane `wd` is not among the
+            # resolved `target`'s parents and every file would be dropped.
+            if wd.resolve() not in target.parents:
                 continue
             out[rel] = text
     return out

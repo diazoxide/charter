@@ -348,7 +348,91 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class TheMarkersNameIsPartOfTheOnDiskContract(_isolation.PersonaIso):
+    """`.charter-generated` is spelled out here once, by hand.
+
+    Every other reference in this suite reads `workspace.GENERATED_MARKER`, which agrees
+    with any value that constant takes — the deletion sweep found the literal as a
+    `retune-string` survivor for exactly that reason, and it is the eleventh time this
+    repository has shipped that shape.
+
+    **The name is a contract, not an implementation detail.** It is the file that answers
+    *is this layer charter's or the operator's* — the rule `_AGENT_MARKER` already sets for
+    generated sub-agents: a file charter wrote is refreshed, a file without the marker is
+    never clobbered. Rename it and charter stops recognising work it did itself: it would
+    either overwrite an operator's edited `settings.json` believing it had never written
+    one, or refuse to refresh its own believing somebody had taken ownership. Neither
+    failure announces itself.
+
+    It also sits beside `.charter-structure` in a workspace, which is the precedent for a
+    charter-owned dotfile there and the reason the name is shaped the way it is.
+    """
+
+    def test_the_marker_is_named_charter_generated(self):
+        self.assertEqual(workspace.GENERATED_MARKER, ".charter-generated")
+
+    def test_it_is_a_dotfile_so_a_workspace_listing_does_not_show_it(self):
+        self.assertTrue(workspace.GENERATED_MARKER.startswith("."))
+
+class AWorkspaceRootReachedThroughASymlink(_isolation.PersonaIso):
+    """`_layer_files`' containment check normalises **both** sides, and only one of them
+    is normalised for it.
+
+    `target` is `(wd / rel).resolve()`, so a `rel` carrying `..` cannot escape. `wd` looks
+    like it needs no resolving — `config.ROOT` is resolved by `root.find_root` (`.resolve()`
+    at `root.py:60`), so every path derived from it is already canonical and
+    `wd == wd.resolve()`. On that reading the two `wd.resolve()` calls are dead and the
+    deletion sweep, which found both as survivors, would be pointing at redundancy.
+
+    **It is not redundancy, and the difference is `config.use`.** `use(root)` hands *root*
+    straight to `derive()` without resolving it (`config.py:698`) — deliberately, so a
+    caller pins the directory it named rather than one charter picked. `PersonaIso` calls
+    exactly that. So a root reached through a symlink stays unresolved, and then::
+
+        wd            = /private/tmp/…/link/workspaces/alpha
+        wd.resolve()  = /private/tmp/…/real/workspaces/alpha
+
+    With the resolve, `wd.resolve() in target.parents` holds and the file is written. Drop
+    either call and the unresolved `wd` is not among the resolved `target`'s parents, the
+    `continue` fires for **every** file, and a workspace silently receives **no layer at
+    all** — the failure mode this whole feature exists to prevent, produced by the guard
+    against a different one.
+
+    macOS makes this easy to miss rather than hard to hit: `tempfile.mkdtemp()` answers
+    under `/var/folders/…` and `/var` is itself a symlink, so a fixture that resolves its
+    temp path before handing it over normalises for free and never reaches this. #837 hit
+    the mirror image — a masked `.resolve()` pair "hidden locally because macOS `/tmp` is a
+    symlink and every fixture path needed normalising for free".
+    """
+
+    def setUp(self):
+        super().setUp()
+        # A plane with settings of its own, because `workspace_files` mirrors the plane's
+        # COMMITTED file rather than charter's constants — a plane with none answers `{}`
+        # deliberately, and a fixture without one would assert nothing.
+        real = Path(config.ROOT) / "real-plane"
+        (real / "workspaces" / "alpha").mkdir(parents=True, exist_ok=True)
+        (real / ".claude").mkdir(parents=True, exist_ok=True)
+        (real / ".claude" / "settings.json").write_text(json.dumps({
+            "env": {"CHARTER_HARNESS": "claude-code"},
+            "statusLine": {"type": "command", "command": "charter statusline"},
+            "enabledPlugins": {"charter@charter": True},
+        }))
+        (real / "charter.toml").write_text("schema = 1\n")
+        link = Path(config.ROOT) / "link-plane"
+        if not link.exists():
+            link.symlink_to("real-plane")
+        self.link, self.real = link, real
+
+    def test_the_layer_reaches_a_workspace_under_an_unresolved_root(self):
+        prev = config.use(self.link)
+        self.addCleanup(config.restore, prev)
+        wd = workspace.workspace_dir("alpha")
+        self.assertNotEqual(wd, wd.resolve(),
+                            "fixture normalised for free — this case would assert nothing")
+        self.assertTrue(workspace._layer_files("alpha"),
+                        "a workspace under a symlinked root received no layer at all")
+
+
 if __name__ == "__main__":  # pragma: no cover
     import unittest
-
-    unittest.main()
