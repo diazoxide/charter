@@ -348,6 +348,92 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class WhatReinitSaysAboutTheLayer(WorkspaceLayer):
+    """`cmd_workspace_reinit`'s per-file report — every outcome that reaches it.
+
+    Nothing exercised this loop, which is why the deletion sweep returned eight survivors
+    across it: both `did ==` branches, both their literals, the `"layer"` key, the `or ()`
+    and the wrote/refreshed ternary.
+
+    **`"present"` never arrives here, and that is worth writing down because it looks like
+    it does.** `write_layer` answers `"present"` for a file already exactly right, and the
+    `else` below increments `healed` and prints *refreshed* — so the two functions read
+    side by side say a current layer is reported as healed, which would make
+    `charter workspace reinit` claim work it had not done. It does not: `reinit` filters
+    those rows first (`workspace.py:1592`, ``if st != "present"``), so a third branch here
+    would be unreachable. `test_a_current_layer_reports_nothing_at_all` pins the filter
+    from this end so the next reader need not re-derive it.
+
+    The sentences are spelled out rather than compared against the code that prints them,
+    because a test built from the same f-string agrees with any wording it takes — and
+    *"was not written by charter — left completely untouched"* is the ownership promise
+    made visible. If it stops being true, the operator finds out by having their file
+    overwritten.
+    """
+
+    def _reinit(self):
+        said: list[tuple[str, str]] = []
+        with mock.patch.object(commands_workspace.util, "ok",
+                               side_effect=lambda m: said.append(("ok", m))), \
+             mock.patch.object(commands_workspace.util, "warn",
+                               side_effect=lambda m: said.append(("warn", m))), \
+             mock.patch.object(commands_workspace.util, "err",
+                               side_effect=lambda m: said.append(("err", m))), \
+             mock.patch.object(commands_workspace.util, "info", side_effect=lambda m: None):
+            commands_workspace.cmd_workspace_reinit(
+                SimpleNamespace(name=self.ws, all=False))
+        return said
+
+    def test_a_hand_edited_file_is_named_as_the_operators_and_left(self):
+        self.settings().write_text("{}")
+        said = self._reinit()
+        self.assertIn(
+            f"'{self.ws}': .claude/settings.json was not written by charter — left "
+            f"completely untouched. Remove it if you want charter's own again.",
+            [m for _, m in said])
+        self.assertEqual(self.settings().read_text(), "{}")
+
+    def test_a_current_layer_reports_nothing_at_all(self):
+        said = self._reinit()
+        self.assertNotIn("harness layer", " ".join(m for _, m in said))
+        self.assertIn("Up to date", " ".join(m for _, m in said))
+
+    def test_a_file_charter_owns_and_the_plane_moved_reads_refreshed(self):
+        # One of the THREE mirrored keys, not `permissions` — that one stays in the plane,
+        # so moving it leaves the layer correctly unchanged and this would assert nothing.
+        _plane_settings(config.ROOT, statusLine={"type": "command",
+                                                 "command": "charter statusline --wide"})
+        said = self._reinit()
+        self.assertIn(
+            f"Reinitialized '{self.ws}' → refreshed .claude/settings.json "
+            f"(charter's harness layer).", [m for _, m in said])
+
+    def test_a_missing_file_reads_wrote_rather_than_refreshed(self):
+        self.settings().unlink()
+        (workspace.workspace_dir(self.ws) / workspace.GENERATED_MARKER).unlink()
+        said = self._reinit()
+        self.assertIn(
+            f"Reinitialized '{self.ws}' → wrote .claude/settings.json "
+            f"(charter's harness layer).", [m for _, m in said])
+
+    def test_a_path_charter_cannot_write_is_reported_and_never_forced(self):
+        """`blocked`. A DIRECTORY at that path reads `foreign` instead — charter cannot
+        match it against the marker so it treats it as the operator's, which is the safe
+        direction. `blocked` is the other half: the path IS charter's to write and the
+        write itself fails."""
+        f = self.settings()
+        f.unlink()
+        d = f.parent
+        d.chmod(0o500)
+        self.addCleanup(d.chmod, 0o700)
+        said = self._reinit()
+        self.assertIn(
+            f"'{self.ws}': .claude/settings.json could not be written — something is in "
+            f"the way at that path. charter never deletes or renames existing content.",
+            [m for _, m in said])
+        self.assertFalse(f.exists(), "charter forced the write past a refusal")
+        self.assertNotIn("harness layer", " ".join(m for _, m in said),
+                         "a blocked file was also counted as healed")
 class TheMarkersNameIsPartOfTheOnDiskContract(_isolation.PersonaIso):
     """`.charter-generated` is spelled out here once, by hand.
 
