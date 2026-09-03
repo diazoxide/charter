@@ -53,9 +53,17 @@ PLUGIN_UPDATE_CMD = ("codex plugin marketplace upgrade charter && "
 
 
 def config_path() -> Path:
-    """Codex's config file. There is **no project-level one**: a `.codex/config.toml` or
-    `codex.toml` planted in a project directory is ignored, checked by putting a
+    """Codex's config file. There is no project-level **config**: a `.codex/config.toml`
+    or `codex.toml` planted in a project directory is ignored, checked by putting a
     deliberate type error in each and watching the config load anyway.
+
+    **That is a fact about config and not about the project**, and the wider reading it
+    used to carry was wrong. Codex reads a project `.codex/skills/`: a sentinel skill at
+    ``<repo>/.codex/skills/<name>/SKILL.md`` reaches a `codex exec` session's context with
+    **zero tool calls**, where a control repository without one does not. So Codex has an
+    in-repo surface; what it does not have is an in-repo place to put *this* file. The
+    original probe missed it by asking `codex mcp list` — a management CLI is not a
+    session, and it ignores project config, so it answers "no" with confidence.
 
     ``$CODEX_HOME`` is honoured — verified by pointing it at a throwaway directory and
     watching `codex mcp list` read that directory's config. Writing to `~/.codex`
@@ -139,16 +147,42 @@ class CodexHarness(Harness):
                 "the terminal-pane key. Hooks are unaffected — their payload carries "
                 "`session_id` directly."),
         # The sharpest of the three, and the one that is a fact about Codex rather than
-        # about a widget: it has NO project-level config at all. A `.codex/config.toml`
-        # or `codex.toml` beside a project is ignored — measured by planting a deliberate
-        # type error in each and watching the config load anyway (ADR 0015 records the
-        # same measurement for the hooks). So there is nowhere for a per-workspace answer
-        # to live, and charter says so rather than printing a tick beside Claude Code's.
+        # about a widget: there is nowhere in a project for its CONFIG to live. A
+        # `.codex/config.toml` or `codex.toml` beside a project is ignored — measured by
+        # planting a deliberate type error in each and watching the config load anyway
+        # (ADR 0015 records the same measurement for the hooks). So there is nowhere for a
+        # per-workspace answer to live, and charter says so rather than printing a tick
+        # beside Claude Code's.
+        #
+        # **Scoped to config, and it did not used to be.** This said "no project-level
+        # config exists at all", which reads as "Codex ignores the project" and is false:
+        # a project `.codex/skills/` IS read (see `config_path`). The conclusion survives
+        # the correction — a skills directory is not somewhere config can go — but the
+        # sentence that reached the operator would have stopped anyone looking for an
+        # in-repo surface Codex actually has.
         Deficit(WORKSPACE_SCOPE,
-                "no project-level config exists at all — a `.codex/config.toml` beside a "
+                "there is no project-level config file — a `.codex/config.toml` beside a "
                 "project is ignored, so `~/.codex/config.toml` is the only answer and "
-                "every workspace on this machine necessarily shares it."),
+                "every workspace on this machine necessarily shares it. A project "
+                "`.codex/skills/` IS read; that is a skills surface, not config, and "
+                "charter writes nothing there."),
     )
+
+    #: Charter writes NO in-repo layer for Codex today, so there is nothing for `doctor`'s
+    #: `session layer` row to look for and the row says where the layer does come from.
+    #:
+    #: **The `.codex/skills/` half is the correction.** Measured against codex-cli 0.147.0
+    #: with a real `codex exec` session, a sentinel skill at
+    #: ``<repo>/.codex/skills/<name>/SKILL.md`` reaches the model's context with **zero
+    #: tool calls**, while a control repository without one does not. A management CLI is
+    #: not a session — `codex mcp list` ignores project config and would have answered
+    #: "no" with confidence — and a model asked whether it can see a file will happily go
+    #: and `sed` the file you just named, so the trace is the evidence and not the answer.
+    layer_note = (
+        "charter writes no in-repo layer for Codex — it arrives from "
+        "`~/.codex/config.toml` and the plugin, and a project `.codex/config.toml` is "
+        "ignored. Codex DOES read an in-repo `.codex/skills/` (measured, 0.147.0); "
+        "charter writes nothing there")
 
     cli_name = "codex"
     binary = "codex"

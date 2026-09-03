@@ -46,10 +46,12 @@ own, and `git add -A` there would stage whatever charter left behind. The limit 
 follows: a session inside a clone gets charter from the plugin, and **cannot delegate to a
 persona** — the plugin ships no `agents/`, and the clone's own git root stops the walk-up.
 
-Only Claude Code binds config to a project root. opencode and Codex read machine-global
-config, so charter's layer is already live in every workspace on those — and, by the same
-fact, cannot be made to differ between two of them. `charter harness list` names that
-ceiling.
+Only Claude Code binds config to the directory a session starts in. opencode's project
+config is keyed to the **repository root** (`opencode.json`) and Codex has no project config
+file at all, so on both, charter's layer is already live in every workspace — and, by the
+same fact, cannot be made to differ between two of them. `charter harness list` names that
+ceiling. Both still read *something* from a project — `.opencode/agent/` and
+`.codex/skills/`, measured with real sessions — and charter writes into neither today.
 
 ## Which workspace am I in
 

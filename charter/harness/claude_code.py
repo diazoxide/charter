@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 
-from .base import Harness
+from .base import Harness, LayerPart
 
 NAME = "claude-code"
 
@@ -40,9 +40,58 @@ WORKSPACE_KEYS = ("enabledPlugins", "statusLine", "env")
 #: Where the mirrored document goes, relative to the workspace directory.
 WORKSPACE_SETTINGS = ".claude/settings.json"
 
+#: The settings files Claude Code resolves **from the session's own directory**, in the
+#: order it reads them. ``~/.claude/settings.json`` is deliberately not among them: it is
+#: machine-global state charter never writes, and this list answers what the REPO carries.
+_PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
+
+#: Charter's layer, one part per discovery rule — every rule measured on binary 2.1.259.
+#:
+#: **Three parts and not one, because three rules.** `settings` is cwd-only; `skills+agents`
+#: walk up and stop at the git boundary; and the status line rides in the settings file, so
+#: it inherits that file's cwd-only rule rather than the walking one. `CLAUDE.md` is the
+#: fourth rule and is deliberately NOT a part here: it walks up and is **not** git-bounded,
+#: so it arrives almost everywhere — which is exactly why the reported chat read as
+#: half-configured rather than as absent, and `doctor` says so in the row instead of
+#: checking for a file that is always found.
+#:
+#: The status line is its own part rather than folded into `settings` for the correction
+#: :data:`WORKSPACE_KEYS` already records: *a workspace given only the plugin loads
+#: charter's skills and hooks and still renders no status line.* Two facts that go missing
+#: separately have to be reported separately, or the one that is present hides the one
+#: that is not.
+LAYER = (
+    LayerPart(
+        "settings", _PROJECT_SETTINGS, False,
+        "project settings are read from the session's OWN directory and the host does not "
+        "walk up, so nothing above it is in force",
+        keys=WORKSPACE_KEYS),
+    LayerPart(
+        "skills+agents", (".claude/skills", ".claude/agents"), True,
+        "skills and agents DO walk up, but the walk stops at the git root — anything "
+        "charter wrote above that boundary is out of reach, while CLAUDE.md walks up and "
+        "is NOT git-bounded, which is why a session like this reads as half-configured "
+        "rather than empty"),
+    LayerPart(
+        "status line", _PROJECT_SETTINGS, False,
+        "`statusLine` is a key in that same settings file, so it is cwd-only too — a "
+        "directory can carry the plugin and still render nothing",
+        keys=("statusLine",)),
+)
+
 
 class ClaudeCodeHarness(Harness):
     name = NAME
+
+    layer = LAYER
+
+    #: Measured, and the reason `doctor` names a condition rather than a verdict (#859).
+    #: The gate is on the DIRECTORY and is global — it takes no argument saying which
+    #: settings source declared the hook — and it is inherited up to the git root. So
+    #: `workspaces/<ws>/` rides the plane's acceptance (it is inside the plane's own
+    #: repository) while a clone at `workspaces/<ws>/<repo>` or a linked worktree has a
+    #: git root of its own and needs its own.
+    trust_gate = "hooks or the status line"
 
     #: Empty on purpose. Claude Code carries every surface charter has — it is the
     #: runtime charter grew inside, so it is the reference ceiling rather than a harness

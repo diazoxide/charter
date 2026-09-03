@@ -39,7 +39,7 @@ offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 | --- | --- | --- | --- | --- |
 | Claude Code | the plugin (`claude plugin install charter@charter`) | `claude plugin update charter@charter` | — | — |
 | opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, compared byte for byte (`read_bytes`) with the one charter generates; anything else in that plugin directory is named too, and nothing charter did not write is ever overwritten | no status bar; no per-turn prompt hook; no ask at tool time; no per-workspace config; **no isolation from other plugins** | `charter statusline --watch`; mid-session notes ride tool output already; charter's own tool-time asks allow and are not shown — denials are unaffected; a second plugin in that directory shares charter's globals and can disable its guards, so `doctor` names it — charter reports the realm, it cannot contain it |
-| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions; no project-level config at all, so no per-workspace config | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
+| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions; no project-level config *file*, so no per-workspace config (a project `.codex/skills/` **is** read — a skills surface, not config) | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
 
 You never have to remember that third column — `charter update` asks the harness you are in
 and names its command (or, for opencode, just moves it). It is written down because a
@@ -66,9 +66,26 @@ the plane's `enabledPlugins`, `statusLine` and `env` into
 `charter doctor`'s `workspace layer` row reports staleness; `charter workspace reinit` is
 the repair.
 
-opencode and Codex get nothing here and say why: their config is machine-global, so
-charter's layer is already live in every workspace and two workspaces on one machine
-cannot be made to differ. That ceiling is in `charter harness list` beside the others.
+Beside it, the **`session layer`** row answers the other half — *can a session started in
+this directory see any of that?* Three artefacts, three discovery rules, all measured on
+Claude Code 2.1.259: `.claude/settings.json` is read from the session's own directory with
+no walk-up, `.claude/agents/` and `.claude/skills/` walk up but stop at the git root, and
+`CLAUDE.md` walks up and is not git-bounded. So "charter is set up here" was never one
+fact, and the row names which part is missing and which rule decided. The rules live on
+each harness (`Harness.layer`), so a harness added to the registry is answered for the day
+it is registered rather than reported under Claude Code's rules by default.
+
+opencode and Codex get nothing here and say why: a workspace **directory** is not a
+config scope for either, so charter's layer is already live in every workspace and two
+workspaces on one machine cannot be made to differ. That ceiling is in `charter harness
+list` beside the others.
+
+Both do read something from a project, and charter says which rather than implying the
+project carries nothing — measured with real sessions, because a management CLI is not one:
+opencode reads an `opencode.json` at the **repository root** and `.opencode/agent/`
+(1.18.23); Codex reads `.codex/skills/` and ignores a project `.codex/config.toml`
+(0.147.0). Charter writes into none of them today, and writes nothing machine-global on the
+operator's behalf either.
 
 Nothing is written into a **clone** — `workspaces/<ws>/<repo>/` is a repo charter does not
 own, and `git add -A` there would stage it. So a session inside a clone gets charter from

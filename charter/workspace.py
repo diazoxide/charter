@@ -1175,8 +1175,10 @@ def is_workspace_dir(path) -> bool:
 def harness_deficits() -> list[tuple[str, object]]:
     """``(harness name, Deficit)`` for every registered harness that cannot isolate.
 
-    Their config is machine-global, so per-workspace divergence is not buildable for them
-    at all. Reported rather than skipped in silence: `base.Deficit` exists for exactly
+    A workspace DIRECTORY is not a config scope for them, so per-workspace divergence is
+    not buildable there — Codex reads no project config file at all, and opencode's is keyed
+    to the repository root, which every workspace under the plane shares. Reported rather
+    than skipped in silence: `base.Deficit` exists for exactly
     this — *"a capability that is simply missing reads as a broken integration"* — and a
     report showing one row for the harness that can and nothing for the two that cannot
     would be read as three ticks.
