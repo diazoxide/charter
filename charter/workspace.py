@@ -224,7 +224,7 @@ def is_tree(path: Path) -> bool:
     return _unreadable(lambda: (Path(path) / ".git").exists())
 
 
-def git_dir(root) -> Path | None:
+def git_dir(root: Path) -> Path | None:
     """The real git directory of the checkout at *root*, or ``None`` if there is none.
 
     ``<root>/.git`` is a DIRECTORY in a clone and a FILE reading ``gitdir: <path>`` in a
@@ -233,7 +233,6 @@ def git_dir(root) -> Path | None:
     treating `<root>/.git/` as a directory does not fail loudly there: `mkdir -p` happily
     creates `.git/info/` *beside* the `.git` file's parent and git reads none of it.
     """
-    root = Path(root)
     dot = root / ".git"
     if _unreadable(lambda: dot.is_dir()):
         return dot
@@ -250,7 +249,7 @@ def git_dir(root) -> Path | None:
     return None
 
 
-def git_exclude_file(root) -> Path | None:
+def git_exclude_file(root: Path) -> Path | None:
     """The ``info/exclude`` git actually READS for the checkout at *root*.
 
     The COMMON directory's, which for a linked worktree is not its own gitdir. Git treats
@@ -272,8 +271,12 @@ def git_exclude_file(root) -> Path | None:
     except (OSError, UnicodeDecodeError):
         common = ""
     if common:
-        c = Path(common)
-        g = c if c.is_absolute() else Path(os.path.normpath(g / c))
+        # No absolute/relative branch: `Path("/a/.git/worktrees/x") / "/elsewhere"` IS
+        # `/elsewhere`, so joining answers both spellings and a branch here would be one
+        # the deletion sweep could remove without changing an answer. `normpath` rather
+        # than `resolve` because `commondir` is git's own `../..` and resolving would
+        # also follow symlinks, which `config.use` deliberately does not.
+        g = Path(os.path.normpath(g / common))
     return g / "info" / "exclude"
 
 
@@ -1336,16 +1339,13 @@ def _walkup_files() -> dict[str, str]:
     out: dict[str, str] = {}
     for sub in WALKUP_DIRS:
         d = config.ROOT / sub
-        if not _unreadable(lambda: d.is_dir()):
-            continue
-        try:
-            found = sorted(d.rglob("*"))
-        except OSError:
-            continue
-        for f in found:
+        # No `is_dir()` guard and no `is_file()` filter. `rglob` on a directory that is
+        # not there yields nothing, and a directory entry, a dangling symlink and a
+        # binary file are one answer here — "not text charter can mirror" — which the
+        # read already gives. A predicate in front of it is a branch the deletion sweep
+        # can remove without changing a single answer, which is what makes it noise.
+        for f in sorted(d.rglob("*")):
             try:
-                if not f.is_file():
-                    continue
                 text = f.read_text()
             except (OSError, UnicodeDecodeError):
                 continue
@@ -1579,18 +1579,17 @@ def _replace_block(text: str, block: str) -> str:
     try:
         i = lines.index(_EXCLUDE_BEGIN)
     except ValueError:
+        # Nothing of charter's here and nothing to add: the file is handed back BYTE FOR
+        # BYTE rather than re-joined. Re-joining normalises a missing trailing newline,
+        # which would make `unwire_guest` rewrite the `info/exclude` of a checkout charter
+        # never wired — a write into somebody's repo for no reason at all.
         if not new:
             return text
-        keep = list(lines)
-        while keep and not keep[-1].strip():
-            keep.pop()
-        out = keep + new
+        out = lines + new
     else:
         j = next((k for k in range(i + 1, len(lines)) if lines[k] == _EXCLUDE_END),
                  len(lines) - 1)
         out = lines[:i] + new + lines[j + 1:]
-        while out and not out[-1].strip():
-            out.pop()
     return "\n".join(out) + "\n" if out else ""
 
 
@@ -1646,7 +1645,6 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
     The exclude row is omitted when charter has generated nothing here — there is then
     nothing to hide, and reporting `missing` would demand a block naming no files.
     """
-    tree = Path(tree)
     marker = _read_marker_at(tree)
     rows = _layer_status(tree, _guest_files(tree), marker)
     owned = _charter_owned(tree, marker)
@@ -1662,7 +1660,6 @@ def wire_guest(tree: Path) -> list[tuple[str, str]]:
     owns, so it can only be written once the writing is done. Both halves are idempotent
     and neither touches a path charter did not generate.
     """
-    tree = Path(tree)
     rows = _materialise(tree, _guest_files(tree))
     owned = _charter_owned(tree, _read_marker_at(tree))
     if owned:
@@ -1680,7 +1677,9 @@ def _prune_empty(d: Path, stop: Path) -> None:
         d, stop = d.resolve(), stop.resolve()
     except OSError:
         return
-    while d != stop and stop in d.parents:
+    # `stop in d.parents` alone: a path is never in its own parents, so it is also what
+    # stops the walk AT the checkout root.
+    while stop in d.parents:
         try:
             d.rmdir()
         except OSError:
@@ -1695,13 +1694,15 @@ def unwire_guest(tree: Path) -> list[str]:
     since rewritten is theirs, and deleting it would be the same overwrite this design
     refuses, one verb further on.
     """
-    tree = Path(tree)
     marker = _read_marker_at(tree)
     removed: list[str] = []
     for rel in sorted(marker):
         p = tree / rel
         try:
-            if not p.is_file() or marker[rel] != content_digest(p.read_text()):
+            # No `is_file()` in front of the read, for `_walkup_files`' reason: a path
+            # already gone and a path that is a directory both raise here, and both mean
+            # the same thing — charter has nothing of its own to take away.
+            if marker[rel] != content_digest(p.read_text()):
                 continue
             p.unlink()
         except (OSError, UnicodeDecodeError):

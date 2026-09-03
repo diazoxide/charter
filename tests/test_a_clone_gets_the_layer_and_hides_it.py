@@ -22,12 +22,16 @@ spells its own environment, and no test here writes git config outside the repo 
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from charter import commands, config, doctor, workspace
 from charter import commands_workspace as cw
@@ -131,6 +135,29 @@ class TheLayerArrives(CloneLayer):
         self.wire()
         self.assertFalse((self.clone / "CLAUDE.md").exists())
         self.assertFalse((self.clone / ".claude" / "CLAUDE.md").exists())
+
+    def test_the_clone_gets_the_planes_skills_too(self):
+        """`.claude/skills/` walks up on the same rule and is cut off at the same boundary.
+        A plane that keeps a skill of its own beside the plugin's has it in a workspace
+        directory and would lose it one directory in."""
+        s = config.ROOT / ".claude" / "skills" / "deploy" / "SKILL.md"
+        s.parent.mkdir(parents=True, exist_ok=True)
+        s.write_text("# deploy\n")
+        self.wire()
+        self.assertEqual((self.clone / ".claude" / "skills" / "deploy" / "SKILL.md")
+                         .read_text(), "# deploy\n")
+
+    def test_a_file_that_is_not_text_is_skipped_and_takes_nothing_with_it(self):
+        """One unreadable file in `.claude/agents/` must not empty the layer — the
+        restraint `One misbehaving harness does not empty the layer` already records one
+        level up."""
+        d = config.ROOT / ".claude" / "agents"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\xff\xfe")
+        (d / "steward.md").write_text("route it\n")
+        self.wire()
+        self.assertFalse((self.clone / ".claude" / "agents" / "logo.png").exists())
+        self.assertTrue((self.clone / ".claude" / "agents" / "steward.md").is_file())
 
     def test_wiring_a_workspace_wires_its_clones(self):
         """`charter workspace reinit` is the repair for a clone too — which it can only be
@@ -316,6 +343,28 @@ class TheExcludeIsReported(CloneLayer):
                          "stale")
         self.assertEqual(self.wire()[".git/info/exclude"], "refreshed")
 
+    def test_an_absent_exclude_file_reads_as_missing_too(self):
+        """Not merely an emptied one: `git init` makes the file, and a repo whose
+        `.git/info/` somebody cleaned out has no file to read at all."""
+        self.wire()
+        workspace.git_exclude_file(self.clone).unlink()
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[".git/info/exclude"],
+                         "missing")
+        self.assertEqual(self.wire()[".git/info/exclude"], "created")
+
+    def test_a_generated_file_deleted_from_disk_stays_named_in_the_block(self):
+        """It is still charter's path — charter puts it back on the next wire, and a block
+        that dropped it would report `stale` on a checkout where nothing is wrong."""
+        self.wire()
+        (self.clone / ".claude" / "settings.json").unlink()
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[".git/info/exclude"], "ok")
+
+    def test_an_all_foreign_checkout_gets_no_row_either(self):
+        p = self.clone / ".claude" / "settings.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{}\n")
+        self.assertNotIn(".git/info/exclude", dict(workspace.guest_layer(self.clone)))
+
     def test_reading_the_layer_never_writes(self):
         """`doctor` calls this from the SessionStart hook. A check that healed what it
         found would report every clone hidden by having just hidden it."""
@@ -386,6 +435,18 @@ class AWorktreeIsAGuestToo(CloneLayer):
         self.assertIsNone(workspace.git_dir(broken))
         self.assertNotIn(broken, workspace.guest_trees(self.ws))
 
+    def test_a_relative_gitdir_is_resolved_against_the_checkout(self):
+        """The spelling a SUBMODULE uses — `gitdir: ../.git/modules/<name>`. git writes an
+        absolute path for a worktree, so nothing else here exercises the join, and without
+        it the path is resolved against the process's cwd instead."""
+        sub = workspace.workspace_dir(self.ws) / "vendored"
+        sub.mkdir()
+        real = workspace.workspace_dir(self.ws) / "modules-vendored"
+        real.mkdir()
+        (sub / ".git").write_text("gitdir: ../modules-vendored\n")
+        self.assertEqual(workspace.git_dir(sub), sub / ".." / "modules-vendored")
+        self.assertTrue(workspace.git_dir(sub).is_dir())
+
     def test_a_git_file_that_says_nothing_is_not_a_checkout(self):
         junk = workspace.workspace_dir(self.ws) / "junk"
         junk.mkdir()
@@ -412,6 +473,16 @@ class RemovingTheWorkspaceRemovesWhatCharterAdded(CloneLayer):
         workspace.unwire_guest(self.clone)
         self.assertTrue((self.clone / ".claude" / "mine.md").is_file())
         self.assertIn("*.tmp", self.excludes())
+
+    def test_unwiring_a_checkout_charter_never_wired_writes_nothing(self):
+        """Byte for byte, trailing newline included. `unwire_guests` runs over every
+        checkout in the workspace, and most of them may have nothing of charter's in
+        them — a rewrite there is a write into somebody's repo for no reason at all."""
+        p = workspace.git_exclude_file(self.clone)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("*.tmp")            # no trailing newline, on purpose
+        workspace.unwire_guest(self.clone)
+        self.assertEqual(p.read_text(), "*.tmp")
 
     def test_unwiring_never_deletes_a_file_the_operator_took_over(self):
         """Deleting it would be the same overwrite this design refuses, one verb on."""
@@ -447,10 +518,6 @@ class RemovingAWorkspaceWithAWorktree(CloneLayer):
 
     def test_workspace_remove_unwires_before_it_deletes(self):
         main_exclude = self.main / "svc-main" / ".git" / "info" / "exclude"
-        from types import SimpleNamespace
-        import contextlib
-        import io
-
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = cw.cmd_workspace_remove(SimpleNamespace(name=self.ws, force=True))
@@ -459,14 +526,36 @@ class RemovingAWorkspaceWithAWorktree(CloneLayer):
         self.assertNotIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
 
 
+class CloningWiresWhatItMade(CloneLayer):
+    """`cmd_clone` calls `workspace.ensure` BEFORE the clones exist, so without a second
+    call the layer would arrive one command late — on whatever unrelated command happened
+    to `ensure` next."""
+
+    def test_cmd_clone_wires_the_checkout_it_just_made(self):
+        r = {"name": "svc", "default_branch": "main", "forge": "github",
+             "path_with_namespace": "g/svc"}
+        with mock.patch.object(commands, "_clone_one",
+                               lambda rr, wd: {"repo": rr, "dest": self.clone,
+                                               "status": "exists"}), \
+             mock.patch.object(commands.workspace, "resolve", lambda *a, **k: self.ws), \
+             mock.patch.object(commands.workspace, "banner", lambda *a, **k: None), \
+             mock.patch.object(commands.workspace, "ensure",
+                               lambda *a: workspace.workspace_dir(self.ws)), \
+             mock.patch.object(commands.inventory, "load", lambda: {}), \
+             mock.patch.object(commands.inventory, "repos", lambda d=None: [r]), \
+             mock.patch.object(commands, "_resolve_targets", lambda a, d: [r]), \
+             contextlib.redirect_stderr(io.StringIO()):
+            rc = commands.cmd_clone(SimpleNamespace(repos=["svc"], workspace=self.ws))
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.clone / ".claude" / "settings.json").is_file())
+        self.assertEqual(self.status(), "")
+
+
 class TheAnnouncement(CloneLayer):
     def test_cloning_says_what_was_written_and_where_it_is_hidden(self):
         """charter has just written files into a repo the operator owns. A mechanism whose
         entire visible signature is its own absence is one nobody can find when they want
         it gone."""
-        import contextlib
-        import io
-
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             commands._wire_clones(self.ws)
