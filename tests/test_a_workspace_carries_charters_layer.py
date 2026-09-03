@@ -348,6 +348,35 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class TheCeilingReportedIsTheOneAboutWorkspaces(WorkspaceLayer):
+    """`harness_deficits` filters on `WORKSPACE_SCOPE`, and Codex is why.
+
+    Codex declares three deficits — `status-bar`, `session-lock` and `WORKSPACE_SCOPE` —
+    so `next(...)` without the key test returns whichever is first. The existing case
+    asserts *which harnesses* have a ceiling; nothing asserted *which ceiling*, which is
+    why the sweep found the filter as a survivor.
+
+    The consequence is a sentence rather than a crash, which is why it would have survived
+    a reader too: `check_workspace_harness` renders the match as
+    *"(codex: config is machine-global, so a workspace cannot diverge)"*. Drop the filter
+    and that explanation is attached to Codex's **status bar** — a true fact about a
+    different limitation, printed as the reason a workspace cannot hold its own config.
+    """
+
+    def test_the_deficit_returned_is_the_workspace_one_not_merely_the_first(self):
+        got = dict(workspace.harness_deficits())
+        self.assertIn("codex", got)
+        self.assertEqual(got["codex"].key, base.WORKSPACE_SCOPE)
+        self.assertNotEqual(got["codex"].key, "status-bar")
+
+    def test_a_harness_declaring_other_ceilings_only_is_not_reported_here(self):
+        """The filter's other half: a harness with deficits but none about workspaces has
+        no ceiling to name, and must not be listed as unable to diverge."""
+        only_other = SimpleNamespace(
+            name="probe", deficits=(base.Deficit("status-bar", "d", "r"),))
+        real = claude_code.ClaudeCodeHarness()
+        with mock.patch.object(registry, "all", return_value=[only_other, real]):
+            self.assertEqual(workspace.harness_deficits(), [])
 class AMarkerCharterCannotReadIsNotAMarker(WorkspaceLayer):
     """`_read_marker` — three ways the sidecar fails, and they must all mean the same thing.
 
