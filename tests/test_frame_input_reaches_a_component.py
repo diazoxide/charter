@@ -740,9 +740,18 @@ class APointerWithTmuxsOwnMouseOn(_AFrameWithProviderPanels):
     those, measured on 3.7c and at the 3.2 floor — it takes away clicking back to any pane
     at all, the harness included, which is worse than the focus steal it fixes.
 
+    **The RIGHT button is the same defect and not the same fix** (#848). tmux's default
+    for `MouseDown3Pane` selects the pane before forwarding too, but its other branch is a
+    page-long `display-menu` that differs between the versions charter supports, so
+    charter cannot write it out — it reads the server's own binding back and re-emits it
+    as the else-branch (`_menu_button_bind_argv`). The last case in this class is the one
+    that tells the wrap apart from #634's shape applied to this button: a right-click on
+    the operator's own pane must still open **tmux's pane menu**, which the shape that
+    works for button 1 silently deletes.
+
     Nothing here is stubbed and nothing is set up by the test that the launcher does not
-    set up: the config is `conf_text`'s own text and the mark is `_panel_mark_argv`'s own
-    argv.
+    set up: the config is `conf_text`'s own text, the mark is `_panel_mark_argv`'s own
+    argv, and the menu button's bind is the launcher's own `_menu_button_bind_argv`.
     """
 
     #: The only difference from the fixture above, and the setting the whole class is about.
@@ -758,10 +767,64 @@ class APointerWithTmuxsOwnMouseOn(_AFrameWithProviderPanels):
                   "-P", "-F", "#{pane_id}", "--", "cat", env=self.env)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.operator_pane = r.stdout.strip()
+        # What this server had for the menu button BEFORE charter touched it — read here
+        # rather than reconstructed, because it is what the wrap has to carry through
+        # unchanged and no literal charter could hold is right on every supported tmux.
+        self.menu_default = commands_frame._menu_button_default(
+            _tmux("list-keys", "-T", "root", env=self.env).stdout)
+        self.assertIsNotNone(self.menu_default,
+                             "this tmux binds nothing to the menu button, so there is no "
+                             "steal here to fix and nothing below is measured")
+        # The launcher's own call, made the way the launcher makes it (#547). A test that
+        # spelled the `bind-key` itself would be measuring its own copy of charter's
+        # answer, and the whole claim of #848 is *which* binding charter installs.
+        wrap = commands_frame._menu_button_bind_argv(socket=SOCKET, env=self.env)
+        self.assertIsNotNone(wrap, "charter read the table and found nothing to wrap")
+        bound = subprocess.run(wrap, capture_output=True, text=True, env=self.env)
+        self.assertEqual(bound.returncode, 0, bound.stderr)
         self._select(self.harness)
 
     def _pointed(self) -> str:
         return self._shown(POINT_CID)
+
+    def _menu_bind(self) -> str:
+        """The menu button's binding as this server now reads it back."""
+        listing = _tmux("list-keys", "-T", "root", env=self.env).stdout
+        return next(ln for ln in listing.split("\n")
+                    if f"-T root {tmuxctl.CLICK_MENU_KEY} " in ln)
+
+    def _press_right(self, pane: str, *, row: int = 0, col: int = 1) -> None:
+        """A right PRESS with no release — SGR button 2, which is what a real right-click
+        puts on the wire (`overlay._SGR_BUTTONS` maps 2 to `right`).
+
+        The release is deliberately not sent: tmux's own pane menu is modal, so a release
+        arriving after it opened would be delivered to the MENU rather than to the pane,
+        and the cases below would be measuring the menu's own key handling.
+        """
+        self._point(pane, row=row, col=col, button=2, release=False)
+
+    def _menu_opened(self) -> bool:
+        """Did tmux's own pane menu open on the client?
+
+        **Asked with a keypress, because a menu is not a pane.** `display-menu` draws on
+        the CLIENT — there is nothing for `capture-pane` to capture and no pane id for
+        `list-panes` to report — so the only observable is that the menu's own keys work.
+        `h` is `Horizontal Split` on tmux 3.7c and on the 3.2 floor alike, and a window
+        that grew a pane after one `h` had a menu open to receive it. Any pane it made is
+        killed again, so a case can ask this without changing the frame the next one runs
+        against.
+        """
+        before = set(self._panes())
+        self._inject(b"h")
+        grew = _await(lambda: set(self._panes()) - before, 6.0)
+        for extra in set(self._panes()) - before:
+            _tmux("kill-pane", "-t", extra, env=self.env)
+        self._inject(b"\x1b")
+        return bool(grew)
+
+    def _panes(self) -> list[str]:
+        return _tmux("list-panes", "-t", self.fid, "-F", "#{pane_id}",
+                     env=self.env).stdout.split()
 
     def test_tmuxs_own_mouse_really_is_on(self):
         """Without this every case below could be passing because tmux is ignoring the
@@ -848,6 +911,85 @@ class APointerWithTmuxsOwnMouseOn(_AFrameWithProviderPanels):
                         f"the wheel never reached it: {self._pointed()!r}")
         self.assertEqual(self._active(), self.harness,
                          "the wheel moved the keyboard")
+
+    # -- the right button (#848) -------------------------------------------- #
+
+    def test_the_menu_button_is_wrapped_and_not_replaced(self):
+        """What is actually in the root table, read back off the running server.
+
+        Both halves, because either alone is satisfied by a binding that is wrong:
+        charter's own condition must be in it (or nothing changed) **and** tmux's own
+        default must still be in it (or the pane menu was deleted, which is the trade #848
+        refused).
+
+        **Asked by token rather than byte for byte, and that is measured rather than
+        lax.** tmux re-quotes a command when it prints it back: on 3.7c the wrapped line
+        reads out as `{ … }` blocks, the same length it went in as, while a real 3.2
+        re-emits the same binding as backslash-escaped `"…"` — 1378 characters in, 1632
+        out. So the assertion is that the parts of tmux's own default that cannot be
+        re-quoted are all still there, and that the line did not get SHORTER, which is
+        what a trimmed else-branch would look like.
+        """
+        line = self._menu_bind()
+        self.assertIn(commands_frame._PANEL_OPTION, line)
+        for token in ("display-menu", "mouse_any_flag", "Horizontal Split", "Kill"):
+            with self.subTest(token=token):
+                self.assertIn(token, line,
+                              f"the wrap dropped {token!r} out of tmux's own binding")
+        self.assertGreater(len(line), len(self.menu_default),
+                           "the binding is shorter than the one it was built from, so "
+                           "something in tmux's own default was trimmed away")
+
+    def test_a_right_click_still_reaches_the_component_whose_pane_it_landed_on(self):
+        """Delivery first, as for the left button: a keyboard that did not move because
+        nothing arrived is not the property being claimed. `right` is the name
+        `overlay._SGR_BUTTONS` gives button 2, and it is the name #846's own chat-tab menu
+        is opened by."""
+        self._select(self.harness)
+        self._press_right(self.pane[POINT_CID], col=2)
+        self.assertTrue(_await(lambda: "POINT-click:right" in self._pointed()),
+                        f"a right press never reached it: {self._pointed()!r}")
+
+    def test_a_right_click_on_a_panel_does_not_move_the_keyboard(self):
+        """#848 itself. Before the wrap this assertion read `active pane: THE PANEL` on
+        3.7c and at the 3.2 floor identically, because tmux's default takes its forwarding
+        branch — `#{mouse_any_flag}` is 1 for this panel precisely because its component
+        declared `click` — and that branch is `select-pane -t = ; send-keys -M`."""
+        self._select(self.harness)
+        self._press_right(self.pane[POINT_CID], col=2)
+        self.assertTrue(_await(lambda: "POINT-click:right" in self._pointed()),
+                        "the press never arrived, so this proves nothing about focus")
+        self.assertEqual(self._active(), self.harness,
+                         "a right click on a panel took the keyboard off the harness")
+
+    def test_a_right_click_on_a_pane_the_operator_split_still_opens_tmuxs_menu(self):
+        """**The case that tells this fix apart from #634's shape applied to this button,
+        and the whole reason the else-branch is sourced rather than written.**
+
+        `select-pane -t =; send-keys -M` is tmux's WHOLE default for `MouseDown1Pane` and
+        only the forwarding HALF of its default for `MouseDown3Pane`. Written out here it
+        passes every case above and deletes tmux's own pane menu — Copy Line, Paste,
+        Horizontal Split, Kill, Zoom — from every pane charter did not create, inside
+        charter's own window. Measured on 3.7c and at the 3.2 floor: that shape leaves the
+        keyboard ON the operator's pane and opens nothing at all.
+        """
+        self._select(self.harness)
+        self._press_right(self.operator_pane)
+        self.assertTrue(self._menu_opened(),
+                        "a right click on a pane the operator split themselves no longer "
+                        "opens tmux's own pane menu — charter deleted a documented tmux "
+                        "affordance from a pane it has nothing to do with")
+
+    def test_the_menu_button_moves_nothing_when_it_opens_the_menu(self):
+        """tmux's own menu is drawn for the client and does not select the pane under it —
+        the branch that selects is the one that FORWARDS, and the operator's pane is not
+        asking for reports. So the keyboard is still on the harness while the menu is up,
+        which is what makes `Kill`/`Zoom` in it act on the pane that was pointed at rather
+        than on the one that was typed into."""
+        self._select(self.harness)
+        self._press_right(self.operator_pane)
+        self.assertEqual(self._active(), self.harness)
+        self._inject(b"\x1b")
 
 
 class APointerPastColumnTwoTwentyThreeLandsWhereItWasAimed(_AFrameWithProviderPanels):
