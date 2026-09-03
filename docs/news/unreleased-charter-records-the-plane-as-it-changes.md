@@ -79,14 +79,19 @@ offer a quit made.
 
 `charter reopen` is a deliberate act, so its per-chat report is read and is unchanged. The
 automatic restore happens because you typed `charter` and wanted a terminal, so it is one
-line. When part of the plane cannot come back, that line says how much and where the rest of
-the answer is — the chats still owed stay in the record, so `charter reopen` is both the
-explanation and the retry:
+line — and when part of the plane cannot come back, the rest is named on that same line:
 
 ```
-✓ charter: restored 3 of the 4 chats this plane last recorded — the rest are still
-  recorded; `charter reopen` says which could not come back, and retries them
+✓ charter: restored 3 of the 4 chats this plane last recorded — beta.1 did not come back
 ```
+
+**It deliberately does not offer `charter reopen` as a retry.** `_consume` does leave
+exactly the chats still owed in the record, exactly as before — but this process is now
+recording as well, so about two seconds later the record is the plane that is running and
+the leftovers are gone. An operator who has just been attached to the frame this restore
+built cannot type anything in that window, so a line pointing there would point at
+something that is no longer there by the time it is read. The names are what the line can
+carry truthfully.
 
 Silence was never an option — that is a frame quietly drawing less than it should — and
 neither was refusing the whole restore because one chat could not start, which makes one
@@ -120,6 +125,17 @@ restore, **and no recording over the record it skipped**. Skipping only the rest
 smaller version of this — it is destructive, because the same run would overwrite the
 skipped record two seconds later and nothing would say so until you asked for the plane back
 and got the wrong one. `charter claude --fresh` says the same thing about a named harness.
+
+## One limit this creates, stated rather than discovered
+
+**`charter reopen` typed while the plane is running will now double it.** The record used to
+exist only after a quit, so there was never a live plane for it to describe; it is current
+now, and that command has no liveness gate of its own — bare `charter` has one, which is why
+the automatic restore cannot do this. Quit first, or attach (`tmux -L charter attach`),
+which is what you wanted in that situation anyway. A gate on `charter reopen` itself is a
+follow-up: it means a `list-windows` on charter's socket from that command's entry path, and
+every existing reopen test would read whatever tmux the developer running the suite happens
+to have — which is the shape `tests/_planeguard.py` exists to refuse.
 
 ## One sentence changed its words
 

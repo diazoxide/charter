@@ -754,8 +754,8 @@ class WhatAnAutomaticRestoreSays(PersonaIso, unittest.TestCase):
         self.assertIn("charter: restored the 2 chat(s) this plane last recorded", out)
         self.assertEqual(len(out.strip().splitlines()), 1)
 
-    def test_a_plane_that_came_back_short_says_how_short_and_where_to_look(self):
-        """Not silence, and not a wall: the count, and the command that names which."""
+    def test_a_plane_that_came_back_short_names_the_rest_on_the_same_line(self):
+        """Not silence, and not a wall: the count and the names, on one line."""
         self._record(self._chat(chat="alpha.1", workspace="alpha"),
                      self._chat(chat="beta.1", workspace="beta"))
         self.fail_for = {"beta"}
@@ -763,14 +763,24 @@ class WhatAnAutomaticRestoreSays(PersonaIso, unittest.TestCase):
         rc, out = self._reopen(quiet=True)
 
         self.assertEqual(rc, 0)
-        self.assertIn("charter: restored 1 of the 2 chats this plane last recorded — the "
-                      "rest are still recorded; `charter reopen` says which could not come "
-                      "back, and retries them", out)
+        self.assertIn("charter: restored 1 of the 2 chats this plane last recorded — "
+                      "beta.1 did not come back", out)
+        self.assertEqual(len(out.strip().splitlines()), 1)
 
-    def test_the_chats_that_did_not_come_back_are_still_recorded_to_retry(self):
-        """What makes "detail on demand" a real offer rather than a form of words:
-        `_consume` leaves exactly the chats still owed, so the command the line names both
-        explains and retries."""
+    def test_a_long_list_of_missing_chats_is_still_one_short_line(self):
+        """A compact line stays compact on a plane that lost six workspaces."""
+        self._record(self._chat(chat="alpha.1", workspace="alpha"),
+                     *[self._chat(chat=f"w{i}.1", workspace=f"w{i}") for i in range(5)])
+        self.fail_for = {f"w{i}" for i in range(5)}
+
+        _rc, out = self._reopen(quiet=True)
+
+        self.assertIn("w0.1, w1.1, w2.1 and 2 more did not come back", out)
+
+    def test_the_chats_that_did_not_come_back_are_still_recorded(self):
+        """`_consume`'s own contract, unchanged: what is left behind is the retry. What the
+        line no longer does is POINT at it — this process is recording too, so the record is
+        the running plane again a couple of seconds later."""
         self._record(self._chat(chat="alpha.1", workspace="alpha"),
                      self._chat(chat="beta.1", workspace="beta"))
         self.fail_for = {"beta"}

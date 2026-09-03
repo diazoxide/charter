@@ -839,13 +839,18 @@ so every per-chat rule above holds. What differs is what it says:
 ```
 
 one line, because you typed `charter` and wanted a terminal. If part of the plane could not
-come back, the line says how much and leaves exactly those chats recorded, so `charter
-reopen` is both the explanation and the retry:
+come back, the same line names the rest:
 
 ```
-✓ charter: restored 3 of the 4 chats this plane last recorded — the rest are still
-  recorded; `charter reopen` says which could not come back, and retries them
+✓ charter: restored 3 of the 4 chats this plane last recorded — beta.1 did not come back
 ```
+
+It does not offer `charter reopen` as a retry, and that is a limit worth knowing rather
+than a wording choice: the chats that could not be started *are* left in the record — but
+the process that just restored your plane is also recording it, so a couple of seconds
+later the record is the plane that is running and those leftovers are gone. Open what is
+missing yourself (`charter -w <workspace>`), or quit and use `charter reopen` while nothing
+is running, which is the state that command is for.
 
 **Two keys, both on**, because recording and restoring are separable: recording costs a
 little I/O and changes nothing you see, restoring changes what `charter` does. A plane can

@@ -4706,13 +4706,37 @@ def _restores_the_plane(args) -> bool:
 #: less than it should.
 RESTORED_ALL = "charter: restored the {n} chat(s) this plane last recorded"
 
-#: The same line when part of the plane did not come back. It says how much, and where the
-#: rest of the answer is — `_consume` leaves precisely the chats still owed in the record,
-#: so `charter reopen` is both the detail and the retry. Refusing the whole restore over
-#: one chat was the alternative, and it makes one dead workspace cost the other five.
+#: The same line when part of the plane did not come back — **the rest, named, on the one
+#: line**. Refusing the whole restore over one chat was the alternative, and it makes one
+#: dead workspace cost the other five; saying nothing is #752's defect.
+#:
+#: **It does not offer `charter reopen` as a retry, and that is measured rather than
+#: cautious.** `_consume` does leave exactly the chats still owed in the record — but this
+#: process is now also RECORDING, so about :data:`frame.record.QUIET` seconds later the
+#: record is the plane that is running and the leftovers are gone. An operator sitting
+#: inside the frame this restore just attached them to cannot type anything in that window,
+#: so a line pointing there would be pointing at something that is not there by the time it
+#: is read. The names are what the line can carry truthfully.
 RESTORED_SOME = ("charter: restored {n} of the {total} chats this plane last recorded — "
-                 "the rest are still recorded; `charter reopen` says which could not come "
-                 "back, and retries them")
+                 "{missing} did not come back")
+
+#: How many of the missing are named before the line starts counting instead. Three, because
+#: this is the compact line and the names are `chats.ID_RE` short — `alpha.1` — so three of
+#: them and a count is still one readable line at any terminal width.
+MISSING_NAMED = 3
+
+
+def _named_briefly(names) -> str:
+    """*names*, joined for one line, with anything past :data:`MISSING_NAMED` counted.
+
+    The values are chat ids off the record, and `reopen._usable` has already held every one
+    of them to `chats.ID_RE` on the way in — so this is a join rather than a boundary, and a
+    hostile manifest cannot reach the line through it.
+    """
+    kept = list(names)
+    if len(kept) <= MISSING_NAMED:
+        return ", ".join(kept)
+    return ", ".join(kept[:MISSING_NAMED]) + f" and {len(kept) - MISSING_NAMED} more"
 
 #: What a launch says when the record could not be acted on at all. It opens a chat anyway:
 #: the operator asked for a terminal, and refusing to give them one because a record is
@@ -8912,8 +8936,12 @@ def _reopen_plane(args) -> int:
     # #752's defect and the reason `_restore_the_plane` can fall through to a launch and
     # still have told the operator something.
     if quiet:
+        done = {r.chat.chat for r in back}
         util.ok(RESTORED_ALL.format(n=len(back)) if len(back) == total
-                else RESTORED_SOME.format(n=len(back), total=total))
+                else RESTORED_SOME.format(
+                    n=len(back), total=total,
+                    missing=_named_briefly(c.chat for c in m.all_chats()
+                                           if c.chat not in done)))
     else:
         util.ok(f"charter: reopened {len(back)} of {total} chats")
     _consume(m, {r.chat.chat for r in back}, quiet=quiet)
