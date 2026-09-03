@@ -39,6 +39,17 @@ class GuardWiredCase(PersonaIso):
         self._real_home = os.environ.get("HOME")
         os.environ["HOME"] = str(self.home)
         self.addCleanup(self._restore_home)
+        # This session is rooted AT the plane — the case every test below is about, and
+        # since #851 something the fixture has to say out loud. `check_guard_wired` reads
+        # the settings the host would read for the running session, which is the working
+        # directory and never an ancestor of it; without this chdir these tests would
+        # write into `config.ROOT` and then read the developer's own checkout, passing or
+        # failing on whatever is wired there. Registered after `PersonaIso`'s cleanup so
+        # it runs before it (LIFO) and the tmp tree is never removed under our own cwd.
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(config.ROOT)
+        self.assertTrue(doctor.session_is_the_plane(),
+                        "these tests are about a session rooted at the plane")
 
     def _restore_home(self):
         if self._real_home is None:

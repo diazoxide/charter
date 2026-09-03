@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -31,6 +32,17 @@ from tests._isolation import PersonaIso
 
 
 class GuardCase(PersonaIso):
+    def setUp(self) -> None:
+        super().setUp()
+        # Rooted at the plane, which is what these tests are about: `cmd_guard_ask` writes
+        # `config.ROOT/.claude/settings.json`, and since #855 `check_ask_rules` reads the
+        # settings the SESSION reads — the directory it is standing in, never an ancestor.
+        # The two agree here, which is the ordinary case; without the chdir the writer and
+        # the reader would be looking at different files and every assertion below would be
+        # about the developer's own checkout.
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(config.ROOT)
+
     def settings(self) -> Path:
         return Path(config.ROOT) / ".claude" / "settings.json"
 

@@ -19,6 +19,7 @@ date and the name; the reader draws the line (ADR 0013).
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,16 @@ from tests._isolation import PersonaIso, run_hook
 
 
 class SeenCase(PersonaIso):
+    def setUp(self) -> None:
+        super().setUp()
+        # Rooted at the plane. `check_guard_seen` asks whether a settings file still
+        # declares the guard, and since #851 that question is answered by the directory
+        # the session is rooted in rather than by the plane it resolved — so a fixture
+        # that only redirects `config.ROOT` would have this row reading the developer's
+        # own checkout, and these rows turning on whatever is wired there.
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(config.ROOT)
+
     def used_plane(self) -> None:
         """A plane a human has worked in — the gate on saying anything at all."""
         self.make_persona("ops", role="Ops", vault="none")
