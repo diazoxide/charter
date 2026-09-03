@@ -52,6 +52,23 @@ def current() -> str | None:
     return None
 
 
+def inherited_paths() -> tuple[str, ...]:
+    """Every registered harness's :attr:`Harness.inherited_paths`, once each.
+
+    The plane-root paths a checkout with a git root of its own cuts a session off from —
+    what `workspace._inherited_files` mirrors into a guest checkout. Asked of the registry
+    rather than listed in `workspace.py`, so a harness registered in :data:`KINDS` has its
+    in-repo surface carried into a clone the day it declares one (#868).
+
+    Deduplicated with ``dict.fromkeys`` rather than a set, and both halves of that are
+    deliberate. Two harnesses naming the same path must not mirror it twice — the second
+    pass would be a second key for one file — and the order has to be the registration
+    order, not whatever a hash gives: an answer that comes out of a set is right about half
+    the time by luck, which is a guarantee nothing can pin.
+    """
+    return tuple(dict.fromkeys(p for h in all() for p in h.inherited_paths))
+
+
 def deficits(name: str | None) -> tuple[Deficit, ...]:
     """What *name* cannot carry.
 

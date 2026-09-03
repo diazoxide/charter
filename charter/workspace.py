@@ -1305,86 +1305,75 @@ def _layer_files(name: str) -> dict[str, str]:
     return _harness_files(workspace_dir(name))
 
 
-#: The plane-root directories Claude Code WALKS UP for, and where that walk stops.
-#:
-#: Agents and skills are found by searching the session's cwd and its parents, and the
-#: search stops at a git boundary. `workspaces/<ws>/` sits inside the plane's own repo, so
-#: both already arrive there untouched — which is why `claude_code.WORKSPACE_KEYS` is
-#: right not to copy them and `test_nothing_else_is_materialised_into_the_workspace` is
-#: right to forbid it. `workspaces/<ws>/<repo>/` is a repo of its own, so the walk stops
-#: at its root and NEITHER arrives. That is the whole of #870: the same layer, one
-#: directory deeper, is missing the half that a workspace directory got for free.
-#:
-#: `enabledPlugins` alone does not close it. The plugin brings charter's own skills, and
-#: it cannot bring this plane's `.claude/agents/` — those are generated from `personas/`
-#: by `persona sync-agents` and are as local to a plane as its personas are. Without them
-#: a chat in a clone loads charter and still cannot delegate to a persona, which is
-#: exactly the limit this module used to record as permanent.
-#:
-#: **CLAUDE.md is deliberately not here.** It walks up on the same rule, so the gap is
-#: real for it too — and it is the one file a repo of its own is most likely to have
-#: opinions about. Dropping the plane's project instructions into a repo charter does not
-#: own, to be read as that repo's instructions, is a claim of a different size from
-#: mirroring a settings key; a guest may hide its own files, not narrate the host's.
-#:
-#: **These two paths are Claude Code's spelling, and that is a stated LIMIT rather than
-#: an assumption that it is the only harness.** Everything else on this path is
-#: harness-agnostic: the mechanism below writes, marks, hides and removes whatever
-#: :func:`_harness_files` returns, which is every registered harness's own
-#: `workspace_files()` — so a harness that answers with files gets them into a clone the
-#: day it answers, with no change here. Only this list is hard-coded, because it is not
-#: any harness's answer: it is the plane's OWN directories, and charter has to know their
-#: names to find them.
-#:
-#: The other two harnesses do read project-level surfaces, measured against the installed
-#: binaries (codex-cli 0.147.0, opencode 1.18.23): opencode reads `opencode.json` and
-#: `.opencode/agent/` at a project root, and Codex reads `.codex/skills/` (though not a
-#: project `.codex/config.toml`). So the same cut-off exists for them in a clone and is
-#: NOT closed here. It is not closed by adding their directory names to this tuple
-#: either: what a harness needs in a tree is `workspace_files()`'s question, and
-#: answering it for them from this module is the mistake `harness/registry.py` exists to
-#: stop — charter naming a harness's files on its behalf, in a file that has to be
-#: edited every time another harness is added.
-WALKUP_DIRS = (".claude/agents", ".claude/skills")
+def _inherited_files() -> dict[str, str]:
+    """``{relative path: text}`` for the plane paths a guest checkout cuts a session off from.
 
+    Which paths those are is every registered harness's own
+    :attr:`harness.base.Harness.inherited_paths` — Claude Code's `.claude/agents` and
+    `.claude/skills`, opencode's `.opencode/agent` and `opencode.json`, Codex's
+    `.codex/skills`. **Nothing here names any of them**, and that is the whole of #868.
+    This function held Claude Code's two as a literal, under a comment stating the limit
+    honestly, and an honest limit is still a limit: an operator on opencode or Codex got a
+    workspace with none of the plane's agents or skills. The registry answers now, so a
+    harness registered tomorrow is carried the day it declares a surface.
 
-def _walkup_files() -> dict[str, str]:
-    """``{relative path: text}`` for the plane directories a guest checkout cuts off.
+    `workspaces/<ws>/` needs none of this and gets none of it. Every one of those paths is
+    resolved from a directory inside the plane's own repository — by a walk that stops at
+    the git root, or by resolving the repository root itself — so a workspace directory
+    already reads the plane's copies, and a second copy would shadow the first
+    non-deterministically. `workspaces/<ws>/<repo>/` is a repository of its own, which is
+    where all of them stop.
 
-    A 1:1 mirror of what is on disk, for `workspace_files`' reason: these are generated
-    from `personas/` by somebody else's generator, so re-deriving them here would be a
-    second generator that drifts. Read as text and skipped when that fails — a binary or
-    unreadable file in `.claude/agents/` is not something charter can copy, and it must
-    not take the whole layer down with it.
+    A 1:1 mirror of what is on disk, for `workspace_files`' reason: `.claude/agents/` is
+    generated from `personas/` by somebody else's generator, so re-deriving it here would
+    be a second generator that drifts. Read as text and skipped when that fails — a binary
+    or unreadable file is not something charter can copy, and it must not take the whole
+    layer down with it.
     """
+    from .harness import registry as _registry
+
     out: dict[str, str] = {}
-    for sub in WALKUP_DIRS:
+    for sub in _registry.inherited_paths():
         d = config.ROOT / sub
-        # No `is_dir()` guard and no `is_file()` filter. `rglob` on a directory that is
-        # not there yields nothing, and a directory entry, a dangling symlink and a
-        # binary file are one answer here — "not text charter can mirror" — which the
-        # read already gives. A predicate in front of it is a branch the deletion sweep
-        # can remove without changing a single answer, which is what makes it noise —
-        # and so was the `sorted()` that used to wrap this, for the same reason: every
-        # entry is an independent key in a dict, and `_layer_status` sorts what it
-        # reports anyway. The sweep found it as a survivor and was right.
-        for f in d.rglob("*"):
+        # `(d, *d.rglob("*"))` — the path ITSELF, then everything under it, because a
+        # harness spells this both ways: `.claude/agents` is a tree and opencode's
+        # `opencode.json` is one file at the repository root. `rglob` on a file yields
+        # nothing, so a file would silently mirror as nothing at all without `d` in front.
+        #
+        # No `is_dir()` guard and no `is_file()` filter. Reading a directory raises
+        # `IsADirectoryError`, reading a path that is not there raises `FileNotFoundError`,
+        # and a dangling symlink and a binary file raise too — all of them one answer here,
+        # "not text charter can mirror", which the read already gives. A predicate in front
+        # of it is a branch the deletion sweep can remove without changing a single answer,
+        # which is what makes it noise — and so was the `sorted()` that used to wrap this,
+        # for the same reason: every entry is an independent key in a dict, and
+        # `_layer_status` sorts what it reports anyway. The sweep found it and was right.
+        for f in (d, *d.rglob("*")):
             try:
                 text = f.read_text()
             except (OSError, UnicodeDecodeError):
                 continue
-            out[f"{sub}/{f.relative_to(d).as_posix()}"] = text
+            rel = f.relative_to(d).as_posix()
+            # `d.relative_to(d)` is `.`, which would mirror `opencode.json` to the key
+            # `opencode.json/.` — a path that names nothing and hides nothing.
+            out[sub if rel == "." else f"{sub}/{rel}"] = text
     return out
 
 
 def _guest_files(tree: Path) -> dict[str, str]:
     """Everything charter generates inside the guest checkout *tree*.
 
-    The harness layer the workspace directory gets, PLUS the walk-up directories that
-    directory did not need — see :data:`WALKUP_DIRS`.
+    The harness layer the workspace directory gets, PLUS the in-repo paths that directory
+    did not need — see :func:`_inherited_files`.
+
+    Two questions, deliberately kept apart. `_harness_files` asks each harness what it
+    needs in a directory charter OWNS, and the answer is generated content. This asks which
+    of the PLANE's own paths a git boundary cuts off, and the answer is a copy of what is
+    on disk. A harness declares both, and neither can be derived from the other: charter
+    cannot generate a plane's personas, and it must not mirror a file it generated.
     """
     out = _harness_files(tree)
-    out.update(_walkup_files())
+    out.update(_inherited_files())
     return out
 
 
@@ -1726,7 +1715,7 @@ def unwire_guest(tree: Path) -> list[str]:
     for rel in sorted(marker):
         p = tree / rel
         try:
-            # No `is_file()` in front of the read, for `_walkup_files`' reason: a path
+            # No `is_file()` in front of the read, for `_inherited_files`' reason: a path
             # already gone and a path that is a directory both raise here, and both mean
             # the same thing — charter has nothing of its own to take away.
             if marker[rel] != content_digest(p.read_text()):

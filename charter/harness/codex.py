@@ -182,7 +182,20 @@ class CodexHarness(Harness):
         "charter writes no in-repo layer for Codex — it arrives from "
         "`~/.codex/config.toml` and the plugin, and a project `.codex/config.toml` is "
         "ignored. Codex DOES read an in-repo `.codex/skills/` (measured, 0.147.0); "
-        "charter writes nothing there")
+        "charter mirrors the plane's copy of that into a workspace's checkouts and "
+        "writes nothing here")
+
+    #: What a checkout inside a workspace stops seeing, in Codex's spelling (#868).
+    #:
+    #: One entry and not two, and the missing one is the point: a project
+    #: `.codex/config.toml` is IGNORED (see :func:`config_path`), so mirroring it would put
+    #: a file in somebody's repo that nothing ever reads — charter's own writing looking
+    #: exactly like wiring and being inert, the "looks wired and is not" shape #177 and
+    #: #433 already cost this repo twice. `.codex/skills/` is the half that was measured to
+    #: reach a session: a sentinel at ``<repo>/.codex/skills/<name>/SKILL.md`` arrives in a
+    #: `codex exec` session's context with **zero tool calls**, where a control repository
+    #: answers NONE.
+    inherited_paths = (".codex/skills",)
 
     cli_name = "codex"
     binary = "codex"

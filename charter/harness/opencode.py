@@ -728,7 +728,24 @@ class OpenCodeHarness(Harness):
         "charter writes no in-repo layer for opencode — it arrives from "
         "`~/.config/opencode/` and the plugin, which every directory on this machine "
         "reads. opencode DOES read an in-repo `opencode.json` at the repository root and "
-        "`.opencode/agent/` from the project (measured, 1.18.23); charter writes neither")
+        "`.opencode/agent/` from the project (measured, 1.18.23); charter mirrors the "
+        "plane's copies of those into a workspace's checkouts and writes neither here")
+
+    #: What a checkout inside a workspace stops seeing, in opencode's spelling (#868).
+    #:
+    #: Both measured against opencode 1.18.23 with a real session: malformed JSON at
+    #: ``<repo>/opencode.json`` fails the run outright (`Error: Config file at
+    #: <repo>/opencode.json is not valid JSON(C)`), and a sentinel at
+    #: ``<repo>/.opencode/agent/probe.md`` is a project agent where a control repository
+    #: has none.
+    #:
+    #: **This does not touch the ceiling in :data:`WORKSPACE_SCOPE` above and does not
+    #: contradict it.** That ceiling is about a workspace DIRECTORY, which is not a
+    #: repository root — every one of them resolves to the plane's own root, so the layer
+    #: is already live there and cannot be made to DIFFER between two. A clone at
+    #: `workspaces/<ws>/<repo>/` is a repository root, which is exactly why it was getting
+    #: nothing, and exactly why charter can write here.
+    inherited_paths = (".opencode/agent", "opencode.json")
 
     cli_name = "opencode"
     binary = "opencode"
