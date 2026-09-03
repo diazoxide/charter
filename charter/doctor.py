@@ -1120,7 +1120,7 @@ def check_frame() -> Result:
     # and a status line blanked because a frame is drawing is nothing to do anything about.
     # That is the same distinction the paragraph above draws in refusing to make it a
     # `ceilings` entry, now carried through to how it is printed.
-    quiet = _statusline_suppressed_note().strip()
+    quiet = _statusline_suppressed_note()
     detail = f"tmux {v[0]}.{v[1]}"
     if quiet:
         detail += f"\n        ↳ {quiet}"
@@ -1130,7 +1130,14 @@ def check_frame() -> Result:
 
 
 def _statusline_suppressed_note() -> str:
-    """`" …"` naming the frame this session's status line is being blanked for, or `""`.
+    """The sentence naming the frame this session's status line is being blanked for, or `""`.
+
+    **No leading space, and the caller does no stripping.** It carried one, and its single
+    caller stripped it straight back off — the sweep found that `.strip()` as a survivor and
+    was right to: the note is either empty or one leading space and never any trailing
+    whitespace, so `strip` and `lstrip` answer identically for every value this can return.
+    A normalisation nothing can observe is not a guard, and pinning it would have been a test
+    asserting that two spellings of the same answer agree.
 
     Asks the same question `statusline.main` asks, through the same function, so the two
     can never disagree about whether a line is suppressed — the failure this note exists
@@ -1147,7 +1154,7 @@ def _statusline_suppressed_note() -> str:
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     if not fid or not frame_state.is_live(fid, pane=os.environ.get("TMUX_PANE", "")):
         return ""
-    return (f" This session's status line is intentionally blank: frame {fid} is drawing "
+    return (f"This session's status line is intentionally blank: frame {fid} is drawing "
             f"the plane instead (ADR 0019). `charter statusline` still runs — it records "
             f"this session's token usage — and still prints in full when you run it "
             f"yourself.")
