@@ -348,6 +348,58 @@ class TheGeneratorIsOnePlace(WorkspaceLayer):
                          workspace.content_digest(files[".claude/settings.json"]))
 
 
+class TheRowsQuietStates(WorkspaceLayer):
+    """The states of `check_workspace_harness` that say **nothing is wrong**.
+
+    `DoctorSaysSo` covers the three that report a problem. The sweep returned these as
+    survivors, which is the usual asymmetry: the failing paths get cases because somebody
+    was fixing a failure, and the reassuring ones are believed. A row that answers OK for
+    the wrong reason is the harder defect, because nobody looks at it again.
+
+    **This class writes a `charter.toml` and re-derives, and that is the whole reason the
+    survivors survived.** `tests/_isolation.py` says it outright — *"`PersonaIso` hands
+    every case a root; it deliberately does not put a `charter.toml`"* — so
+    `HAS_CONTROL_PLANE` is False for every case in this module and the row returns
+    ``no control plane found`` before reaching a single line below it. Dropping that guard
+    changes nothing a test can see, because no test was ever past it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        (Path(config.ROOT) / "charter.toml").write_text("schema = 1\n")
+        prev = config.use(Path(config.ROOT))
+        self.addCleanup(config.restore, prev)
+        self.assertTrue(config.HAS_CONTROL_PLANE,
+                        "fixture did not give the row a plane — every case below would "
+                        "pass through the short-circuit and assert nothing")
+
+    def test_outside_a_plane_the_row_says_so_and_checks_nothing(self):
+        with mock.patch.object(config, "HAS_CONTROL_PLANE", False):
+            r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, doctor.OK)
+        self.assertEqual(r.detail, "no control plane found")
+
+    def test_a_current_plane_counts_what_it_mirrors(self):
+        r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, doctor.OK)
+        self.assertIn("generated file(s) across all workspaces, all current", r.detail)
+        self.assertNotIn("nothing to mirror", r.detail)
+
+    def test_the_deficit_aside_names_the_harnesses_that_cannot_diverge(self):
+        r = doctor.check_workspace_harness()
+        self.assertIn("config is machine-global, so a workspace cannot diverge — "
+                      "charter harness list", r.detail)
+
+    def test_a_plane_whose_harnesses_can_all_isolate_gets_no_aside(self):
+        """The `else` half, which no registry this repository ships can reach: opencode and
+        Codex both declare the ceiling, so `gaps` is never empty and the aside is always
+        rendered. That makes the empty string look like dead code — it is not, it is the
+        answer the day a harness gains per-workspace config, and it is the difference
+        between a clean row and one carrying a trailing parenthetical about nothing."""
+        with mock.patch.object(workspace, "harness_deficits", return_value=[]):
+            r = doctor.check_workspace_harness()
+        self.assertNotIn("machine-global", r.detail)
+        self.assertNotIn("  (", r.detail, "an empty aside still printed its brackets")
 class WhatReinitSaysAboutTheLayer(WorkspaceLayer):
     """`cmd_workspace_reinit`'s per-file report — every outcome that reaches it.
 
