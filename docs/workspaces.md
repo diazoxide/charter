@@ -41,17 +41,32 @@ plane's settings move; one that does not is yours — left completely untouched,
 repaired, and named by `charter doctor`'s `workspace layer` row. `charter workspace reinit`
 (or `--all`) is the repair.
 
-**Nothing is written into a clone.** `workspaces/<name>/<repo>/` is a repo charter does not
-own, and `git add -A` there would stage whatever charter left behind. The limit that
-follows: a session inside a clone gets charter from the plugin, and **cannot delegate to a
-persona** — the plugin ships no `agents/`, and the clone's own git root stops the walk-up.
+**A clone gets the layer too, and pays a cost this directory does not.**
+`workspaces/<name>/<repo>/` is a repo of its own, so the walk-up that carries agents and
+skills into a workspace directory stops at its root and a session there got none of the
+layer — not the settings, and not the personas either. Charter writes both, and registers
+every path it generated in that checkout's **`.git/info/exclude`**: per-checkout, never
+committed, not itself tracked, and the one file a guest may write. Charter never edits the
+clone's `.gitignore`, hides only the exact paths it wrote (never a `.claude/` glob, which
+would take your own untracked files with it), never touches a file it did not generate, and
+removes its files and its exclude block when the workspace goes. `git status` in your repo
+is unaffected. Linked worktrees included — their `info/exclude` is the main repo's, which is
+also why removal is not just a `rm -rf`. **`CLAUDE.md` is deliberately left behind**: a guest
+hides its own files, it does not narrate the host's.
 
-Only Claude Code binds config to the directory a session starts in. opencode's project
-config is keyed to the **repository root** (`opencode.json`) and Codex has no project config
-file at all, so on both, charter's layer is already live in every workspace — and, by the
+**And it is every harness's layer, not Claude Code's.** What a clone cuts off is spelled by
+each harness, measured against the installed binary: `.claude/agents/` and `.claude/skills/`
+(Claude Code 2.1.259), `.opencode/agent/` and `opencode.json` at the repository root
+(opencode 1.18.23), `.codex/skills/` (codex-cli 0.147.0 — a project `.codex/config.toml` is
+ignored, so charter writes none). A harness registered tomorrow is carried the day it
+declares a surface.
+
+That is about a **clone**. A workspace **directory** is a different question, and there the
+ceiling stands: only Claude Code binds config to the directory a session starts in.
+opencode's project config is keyed to the repository root, and Codex has no project config
+file at all — so on both, charter's layer is already live in every workspace and, by the
 same fact, cannot be made to differ between two of them. `charter harness list` names that
-ceiling. Both still read *something* from a project — `.opencode/agent/` and
-`.codex/skills/`, measured with real sessions — and charter writes into neither today.
+ceiling.
 
 ## Which workspace am I in
 

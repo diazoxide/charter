@@ -64,15 +64,13 @@ is byte-identical.
   this design guards against: every file can be current and your status still full of
   charter. A row nothing reports is a guarantee nothing keeps.
 
-**The two mirrored directories are Claude Code's, and the rest is not.** Everything that
-writes, marks, hides and removes works from whatever a harness declares it needs in a
-tree, so a harness that answers with files gets them into a clone the day it answers. Only
-the walk-up list is spelled out, because it names the *plane's* own directories rather
-than any harness's answer. Measured against the installed binaries: opencode reads
-`opencode.json` and `.opencode/agent/` at a project root, and Codex reads `.codex/skills/`
-— so a clone cuts those off too, and this release does not carry them in. That belongs in
-each harness's own answer, not in a list in `workspace.py` that has to be edited every
-time another harness arrives.
+**Every harness's surface is carried, not Claude Code's.** Everything that writes, marks,
+hides and removes works from whatever a harness declares, so a harness registered tomorrow
+is covered the day it declares one. The list of *what a git boundary cuts off* used to be
+two Claude Code paths spelled out in `workspace.py`; it is now `Harness.inherited_paths`,
+measured against the installed binaries — `.claude/agents` and `.claude/skills` (2.1.259),
+`.opencode/agent` and `opencode.json` (1.18.23), `.codex/skills` (0.147.0). See *a clone
+carries every harness's layer*, in this same release.
 
 **CLAUDE.md is deliberately not carried in.** It walks up on the same rule, so the gap is
 real for it too — and it is the one file a repo of its own is most likely to have opinions

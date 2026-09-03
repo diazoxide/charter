@@ -84,8 +84,8 @@ Both do read something from a project, and charter says which rather than implyi
 project carries nothing — measured with real sessions, because a management CLI is not one:
 opencode reads an `opencode.json` at the **repository root** and `.opencode/agent/`
 (1.18.23); Codex reads `.codex/skills/` and ignores a project `.codex/config.toml`
-(0.147.0). Charter writes into none of them today, and writes nothing machine-global on the
-operator's behalf either.
+(0.147.0). Charter writes nothing machine-global on the operator's behalf, and inside a
+workspace's checkouts it writes to exactly those surfaces — see below.
 
 **A clone gets the same layer, plus what the walk-up could not carry there.**
 `workspaces/<ws>/<repo>/` is a repo of its own, so a session inside it loses the settings
@@ -99,11 +99,20 @@ repo is unaffected, and nothing charter wrote can be staged. Linked worktrees in
 their `info/exclude` is the main repo's, which is also why removal is not just a
 `rm -rf`.
 
-The *mechanism* is harness-agnostic: whatever a harness declares it needs in a tree is
-written, marked, hidden and removed the same way. The two mirrored directories are Claude
-Code's, and that is a limit rather than a claim about the others — opencode reads
-`opencode.json` and `.opencode/agent/` at a project root, and Codex reads
-`.codex/skills/`, so a clone cuts those off too and charter does not yet carry them in.
+**And it is every harness's layer.** What a git boundary cuts off is spelled by each
+harness — `Harness.inherited_paths`, beside `layer` and `layer_note` — so charter's own code
+names none of it:
+
+| harness | carried into a checkout | binary |
+|---|---|---|
+| Claude Code | `.claude/agents`, `.claude/skills` | 2.1.259 |
+| opencode | `.opencode/agent`, `opencode.json` | 1.18.23 |
+| Codex | `.codex/skills` | 0.147.0 |
+
+A harness registered tomorrow is carried the day it declares a surface. Two things are
+deliberately absent from every row: a project `.codex/config.toml`, because Codex ignores
+it and writing it would look like wiring while being inert; and `CLAUDE.md` or any
+equivalent, because a guest hides its own files and does not narrate the host's.
 
 ## `charter statusline --watch`
 
