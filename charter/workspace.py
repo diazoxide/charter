@@ -1310,8 +1310,8 @@ def _inherited_files() -> dict[str, str]:
 
     Which paths those are is every registered harness's own
     :attr:`harness.base.Harness.inherited_paths` — Claude Code's `.claude/agents` and
-    `.claude/skills`, opencode's `.opencode/agent` and `opencode.json`, Codex's
-    `.codex/skills`. **Nothing here names any of them**, and that is the whole of #868.
+    `.claude/skills`, opencode's `.opencode/agent`, Codex's `.codex/skills`. **Nothing here
+    names any of them**, and that is the whole of #868.
     This function held Claude Code's two as a literal, under a comment stating the limit
     honestly, and an honest limit is still a limit: an operator on opencode or Codex got a
     workspace with none of the plane's agents or skills. The registry answers now, so a
@@ -1336,9 +1336,11 @@ def _inherited_files() -> dict[str, str]:
     for sub in _registry.inherited_paths():
         d = config.ROOT / sub
         # `(d, *d.rglob("*"))` — the path ITSELF, then everything under it, because a
-        # harness spells this both ways: `.claude/agents` is a tree and opencode's
-        # `opencode.json` is one file at the repository root. `rglob` on a file yields
-        # nothing, so a file would silently mirror as nothing at all without `d` in front.
+        # harness may spell this as one FILE at a repository root rather than as a tree.
+        # Every shipped harness spells it as a tree today; half the in-repo surfaces
+        # charter has measured are single files, and `rglob` on a file yields nothing at
+        # all — so without `d` in front, the next harness to spell it that way would mirror
+        # as nothing, silently and with no row anywhere saying so.
         #
         # No `is_dir()` guard and no `is_file()` filter. Reading a directory raises
         # `IsADirectoryError`, reading a path that is not there raises `FileNotFoundError`,
@@ -1354,8 +1356,9 @@ def _inherited_files() -> dict[str, str]:
             except (OSError, UnicodeDecodeError):
                 continue
             rel = f.relative_to(d).as_posix()
-            # `d.relative_to(d)` is `.`, which would mirror `opencode.json` to the key
-            # `opencode.json/.` — a path that names nothing and hides nothing.
+            # `d.relative_to(d)` is `.`, so a declared FILE would land at the key
+            # `<path>/.` — a path that names nothing, hides nothing, and turns the file
+            # into a directory on the way in.
             out[sub if rel == "." else f"{sub}/{rel}"] = text
     return out
 
