@@ -920,6 +920,21 @@ def _grown(sizes: dict[str, int], wanted: dict[str, int], *,
     explains. Round-robin gives the first strip the first row, the second the second, and
     both strips their second row before either gets a third.
 
+    **The rounds are counted off the BUDGET rather than run under a `while`, and that is
+    the deletion sweep's finding rather than a preference.** One round hands out at least
+    one row while any demand and any budget remain, and no round may hand out a row the
+    budget has not got — so ``range(budget)`` is more rounds than the deal can ever need,
+    and a round past the last useful one is two guarded no-ops. Written as a `while` on
+    ``budget > 0 and any(n > 0 …)`` instead, FIVE mutations of that one line do not
+    terminate: dropping either conjunct, moving either boundary from `>` to `>=`, or
+    swapping `any` for `all` each leaves a loop whose body cannot change its own condition
+    (measured, with the state that hangs each one). A non-terminating mutant is CAUGHT —
+    but the sweep can only report it as unmeasured, and it pays the full per-mutation
+    timeout for each, which is what put nine other mutations of this branch out of time.
+    The bound here is DATA, not a guard: it is what the deal costs, so removing it or
+    moving it changes the answer rather than hiding a hang, and the two conditions below
+    stay exactly as observable as they were.
+
     *wanted* is a number a CALLER measured, never a policy read here — `slots
     .bar_rows_wanted` is the measurement and `commands_frame._slot_sizes` is the one place
     it is made, for the reason :func:`repos_rows` gives about *pinned_rows*. So there is no
@@ -940,8 +955,8 @@ def _grown(sizes: dict[str, int], wanted: dict[str, int], *,
     short = {slot: n - sizes[slot] for slot, n in wanted.items() if slot in sizes}
     budget = harness_rows(sizes, window_rows=window_rows) - HARNESS_MIN_ROWS
     out = dict(sizes)
-    while budget > 0 and any(n > 0 for n in short.values()):
-        for slot in list(short):
+    for _round in range(budget):
+        for slot in short:
             if short[slot] > 0 and budget > 0:
                 out[slot] += 1
                 short[slot] -= 1

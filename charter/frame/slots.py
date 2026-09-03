@@ -3846,8 +3846,20 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
             lines.append(head_cells + before + body)
         return lines, cols, more, add
 
+    def row(body: str = "", drawn=(), before: str = "", more=(), add=()):
+        """A rung that draws ONE row, said the way three of the four rungs say it.
+
+        :func:`rung`'s single-row case, and a wrapper rather than a shape every rung has to
+        spell: three of the four draw exactly one row and said so before #829 gave the
+        fourth some more, and rewriting them to hand over a one-element list of triples
+        would be three call sites edited to say what they already said. An empty *body* is
+        the rung that draws nothing — rung 4, and a bar with no names — which is no rows at
+        all rather than one blank one.
+        """
+        return rung([(before, body, drawn)] if body else [], more, add)
+
     if not names:
-        return rung()
+        return row()
     # **Which row is yours is decided on the RAW names; only the drawing uses the
     # contained ones.** `choose.Roster` makes the same split one surface over and for the
     # same reason: `contain.one_line` is a repair, so two names that differ only in what
@@ -3883,10 +3895,10 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
         # The affordance's own cells, measured off this composition — :func:`_span`'s
         # reason, and the same walk the counts get one rung down. It is drawn only where
         # the whole list is on the strip, which is why a `+` and a `+9` are never on one.
-        return rung([("", gap.join(painted) + gap + note, zip(names, marked))],
-                    add=_span(0, tui.width(lead + joined + gap), note))
+        return row(gap.join(painted) + gap + note, zip(names, marked),
+                   add=_span(0, tui.width(lead + joined + gap), note))
     if tui.width(joined) <= room:
-        return rung([("", gap.join(painted), zip(names, marked))])
+        return row(gap.join(painted), zip(names, marked))
     if at >= 0:
         # **No `if len(names) > 1` here, and it is unreachable rather than merely
         # untested.** With ONE name the page is that name, both counts are absent, and the
@@ -3900,8 +3912,8 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
         # a function of the names, the width and the row count and of nothing that moves
         # when the operator switches. `rows == 1` makes every run one page, which is
         # exactly the answer this rung gave before it could grow.
-        page = bisect.bisect_right(cuts, at) - 1
-        run = (page // rows) * rows
+        marked_page = bisect.bisect_right(cuts, at) - 1
+        run = (marked_page // rows) * rows
         stop = min(run + rows, len(cuts) - 1)
         first, last = cuts[run], cuts[stop]
         # Neither count is a tab. `+9` stands for names that are not on the row, so there
@@ -3927,36 +3939,51 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
         # starts at the head of the list and reaches its end, which is the multi-row form
         # of the rung above. A `+` beside a `+9` on two rows of one strip would be the two
         # `+` fields on screen together that the promise exists to prevent.
-        tail = note if note and not leading and not trailing else ""
+        # The affordance rides only a run that holds the WHOLE list — no leading count and
+        # no trailing one — which is `_Tabs.add_at`'s structural promise in the shape a
+        # strip with rows needs it: a `+` and a `+9` are never on screen together, and a
+        # second ROW is on screen with the first. `note` is already `""` where a caller
+        # passed none, so the conjunct testing it again was a line no input could make
+        # observable and is not written.
+        tail = note if not leading and not trailing else ""
+        # **Which row each field that is NOT a name goes on, decided ONCE and not per
+        # row.** The leading count belongs beside the first tab drawn and the trailing one
+        # after the last, because that is where the names they stand for actually are; on a
+        # one-row strip both land on the one row, which is the answer this rung gave before
+        # it could grow. Written as two edits to a list of blanks rather than as a
+        # `r == 0`/`last_row` test inside the loop: the loop below is then straight-line,
+        # and four conditional expressions that each had to be got right per row become two
+        # statements that are true of the run.
+        span = range(run, stop)
+        befores = [""] * len(span)
+        afters = [""] * len(span)
+        if leading:
+            befores[0] = f"{leading}{gap}"
+        if trailing or tail:
+            afters[-1] = f"{gap}{trailing or tail}"
         start = tui.width(lead)
-        plain, painted_rows = [], []
-        counts: list[tuple[int, int]] = []
-        add: list[tuple[int, int]] = []
-        for r, page in enumerate(range(run, stop)):
+        plain, painted_rows, ends = [], [], []
+        for r, page in enumerate(span):
             lo, hi = cuts[page], cuts[page + 1]
-            last_row = page == stop - 1
-            # The leading count goes on the FIRST row of the run and the trailing one on
-            # the LAST, because that is where the names they stand for actually are: what
-            # `+5` is about sits to the left of the first tab drawn, and what `+9` is about
-            # follows the last. On a one-row strip both land on the one row, which is the
-            # answer this rung gave before it could grow. The affordance takes the trailing
-            # field's place on the row that ends a run holding the whole list, which is the
-            # only run either of them can be on.
-            before = f"{leading}{gap}" if leading and r == 0 else ""
-            after = f"{gap}{trailing or tail}" if last_row and (trailing or tail) else ""
             tabs = gap.join(marked[lo:hi])
-            # Where the fields that are not names landed, taken from the composition above
-            # rather than searched for in the finished string — :func:`_tab_columns`'
-            # discipline for the names, kept for the rest. :func:`_span` answers an empty
-            # span for a field this row does not carry, so there is no branch here to get
-            # wrong: a row with no leading count contributes no cells.
-            at_end = start + tui.width(before + tabs + gap)
-            counts += _span(r, start, leading if before else "")
-            counts += _span(r, at_end, trailing if last_row else "")
-            add += _span(r, at_end, tail if last_row else "")
-            plain.append((before, tabs + after))
-            painted_rows.append((before, gap.join(painted[lo:hi]) + after,
+            ends.append(start + tui.width(befores[r] + tabs + gap))
+            plain.append((befores[r], tabs + afters[r]))
+            painted_rows.append((befores[r], gap.join(painted[lo:hi]) + afters[r],
                                  list(zip(names[lo:hi], marked[lo:hi]))))
+        # Where the fields that are not names landed, taken from the composition above
+        # rather than searched for in the finished string — :func:`_tab_columns`'
+        # discipline for the names, kept for the rest. **No branch here at all**:
+        # :func:`_span` answers an empty span for an empty string, and `leading`, `trailing`
+        # and `tail` are already `""` where this run does not carry them, so a run at the
+        # head of the list contributes no leading cells by arithmetic rather than by a
+        # test somebody has to keep true.
+        # **`bottom` and not `last`**, which is a name this rung already gave to the index
+        # one past the last NAME on the run: `trailing` is computed from that one and
+        # everything below is about a ROW, and two meanings for one word on a strip whose
+        # whole subject is which row a field is on is the reading error to refuse.
+        bottom = len(plain) - 1
+        counts = _span(0, start, leading) + _span(bottom, ends[bottom], trailing)
+        add = _span(bottom, ends[bottom], tail)
         # Measured, not assumed. :func:`_cuts` puts at least one name on a page, so a name
         # wider than the whole row composes a body that overflows — and this ladder gives a
         # rung up rather than drawing part of anything. Measured on the PLAIN rows for the
@@ -3974,8 +4001,8 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
         # all. A frame narrow enough to fall here had a strip that could be pointed at and
         # not pressed; it opens the palette now, which is the surface that works at every
         # width.
-        return rung([("", counted, ())], more=_span(0, tui.width(lead), counted))
-    return rung()
+        return row(counted, more=_span(0, tui.width(lead), counted))
+    return row()
 
 
 #: The chat bar's add-chat affordance (§3.6) — a BUTTON now, and one cell of it.
@@ -4084,36 +4111,45 @@ def bar_rows_wanted(fid: str, slot: str, *, pane_cols: int, cap: int) -> int:
     so a padded pane's strip is planned for `pane_cols - 2 * pad` and asking the unpadded
     question would size this pane from a number the renderer never sees.
 
+    **The answer is the tallest height the strip FILLS, and there is deliberately no "does
+    it hold every name yet" test beside it.** There was one — an early ``return rows`` the
+    moment the map held every name — and the deletion sweep reported dropping it as a
+    SURVIVOR. Measured rather than argued: over 406,000 inputs (32 name lists, every mark,
+    every width from 0 to 300, five ceilings) the two answer the same number every time,
+    and they must. A run holds every name exactly when the cut has no more pages than the
+    strip has rows; at that height the run IS the whole list, so the strip fills every row
+    it was given and the line below records it. A greater height cannot beat it either —
+    there are no more pages to draw, so the strip draws fewer rows than it is offered and
+    that height is not recorded. An equivalent mutant and dead code are the same finding,
+    and this repository deletes rather than pins.
+
+    What is left says the whole rule, and it covers two shapes at once: the rungs below the
+    windowed one draw `2/3` or nothing whatever they are offered — a frame too narrow to
+    draw one name is too narrow to draw one on row two — and a run that falls at the end of
+    the cut can be shorter than the rows it was given (see :func:`_compose`). Measuring
+    ROWS rather than rungs is also what covers a rung added below this one on the day it is
+    written: what is being bought is rows.
+
     One for a *slot* that draws no strip — a caller that asked about `repos` gets the
     height the pane already has, which is `layout.slot_sizes`' own filter-don't-refuse
     degrade rather than a raise on a name out of a committed file. One, too, for a *cap*
     below one: `filled` is the floor and the loop simply does not run, so there is no
     `max` in front of the range for no input to make observable.
     """
-    strip = BARS.get(slot)
-    if strip is None:
+    # **Not spelled `strip`**, though it is the natural word for what a `BARS` entry
+    # answers about. `tools/sweep.py`'s `swap-synonym` operator reads `strip` as the string
+    # method and offers `lstrip` for it, so a local of that name spends a mutation on a
+    # question about nothing — the same word collision #842 records one guard over, where
+    # `tests/test_claims`' `_REDACT_VERB` reads `strip` as a promise to redact.
+    entry = BARS.get(slot)
+    if entry is None:
         return 1
-    head, names, here, note = strip(fid)
+    head, names, here, note = entry(fid)
     width = pane_cols - 2 * pad_for(slot, pane_cols)
     filled = 1
     for rows in range(1, cap + 1):
-        lines, cols, _, _ = _compose(head, names, here, width, note=note, rows=rows)
-        # **Every name is DRAWN, asked of the map rather than of the text.** A name that is
-        # a substring of another would answer yes to a search of the finished row while
-        # nothing on screen could be clicked to reach it — `_Tabs` is what the operator can
-        # actually press, so it is what "the strip holds them all" has to mean. A strip
-        # that draws nothing has no names to hold and falls out of this by answering the
-        # empty set of a list that is also empty, or by never filling a row below.
-        if set(cols.values()) >= set(names):
-            return rows
-        # **A row the strip does not FILL is a row off the harness for nothing**, so the
-        # answer is the tallest height it fills rather than the tallest it is allowed. Two
-        # shapes reach here and one number covers both: the rungs below the windowed one
-        # draw `2/3` or nothing whatever they are offered — a frame too narrow to draw one
-        # name is too narrow to draw one on row two — and a run that falls at the end of
-        # the cut can be shorter than the rows it was given (see :func:`_compose`).
-        # Measuring rows rather than rungs is what covers a rung added below this one on
-        # the day it is written: what is being bought is rows.
+        lines, _cols, _more, _add = _compose(head, names, here, width,
+                                             note=note, rows=rows)
         if len(lines) == rows:
             filled = rows
     return filled

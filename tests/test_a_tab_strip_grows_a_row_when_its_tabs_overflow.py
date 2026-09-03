@@ -508,14 +508,25 @@ class AStripGrowsOnlyIntoRowsTheHarnessCanSpare(unittest.TestCase):
     def test_a_want_below_the_height_a_strip_already_has_never_shrinks_it(self):
         """This grows and never trims. A plane that pinned its strip to three rows in its
         own `[[frame.component]]` table asked for three rows (#687); a measurement saying
-        its names fit on one is not that operator changing their mind."""
+        its names fit on one is not that operator changing their mind.
+
+        **Asked BESIDE a strip that is growing**, which is what makes the shortfall test in
+        `layout._grown` observable at all: the deal runs for as many rounds as the growing
+        strip needs, so a round that stopped asking whether this one still wants a row
+        would hand it one on every one of them.
+        """
         with mock.patch.dict(config.FRAME, _placed(chats=3)):
             got = layout.slot_sizes(SLOTS, window_rows=50, content_rows=4,
                                     bar_rows={"chats": 1})
             self.assertEqual(got["chats"], 3)
             grown = layout.slot_sizes(SLOTS, window_rows=50, content_rows=4,
                                       bar_rows={"chats": 5})
-        self.assertEqual(grown["chats"], 5)
+            self.assertEqual(grown["chats"], 5)
+            beside = layout.slot_sizes(SLOTS, window_rows=50, content_rows=4,
+                                       bar_rows={"chats": 1, "workspaces": 3})
+        self.assertEqual((beside["chats"], beside["workspaces"]), (3, 3),
+                         "a strip that wanted nothing was dealt the rows its neighbour "
+                         "asked for")
 
 
 class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
