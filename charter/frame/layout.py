@@ -967,9 +967,9 @@ def slot_sizes(slots: list[str], *, window_rows: int, content_rows: int,
     arithmetic passes — is a plane that pinned nothing, which is charter's own and very
     nearly everyone's.
 
-    *bar_rows* is the same kind of value one slot family over: how many rows each tab
-    strip's own names need at its own pane width, measured by `slots.bar_rows_wanted` and
-    carried here rather than read, for exactly *pinned_rows*' reason. `None` — the default,
+    *bar_rows* is the same kind of number one slot family over: how many rows a tab strip's
+    own names need at its own pane width, measured by `slots.bar_rows_wanted` and carried
+    here rather than read, for exactly *pinned_rows*' reason. `None` — the default,
     and what every caller asking about the arithmetic passes — is a frame with no strip
     that overflows, which is every frame that places no bar and every plane whose names
     fit. :func:`_grown` is what spends it, and what refuses to spend rows the harness has
