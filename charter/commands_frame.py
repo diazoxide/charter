@@ -150,7 +150,7 @@ import time
 from . import config, contain, harness, inflight, instance, tui, util, workspace
 from .frame import (actions as frame_actions, builtin_actions, chats, choose, component,
                     gather, layout, leave, overlay, pane, palette, picker, state, switch,
-                    tmuxctl)
+                    tabmenu, tmuxctl)
 # Aliased because `cmd_reopen` is a function in this module and `reopen` reads as one: the
 # module answers what a quit RECORDED and the command is what puts it back, and a bare
 # `reopen.read()` beside `cmd_reopen` invites a reader to think one is the other.
@@ -7261,6 +7261,15 @@ def cmd_palette(args) -> int:
     ``--pane`` this runs as the hotkey bind's `run-shell` child and does nothing but carve
     the overlay's pane off the harness; with it, this IS the program inside that pane.
 
+    **``--tab`` makes it a third thing, and deliberately not a third subcommand** (#846).
+    A right-click on a chat tab opens a menu about THAT chat, and a menu is this pane with
+    a different row source: the same split off the same harness, the same
+    :func:`_close_open_overlays` sweep in front of it, the same escape hatch armed before
+    anything can capture input. So it travels as an option on this command, is forwarded
+    into the pane by :func:`_open_palette`, and is read back here to decide which surface
+    this process is. `frame/tabmenu.py` owns the rows and the routing; a value that cannot
+    name a chat is not an error but an ordinary palette.
+
     **The bind carries the presser's client and nothing else** (see `conf_text`). The
     frame is resolved from `$CHARTER_SESSION_ID` at the moment the key fires, exactly as
     `cmd_density`, `cmd_switch` and `cmd_respawn` resolve theirs, because one bind is
@@ -7307,6 +7316,15 @@ def cmd_palette(args) -> int:
     if getattr(args, "pane", False):
         held = pane.claim()
         try:
+            # **`--tab` is which surface this pane is, and it is asked here rather than
+            # inside `_draw_palette`** (#846). A tab menu is the palette's pane, its
+            # overlay, its hatch and its raw-mode loop over a different row source — but
+            # every line of `_draw_palette` is about the frame this pane belongs to, and a
+            # menu is about one CHAT that is very often not the one the frame is on. An
+            # unspellable `--tab` answers `""` and the ordinary palette opens, which is
+            # `frame/tabmenu.wanted`'s whole degradation promise: never a refusal.
+            if tabmenu.wanted(args):
+                return tabmenu.draw(args)
             return _draw_palette(args)
         finally:
             pane.release(held)
@@ -7346,8 +7364,12 @@ def _open_palette(args) -> int:
     _close_open_overlays(socket, harness=harness)
     argv = overlay.open_argv(
         socket, harness=harness,
-        command=util.self_relaunch_argv("frame-palette",
-                                        "--pane"),
+        # `frame/tabmenu.forward` splices `--tab <chat>` in for a right-click on a tab and
+        # NOTHING for `F2`, so the ordinary palette's argv is byte-identical to what it was
+        # (#846). The pane is still carved off THIS frame's harness whichever it is: the
+        # menu is about another tab, but the operator is looking at this one.
+        command=util.self_relaunch_argv("frame-palette", "--pane",
+                                        *tabmenu.forward(args)),
         env=_relayout_pane_env(fid, v))
     if argv is None:
         return 0

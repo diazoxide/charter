@@ -861,6 +861,17 @@ def _add_frame_parsers(sub) -> None:
     # `--chat` at all. Empty falls back to `$CHARTER_SESSION_ID`, which is what that frame
     # always resolved through — see `commands_frame._pressers_chat`.
     pal.add_argument("--chat", dest="chat", default="")
+    # Which TAB the menu is about, and it is a different question from `--chat` above:
+    # that one says which chat the keypress happened in — which frame's harness the pane
+    # is carved off — and this says which chat the two rows in it act on. A right-click on
+    # another chat's tab opens a menu over the frame the operator is looking at (#846).
+    #
+    # Not a positional, for `frame-switch`'s reason: the `client` positional above is a
+    # compatibility surface for binds installed by older charters, and a second one would
+    # be ambiguous with it. Optional, for `--chat`'s reason exactly — every invocation
+    # that is not a tab menu carries none, and `frame/tabmenu.wanted` reads an absent or
+    # unspellable value as "this is the ordinary palette" rather than as an error.
+    pal.add_argument("--tab", dest="tab", default="")
     pal.set_defaults(func=commands_frame.cmd_palette)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the

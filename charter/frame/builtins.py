@@ -237,17 +237,68 @@ def _panel(slot: str):
     return render
 
 
-#: Which mouse button charter acts on. One, and it is named rather than "whatever came":
-#: middle-click is paste on every terminal an operator has ever used and right-click opens
-#: their emulator's own menu, so acting on either would be charter taking a gesture that
-#: already means something else. `overlay._SGR_BUTTONS` is where the three get their names,
-#: and the ones §4f named no kind for never arrive here at all.
+#: Which mouse button ACTS. One, and it is named rather than "whatever came": middle-click
+#: is paste on every terminal an operator has ever used, so acting on it would be charter
+#: taking a gesture that already means something else. `overlay._SGR_BUTTONS` is where the
+#: three get their names, and the ones §4f named no kind for never arrive here at all.
 #:
-#: **One constant for the table and for both bars**, because "which button did the operator
-#: mean" is one question — a second answer to it would be a frame where the same gesture
-#: works on one pane and does nothing on the next, which is the thing an operator reports
-#: as a bug and is right to.
+#: **One constant for the table, both bars and both strips**, because "which button did the
+#: operator mean" is one question — a second answer to it would be a frame where the same
+#: gesture works on one pane and does nothing on the next, which is the thing an operator
+#: reports as a bug and is right to.
 _ACT_BUTTON = "left"
+
+#: Which mouse button opens a MENU about the thing under it — #846, and it is a second
+#: question rather than a second answer to the first.
+#:
+#: **Right-click already reaches charter's panels, and it needs no tmux bind.** That is the
+#: opposite of what this constant's absence assumed, and it is measured on tmux 3.2 and
+#: 3.7c against a pane requesting exactly what `overlay.MOUSE_ON` requests, with SGR
+#: button 2 injected into a real client::
+#:
+#:     mouse=off  custombind=no   PRESS ^[[<2;50;7M  RELEASE ^[[<2;50;7m  bind fired: no
+#:     mouse=on   custombind=no   PRESS ^[[<2;50;7M  RELEASE ^[[<2;50;7m  bind fired: no
+#:     mouse=on   custombind=yes  PRESS —           RELEASE ^[[<2;50;7m  bind fired: YES
+#:
+#: With `mouse off` — charter's shipped default — no mouse `bind -n` fires at all and tmux
+#: routes the report straight to the pane, pane-relative. With `mouse on` and tmux's own
+#: DEFAULT `MouseDown3Pane` in place the press still reaches the pane and tmux's menu does
+#: not appear, because that binding tests `#{mouse_any_flag}` — which is 1 precisely
+#: because this pane asked for reporting — and takes its `send-keys -M` branch. **A custom
+#: `bind -n MouseDown3Pane` that omits `send -M` is the one thing that would swallow the
+#: press**, so charter binds nothing: `commands_frame.conf_text` names no mouse key, and
+#: adding one is what would break this rather than what would enable it.
+#:
+#: **It is deliberately NOT read by three of the four handlers below.** Right-click is a
+#: menu gesture and a menu needs something to be about; the repo table's rows, the two
+#: strips' doorways and the persona column's badges each already have their one meaning,
+#: and giving a second button a second one there would be inventing surfaces nobody asked
+#: for. `_bar_events` is the only reader, and only on the bar whose tabs are chats.
+#:
+#: **What the press DOES cost, measured here rather than assumed away.** tmux's default
+#: binding forwards the report, but it selects the pane first — read back off a real 3.7c
+#: with `list-keys -T root`, the forwarding branch is `{ select-pane -t = ; send-keys -M }`.
+#: So with `[frame] mouse = true` a right-click on any charter panel moves the keyboard to
+#: that panel before the byte arrives. **That is #634's defect one button over, it is
+#: pre-existing, and this change does not close it.** It costs nothing on the gesture this
+#: constant is for — a menu that opens takes the keyboard anyway, and
+#: `commands_frame._close_palette` selects the harness on the way out — and it costs a MISS
+#: one left click on the harness, or `overlay.HATCH_KEY`.
+#:
+#: Closing it is a change of its own and not a line here. `MouseDown1Pane`'s fix works
+#: because tmux's default for THAT key is two commands charter can write out verbatim in
+#: the else-branch (`commands_frame.conf_text`); button 3's else-branch is a `display-menu`
+#: a page long, built out of `#{mouse_word}`, `#{pane_marked}` and a dozen other formats,
+#: and it differs between the versions charter supports. A bind that dropped it would take
+#: tmux's own pane menu away from the harness and from the operator's own splits, inside
+#: charter's window, to fix a focus steal that a click puts right.
+#:
+#: **And on a terminal that eats button 2 this constant simply never matches.** The
+#: measurement above injected bytes into a pty, which bypasses the terminal EMULATOR;
+#: whether one forwards button 2 to a mouse-reporting application or serves its own
+#: context menu is emulator-dependent and configurable. Every path behind this degrades to
+#: *never fires* — `component.EVENT_KINDS`' own direction — and `F2` keeps every row.
+_MENU_BUTTON = "right"
 
 
 def _repos_events(fid: str):
@@ -348,8 +399,28 @@ _WORKSPACE_SWITCH = ("frame-switch", "--workspace")
 #: :data:`_CHAT_SWITCH` carries no `--chat` either.
 _NEW_CHAT = ("frame-new-chat",)
 
+#: What a right press on a chat tab opens — the menu about THAT tab (`frame/tabmenu.py`),
+#: with the tab's own id appended by the handler.
+#:
+#: **`frame-palette` and not a subcommand of its own**, because a tab menu IS the palette:
+#: the same pane, carved off the same harness, by the same argv, behind the same
+#: `_close_open_overlays` sweep (so a right-click while `F2` is up replaces it rather than
+#: leaving an invisible pane holding a live process — #739) and the same escape hatch,
+#: armed before the surface can capture anything. `frame/tabmenu.TAB_OPTION` is the whole
+#: of the difference, and it is read twice: by the process that splits the pane, to pass it
+#: on, and by the process inside it, to decide which surface to be.
+#:
+#: **Charter-drawn, and NOT `display-menu`**, which `frame/tabmenu.py` re-measures at the
+#: 3.2 floor: no styling flags at all, a key as well as a command per item, per-client,
+#: totally modal at the server (every panel on the window goes blind while it is up), and
+#: a `client_height − 2` item cap past which it draws nothing and exits 0. `frame/menu.py`
+#: was deleted rather than deprecated when `frame/palette.py` arrived, and nothing about a
+#: pointer makes that call worth reversing.
+_TAB_MENU = ("frame-palette", "--tab")
 
-def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None = None):
+
+def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None = None,
+                menu: bool = False):
     """A tab bar's handler: a left click on a tab switches this frame to it.
 
     **A click here SWITCHES, where a click on the repo table only ever SELECTS, and that
@@ -466,6 +537,32 @@ def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None 
     the renderer happened to draw, which is what keeps the two bars from degrading
     differently the day one of them starts drawing a note it did not have.
 
+    **A RIGHT press on a chat tab opens a menu about that tab** (#846) — the fourth
+    gesture, the second button, and the one that had to argue for itself hardest, because
+    §4i's rule is about exactly this: the irreversible half of an interaction is never
+    driven by a pointer event.
+
+    It is met the same way the `+` meets it and then once more. The press is still the
+    half that is never delivered unpaired, so a drag that began elsewhere and releases
+    over the bar opens nothing. And what the press starts is not the irreversible thing:
+    it is a SURFACE. `charter frame-palette --tab <chat>` splits the overlay pane, draws
+    two rows, and stops — `chat: close` on it is a doorway onto `leave.confirm_rows`, so
+    the chat is stopped by a keypress, on a warning that names it, exactly as `F2 → chat:
+    close` stops one today. A pointer opens the question; the keyboard answers it.
+
+    **Which tab it is about comes from `slots._Tabs.tab_at` and not from
+    :meth:`~slots._Tabs.switch_to`**, and the one cell they disagree about is the point:
+    the tab you are ON. Switching to it is 41 tmux calls to arrive where you already are,
+    so `switch_to` refuses it; closing it is the ordinary case of closing a chat, so a
+    menu that refused it would refuse the commonest right-click there is.
+
+    **`menu` is False for the workspaces bar, and that is `add`'s structural argument one
+    noun over.** Both rows the menu holds — the transcript and the close — are about a
+    CHAT. A workspace has neither, and the palette's own catalogue by scope is what says
+    so: nothing else charter offers is about one tab at all. So the workspaces bar is
+    handed no menu command, exactly as it is handed no `+`, rather than being handed one
+    and relying on a resolution that would happen to answer nothing.
+
     *command* is which of the two switches this bar starts (:data:`_CHAT_SWITCH`,
     :data:`_WORKSPACE_SWITCH`). One handler and two lines of data rather than two
     handlers, because everything above is true of both bars and a second copy would be
@@ -488,7 +585,21 @@ def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None 
         from .. import util
         from . import slots as _slots
         from .builtin_actions import _spawn
-        if not ev.pressed or ev.name != _ACT_BUTTON:
+        if not ev.pressed:
+            return False
+        if ev.name == _MENU_BUTTON:
+            # **The menu button is asked about FIRST and answers on its own**, rather than
+            # widening the guard below: the two gestures read two different maps
+            # (`tab_at` here, `switch_to` there) and they disagree about exactly one cell,
+            # so a single guard would make a right-click on the tab you are on fall
+            # through to `add_at`/`more_at` — a menu button that could reach the `+`.
+            # Falsy afterwards for the same reason every other spawn here is: the pane the
+            # menu carves comes off the harness, so nothing in THIS rectangle changed.
+            tab = _slots.TABS.tab_at(ev.row, ev.col) if menu else None
+            if tab is not None:
+                _spawn(util.self_relaunch_argv(*_TAB_MENU, tab), fid=fid)
+            return False
+        if ev.name != _ACT_BUTTON:
             return False
         name = _slots.TABS.switch_to(ev.row, ev.col)
         if name is None:
@@ -905,7 +1016,8 @@ def build(fid: str = "") -> Registry:
     reg.register(Component(
         id="chats", title="chats", edge="top", size=Fixed(1),
         needs=(), render=_chats,
-        events=("click",), on_event=_bar_events(fid, _CHAT_SWITCH, add=_NEW_CHAT)))
+        events=("click",),
+        on_event=_bar_events(fid, _CHAT_SWITCH, add=_NEW_CHAT, menu=True)))
     reg.register(Component(
         id="workspaces", title="workspaces", edge="top", size=Fixed(1),
         needs=(), render=_workspaces,
