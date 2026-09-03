@@ -725,6 +725,12 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     keys a component may not claim, for `HATCH_KEY`'s reason exactly — both are written
     here BEFORE the toggles, so tmux's last-wins would leave charter's mouse handling
     silently deleted and `list-keys` reading back one line where two were meant (#566).
+    `MouseDown3Pane` is in that same set and is NOT written here, which is #848: its
+    else-branch is not two commands charter can spell but a page of tmux's own
+    `display-menu` that differs between 3.2 and 3.7c, so charter reads the server's own
+    binding back and re-emits it wrapped, as its own `bind-key` argv — see
+    `_menu_button_argv` for the measurement that chose that over this bind's shape, and
+    `tmuxctl.CLICK_MENU_KEY` for why a third line here could not have carried it.
 
     **`focus-events` is the THIRD genuine server option here, and it is written `-g` for
     exactly `escape-time`'s reason.** Spec §4f closes the component event kinds at six,
@@ -769,7 +775,9 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
 
     Neither `pane-died` hook lives here — see `_pane_died_write_hook_argv` and
     `_pane_died_teardown_hook_argv` for why they are issued as their own tmux commands
-    instead of text baked into this string.
+    instead of text baked into this string. Nor does the menu button's bind, for a third
+    reason of its own (`_menu_button_argv`): it is built out of what a `list-keys` READ
+    said, and this function has no server to ask.
 
     *session* is the frame id, which `state.frame_id` already sanitises (see
     `charter/frame/state.py`) before this function ever sees it — interpolated into
@@ -963,6 +971,139 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     lines.append(overlay.hatch_bind())
     lines.append("")
     return "\n".join(lines)
+
+
+#: One `list-keys -T root` line for :data:`tmuxctl.CLICK_MENU_KEY`, with the command it is
+#: bound to as the only group. What tmux prints is not one format across the versions
+#: charter supports, so this matches the parts that ARE stable and nothing else:
+#:
+#:     bind-key  -T root MouseDown3Pane            if-shell -F -t = "#{||:…}" { … } { … }
+#:     bind-key -T root MouseDown3Pane       if-shell -F -t = "#{||:…}" "…" "…"
+#:     bind-key -r -T root MouseDown3Pane          display-message hi
+#:
+#: The first is 3.7c, the second a 3.2 built from the release tarball, the third either
+#: version after `bind -n -r`. The column padding differs, the flag between `bind-key` and
+#: `-T` is the operator's, and `\s+` and the flag group absorb both. **`-N` is not a case
+#: this has to carry**: measured on 3.7c, a binding made with `bind -N 'my note'` reads
+#: back through a plain `list-keys` with no note at all — tmux prints notes only when
+#: asked with `-N`, which this read does not ask.
+#:
+#: `-T root` is spelled literally rather than captured, so a line from any OTHER key table
+#: cannot match: a `bind-key -T copy-mode MouseDown3Pane` is a real thing an operator can
+#: write, and wrapping it here would install a copy-mode binding into the root table.
+_MENU_BIND_RE = re.compile(r"^bind-key\s+(?:-\S+\s+)*-T root "
+                           + re.escape(tmuxctl.CLICK_MENU_KEY) + r"\s+(?P<cmd>\S.*?)\s*$")
+
+
+def _menu_button_default(listing: str) -> str | None:
+    """Whatever this server has bound to the menu button, out of a `list-keys -T root`.
+
+    ``None`` when there is nothing for charter to wrap, and all three of those readings
+    are benign rather than degraded — which is why this answers with one value and the
+    caller does not have to tell them apart:
+
+    * **the key is not in the table at all.** An operator who ran `unbind -n
+      MouseDown3Pane` has said this key does nothing, and a key that does nothing runs no
+      `select-pane`: there is no steal left to fix, and inventing a binding to fix it with
+      would be charter putting back what they removed.
+    * **charter already wrapped it**, which is every launch after the first on a shared
+      server. The bind is server-wide (`conf_text`'s own reason for leaving key tables
+      global), so it is already installed and correct. Wrapping it a SECOND time is not
+      merely wasteful: each pass nests another copy of a page-long `display-menu` inside
+      the last, so the ninth frame on a socket would carry a kilobyte of tmux config per
+      launch and the operator's own binding would be nine layers down.
+    * **tmux would not say.** A read that failed is reported by `tmuxctl.run` itself; what
+      is lost here is the fix, and what is left is exactly the behaviour every charter
+      before this one had.
+
+    The re-wrap test is for :data:`_PANEL_OPTION` in the command text, which is charter's
+    own marker and is in no default binding of tmux's on either version — the option name
+    itself, so a rename cannot leave this asking about a string nothing writes any more.
+    """
+    for line in listing.split("\n"):
+        found = _MENU_BIND_RE.match(line)
+        if found is None:
+            continue
+        cmd = found.group("cmd")
+        return None if _PANEL_OPTION in cmd else cmd
+    return None
+
+
+def _menu_button_argv(*, socket: str, default: str) -> list[str]:
+    """`bind-key -n MouseDown3Pane if-shell -F -t = '#{@charter_panel}' 'send-keys -M'
+    <whatever this server already had>` — as an ARGV, never as config text.
+
+    **An argv and not a `conf_text` line, and the difference is the whole safety of this
+    change.** *default* is a page of tmux's own config language — `{}` command blocks on
+    3.7c, backslash-escaped `"…"` on 3.2, `''` empty menu separators on both. Written into
+    the file `source-file` parses, it would have to survive a second round of quoting, and
+    a single unbalanced brace inside a quoted string (an operator's own binding is not
+    charter's to hold to any shape) would end the `bind` line early and take `mouse`,
+    `history-limit` and the palette's own hotkey down with it — the failure `conf_text`'s
+    docstring already names as the reason a refused toggle costs its key and nothing else.
+    As a separate argv element nothing re-lexes it: tmux hands it to `if-shell` verbatim
+    and parses it when the key fires, so the worst a malformed one can do is fail on a
+    right-click, on a pane charter does not own. Same reason both `pane-died` hooks are
+    their own commands rather than text in that string.
+
+    **The true branch is `send-keys -M` alone**, which is `conf_text`'s `CLICK_KEY` bind
+    one button over and for its reason exactly: forward the report to the panel, never
+    move the keyboard. **The false branch is what this server already had**, which is what
+    makes this a wrap rather than a replacement — measured on a real 3.7c and on a real
+    3.2, with a marked panel, the harness and a pane split by hand standing in for the
+    operator's own, SGR button-2 reports injected into a real client on a real pty::
+
+        bind                     right-click a panel   right-click harness  right-click own split
+        tmux's own default       delivered, MOVED      untouched            tmux's pane menu
+        `MouseDown1Pane`'s shape  delivered, unchanged untouched            MOVED, NO MENU
+        this one                 delivered, unchanged  untouched            tmux's pane menu
+
+    The middle row is the fix #634 shipped for button 1, applied verbatim to button 3, and
+    it is why this function reads the server instead: `select-pane -t =; send-keys -M` is
+    tmux's whole default for button 1 and only the FORWARDING half of its default for
+    button 3, so writing it out here would delete tmux's pane menu — Copy Line, Paste,
+    Horizontal Split, Kill, Zoom — from the harness and from every pane the operator split
+    themselves, inside charter's own window, to fix a focus steal that one click puts
+    right. That is a strictly worse trade than #634's and it is what #848 refused.
+
+    **An operator who rebound this key keeps their binding, and that is a property of
+    sourcing rather than a concession.** Whatever `list-keys` reported becomes the false
+    branch verbatim, so charter's panels stop stealing the keyboard and every pane that is
+    not charter's still does exactly what the operator's own `~/.tmux.conf` said — which a
+    hard-coded else-branch could not have promised at all. What is NOT carried across is a
+    `-r` on their binding and a `-N` note: this emits a plain `bind -n`, tmux's `list-keys`
+    does not report the note without being asked, and a repeat flag on a mouse button is
+    not a thing charter can honour by wrapping.
+
+    Every element is separate (`tmuxctl.server_argv`'s rule): nothing here is joined, so
+    nothing here is shell-interpreted.
+    """
+    return tmuxctl.server_argv(socket, "bind-key", "-n", tmuxctl.CLICK_MENU_KEY,
+                               "if-shell", "-F", "-t", "=", f"#{{{_PANEL_OPTION}}}",
+                               "send-keys -M", default)
+
+
+def _menu_button_bind_argv(*, socket: str, env: dict | None = None) -> list[str] | None:
+    """Read this server's menu button and build the bind that wraps it, or ``None``.
+
+    The one call that needs a running tmux, which is why it is not in `conf_text` and why
+    it happens where the launcher's other admin commands do — by then `new-session` has
+    started the harness, so there is a server to ask.
+
+    Ordered against charter's OWN write rather than against the clock: the read must land
+    before the `bind-key` this returns, and it does because the caller batches that write
+    and sends the batch afterwards. Two launchers racing each other both read tmux's
+    default and both write the same wrap, so the loser of the race installs what the
+    winner did.
+    """
+    said = tmuxctl.run("reading tmux's own binding for the menu button",
+                       tmuxctl.server_argv(socket, "list-keys", "-T", "root"), env=env)
+    if said.returncode != 0:
+        return None
+    default = _menu_button_default(said.stdout)
+    if default is None:
+        return None
+    return _menu_button_argv(socket=socket, default=default)
 
 
 def _charter_py_env_argv(*, socket: str, session: str) -> list[str]:
@@ -5276,6 +5417,22 @@ def _launch(args) -> int:
           tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
           "charter frame: continuing without it — mouse/history-limit/hotkey "
           "settings may not be in effect for this frame")
+
+    # The third mouse key, and the only one charter cannot simply write out (#848). The
+    # file above carries the wheel's and the left click's binds as text; this one is a
+    # WRAP of whatever the server already had, so it needs a read before it can be built
+    # and it cannot be a line in a file built before the server was asked. `None` is the
+    # ordinary answer on every launch after the first on a shared socket — the bind is
+    # already there — and `_menu_button_default` says why the other two `None`s are
+    # benign too. Right here, beside `source-file`, so all three mouse keys are installed
+    # by the same batch and a reader looking for charter's mouse handling finds it in one
+    # place rather than two.
+    menu = _menu_button_bind_argv(socket=SOCKET, env=env)
+    if menu is not None:
+        _tell("binding the menu button off the panels",
+              menu,
+              "charter frame: continuing without it — a right-click on a panel may "
+              "move the keyboard off the harness")
 
     _tell("carrying the exit-status path",
           _exit_path_env_argv(socket=SOCKET, session=session,
