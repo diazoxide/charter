@@ -1541,13 +1541,19 @@ def _release() -> dict:
 
 
 def _step(job: dict, step_id: str) -> dict:
-    """The step this job runs under a given `id:`, refused if it is not there."""
+    """The step this job runs under a given `id:`, refused if it is not there.
+
+    Every step reached this way stands between a release and something irreversible —
+    `version-check` is the cross-check #558 exists for, `artefact-set` is the bound #835
+    put on what a retry may upload — so "not found" is refused rather than answered with a
+    default. A reader that shrugged would report a green measurement of a step that is no
+    longer in the file.
+    """
     found = [s for s in job["steps"] if isinstance(s, dict) and s.get("id") == step_id]
     if len(found) != 1:
         raise AssertionError(
-            f"expected exactly one step with `id: {step_id}`, found {len(found)}. That "
-            f"step is the version cross-check #558 exists for; if it moved, move these "
-            f"tests with it rather than deleting them.")
+            f"expected exactly one step with `id: {step_id}`, found {len(found)}. If it "
+            f"moved, move the tests that read it with it rather than deleting them.")
     return found[0]
 
 

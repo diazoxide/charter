@@ -274,6 +274,55 @@ jobs:
         run: pipx run build
       - name: Validate metadata renders on PyPI
         run: pipx run twine check dist/*
+      # NO `if:` ON THIS STEP. It is the whole of the claim `publish` makes about what a
+      # dispatch retry can do to a version PyPI already holds, and a skipped step is a
+      # green step — the same rule, and the same reason, as `guard`.
+      - name: Refuse an artefact set skip-existing cannot reason about
+        id: artefact-set
+        run: |
+          # WHAT THIS IS FOR, AND WHY IT IS HERE RATHER THAN IN `publish` (#835).
+          #
+          # `publish` passes `skip-existing` on the retry trigger, and the sentence that
+          # makes that safe is written where the input is set. Its load-bearing half is
+          # *what a dispatch can upload*: `--skip-existing` does not skip a VERSION, it
+          # skips the individual files PyPI already holds BY NAME and uploads the rest. So
+          # a retry against a published version is a no-op only while every file this
+          # repository can build for that version is already up there — which is true
+          # because the artefact set is determined by the project NAME and the VERSION and
+          # by nothing else. That is arithmetic living in the build configuration, not in
+          # this workflow, and a second wheel tag, a platform wheel or an `--python-tag`
+          # would end it silently: nothing would fail, a file would simply appear under a
+          # version already published. This step is that arithmetic, asserted.
+          #
+          # In `build` because `publish` cannot ask: it holds `contents: none` and never
+          # checks the repository out, so it has no `pyproject.toml` to derive the names
+          # from. `build` is also the right END of the release: this refusal lands before
+          # anything is uploaded, so a build config that outgrew the invariant costs a red
+          # run rather than a file glued onto a published version.
+          #
+          # `set -eu` for the reason `announce` spells out — Actions already runs `run:`
+          # under `bash -e`, and a property this file leans on should be one this file
+          # states.
+          set -eu
+          # Both names derived here, never written down: PEP 625/427 build the filename
+          # from the NORMALISED project name, so `charter-cp` is `charter_cp` on disk and a
+          # check spelling either by hand would be a second answer to a question
+          # `pyproject.toml` already answers.
+          expected=$(python -c 'import re,tomllib;p=tomllib.load(open("pyproject.toml","rb"))["project"];n=re.sub(r"[-_.]+","_",p["name"]).lower();v=p["version"];print("\n".join(sorted([f"{n}-{v}-py3-none-any.whl",f"{n}-{v}.tar.gz"])))')
+          # `-A`, so a DOTFILE in dist/ is a refusal. That is stricter than the upload,
+          # which globs `dist/*` and so would not offer one to PyPI — deliberately: a
+          # hidden file appearing here means the build changed (`uv build` writes a
+          # `.gitignore` into its output directory; `python -m build`, which this job
+          # runs, does not), and a release gate should stop for that rather than reason
+          # about whose glob rules decide. It costs a red run before anything is
+          # uploaded, which is the cheap end.
+          built=$(ls -A dist | LC_ALL=C sort)
+          if [ "$built" != "$expected" ]; then
+            echo "::error::this build did not emit the artefact set release.yml's retry path assumes. Expected exactly the two files the project name and version determine, and got something else — see the diff below. A dispatch retry uploads every built file PyPI does not already hold BY NAME, so an artefact set that depends on more than name-and-version means a run against an already-published version can ADD a file to it, which is not what `skip-existing` is there for (#835). If the new set is deliberate, decide what a retry should now mean before changing this step — the reasoning is beside `skip-existing` in the publish job."
+            printf 'expected:\n%s\n\nbuilt:\n%s\n' "$expected" "$built"
+            exit 1
+          fi
+          printf 'dist holds exactly what the name and version determine:\n%s\n' "$built"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist
@@ -320,9 +369,30 @@ jobs:
           # fault, and the run cannot check it by comparing bytes either. `docs/news/`
           # ships inside the sdist, so the #665 recovery — fix the entry, re-dispatch —
           # rebuilds a different sdist by construction, and `--ref main` picks up whatever
-          # else merged besides. PyPI keeps what it has. That is what makes a version one
-          # immutable thing, and it is the right outcome: this run's business is the
-          # Release, not the artifacts.
+          # else merged besides. PyPI never lets a file be REPLACED, so the bytes this run
+          # rebuilds cannot displace the ones it holds, and that is the right outcome:
+          # this run's business is the Release, not the artifacts.
+          #
+          # THAT SENTENCE IS ABOUT REPLACEMENT AND SAYS NOTHING ABOUT ADDITION (#835). It
+          # used to read "PyPI keeps what it has, that is what makes a version one
+          # immutable thing", which is a claim `--skip-existing` does not make: the flag
+          # does not skip a VERSION, it skips the individual files PyPI already holds BY
+          # NAME and uploads the rest. Nor does `guard` close the gap — it reads an HTTP
+          # status off the version endpoint, so a `200` proves the version is there and
+          # not which files are under it, and finishing an upload that got the sdist up
+          # and died before the wheel is precisely what this retry is for.
+          #
+          # What actually bounds a dispatch is that every file this repository can build
+          # for a version is determined by the project NAME and that VERSION and by
+          # nothing else — so the set it uploads is either already there or the missing
+          # half of the same two files. That arithmetic lives in the build configuration,
+          # not here: a second wheel tag, a platform wheel or an `--python-tag` would end
+          # it with nothing failing and a file simply appearing under a published version.
+          # `build` therefore refuses an artefact set that is not exactly those two names
+          # (`id: artefact-set`, with the reasoning on the step), so changing what the
+          # build emits is a decision somebody makes in the open rather than a sentence
+          # here quietly ceasing to be true. `tests/test_a_half_finished_release_can_be_
+          # finished.py` holds both halves.
           #
           # NOT `true`, and the asymmetry is the whole of the decision. On the tag path a
           # version PyPI already holds has one realistic cause: a tag deleted and re-pushed
