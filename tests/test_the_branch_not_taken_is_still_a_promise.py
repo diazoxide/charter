@@ -637,6 +637,34 @@ class ReopeningOneChatSaysWhatItChanged(PersonaIso):
         self.assertFalse([s for s in said if "comes back in" in s],
                          "a restore that moved nothing has nothing to report")
 
+    def test_a_launcher_standing_in_the_workspace_already_still_gets_the_line(self):
+        """`_same_directory`'s ``if not b`` guard, and it cannot be pinned by an ordinary
+        fixture. `os.path.realpath("")` answers the **process's** working directory, so a
+        chat with no recorded cwd is compared against wherever the runner happens to
+        stand — which is normally somewhere else, and the line is printed for the wrong
+        reason. This case puts the process in the very directory the restore chose, which
+        is the one arrangement where dropping the guard silences a report that is true."""
+        where = ws_mod.ensure("alpha")
+        os.chdir(where)
+
+        _out, said, _seen = self._reopen(_chat(cwd=""))
+
+        self.assertTrue([s for s in said if "comes back in" in s],
+                        "a chat that recorded no directory has moved, and is told so")
+
+    def test_a_recorded_directory_that_is_not_a_path_at_all_is_reported_not_raised(self):
+        """`_same_directory`'s `except`, on the one value that reaches it. `os.path.isdir`
+        swallows an embedded NUL and answers `False`, so `_restore_root` never offers such
+        a cwd to `os.chdir` — but `os.path.realpath` RAISES `ValueError` on it, and the
+        manifest is a plain file that outlives the process and can be hand-edited. Without
+        the guard this is a traceback out of a restore, taking every later chat with it."""
+        _out, said, seen = self._reopen(_chat(cwd="/some\x00where"))
+
+        self.assertTrue(seen, "the chat is still reopened")
+        line = next(s for s in said if "comes back in" in s)
+        self.assertIn("is gone", line)
+        self.assertNotIn("\x00", line, "the NUL reached the terminal unescaped")
+
     def test_a_chat_with_no_workspace_is_not_told_it_landed_in_one(self):
         """The `landing` conditional. `_restore_root`'s no-workspace branch falls back to
         the plane root, and calling that *"its workspace directory"* would be charter
@@ -688,8 +716,10 @@ class ReopeningOneChatSaysWhatItChanged(PersonaIso):
         self.assertIsNone(seen[0].workspace)
         # And the other conjunct on the report line: a chat that names NO workspace is not
         # a chat whose workspace is missing — `leave.NOT_REOPENED` already said what it is,
-        # and this line would name the empty string.
-        self.assertFalse([s for s in said if "workspace is missing" in s])
+        # and this line would name the empty string. It is `valid_name` and no longer a
+        # bare truthiness test since #867, because that conjunct now also decides whether
+        # `_restore_root` will have MADE a directory to report on.
+        self.assertFalse([s for s in said if "workspace was missing" in s])
 
     def test_a_launcher_that_failed_reports_the_chat_as_not_come_back(self):
         out, said, _seen = self._reopen(_chat(), rc=1)

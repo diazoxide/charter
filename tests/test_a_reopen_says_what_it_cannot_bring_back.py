@@ -360,7 +360,12 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
 
     def test_a_directory_that_has_gone_falls_back_to_the_workspace(self):
         """It used to fall back to the plane root, which #867 is the end of: a workspace
-        the chat named is a better answer than the one directory every workspace shares."""
+        the chat named is a better answer than the one directory every workspace shares.
+
+        The workspace is made FIRST here, so this case is only about the cwd — the one
+        below is the same fallback with the workspace missing too, which is a different
+        branch and used to reach the plane root by a second route."""
+        ws_mod.ensure("alpha")
         self._record(self._chat(cwd="/nowhere-at-all"))
 
         self.assertEqual(self._reopen(), 0)
@@ -814,6 +819,72 @@ class ARefusedDoorwaySaysItsReasonOnScreen(PersonaIso, unittest.TestCase):
                             lambda r: r.refused)
 
         said.assert_not_called()
+
+
+class TheBoundaryARestoreDecidesWith(PersonaIso, unittest.TestCase):
+    """`workspace.contains` — #867's predicate, asked of the predicate itself.
+
+    Here rather than beside `workspace.exists` because what it answers is *where a chat
+    comes back*, which is this file's subject. The cases above measure it through the
+    restore and through the quit row; these measure it directly, so a failure says which
+    of the two the defect is in — the boundary, or what the caller does with it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.assertIn("edm-test-", str(config.STATE_DIR))
+
+    def test_the_workspace_directory_itself_is_inside_its_own_boundary(self):
+        """The one case `from_path` deliberately answers `None` for — `workspaces/<ws>`
+        is the container and not a tree — and the one a *boundary* has to say yes to. A
+        `contains` that were merely `from_path(...) == name` would report the workspace
+        root as outside the workspace and move a chat standing in it."""
+        wd = ws_mod.ensure("alpha")
+
+        self.assertIsNone(ws_mod.from_path(wd), "or this case measures nothing")
+        self.assertTrue(ws_mod.contains("alpha", wd))
+
+    def test_a_clone_under_the_workspace_is_inside_it(self):
+        clone = ws_mod.ensure("alpha") / "some-repo"
+        clone.mkdir()
+
+        self.assertTrue(ws_mod.contains("alpha", clone))
+        self.assertFalse(ws_mod.contains("beta", clone))
+
+    def test_the_plane_root_is_not_inside_any_workspace(self):
+        """#867's own case: the directory `harness-wrapper.1` recorded."""
+        ws_mod.ensure("alpha")
+
+        self.assertFalse(ws_mod.contains("alpha", config.ROOT))
+
+    def test_a_sibling_named_like_the_workspace_is_not_inside_it(self):
+        """`workspaces/alpha-old` is not `workspaces/alpha`, and a prefix test on the
+        string would say it is."""
+        ws_mod.ensure("alpha")
+        sibling = config.WORKSPACES_DIR / "alpha-old"
+        sibling.mkdir()
+
+        self.assertFalse(ws_mod.contains("alpha", sibling))
+
+    def test_a_name_that_cannot_name_a_workspace_contains_nothing(self):
+        """`valid_name` first, for `workspace.exists`' reason: ``WORKSPACES_DIR / ".."``
+        is the plane root, so a predicate that only resolved paths would answer True for
+        a name no `ensure` will ever make."""
+        config.WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+
+        self.assertFalse(ws_mod.contains("..", config.ROOT))
+        self.assertFalse(ws_mod.contains("", config.WORKSPACES_DIR))
+        self.assertFalse(ws_mod.contains("alpha", ""))
+
+    def test_a_path_that_cannot_be_resolved_is_simply_not_contained(self):
+        """The docstring says *never raises*, and this is what makes that a fact rather
+        than an intention. `Path.resolve` raises `ValueError` on an embedded NUL and
+        `from_path` catches only `(OSError, RuntimeError)`, so the guard has to be in
+        front of that call and not merely around the comparison below it. The value can
+        arrive: `reopen.json` is a plain file that outlives the process."""
+        ws_mod.ensure("alpha")
+
+        self.assertFalse(ws_mod.contains("alpha", "/some\x00where"))
 
 
 if __name__ == "__main__":       # pragma: no cover

@@ -247,7 +247,7 @@ def exists(name: str) -> bool:
 
     **The name check is part of the predicate and not the caller's job, and that is what
     is new here.** The same question was spelled inline in `frame/leave.plan` (`homeless`)
-    and in `commands_frame._reopen_one`'s `· workspace is missing`, and both are fed from
+    and in `commands_frame._reopen_one`'s `· workspace was missing`, and both are fed from
     `state.own_workspace`, which name-checks every rung it returns — so a bare
     `workspace_dir(ws).is_dir()` was safe *there* because of something true one call up.
     The pane's name comes from `state.workspace_for`, whose LAST rung is a bare
@@ -324,13 +324,16 @@ def contains(name: str, path) -> bool:
     as text answers *outside* for a path that is plainly inside.
 
     Never creates and never raises, like every predicate here: an unresolvable path is
-    simply not contained.
+    simply not contained. **`from_path` is inside the guard and not in front of it**, which
+    is the difference between promising that and merely intending it — it catches
+    ``(OSError, RuntimeError)`` and `Path.resolve` raises `ValueError` on a path with an
+    embedded NUL, which is a value a hand-edited `reopen.json` can carry to both callers.
     """
     if not valid_name(name) or not path:
         return False
-    if from_path(path) == name:
-        return True
     try:
+        if from_path(path) == name:
+            return True
         return os.path.realpath(path) == os.path.realpath(workspace_dir(name))
     except (OSError, ValueError):
         return False
