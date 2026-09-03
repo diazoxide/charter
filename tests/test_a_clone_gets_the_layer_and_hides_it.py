@@ -253,6 +253,25 @@ class TheReportIsInAStableOrder(CloneLayer):
                                       "/.claude/agents/mike.md",
                                       "/.claude/agents/zulu.md"])
 
+    def test_the_block_stays_sorted_when_a_persona_arrives_later(self):
+        """The case that makes `_charter_owned`'s sort observable at all. The marker is
+        BUILT in sorted order — `_materialise` walks `_layer_status`, which sorts — so on
+        a checkout wired once the dict order and the sorted order agree and the sort looks
+        like decoration. A persona added afterwards is appended to the marker's end, and
+        from then on they disagree: the block would list `settings.json` above an agent
+        that sorts above it, and re-sort itself the next time the marker was rewritten
+        from scratch. A file the operator reads should not shuffle on its own."""
+        self.wire()
+        self.agents("alpha.md")
+        self.wire()
+        marker = json.loads((self.clone / workspace.GENERATED_MARKER).read_text())
+        self.assertEqual(list(marker), [".claude/settings.json",
+                                        ".claude/agents/alpha.md"],
+                         "fixture no longer diverges — this case would assert nothing")
+        listed = [ln for ln in self.excludes().splitlines() if ln.startswith("/")]
+        self.assertEqual(listed, ["/.claude/agents/alpha.md", "/.claude/settings.json",
+                                  f"/{workspace.GENERATED_MARKER}"])
+
     def test_what_unwiring_reports_removing_is_sorted(self):
         self.agents("zulu.md", "alpha.md", "mike.md")
         self.wire()
