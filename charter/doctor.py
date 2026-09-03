@@ -639,22 +639,101 @@ def check_plane_root() -> Result:
 
 
 
-def _settings_files() -> list[Path]:
+def session_root() -> Path:
+    """The directory the HOST resolves this session's project settings against (#851).
+
+    **Not the plane, and that is the whole point.** `config.ROOT` comes from
+    `root.find_root`, which walks UP from the working directory until it finds a
+    `charter.toml` — so it lands on the plane from anywhere inside it, which is exactly
+    right for identity. Claude Code does not walk up: project settings, agents, skills and
+    commands are read from the session's own directory and nowhere above it (only
+    `CLAUDE.md` walks). A chat launched at `workspaces/<ws>/` — where the `+` button and
+    every workspace tab put one — therefore reads none of the plane's `.claude/`, while
+    `doctor` read all of it and reported the plugin enabled and the guard wired over a
+    session that had neither.
+
+    ``os.getcwd()`` is the evidence available, and it is the right evidence rather than a
+    stand-in: doctor runs *inside* the session it is reporting on, so the directory this
+    process is standing in is the directory the host resolved settings against.
+    ``$CLAUDE_PROJECT_DIR`` is exported to hook commands only — measured, not assumed: it
+    is absent from a session's own shell, so a `charter doctor` the agent or the operator
+    types would read nothing from it.
+
+    Deliberately NOT `root.tree_of`. That function answers "am I in a linked worktree of
+    the plane's repo" and answers ``None`` for ``workspaces/<ws>/<repo>`` **on purpose**
+    (its own docstring says so, and `nested_plane_in` exists because widening it would be
+    wrong). The question here is neither of those: it is "which directory is this session
+    rooted in", which no plane-relative derivation can answer.
+
+    Falls back to the plane if the cwd cannot be read at all — a process whose working
+    directory was deleted out from under it. A preflight row must render something.
+    """
+    from . import config as _config
+    try:
+        # Already canonical: the kernel resolves symlinks on the way out of `getcwd`, so
+        # this compares cleanly against a resolved plane without a second syscall that
+        # could itself raise.
+        return Path(os.getcwd())
+    except OSError:
+        return _canonical(Path(_config.ROOT))
+
+
+def _canonical(p: Path) -> Path:
+    """*p* with symlinks resolved, or *p* itself when it cannot be.
+
+    **One call site, deliberately.** The first draft resolved both sides of the comparison
+    in :func:`session_is_the_plane`, and the deletion sweep charged both — each was
+    individually deletable with the suite still green, because they masked each other and
+    because a Linux runner's ``/tmp`` needs no normalising either way. Only one of them was
+    ever load-bearing: `os.getcwd` hands back the physical path already, so the SESSION
+    side has nothing to normalise, while `config.derive` stores ROOT exactly as it was
+    handed in — a plane reached through a symlink (macOS's ``/var`` → ``/private/var``, a
+    symlinked checkout, `config.use` in a test) keeps that spelling.
+
+    So the plane is the side that needs it, and this is where it happens. Resolving a path
+    can raise `OSError` (an unreadable ancestor) or `RuntimeError` (a symlink loop), and a
+    preflight row must render something rather than traceback.
+    """
+    try:
+        return p.resolve()
+    except (OSError, RuntimeError):
+        return p
+
+
+def session_is_the_plane() -> bool:
+    """Is this session rooted at the plane, so that the plane's ``.claude/`` is in force?
+
+    The plane is canonicalised before comparing and the session is not, because only the
+    plane can be spelled two ways — see :func:`_canonical`. Without it a plane whose path
+    runs through a symlink answers "not the plane" for a session standing in the very
+    directory it resolved, and every row below would report a divergence that is not there.
+    """
+    from . import config as _config
+    return session_root() == _canonical(Path(_config.ROOT))
+
+
+def _settings_files(root: Path | None = None) -> list[Path]:
     """The settings the HOST actually resolves, in the order it reads them.
 
     One list, used both for a directly-declared hook and for `enabledPlugins`, so the two
     halves of "is it wired" can never disagree about which files are in force.
+
+    *root* defaults to :func:`session_root` — the directory this session is rooted in, not
+    the plane (#851). A caller that is asking about a **specific** file rather than about
+    this session names its own root: `commands._ensure_guard_hook` is about to write the
+    PLANE's `settings.json` and must read the plane's `enabledPlugins`, whatever directory
+    the operator happened to be standing in when they typed `charter reinit`.
     """
-    from . import config as _config
-    return [Path(_config.ROOT) / ".claude" / "settings.json",
-            Path(_config.ROOT) / ".claude" / "settings.local.json",
+    here = Path(root) if root is not None else session_root()
+    return [here / ".claude" / "settings.json",
+            here / ".claude" / "settings.local.json",
             Path.home() / ".claude" / "settings.json"]
 
 
-def _enabled_plugin_ids() -> set[str]:
+def _enabled_plugin_ids(root: Path | None = None) -> set[str]:
     """Plugin ids the host has ENABLED. Installed is not enabled (#177)."""
     out: set[str] = set()
-    for p in _settings_files():
+    for p in _settings_files(root):
         try:
             doc = json.loads(p.read_text())
         except (OSError, ValueError, UnicodeDecodeError):
@@ -667,7 +746,7 @@ def _enabled_plugin_ids() -> set[str]:
     return out
 
 
-def _plugin_declaring_guard() -> str | None:
+def _plugin_declaring_guard(root: Path | None = None) -> str | None:
     """An ENABLED Claude Code plugin whose own ``hooks.json`` dispatches the guard.
 
     ``CLAUDE_PLUGIN_ROOT`` is set only for the plugin's OWN processes, so a `charter doctor`
@@ -693,8 +772,14 @@ def _plugin_declaring_guard() -> str | None:
     Read from ``installed_plugins.json`` rather than globbed out of the plugin cache: the
     cache keeps every version ever fetched, so a stale copy would answer for a plugin since
     removed. The manifest is what the host actually installed.
+
+    *root* is the directory whose ``enabledPlugins`` to believe, defaulting to
+    :func:`session_root`. ``enabledPlugins`` is a settings key like any other, so it is
+    scoped to the directory the host read it from — a plugin enabled in the plane's
+    ``settings.json`` is not enabled for a chat rooted at ``workspaces/<ws>/`` (#851). A
+    caller writing a specific file names that file's directory instead.
     """
-    enabled = _enabled_plugin_ids()
+    enabled = _enabled_plugin_ids(root)
     if not enabled:
         return None
     manifest = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
@@ -716,6 +801,54 @@ def _plugin_declaring_guard() -> str | None:
             except (OSError, UnicodeDecodeError):
                 continue
     return None
+
+
+def check_session_root() -> Result:
+    """Which directory answered for the settings rows — and whether it is the plane (#851).
+
+    Every row below that reads `.claude/settings.json` reads :func:`session_root`'s, and
+    when that is not the plane the operator will go and look at the plane's file, find the
+    guard declared in it, and conclude doctor is broken. So the divergence is stated once,
+    up front, in the vocabulary charter already uses for it: **the plane is identity, the
+    directory you are standing in is artifacts** (`config.in_tree`, `docs/control-plane.md`
+    → *What follows the plane, and what follows the tree*).
+
+    **A fact, never a verdict — OK even when the two differ.** A chat rooted in a workspace
+    is the designed workflow: the `+` button and every workspace tab put one there, and a
+    row that warns on the normal case is a row operators learn to skip — the failure
+    `check_memory_indexes` and `check_harness` each record in their own docstrings.
+    Whatever is actually *missing* because of the divergence warns on its own row, where it
+    can name its own remedy; this one supplies the reason those rows read the way they do
+    (ADR 0013).
+
+    **Trust is deliberately not asked here, and that is a real gap rather than an
+    oversight.** Claude Code gates hook execution and the status line on the directory
+    being trusted, globally, whatever declared them — so "the plugin is enabled here" and
+    "charter's hooks actually run here" are two different questions, and an untrusted
+    directory answers yes to the first and no to the second. That belongs to
+    `check_guard_seen`, which already answers dispatch from evidence (a guard that ran)
+    rather than from configuration, and which says in its own docstring why no amount of
+    reading configuration can see it. Naming a directory as trusted by reading
+    ``~/.claude.json`` would be one more proxy in the family this row is fixing.
+    """
+    from . import config as _config
+
+    name = "session root"
+    here = session_root()
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail=f"{here} — no control plane found")
+    if session_is_the_plane():
+        return Result(name, OK, detail=f"{here} — the plane")
+    return Result(
+        name, OK,
+        detail=(f"{here} — not the plane ({_config.ROOT})\n"
+                f"        ↳ the host reads project settings, agents, skills and commands "
+                f"from the session's own directory and does not walk up, so the plane's "
+                f".claude/ is not in force here — the rows below read {here}/.claude/ and "
+                f"~/.claude/\n"
+                f"        ↳ the plane is still this session's identity: personas, the "
+                f"vault, memory and workspaces resolve to {_config.ROOT} from anywhere "
+                f"inside it"))
 
 
 def check_guard_wired() -> Result:
@@ -802,6 +935,26 @@ def check_guard_wired() -> Result:
                  "was right — but it was the declaration this session actually had.")
     if declared:
         return Result(name, OK, detail=f"wired ({declared[0]})")
+    # The remedy has to name a file THIS session reads. `charter reinit` writes the PLANE's
+    # `.claude/settings.json`, and for a chat rooted at `workspaces/<ws>/` the host never
+    # reads that file — so the old hint would have been followed, believed, and left the
+    # session exactly as unguarded (#851). That is this row's own defect one level down: a
+    # remedy that looks like a fix and is not.
+    if not session_is_the_plane():
+        from . import config as _config
+
+        here = session_root()
+        return Result(
+            name, WARN,
+            detail=f"pretooluse is not wired — branch moves in the plane root are NOT "
+                   f"refused, and nothing declares it in {here}",
+            hint=(f"This session is rooted at {here}, not the plane ({_config.ROOT}), and "
+                  f"the host does not walk up — so the plane's .claude/settings.json never "
+                  f"reaches here, wired or not. `charter reinit` writes THAT file, so it "
+                  f"would not change this session. Declare `charter hook pretooluse` under "
+                  f"hooks.PreToolUse in {here}/.claude/settings.json, or in "
+                  f"~/.claude/settings.json which every session reads — or install the "
+                  f"Claude Code plugin."))
     return Result(name, WARN,
                   detail="pretooluse is not wired — branch moves in the plane root are "
                          "NOT refused",
@@ -1117,9 +1270,23 @@ def check_nested_plane() -> Result:
 
 
 def _ask_rules() -> list | None:
-    """`permissions.ask` from the plane's settings — ``None`` when it cannot be read."""
-    from . import config as _config
-    p = Path(_config.ROOT) / ".claude" / "settings.json"
+    """`permissions.ask` from the settings THIS SESSION reads — ``None`` when unreadable.
+
+    The session's project settings, not the plane's (#855, the same defect as #851 one
+    check over). `permissions` is a host settings key like any other, so the host resolves
+    it from the session's own directory and does not walk up. Reading the plane's file
+    instead was wrong in both directions for a chat rooted at ``workspaces/<ws>/``: it
+    reported the plane's `ask` rules as shadowing a persona's declared tools when they never
+    reach that session, and it could not see a rule in the session's own settings that
+    genuinely does. This row exists to say *why* pre-approved tools started prompting
+    (ADR 0014), so an answer read out of a file the host never opened sends the reader
+    hunting in the wrong place.
+
+    Still the project settings file alone, as before — widening to `settings.local.json` and
+    `~/.claude/settings.json`, which also carry `permissions`, is a second change and is not
+    this one.
+    """
+    p = session_root() / ".claude" / "settings.json"
     if not p.exists():
         return []
     try:
@@ -2490,7 +2657,8 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
+                check_plane_root(), check_session_root(),
+                check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(), check_changes(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
@@ -2529,7 +2697,7 @@ def _checks():
 _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
-    "git auth", "charter.toml", "schema", "plane root", "harness", "frame",
+    "git auth", "charter.toml", "schema", "plane root", "session root", "harness", "frame",
     "plane-root guard", "guard seen", "nested plane", "workspace clones", "changes",
     "inventory", "vaults", "vault registry", "version lock", "memory indexes",
     "personas", "persona grant", "front door", "news", "ask rules", "shadowed docs",

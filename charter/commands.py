@@ -1040,8 +1040,17 @@ def _hooks_snippet() -> str:
     return json.dumps({"hooks": {"PreToolUse": [_GUARD_HOOK]}}, indent=2)
 
 
-def _plugin_dispatches_guard() -> str | None:
+def _plugin_dispatches_guard(root: Path) -> str | None:
     """The enabled plugin whose own ``hooks.json`` dispatches `charter hook pretooluse`.
+
+    *root* is the directory whose ``enabledPlugins`` decides it, and it is passed rather
+    than inherited because doctor's default is no longer the plane (#851): every row there
+    now answers for the directory the SESSION is rooted in, which is where the host reads
+    settings from. This caller is not asking about a session — it is about to write
+    ``root/.claude/settings.json``, so the enablement that matters is the one recorded in
+    that same file. Without the argument, `charter reinit` typed from a subdirectory would
+    miss the plugin enabled in the plane's settings and write a second declaration into it
+    — the doubling this function exists to prevent, arrived at from a new direction.
 
     Deliberately NOT "is a charter plugin enabled". `doctor._plugin_declaring_guard`
     records why, and 0.43.1 got it wrong by reading `enabledPlugins` instead: **installed,
@@ -1054,7 +1063,7 @@ def _plugin_dispatches_guard() -> str | None:
     """
     from . import doctor
 
-    return doctor._plugin_declaring_guard()
+    return doctor._plugin_declaring_guard(root)
 
 
 def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
@@ -1075,7 +1084,7 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     # `charter hook pretooluse` runs twice for every Bash call — the same doubling Codex
     # got from two installers, arrived at here by one writer and one checker disagreeing
     # about what "wired" means in the same file.
-    if _plugin_dispatches_guard():
+    if _plugin_dispatches_guard(root):
         return "present", p
     if not p.exists():
         try:

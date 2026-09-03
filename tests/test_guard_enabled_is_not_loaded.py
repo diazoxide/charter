@@ -40,6 +40,14 @@ class GuardCase(PersonaIso):
         # early without one. Asserted here rather than worked around, so the fixture says
         # out loud that these rows are about a real plane.
         self.enterContext(mock.patch.object(config, "HAS_CONTROL_PLANE", True))
+        # Rooted at the plane, so `config.ROOT/.claude/settings.json` is the file the host
+        # would actually read for this "session" (#851). Without it these tests write one
+        # settings file and `check_guard_wired` reads another — the developer's own — which
+        # is how a fixture goes on passing while asserting nothing.
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(config.ROOT)
+        self.assertTrue(doctor.session_is_the_plane(),
+                        "these tests are about a session rooted at the plane")
 
     def plugin_enabled(self):
         """The plugin is enabled in settings — declared, and loaded only at session start."""
