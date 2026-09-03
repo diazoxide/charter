@@ -1579,7 +1579,15 @@ def needs_reinit(name: str) -> bool:
 def reinit(name: str) -> dict:
     """Idempotently bring a workspace up to the current structure — create any missing
     baseline files and stamp the version marker. Additive: never destroys existing
-    content. Returns the pre-reinit status (what was missing / the old version)."""
+    content. Returns the pre-reinit status (what was missing / the old version), plus
+    ``layer`` — the harness-layer rows this call actually wrote.
+
+    **``layer`` is always set, on every path**, and `cmd_workspace_reinit` subscripts it
+    rather than carrying a fallback. An early return added above the line that sets it
+    would be a `KeyError` in the repair command, which is the loud failure; the fallback
+    it replaced made the same mistake print "up to date" over a workspace whose layer had
+    just been rewritten.
+    """
     before = structure_status(name)
     # The harness layer, written HERE rather than left to `scaffold`'s own call, because
     # the repair has to report what it DID and only the writer knows that: a `.claude`

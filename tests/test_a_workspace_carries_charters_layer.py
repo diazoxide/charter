@@ -578,10 +578,11 @@ class TheRowsQuietStates(WorkspaceLayer):
 
         Falling through renders the sentence below it with the number it has, and
         ``0 generated file(s) across all workspaces, all current`` is a true count wearing
-        the wrong row: it tells an operator their workspaces are mirroring the plane
-        correctly when the plane has nothing to mirror and no workspace holds a file at
-        all. The two states differ in what the next command should be — `reinit` repairs
-        the first and can do nothing about the second — so the row has to tell them apart.
+        the wrong row: it reports charter's files as in place and current when there are
+        no files, and no workspace holds one. Both states are green and they are not the
+        same fact — the second says the plane declares nothing worth mirroring, which is
+        the only one of the two an operator can do anything about, and `reinit` is not
+        what does it.
         """
         (config.ROOT / ".claude" / "settings.json").write_text(json.dumps(
             {"permissions": {"allow": ["Bash(ls:*)"]}}))
