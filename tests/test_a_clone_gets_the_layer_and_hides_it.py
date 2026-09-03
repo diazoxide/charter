@@ -628,6 +628,20 @@ class TheAnnouncement(CloneLayer):
         self.assertIn("svc", err.getvalue())
         self.assertIn("info/exclude", err.getvalue())
 
+    def test_a_refreshed_layer_is_announced_too(self):
+        """`created` is not the only thing worth saying. A plane whose status line moved
+        makes the next clone REFRESH what is already there, and charter has written into
+        the operator's repo again — the announcement is about the write, not about it
+        being the first one."""
+        commands._wire_clones(self.ws)
+        _plane_settings(config.ROOT,
+                        statusLine={"type": "command", "command": "charter frame"})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            commands._wire_clones(self.ws)
+        self.assertIn("svc", err.getvalue())
+        self.assertIn("info/exclude", err.getvalue())
+
     def test_a_second_clone_into_the_same_workspace_says_nothing(self):
         """Every `workspace restore` re-clones what is already there. A line per checkout
         per run would be the announcement nobody reads by the time it matters."""
