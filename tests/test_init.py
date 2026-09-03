@@ -9,10 +9,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
-from charter import commands, config, instance
-from tests import _envguard
+from charter import commands, instance
+from tests import _envguard, _isolation
 
 
 class InitIso(unittest.TestCase):
@@ -23,13 +22,16 @@ class InitIso(unittest.TestCase):
         _envguard.unset_all()
 
         self.root = Path(tempfile.mkdtemp(prefix="charter-init-")).resolve()
+        # Every derived setting, not just `ROOT`. `cmd_init` re-derives where the marker
+        # lands (#858), so a patcher scoped to one name would put that one back and leave
+        # the other nineteen pointing into this temp directory for the rest of the run.
+        _isolation.point_config_at(self, self.root)
 
     def _init(self, **kw):
         args = SimpleNamespace(forge=kw.get("forge", "gitlab"),
                                owner=kw.get("owner", "acme"),
                                host=kw.get("host", None))
-        with mock.patch.object(config, "ROOT", self.root):
-            return commands.cmd_init(args)
+        return commands.cmd_init(args)
 
 
 class TestFreshDirectory(InitIso):

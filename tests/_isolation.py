@@ -249,6 +249,30 @@ def make_plane(case, body: str = "schema = 1\n") -> Path:
     return case.tmp
 
 
+def point_config_at(case, root: Path) -> Path:
+    """Point every derived setting at *root* for one case, restoring all of them after.
+
+    What ``mock.patch.object(config, "ROOT", root)`` was standing in for in the four `init`
+    fixtures, and it was standing in badly. Patching the one name looked like isolation and
+    was a coincidence: `cmd_init`'s helpers all take *root* as an argument, so the other
+    twenty-odd settings were simply never read — while still pointing at the developer's
+    real plane throughout.
+
+    It stopped being survivable when `cmd_init` began re-deriving where the marker lands
+    (#858). `config.use` updates every `DERIVED` name; a patcher scoped to ``ROOT`` then
+    puts ``ROOT`` back and leaves the other nineteen in a temp directory that `addCleanup`
+    has already deleted — measured, on `tests/test_init.py`, and the WORSE half of #402's
+    shape: `config` reporting the real plane's root beside a `PERSONAS_DIR` that no longer
+    exists, for every test that runs afterwards.
+
+    So the snapshot is taken over the same set `config.use` writes, which is the set
+    `config.derive` produces — a setting added there is covered here the day it is added.
+    `PersonaIso`-based cases need none of this; they already snapshot in `setUp`.
+    """
+    case.addCleanup(config.restore, config.use(root))
+    return root
+
+
 def isolate_state_dir(case) -> Path:
     """Point ``config.STATE_DIR`` at a throwaway dir for one test case, restoring after.
 
