@@ -406,6 +406,18 @@ class Conf(unittest.TestCase):
 #: than today's five moves this with it instead of quietly leaving those cases short.
 _EVERY_CHROME_OPTION = max(floor for _n, _v, floor in commands_frame._CHROME)
 
+#: What `_FakeTmux` answers `list-keys -T root` with — tmux 3.7c's own `MouseDown3Pane`
+#: line, verbatim through the `select-pane` that is #848's defect and cut short of the
+#: page-long `display-menu` this suite has no use for. The launcher reads this and builds
+#: its wrap out of it (`commands_frame._menu_button_bind_argv`); a fake that answered with
+#: nothing would make every launch here take the "nothing to wrap" branch and no case
+#: below could tell the ordinary path from it.
+_ROOT_KEYS = (
+    "bind-key  -T root MouseDown1Pane            select-pane -t = \\; send-keys -M\n"
+    'bind-key  -T root MouseDown3Pane            if-shell -F -t = "#{||:'
+    '#{mouse_any_flag},#{pane_in_mode}}" { select-pane -t = ; send-keys -M } '
+    '{ display-menu -T "#{pane_index}" -t = -x M -y M Kill X { kill-pane } }\n')
+
 
 class Chrome(unittest.TestCase):
     """The frame's own pane-border settings (#514) — the builder alone; the launch paths
@@ -1511,6 +1523,7 @@ class _FakeTmux:
                 resize_hook_rc=0,
                 capture_rc=0,
                 respawn_hook_rc=0, chat_option_rc=0, plane_option_rc=0,
+                root_keys=None, keys_rc=0, menu_bind_rc=0,
                 resize_hook_stderr="bad resize hook target"):
         self.pane_id = pane_id
         self.exit_code = exit_code
@@ -1567,6 +1580,17 @@ class _FakeTmux:
         self.respawn_hook_rc = respawn_hook_rc
         self.chat_option_rc = chat_option_rc
         self.plane_option_rc = plane_option_rc
+        #: What `list-keys -T root` answers — the read #848's menu-button bind is built
+        #: out of. Defaults to tmux's own `MouseDown3Pane` line, cut short of its
+        #: page-long `display-menu`, so an ordinary launch here wraps something the way an
+        #: ordinary launch on a real server does. `""` is the server that binds nothing,
+        #: and a line already carrying `_PANEL_OPTION` is the second frame on a socket.
+        self.root_keys = _ROOT_KEYS if root_keys is None else root_keys
+        #: The read's own return code, and the bind's — separate knobs, because a server
+        #: that will not say what it has bound and one that refuses the bind are two
+        #: different degrades and each is warned about differently.
+        self.keys_rc = keys_rc
+        self.menu_bind_rc = menu_bind_rc
         #: Every value the launcher wrote to `@charter_plane`, in order — a list rather
         #: than a flag because "written once, by the launch that made the session" is a
         #: COUNT, and the case that would have caught a second write is a launch that
@@ -1780,6 +1804,27 @@ class _FakeTmux:
             if self.fid and self.still_live:
                 live.add(self.fid)
             return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(live), stderr="")
+        if "list-keys" in cmd:
+            # The one READ in the launcher's admin sequence whose answer another command
+            # is built out of (#848) — see `_menu_button_bind_argv`. It cannot join the
+            # batch below it for exactly that reason.
+            #
+            # **The stdout is the same whatever `keys_rc` says, deliberately.** A failing
+            # tmux usually prints nothing, but a timeout after partial output and a
+            # `tmuxctl.DECODE_ERRORS` replacement both leave readable bytes behind a
+            # non-zero code — so the claim under test is charter reading the RETURN CODE
+            # rather than the bytes, and a fake that emptied stdout here would make that
+            # claim unpinnable.
+            return subprocess.CompletedProcess(cmd, self.keys_rc, stdout=self.root_keys,
+                                               stderr="" if self.keys_rc == 0
+                                               else "no server running")
+        if "bind-key" in cmd:
+            # And the write it produces. The only top-level `bind-key` the launcher makes:
+            # `conf_text`'s two mouse binds and the palette's hotkey travel inside the
+            # config file, and the hatch is a `set-option`.
+            return subprocess.CompletedProcess(cmd, self.menu_bind_rc, stdout="",
+                                               stderr="" if self.menu_bind_rc == 0
+                                               else "unknown key: MouseDown3Pane")
         raise AssertionError(f"unexpected tmux command in test: {cmd}")
 
     def _panes(self, harness: str) -> str:
@@ -2704,6 +2749,79 @@ class Launch(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(exit_code=0)
         _launch(fake)
         self.assertNotIn("frame-toggle", fake.sourced_conf_text)
+
+    def test_the_menu_button_is_bound_out_of_what_the_server_already_had(self):
+        """#848, at the launcher. `conf_text` cannot carry this bind — it is built out of
+        a `list-keys` READ — so the launch is the only place the read and the write meet,
+        and a launcher that stopped making the read would leave every unit test in
+        `tests/test_a_right_click_on_a_panel_stays_where_it_points.py` green while no
+        frame anywhere had the binding."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        bind = [c for c in fake.calls if "bind-key" in c]
+        self.assertEqual(len(bind), 1, "the menu button was not bound exactly once")
+        self.assertEqual(bind[0][3:11],
+                         ["bind-key", "-n", "MouseDown3Pane", "if-shell", "-F", "-t",
+                          "=", "#{@charter_panel}"])
+        self.assertEqual(bind[0][-2], "send-keys -M")
+        self.assertIn("display-menu", bind[0][-1],
+                      "the else-branch is not the binding this server already had")
+        # And NOT duplicated into the text file `source-file` loads, which is what keeps
+        # an operator's own binding out of a parse that would take `mouse`,
+        # `history-limit` and the palette's hotkey down with it.
+        self.assertNotIn("MouseDown3Pane", fake.sourced_conf_text or "")
+
+    def test_the_binding_is_read_before_it_is_written(self):
+        """Otherwise charter would read back its OWN wrap and nest another copy of a
+        page-long `display-menu` inside it on every launch."""
+        fake = _FakeTmux(exit_code=0)
+        _launch(fake)
+        read = next(i for i, c in enumerate(fake.calls) if "list-keys" in c)
+        wrote = next(i for i, c in enumerate(fake.calls) if "bind-key" in c)
+        self.assertLess(read, wrote)
+
+    def test_a_second_frame_on_the_socket_binds_nothing_again(self):
+        """The ordinary case after the first launch, since a root key table is
+        server-wide: the server answers with charter's own wrap, and there is nothing to
+        do. Silent rather than warned about — the binding this launch would have
+        installed is already installed."""
+        fake = _FakeTmux(exit_code=0, root_keys=(
+            'bind-key  -T root MouseDown3Pane            if-shell -F -t = '
+            '"#{@charter_panel}" { send-keys -M } { display-menu -T x }\n'))
+        _launch(fake)
+        self.assertEqual([c for c in fake.calls if "bind-key" in c], [])
+
+    def test_a_server_that_binds_the_key_to_nothing_is_left_alone(self):
+        """`unbind -n MouseDown3Pane` is a thing an operator can have written, and a key
+        that does nothing runs no `select-pane`: there is no steal to fix, and charter
+        putting a binding back would be charter undoing their config."""
+        fake = _FakeTmux(exit_code=0, root_keys="bind-key  -T root WheelUpPane  send -M\n")
+        _launch(fake)
+        self.assertEqual([c for c in fake.calls if "bind-key" in c], [])
+
+    def test_a_read_that_fails_costs_the_bind_and_not_the_launch(self):
+        """What is lost is the fix; what is left is what every charter before #848
+        shipped. `tmuxctl.run` names the failed read itself, so this asserts the launch
+        continued rather than that it was silent about it.
+
+        The fake still prints a readable table behind the non-zero code (see its
+        `list-keys` branch), so what this pins is that charter reads the RETURN CODE and
+        not the bytes."""
+        fake = _FakeTmux(exit_code=0, keys_rc=1)
+        self.assertEqual(_launch(fake), 0)
+        self.assertEqual([c for c in fake.calls if "bind-key" in c], [])
+        self.assertTrue(any("source-file" in c for c in fake.calls),
+                        "a failed read took the rest of the launch with it")
+
+    def test_a_refused_bind_is_warned_about_and_the_launch_goes_on(self):
+        """One key, and a sentence naming what it cost. The frame still comes up: the
+        alternative is refusing a launch over a right-click."""
+        fake = _FakeTmux(exit_code=0, menu_bind_rc=1)
+        with mock.patch("charter.util.warn") as warned:
+            self.assertEqual(_launch(fake), 0)
+        said = " ".join(str(c) for c in warned.call_args_list)
+        self.assertIn("right-click", said)
+        self.assertIn("keyboard", said)
 
     def test_both_hooks_are_installed_as_their_own_commands(self):
         """Companion to the `source-file` test: neither hook is missing from BOTH

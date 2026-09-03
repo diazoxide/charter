@@ -19,8 +19,9 @@ the panel process out of its own event handler. What that buys, link by link:
 * that the pane really asks (`overlay.MOUSE_ON` written to fd 1 by a process nobody in
   this test can monkey-patch);
 * that tmux routes the report to the pane under the pointer, in that pane's own cells, and
-  **leaves the keyboard on the harness** — #634's `MouseDown1Pane` rebind, which is what
-  makes a clickable bar something an operator can use rather than a trap;
+  **leaves the keyboard on the harness** — #634's `MouseDown1Pane` rebind for the left
+  button and #848's `MouseDown3Pane` wrap for the right, which is what makes a clickable
+  bar something an operator can use rather than a trap;
 * that the handler's `_spawn` really starts a charter that really performs the switch, in
   a plane the child resolves for itself — a link that is three processes long and whose
   failure mode (`No module named charter`, a plane resolved from a cwd) is silent.
@@ -201,12 +202,18 @@ class _ARealFrameWithBars(PersonaIso):
         return started.stdout.strip()
 
     def _source_conf(self, fid: str) -> None:
-        """charter's OWN frame config, `mouse = true`.
+        """charter's OWN frame config, `mouse = true`, and its own menu-button bind.
 
         Asking `conf_text` for the text rather than writing `set mouse on` by hand is what
         makes the `MouseDown1Pane` rebind (#634) part of what is under test — a
         hand-written config would leave tmux's default binding in place and the "keyboard
         stays on the harness" case below would be measuring a config this file invented.
+
+        `MouseDown3Pane` is the same rule for the same reason one button over (#848), and
+        it is a second call rather than a second line because that bind is not text at all:
+        it is a WRAP of whatever the server already had, so it needs a `list-keys` read
+        first and cannot exist before there is a server to ask. This is the launcher's own
+        call, made the way the launcher makes it.
         """
         conf = str(self.tmp / f"{fid}.conf")
         with open(conf, "w") as fh:
@@ -214,6 +221,11 @@ class _ARealFrameWithBars(PersonaIso):
                                               history_limit=100, session=fid))
         sourced = self._tmux("source-file", conf)
         self.assertEqual(sourced.returncode, 0, sourced.stderr)
+        wrap = commands_frame._menu_button_bind_argv(socket=self.socket, env=self.env)
+        if wrap is not None:
+            bound = subprocess.run(wrap, capture_output=True, text=True, timeout=20,
+                                   env=self.env)
+            self.assertEqual(bound.returncode, 0, bound.stderr)
 
     def _split_bar(self, harness: str, name: str, fid: str) -> str:
         """One real `charter panel <name>` pane, marked the way its launcher marks it.
@@ -744,34 +756,39 @@ class ARealRightClickOnTheChatBarOpensARealMenu(_ARealChatBarOverTwoChats,
         start — which is what makes the empty pane list below a real assertion rather than
         a race this case happened to win.
 
-        **What this case deliberately does NOT assert is where the keyboard ended up, and
-        that is a measurement rather than an omission.** tmux's own default binding for
-        this key, read back off a real 3.7c with `list-keys -T root`, is::
+        **And the keyboard stays on the harness, which is #848 and is the third line this
+        case could not assert when it was written.** tmux's own default binding for this
+        key, read back off a real 3.7c with `list-keys -T root`, is::
 
             MouseDown3Pane if-shell -F -t = "#{||:#{mouse_any_flag},…}"
                              { select-pane -t = ; send-keys -M }
                              { display-menu … }
 
-        The branch that forwards the report **selects the pane first**. That is #634's
-        defect, one button over and still open: with `[frame] mouse = true`, a right-click
-        on any charter panel moves the keyboard to it before the byte arrives. It is
-        pre-existing — it is what tmux has always done to button 3 — and it costs nothing
-        on the gesture this feature is for, because a menu that opens takes the keyboard
-        anyway and `commands_frame._close_palette` selects the harness on the way out. It
-        costs a MISS one left click, or `overlay.HATCH_KEY`.
+        The branch that forwards the report **selects the pane first**, and
+        `#{mouse_any_flag}` is 1 for this bar precisely because its component declared
+        `click` — so with `[frame] mouse = true` this press used to leave `#{pane_id}` on
+        the bar's pane rather than the harness's. It cost nothing on the gesture #846 is
+        for, because a menu that opens takes the keyboard anyway and
+        `commands_frame._close_palette` selects the harness on the way out; **a MISS is
+        exactly the case where it cost something**, which is why the missing assertion
+        belonged on this case and on no other.
 
-        Charter binds nothing here, which is `frame/builtins._MENU_BUTTON`'s own note:
-        `MouseDown1Pane`'s fix works because its else-branch is tmux's own two commands
-        written out, and button 3's else-branch is a `display-menu` a page long that
-        differs between versions. Asserting the steal here would enshrine it; asserting
-        its absence would be red. So this asserts what is contractual — nothing opened —
-        and says why the third line is missing.
+        Charter now wraps that binding rather than replacing it
+        (`commands_frame._menu_button_bind_argv`): its own `@charter_panel` test in front,
+        and whatever the server already had as the else-branch, so a right click on a pane
+        charter did not create still gets tmux's own pane menu. The bar is a panel, so this
+        press takes the forwarding branch without the `select-pane` — the report arrives,
+        `slots._Tabs.tab_at` answers nothing for a heading cell, and nothing at all
+        happens, which is what a miss should cost.
         """
         self._click(self.bar, col=self._column_of(self.bar, "chats"),
                     button=self.BUTTON)
         time.sleep(2.0)
         self.assertEqual(self._menu_pane(), "")
         self.assertIn(self.harness, self._panes(self.WS))
+        self.assertEqual(self._active(), self.harness,
+                         "a right click that opened nothing still took the keyboard off "
+                         "the harness — #848, and one left click or F12 to undo")
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")

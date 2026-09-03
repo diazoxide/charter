@@ -212,24 +212,32 @@ class NeitherMouseKeyIsAComponentsToTake(unittest.TestCase):
     """#566's hazard, in the mouse table.
 
     tmux key tables have no notion of a conflict — a later `bind -n` replaces the earlier
-    and `list-keys` reads back one line where two were meant. `conf_text` writes both mouse
-    binds BEFORE the toggles, so a component claiming either would leave its own key alive
-    and charter's mouse handling silently gone: the wheel would stop entering copy-mode,
-    and a click on a panel would go back to taking the keyboard off the harness.
+    and `list-keys` reads back one line where two were meant. `conf_text` writes two of the
+    three mouse binds BEFORE the toggles, so a component claiming either would leave its
+    own key alive and charter's mouse handling silently gone: the wheel would stop entering
+    copy-mode, and a click on a panel would go back to taking the keyboard off the harness.
 
-    Both names pass `instance._HOTKEY_RE` — they are alphanumerics under twenty characters
-    — so this is reachable rather than theoretical, and the guard is what closes it.
+    **The third is `MouseDown3Pane` and it is reserved for a sharper version of the same
+    reason** (#848). That one is not written by `conf_text` at all — it is a WRAP of
+    whatever the server already had, built from a `list-keys` read
+    (`_menu_button_bind_argv`) — so a component that claimed it would not merely replace
+    charter's binding: it would replace the operator's own pane menu with a toggle, having
+    been handed tmux's whole default `display-menu` to overwrite.
+
+    All three names pass `instance._HOTKEY_RE` — they are alphanumerics under twenty
+    characters — so this is reachable rather than theoretical, and the guard is what closes
+    it.
     """
 
     def _resolve(self, key: str) -> dict:
         return instance.frame_of(
             {"frame": {"hotkey": "M-x", "component": [{"use": "identity", "key": key}]}})
 
-    def test_both_names_are_keys_the_alphabet_would_otherwise_allow(self):
-        """Without this the two cases below could be passing for the wrong reason — a
+    def test_all_three_names_are_keys_the_alphabet_would_otherwise_allow(self):
+        """Without this the three cases below could be passing for the wrong reason — a
         component claiming a key `_HOTKEY_RE` rejects is refused by a different guard
         entirely, and the collision guard would never fire."""
-        for key in ("WheelUpPane", "MouseDown1Pane"):
+        for key in ("WheelUpPane", "MouseDown1Pane", "MouseDown3Pane"):
             with self.subTest(key=key):
                 self.assertEqual(instance.toggle_key(key), key)
 
@@ -240,6 +248,15 @@ class NeitherMouseKeyIsAComponentsToTake(unittest.TestCase):
 
     def test_a_component_may_not_take_the_click(self):
         frame = self._resolve("MouseDown1Pane")
+        self.assertEqual(frame["components"], [])
+        self.assertEqual(frame["slots"], instance.FRAME_DEFAULTS["slots"])
+
+    def test_a_component_may_not_take_the_menu_button(self):
+        """#848's key, held to the same rule the moment charter started binding it. It was
+        nobody's to claim before this — `MouseDown2Pane`'s control case below was true of
+        this name as well — and the reservation is what stops a plane's own toggle key
+        deleting the wrap that keeps a right-click off the keyboard."""
+        frame = self._resolve("MouseDown3Pane")
         self.assertEqual(frame["components"], [])
         self.assertEqual(frame["slots"], instance.FRAME_DEFAULTS["slots"])
 
@@ -280,12 +297,23 @@ class NeitherMouseKeyIsAComponentsToTake(unittest.TestCase):
 
     def test_the_reserved_names_are_the_ones_actually_bound(self):
         """The drift this reservation exists to prevent, asked directly: every key in
-        `tmuxctl.MOUSE_KEYS` must appear as a `bind -n` in `conf_text`'s output, and the
-        two spellings are pinned as literals so that renaming the constant alone is red."""
-        self.assertEqual(tuple(tmuxctl.MOUSE_KEYS), ("WheelUpPane", "MouseDown1Pane"))
+        `tmuxctl.MOUSE_KEYS` must really be bound somewhere, and the three spellings are
+        pinned as literals so that renaming a constant alone is red.
+
+        **Two of them are asked of `conf_text` and the third of the argv**, because that
+        is where they are: reserving a key charter does not bind is a refusal that costs a
+        plane its toggle and buys nothing, and the only way to notice is to ask each name
+        of the writer that actually emits it."""
+        self.assertEqual(tuple(tmuxctl.MOUSE_KEYS),
+                         ("WheelUpPane", "MouseDown1Pane", "MouseDown3Pane"))
         for key in ("WheelUpPane", "MouseDown1Pane"):
             with self.subTest(key=key):
                 self.assertIn(f"bind -n {key} ", _text())
+        self.assertNotIn("MouseDown3Pane", _text(),
+                         "the menu button is a WRAP of the server's own binding and "
+                         "cannot be a line in a file written before the server is asked")
+        argv = commands_frame._menu_button_argv(socket="charter", default="display-menu")
+        self.assertEqual(argv[3:6], ["bind-key", "-n", "MouseDown3Pane"])
 
 
 if __name__ == "__main__":  # pragma: no cover
