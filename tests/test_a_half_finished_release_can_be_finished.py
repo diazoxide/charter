@@ -45,9 +45,16 @@ different bytes by construction**: `docs/news/` ships inside the sdist, so the #
 recovery (fix the entry, re-dispatch) changes it, and `--ref main` picks up whatever else
 merged besides. A byte comparison would refuse the exact retry it exists to enable.
 
-PyPI keeps what it already holds either way. That is what makes a published version one
-immutable thing, and it is the right outcome: a retry's business is the Release, not the
+PyPI never lets a file be REPLACED either way, so the rebuilt bytes cannot displace the
+published ones, and that is the right outcome: a retry's business is the Release, not the
 artifacts.
+
+That sentence is about replacement, and for a while it was read as saying a published
+version cannot change at all. It does not (#835). `--skip-existing` skips the files PyPI
+already holds *by name* and uploads the rest, so what bounds a retry is not PyPI's refusal
+but the artefact set being determined by the project name and the version — an arithmetic
+that lives in `pyproject.toml`, which the publishing workflow never reads. `build` now
+asserts it, and `WhatARetryCanUploadIsBoundedByTheSetTheBuildEmits` below is that half.
 
 So the discriminator is which trigger asked — the only honest one available — and a
 trigger nobody has taught this rule gets the strict path. That is asserted below rather
@@ -59,12 +66,14 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests.test_workflows import Unparsed, _release, needs
+from tests.test_workflows import Unparsed, _release, _step, needs
 
 #: The action whose `skip-existing` this module is about. Matched by what the step *is*
 #: rather than by an `id:`, so the assertions below cannot be satisfied by a second step
@@ -272,6 +281,275 @@ class TheReaderRendersOnlyWhatItUnderstands(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(Unparsed):
                     skip_existing_on(self._step(value), "push")
+
+
+def _artefact_check() -> str:
+    """`build`'s script for the artefact set, refused if it is not there.
+
+    By `id:` rather than by what the step *is*, unlike `upload_step` above, because there
+    is nothing else to match on: it is a `run:` block, and matching it on its own text
+    would mean this reader agreeing with the script about the script.
+    """
+    return _step(_release()["jobs"]["build"], "artefact-set")["run"]
+
+
+def _run_artefact_check(built, packaged: str = "0.55.0",
+                        project: str = "charter-cp") -> tuple[int, str]:
+    """Run that step over a `dist/` holding exactly *built*, in a tree whose pyproject
+    says *project* / *packaged*.
+
+    A `python` shim for the same reason `_execute` has one — the step parses TOML, which
+    is 3.11+, and the runner's default `python` is a version nobody chose. Nothing else is
+    stubbed: this step reaches no network and asks nobody anything, which is most of why
+    it belongs in `build` rather than beside the upload.
+    """
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(os.path.realpath(raw))
+        (tmp / "pyproject.toml").write_text(
+            f'[project]\nname = "{project}"\nversion = "{packaged}"\n')
+        (tmp / "dist").mkdir()
+        for name in built:
+            (tmp / "dist" / name).write_bytes(b"")
+        (tmp / "bin").mkdir()
+        shim = tmp / "bin" / "python"
+        shim.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+        shim.chmod(0o755)
+        done = subprocess.run(["bash", "-e", "-c", _artefact_check()], cwd=tmp,
+                              env={"PATH": f"{tmp / 'bin'}:/usr/bin:/bin"},
+                              capture_output=True, text=True)
+        return done.returncode, done.stdout + done.stderr
+
+
+def _emitted(version: str = "0.55.0", project: str = "charter_cp") -> list[str]:
+    """The artefact set hatchling emits for this package — the two names the retry path's
+    whole safety rests on being all of them."""
+    return [f"{project}-{version}-py3-none-any.whl", f"{project}-{version}.tar.gz"]
+
+
+class WhatARetryCanUploadIsBoundedByTheSetTheBuildEmits(unittest.TestCase):
+    """The half of #673 that was true by arithmetic nobody had written down (#835).
+
+    `skip-existing` reads like "tolerate a version PyPI already has". It is not what the
+    flag does. **It skips the individual files PyPI already holds BY NAME and uploads the
+    rest** — so a dispatch against a published version is a no-op only while every file
+    the build can emit for that version is one PyPI already has. Otherwise the run adds a
+    file to a version that is already out, and nothing anywhere reports it.
+
+    Two things that look like they close that gap and do not:
+
+    * **`guard` does not.** It asks `pypi.org/pypi/<project>/<version>/json` and reads the
+      HTTP status. A `200` says the version exists; it says nothing about which files are
+      under it. An upload that got the sdist up and died before the wheel leaves exactly
+      that state, and finishing it is what the retry is *for*.
+    * **The action does not.** `--skip-existing` is per file, by construction: twine
+      uploads one distribution at a time and this flag is how a `400`/`409` on one of them
+      stops being fatal.
+
+    What actually holds is that hatchling emits `<name>-<version>.tar.gz` and
+    `<name>-<version>-py3-none-any.whl` and nothing else, both fully determined by the
+    project name and the version — so the set a retry offers is either already up there or
+    is the missing half of the same two files. That is a fact about `pyproject.toml`, in a
+    file the publishing workflow does not read, and it would stop being true silently:
+    add a second wheel tag, a platform wheel or an `--python-tag` and a published version
+    quietly gains a file on the next dispatch.
+
+    So it is asserted, in `build`, where the files exist and before any of them is
+    uploaded — the same move #681 made one file along, where the claim was "the tree a
+    dispatch publishes agrees with the version beside it" and the answer was to ask rather
+    than to write the assumption down.
+
+    **In `build` and not in `publish`, and that is not a preference.** `publish` holds
+    `contents: none` and never checks the repository out — it downloads the artifact and
+    uploads it — so it has no `pyproject.toml` to derive the two names from. `build` is
+    also the safe end: a refusal there costs a red run before anything irreversible, where
+    the same refusal beside the upload would arrive with half a release already shipped.
+    """
+
+    def setUp(self):
+        self.release = _release()
+        self.build = self.release["jobs"]["build"]
+
+    # ------------------------------------------------------------------ the premise
+
+    def test_a_trigger_still_tolerates_a_version_pypi_already_holds(self):
+        """If `skip-existing` ever comes off every trigger, PyPI refuses an upload into a
+        published version on every path and this class guards a door already locked. That
+        would be fine; it would also leave the reasoning above reading as current."""
+        upload = upload_step(self.release["jobs"]["publish"])
+        self.assertTrue(
+            any(skip_existing_on(upload, t) for t in self.release["on"]),
+            "no trigger passes `skip-existing` any more, so nothing can add a file to a "
+            "published version. This class's subject has changed shape — re-read the "
+            "module rather than deleting the assertions.")
+
+    # ------------------------------------------------------------------ the shape
+
+    def test_the_bound_is_measured_in_the_job_whose_output_publish_uploads(self):
+        """`publish` uploads the artifact `build` produced, so a check anywhere else is a
+        check of something other than the bytes PyPI is offered."""
+        self.assertIn("build", needs(self.release["jobs"]["publish"]),
+                      "`publish` no longer takes its distributions from `build`, so this "
+                      "step is measuring a set nobody uploads")
+        _artefact_check()      # raises by name if the step is gone from `build`
+
+    def test_the_bound_is_taken_before_the_artifact_publish_downloads_is_uploaded(self):
+        """Order, not merely presence. `upload-artifact` is what leaves `build`; a check
+        after it would pass or fail over a set that had already been handed on."""
+        steps = self.build["steps"]
+        checked = [i for i, s in enumerate(steps) if s.get("id") == "artefact-set"]
+        handed = [i for i, s in enumerate(steps)
+                  if str(s.get("uses", "")).startswith("actions/upload-artifact@")]
+        self.assertEqual(len(checked), 1, "one step bounds the artefact set")
+        self.assertEqual(len(handed), 1, "one step hands it to `publish`")
+        self.assertLess(checked[0], handed[0],
+                        "the artefact set is handed to `publish` before anything has "
+                        "asked what is in it")
+
+    def test_the_bound_cannot_be_skipped(self):
+        """#558's rule, applied to the step that carries #835's claim: a conditional step
+        reports success without running, which is indistinguishable here from a build
+        whose artefact set was checked and found correct."""
+        step = _step(self.build, "artefact-set")
+        self.assertNotIn(
+            "if", step,
+            "a condition on the step that bounds what a retry can upload. A skipped step "
+            "is a green step, so this is a way for the bound to report success unrun")
+
+    # ------------------------------------------------------------------ the behaviour
+
+    def test_the_two_files_name_and_version_determine_are_accepted(self):
+        """The direction that has to keep working: today's build must still release. A
+        step that refused everything would pass every other case in this class."""
+        code, said = _run_artefact_check(_emitted())
+        self.assertEqual(code, 0, said)
+
+    def test_the_order_the_files_are_found_in_does_not_decide_the_answer(self):
+        """`ls` orders by locale and the check compares a sorted listing, so this is the
+        difference between asserting about a SET and asserting about a directory read."""
+        code, said = _run_artefact_check(list(reversed(_emitted())))
+        self.assertEqual(code, 0, said)
+
+    def test_a_third_artefact_is_refused_and_named(self):
+        """#835 itself: the platform wheel that would otherwise be added to a version
+        already on PyPI by the next `workflow_dispatch`, with nothing failing."""
+        extra = "charter_cp-0.55.0-cp312-cp312-manylinux_2_17_x86_64.whl"
+        code, said = _run_artefact_check(_emitted() + [extra])
+        self.assertNotEqual(code, 0, f"a third artefact was accepted:\n{said}")
+        self.assertIn(extra, said, "the refusal does not name the file it is about")
+
+    def test_the_refusal_says_why_an_extra_file_matters_on_this_path(self):
+        """An exit code says a build changed; it does not say that the consequence lands
+        two jobs later, on a trigger, against a version already published. Whoever added
+        the wheel is the person who needs that sentence."""
+        code, said = _run_artefact_check(_emitted() + ["charter_cp-0.55.0-py2-none-any.whl"])
+        self.assertNotEqual(code, 0, said)
+        self.assertIn("ADD a file to it", said)
+        self.assertIn("skip-existing", said)
+
+    def test_an_artefact_that_did_not_get_built_is_refused_too(self):
+        """The other direction, and it is not symmetry for its own sake. A build that
+        emitted only the sdist would satisfy "nothing unexpected is here" while shipping a
+        release with no wheel — and would leave the wheel as a file a later dispatch could
+        still add."""
+        for missing, kept in (("the wheel", [_emitted()[1]]),
+                              ("the sdist", [_emitted()[0]]),
+                              ("both", [])):
+            with self.subTest(missing=missing):
+                code, said = _run_artefact_check(kept)
+                self.assertNotEqual(code, 0, f"a build missing {missing} was accepted:\n"
+                                             f"{said}")
+
+    def test_a_hidden_file_in_dist_is_refused_rather_than_reasoned_about(self):
+        """Stricter than the upload, on purpose, and measured so it stays a decision.
+
+        The action globs `dist/*`, which does not match a dotfile, so a hidden file would
+        never reach PyPI — and this refuses it anyway. A dotfile in `dist/` means the
+        build changed (`uv build` writes a `.gitignore` into its output directory; the
+        `python -m build` this job runs does not), and the alternative is a release gate
+        whose correctness depends on whose glob rules decide. It costs a red run before
+        anything is uploaded.
+        """
+        code, said = _run_artefact_check(_emitted() + [".gitignore"])
+        self.assertNotEqual(code, 0, f"a dotfile in dist/ was accepted:\n{said}")
+
+    def test_a_dist_that_is_not_there_at_all_is_a_refusal_and_not_a_pass(self):
+        """`ls` fails and the pipeline's status is `sort`'s, so `set -e` does not fire and
+        `built` comes out empty — which has to read as "not the expected set" rather than
+        as nothing to check. Fails closed, and this is the case that says so."""
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(os.path.realpath(raw))
+            (tmp / "pyproject.toml").write_text(
+                '[project]\nname = "charter-cp"\nversion = "0.55.0"\n')
+            (tmp / "bin").mkdir()
+            shim = tmp / "bin" / "python"
+            shim.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+            shim.chmod(0o755)
+            done = subprocess.run(["bash", "-e", "-c", _artefact_check()], cwd=tmp,
+                                  env={"PATH": f"{tmp / 'bin'}:/usr/bin:/bin"},
+                                  capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0,
+                            f"no dist/ at all was accepted:\n{done.stdout}{done.stderr}")
+
+    def test_the_names_are_read_from_pyproject_rather_than_written_down(self):
+        """A step with the current version baked into it would pass every case above and
+        refuse the next release. The version is the release's own input, so it is the one
+        thing this check may not have an opinion about."""
+        code, said = _run_artefact_check(_emitted(version="9.9.9"), packaged="9.9.9")
+        self.assertEqual(code, 0, said)
+        code, said = _run_artefact_check(_emitted(version="0.55.0"), packaged="9.9.9")
+        self.assertNotEqual(code, 0, f"a dist built for another version was accepted:\n"
+                                     f"{said}")
+
+    def test_the_project_name_is_normalised_the_way_a_built_filename_is(self):
+        """`charter-cp` is `charter_cp` on disk: PEP 625 and PEP 427 both name the file
+        from the NORMALISED project name. A check spelling `p["name"]` straight through
+        would refuse every real build of this package, and one spelling the underscore by
+        hand would be a second answer to a question `pyproject.toml` already answers."""
+        code, said = _run_artefact_check(_emitted(project="charter_cp"),
+                                         project="charter-cp")
+        self.assertEqual(code, 0, said)
+        for spelling in ("Charter.CP", "charter__cp"):
+            with self.subTest(name=spelling):
+                code, said = _run_artefact_check(_emitted(project="charter_cp"),
+                                                 project=spelling)
+                self.assertEqual(code, 0, f"{spelling!r} normalises to charter_cp and the "
+                                          f"check did not read it that way:\n{said}")
+
+    def test_the_set_it_expects_is_the_set_this_repository_asks_for(self):
+        """The only assertion here that reaches past the workflow into `pyproject.toml`,
+        and it is a PROMPT rather than a proof — the same distinction `.github/publish-
+        closure.json` draws about the pins it records.
+
+        The proof runs in `build`, over the files that actually came out. This reads the
+        configuration that produces them, so the two changes #835 names in the abstract —
+        a backend whose filenames follow other rules, a wheel target pinned to a tag that
+        is not `py3-none-any` — arrive in a pull request rather than waiting for a release
+        to go red. It cannot be complete, because "what hatchling emits" is settled by
+        hatchling, and nothing offline reads that. Which is why it is not the thing being
+        relied on.
+        """
+        import tomllib
+        root = Path(__file__).resolve().parent.parent
+        with (root / "pyproject.toml").open("rb") as fh:
+            pkg = tomllib.load(fh)
+        self.assertEqual(
+            pkg["build-system"]["build-backend"], "hatchling.build",
+            "the backend changed, and a backend names its artefacts by its own rules — so "
+            "`build`'s artefact-set step is now encoding somebody else's convention (#835)")
+        wheel = ((pkg.get("tool", {}).get("hatch", {}).get("build", {})
+                  .get("targets", {}).get("wheel", {})) or {})
+        self.assertNotIn(
+            "tag", wheel,
+            "the wheel target pins a `tag`, so the built filename no longer follows from "
+            "the project name and the version alone. That is exactly the change that lets "
+            "a `workflow_dispatch` retry add a file to a version PyPI already holds — "
+            "decide what a retry should mean before widening `build`'s artefact-set step "
+            "to accept it (#835).")
+        code, said = _run_artefact_check(_emitted(version=pkg["project"]["version"]),
+                                         packaged=pkg["project"]["version"],
+                                         project=pkg["project"]["name"])
+        self.assertEqual(code, 0, f"the step refuses the set this repository's own name "
+                                  f"and version determine:\n{said}")
 
 
 def _announce_script(job: dict | None = None) -> str:
