@@ -759,5 +759,37 @@ class TheAnnouncement(CloneLayer):
         self.assertEqual(err.getvalue(), "")
 
 
+class TheBlockDelimitersAreAnOnDiskContract(unittest.TestCase):
+    """Spelled out here once, by hand.
+
+    Every other reference in this file reads `workspace._EXCLUDE_BEGIN`, which agrees with
+    any value that constant takes — the `retune-string` shape the deletion sweep keeps
+    returning, and the same reason `TheMarkersNameIsPartOfTheOnDiskContract` spells out
+    `.charter-generated` one file over.
+
+    They are a real contract rather than decoration, and the file they are written in is
+    the reason: the delimiters are how a LATER charter finds what an EARLIER one wrote in
+    a repo charter does not own. Change the spelling and every checkout already wired gets
+    a SECOND block appended beside the first, growing on every launch — the exact failure
+    the block exists to prevent, happening in the operator's repository rather than in
+    charter's, in a file they never look at.
+    """
+
+    def test_the_delimiters_are_spelled_out(self):
+        self.assertEqual(
+            workspace._EXCLUDE_BEGIN,
+            "# >>> charter (generated layer — `charter workspace reinit`) >>>")
+        self.assertEqual(workspace._EXCLUDE_END, "# <<< charter <<<")
+
+    def test_every_line_charter_adds_that_is_not_a_path_is_a_comment(self):
+        """`info/exclude` is a pattern file. A delimiter that is not a comment is a
+        PATTERN, and `# >>> charter …` without its `#` would have git matching paths
+        against charter's bookkeeping."""
+        lines = [workspace._EXCLUDE_BEGIN, workspace._EXCLUDE_END,
+                 *workspace._EXCLUDE_NOTE.splitlines()]
+        for line in lines:
+            self.assertTrue(line.startswith("#"), line)
+
+
 if __name__ == "__main__":
     unittest.main()
