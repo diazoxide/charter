@@ -106,9 +106,12 @@ warn = "blue"
 # whose theme its author never saw, so it resolves against the OPERATOR's palette.
 #
 # Every pane charter draws is `black` and the harness pane is left alone, which is
-# the whole look: charter's chrome is grey, the work area is the terminal's own. The pair
-# inverts on focus (`black` active is `black`), so the focused panel is the one that
-# differs from its neighbours rather than the one that lights up.
+# the whole look: charter's chrome is dark, the work area is the terminal's own. `black`
+# rather than `brightblack` because this terminal has a LIGHT ground — see `text` above —
+# so the dark shade is the one that reads as chrome here. The pair still inverts on focus
+# (`FRAME_PANE_BG` pairs each word with its bright form, so `black` active is
+# `brightblack`), which means the focused panel is the one that differs from its
+# neighbours rather than the one that lights up.
 #
 # `pad` is horizontal only and comes OUT of the content budget, not on top of it: a
 # renderer composes narrower rather than composing wide and being pushed off its own edge.

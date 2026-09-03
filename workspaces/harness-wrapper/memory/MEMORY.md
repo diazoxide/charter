@@ -79,3 +79,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [For a 'never raises' subprocess wrapper, errors='replace' beats errors='](20260902-221821-for-a-never-raises-subprocess-wrapper-errors-rep.md)
 - [An issue can be STALE ON ARRIVAL: check the merge log before believing i](20260902-221831-an-issue-can-be-stale-on-arrival-check-the-merge.md)
 - [The plane guard's mention gate is `charter|edm` with NO word boundaries ](20260903-004457-the-plane-guard-s-mention-gate-is-charter-edm-wi.md)
+- [tmux 'server exited unexpectedly' rc 1 in a test fixture is always #713'](20260903-084351-tmux-server-exited-unexpectedly-rc-1-in-a-test-f.md)
