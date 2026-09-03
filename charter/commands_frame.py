@@ -5789,9 +5789,10 @@ def _relayout(socket: str, *, fid: str, harness_pane: str, panels: dict[str, str
 
 
 def _apply_sizes(socket: str, *, panes: dict[str, str], sizes: dict[str, int],
-                 flag: str) -> None:
+                 flag: str, then: list[tmuxctl.Write] = ()) -> None:
     """`resize-pane <flag>` every slot in *panes* that *sizes* has a number for and
-    `layout.resize_flag` answers exactly *flag* about.
+    `layout.resize_flag` answers exactly *flag* about, plus *then* — resizes that belong
+    to the same pass and have to land after them.
 
     One loop, called twice by :func:`_reassert_sizes` — once for the columns and once for
     the rows — rather than one loop over both, because the two are separated by a
@@ -5830,6 +5831,26 @@ def _apply_sizes(socket: str, *, panes: dict[str, str], sizes: dict[str, int],
     four separate repaints of a window whose panes were being shuffled into place. The two
     passes stay two batches: the measurement between them is what makes the second one
     truthful, and it is a READ.
+
+    ***then* is the rest of this pass, and #844 is why it is a parameter rather than a
+    second call.** The row pass ends on the HARNESS's own height, which
+    :func:`_reassert_sizes` used to send as an invocation of its own — so a frame's rows
+    landed as two command lists. Measured on tmux 3.7c and at the 3.2 floor with a real
+    attached client at 200x50: **every command list carrying a write redraws the whole
+    client**, and a `resize-pane` to a size the pane already has is no exception — 1672
+    bytes on 3.7c and 1811 at the floor, byte for byte what a real resize costs, while a
+    list of three no-op resizes costs exactly one of those and a pure `display-message -p`
+    costs none. So the count that decides how much the operator sees re-render is the
+    number of write-carrying LISTS, not the number of resizes in them and not whether any
+    of them changed a pane. These writes are one pass, they are computed from one *sizes*
+    map, and nothing between them reads anything — so they are one list.
+
+    **Order inside the list is preserved and is load-bearing**, which is what makes the
+    merge safe rather than merely cheaper: `resize-pane -y` moves exactly ONE boundary
+    (#515), so the harness's own row has to be asserted after the strips' — a chain runs
+    in the order it is given, so it still is. Measured on both versions: the final
+    geometry of a four-panel 200x50 frame is identical byte for byte to what the two
+    lists produced.
     """
     writes = [tmuxctl.Write(f"restoring the {slot} panel's size",
                             tmuxctl.server_argv(socket, "resize-pane", "-t", pane_id,
@@ -5838,7 +5859,8 @@ def _apply_sizes(socket: str, *, panes: dict[str, str], sizes: dict[str, int],
               for slot, pane_id in panes.items()
               if layout.resize_flag(slot) == flag and slot in sizes
               and _PANE_ID_RE.fullmatch(pane_id)]
-    tmuxctl.write_all(f"restoring this frame's panel sizes ({flag})", writes)
+    tmuxctl.write_all(f"restoring this frame's panel sizes ({flag})",
+                      writes + list(then))
 
 
 def _variable_pane_cols(socket: str, *, panes: dict[str, str], window_cols: int) -> int:
@@ -5911,7 +5933,8 @@ def _variable_pane_cols(socket: str, *, panes: dict[str, str], window_cols: int)
     return layout.repos_cols(list(panes), window_cols=window_cols)
 
 
-def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pane: str,
+def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
+                    harness_pane: str | None,
                     window_cols: int, window_rows: int) -> None:
     """Re-apply every pane in *panes* the size `layout.slot_sizes` says it should have in
     a *window_cols* x *window_rows* window.
@@ -5973,8 +5996,25 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
     heights are free; asserting all N is what made the result depend on the order, and
     asserting N-2 is what left a placed bar holding the table's rows.
 
+    **The harness's own row rides in the row pass's command list rather than in one of its
+    own** (#844, :func:`_apply_sizes`' *then*). It is the last write of that pass and
+    nothing between it and the strips reads anything, so the only thing a second
+    invocation bought was a second whole-client repaint — which a `resize-pane` costs
+    whether or not it moves a boundary. The ORDER is unchanged, and that is the half that
+    had to be: the harness is still asserted after the strips, because `resize-pane -y`
+    moves one boundary and a chain runs in the order it is given.
+
     *harness_pane* is checked like every other id here and for the same reason: it is read
     off disk (`state.harness_pane`) by `cmd_resize`, which is exactly the shape #475 was.
+    **`None` is one of the values that record really answers with**, and the annotation
+    says so rather than leaving `or ""` looking like belt and braces: it is the half of
+    the check that decides whether a frame with no recorded harness pane resizes its
+    panels or dies, because `_PANE_ID_RE.fullmatch(None)` raises and this runs inside
+    `_relayout`, above the resize hook and above the `select-pane` that takes the keyboard
+    back off a panel. Neither caller can produce it today — `_relayout_target` answers
+    `None` for the whole frame rather than a tuple with one in it, and `cmd_resize` spells
+    its own `or ""` — which is why the deletion sweep found the line unpinned and
+    `test_reassert_sizes_takes_no_harness_pane_at_all_without_raising` now drives it.
 
     `report=False` throughout: a pane that has since died (the operator closed it, a panel
     crashed between the map being read and this running) makes `resize-pane` fail, and that
@@ -5994,14 +6034,21 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str], harness_pan
     sizes = _slot_sizes(
         fid, order, window_rows=window_rows, order=order, window_cols=window_cols,
         pane_cols=_variable_pane_cols(socket, panes=panes, window_cols=window_cols))
-    # Pass two: the ROWS, and the harness below them.
-    _apply_sizes(socket, panes=panes, sizes=sizes, flag="-y")
-    if _PANE_ID_RE.fullmatch(harness_pane or ""):
-        tmuxctl.run("restoring the harness pane's height",
-                    tmuxctl.server_argv(
-                        socket, "resize-pane", "-t", harness_pane, "-y",
-                        str(layout.harness_rows(sizes, window_rows=window_rows))),
-                    report=False)
+    # Pass two: the ROWS, and the harness below them — **one command list, not two**
+    # (#844). It was two, and the second carried one `resize-pane` that is very often a
+    # no-op; measured on 3.7c and at the 3.2 floor, a no-op write costs the client the
+    # same full redraw a real one does, so that list was a whole-window repaint bought for
+    # nothing. Nothing is read between the two, they share one *sizes* map, and a chain
+    # keeps their order — see :func:`_apply_sizes` for the measurement and for why the
+    # order is the part that matters.
+    _apply_sizes(socket, panes=panes, sizes=sizes, flag="-y",
+                 then=[tmuxctl.Write(
+                     "restoring the harness pane's height",
+                     tmuxctl.server_argv(
+                         socket, "resize-pane", "-t", harness_pane, "-y",
+                         str(layout.harness_rows(sizes, window_rows=window_rows))),
+                     report=False)]
+                 if _PANE_ID_RE.fullmatch(harness_pane or "") else [])
 
 
 def cmd_resize(args) -> int:
@@ -6819,7 +6866,7 @@ def cmd_chat(args) -> int:
        pointer `charter workspace use` wrote — so two
        chats can share a roster with their windows in two different tmux sessions — and
        `select-window` at another session's pane returns **0**, moves that session, and
-       leaves this client exactly where it was. Steps 1 and 2 then reported a switch that
+       leaves this client exactly where it was. Steps 1 and 4 then reported a switch that
        had not happened and tore down the panels of the chat still on screen.
     1. `select-window` at the target chat's own harness PANE. A pane id resolves to that
        pane's window — measured on tmux 3.7c and on tmux 3.2 — which is why charter needs
@@ -6830,25 +6877,36 @@ def cmd_chat(args) -> int:
        acted on the wrong target is indistinguishable from one that acted on the right
        one, so the teardown below is gated on the client having moved rather than on a
        return code.
-    2. :func:`_apply_arrangement` with ``want=[]`` on the chat being left, which tears its
-       panels down. Not a saving — a correctness rule. A background window keeps STALE
-       geometry (§7.4, measured identically on 3.7c and 3.2), so panels left running there
-       are not idle, they are rendering at a width that is no longer their window's, which
-       is the exact defect `panel._component_text`'s `width=slots._width()` guard exists
-       for.
-    3. :func:`_apply_arrangement` on the chat being entered, which splits its panels into
+    2. :func:`_apply_arrangement` on the chat being ENTERED, which splits its panels into
        the window **tmux has just resized**. Measured here on 3.7c and 3.2: the very next
        tmux invocation after `select-window` already reports the target window at the
        client's size (200x50 → 100x29 with no sleep at all). So the panels are born at the
        true width and there is nothing stale to repair —
-    4. **which is why the switch never asks for a `window-resized` hook, and must not.**
+    3. **which is why the switch never asks for a `window-resized` hook, and must not.**
        On tmux 3.2 — `tmuxctl.FLOOR` — `set-hook -w window-resized` answers `invalid
        option`, rc=1: the hook does not exist. A switch that relied on it would be correct
        on the author's tmux and silently wrong on the floor charter promises to run on.
        `_apply_arrangement` measures and re-asserts the layout itself, which is the same
        thing a density change already does and not a second path.
+    4. :func:`_apply_arrangement` with ``want=[]`` on the chat being left, which tears its
+       panels down. Not a saving — a correctness rule. A background window keeps STALE
+       geometry (§7.4, measured identically on 3.7c and 3.2), so panels left running there
+       are not idle, they are rendering at a width that is no longer their window's, which
+       is the exact defect `panel._component_text`'s `width=slots._width()` guard exists
+       for.
 
-    The bump is step 3's own last line (`_apply_arrangement`), so the new chat's panels
+    **Steps 2 and 4 are in that order because of what the operator is looking at while
+    they run** (#844). They were the other way round — tidy the departure, then dress the
+    arrival — and this docstring already said they were independent, so nothing had ever
+    pinned it. What it cost was measured end to end on tmux 3.7c with a real attached
+    client and four panels at 200x50: the client moves at invocation 3, the departure's
+    teardown then spends invocations 5 to 11 on a window nobody can see, and the arriving
+    frame's panels did not appear until invocation 15 — **66 ms of bare full-screen
+    harness pane**, which is a large part of what "the whole window re-renders" looks
+    like. The teardown is not dropped and not deferred to some later event: it is the same
+    work in the same switch, done in the half where nobody is waiting on it.
+
+    The bump is step 2's own last line (`_apply_arrangement`), so the new chat's panels
     repaint into the shape that has already settled — #411/#412's rule, and the reason
     this does not write a pointer of its own for anything to read.
 
@@ -6987,13 +7045,23 @@ def cmd_chat(args) -> int:
         _say_on_screen(fid, f"cannot switch: tmux selected chat '{target}' but this "
                             "client did not move, so this chat keeps its panels")
         return 0
-    here = _relayout_target(fid)
-    if here is not None:
-        _apply_arrangement(fid, where=here, want=[])
+    # **The ARRIVAL first, and the departure tidied behind it** (#844). Steps 2 and 4 ran
+    # the other way round for as long as this function has existed, and the docstring
+    # above has always said they are independent — so the order was never load-bearing,
+    # it was just the order they were written in. Measured end to end on tmux 3.7c with a
+    # real attached client, four panels at 200x50: the client moves at invocation 3 and
+    # the arriving window's panels used to appear at invocation 15, **66 ms** later, every
+    # one of those invocations tidying a window the operator has already stopped looking
+    # at. What they were looking at for those 66 ms was a bare full-screen harness pane.
+    # The teardown is not dropped and not deferred to some later event — it is the same
+    # work, done in the half of the switch where nobody is waiting on it.
     there = _relayout_target(target)
     if there is not None:
         _apply_arrangement(target, where=there,
                            want=_visible_now(target, config.FRAME))
+    here = _relayout_target(fid)
+    if here is not None:
+        _apply_arrangement(fid, where=here, want=[])
     return 0
 
 
@@ -7260,19 +7328,28 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
        ones it can prove are looking at THIS chat: every client attached to this chat's
        session. They already share one current window (§2.10), so they were already looking
        at the same thing, and moving them together keeps them so.
-    2. **`_apply_arrangement(want=[])` on the chat being left**, which is #686's rule
-       unchanged: a background window keeps STALE geometry (§7.4, measured identically on
-       both versions), so panels left running in one are not idle, they are rendering at a
-       width that is no longer their window's. Only this chat has panels to lose — every
-       other chat of the workspace is a background window and lost its own the same way.
-    3. **`_apply_arrangement` on the chat tmux LANDED on**, unconditionally, which is §4b's
+    2. **`_apply_arrangement` on the chat tmux LANDED on**, unconditionally, which is §4b's
        "#686's treatment one scope out". Which chat that is, charter does not choose:
        `switch-client` restores the target session's own last active window, so the landing
        chat is read back off the server (:func:`_chat_showing`) rather than guessed from
        the seat :func:`_plane_session` happened to match. Re-dressing is not optional and
        not conditional on the geometry having changed — the panels there were torn down
        when that workspace went to the background, so they have to be split into a window
-       that tmux has just resized, and that is the same thing `cmd_chat` step 3 does.
+       that tmux has just resized, and that is the same thing `cmd_chat` step 2 does.
+    3. **`_apply_arrangement(want=[])` on the chat being left**, which is #686's rule
+       unchanged: a background window keeps STALE geometry (§7.4, measured identically on
+       both versions), so panels left running in one are not idle, they are rendering at a
+       width that is no longer their window's. Only this chat has panels to lose — every
+       other chat of the workspace is a background window and lost its own the same way.
+
+    **Steps 2 and 3 are in that order for `cmd_chat`'s reason** (#844): they are
+    independent, and the operator is already looking at the ARRIVING window while both
+    run, so every invocation spent tidying the one they left is time they spend on a bare
+    full-screen harness pane. Against this repository's own fakes, four panels at 200x50,
+    the client moves at invocation 4 and the panels appeared at invocation 17 — they
+    appear at 10. Step 3 is also the one place the two chats can turn out to be the same
+    one, and it says so rather than relying on which of them runs last: see the guard on
+    it, and `_plane_session` for the recycled pane id that gets there.
 
     **The teardown is gated on the client having MOVED, not on a command having exited 0**
     — #684's rule, re-asked here because the failure it names exists here too:
@@ -7390,13 +7467,18 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
         return
     landed = _chat_showing(_window_seats(socket, "finding the chat this switch landed on"),
                            there[0])
-    left = _relayout_target(fid)
-    if left is not None:
-        _apply_arrangement(fid, where=left, want=[])
-    # Both re-layouts are attempted independently and a failure of the first does not
-    # cancel the second — `cmd_chat`'s rule, for its reason: the frame the operator is now
-    # looking at is the one that matters, and abandoning it because the workspace they just
-    # left could not be tidied would leave them on a bare harness pane.
+    # **The ARRIVAL first, and the departure tidied behind it** — `cmd_chat`'s ordering
+    # (#844), one scope out and for exactly its reason. Steps 2 and 3 are independent, so
+    # nothing pinned which went first; what decided it was that the operator is already
+    # looking at the arriving window by the time either runs, and every invocation spent
+    # on the workspace they LEFT is time they spend watching a bare full-screen harness
+    # pane. Measured against this repository's own fakes, four panels at 200x50: the
+    # client moved at invocation 4 and the panels appeared at invocation 17.
+    #
+    # Both re-layouts are still attempted independently and a failure of the first does
+    # not cancel the second — `cmd_chat`'s rule, for its reason: the frame the operator is
+    # now looking at is the one that matters, and abandoning it because the workspace they
+    # just left could not be tidied would leave them on a bare harness pane.
     arrived = _relayout_target(landed) if landed else None
     if arrived is not None:
         _apply_arrangement(landed, where=arrived,
@@ -7405,10 +7487,25 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
     # is drawn by a panel out of a frame's own state, so it has to be written to the frame
     # they will be reading a moment from now. A workspace whose landing chat charter could
     # not name is left unsaid rather than announced on a frame nobody is looking at — the
-    # client visibly moved, which is the report, and `state.say` on the chat being left
-    # would write into panels that are being torn down two lines above.
+    # client visibly moved, which is the report. Said BEFORE the teardown below rather
+    # than after it, so the sentence lands with the panels that will draw it rather than a
+    # teardown's worth of round trips later; `state.say` on the chat being LEFT is still
+    # the thing this must not do, and that has never been about the order.
     if landed:
         _say_on_screen(landed, said, ok=True)
+    # **And the chat left behind is never the chat landed on**, which the order above is
+    # what makes worth saying (#844). `_chat_showing` reads the landing chat off the
+    # SERVER while `here` came from this chat's own recorded pane, and `_plane_session`'s
+    # docstring names the residual where those two disagree: a pane id restarts at `%0`
+    # when a server does, so a `%3` recorded for a chat that is over can name a live pane
+    # belonging to another session. In that state `landed` really can be *fid* — and with
+    # the arrival dressed first, an unguarded teardown would split this frame's panels
+    # back in and then kill them, leaving the operator on the bare harness pane this whole
+    # issue is about. Dressing last used to absorb that by accident; this says it.
+    if landed != fid:
+        left = _relayout_target(fid)
+        if left is not None:
+            _apply_arrangement(fid, where=left, want=[])
 
 
 def _pressers_chat(args) -> str:

@@ -272,7 +272,52 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         _a_chat("beta.2", ws="beta", pane="%3")
         self._switch(self._ordinary(landing=["$2\t0\tbeta.1", "$2\t1\tbeta.2"]))
         self.assertEqual([c[0][0] for c in self.laid_out.call_args_list],
-                         [self.FID, "beta.2"])
+                         ["beta.2", self.FID])
+
+    def test_the_workspace_arrived_at_is_dressed_before_the_one_left_is_tidied(self):
+        """#844, and it is `cmd_chat`'s ordering one scope out.
+
+        The two re-layouts are independent — §4b says so and this module's other cases
+        assert each on its own — so nothing pinned which went first, and what decided it
+        was the order they were written in. The operator is already looking at the
+        ARRIVING window by the time either runs: `switch-client` has moved their client
+        several invocations earlier. So every invocation spent tidying the workspace they
+        left is time they spend watching a bare full-screen harness pane — measured end to
+        end on tmux 3.7c with a real attached client and four panels at 200x50, 66 ms of
+        it on the chat path this shares its shape with.
+
+        Asserted as an ORDER rather than as two independent calls, because that is the
+        whole change: both calls were already made, and both still are.
+        """
+        self._switch(self._ordinary())
+        self.assertEqual([c[0][0] for c in self.laid_out.call_args_list],
+                         ["beta.1", self.FID],
+                         "the workspace being left is tidied before the one arrived at "
+                         "is dressed")
+        self.assertTrue(self.laid_out.call_args_list[0][1]["want"])
+        self.assertEqual(self.laid_out.call_args_list[1][1]["want"], [])
+
+    def test_a_switch_that_lands_back_on_this_chat_keeps_its_panels(self):
+        """The one state where the two re-layouts are the SAME frame, and #844's ordering
+        is what makes it worth a line of its own.
+
+        `_chat_showing` reads the landing chat off the SERVER, while `here` came from this
+        chat's own recorded harness pane — and `_plane_session`'s docstring names the
+        residual where those disagree: a pane id restarts at `%0` when a server does, so a
+        `%N` recorded for a chat that is over can name a live pane in another session. The
+        two readings then say this client is in `$1` and that `$2`'s current window is
+        drawing *this* chat.
+
+        With the arrival dressed last, the teardown was undone by accident. With it
+        dressed FIRST, an unguarded teardown would split this frame's panels back in and
+        then kill them — leaving the operator on the bare harness pane #844 is about. So
+        the chat left behind is compared, not assumed.
+        """
+        self._switch(self._ordinary(landing=[f"$2\t1\t{self.FID}"]))
+        self.assertEqual([c[0][0] for c in self.laid_out.call_args_list], [self.FID])
+        self.assertTrue(self.laid_out.call_args_list[0][1]["want"],
+                        "the chat this switch landed on was stripped of its panels by "
+                        "the teardown meant for the chat being LEFT")
 
     def test_the_outcome_is_said_on_the_chat_the_operator_landed_on(self):
         """A notice is drawn by a panel out of a frame's own state, so it has to be

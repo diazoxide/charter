@@ -468,10 +468,12 @@ them.
 Measured on tmux 3.7c and at the 3.2 floor with a real client: `switch-client` moves the
 client, every pane on the server is still there afterwards with the same pid, and the
 `attach` process itself is untouched. The switch itself is about **5 ms** of tmux; what it
-costs beyond that is one re-layout at each end — the panels of the chat you left are torn
-down and the chat you arrive at gets fresh ones, for the same reason a chat switch does it
-(a background window keeps stale geometry). You land on whichever chat that workspace was
-last showing, which is tmux's own answer and not a record charter keeps.
+costs beyond that is one re-layout at each end — the chat you arrive at gets fresh panels
+and the panels of the chat you left are torn down, in that order and for a chat switch's
+reason (#844): you are already looking at the window you arrived at, so the tidying goes
+behind it. Both happen for the same reason a chat switch does them at all — a background
+window keeps stale geometry. You land on whichever chat that workspace was last showing,
+which is tmux's own answer and not a record charter keeps.
 
 **Switching is restricted to workspaces of this plane, and anything else is refused by
 name.** One tmux server serves every plane on the machine: the operator's own socket had
@@ -502,15 +504,32 @@ switch by hand.
 it is thrift. A tmux window that is not the current one keeps the size it had when it was —
 measured on tmux 3.7c and at the 3.2 floor alike — so panels left running in a chat you
 switched away from are not idle, they are drawing at a width that is not their window's.
-The switch therefore tears the old chat's panels down, selects the new window (tmux resizes
-it *at* that moment), and splits fresh panels into a window that is already the right size.
+The switch therefore selects the new window (tmux resizes it *at* that moment), splits
+fresh panels into a window that is already the right size, and then tears the old chat's
+panels down.
 
-**It costs about a seventh of a second.** Measured with a real client and four panels:
+**In that order, and the order is the difference between a switch you wait through and one
+you do not** (#844). Both re-layouts are independent, and the one you are looking at is the
+one you have already arrived at: the window a switch lands you on holds nothing but the
+harness pane at full window size, because its panels were killed when you last left it. So
+every tmux call spent tidying the window you left is a call you spend staring at a bare
+harness pane. Measured with a real client and four panels at 200x50:
+
+| | your client moves at | panels appear at | bare harness pane for |
+|---|---|---|---|
+| tmux 3.7c | invocation 3 | invocation 15 → **8** | 78 ms → **38 ms** |
+| at the 3.2 floor | invocation 3 | invocation 14 → **8** | 63 ms → **36 ms** |
+
+Nothing is dropped and nothing is deferred to some later event — it is the same teardown,
+in the same switch, done in the half where nobody is waiting on it.
+
+**It costs about a seventh of a second in total.** Measured with a real client and four
+panels:
 
 | | tmux invocations | wall clock | times your terminal is repainted |
 |---|---|---|---|
-| tmux 3.7c | 58 → **23** | 314 ms → **142 ms** | 45 → **14** |
-| at the 3.2 floor | 50 → **21** | 237 ms → **114 ms** | 41 → **12** |
+| tmux 3.7c | 58 → 23 → **22** | 314 ms → **142 ms** | 45 → **14** |
+| at the 3.2 floor | 50 → 21 → **20** | 237 ms → **114 ms** | 41 → **12** |
 
 That is the price of not keeping four panel processes per chat drawing at the wrong width,
 and it is the whole cost — nothing is lost, no harness is restarted, and the chat you left
@@ -526,11 +545,21 @@ sees while the panels are torn down and split back one at a time.
 
 Most of those commands read nothing back, so tmux takes them as one list. The four kills
 and their four disarms are one invocation now; so is each end's window dressing, so are the
-four splits, so is everything the four new panes are told about themselves, and so are the
-four respawn hooks. Nothing was dropped and nothing was
-reordered — the same commands, in the same order, in 40% of the invocations and a third of
-the repaints. It is not silent: 14 updates is still four panel processes coming up and
-painting themselves, which is a different cost and not this one.
+four splits, so is everything the four new panes are told about themselves, so are the
+four respawn hooks, and — since #844 — so are a frame's panel rows and the harness pane's
+own row. Nothing was dropped and nothing was reordered inside a list: the same commands, in
+the same order, in 38% of the invocations and a third of the repaints. It is not silent: 14
+updates is still four panel processes coming up and painting themselves, which is a
+different cost and not this one.
+
+**A write that changes nothing costs the same repaint as one that does**, which is why the
+list is the unit worth counting rather than the command. Measured on 3.7c and at the 3.2
+floor with a real client, 200x50: `resize-pane -x 22` on a pane that is *already* 22 wide
+sends no resize to the pane at all and still repaints the whole client — 1672 bytes on
+3.7c, 1811 at the floor, which is what a real resize costs. Three of them in one list cost
+one of those. A pure `display-message -p` costs nothing at all, which is why the
+measurement #510 puts between charter's two size passes is not something that had to be
+collapsed away.
 
 A switch is refused, with the reason on your own screen, for a chat this workspace does not
 have, one whose window has gone, one charter has no pane record for, and the chat you are
