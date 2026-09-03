@@ -238,6 +238,26 @@ class NothingIsWritten(StrangersRepo):
                 _run(hooks._HANDLERS[hook], payload)
                 self.assertUntouched(f"refusing via `{hook}`")
 
+    def test_a_bash_call_that_records_a_memory_resets_no_cadence_out_here(self):
+        """`pretooluse` resets the record-memory counter when it SEES the CLI recording one
+        — `charter workspace remember …` is Bash, so PostToolUse never learns of it. That
+        reset writes `<state>/sessions/<sid>.memnudge`.
+
+        Its own case because the sweep's payload cannot reach it: every other case here
+        sends `ls -la`, which `_MEM_RECORD_RE` does not match, so the gate in front of the
+        reset is never asked and deleting it would go unnoticed. The command is spelled out
+        rather than built from the pattern — a test that reads the regex it is checking
+        passes against a regex edited to match nothing.
+        """
+        for cmd in ('charter workspace remember "a durable fact"',
+                    'charter persona note "another one"'):
+            with self.subTest(command=cmd):
+                self.before = _tree(config.ROOT)
+                payload = dict(self.payloads()["pretooluse"])
+                payload["tool_input"] = {"command": cmd}
+                _run(hooks.pretooluse, payload)
+                self.assertUntouched(f"`{cmd}`")
+
 
 class NothingIsSaid(StrangersRepo):
     def test_no_handler_speaks_into_a_session_with_no_plane_to_act_on(self):
@@ -318,6 +338,21 @@ class InsideAPlaneNothingIsLost(StrangersRepo):
     def test_the_memory_cadence_is_still_counted(self):
         _run(hooks.posttooluse, self.payloads()["posttooluse"])
         self.assertTrue((Path(config.SESSIONS_DIR) / f"{self.sid}.memnudge").is_file())
+
+    def test_a_bash_call_that_records_a_memory_still_resets_the_cadence(self):
+        """The in-plane half of
+        `test_a_bash_call_that_records_a_memory_resets_no_cadence_out_here`. Counted up
+        first, so the reset has something to undo — asserting a zero that was never
+        anything else would pass with the reset deleted."""
+        for _ in range(3):
+            _run(hooks.posttooluse, self.payloads()["posttooluse"])
+        counter = Path(config.SESSIONS_DIR) / f"{self.sid}.memnudge"
+        self.assertNotEqual("0", counter.read_text().strip(),
+                            "precondition: the counter must have moved off zero")
+        payload = dict(self.payloads()["pretooluse"])
+        payload["tool_input"] = {"command": 'charter workspace remember "a durable fact"'}
+        _run(hooks.pretooluse, payload)
+        self.assertEqual("0", counter.read_text().strip())
 
     def test_a_dispatch_is_still_tallied(self):
         _run(hooks.posttooluse_dispatch, self.payloads()["posttooluse-dispatch"])
