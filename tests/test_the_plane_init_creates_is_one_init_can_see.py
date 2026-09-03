@@ -182,17 +182,22 @@ class TheAnswerIsTakenAtTheRootInitChose(InitSeesItsOwnPlane):
         inner = outer / "workspaces" / "dev" / "plane"
         inner.mkdir(parents=True)
 
-        # The premise: standing at `inner`, resolution answers `outer`. If that ever stops
-        # being true this case is testing nothing, so it is measured rather than assumed.
-        self.assertEqual(_root.find_root(inner), outer,
-                         "resolution no longer hops outward, so the two spellings of the "
-                         "re-derivation can no longer be told apart here")
-
-        # Point config at `inner` the way a shell standing there would have to be pointed
-        # ($CHARTER_ROOT), since resolution on its own answers `outer` — which is the whole
-        # premise above.
+        # Point config at `inner` the way a shell standing there has to be pointed
+        # ($CHARTER_ROOT, which wins outright in `find_root`), since resolution on its own
+        # answers `outer`.
         _isolation.point_config_at(self, inner)
         commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
+
+        # THE PREMISE, asserted after `init` rather than before it, because that is where
+        # it is load-bearing. Before, `inner` has no marker and resolution answers `outer`
+        # for the uninteresting reason. After, `inner` carries its own `charter.toml` and
+        # resolution STILL answers `outer` — that is `_outermost`'s hop, and it is the only
+        # thing that makes `config.use(root)` and a re-resolution distinguishable here.
+        self.assertEqual(
+            _root.find_root(inner), outer,
+            "resolution no longer hops outward past a plane inside another plane's "
+            "workspaces/, so this case can no longer tell the two spellings of the "
+            "re-derivation apart — re-read the class before trusting it")
 
         self.assertEqual(
             config.ROOT, inner,
