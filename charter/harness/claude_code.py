@@ -69,7 +69,9 @@ LAYER = (
     LayerPart(
         "skills+agents", (".claude/skills", ".claude/agents"), True,
         "skills and agents DO walk up, but the walk stops at the git root — anything "
-        "charter wrote above that boundary is out of reach"),
+        "charter wrote above that boundary is out of reach, while CLAUDE.md walks up and "
+        "is NOT git-bounded, which is why a session like this reads as half-configured "
+        "rather than empty"),
     LayerPart(
         "status line", _PROJECT_SETTINGS, False,
         "`statusLine` is a key in that same settings file, so it is cwd-only too — a "

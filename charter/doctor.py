@@ -919,7 +919,8 @@ def check_session_layer() -> Result:
     * ``CLAUDE.md`` — walks up and is **not** git-bounded, so it arrives almost anywhere.
 
     That last rule is why such a chat reads as half-configured rather than as empty:
-    charter's prose reaches it and none of charter's machinery does. The row says so.
+    charter's prose reaches it and none of charter's machinery does. The row says so — in
+    the harness's own words, beside the walking rule it contrasts with.
 
     **About the LAYER, not the plugin, so `check_guard_wired`'s reasoning stays intact.**
     That check argues — rightly — that *"Whether the plane runs as a plugin is an

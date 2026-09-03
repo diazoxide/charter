@@ -66,6 +66,15 @@ the plane's `enabledPlugins`, `statusLine` and `env` into
 `charter doctor`'s `workspace layer` row reports staleness; `charter workspace reinit` is
 the repair.
 
+Beside it, the **`session layer`** row answers the other half — *can a session started in
+this directory see any of that?* Three artefacts, three discovery rules, all measured on
+Claude Code 2.1.259: `.claude/settings.json` is read from the session's own directory with
+no walk-up, `.claude/agents/` and `.claude/skills/` walk up but stop at the git root, and
+`CLAUDE.md` walks up and is not git-bounded. So "charter is set up here" was never one
+fact, and the row names which part is missing and which rule decided. The rules live on
+each harness (`Harness.layer`), so a harness added to the registry is answered for the day
+it is registered rather than reported under Claude Code's rules by default.
+
 opencode and Codex get nothing here and say why: their config is machine-global, so
 charter's layer is already live in every workspace and two workspaces on one machine
 cannot be made to differ. That ceiling is in `charter harness list` beside the others.
