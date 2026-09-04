@@ -268,6 +268,17 @@ BAR_MAX_ROWS = 3
 #: and this is a default, and neither is the other.
 BAR_ROWS_DEFAULT = 1
 
+#: Every height a tab strip may be at — :data:`BAR_ROWS_DEFAULT` through
+#: :data:`BAR_MAX_ROWS`.
+#:
+#: **A range and not two comparisons, and the deletion sweep is what settled it.** Written
+#: as ``BAR_ROWS_DEFAULT <= now <= BAR_MAX_ROWS``, the LOWER boundary is an equivalent
+#: mutant by construction: the fallback for a value below the range IS the bottom of the
+#: range, so `<` and `<=` answer the same number for every input there is, and
+#: `shift-boundary` would report it as a survivor forever. A membership test has no
+#: boundary to move and says exactly the same thing.
+_BAR_ROWS = range(BAR_ROWS_DEFAULT, BAR_MAX_ROWS + 1)
+
 #: The key that cycles a tab strip's height, bound by `commands_frame.conf_text`.
 #:
 #: **Here rather than in `commands_frame`, because `instance` has to know it too.** A
@@ -301,14 +312,14 @@ def bar_rows_cap(rows: int | None) -> int:
     outcome: there is nothing to put on a second row. What the key raises is the ceiling
     that was stopping a strip which DOES overflow.
 
-    **Anything outside the range degrades to the default rather than clamping**, and that
-    is `instance.density_level`'s discipline: the value is read back off a file, so `0`,
-    `7`, `-1` and a truncated write are all "this frame has not chosen", not "this frame
-    chose something charter will round for it". Clamping a `7` to `3` would leave a frame
-    silently at the ceiling because a byte went missing.
+    **Anything outside :data:`_BAR_ROWS` degrades to the default rather than clamping**,
+    and that is `instance.density_level`'s discipline: the value is read back off a file,
+    so `0`, `7`, `-1` and a truncated write are all "this frame has not chosen", not "this
+    frame chose something charter will round for it". Clamping a `7` to `3` would leave a
+    frame silently at the ceiling because a byte went missing.
     """
     now = rows if rows is not None else BAR_ROWS_DEFAULT
-    return now if BAR_ROWS_DEFAULT <= now <= BAR_MAX_ROWS else BAR_ROWS_DEFAULT
+    return now if now in _BAR_ROWS else BAR_ROWS_DEFAULT
 
 
 def next_bar_rows(rows: int | None) -> int:

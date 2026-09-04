@@ -178,6 +178,16 @@ class TheHeightIsRememberedForThisFrameAndNoLonger(PersonaIso, unittest.TestCase
         state.clear_shape(self.FID)
         self.assertIsNone(state.bar_rows(self.FID))
 
+    def test_an_id_the_state_directory_refuses_writes_nothing_and_raises_nothing(self):
+        """`state.frame_dir` resolves through `contain.child`, which refuses a traversal
+        outright — so this writer has an id it cannot have a directory for, and the answer
+        to that is a no-op. `record_density`'s guard, kept for the same reason: this runs
+        from a keypress, where raising costs the frame its re-layout."""
+        state.record_bar_rows("../evil", 3)
+        state.record_bar_rows("", 3)
+        self.assertIsNone(state.bar_rows("../evil"))
+        self.assertIsNone(state.bar_rows(""))
+
     def test_an_unreadable_or_unparseable_file_is_the_default_and_not_a_raise(self):
         """This is read on a sizing path that runs inside the `frame-resize` child, so a
         half-written file must degrade rather than take the recompute down. The RANGE is

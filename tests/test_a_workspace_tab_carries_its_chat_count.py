@@ -81,6 +81,15 @@ class TheCountIsDrawnBesideTheName(unittest.TestCase):
         row = self._row({"alpha": slots.TAB_COUNT_MAX + 1})
         self.assertIn(f"alpha ({slots.TAB_COUNT_MAX}+)", row)
 
+    def test_the_ceiling_itself_is_still_drawn_as_a_number(self):
+        """`n <= TAB_COUNT_MAX` and not `n <`: the ceiling is the last count drawn in full,
+        so `(99)` is a number and `(100)` is the overflow. One cell apart on screen and one
+        boundary apart in the code, which is exactly the shift `tools/sweep.py` asks about
+        and which the case above — asked at `MAX + 1` — cannot see."""
+        row = self._row({"alpha": slots.TAB_COUNT_MAX})
+        self.assertIn(f"alpha ({slots.TAB_COUNT_MAX})", row)
+        self.assertNotIn("+", row, "the ceiling itself was drawn as an overflow")
+
     def test_the_chats_strip_reserves_nothing_at_all(self):
         """``None`` and ``{}`` are different instructions: no field, against a field with
         nothing in it. A chat is the leaf and has nothing to count, so a strip of chats
