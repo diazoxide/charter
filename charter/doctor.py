@@ -2768,6 +2768,29 @@ def _plugin_install(name: str) -> Result:
                       detail="not checked (could not read `claude plugin list --json`)",
                       hint=_NOT_CHECKED_HINT)
     if entry is not None:
+        # **Installed is not enabled, and only enabled loads anything** (#177). `claude
+        # plugin list --json` carries `enabled`, and a tick over an installed-but-disabled
+        # plugin is exactly the failure 0.31.1 shipped and `check_guard_wired` was written
+        # to stop: the absence of a protection rendered as health.
+        #
+        # Absent rather than False is read as enabled. An older `claude` that does not emit
+        # the field would otherwise have every plane told its plugin is off — inventing a
+        # problem out of a missing key, which is the opposite error and just as expensive.
+        #
+        # **Reported, never fixed**, and `--fix` deliberately does not enable it. Somebody
+        # disabling a plugin is a choice, and charter does not revert a deliberate edit —
+        # the rule `_ensure_statusline` exists to keep. The row says what is not happening;
+        # the operator decides.
+        if entry.get("enabled") is False:
+            return Result(
+                name, WARN,
+                detail=f"{entry.get('id')} is installed ({entry.get('scope')} scope) and "
+                       f"DISABLED — an installed plugin loads nothing until it is enabled, "
+                       f"so charter's hooks do not run here",
+                hint=f"Run: claude plugin enable {entry.get('id')} --scope "
+                     f"{entry.get('scope')}  (charter does not enable it for you: if you "
+                     f"turned it off on purpose, this row is only telling you what that "
+                     f"costs). The plugin loads at the NEXT session.")
         return Result(name, OK,
                       detail=f"{entry.get('id')} installed ({entry.get('scope')} scope)")
     return Result(

@@ -95,6 +95,11 @@ declares `charter hook pretooluse` in its own `.claude/settings.json` is guarded
 plugin at all, and a CLI-only install is supported — `charter clone`, `charter persona
 show` and the rest work with no plugin anywhere.
 
+The same row says so when the plugin is installed and **disabled**, because an installed
+plugin loads nothing until it is enabled. charter will not enable it for you — `claude
+plugin enable charter@charter --scope project` is yours to run, since turning a plugin off
+is a choice and charter does not revert a deliberate edit.
+
 By hand, if you would rather, or if `charter doctor --fix` could not (an old `claude`, no
 network):
 

@@ -412,6 +412,38 @@ class TheDoctorRowReportsTheGapWithoutCryingWolf(PersonaIso):
         self.assertEqual(res.status, doctor.OK)
         self.assertIn("project", res.detail)
 
+    def test_an_installed_but_DISABLED_plugin_is_not_a_tick(self):
+        """#177: installed, enabled and wired are three states and only the third protects
+        anything. 0.31.1 printed a tick over an installed-and-disabled plugin — the absence
+        of a protection rendered as health — and this row must not do it again."""
+        entry = {"id": "charter@charter", "scope": "project", "enabled": False,
+                 "projectPath": str(self.tmp)}
+        with rows([entry]):
+            res = doctor.check_plugin_install()
+        self.assertEqual(res.status, doctor.WARN)
+        self.assertIn("DISABLED", res.detail)
+        self.assertIn("claude plugin enable charter@charter", res.hint)
+
+    def test_a_claude_that_does_not_report_enabled_is_not_reported_as_disabled(self):
+        """Absent is not False. An older `claude` omitting the field would otherwise have
+        every plane told its plugin is off — a problem invented out of a missing key, which
+        is the same error pointing the other way."""
+        entry = {"id": "charter@charter", "scope": "project", "projectPath": str(self.tmp)}
+        with rows([entry]):
+            self.assertEqual(doctor.check_plugin_install().status, doctor.OK)
+
+    def test_fix_does_not_enable_a_plugin_somebody_turned_off(self):
+        """charter reports; it does not revert a deliberate edit. Disabling a plugin is a
+        choice, and a `--fix` that silently undid it is the thing `_ensure_statusline`
+        exists not to do."""
+        entry = {"id": "charter@charter", "scope": "project", "enabled": False,
+                 "projectPath": str(self.tmp)}
+        calls: list = []
+        with rows([entry]), spawns(calls):
+            status, _ = plugincache.install(self.tmp)
+        self.assertEqual(status, "present")
+        self.assertEqual(calls, [])
+
     def test_a_plane_with_no_claude_at_all_is_green_and_says_why(self):
         """opencode and Codex planes are supported installs with no Claude Code plugin to
         be missing. A yellow row on every one of them is the cry-wolf failure that costs

@@ -50,6 +50,12 @@ The row is scoped to the **plane**, not the machine: a project-scoped install be
 somebody else's checkout is not an answer here, and reading one as an answer would print
 "installed" over a plane with no plugin — #168's defect wearing a new row.
 
+It also refuses to tick over an install that is **disabled**. `claude plugin list --json`
+carries `enabled`, and installed is not enabled (#177) — an installed plugin loads nothing
+until it is switched on, and a green row over that is 0.31.1's failure exactly. charter
+names `claude plugin enable charter@charter --scope project` and stops there: turning a
+plugin off is a choice, and `--fix` does not revert a deliberate edit.
+
 ## Project scope, and never `user`
 
 The plugin is what carries a plane's pinned version, which is why `[charter].version` is
