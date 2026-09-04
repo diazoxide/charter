@@ -84,14 +84,20 @@ def _placed(*, style=None, **sizes):
     return instance.frame_of({"frame": {"component": tables}})
 
 
-def _strip(names=NAMES, here=HERE, note=""):
+def _strip(names=NAMES, here=HERE, note="", counts=None):
     """A `slots.BARS` entry that answers *names* without touching a plane.
 
     The seam the sizer reads through, used as one. `TheRealStripsGoThroughTheSameSeam`
     is what says charter's own two entries reach it, so this is a fixture for the
     arithmetic rather than a stand-in for the feature.
+
+    *counts* defaults to ``None`` — no count field — which is what makes the widths below
+    the ladder's own rather than the workspace strip's (#880). The reserve that strip spends
+    is `slots.TAB_COUNT_W` per tab and has its own cases; every number in this module is
+    about how many rows a list of names needs, and folding a fixed six cells per name into
+    them would measure the field as much as the ladder.
     """
-    return lambda fid: (list(names), here, note)
+    return lambda fid: (list(names), here, note, counts)
 
 
 class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
@@ -623,11 +629,14 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
     def test_the_boundary_asks_the_strip_and_hands_the_answer_to_the_arithmetic(self):
         got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
                                          order=SLOTS, window_cols=160)
-        self.assertEqual(got["workspaces"], 2, got)
+        self.assertEqual(got["workspaces"], 3, got)
 
     def test_a_wide_window_leaves_the_strip_at_one_row(self):
-        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=300,
-                                         order=SLOTS, window_cols=300)
+        """360 columns and not 300: every workspace tab reserves `slots.TAB_COUNT_W` for
+        its chat count now (#880), so these fifteen names need 352 columns for one row
+        rather than 262."""
+        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=360,
+                                         order=SLOTS, window_cols=360)
         self.assertEqual(got["workspaces"], 1, got)
 
     def test_the_height_the_strip_asked_for_reaches_split_window(self):
@@ -639,7 +648,7 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         argvs = layout.panel_argvs(slots=SLOTS, session="s", socket="k",
                                    harness_pane="%1", sizes=sizes)
         bar, = [a for a in argvs if "workspaces" in a]
-        self.assertEqual(bar[bar.index("-l") + 1], "2")
+        self.assertEqual(bar[bar.index("-l") + 1], "3")
 
     def test_the_strips_own_pane_width_is_what_it_is_measured_at(self):
         """#500 one slot over. A strip split AFTER the sidebar is carved out of a pane the
@@ -649,10 +658,10 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         self.assertEqual(layout.pane_cols(inset, "workspaces", window_cols=160), 137)
         self.assertEqual(layout.pane_cols(SLOTS, "workspaces", window_cols=160), 160)
         wide = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
-                                          order=SLOTS, window_cols=274)
+                                          order=SLOTS, window_cols=360)
         narrow = commands_frame._slot_sizes(
             "f-1", inset, window_rows=50, pane_cols=200, order=inset,
-            window_cols=274)
+            window_cols=360)
         self.assertEqual(wide["workspaces"], 1)
         self.assertEqual(narrow["workspaces"], 2,
                          "the strip was sized from the window rather than its pane")

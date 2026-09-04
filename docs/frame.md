@@ -685,6 +685,22 @@ plane declares no `[harness] default`; or charter cannot enter the workspace's d
 workspace is a directory and a *name*, which is `charter workspace create` — and a picker
 that creates on a typo leaves litter.
 
+**Each workspace tab says how many chats it holds** — `some-workspace (5)`. A workspace
+with none draws a blank, so every count you see means something, and past 99 the field says
+`(99+)` rather than growing a digit.
+
+The field is **always there**, whether or not it has a number in it, and that is not
+tidiness. Tab widths decide where the bar cuts its pages, so a suffix that appeared when you
+opened a chat and vanished when you closed one would move every tab to its right — and the
+cell you were about to click would hold another workspace's name. It is the same reason the
+chat spinner takes the mark's column instead of adding one. Six columns per tab is what it
+costs; those fifteen workspaces need 352 columns for one row now rather than 262.
+
+It costs one directory scan per repaint for the whole strip, not one per workspace, and the
+strip still repaints on the same thing it always did — so a count can be a beat behind if
+something else opens a chat in the background, and it is right again the moment you come
+back to that window.
+
 **You do not need a mouse for the strips either.** `F2` → `chat: the next tab` (and
 `previous`, and the same pair for `workspace`) walks the strip one step, in the order it is
 drawn, running the same command a click on that tab runs. It wraps, so every press moves
