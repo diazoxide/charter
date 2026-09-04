@@ -1054,11 +1054,16 @@ def by_use(names: list[str] | None = None) -> list[str]:
     The name is the last term on both passes so the answer is TOTAL: two personas with the
     same dispatch count and the same memory count still have one order, the same one every
     time, on every machine. `sorted` over a set would have been an ordering that is right
-    about half the time by luck.
+    about half the time by luck — and that totality is also why *names* is not pre-sorted
+    here: both passes below already end in the name, so a `sorted()` in front of them
+    would be a line no test could go red without.
+
+    **No early return for an empty roster either**, for the same rule one step further.
+    Every line below is a no-op on `[]` — the two store reads answer for a plane, not for
+    a name, and neither of them is reached per persona — so a guard would only save a
+    directory glob on the one plane whose switcher has nothing to offer anyway.
     """
-    names = sorted(list_personas() if names is None else names)
-    if not names:
-        return []
+    names = list(list_personas() if names is None else names)
     default = plane_default()
     rest = [n for n in names if n != default]
     disp = _dispatches()

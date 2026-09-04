@@ -1958,7 +1958,7 @@ def _persona_chip_cells(session: str | None = None) -> list[PersonaChip]:
             # order on screen is `by_use`'s untouched.
             keep = _MAX_PERSONA_LINES - 1          # one row spent saying what was dropped
             by_name = dict(zip(order, chips))
-            lead = [n for n in order if n == active][:1]
+            lead = [active] if active in by_name else []
             rest = [n for n in order if n not in lead]
             ordered = lead + [n for n in rest if n in flagged_names] \
                            + [n for n in rest if n not in flagged_names]
