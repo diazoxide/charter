@@ -409,6 +409,22 @@ def cmd_clone(args) -> int:
         report_submodule_drift(dest, r["name"])
         _hint_repo_docs(dest, r)
     _wire_clones(ws)
+    # **The reported symptom of #886**: this command wrote clones to disk and told nobody,
+    # so the `repos` component stayed empty until charter was restarted. Here rather than
+    # inside the loop above because ten repos are ONE change to the plane — `notify` has no
+    # debounce that can cover a CLI command against itself (`DEBOUNCE` is per hook process),
+    # and one fan-out at completion is also what the operator wants to see: the list
+    # arriving complete, once, rather than growing a row at a time.
+    #
+    # After the failure report and not before it, and unconditional on `failures`: a run
+    # that cloned four of five repos changed the plane exactly as much as one that cloned
+    # five, and a frame drawing four repos is the honest picture of what is on disk.
+    #
+    # Imported inside the function, which is how `hooks.py` reaches this same module at all
+    # seven of its call sites: `charter clone` is the only subcommand here that needs a
+    # frame at all, and this module is imported by every `charter` invocation there is.
+    from .frame import notify
+    notify.plane_changed_everywhere()
     return 1 if failures else 0
 
 
