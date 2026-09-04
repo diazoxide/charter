@@ -1,28 +1,42 @@
 # Install
 
-charter ships as **two artifacts** — install both. A CLI-only install leaves the plugin's
-hooks inert (no session context injection, no golden-rule guard, no auto-save), since the
-plugin is what actually wires them into Claude Code.
+**One command installs charter.**
+
+```bash
+uv tool install charter-cp
+```
+
+That is the CLI, and the CLI is the front door: it is what sits on your `PATH`, what every
+hook charter declares shells out to, and what writes `.claude/settings.json`. Claude Code's
+charter plugin is the *second* artifact, and you do not install it by hand — `charter init`
+installs it for the plane it creates, and `charter doctor --fix` installs it for a plane
+that already exists. The inverse shape, a plugin that bootstraps a CLI, would have to guess
+at a Python environment it does not own.
+
+Nothing installs itself. `init` and `doctor --fix` are the only two commands that install
+anything, and both are commands you typed; `charter workspace list` will never install
+software as a side effect of answering a question.
 
 ## Paste this into Claude Code
 
-Both artifacts, installed and checked, without looking anything up:
+Installed and checked, without looking anything up:
 
 ```
 Install charter (https://github.com/diazoxide/charter) for me:
 
-1. CLI: run `uv tool install charter-cp`. charter needs Python 3.11+, which uv can
+1. Run `uv tool install charter-cp`. charter needs Python 3.11+, which uv can
    fetch for me; fall back to pipx or pip only if uv is missing.
-2. Plugin: run `claude plugin marketplace add diazoxide/charter`, then
-   `claude plugin install charter@charter`.
-3. Run `charter doctor` and show me the output.
-4. Do NOT run `charter init` — tell me what it would create and let me pick the
-   directory first.
+2. Run `charter doctor` and show me the output. Its `plugin install` row will say
+   Claude Code's charter plugin is missing — that is expected here, because the
+   plugin is installed per control plane and there is no plane yet.
+3. Do NOT run `charter init` — tell me what it would create and let me pick the
+   directory first. `charter init` is what installs the plugin, for the plane it
+   creates.
 
-Then tell me to restart this session so the plugin's hooks load.
+Then tell me to restart this session once the plane exists, so the plugin's hooks load.
 ```
 
-Step 4 is not caution for its own sake: `charter init` makes the directory it runs in a
+Step 3 is not caution for its own sake: `charter init` makes the directory it runs in a
 control plane, writing `charter.toml` and scaffolding `personas/`, `inventory/` and
 `workspaces/` (see [control-plane.md](control-plane.md)). Run from an unrelated project by
 accident, it would quietly convert it — so the prompt stops before the step that writes
@@ -59,15 +73,39 @@ uvx --from charter-cp charter <cmd>
 > `charter` as a project name, so the distribution carries a suffix — but everything you
 > type, and everything in the docs, is `charter`.
 
-## 2. The Claude Code plugin
+## 2. The Claude Code plugin — charter installs it
 
 This repo also ships as a Claude Code plugin — `.claude-plugin/plugin.json` +
-`hooks/hooks.json` — installed the way you install any Claude Code plugin from a git repo.
-From a shell:
+`hooks/hooks.json` — and you do not type the commands for it:
+
+```bash
+charter init          # creates a control plane, and installs the plugin for it
+charter doctor --fix  # installs it into a plane that already exists
+```
+
+**Per plane, at `project` scope, and that is a feature rather than an accident.** Claude
+Code keeps a cache holding every version of a plugin at once, so a plane's pinned version
+is the plugin's and not the binary's: two planes on one laptop can sit on different
+charters without fighting. A machine-wide install would collapse that to one version, and
+would put charter's hooks into repositories you never pointed charter at.
+
+`charter doctor` reports the plugin's absence on its own `plugin install` row and names
+`charter doctor --fix` as the remedy. It **warns** rather than failing: a plane that
+declares `charter hook pretooluse` in its own `.claude/settings.json` is guarded with no
+plugin at all, and a CLI-only install is supported — `charter clone`, `charter persona
+show` and the rest work with no plugin anywhere.
+
+The same row says so when the plugin is installed and **disabled**, because an installed
+plugin loads nothing until it is enabled. charter will not enable it for you — `claude
+plugin enable charter@charter --scope project` is yours to run, since turning a plugin off
+is a choice and charter does not revert a deliberate edit.
+
+By hand, if you would rather, or if `charter doctor --fix` could not (an old `claude`, no
+network):
 
 ```bash
 claude plugin marketplace add diazoxide/charter
-claude plugin install charter@charter
+claude plugin install charter@charter --scope project
 ```
 
 Or inside a session: `/plugin marketplace add diazoxide/charter`, then `/plugin install
@@ -76,22 +114,34 @@ on since this was written.
 
 The plugin loads on the **next** session, so restart after installing. Upgrading the CLI
 does not upgrade the plugin — they are two artifacts with two version numbers, pinned to
-each other, so `claude plugin update charter@charter` is its own step. A plugin *newer*
-than the CLI says so loudly at session start; an older one is quietly supported.
+each other, so `claude plugin update charter@charter` is its own step, and skew between
+them is normal rather than exceptional. `charter doctor` **refuses** on skew, with a row
+naming the exact command; charter's hooks only **warn**, at session start and nowhere else.
+That asymmetry is deliberate: a hook that hard-failed on a version mismatch would brick
+every tool call in the session, turning a cosmetic difference into an outage. A plugin
+*newer* than the CLI says so loudly at session start; an older one is quietly supported.
 
 The plugin supplies the pieces that only make sense running *inside* a Claude Code
 session: injecting the active persona's memory at session start, the `PreToolUse` guard
 that enforces the [one-credential rule](git-policy.md), the record-memory nudges, and the
 Stop-hook auto-save. **The plugin ships no Python of its own** — every hook it declares
-just shells out to the `charter` CLI you installed in step 1, so the CLI must be on `PATH`
-first. The CLI works standalone for everything else (`charter clone`, `charter persona
-show`, …) with the plugin absent; install the plugin too if you want charter actively
-driving a live session, not just scripted from a terminal.
+just shells out to the `charter` CLI you installed in step 1, which is why the CLI is the
+artifact you install and the plugin is the one it installs for you.
 
 ## 3. opencode and Codex
 
 Each harness gets **one installed artifact**, the same way Claude Code does. Nothing is
 written into the repos you work in.
+
+**Only Claude Code's artifact is one charter installs for you, and the difference is
+scope.** The Claude Code plugin is installed per project, so `charter init` installing it
+touches exactly the plane you just asked charter to create. Codex's wiring lives only in
+`~/.codex/config.toml` — a machine-global file, in force for every repository on the
+machine — so charter writes it only when you run `charter harness install codex`, where
+running the command *is* the consent. `charter doctor` reports the gap and stops there;
+one documented one-time edit is a smaller cost than charter silently rewriting a
+machine-wide config, and unlike the plugin that file is not something a charter upgrade
+has to keep in lockstep.
 
 **opencode — `charter init` does it.** The plugin goes to `~/.config/opencode/plugin/`
 (`$XDG_CONFIG_HOME` is honoured), which opencode reads for every project, along with a

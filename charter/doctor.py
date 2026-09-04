@@ -2704,6 +2704,105 @@ def check_plugin_skew() -> Result:
                          f"plugin, dispatching every handler. Upgrade: {upgrade}")
 
 
+#: What to type when the Claude Code plugin is missing. One string, because `doctor`'s row
+#: and `init`'s warning must never disagree about the remedy — and because the remedy is
+#: now a charter command rather than three lines of `claude plugin …` the reader has to
+#: copy correctly (#881).
+PLUGIN_FIX_CMD = "charter doctor --fix"
+
+
+def check_plugin_install() -> Result:
+    """Is charter's own Claude Code plugin installed for THIS plane — and if not, the one
+    command that installs it (#881).
+
+    A third question about the plugin, beside the two rows that already exist, and the
+    split is the same one `check_guard_wired` records: *installed*, *enabled* and *wired*
+    are different states. `check_plugin_skew` compares version numbers and answers nothing
+    at all outside a plugin process; `check_plugin_freshness` compares the installed files
+    with the marketplace clone. Neither says *there is no plugin here* — freshness reports
+    that as a green ``the charter plugin is not installed here``, which is true and is read
+    as health.
+
+    **WARN and never FAIL.** `cmd_doctor` exits non-zero only on FAIL, and that exit code
+    is what makes the SessionStart wrapper print — so a FAIL here would put a red preflight
+    in front of every CLI-only install, which `docs/install.md` supports and CI uses. It
+    would also be wrong about protection: a plane that declares `charter hook pretooluse`
+    in its own `.claude/settings.json` is guarded with no plugin at all, and
+    `check_guard_wired` is the row that answers whether the guard fires. This row answers
+    whether the artifact charter can install for you is there.
+
+    **Scoped to this plane, not to the machine.** `plugincache.installed_for` refuses a
+    project-scoped install belonging to somebody else's checkout, because reading one as an
+    answer here would print "installed" over a plane with no plugin — #168's own defect in
+    a new row.
+
+    Silent, green and specific where there is no `claude` at all: an opencode or Codex
+    plane has no Claude Code plugin to be missing, and `check_harness` already states what
+    each harness cannot carry.
+    """
+    name = "plugin install"
+    try:
+        return _plugin_install(name)
+    except Exception as e:
+        # The row-level guard `check_plugin_freshness` carries, for the same reason:
+        # `_checks()` is an eager list literal with no per-check guard, so ONE raising
+        # check returns no rows at all — and `hooks/hooks.json` renders a non-zero `charter
+        # doctor` as "charter preflight failed - fix before working:" at every SessionStart.
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+
+
+def _plugin_install(name: str) -> Result:
+    """The body of :func:`check_plugin_install`, which owns the story and the guard."""
+    from . import config as _config, plugincache
+
+    if not plugincache.available():
+        return Result(name, OK, detail="no `claude` on PATH — no Claude Code plugin here")
+    if not _config.HAS_CONTROL_PLANE:
+        # The plugin is installed per PROJECT, so without a plane there is no directory to
+        # install it for. Not a fault: `charter doctor` outside a plane is a supported way
+        # to preflight a machine.
+        return Result(name, OK, detail="no control plane here — nothing to install it for")
+    entry = plugincache.installed_for(_config.ROOT)
+    if entry is plugincache.UNKNOWN:
+        return Result(name, WARN,
+                      detail="not checked (could not read `claude plugin list --json`)",
+                      hint=_NOT_CHECKED_HINT)
+    if entry is not None:
+        # **Installed is not enabled, and only enabled loads anything** (#177). `claude
+        # plugin list --json` carries `enabled`, and a tick over an installed-but-disabled
+        # plugin is exactly the failure 0.31.1 shipped and `check_guard_wired` was written
+        # to stop: the absence of a protection rendered as health.
+        #
+        # Absent rather than False is read as enabled. An older `claude` that does not emit
+        # the field would otherwise have every plane told its plugin is off — inventing a
+        # problem out of a missing key, which is the opposite error and just as expensive.
+        #
+        # **Reported, never fixed**, and `--fix` deliberately does not enable it. Somebody
+        # disabling a plugin is a choice, and charter does not revert a deliberate edit —
+        # the rule `_ensure_statusline` exists to keep. The row says what is not happening;
+        # the operator decides.
+        if entry.get("enabled") is False:
+            return Result(
+                name, WARN,
+                detail=f"{entry.get('id')} is installed ({entry.get('scope')} scope) and "
+                       f"DISABLED — an installed plugin loads nothing until it is enabled, "
+                       f"so charter's hooks do not run here",
+                hint=f"Run: claude plugin enable {entry.get('id')} --scope "
+                     f"{entry.get('scope')}  (charter does not enable it for you: if you "
+                     f"turned it off on purpose, this row is only telling you what that "
+                     f"costs). The plugin loads at the NEXT session.")
+        return Result(name, OK,
+                      detail=f"{entry.get('id')} installed ({entry.get('scope')} scope)")
+    return Result(
+        name, WARN,
+        detail="charter's Claude Code plugin is not installed for this plane, so none of "
+               "its hooks run here — no session context, no plane-root guard, no auto-save",
+        hint=f"Run: {PLUGIN_FIX_CMD}  (installs `{plugincache.PLUGIN_ID}` at "
+             f"{plugincache.INSTALL_SCOPE} scope from `{plugincache.MARKETPLACE_SOURCE}`; "
+             f"`charter init` does the same thing on a fresh plane). The plugin loads at "
+             f"the NEXT session, so restart afterwards.")
+
+
 def check_plugin_freshness() -> Result:
     """Is the INSTALLED plugin the same FILES as the marketplace clone it came from?
 
@@ -3059,7 +3158,8 @@ def _checks():
                 check_ask_rules(),
                 check_shadowed_knowledge(),
                 check_credential_paths(),
-                check_mcp_launchers(), check_plugin_skew(), check_plugin_freshness()]
+                check_mcp_launchers(), check_plugin_install(), check_plugin_skew(),
+                check_plugin_freshness()]
     return results
 
 
@@ -3094,7 +3194,7 @@ _FIXED_CHECK_NAMES = (
     "workspace layer", "changes",
     "inventory", "vaults", "vault registry", "version lock", "memory indexes",
     "personas", "persona grant", "front door", "news", "ask rules", "shadowed docs",
-    "credential paths", "mcp", "plugin", "plugin files",
+    "credential paths", "mcp", "plugin install", "plugin", "plugin files",
 )
 
 #: Where the forge pair goes in `_FIXED_CHECK_NAMES` — after `git identity`, which is

@@ -4,8 +4,11 @@ The CLI is one of charter's two artifacts. The other is a **Claude Code plugin**
 plugin is almost entirely hooks: the things that have to happen without anyone remembering
 to ask for them.
 
-Install both — a CLI with no plugin leaves every guard and every injection dead, while
-looking completely installed. See [install.md](install.md).
+You install one of them. `uv tool install charter-cp` puts the CLI on your `PATH`, and
+`charter init` installs the plugin for the plane it creates — `charter doctor --fix` for a
+plane that already exists. A CLI with no plugin leaves every guard and every injection
+dead, while looking completely installed, which is why `charter doctor`'s `plugin install`
+row names the gap rather than leaving you to notice it. See [install.md](install.md).
 
 The plugin ships **no Python**. Every hook is a `charter hook <name>` call against the CLI
 on `PATH`, which is why a version skew between the two is worth shouting about and is the
@@ -641,6 +644,13 @@ the guard, while "the harness did not get this" can still become a refusal.
 The deliberate exception is version skew, in **both** directions — that is the failure shape
 this project keeps paying for, so it is the one thing a hook says out loud, once, at session
 start.
+
+**Out loud, and never fatal.** The two artifacts update through different channels (`uv
+tool upgrade`, `claude plugin update`), so skew is normal rather than exceptional and will
+happen mid-session. A hook that hard-failed on it would refuse every tool call in that
+session, turning a cosmetic mismatch into an outage — so the hooks warn and keep guarding,
+and it is `charter doctor` that refuses, on a row naming the exact command. Same fact, two
+surfaces, and only the one you can act on without losing the session is allowed to block.
 
 - **Plugin newer than the CLI** — the manifest dispatches `charter hook <name>` for a handler
   this CLI does not have, so it errors. `doctor` FAILs, which is what makes the SessionStart

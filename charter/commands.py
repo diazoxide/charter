@@ -2021,6 +2021,29 @@ def _wire_harnesses(root: Path) -> list[tuple[str, str]]:
     return out
 
 
+def _provision_harnesses(root: Path) -> list[tuple[str, str]]:
+    """Install every registered harness's own ARTIFACT for the plane at *root* (#881).
+
+    The same loop shape as :func:`_wire_harnesses` and deliberately NOT the same function.
+    `wire` writes files inside the plane and is safe to re-run from `reinit`; this shells
+    out to a package manager and installs software, so it runs only from `charter init`
+    and `charter doctor --fix` — the two commands a person types when they are asking for
+    an install. `charter workspace list` must never install anything, which is #857's
+    surprise and the same reason charter refuses to write `~/.claude/settings.json`
+    unasked.
+
+    Nothing here names a harness: `Harness.provision` is empty by default and Claude Code
+    is the one that overrides it, so a harness that grows an installable artifact is
+    covered the day its class says so.
+    """
+    from .harness import registry
+
+    out: list[tuple[str, str]] = []
+    for h in registry.all():
+        out.extend(h.provision(root))
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # init's one offer: the repo you are standing in                               #
 #                                                                              #
@@ -2400,6 +2423,29 @@ def cmd_init(args) -> int:
         else:
             (created if status == "created" else present).append(label)
 
+    # BEFORE `_ensure_guard_hook`, and the order is load-bearing rather than tidy.
+    #
+    # `claude plugin install --scope project` writes `enabledPlugins` into the plane's own
+    # `.claude/settings.json` — measured on a real machine, where that file holds exactly
+    # `enabledPlugins`, `env` and `statusLine` and no `hooks` block. So by the time
+    # `_ensure_guard_hook` runs, `_plugin_dispatches_guard` finds an enabled plugin that
+    # dispatches `charter hook pretooluse` and correctly writes nothing.
+    #
+    # Run the other way round, `init` writes its own `hooks.PreToolUse` block first (the
+    # plugin is not installed yet, so there is nothing to find), the install enables the
+    # plugin a moment later, and the plane ends up with BOTH — the guard running twice on
+    # every Bash call, which is the doubling `doctor.check_guard_wired` reports as *declared
+    # twice* and which nobody finds, because two denials for one command read as one
+    # stubborn denial. That was the ordinary outcome of the old two-step install.
+    #
+    # `init` is one of the two doors an install may come through (#881); `reinit` is not one
+    # of them, which is why this is not folded into `_wire_harnesses` above.
+    for status, label in _provision_harnesses(root):
+        if status == "unvouched":
+            unvouched.append(label)
+        else:
+            (created if status == "created" else present).append(label)
+
     fd = _ensure_front_door(root, getattr(args, "front_door", None))
     if fd:
         created.append(fd[1])
@@ -2577,8 +2623,56 @@ def cmd_reinit(args) -> int:
 # --------------------------------------------------------------------------- #
 # doctor                                                                       #
 # --------------------------------------------------------------------------- #
+def _run_doctor_fix() -> None:
+    """Install what `doctor` can install for this plane, and say what happened (#881).
+
+    The other half of #881's answer, and the reason `doctor` gained a flag rather than a
+    behaviour: **installation happens where somebody asked for it and nowhere else.**
+    `charter init` is the first door and this is the second; nothing installs as a side
+    effect of an ordinary command, which is #857's surprise and the same reason charter
+    refuses to write `~/.claude/settings.json` unasked.
+
+    Deliberately the same call `init` makes — :func:`_provision_harnesses` — rather than a
+    second installer that could drift from it. `doctor`'s own row names this command, so
+    the two would be a remedy and a report disagreeing about what the remedy does.
+
+    `doctor.py` stays read-only ("Nothing here changes the system"), which is why this
+    lives here and not beside the row that hints at it.
+
+    Never raises, and never changes `doctor`'s verdict: the rows are the verdict, so a fix
+    that failed shows up as the row it did not turn green rather than as an exit code from
+    the fixing. Everything here goes to **stderr** (`util.*`), so `charter doctor --json
+    --fix` still emits parseable JSON on stdout.
+    """
+    if not config.HAS_CONTROL_PLANE:
+        util.warn("no control plane here (no charter.toml in this directory or any "
+                  "parent), and charter installs the Claude Code plugin per project — so "
+                  "there is nothing for --fix to install it for.")
+        util.info("  Run `charter init` in the directory you want to be a control plane; "
+                  "it installs the plugin as part of scaffolding.")
+        return
+    done = _provision_harnesses(config.ROOT)
+    if not done:
+        util.info("--fix had nothing to install.")
+        return
+    for status, label in done:
+        if status == "unvouched":
+            util.warn(label)
+        elif status == "created":
+            util.ok(f"Installed {label}")
+        else:
+            util.info(f"Already there: {label}")
+
+
 def cmd_doctor(args) -> int:
-    """Preflight the environment. Exit non-zero if any hard requirement fails."""
+    """Preflight the environment. Exit non-zero if any hard requirement fails.
+
+    ``--fix`` runs FIRST and then the checks run as usual, so the report the operator reads
+    is the state after the repair rather than the one that prompted it. A `--fix` that fixed
+    nothing is therefore not silent: the row that asked for it is still there, still yellow,
+    still naming what to do."""
+    if getattr(args, "fix", False):
+        _run_doctor_fix()
     if getattr(args, "json", False):
         results = doctor.run_all()
         print(json.dumps(

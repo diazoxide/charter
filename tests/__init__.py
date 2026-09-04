@@ -92,6 +92,17 @@ from . import _forgeprobe      # noqa: E402
 
 _forgeprobe.install()
 
+# One more fact about the machine that CI does not have and a laptop does: the `claude`
+# CLI. `charter init` now installs charter's own Claude Code plugin through it (#881), and
+# nine modules call `cmd_init` in-process while `test_cli_smoke` runs it as a real
+# subprocess — so on a developer's machine a suite run installed a plugin into their real
+# Claude Code, once per fixture plane, scoped to temp directories that no longer exist.
+# Measured: five such rows in `claude plugin list`. See `tests/_claudeguard.py`; the
+# in-process opt-in is the one `test_plugin_freshness` already uses.
+from . import _claudeguard      # noqa: E402
+
+_claudeguard.install()
+
 # And the one thing no guard can prevent, only clean up after: a run that was KILLED.
 # Measured — a `kill -9` two seconds into `test_frame_overlay_escape_hatch` leaves a live
 # tmux server and its socket file behind, because the signal skips every `addCleanup`

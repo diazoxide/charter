@@ -13,12 +13,16 @@ among them.
 follows the CLI and not the plugin's bundled copy of ``charter/*.py``. Skills are different:
 they are text the model loads, and a stale one is wrong instructions delivered confidently.
 
-Two callers, one mechanism:
+Three callers, one mechanism:
 
 * `doctor.check_plugin_freshness` compares by CONTENT, which is the question a version
   string cannot answer.
 * `commands_update` force-refreshes on the dev channel, where a version-keyed update can
   never see the change.
+* `commands.cmd_init` and `charter doctor --fix` INSTALL it (#881), so that installing
+  charter installs charter and the operator types one command rather than three. Those two
+  entry points and no other: :func:`install` says at length why nothing may reach it as a
+  side effect of an unrelated command.
 
 **Everything here talks to `claude plugin … --json`, never to Claude Code's files.**
 ``~/.claude/plugins/installed_plugins.json``, ``known_marketplaces.json`` and the cache
@@ -107,6 +111,25 @@ _MARKETPLACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 #: `tests/test_plugin.py` already pins those two to each other.
 PLUGIN_ID = "charter@charter"
 
+#: What ``claude plugin marketplace add`` is given — the GitHub ``<owner>/<repo>`` charter
+#: is published from, which is how a marketplace comes to be called ``charter`` at all.
+#:
+#: A literal rather than something read at runtime, because the wheel does not ship
+#: `.claude-plugin/`: `[tool.hatch.build.targets.wheel] packages = ["charter"]`, so a CLI
+#: installed from PyPI has no manifest to read this out of. `tests/test_plugin_install.py`
+#: pins it to `pyproject.toml`'s own `Repository` URL instead, so the day charter moves
+#: house the suite fails rather than every stranger's first install.
+MARKETPLACE_SOURCE = "diazoxide/charter"
+
+#: The scope charter installs its own plugin at, and NOT ``user``.
+#:
+#: The README states the consequence and it is the whole reason a plane pins the plugin's
+#: version rather than the binary's: *"two planes on one laptop can sit on different
+#: charters without fighting"*. A machine-global install collapses that — one version for
+#: every plane on the machine — and it also puts charter's hooks into repositories nobody
+#: pointed charter at, which is #857's category exactly.
+INSTALL_SCOPE = "project"
+
 
 def available() -> bool:
     """True when the `claude` CLI is on PATH. False is an ordinary answer, not a fault —
@@ -154,6 +177,181 @@ def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT):
         return None
 
 
+def _our_entries():
+    """Every ``claude plugin list`` row that IS charter's plugin, or :data:`UNKNOWN`.
+
+    Split out of :func:`installed_charter_plugin` when :func:`installed_for` needed the
+    same rows asked a different question. One reader, because two of them would eventually
+    disagree about which rows count as charter's — and the id check below is the only thing
+    standing between `charter doctor --fix` and a plugin that is not charter's to touch.
+    """
+    entries = _claude_json(["list"])
+    # ONE test, and it used to be two. `_claude_json` answers `None` for every way a read
+    # can fail, and the line above it — `if entries is None: return UNKNOWN` — was carried
+    # here from `installed_charter_plugin` and is strictly subsumed by this one: `None` is
+    # not a list either, and both returned the same sentinel. The deletion sweep found it
+    # as a survivor no test could tell from its own absence, which is the honest name for a
+    # branch nothing can reach. What the two spellings meant is preserved here: "could not
+    # read" and "`--json` answered something that is not a list of rows" are the same
+    # answer — nothing is known — and neither is "there is nothing installed".
+    if not isinstance(entries, list):
+        return UNKNOWN
+    ours = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        pid = e.get("id")
+        # Equality against a module constant, and NOT also `_PLUGIN_ID_RE` — which used to
+        # sit on the line above and became dead the moment this narrowed to one id. An
+        # equality test against a constant is strictly stronger than any pattern: what
+        # survives it IS the constant. The regex was kept for a while as "defence in
+        # depth", which is the honest name for a check no test can distinguish from its own
+        # absence; `refresh_argvs` still applies it, because that function takes an id from
+        # a caller rather than producing one.
+        if pid != PLUGIN_ID:
+            continue
+        if e.get("scope") not in _SCOPES:
+            continue
+        ours.append(e)
+    return ours
+
+
+def _same_dir(a, b) -> bool:
+    """Do two paths name the same directory? ``False`` for anything unresolvable.
+
+    `Path.resolve` is what makes ``/var/…`` and ``/private/var/…`` the same answer on
+    macOS, which is not a test-only concern: a plane under ``/tmp`` is a symlinked path in
+    every terminal on that machine.
+    """
+    if not isinstance(a, str) or not isinstance(b, (str, Path)):
+        return False
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def covers(entry: dict, project) -> bool:
+    """Does this install of charter's plugin apply to a session rooted at *project*?
+
+    ``user`` scope is machine-wide and covers everything. ``project`` and ``local`` are
+    bound to the directory they were installed from, so an install belonging to somebody
+    else's checkout is **not** an answer for this plane — and reading it as one is how
+    "already installed" would be printed over a plane with no plugin at all, which is
+    `check_guard_wired`'s #168 defect wearing a different row.
+    """
+    if entry.get("scope") == "user":
+        return True
+    return _same_dir(entry.get("projectPath"), project)
+
+
+def installed_for(project):
+    """The charter plugin install that covers *project* — or :data:`UNKNOWN`, or ``None``.
+
+    :func:`installed_charter_plugin` answers a different question and keeps answering it:
+    *which install may charter refresh*, where every project-scoped install points at the
+    same versioned cache directory, so any one of them will do. This one answers *is this
+    plane covered*, where they are not interchangeable at all.
+    """
+    ours = _our_entries()
+    if ours is UNKNOWN:
+        return UNKNOWN
+    for e in ours:
+        if covers(e, project):
+            return e
+    return None
+
+
+def install_argvs(scope: str = INSTALL_SCOPE,
+                  source: str = MARKETPLACE_SOURCE) -> list[list[str]] | None:
+    """The two commands that put charter's plugin on a machine, in order.
+
+    ``None`` if *scope* is not one charter will install at, so a caller cannot run half a
+    sequence against a value charter would not have built an argv from — the discipline
+    :func:`refresh_argvs` already keeps.
+
+    **The order is the mechanism**, and it is the fact this repository used to keep in
+    prose: `tests/test_docs.py` pinned *"installing from a marketplace that has not been
+    added fails"* against the README's paste-in block. The README no longer types these
+    commands, so the assertion moved here, onto the code that runs them.
+
+    ``-y`` on the install because charter runs it non-interactively; `claude` requires it
+    when stdout is not a TTY and would otherwise refuse rather than prompt.
+    """
+    if scope not in _SCOPES:
+        return None
+    if not isinstance(source, str) or not source or source.startswith("-"):
+        return None
+    return [
+        ["claude", "plugin", "marketplace", "add", source],
+        ["claude", "plugin", "install", PLUGIN_ID, "--scope", scope, "-y"],
+    ]
+
+
+def _step(argv: list[str], cwd) -> tuple[bool, str]:
+    """Run one `claude plugin` step. ``(ok, why)``, never raising — same reasons as
+    :func:`force_refresh`, which this sits beside."""
+    try:
+        proc = util.run(argv, cwd=cwd, check=False, timeout=REFRESH_TIMEOUT)
+    except (util.ProcTimeout, OSError) as e:
+        return False, str(e) or type(e).__name__
+    if proc.returncode != 0:
+        why = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return False, (why[-1][:200] if why else f"exit {proc.returncode}")
+    return True, ""
+
+
+def install(project, scope: str = INSTALL_SCOPE) -> tuple[str, str]:
+    """Install charter's own Claude Code plugin for *project*. ``(status, detail)``.
+
+    Five statuses, because five different things are true and only one of them is a fault:
+
+    * ``present`` — an install already covers *project*. Nothing runs.
+    * ``installed`` — charter added the marketplace and installed the plugin.
+    * ``unavailable`` — no `claude` on PATH. An opencode or Codex plane, or a terminal
+      with no Claude Code at all; a perfectly ordinary state and never an error.
+    * ``unknown`` — `claude plugin list --json` could not be read. **Nothing is installed
+      on a guess.** An older `claude` that does not understand `--json` is the population
+      this is for, and installing over an unknown state is how a second copy appears.
+    * ``failed`` — a step ran and did not succeed.
+
+    **Only ever called from a command a person typed** — `charter init` and `charter doctor
+    --fix`. Nothing here may be reached as a side effect of `charter workspace list`:
+    installing software because some unrelated command ran is #857's surprise, and the same
+    reason charter refuses to write `~/.claude/settings.json` unasked.
+    """
+    if not available():
+        return "unavailable", ("the `claude` CLI is not on PATH, so there is no Claude "
+                               "Code to install a plugin into")
+    entry = installed_for(project)
+    if entry is UNKNOWN:
+        return "unknown", ("could not read `claude plugin list --json`, so charter does "
+                           "not know what is installed and will not install over it")
+    if entry is not None:
+        return "present", (f"{entry.get('id')} is already installed "
+                           f"({entry.get('scope')} scope)")
+    argvs = install_argvs(scope)
+    if argvs is None:
+        return "failed", f"{scope!r} is not a scope charter will install at"
+    add, put = argvs
+    cwd = str(project) if project is not None and Path(project).is_dir() else None
+    added, why_add = _step(add, cwd)
+    ok, why = _step(put, cwd)
+    if ok:
+        return "installed", f"{PLUGIN_ID} installed at {scope} scope"
+    # The marketplace step is allowed to fail and the install still to be attempted: a
+    # marketplace that is ALREADY registered is the common way `add` exits non-zero, and
+    # refusing to continue there would make the second install on a machine impossible.
+    # So the install's own failure is the verdict — and when the step before it failed too,
+    # that is said, because "already registered" and "offline" fail identically here and
+    # the reader needs to know a second command was also unhappy.
+    if not added:
+        return "failed", (f"`{' '.join(put)}` failed: {why}. `{' '.join(add)}` failed "
+                          f"first ({why_add}) — an already-registered marketplace fails "
+                          f"that way harmlessly, so read the install error above it.")
+    return "failed", f"`{' '.join(put)}` failed: {why}"
+
+
 def installed_charter_plugin(prefer_project=None):
     """The installed charter plugin entry — or :data:`UNKNOWN`, or ``None``.
 
@@ -186,28 +384,9 @@ def installed_charter_plugin(prefer_project=None):
     charter's to touch. A plugin outside that id reads as "not installed" here, which is
     the honest answer: charter cannot identify it as its own.
     """
-    entries = _claude_json(["list"])
-    if entries is None:
+    ours = _our_entries()
+    if ours is UNKNOWN:
         return UNKNOWN
-    if not isinstance(entries, list):
-        return UNKNOWN          # `--json` answered something that is not a list of rows
-    ours = []
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        pid = e.get("id")
-        # Equality against a module constant, and NOT also `_PLUGIN_ID_RE` — which used to
-        # sit on the line above and became dead the moment this narrowed to one id. An
-        # equality test against a constant is strictly stronger than any pattern: what
-        # survives it IS the constant. The regex was kept for a while as "defence in
-        # depth", which is the honest name for a check no test can distinguish from its own
-        # absence; `refresh_argvs` still applies it, because that function takes an id from
-        # a caller rather than producing one.
-        if pid != PLUGIN_ID:
-            continue
-        if e.get("scope") not in _SCOPES:
-            continue
-        ours.append(e)
     if not ours:
         return None
     if prefer_project is not None:

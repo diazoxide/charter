@@ -152,6 +152,53 @@ class ClaudeCodeHarness(Harness):
         status, _path = commands.ensure_env_var(root, "CHARTER_HARNESS", self.name)
         return [(status, ".claude/settings.json (env)")]
 
+    def provision(self, root: Path) -> list[tuple[str, str]]:
+        """Install charter's own Claude Code plugin for the plane at *root* (#881).
+
+        The CLI is the front door: it is what sits on ``PATH``, what every hook in
+        ``hooks/hooks.json`` dispatches to, and what already writes `.claude/settings.json`
+        — so it exists before a harness session does. The inverse shape, a plugin that
+        bootstraps a CLI, has to guess at a Python environment it does not own.
+
+        **Project scope**, from the plane's own directory, for the reason the README states
+        as a feature: the plugin is what carries a plane's pinned version, so two planes on
+        one laptop can sit on different charters without fighting. A ``user``-scope install
+        would collapse that to one version per machine and would put charter's hooks into
+        repositories nobody pointed charter at.
+
+        A machine with no `claude` gets **no row at all** rather than a warning. An opencode
+        or Codex plane is a supported install and has no Claude Code plugin to be missing;
+        `check_harness` already states what each harness cannot carry, and a warning here
+        would be the cry-wolf failure `doctor.py` keeps returning to.
+        """
+        from .. import plugincache
+
+        status, detail = plugincache.install(root)
+        if status == "installed":
+            # Shaped for `commands._fold_entries`, which splits a label on `" ("`: the
+            # head is the thing, the parenthesis is the note. `init` lists one line per
+            # FILE and folds several notes onto it, and a label with no fold point makes
+            # that line grow instead — the 254-column headline #231 capped.
+            return [("created", f"the Claude Code plugin ({plugincache.PLUGIN_ID}, "
+                                f"{plugincache.INSTALL_SCOPE} scope)")]
+        if status == "present":
+            # No parenthetical. Every caller here already says "already present" or
+            # "Already there", so `(charter@charter is already installed …)` would be the
+            # same word twice in one line.
+            return [("present", "the Claude Code plugin")]
+        if status == "unavailable":
+            return []
+        # `unknown` and `failed`. A SENTENCE, in the bucket `init` warns about rather than
+        # lists: "the plugin is not installed" is exactly the state a reader must not take
+        # away from a line under "already present" (#433, one level up).
+        return [("unvouched",
+                 f"The Claude Code plugin was not installed — {detail}. Without it charter's "
+                 f"hooks do not run in this plane: no session context, no plane-root guard, "
+                 f"no auto-save. Retry with `charter doctor --fix`, or install it by hand: "
+                 f"`claude plugin marketplace add {plugincache.MARKETPLACE_SOURCE}` then "
+                 f"`claude plugin install {plugincache.PLUGIN_ID} --scope "
+                 f"{plugincache.INSTALL_SCOPE}`.")]
+
     def workspace_files(self) -> dict[str, str]:
         """The plane's own three settings keys, as one document for a workspace to hold.
 
