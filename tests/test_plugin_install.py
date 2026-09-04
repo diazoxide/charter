@@ -141,6 +141,31 @@ class AnInstallBelongingToSomebodyElsesCheckoutIsNotAnAnswerHere(unittest.TestCa
         with rows([{"id": "charter@someone-else", "scope": "user"}]):
             self.assertIsNone(plugincache.installed_for("/planes/a"))
 
+    def test_the_same_directory_spelled_two_ways_is_the_same_directory(self):
+        """Not a test-only nicety. macOS resolves `/tmp` to `/private/tmp` and `/var` to
+        `/private/var`, so a plane under either is spelled one way by `claude plugin list`
+        and another by the shell — and an unresolved compare would report "not installed"
+        for an install that is right there."""
+        import os
+        import tempfile
+
+        real = Path(tempfile.mkdtemp(prefix="charter-samedir-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(real, ignore_errors=True))
+        link = real.parent / (real.name + "-link")
+        os.symlink(real, link)
+        self.addCleanup(lambda: link.unlink(missing_ok=True))
+        entry = {"id": "charter@charter", "scope": "project", "projectPath": str(real)}
+        with rows([entry]):
+            self.assertIsNotNone(plugincache.installed_for(link))
+
+    def test_a_projectPath_that_is_not_a_string_is_not_a_match(self):
+        """`claude plugin list --json` is a machine's own output, not a committed file, but
+        it is still input: a row whose `projectPath` is null or a number must answer "no",
+        not raise out of a `doctor` row."""
+        for junk in (None, 17, ["/planes/a"]):
+            with rows([{"id": "charter@charter", "scope": "project", "projectPath": junk}]):
+                self.assertIsNone(plugincache.installed_for("/planes/a"), junk)
+
 
 class TheInstallItself(unittest.TestCase):
     def test_it_installs_when_nothing_covers_this_plane(self):
@@ -150,6 +175,27 @@ class TheInstallItself(unittest.TestCase):
         self.assertEqual(status, "installed")
         self.assertEqual([c[0] for c in calls], plugincache.install_argvs())
         self.assertIn("charter@charter", detail)
+
+    def test_it_runs_from_the_plane_so_project_scope_lands_on_the_plane(self):
+        """`claude plugin install --scope project` installs for the CWD. Run it from
+        anywhere else and the plugin is installed for that other directory instead —
+        silently, since the command succeeds either way."""
+        import tempfile
+
+        plane = Path(tempfile.mkdtemp(prefix="charter-installcwd-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(plane, ignore_errors=True))
+        calls: list = []
+        with rows([]), spawns(calls):
+            plugincache.install(plane)
+        self.assertEqual([c[1] for c in calls], [str(plane), str(plane)])
+
+    def test_a_plane_path_that_is_not_a_directory_spawns_with_no_cwd(self):
+        """Rather than handing `subprocess` a directory that is not there, which raises
+        where a returned failure is wanted."""
+        calls: list = []
+        with rows([]), spawns(calls):
+            plugincache.install("/no/such/plane")
+        self.assertEqual([c[1] for c in calls], [None, None])
 
     def test_it_runs_nothing_when_an_install_already_covers_this_plane(self):
         calls: list = []
@@ -247,6 +293,50 @@ class InstallationHappensWhereSomebodyAskedForIt(PersonaIso):
             self._provisions(
                 lambda: commands.cmd_doctor(SimpleNamespace(json=True, fix=True))), 1)
 
+    def test_fix_outside_a_plane_installs_nothing_and_says_where_to_go(self):
+        """The plugin is installed per PROJECT, so with no plane there is no directory to
+        install it for. `doctor` outside a plane is a supported way to preflight a machine
+        — it must not become a way to install into whatever directory you stood in."""
+        import io
+        from contextlib import redirect_stderr
+
+        from charter import config
+
+        config.use(self.tmp / "not-a-plane")
+        buf = io.StringIO()
+        n = 0
+        with redirect_stderr(buf):
+            n = self._provisions(lambda: commands._run_doctor_fix())
+        self.assertEqual(n, 0)
+        self.assertIn("charter init", buf.getvalue())
+
+    def test_fix_with_nothing_to_do_says_so_rather_than_nothing(self):
+        """A command that produced no output would read as one that did not run."""
+        import io
+        from contextlib import redirect_stderr
+
+        commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
+        buf = io.StringIO()
+        with redirect_stderr(buf), \
+                mock.patch.object(commands, "_provision_harnesses", return_value=[]):
+            commands._run_doctor_fix()
+        self.assertIn("nothing to install", buf.getvalue())
+
+    def test_fix_warns_about_an_install_it_could_not_vouch_for(self):
+        """`unvouched` carries a sentence, and a `--fix` that failed must not read as a
+        `--fix` that worked — the row it did not turn green is the verdict, but the reason
+        is only here."""
+        import io
+        from contextlib import redirect_stderr
+
+        commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
+        buf = io.StringIO()
+        with redirect_stderr(buf), \
+                mock.patch.object(commands, "_provision_harnesses",
+                                  return_value=[("unvouched", "it did not work because X")]):
+            commands._run_doctor_fix()
+        self.assertIn("it did not work because X", buf.getvalue())
+
     def test_the_flag_is_reachable_from_the_command_line(self):
         """A flag argparse does not define is a flag nobody can type."""
         from charter import cli
@@ -321,6 +411,27 @@ class TheDoctorRowReportsTheGapWithoutCryingWolf(PersonaIso):
             res = doctor.check_plugin_install()
         self.assertEqual(res.status, doctor.OK)
         self.assertIn("project", res.detail)
+
+    def test_a_plane_with_no_claude_at_all_is_green_and_says_why(self):
+        """opencode and Codex planes are supported installs with no Claude Code plugin to
+        be missing. A yellow row on every one of them is the cry-wolf failure that costs
+        the rows that matter."""
+        with mock.patch.object(plugincache, "available", return_value=False):
+            res = doctor.check_plugin_install()
+        self.assertEqual(res.status, doctor.OK)
+        self.assertIn("no `claude` on PATH", res.detail)
+
+    def test_a_green_row_keeps_no_remedy_back_in_a_hint(self):
+        """`Result.render` drops the hint entirely at OK, so guidance written there is
+        invisible while looking shipped — #856, and `TestAGreenRowKeepsNothingBack` holds
+        every check to it. Stated here too because this row has three green branches."""
+        cases = [mock.patch.object(plugincache, "available", return_value=False),
+                 rows([{"id": "charter@charter", "scope": "user"}])]
+        for ctx in cases:
+            with ctx:
+                res = doctor.check_plugin_install()
+            if res.status == doctor.OK:
+                self.assertEqual(res.hint, "", res.detail)
 
     def test_an_unreadable_list_is_not_checked_rather_than_a_tick(self):
         """#171: a check that silently does nothing is worse than no check, and the

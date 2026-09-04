@@ -175,9 +175,17 @@ class ClaudeCodeHarness(Harness):
 
         status, detail = plugincache.install(root)
         if status == "installed":
-            return [("created", f"the Claude Code plugin — {detail}")]
+            # Shaped for `commands._fold_entries`, which splits a label on `" ("`: the
+            # head is the thing, the parenthesis is the note. `init` lists one line per
+            # FILE and folds several notes onto it, and a label with no fold point makes
+            # that line grow instead — the 254-column headline #231 capped.
+            return [("created", f"the Claude Code plugin ({plugincache.PLUGIN_ID}, "
+                                f"{plugincache.INSTALL_SCOPE} scope)")]
         if status == "present":
-            return [("present", f"the Claude Code plugin ({detail})")]
+            # No parenthetical. Every caller here already says "already present" or
+            # "Already there", so `(charter@charter is already installed …)` would be the
+            # same word twice in one line.
+            return [("present", "the Claude Code plugin")]
         if status == "unavailable":
             return []
         # `unknown` and `failed`. A SENTENCE, in the bucket `init` warns about rather than
