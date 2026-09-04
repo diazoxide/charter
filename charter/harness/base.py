@@ -22,6 +22,12 @@ documented. Written in `doctor` they would be exactly the hardcoded literal per 
 this file exists to stop: a harness added to ``KINDS`` would silently be reported under
 Claude Code's discovery rules, which is the "verified a proxy instead of the fact"
 failure #168, #177, #261 and #851 are each an instance of.
+
+:attr:`Harness.inherited_paths` is the eighth and the same argument again, one verb over:
+`workspace.py` held two Claude Code paths as a literal and mirrored them into every guest
+checkout, so an operator on opencode or Codex got a workspace with none of the plane's
+agents or skills (#868). Reporting a harness under another's rules and *writing* another
+harness's files are the same mistake; only the second one lands on disk.
 """
 
 from __future__ import annotations
@@ -179,6 +185,54 @@ class Harness:
     #: answers yes to the first and no to the second (#859). A harness charter has not
     #: measured says nothing, which is not a claim that it has no gate.
     trust_gate: str = ""
+
+    #: The paths, relative to a REPOSITORY ROOT, that this harness reads for a session
+    #: anywhere inside that repository — and which a checkout with a git root of its own
+    #: therefore cuts off from the plane's copies.
+    #:
+    #: This is what `workspace._inherited_files` mirrors into a guest checkout at
+    #: ``workspaces/<ws>/<repo>/``. It names the PLANE's own directories in this harness's
+    #: spelling, which is why it has to live here: charter has to know the names to find
+    #: them on disk, and a list of them in `workspace.py` is a list every new harness makes
+    #: wrong — the hardcoded-literal-per-harness failure `registry.py` exists to end. Until
+    #: #868 that list was exactly two Claude Code paths, and an operator on opencode or
+    #: Codex got a workspace with none of the plane's agents or skills.
+    #:
+    #: **A separate member from :attr:`layer`, and the reason is what each can be measured
+    #: to say.** `layer` answers *"would a session started HERE find it, by which discovery
+    #: rule"*, and :class:`LayerPart` has exactly two measured rules — cwd-only, and walk
+    #: up to the git root. opencode resolves ``opencode.json`` at the repository ROOT,
+    #: which is neither; declaring it as a walking part would report a layer as reachable
+    #: from an intermediate directory that opencode never reads there, and `part_reaches`
+    #: says over-claiming is the one direction that row must never be wrong in. The
+    #: question here is narrower and IS answered for all three: which of the plane's
+    #: in-repo paths does a nested checkout stop seeing. A harness may declare this without
+    #: declaring a rule it has not measured.
+    #:
+    #: Directories and single files both. Every shipped harness spells this as a
+    #: directory today, and the mirror still reads a plain file first, because half the
+    #: in-repo surfaces charter has measured ARE single files at a repository root
+    #: (opencode's ``opencode.json``, Codex's ignored ``.codex/config.toml``). The whole
+    #: point of the member is that a harness charter has not met declares its own spelling,
+    #: and a mirror that answered "nothing" for a file would be silently wrong for the next
+    #: one — `rglob` on a file yields nothing at all.
+    #:
+    #: **A path here is a claim that the plane's copy is safe to place in a repository
+    #: charter does not own**, and two kinds of thing are deliberately not:
+    #:
+    #: * **Grants.** Charter mirrors CAPABILITY — agents, skills, commands — never
+    #:   permission. `charter guard` writes this plane's rules into a harness's own config
+    #:   file, so mirroring that file would put an ``allow`` in force in a repository
+    #:   nobody granted it in. :data:`claude_code.WORKSPACE_KEYS` already refuses exactly
+    #:   this for Claude Code, and this mechanism writing into the same directory must not
+    #:   answer it two opposite ways for two harnesses. Where a harness's config file mixes
+    #:   the two, a mirror is the wrong instrument — it cannot drop a key — and
+    #:   :meth:`workspace_files` is the one that can.
+    #: * **Project instructions.** ``CLAUDE.md`` and any equivalent: dropping the plane's
+    #:   instructions into somebody else's repo, to be read there as that repo's, is a
+    #:   claim of a different size from mirroring a settings key. A guest hides its own
+    #:   files; it does not narrate the host's.
+    inherited_paths: tuple[str, ...] = ()
 
     #: The value this harness puts in ``$CHARTER_HARNESS``. Its identity everywhere.
     name: str = ""

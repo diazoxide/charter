@@ -164,12 +164,20 @@ class CodexHarness(Harness):
                 "there is no project-level config file — a `.codex/config.toml` beside a "
                 "project is ignored, so `~/.codex/config.toml` is the only answer and "
                 "every workspace on this machine necessarily shares it. A project "
-                "`.codex/skills/` IS read; that is a skills surface, not config, and "
-                "charter writes nothing there."),
+                "`.codex/skills/` IS read; that is a skills surface, not config — charter "
+                "mirrors the plane's copy of it into a workspace's checkouts, which "
+                "carries capability there and still cannot make two workspaces differ."),
     )
 
-    #: Charter writes NO in-repo layer for Codex today, so there is nothing for `doctor`'s
+    #: Charter declares NO :class:`LayerPart` for Codex, so there is nothing for `doctor`'s
     #: `session layer` row to look for and the row says where the layer does come from.
+    #:
+    #: Empty because charter has not measured Codex's DISCOVERY rules — where a lookup for
+    #: `.codex/skills/` starts and where it stops — not because charter writes nothing in a
+    #: repo. Since #868 it mirrors the plane's `.codex/skills/` into a workspace's
+    #: checkouts (:attr:`inherited_paths`); what it cannot yet do is say which of the two
+    #: measured rules finds it, and reporting it under Claude Code's would be the borrowed
+    #: answer this whole member exists to refuse.
     #:
     #: **The `.codex/skills/` half is the correction.** Measured against codex-cli 0.147.0
     #: with a real `codex exec` session, a sentinel skill at
@@ -179,10 +187,23 @@ class CodexHarness(Harness):
     #: "no" with confidence — and a model asked whether it can see a file will happily go
     #: and `sed` the file you just named, so the trace is the evidence and not the answer.
     layer_note = (
-        "charter writes no in-repo layer for Codex — it arrives from "
+        "charter has not measured Codex's discovery rules, so this row cannot say "
+        "what a session here would find — the layer arrives from "
         "`~/.codex/config.toml` and the plugin, and a project `.codex/config.toml` is "
         "ignored. Codex DOES read an in-repo `.codex/skills/` (measured, 0.147.0); "
-        "charter writes nothing there")
+        "charter mirrors the plane's copy of that into a workspace's checkouts")
+
+    #: What a checkout inside a workspace stops seeing, in Codex's spelling (#868).
+    #:
+    #: One entry and not two, and the missing one is the point: a project
+    #: `.codex/config.toml` is IGNORED (see :func:`config_path`), so mirroring it would put
+    #: a file in somebody's repo that nothing ever reads — charter's own writing looking
+    #: exactly like wiring and being inert, the "looks wired and is not" shape #177 and
+    #: #433 already cost this repo twice. `.codex/skills/` is the half that was measured to
+    #: reach a session: a sentinel at ``<repo>/.codex/skills/<name>/SKILL.md`` arrives in a
+    #: `codex exec` session's context with **zero tool calls**, where a control repository
+    #: answers NONE.
+    inherited_paths = (".codex/skills",)
 
     cli_name = "codex"
     binary = "codex"

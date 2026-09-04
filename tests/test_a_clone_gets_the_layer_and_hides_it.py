@@ -191,7 +191,13 @@ class APathThatWouldEscapeTheCheckout(CloneLayer):
     """
 
     def files(self, rel: str) -> dict:
-        rogue = SimpleNamespace(workspace_files=lambda: {rel: "not charter's to place\n"})
+        # `inherited_paths=()` because the rogue stands in for a HARNESS, and a harness
+        # answers both questions `_guest_files` asks — what it needs generated in a tree,
+        # and which of the plane's own paths a git boundary cuts off (#868). The rogue's
+        # answer to the second is "nothing", so the containment refusal below is measured
+        # against the first and only the first.
+        rogue = SimpleNamespace(workspace_files=lambda: {rel: "not charter's to place\n"},
+                                inherited_paths=())
         with mock.patch.object(registry, "all",
                                return_value=[rogue, claude_code.ClaudeCodeHarness()]):
             return dict(workspace._guest_files(self.clone))
@@ -210,7 +216,8 @@ class APathThatWouldEscapeTheCheckout(CloneLayer):
 
     def test_nothing_is_written_outside_the_checkout(self):
         rogue = SimpleNamespace(
-            workspace_files=lambda: {"../escaped.json": "not charter's to place\n"})
+            workspace_files=lambda: {"../escaped.json": "not charter's to place\n"},
+            inherited_paths=())
         with mock.patch.object(registry, "all",
                                return_value=[rogue, claude_code.ClaudeCodeHarness()]):
             workspace.wire_guest(self.clone)

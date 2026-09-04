@@ -80,10 +80,29 @@ LAYER = (
 )
 
 
+#: The plane-root paths a checkout of its own cuts a Claude Code session off from.
+#:
+#: The same two directories :data:`LAYER`'s walking part is about, said for a different
+#: purpose: that part answers whether a session HERE finds them, this one is the spelling
+#: charter mirrors into `workspaces/<ws>/<repo>/`. Not derived from `LAYER` because the two
+#: only coincide for this harness — opencode's in-repo surface is resolved by a rule
+#: `LayerPart` cannot express, so deriving one from the other would have kept opencode's
+#: paths out of a clone for as long as its discovery rule went unmeasured.
+#:
+#: **`.claude/settings.json` is deliberately not here**, and neither is `CLAUDE.md`.
+#: Settings arrive by :meth:`ClaudeCodeHarness.workspace_files`, which every checkout gets
+#: through `_harness_files`; listing it here as well would mirror the plane's file over the
+#: generated one. `CLAUDE.md` is the project-instructions line `Harness.inherited_paths`
+#: draws — it walks up on the same rule as the two below and is left behind on purpose.
+WALKUP_DIRS = (".claude/agents", ".claude/skills")
+
+
 class ClaudeCodeHarness(Harness):
     name = NAME
 
     layer = LAYER
+
+    inherited_paths = WALKUP_DIRS
 
     #: Measured, and the reason `doctor` names a condition rather than a verdict (#859).
     #: The gate is on the DIRECTORY and is global — it takes no argument saying which

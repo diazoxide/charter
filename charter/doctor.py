@@ -941,10 +941,14 @@ def check_session_layer() -> Result:
     one charter has never measured says exactly that rather than borrowing an answer.
 
     **A fact, never a verdict.** `check_session_root`'s discipline, for its reason: a chat
-    rooted in a clone reaches none of this and that is the designed workflow — charter
-    deliberately writes nothing inside `workspaces/<ws>/<repo>/` — so a row that warned
-    there is a row operators learn to skip, the cry-wolf failure `check_memory_indexes`
-    and `check_harness` each record. Whatever is genuinely missing AND fixable warns on
+    can be rooted in a directory that reaches none of this and be exactly where it belongs
+    — a clone charter has not wired yet, or one whose harness charter declares no layer
+    parts for — so a row that warned there is a row operators learn to skip, the cry-wolf
+    failure `check_memory_indexes` and `check_harness` each record. (This used to say
+    charter writes nothing inside `workspaces/<ws>/<repo>/`. It does now: #870 writes the
+    layer there and #868 made what it carries every harness's own. The argument is
+    unchanged — the row reports what a session would find, and it is `workspace layer` that
+    warns when what charter wrote has gone stale or vanished.) Whatever is genuinely missing AND fixable warns on
     its own row, where it can name its own remedy: `workspace layer` for a generated file
     that has gone stale or vanished, `plane-root guard` for the guard.
 
