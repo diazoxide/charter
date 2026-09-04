@@ -466,9 +466,12 @@ class ARealClickOnARealPersonaRowSwitchesTheFrame(_ARealFrameWithStrips,
         # sidebar child sees it through the same two writes the click will use, and the
         # case below is still measuring the click rather than a second run of itself.
         #
-        # Stated rather than assumed, because `_persona_chip_cells` orders the ACTIVE
-        # persona first: a frame that started on some other name would put every row this
-        # case clicks somewhere else.
+        # Stated rather than assumed, because the case below asserts the marker MOVES: it
+        # has to know which row carries `▸` before the click, and "some persona" is not a
+        # starting point a `▸ {THERE}` assertion can be read against. It is no longer a
+        # statement about the column's ORDER — `_persona_chip_cells` used to lift the
+        # active persona to the top and does not since #882 (`persona.by_use`), which is
+        # also why `_row_of` looks the row up by name instead of assuming an index.
         from charter import persona as p_mod
         p_mod.set_active(self.HERE, session_id=self.fid, terminal_id="")
         state.bump(self.fid)

@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import time
+from itertools import groupby as _groupby
 from pathlib import Path
 
 from . import config, contain, mcpseen
@@ -970,6 +971,122 @@ def declared_default() -> str | None:
     # the wrong question — a reference climbing out of `personas/` named a file the plane
     # does not contain, and `resolve()` merged its `vault:`, `role:` and `tools:` (#337).
     return val if val and reference_ok(val) and def_path(val).exists() else None
+
+
+def plane_default() -> str | None:
+    """The default persona this PLANE declares, or ``None`` — the two committed rungs of
+    :func:`_resolved` and neither of the four session ones.
+
+    That exclusion is the whole point of the function existing. :func:`resolve_active`
+    answers *who am I being right now*, which moves with a `$CHARTER_PERSONA`, a session
+    pointer or a `charter persona use`; this answers *who does this plane put first*,
+    which is a committed fact and the same for every frame, every session and every
+    teammate on the plane. :func:`by_use` pins the answer to the top of every switcher,
+    and a pin that moved with the session would be the defect #882 is about wearing a
+    different name.
+
+    ``charter.toml`` before ``personas/.default`` for :func:`declared_default`'s own
+    reason, and both are already validated against what exists, so a declaration naming a
+    persona that was renamed resolves to nothing rather than pinning a name no switcher
+    can offer.
+    """
+    return declared_default() or default_persona()
+
+
+def _dispatches() -> dict:
+    """agent → how many times it has been dispatched, ever. ``{}`` on any failure.
+
+    One read of `personas/_dispatch/` per call and never one per persona — the store is a
+    handful of month-and-host jsonl files, so the whole tally is a directory glob and a
+    line walk (measured on this plane at 0.4 ms for 449 rows), while asking it per name
+    would re-walk the same files once for each. Swallowed like every other number a
+    switcher draws: an unreadable log is a roster in alphabetical order, never a frame
+    that will not paint.
+    """
+    from . import dispatch
+    try:
+        return dict(dispatch.tally())
+    except Exception:
+        return {}
+
+
+def by_use(names: list[str] | None = None) -> list[str]:
+    """*names* (default: every persona) in the order a switcher offers them.
+
+        **The declared default first, then most-dispatched first, ties broken by the
+        larger memory count, then by name.**
+
+    **Nothing here depends on which persona you are currently on**, and that is the whole
+    of #882. The sidebar column used to lift the ACTIVE persona to the top
+    (`statusline._persona_chip_cells`), so choosing a persona re-laid the list that had
+    just been chosen from: every other row moved, and where a name sat depended on where
+    the operator already was. A list whose rows reorder with state is a list nobody
+    learns — `frame/slots._change_rows` settled the identical question for changes, and
+    this is that rule arriving on the noun it was first broken for. The active persona is
+    still MARKED, on every surface that draws it; being marked costs no other row its
+    position.
+
+    **Dispatch count and not memory count, and the two genuinely disagree.** Measured on
+    this plane the day #882 was written: by memory it is `release 51`, `steward 47`,
+    `statusline 14`, `forge 13`, `reddit 7`; by dispatch it is `release 26`, `forge 18`,
+    `steward 11`, `statusline 8`, `reddit 4` — `forge` is second on one and fourth on the
+    other. **A memory count only ever grows**, so it ossifies: a persona worked heavily
+    one month outranks one used daily the next, permanently, because nothing ever takes a
+    memory back. A dispatch count measures *use*, which is what makes a persona worth
+    reaching for, and it is the same number `charter persona stats` retires personas on.
+
+    **"Last dispatched" was considered and rejected**, and it is the sharper signal of the
+    two — `dispatch.last_seen` already computes it. It is refused because it makes the
+    list reorder far more often than a count does: every dispatch would be able to move a
+    row, where a count only moves one past a neighbour it has overtaken. That is the same
+    defect as lifting the selected item, one cause over, and a fix that reintroduces the
+    thing it removes is not a fix.
+
+    **The memory count is read only where dispatch counts TIE**, which is why the tie-break
+    is a second pass rather than a second term in one sort key. `memory_count` is a
+    directory glob per persona (`memstore.files`), a switcher opens on a keypress, and a
+    key function is called once per element — so a single key would pay one glob per
+    persona on every open, to decide an order the first term almost always decides alone.
+    On this plane's five personas the dispatch counts are all distinct and this reads no
+    memory directory at all. `groupby` over the already-sorted list is what makes "almost
+    always" free rather than merely cheap.
+
+    The name is the last term on both passes so the answer is TOTAL: two personas with the
+    same dispatch count and the same memory count still have one order, the same one every
+    time, on every machine. `sorted` over a set would have been an ordering that is right
+    about half the time by luck.
+    """
+    names = sorted(list_personas() if names is None else names)
+    if not names:
+        return []
+    default = plane_default()
+    rest = [n for n in names if n != default]
+    disp = _dispatches()
+    rest.sort(key=lambda n: (-disp.get(n, 0), n))
+    out = []
+    for _, grp in _groupby(rest, key=lambda n: disp.get(n, 0)):
+        run = list(grp)
+        # One name in the run is one order already, and asking for its memory count would
+        # be a directory glob spent on a comparison with nobody.
+        out.extend(run if len(run) == 1
+                   else sorted(run, key=lambda n: (-memory_count(n), n)))
+    return ([default] if default in names else []) + out
+
+
+def memory_count(name: str) -> int:
+    """How many persistent memories *name* holds — :func:`by_use`'s tie-break, and 0 for a
+    persona whose directory cannot be read.
+
+    Its own function rather than a `len(memories(...))` inside the sort, because the tie-
+    break is exactly what a mutation sweep attacks and a named thing can be measured
+    directly. The 0 is the same fail-toward-no-change every other number on a switcher
+    takes: an unreadable memory directory demotes a persona within its tie group, and does
+    not raise out of a repaint.
+    """
+    try:
+        return len(memories(name))
+    except Exception:
+        return 0
 
 
 def _pointer_files(session_id: str | None = None,

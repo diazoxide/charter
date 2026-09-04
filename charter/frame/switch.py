@@ -106,15 +106,30 @@ def workspaces() -> list[str]:
 
 
 def personas() -> list[str]:
-    """Every persona a switcher may offer, name-checked on the way out.
+    """Every persona a switcher may offer, name-checked on the way out and **ordered by
+    use**: the plane's declared default first, then most-dispatched first, ties broken by
+    the larger memory count, then by name.
 
-    Same reasoning as :func:`workspaces`, one noun over — `persona.list_personas` globs
+    Same name-check as :func:`workspaces`, one noun over — `persona.list_personas` globs
     the plane's `personas/` directory, and `persona.valid_name` is the rule
     `persona.dir_of`'s own join depends on. No fold-in here: there is no always-present
     persona, and "no personas" is a real and ordinary answer for a plane that has none.
+
+    **The order is not this function's, and that is deliberate** (#882). `persona.by_use`
+    owns it and states the whole argument — why dispatches rather than memories, why the
+    default is pinned, why the memory count is read only where dispatch counts tie. The
+    other switcher onto the same names is the frame's sidebar persona column
+    (`statusline._persona_chip_cells`, clickable through `frame/builtins._persona_events`),
+    which used to lift the ACTIVE persona to the top; both ask one function now, so a
+    picker and the column beside it cannot draw the same roster in two orders.
+
+    **The name-check is applied BEFORE the ordering, not after.** `by_use` reads a
+    dispatch tally and, on a tie, a memory directory per name; handing it a name
+    `valid_name` refuses would be spending those reads on a row no switcher may draw, and
+    `persona.memory_dir`'s join is the very thing that check stands in front of (#442).
     """
     from .. import persona as p_mod
-    return sorted(n for n in p_mod.list_personas() if p_mod.valid_name(n))
+    return p_mod.by_use([n for n in p_mod.list_personas() if p_mod.valid_name(n)])
 
 
 #: How many names an "I do not have that one, here is what I have" message lists. A

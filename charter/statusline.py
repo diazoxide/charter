@@ -1875,9 +1875,9 @@ class PersonaChip(NamedTuple):
 
 
 def _persona_chips(session: str | None = None) -> list[str]:
-    """One chip per persona (active first) for the status-line right column, each
-    tagged with its memory counts (``✎`` persistent + ``◌`` ephemeral). Every
-    persona is also dispatchable as a sub-agent.
+    """One chip per persona, **ordered by use** (`persona.by_use`), for the status-line
+    right column, each tagged with its memory counts (``✎`` persistent + ``◌`` ephemeral).
+    Every persona is also dispatchable as a sub-agent.
 
     Composed from :func:`_persona_chip_cells` rather than built alongside it — one
     builder, two shapes. See :class:`PersonaChip`.
@@ -1892,6 +1892,16 @@ def _persona_chip_cells(session: str | None = None) -> list[PersonaChip]:
     order, capped at :data:`_MAX_PERSONA_LINES` with a row that says how many were
     dropped, and never raising. See :class:`PersonaChip` for where the split falls and
     why the vault dot sits on the name's side of it.
+
+    **The order no longer depends on which persona the session is on** (#882). This column
+    is a switcher — `frame/slots.persona_section` draws it and `frame/builtins._persona_events`
+    turns a click on a name into `frame-switch --persona` — and it used to put the ACTIVE
+    persona first, so choosing a name re-laid the very list it had been chosen from and
+    where every other row sat depended on where the operator already was. `persona.by_use`
+    is the order now, it is the same one `frame/switch.personas` gives the F2 picker, and
+    it states the whole argument for itself. The active persona is still marked, in
+    magenta with `_MARK_ACTIVE`, and carried as `PersonaChip.active` for the frame's
+    full-row highlight; being marked costs no other row its position.
     """
     try:
         from . import persona
@@ -1899,7 +1909,7 @@ def _persona_chip_cells(session: str | None = None) -> list[PersonaChip]:
         if not names:
             return []
         active = persona.resolve_active()
-        order = ([active] if active in names else []) + [n for n in names if n != active]
+        order = persona.by_use(names)
         known = set(names)   # computed once for the whole column, not once per persona
         flying = _inflight_by_persona()   # one glob for the column, not one per chip
         chips = []
@@ -1937,9 +1947,18 @@ def _persona_chip_cells(session: str | None = None) -> list[PersonaChip]:
             # a health mark (`_health_mark` speaks only when something is wrong), then the
             # rest. The count of what is hidden is shown rather than implied — the same
             # contract `_repo_rows` keeps with its own "(+N more)".
+            #
+            # **The active persona is lifted HERE and nowhere else, and #882 does not
+            # reach this branch.** That issue is about what the list READS like, and the
+            # answer is `by_use`'s: no row's position depends on where the operator is
+            # standing. This asks a different question — which rows FIT — and "the persona
+            # you are being is not one a column may drop" is identity, the same reason
+            # `frame/slots._cap_personas` keeps it. It is also unobservable on a plane
+            # under `_MAX_PERSONA_LINES` personas, which is nearly all of them, where the
+            # order on screen is `by_use`'s untouched.
             keep = _MAX_PERSONA_LINES - 1          # one row spent saying what was dropped
             by_name = dict(zip(order, chips))
-            lead = [n for n in order[:1] if n == active]
+            lead = [n for n in order if n == active][:1]
             rest = [n for n in order if n not in lead]
             ordered = lead + [n for n in rest if n in flagged_names] \
                            + [n for n in rest if n not in flagged_names]

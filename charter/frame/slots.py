@@ -1847,10 +1847,18 @@ def _cap_personas(cells: list, keep: int) -> list:
     personas survive" is one question, and answering it in two places is how the two
     answers come to disagree; a short pane at `terse` asks it once here.
 
-    `_persona_chip_cells` is already ordered (the active persona first, then anything
-    carrying a health mark), so what survives is the top of an order rather than an
-    arbitrary handful, and a row that was ALREADY standing for hidden personas folds its
-    count into the new row rather than losing it.
+    `_persona_chip_cells` is already ordered — `persona.by_use`: the plane's declared
+    default, then most-dispatched first (#882) — so what survives is the top of an order
+    rather than an arbitrary handful, and a row that was ALREADY standing for hidden
+    personas folds its count into the new row rather than losing it.
+
+    **That order used to be "the active persona first", and the trim reads no worse for
+    the change.** Both orders put something worth seeing at the top; this one puts the
+    same thing there on every frame, so a sidebar shortened by a density key drops the
+    persona nobody dispatches rather than whichever name happened to be next after the one
+    the operator was standing on. The active persona can now be among what is dropped —
+    it is still named on the top bar (`identity`, `◆ <name>`), which is the row that
+    answers "who am I being" when the column cannot.
     """
     from .. import statusline as sl
     if keep <= 0 or len(cells) <= keep:
