@@ -31,6 +31,8 @@ from unittest import mock
 
 from charter import commands, util
 
+from tests import _isolation
+
 
 class TestGitCallsCannotBlockOnAnInvisiblePrompt(unittest.TestCase):
     def env_of(self, *cmd) -> dict:
@@ -84,6 +86,18 @@ class TestGitCallsCannotBlockOnAnInvisiblePrompt(unittest.TestCase):
 
 class CloneCase(unittest.TestCase):
     """`_clone_one` is stubbed: this pins the concurrency and the rendering, not git."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The REAL plane on purpose — `workspace.ensure` is patched to `config.ROOT` below,
+        # and what these cases measure is the pool and the render order, which want the
+        # ordinary environment. What they must not touch is `.charter/` (#886): `cmd_clone`
+        # now ends in `notify.plane_changed_everywhere`, which walks the frame root and
+        # writes a cache and a version into every chat it finds — the developer's own
+        # running sessions, on a suite run from a plane. `isolate_state_dir` redirects that
+        # one directory and nothing else, so the fan-out finds an empty frame root and
+        # these cases go on asserting exactly what they asserted before.
+        _isolation.isolate_state_dir(self)
 
     def targets(self, *names):
         return [{"name": n, "default_branch": "main", "path_with_namespace": f"g/{n}",
