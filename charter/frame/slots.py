@@ -4349,6 +4349,11 @@ def _workspaces_strip(fid: str):
     argument that "a picker that creates on a typo leaves litter". A `+` here would have to
     open something that takes a name, which is `charter workspace create` and is not a
     thing a one-row strip can be.
+
+    **The counts are this strip's and the chat strip has none** (#880) — see
+    :func:`_workspace_counts` for the one grouped read and for why it does not put this
+    strip on a clock, and :data:`TAB_COUNT_W` for why the field is there on every tab even
+    when the number is not.
     """
     from . import switch as switch_mod
     return (switch_mod.workspaces(), switch_mod.current_workspace(fid), "",
