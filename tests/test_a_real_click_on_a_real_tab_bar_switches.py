@@ -478,10 +478,16 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
                          "the tab the frame is on started a switch")
         self.assertEqual(self._bar_row(self.bar), before)
 
-    def test_clicking_the_heading_moves_nothing(self):
-        """`  workspaces  ` is about no workspace. It is a field the operator can see and
-        click, so "nothing happens" has to be what happens rather than the nearest name
-        being picked for them."""
+    def test_clicking_the_strips_own_inset_moves_nothing(self):
+        """Column 0 is about no workspace. It is a cell the operator can see and click, so
+        "nothing happens" has to be what happens rather than the nearest name being picked
+        for them.
+
+        **This case used to be about the `  workspaces  ` heading and it is the same
+        press.** #880 deleted the heading; the cells this clicks are the ones that are
+        still there on that side of the row — `slots.INSET`, the frame's own left edge —
+        and the claim is unchanged: a cell the strip drew no tab into switches nothing.
+        Column 0 was always the column it pressed."""
         self._click(self.bar, col=0)
         time.sleep(2.0)
         self.assertEqual(state.frame_workspace(self.fid), self.HERE)
@@ -750,8 +756,8 @@ class ARealRightClickOnTheChatBarOpensARealMenu(_ARealChatBarOverTwoChats,
         self.assertIn(self.other_harness,
                       self._tmux("list-panes", "-a", "-F", "#{pane_id}").stdout.split())
 
-    def test_a_right_press_on_the_heading_opens_nothing(self):
-        """`  chats  ` is about no chat. A cell the strip drew no tab into is absent from
+    def test_a_right_press_on_the_strips_own_inset_opens_nothing(self):
+        """Column 0 is about no chat. A cell the strip drew no tab into is absent from
         `slots._Tabs`' map whatever asks about it, so this costs not even an interpreter
         start — which is what makes the empty pane list below a real assertion rather than
         a race this case happened to win.
@@ -778,11 +784,16 @@ class ARealRightClickOnTheChatBarOpensARealMenu(_ARealChatBarOverTwoChats,
         and whatever the server already had as the else-branch, so a right click on a pane
         charter did not create still gets tmux's own pane menu. The bar is a panel, so this
         press takes the forwarding branch without the `select-pane` — the report arrives,
-        `slots._Tabs.tab_at` answers nothing for a heading cell, and nothing at all
-        happens, which is what a miss should cost.
+        `slots._Tabs.tab_at` answers nothing for an inset cell, and nothing at all happens,
+        which is what a miss should cost.
+
+        **The cell it presses was the strip's `chats` heading until #880 deleted it**, and
+        the case is unchanged by that: what is left on the left of the row is
+        `slots.INSET`, which is a cell the operator can see and press and which no tab was
+        drawn into. The three assertions below are about the press missing, not about what
+        it missed.
         """
-        self._click(self.bar, col=self._column_of(self.bar, "chats"),
-                    button=self.BUTTON)
+        self._click(self.bar, col=0, button=self.BUTTON)
         time.sleep(2.0)
         self.assertEqual(self._menu_pane(), "")
         self.assertIn(self.harness, self._panes(self.WS))
@@ -949,15 +960,20 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
                    or "chat" in self._shown(opened[0])),
             f"the new pane is not the palette: {self._shown(opened[0])!r}")
 
-    def test_clicking_the_heading_still_opens_nothing(self):
+    def test_clicking_the_strips_own_inset_still_opens_nothing(self):
         """The control the case above cannot do without: a row that answers EVERY click is
-        as wrong as one that answers none. `workspaces` is a label — the frame naming what
-        the row is about — and the cells it occupies were measured, not made live."""
+        as wrong as one that answers none. Column 0 is the strip's own left inset — the
+        frame's edge, not a field — and the cells the counts occupy were measured, not the
+        whole row made live.
+
+        **It pressed the `workspaces` heading until #880 deleted it.** The heading was the
+        widest run of dead cells the row had; the inset is what is left of that run, and it
+        is the same claim about the same side of the same row."""
         before = self._panes()
-        self._click(self.bar, col=self._column_of(self.bar, "workspaces"))
+        self._click(self.bar, col=0)
         time.sleep(2.0)
         self.assertEqual(self._panes(), before,
-                         "a click on the heading opened something")
+                         "a click on the strip's inset opened something")
         self.assertEqual(self._active(), self.harness)
 
 

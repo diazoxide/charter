@@ -159,8 +159,8 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
         `slots.chats_bar`'s sibling. A renderer handed the width alone would leave the row
         the resize just bought blank, and nothing above would notice.
 
-        Asserted on what the pane SHOWS, captured from tmux: the `+7` that stood for the
-        seven workspaces one row could not draw is gone, and the seven names are there.
+        Asserted on what the pane SHOWS, captured from tmux: the `+6` that stood for the
+        six workspaces one row could not draw is gone, and the six names are there.
         """
         plane = make_plane(self)
         for name in NAMES:
@@ -198,10 +198,10 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
         self.assertTrue(_await(lambda: "harness-wrapper" in shown()),
                         f"the panel never drew its strip: {shown()!r}")
         one = shown()
-        self.assertIn("+7", one, f"160 columns drew every name on one row: {one!r}")
+        self.assertIn("+6", one, f"160 columns drew every name on one row: {one!r}")
 
         self.assertEqual(_tmux("resize-pane", "-t", pane, "-y", "2").returncode, 0)
-        self.assertTrue(_await(lambda: "+7" not in shown()),
+        self.assertTrue(_await(lambda: "+6" not in shown()),
                         f"the panel kept one row's worth of names in a two-row pane: "
                         f"{shown()!r}")
         two = shown()

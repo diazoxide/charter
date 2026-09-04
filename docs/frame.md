@@ -237,9 +237,9 @@ you came from; and nothing else could ever finish the gesture, because a keypres
 reach a panel at all — tmux gives your typing to the active pane, which is the harness.
 
 Clicking the tab you are already on does nothing at all, rather than tearing the panels down
-and putting them back to arrive where you were. So does clicking the heading, the gap between
-two names, or the empty space past the last tab: those are cells no tab was drawn into, and
-charter will not pick the nearest name for you.
+and putting them back to arrive where you were. So does clicking the row's own left inset,
+the gap between two names, or the empty space past the last tab: those are cells no tab was
+drawn into, and charter will not pick the nearest name for you.
 
 **Right-click a chat tab and you get a menu about that chat.** Two rows — `chat: previous
 transcript` and, last, `chat: close` — both about the tab under the pointer rather than the
@@ -249,7 +249,7 @@ close` draws, naming the chat and what stopping it costs, and the keypress on *t
 stops the harness. Escape leaves, `F12` always leaves, and nothing is stopped by a pointer.
 
 Right-click on the tab you *are* on works too — closing the chat you are in is the ordinary
-case of closing one. Right-click on the heading, on the `+`, on a `+N` count or on empty
+case of closing one. Right-click on the left inset, on the `+`, on a `+N` count or on empty
 space does nothing at all, and the `workspaces` bar has no menu: a workspace has neither a
 transcript nor a chat to close.
 
@@ -614,15 +614,21 @@ not all fit the bar draws the page yours falls on and counts what is off each en
 (`+5  *harness-wrapper   news-dispatch-guard  …  +7`); narrower still it says only where you
 are (`2/3`). It never shows half a name.
 
-Fifteen workspaces need 274 columns to fit on one row, so on a real terminal the bar is
-usually drawing a page. At 120 columns it draws six of them, at 160 eight, at 200 ten.
+**Neither strip is labelled.** They used to open with the word `chats` or `workspaces`, and
+that cost 9 and 14 columns of the row the names are competing for. What tells them apart is
+where they are and what is on them: the strips are adjacent and always in the same order, the
+chat bar draws a `+` and a spinner and the workspace bar deliberately draws neither, and a
+chat id ends in an ordinal. A label that never changes is chrome you stop seeing after a day.
+
+Fifteen workspaces need 262 columns to fit on one row, so on a real terminal the bar is
+usually drawing a page. At 120 columns it draws seven of them, at 160 nine, at 200 eleven.
 
 **A strip that cannot fit its names on one row is given another one — up to three.** It is
 one row whenever the names fit, so a plane whose strip is not overflowing never loses a row
 to this; and the rows it does take come out of what your session has above its own 12-row
 floor, so a short terminal grows nothing at all. Fifteen workspaces take two rows at 160
 columns and three at 120, and every name on every row is clickable. Resize the terminal and
-the strip follows: widen it past 274 columns and the strip gives its extra rows back.
+the strip follows: widen it past 262 columns and the strip gives its extra rows back.
 
 Below tmux 3.3 that last part does not happen on its own. `window-resized` is a hook tmux
 added in 3.3, so charter has nothing to trigger a recompute on and the strip keeps the
