@@ -158,6 +158,33 @@ class AnInstallBelongingToSomebodyElsesCheckoutIsNotAnAnswerHere(unittest.TestCa
         with rows([entry]):
             self.assertIsNotNone(plugincache.installed_for(link))
 
+    def test_a_path_that_cannot_be_resolved_answers_no_rather_than_raising(self):
+        """A symlink loop or an unreadable ancestor makes `Path.resolve` raise, and this
+        runs inside a `doctor` row — which must render something rather than traceback, and
+        inside `init`, which must not die on the way to writing a plane."""
+        entry = {"id": "charter@charter", "scope": "project", "projectPath": "/planes/a"}
+        with rows([entry]), mock.patch.object(Path, "resolve",
+                                              side_effect=OSError("too many links")):
+            self.assertIsNone(plugincache.installed_for("/planes/a"))
+
+    def test_a_list_that_is_not_a_list_of_rows_is_UNKNOWN(self):
+        """`--json` answering an object, or rows that are not objects. Not "nothing is
+        installed", which is the confidently-wrong answer :data:`UNKNOWN` exists for."""
+        with mock.patch.object(plugincache, "available", return_value=True), \
+                mock.patch.object(plugincache, "_claude_json", return_value={"oops": 1}):
+            self.assertIs(plugincache.installed_for("/planes/a"), plugincache.UNKNOWN)
+
+    def test_rows_that_are_not_objects_are_skipped_rather_than_believed(self):
+        with rows(["nonsense", 7, None,
+                   {"id": "charter@charter", "scope": "user"}]):
+            self.assertIsNotNone(plugincache.installed_for("/planes/a"))
+
+    def test_a_scope_charter_does_not_recognise_is_not_an_install(self):
+        """The scope reaches an argv, so an entry carrying one charter would not act on is
+        not returned at all — no caller has to remember to check."""
+        with rows([{"id": "charter@charter", "scope": "global"}]):
+            self.assertIsNone(plugincache.installed_for("/planes/a"))
+
     def test_a_projectPath_that_is_not_a_string_is_not_a_match(self):
         """`claude plugin list --json` is a machine's own output, not a committed file, but
         it is still input: a row whose `projectPath` is null or a number must answer "no",
@@ -248,6 +275,25 @@ class TheInstallItself(unittest.TestCase):
         self.assertEqual(status, "installed")
         self.assertEqual(len(calls), 2, "the install step must still run")
 
+    def test_a_claude_that_hangs_or_vanishes_is_a_failure_and_not_a_traceback(self):
+        """`util.run` raises `ProcTimeout` regardless of `check`, and `shutil.which` in
+        `available` and the exec here are two moments — a `claude` removed between them is
+        a `FileNotFoundError`. Both reach `init`, which must report rather than die."""
+        for boom in (plugincache.util.ProcTimeout(["claude", "plugin", "install"], 120),
+                     FileNotFoundError("claude")):
+            with rows([]), mock.patch.object(plugincache.util, "run", side_effect=boom):
+                status, detail = plugincache.install("/planes/a")
+            self.assertEqual(status, "failed", boom)
+            self.assertTrue(detail)
+
+    def test_a_scope_charter_would_not_install_at_never_reaches_a_subprocess(self):
+        calls: list = []
+        with rows([]), spawns(calls):
+            status, detail = plugincache.install("/planes/a", scope="everywhere")
+        self.assertEqual(status, "failed")
+        self.assertEqual(calls, [])
+        self.assertIn("everywhere", detail)
+
     def test_both_steps_failing_names_the_install_error_first(self):
         """The two failures are not equally informative: "already registered" and "offline"
         fail the marketplace step identically, so the install's own error is the verdict —
@@ -292,6 +338,22 @@ class InstallationHappensWhereSomebodyAskedForIt(PersonaIso):
         self.assertEqual(
             self._provisions(
                 lambda: commands.cmd_doctor(SimpleNamespace(json=True, fix=True))), 1)
+
+    def test_init_lists_what_it_installed_and_warns_about_what_it_could_not(self):
+        """The two buckets `init` renders differently. A path under "already present" is
+        true about the filename and false about everything a reader takes from it (#433),
+        which is why an install charter could not vouch for is a warning instead."""
+        import io
+        from contextlib import redirect_stderr
+
+        for status, label, expect in (("created", "a thing", "+ a thing"),
+                                      ("unvouched", "it went wrong", "it went wrong")):
+            buf = io.StringIO()
+            with redirect_stderr(buf), \
+                    mock.patch.object(claude_code.ClaudeCodeHarness, "provision",
+                                      return_value=[(status, label)]):
+                commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
+            self.assertIn(expect, buf.getvalue(), status)
 
     def test_fix_outside_a_plane_installs_nothing_and_says_where_to_go(self):
         """The plugin is installed per PROJECT, so with no plane there is no directory to
@@ -368,6 +430,23 @@ class OnlyClaudeCodeHasAnArtifactCharterInstalls(unittest.TestCase):
         with mock.patch.object(plugincache, "available", return_value=False):
             self.assertEqual(
                 claude_code.ClaudeCodeHarness().provision(Path("/planes/a")), [])
+
+    def test_an_install_that_is_already_there_is_reported_as_present(self):
+        """`init` lists it under "already present" and `--fix` says "Already there". The
+        label carries no parenthetical of its own, because both callers already say the
+        word — and because `_fold_entries` splits a label on `" ("`."""
+        with rows([{"id": "charter@charter", "scope": "user"}]):
+            out = claude_code.ClaudeCodeHarness().provision(Path("/planes/a"))
+        self.assertEqual([s for s, _ in out], ["present"])
+        self.assertNotIn("(", out[0][1])
+
+    def test_an_install_it_performed_is_reported_as_created_and_names_what_it_did(self):
+        calls: list = []
+        with rows([]), spawns(calls):
+            out = claude_code.ClaudeCodeHarness().provision(Path("/planes/a"))
+        self.assertEqual([s for s, _ in out], ["created"])
+        self.assertIn(plugincache.PLUGIN_ID, out[0][1])
+        self.assertIn(plugincache.INSTALL_SCOPE, out[0][1])
 
     def test_a_failed_install_is_a_sentence_init_warns_about_not_an_item_it_lists(self):
         """`unvouched` is the bucket #433 built: a path listed under "already present" is
@@ -486,6 +565,18 @@ class TheDoctorRowReportsTheGapWithoutCryingWolf(PersonaIso):
         self.assertEqual(res.status, doctor.WARN)
         self.assertIn("not checked", res.detail)
         self.assertGreater(len(rows_), 20)
+
+    def test_outside_a_plane_there_is_nothing_to_install_it_for(self):
+        """The plugin is installed per PROJECT, so a `charter doctor` run from a machine
+        with no plane has no directory to answer about. Green, not yellow: preflighting a
+        machine before creating a plane is what `docs/install.md` tells people to do."""
+        from charter import config
+
+        config.use(self.tmp / "somewhere-else")
+        with rows([]):
+            res = doctor.check_plugin_install()
+        self.assertEqual(res.status, doctor.OK)
+        self.assertIn("no control plane", res.detail)
 
     def test_the_row_is_registered_so_doctor_actually_runs_it(self):
         """A check nobody calls is a check that does not exist, and `name_width` sizes the
