@@ -136,10 +136,11 @@ memory, persona memory, shared memory and refs — which is the only search you 
 remember.
 
 **`workspace.json` is there from the start.** Every workspace has one — `workspace.ensure`
-writes it, saying which workspace this is and that it has no repos yet — because the file is
-committed so a *teammate* can rebuild the workspace, and a file designed to be shared cannot
-depend on somebody having run a command. A workspace made by an earlier charter gets one from
-`charter workspace reinit --all`.
+writes it, saying which workspace this is and that it has no repos yet. The file exists to
+be shared: make the workspace LIVE (below) and it is committed, which is how a *teammate*
+rebuilds it with `restore`. A file for that cannot depend on somebody having run a command
+first, so its presence is an invariant rather than a coincidence. A workspace made by an
+earlier charter gets one from `charter workspace reinit --all`.
 
 **Its two halves have different lifetimes.** Membership is maintained: a repo cloned into
 the workspace is recorded, because which repos a workspace is made of is a fact about the
