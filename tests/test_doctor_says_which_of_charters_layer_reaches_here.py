@@ -42,12 +42,15 @@ from tests import _isolation
 
 OK, WARN = doctor.OK, doctor.WARN
 
-#: The three keys charter's layer is made of, hand-spelled. Imported from
+#: The keys charter's layer is made of, hand-spelled. Imported from
 #: `claude_code.WORKSPACE_KEYS` this would assert nothing: a check that stopped looking at
 #: any of them would still find the constant agreeing with itself.
+#:
+#: Two since #895, not three. `statusLine` was the third and charter writes no such key
+#: any more — spelling it here would hand `part_reaches` a key charter never puts in the
+#: document under test, so every assertion built on it would be measuring a fixture.
 _LAYER_DOC = {
     "enabledPlugins": {"charter@charter": True},
-    "statusLine": {"type": "command", "command": "charter statusline"},
     "env": {"CHARTER_HARNESS": "claude-code"},
 }
 
@@ -139,8 +142,14 @@ class LayerCase(_isolation.PersonaIso):
         return doctor.check_session_layer().detail
 
 
-class TheThreeRulesAreThreeAnswers(LayerCase):
-    """#869: settings, skills+agents and the status line go missing separately."""
+class TheRulesAreSeparateAnswers(LayerCase):
+    """#869: settings and skills+agents go missing separately, by separate rules.
+
+    Three rules when it was written — the status line was the third and #895 took it, along
+    with the key charter no longer writes. The argument is unchanged for the two that are
+    left: they are discovered differently, so folding them into one ✓/✗ lets the half that
+    is present hide the half that is not.
+    """
 
     def test_settings_do_not_walk_up_from_a_workspace_directory(self):
         """The reported chat, exactly. The plane is wired and the session is not."""
@@ -190,16 +199,24 @@ class TheThreeRulesAreThreeAnswers(LayerCase):
         self.rooted_at(self.workspace)
         self.assertIn("skills+agents ✓", self.detail())
 
-    def test_the_status_line_is_reported_apart_from_the_settings_that_carry_it(self):
-        """`WORKSPACE_KEYS`' own correction: a directory given only the plugin loads
-        charter's hooks and skills and still renders no status line. Folded into one
-        answer, the half that is present hides the half that is not."""
-        doc = {k: v for k, v in _LAYER_DOC.items() if k != "statusLine"}
+    def test_a_settings_document_missing_a_layer_key_still_answers_settings(self):
+        """`LayerPart.keys` is ANY, not ALL, and this is where that shows.
+
+        This test used to assert `settings ✓; status line ✗` off the same fixture: charter
+        wrote three keys, `statusLine` had a part of its own, and a document carrying two
+        of the three reported the missing one separately — `WORKSPACE_KEYS`' correction
+        that *a directory given only the plugin loads charter's hooks and skills and still
+        renders no status line*. #895 deleted both the key and the part, so the old
+        assertion could only ever have passed by accident and the honest replacement is the
+        rule that is actually left: any one of the remaining keys satisfies the part, so a
+        document with `enabledPlugins` and no `env` still reads ✓ here, and it is
+        `workspace layer` — not this row — that notices what is missing from it."""
+        doc = {k: v for k, v in _LAYER_DOC.items() if k != "env"}
         self.settings(self.workspace, doc)
         self.rooted_at(self.workspace)
         detail = self.detail()
         self.assertIn("settings ✓", detail)
-        self.assertIn("status line ✗", detail)
+        self.assertNotIn("status line", detail)
 
     def test_claude_md_is_named_as_why_such_a_session_feels_half_configured(self):
         """The fourth rule, and the one that explains the symptom: CLAUDE.md walks up and
@@ -415,15 +432,18 @@ class TheHarnessesDeclareWhatWasMeasured(_isolation.PersonaIso):
     """Properties of the declarations themselves, so a harness cannot be registered with a
     layer nobody can render."""
 
-    def test_claude_code_declares_all_three_parts(self):
+    def test_claude_code_declares_both_parts(self):
+        """Three until #895, which removed `status line` along with the key it looked
+        for. Spelled as an equality rather than a membership test so a part quietly
+        re-added — or a fourth one appearing with no rule behind it — fails here."""
         got = [p.what for p in claude_code.ClaudeCodeHarness().layer]
-        self.assertEqual(got, ["settings", "skills+agents", "status line"])
+        self.assertEqual(got, ["settings", "skills+agents"])
 
     def test_the_two_rules_are_both_represented(self):
-        """One walking part and two that do not walk. A layer whose parts all shared a
+        """One walking part and one that does not. A layer whose parts all shared a
         rule would not have needed this row at all."""
         parts = claude_code.ClaudeCodeHarness().layer
-        self.assertEqual([p.walks for p in parts], [False, True, False])
+        self.assertEqual([p.walks for p in parts], [False, True])
 
     def test_every_part_says_why_it_would_be_missing(self):
         for h in registry.all():
@@ -536,9 +556,9 @@ class ThePartResolver(_isolation.PersonaIso):
         p = self.here / ".claude" / "settings.json"
         p.parent.mkdir(parents=True)
         p.write_text(json.dumps({"permissions": {}}))
-        part = self.part(False, ".claude/settings.json", keys=("statusLine",))
+        part = self.part(False, ".claude/settings.json", keys=("enabledPlugins",))
         self.assertFalse(base.part_reaches(part, self.here, None))
-        p.write_text(json.dumps({"statusLine": {"command": "charter statusline"}}))
+        p.write_text(json.dumps({"enabledPlugins": {"charter@charter": True}}))
         self.assertTrue(base.part_reaches(part, self.here, None))
 
     def test_any_of_the_keys_satisfies_a_part(self):
@@ -546,7 +566,7 @@ class ThePartResolver(_isolation.PersonaIso):
         p.parent.mkdir(parents=True)
         p.write_text(json.dumps({"env": {"CHARTER_HARNESS": "claude-code"}}))
         self.assertTrue(base.part_reaches(
-            self.part(False, ".claude/settings.json", keys=("statusLine", "env")),
+            self.part(False, ".claude/settings.json", keys=("enabledPlugins", "env")),
             self.here, None))
 
     def test_a_json_document_that_is_not_an_object_carries_no_keys(self):
@@ -696,8 +716,13 @@ class TheTrustClauseIsAssembledDeterministically(LayerCase):
         self.assertIn("until that is given, hooks do not run", detail)
 
     def test_one_gate_is_named_alone(self):
+        """Claude Code's own gate, and it reads "hooks" since #895 rather than "hooks or
+        the status line". The binary still gates both — that measurement did not move —
+        but charter writes only one of them, and a condition that names a surface charter
+        never wired sends the reader looking for a footer to fix."""
         self.rooted_at(self.clone())
-        self.assertIn("hooks or the status line do not run here", self.detail())
+        self.assertIn("hooks do not run here", self.detail())
+        self.assertNotIn("status line", self.detail())
 
 
 class TheRowIsInTheReport(LayerCase):

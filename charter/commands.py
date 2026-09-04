@@ -2388,10 +2388,15 @@ def cmd_init(args) -> int:
 
     # Same failure shape either way — "you asked for this, it did not happen" — so both
     # exit non-zero: a blocked baseline path (file already prints its own util.err above)
-    # and a malformed settings.json (its util.warn already fired where sl_status was
+    # and a malformed settings.json (its util.warn already fired where `gh_status` was
     # decided). Scripted/CI callers must be able to tell from the exit code alone that
     # something requested was skipped, not just from stderr text.
-    if blocked or sl_status == "malformed":
+    #
+    # `gh_status`, and until #895 `sl_status` was ORed in beside it. There is no second
+    # writer of that file any more, so the guard hook's own verdict is the whole answer —
+    # and it is the same file, so a malformed settings.json still exits non-zero exactly
+    # as it did.
+    if blocked or gh_status == "malformed":
         for name, p in blocked:
             util.err(f"{name}/ can't be created — {p} already exists and is not a "
                      f"directory. charter never deletes or renames existing content; "
