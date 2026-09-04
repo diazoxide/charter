@@ -55,3 +55,4 @@ Written by the persona as it learns; committed and shared.
 - [Cutting a release from a workspace clone (workspaces/<ws>/charter) is th](cutting-a-release-from-a-workspace-clone-workspa.md)
 - [0.56.0 (post-#883): _BODY_BUDGET is 122_000 measured by news.sent_length](0-56-0-post-883-body-budget-is-122-000-measured-.md)
 - [When a release branch is overtaken by a PR that EDITS the same docs/news](when-a-release-branch-is-overtaken-by-a-pr-that-.md)
+- [A news entry's headline: wrapped in YAML-style single quotes ships those](a-news-entry-s-headline-wrapped-in-yaml-style-si.md)
