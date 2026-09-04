@@ -1002,6 +1002,13 @@ def _dispatches() -> dict:
     would re-walk the same files once for each. Swallowed like every other number a
     switcher draws: an unreadable log is a roster in alphabetical order, never a frame
     that will not paint.
+
+    That "handful" is the count TODAY, and it is one file per month per host forever
+    after: the store only grows, this sits on a per-turn repaint path, and the walk was
+    therefore monotonic in the age of the plane rather than in anything an operator does
+    (#887). `dispatch._rows_of` memoises each file's rows on ``(path, mtime, size)``, so a
+    closed month is parsed once per process and the reading is bounded by the current
+    month. Nothing about the number this returns changed.
     """
     from . import dispatch
     try:
