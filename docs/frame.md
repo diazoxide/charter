@@ -285,6 +285,21 @@ is what makes a double-click harmless: the second press lands on the tab you jus
 and that one does nothing. It also means the names a click can reach are the ones on your
 page; `F2` is what reaches the other pages.
 
+**The persona column does not move when you switch either, and it is ordered by use.** The
+plane's declared default (`charter.toml`'s `[persona] default`) is the first row, always;
+under it the personas come most-dispatched first, and two with the same dispatch count are
+separated by the one holding more memories, then by name. Nothing in that depends on which
+persona you are being — the one you are on is *marked* (`▸`, in magenta), and being marked
+costs no other row its position. So the name you reach for is in the same place every time
+you look, and adopting it does not re-lay the column you just chose from.
+
+It is a **dispatch** count and not a memory count because the two rank differently and only
+one of them measures use: a memory count never goes down, so a persona worked heavily one
+month would outrank one used daily the next, permanently. `charter persona stats` shows both
+numbers, and it is the dispatch column personas get retired on. "Most recently dispatched"
+would be sharper still and is deliberately not used: it would move rows on nearly every
+dispatch, which is the same defect as lifting the row you are standing on.
+
 **A persona row's badges explain themselves.** Clicking the badge column puts the glyph
 legend on the attention row (see *Every glyph on a persona row* above). It works on the
 row you are already on, which is where the question usually comes from.

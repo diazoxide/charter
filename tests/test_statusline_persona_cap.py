@@ -20,6 +20,13 @@ A status line taller than the conversation is not a status line.
 drop exactly the personas worth seeing, so the order is what a truncated column is FOR: the
 active persona, then anything carrying a health mark — `_health_mark` speaks only when
 something is wrong — then the rest.
+
+That is a statement about the CAP and not about the column, and #882 is what split the
+two. The column reads in `persona.by_use` order — the plane's declared default, then
+most-dispatched first — and no row's position depends on which persona the session is on;
+the survival rule above still lifts the active persona, because "which rows fit" is a
+question about identity that "what order do they read in" is not.
+`tests/test_the_persona_switcher_sorts_by_use.py` owns the ordering half.
 """
 
 from __future__ import annotations
