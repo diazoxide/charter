@@ -2740,9 +2740,21 @@ def check_plugin_install() -> Result:
     plane has no Claude Code plugin to be missing, and `check_harness` already states what
     each harness cannot carry.
     """
+    name = "plugin install"
+    try:
+        return _plugin_install(name)
+    except Exception as e:
+        # The row-level guard `check_plugin_freshness` carries, for the same reason:
+        # `_checks()` is an eager list literal with no per-check guard, so ONE raising
+        # check returns no rows at all — and `hooks/hooks.json` renders a non-zero `charter
+        # doctor` as "charter preflight failed - fix before working:" at every SessionStart.
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+
+
+def _plugin_install(name: str) -> Result:
+    """The body of :func:`check_plugin_install`, which owns the story and the guard."""
     from . import config as _config, plugincache
 
-    name = "plugin install"
     if not plugincache.available():
         return Result(name, OK, detail="no `claude` on PATH — no Claude Code plugin here")
     if not _config.HAS_CONTROL_PLANE:
