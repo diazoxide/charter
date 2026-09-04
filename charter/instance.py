@@ -2394,6 +2394,7 @@ def component_arrangement(section, *,
         # deletion sweep calls a survivor.
         return None, "`component = []` places no components at all"
     from .frame import builtins as _builtins
+    from .frame import layout as _layout
     from .frame import overlay as _overlay
     from .frame import tmuxctl as _tmuxctl
     from .frame.component import EDGES, Fixed
@@ -2423,7 +2424,8 @@ def component_arrangement(section, *,
     # real keys and nothing else. The collision test below leans on that rather than
     # re-checking, so this filter is load-bearing; see the comment there for what a
     # ``None`` in here would cost.
-    bound: set[str] = {k for k in (hotkey, _overlay.HATCH_KEY, *_tmuxctl.MOUSE_KEYS) if k}
+    bound: set[str] = {k for k in (hotkey, _overlay.HATCH_KEY, _layout.BAR_ROWS_KEY,
+                                   *_tmuxctl.MOUSE_KEYS) if k}
     for n, table in enumerate(tables, 1):
         if not isinstance(table, dict):
             return None, (f"the entry {_component_at(None, n)} is "

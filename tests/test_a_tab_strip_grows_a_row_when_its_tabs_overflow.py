@@ -37,7 +37,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, config, instance, tui
-from charter.frame import layout, slots, tmuxctl
+from charter.frame import layout, slots, state, tmuxctl
 from tests._isolation import PersonaIso
 from tests.test_frame_chat_switch import _plant
 
@@ -84,14 +84,20 @@ def _placed(*, style=None, **sizes):
     return instance.frame_of({"frame": {"component": tables}})
 
 
-def _strip(names=NAMES, here=HERE, note=""):
+def _strip(names=NAMES, here=HERE, note="", counts=None):
     """A `slots.BARS` entry that answers *names* without touching a plane.
 
     The seam the sizer reads through, used as one. `TheRealStripsGoThroughTheSameSeam`
     is what says charter's own two entries reach it, so this is a fixture for the
     arithmetic rather than a stand-in for the feature.
+
+    *counts* defaults to ``None`` — no count field — which is what makes the widths below
+    the ladder's own rather than the workspace strip's (#880). The reserve that strip spends
+    is `slots.TAB_COUNT_W` per tab and has its own cases; every number in this module is
+    about how many rows a list of names needs, and folding a fixed six cells per name into
+    them would measure the field as much as the ladder.
     """
-    return lambda fid: ("workspaces", list(names), here, note)
+    return lambda fid: (list(names), here, note, counts)
 
 
 class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
@@ -108,10 +114,10 @@ class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
             return slots.bar_rows_wanted("f-1", slot, pane_cols=cols, cap=cap)
 
     def test_a_strip_whose_names_all_fit_on_one_row_asks_for_one(self):
-        """274 columns is where rung 1 draws all fifteen (`test_frame_bars` pins the
+        """262 columns is where rung 1 draws all fifteen (`test_frame_bars` pins the
         number), and a strip that is not overflowing must not take a row off the harness
         — which is the whole argument against the fixed two-row launch #829 rejected."""
-        self.assertEqual(self._want(274), 1)
+        self.assertEqual(self._want(262), 1)
         self.assertEqual(self._want(400), 1)
 
     def test_a_strip_that_overflows_asks_for_the_rows_its_pages_need(self):
@@ -136,7 +142,7 @@ class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
                     with self.subTest(here=here, cols=cols, cap=cap):
                         want = self._want(cols, cap=cap, here=here)
                         slots.TABS.forget()
-                        lines = slots._bar("workspaces", list(NAMES), here, cols,
+                        lines = slots._bar(list(NAMES), here, cols,
                                            rows=want)
                         if lines:
                             self.assertEqual(
@@ -153,7 +159,7 @@ class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
             if want >= 40:
                 continue
             slots.TABS.forget()
-            lines = slots._bar("workspaces", list(NAMES), HERE, cols, rows=want)
+            lines = slots._bar(list(NAMES), HERE, cols, rows=want)
             drawn = {slots.TABS.switch_to(r, c)
                      for r in range(want) for c in range(cols)} - {None}
             if lines and len(drawn) > 1:
@@ -168,26 +174,28 @@ class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
         the harness for a count — the exact trade `layout.visible_slots` refuses one rung
         down when it drops both bars whole.
 
-        30 columns is the `6/15` rung and 0 is the rung that draws nothing. Both were 3
+        20 columns is the `6/15` rung and 0 is the rung that draws nothing. Both were 3
         before the "did it fill what it was given" test went in beside the coverage one,
-        which is two rows of harness spent on a count.
+        which is two rows of harness spent on a count. (30 columns was the `6/15` rung
+        while the strip drew a heading; without one, 30 has room for a page — #880.)
         """
-        self.assertEqual(self._want(30), 1)
+        self.assertEqual(self._want(20), 1)
         self.assertEqual(self._want(0), 1)
-        self.assertEqual(self._want(30, cap=8), 1)
+        self.assertEqual(self._want(20, cap=8), 1)
 
     def test_the_ceiling_is_the_callers_and_it_bounds_the_answer(self):
         """Carried rather than read, `layout.repos_rows`' discipline for *pinned_rows*:
         applying `BAR_MAX_ROWS` here AND in `layout._grown` would be a bound no input
-        could make observable. 80 columns wants six rows and gets what it is allowed."""
-        self.assertEqual(self._want(80, cap=8), 6)
+        could make observable. 80 columns wants five rows and gets what it is allowed."""
+        self.assertEqual(self._want(80, cap=8), 5)
         self.assertEqual(self._want(80, cap=3), 3)
         self.assertEqual(self._want(80, cap=1), 1)
 
     def test_the_shipped_ceiling_is_three(self):
         """Spelled, because it is a number with a measurement behind it rather than a
         derived one: this plane's fifteen workspaces need 2 rows at 160 columns, 3 at 120,
-        4 at 100 and 6 at 80, and three is where a strip stops being a strip."""
+        3 at 100 and 5 at 80, and three is where a strip stops being a strip. (They were
+        2/3/4/6 while the strip still spent twelve columns on a heading — #880.)"""
         self.assertEqual(layout.BAR_MAX_ROWS, 3)
 
     def test_the_panes_own_pad_comes_off_the_width_before_the_names_are_measured(self):
@@ -196,15 +204,15 @@ class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
         `pane_cols - 2 * pad` and asking the unpadded question would size the pane from a
         number the renderer never sees.
 
-        The two-row band for these names starts at 150 columns, so a 152-column pane with a
+        The two-row band for these names starts at 138 columns, so a 140-column pane with a
         two-cell pad each side is a three-row strip and the same pane without one is a
         two-row strip. Asked through a real `[[frame.component]]` table, because a pad only
         exists where an operator committed one.
         """
         with mock.patch.dict(config.FRAME, _placed(style={"chats": {"pad": 2}})):
-            self.assertEqual(self._want(152, slot="chats"), 3)
+            self.assertEqual(self._want(140, slot="chats"), 3)
         with mock.patch.dict(config.FRAME, _placed()):
-            self.assertEqual(self._want(152, slot="chats"), 2)
+            self.assertEqual(self._want(140, slot="chats"), 2)
 
     def test_a_slot_that_draws_no_strip_is_answered_rather_than_raised_at(self):
         """`layout.slot_sizes`' filter-don't-refuse discipline: the slot list is committed,
@@ -219,11 +227,12 @@ class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):
         wrote `slots.TABS` would leave a map describing a strip nobody is looking at, and
         in a test process it would describe one another case had just drawn."""
         slots.TABS.forget()
-        slots._bar("chats", ["api.1", "api.2"], "api.1", 200)
-        before = slots.TABS.switch_to(0, tui.width(slots._inset() + "chats  ") + 1)
+        slots._bar(["api.1", "api.2"], "api.1", 200)
+        at = tui.width(slots._inset()) + 1
+        before = slots.TABS.switch_to(0, at)
         self._want(120)
-        self.assertEqual(slots.TABS.switch_to(0, tui.width(slots._inset() + "chats  ") + 1),
-                         before, "the sizing question overwrote the paint's own map")
+        self.assertEqual(slots.TABS.switch_to(0, at), before,
+                         "the sizing question overwrote the paint's own map")
 
 
 class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
@@ -240,11 +249,12 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
         self.addCleanup(slots.TABS.forget)
 
     def _strip(self, width, rows, names=NAMES, here=HERE, note=""):
-        return slots._bar("workspaces", list(names), here, width, note=note, rows=rows)
+        return slots._bar(list(names), here, width, note=note, rows=rows)
 
     def test_a_second_row_draws_the_names_the_first_could_not(self):
-        """The operator's own sentence, measured: 160 columns reaches seven workspaces on
-        one row and every one of the fifteen on two."""
+        """The operator's own sentence, measured: 160 columns reaches eight workspaces on
+        one row and every one of the fifteen on two. (Seven, until #880 gave the heading's
+        twelve columns back to the names.)"""
         one = self._strip(160, 1)
         reachable_one = {slots.TABS.switch_to(0, c) for c in range(160)} - {None}
         two = self._strip(160, 2)
@@ -252,7 +262,7 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
                          for r in range(2) for c in range(160)} - {None}
         self.assertEqual(len(one), 1)
         self.assertEqual(len(two), 2)
-        self.assertEqual(len(reachable_one), 7)
+        self.assertEqual(len(reachable_one), 8)
         self.assertEqual(reachable_two | {HERE}, set(NAMES))
 
     def test_every_drawn_tab_answers_at_its_own_row_and_at_no_other(self):
@@ -273,45 +283,54 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
                     self.assertNotIn(name, [slots.TABS.switch_to(o, at) for o in others],
                                      "a column answers with a name from another row")
 
-    def test_the_blank_under_the_heading_is_not_a_tab(self):
-        """The heading names the strip once and the rows under it are indented to line up
-        with the first row's tabs. Those cells are charter's, no name was drawn in them,
-        and a click there switches nothing — `_Tabs`' rule for the heading itself, one
-        row down."""
+    def test_the_inset_every_row_starts_at_is_not_a_tab(self):
+        """Every row of the strip begins at the frame's own left edge, and those cells are
+        charter's: no name was drawn in them and a click there switches nothing.
+
+        **Asked on EVERY row, which is what it took over from the case it replaces.** Until
+        #880 this was the blank under the `workspaces` heading, and it could only ever be
+        asked about rows two and three because row one held the word itself. With no
+        heading there is one lead on every row and the same question to ask of all of
+        them."""
         rows = self._strip(120, 3)
-        lead = tui.width(slots._inset() + "workspaces" + "  ")
-        for r in range(1, len(rows)):
+        lead = tui.width(slots._inset())
+        for r in range(len(rows)):
             for c in range(lead):
                 with self.subTest(row=r, col=c):
                     self.assertIsNone(slots.TABS.switch_to(r, c))
                     self.assertFalse(slots.TABS.more_at(r, c))
                     self.assertFalse(slots.TABS.add_at(r, c))
 
-    def test_the_heading_names_the_strip_once_and_not_once_per_row(self):
-        """The rows under the first are BLANK to the width of the heading, not the heading
-        again — `chats` repeated down the left of a three-row strip is the same word three
-        times where names are competing for columns.
+    def test_every_row_of_the_strip_starts_its_tabs_at_the_same_left_edge(self):
+        """**What is left of the heading case after #880, and it is the half that was ever
+        load-bearing.** This class used to assert that `workspaces` was drawn on row one
+        and blanked to the same width on the rows below it — a heading repeated down the
+        left of a three-row strip being the same word three times where names are competing
+        for columns. The heading is gone; the property the blank under it existed for is
+        not, and it is this one: every row begins its names in the SAME column, which is
+        what lets every page be cut against one `room` and is what a click's stability
+        rests on.
 
-        **Nothing else here can see this**, which is why it is its own case and why the
-        deletion sweep found it: `slots._compose` blanks those cells with
-        ``" " * tui.width(lead)``, so the heading and its blank are the same WIDTH by
-        construction and every column assertion in this class is unmoved by drawing one in
-        place of the other. Only the text tells them apart.
+        **Nothing else here can see it**, which is why it is still its own case. Every
+        column assertion in this class is taken from the row it is about, so a second row
+        that started three cells to the left would map its own tabs correctly and still be
+        cut for a room it does not have. Only comparing the rows to each other tells them
+        apart.
         """
         for cols, rows in ((120, 3), (160, 2), (100, 3)):
             drawn = [tui.strip_ansi(r) for r in self._strip(cols, rows)]
             with self.subTest(cols=cols, rows=rows):
                 self.assertGreater(len(drawn), 1, "this width drew no second row")
-                head = "workspaces"
-                self.assertIn(head, drawn[0])
-                self.assertEqual([r for r in drawn if head in r], [drawn[0]],
-                                 f"the heading is drawn on more than the first row: "
-                                 f"{drawn!r}")
-                lead = tui.width(slots._inset() + head + "  ")
-                for r, line in enumerate(drawn[1:], start=1):
-                    self.assertEqual(line[:lead], " " * lead,
-                                     f"row {r} does not start with the heading's blank: "
-                                     f"{line!r}")
+                lead = tui.width(slots._inset())
+                indents = {tui.width(line) - tui.width(line.lstrip()) for line in drawn}
+                # A row whose first field is a tab carries `_BAR_MARK`'s blank in front of
+                # the name, so its text begins one cell past the lead; a row whose first
+                # field is a leading `+N`, or whose first tab is the marked one, begins at
+                # the lead itself. Both are the same lead — what this refuses is a row
+                # composed against a different one.
+                self.assertLessEqual(
+                    indents, {lead, lead + tui.width(slots._BAR_MARK[1])},
+                    f"a row was composed against a different lead: {drawn!r}")
 
     def test_a_row_the_strip_did_not_draw_answers_nothing(self):
         """A pane taller than the names need draws fewer rows than it has, and the rows
@@ -398,12 +417,12 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
         that reaches the END of the list but starts partway into it has no trailing count
         and a leading one, and that is the state where "is there a `+N` anywhere" and "is
         there a trailing field" stop being the same question. 120 columns cuts these
-        fifteen into three pages, so a mark on the third draws that page alone with `+11`
+        fifteen into three pages, so a mark on the last draws that page alone with `+13`
         in front of it and nothing after it.
         """
         rows = self._strip(120, 1, here=NAMES[13], note=slots.ADD_CHAT)
         drawn = tui.strip_ansi(rows[0])
-        self.assertIn("+11", drawn, f"this is not the run the case is about: {drawn!r}")
+        self.assertIn("+13", drawn, f"this is not the run the case is about: {drawn!r}")
         self.assertFalse(drawn.rstrip().endswith(slots.ADD_CHAT),
                          f"a `+` rode a run that starts mid-list: {drawn!r}")
         self.assertEqual({c for c in range(120) if slots.TABS.add_at(0, c)}, set(),
@@ -607,26 +626,57 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
         self.enterContext(mock.patch.dict(config.FRAME, _placed()))
 
+    def test_a_frame_nobody_has_pressed_the_key_in_launches_one_row_deep(self):
+        """**The default #880 changed, at the widths where the old one was visible.**
+        `bar_rows_wanted` still measures what these fifteen names need — three rows at 160
+        columns — and the boundary hands it a ceiling of `layout.BAR_ROWS_DEFAULT` instead,
+        so a plane with many names no longer launches two rows deep and two rows shorter in
+        the harness. What it launches with instead is `+N`, which is clickable and opens
+        the palette; a collapsed strip is one press from the complete list.
+        """
+        for cols in (100, 160, 200, 360):
+            with self.subTest(cols=cols):
+                got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50,
+                                                 pane_cols=cols, order=SLOTS,
+                                                 window_cols=cols)
+                self.assertEqual(got["workspaces"], 1, got)
+
     def test_the_boundary_asks_the_strip_and_hands_the_answer_to_the_arithmetic(self):
+        """With the ceiling raised, which since #880 is the only way to reach a strip
+        taller than one row: `state.bar_rows` is what `layout.bar_rows_cap` reads and the
+        boundary carries down."""
+        state.record_bar_rows("f-1", 3)
         got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
                                          order=SLOTS, window_cols=160)
-        self.assertEqual(got["workspaces"], 2, got)
+        self.assertEqual(got["workspaces"], 3, got)
 
-    def test_a_wide_window_leaves_the_strip_at_one_row(self):
-        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=300,
-                                         order=SLOTS, window_cols=300)
+    def test_a_raised_ceiling_is_not_a_height_and_a_wide_window_stays_at_one_row(self):
+        """**A cap and not a demand.** The key raises what a strip MAY grow to; what it
+        does grow to is still what its names need, so a pane wide enough for every name
+        stays one row however high the ceiling has been cycled.
+
+        360 columns and not 300: every workspace tab reserves `slots.TAB_COUNT_W` for its
+        chat count now (#880), so these fifteen names need 352 columns for one row rather
+        than 262."""
+        state.record_bar_rows("f-1", 3)
+        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=360,
+                                         order=SLOTS, window_cols=360)
         self.assertEqual(got["workspaces"], 1, got)
 
     def test_the_height_the_strip_asked_for_reaches_split_window(self):
         """The measurement #687 filed for the pinned height, asked for the measured one:
         a number that stopped at `slot_sizes` would be the inert value the whole seam is
-        written against."""
+        written against.
+
+        The ceiling is raised first, because since #880 a launch is one row deep and the
+        seam this is about would then be carrying a number no press had changed."""
+        state.record_bar_rows("f-1", 3)
         sizes = commands_frame._launch_sizes("f-1", SLOTS, window_cols=160,
                                              window_rows=50)
         argvs = layout.panel_argvs(slots=SLOTS, session="s", socket="k",
                                    harness_pane="%1", sizes=sizes)
         bar, = [a for a in argvs if "workspaces" in a]
-        self.assertEqual(bar[bar.index("-l") + 1], "2")
+        self.assertEqual(bar[bar.index("-l") + 1], "3")
 
     def test_the_strips_own_pane_width_is_what_it_is_measured_at(self):
         """#500 one slot over. A strip split AFTER the sidebar is carved out of a pane the
@@ -635,11 +685,12 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         inset = ["right", "top", "workspaces", "bottom", "repos"]
         self.assertEqual(layout.pane_cols(inset, "workspaces", window_cols=160), 137)
         self.assertEqual(layout.pane_cols(SLOTS, "workspaces", window_cols=160), 160)
+        state.record_bar_rows("f-1", 3)
         wide = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
-                                          order=SLOTS, window_cols=274)
+                                          order=SLOTS, window_cols=360)
         narrow = commands_frame._slot_sizes(
             "f-1", inset, window_rows=50, pane_cols=200, order=inset,
-            window_cols=274)
+            window_cols=360)
         self.assertEqual(wide["workspaces"], 1)
         self.assertEqual(narrow["workspaces"], 2,
                          "the strip was sized from the window rather than its pane")

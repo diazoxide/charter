@@ -159,10 +159,15 @@ class ARightClickResolvesToTheTabItLandedOn(_ABarThatWasDrawn, unittest.TestCase
                 self.assertLessEqual(len(kinds), 1, f"({row}, {col}) answers {kinds}")
 
     def test_a_cell_no_tab_was_drawn_into_answers_nothing(self):
-        """The heading, and every column past the last name. `switch_to` already promises
-        this and `tab_at` reads the identical mapping, so the promise is structural: a
-        cell nothing drew into is absent from the map, whatever asks about it."""
-        for col in range(self._column_of("chats")):
+        """The inset the row starts at, and every column past the last name. `switch_to`
+        already promises this and `tab_at` reads the identical mapping, so the promise is
+        structural: a cell nothing drew into is absent from the map, whatever asks about
+        it.
+
+        The left-hand half of this was the strip's `chats` heading until #880 deleted it;
+        what is left on that side is `slots.INSET`, and it is the same claim about the same
+        cells."""
+        for col in range(slots.INSET):
             self.assertIsNone(slots.TABS.tab_at(0, col), f"column {col}")
         for col in range(tui.width(self.row) + 1, self.WIDTH):
             self.assertIsNone(slots.TABS.tab_at(0, col), f"column {col}")
@@ -243,7 +248,7 @@ class ARightClickOpensTheMenuAndNothingElse(_ABarThatWasDrawn, unittest.TestCase
         self.assertEqual(self.spawned, [], row)
 
     def test_a_right_press_on_a_cell_that_is_not_a_tab_does_nothing(self):
-        for col in (0, self._column_of("chats"), tui.width(self.row) + 5):
+        for col in (0, slots.INSET - 1, tui.width(self.row) + 5):
             self._handler("chats")(_click(0, col, name="right"))
         self.assertEqual(self.spawned, [])
 

@@ -461,20 +461,27 @@ class TheStripDrawsItWithoutMovingACell(PersonaIso, unittest.TestCase):
 
     def _row(self, busy=(), width=200, here="api.2", now=0.0):
         with mock.patch("charter.frame.slots.time.monotonic", return_value=now):
-            rows = slots._bar("chats", list(self.NAMES), here, width, busy=busy)
+            rows = slots._bar(list(self.NAMES), here, width, busy=busy)
         return tui.strip_ansi(rows[0]) if rows else ""
 
     def test_an_idle_strip_is_the_strip_that_shipped(self):
-        self.assertEqual("chats   api.1  *api.2   api.3", self._row().strip())
+        self.assertEqual("   api.1  *api.2   api.3", self._row().rstrip())
 
     def test_a_working_chat_wears_the_spinner_where_an_idle_one_wears_a_blank(self):
         """Hand-spelled, and the whole row, because what is being asserted is a POSITION:
         the glyph is in the cell `slots._BAR_MARK[1]` would have left blank, and every
-        other character of the row is where it was."""
-        self.assertEqual("chats  ✢api.1  *api.2   api.3",
-                         self._row(busy={"api.1"}, now=0.0).strip())
-        self.assertEqual("chats   api.1  *api.2  ✶api.3",
-                         self._row(busy={"api.3"}, now=slots.SPINNER_PERIOD).strip())
+        other character of the row is where it was.
+
+        **`rstrip` and never `strip`**, which #880 is what made load-bearing. These rows
+        used to open with the word `chats`, so stripping both ends left the idle mark's
+        blank in the middle of the string where a reader could see it; with the heading
+        gone, `strip` eats exactly the cell this case is about and an idle row and a
+        working one would compare equal. The two leading spaces are `slots.INSET`.
+        """
+        self.assertEqual("  ✢api.1  *api.2   api.3",
+                         self._row(busy={"api.1"}, now=0.0).rstrip())
+        self.assertEqual("   api.1  *api.2  ✶api.3",
+                         self._row(busy={"api.3"}, now=slots.SPINNER_PERIOD).rstrip())
 
     def test_the_chat_you_are_typing_in_keeps_its_star(self):
         """One cell, two facts, and `*` wins. `chrome.block` paints the active tab in
@@ -482,12 +489,12 @@ class TheStripDrawsItWithoutMovingACell(PersonaIso, unittest.TestCase):
         `panel._write` strips SGR under `NO_COLOR` — so on a plain plane the `*` is the
         only thing saying where you are. The chat you are IN is also the one whose harness
         you can watch directly."""
-        self.assertEqual("chats   api.1  *api.2   api.3",
-                         self._row(busy={"api.2"}).strip())
+        self.assertEqual("   api.1  *api.2   api.3",
+                         self._row(busy={"api.2"}).rstrip())
 
     def test_every_tab_on_a_row_shows_the_same_frame(self):
         row = self._row(busy={"api.1", "api.3"}, now=slots.SPINNER_PERIOD * 2)
-        self.assertEqual("chats  ✻api.1  *api.2  ✻api.3", row.strip())
+        self.assertEqual("  ✻api.1  *api.2  ✻api.3", row.rstrip())
 
     def test_a_chat_starting_a_turn_moves_no_column_of_the_click_map(self):
         """**The property the whole design turns on.** The map resolves a click BY COLUMN,
@@ -498,11 +505,11 @@ class TheStripDrawsItWithoutMovingACell(PersonaIso, unittest.TestCase):
         for width in range(0, 120):
             with self.subTest(width=width):
                 slots.TABS.forget()
-                idle = slots._bar("chats", list(self.NAMES), "api.2", width)
+                idle = slots._bar(list(self.NAMES), "api.2", width)
                 idle_map = dict(slots.TABS._cols)
                 slots.TABS.forget()
                 with mock.patch("charter.frame.slots.time.monotonic", return_value=0.0):
-                    busy = slots._bar("chats", list(self.NAMES), "api.2", width,
+                    busy = slots._bar(list(self.NAMES), "api.2", width,
                                       busy={"api.1", "api.3"})
                 self.assertEqual(idle_map, dict(slots.TABS._cols))
                 self.assertEqual([tui.width(r) for r in idle],

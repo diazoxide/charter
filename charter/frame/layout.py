@@ -244,12 +244,107 @@ HARNESS_MIN_ROWS = 12
 #: measured an operator running at, and stops short of the width where the strip would be
 #: taking six rows off the harness to become a list.
 #:
-#: Read by `commands_frame._slot_sizes` and handed to `frame.slots.bar_rows_wanted` as its
-#: *cap*, never applied twice: this module caps a strip at what the harness can spare and
-#: the SIZER caps it at what a strip is, and a second `min` here would be a bound no input
-#: could make observable — the survivor `tools/sweep.py` reports and this repository
-#: deletes.
+#: The top of the cycle :data:`BAR_ROWS_KEY` walks and NOT the height a frame launches at
+#: — that is :data:`BAR_ROWS_DEFAULT` (#880). `commands_frame._slot_sizes` reads this
+#: frame's own choice through :func:`bar_rows_cap` and hands the answer to
+#: `frame.slots.bar_rows_wanted` as its *cap*, never applying it twice: this module caps a
+#: strip at what the harness can spare and the SIZER caps it at what a strip is, and a
+#: second `min` here would be a bound no input could make observable — the survivor
+#: `tools/sweep.py` reports and this repository deletes.
 BAR_MAX_ROWS = 3
+
+#: How tall a tab strip is when nobody has said otherwise — one row, on every run (#880).
+#:
+#: **The launch default and NOT the ceiling**, which are two numbers and used to be one.
+#: `slots.bar_rows_wanted` composed at 1, 2 … :data:`BAR_MAX_ROWS` and kept the tallest
+#: height it FILLED, so a plane with many names came up two rows deep whether or not its
+#: operator wanted the harness two rows shorter. A strip that overflows is not a strip that
+#: has asked for the room: `+N` is clickable and opens the palette, which lists every name,
+#: so a collapsed strip is one press from the complete list rather than a dead end.
+#:
+#: The operator raises it with :data:`BAR_ROWS_KEY`, which cycles 1 → 2 → 3 and back
+#: (:func:`next_bar_rows`). A plane that always wants three says so once in its own
+#: `[[frame.component]] size` (#687), which :func:`_grown` still honours — that is a pin
+#: and this is a default, and neither is the other.
+BAR_ROWS_DEFAULT = 1
+
+#: Every height a tab strip may be at — :data:`BAR_ROWS_DEFAULT` through
+#: :data:`BAR_MAX_ROWS`.
+#:
+#: **A range and not two comparisons, and the deletion sweep is what settled it.** Written
+#: as ``BAR_ROWS_DEFAULT <= now <= BAR_MAX_ROWS``, the LOWER boundary is an equivalent
+#: mutant by construction: the fallback for a value below the range IS the bottom of the
+#: range, so `<` and `<=` answer the same number for every input there is, and
+#: `shift-boundary` would report it as a survivor forever. A membership test has no
+#: boundary to move and says exactly the same thing.
+_BAR_ROWS = range(BAR_ROWS_DEFAULT, BAR_MAX_ROWS + 1)
+
+#: The key that cycles a tab strip's height, bound by `commands_frame.conf_text`.
+#:
+#: **Here rather than in `commands_frame`, because `instance` has to know it too.** A
+#: component's own toggle key may not collide with a key charter has already bound
+#: (`instance.component_arrangement`'s `bound` set, which is where `overlay.HATCH_KEY` and
+#: the mouse keys already are); `instance` importing `commands_frame` would close a cycle,
+#: and this module is the one that owns bar heights and is already imported from there.
+#:
+#: **A third shipped `bind -n`, and the cost is stated rather than waved past.** A root-table
+#: binding is server-wide and takes the key before the harness pane sees it, which is why
+#: charter binds NO component toggle by default. It claims exactly two keys today — `F2`
+#: for the palette, `F12` for the escape hatch — and this is the third. It is affordable for
+#: the same reason those two are: `F3` is not a key Claude Code, codex or opencode binds,
+#: it is next to the palette an operator already knows, and unlike a toggle it is charter's
+#: own gesture rather than one of an open set. Unlike `F2` it is NOT configurable, exactly
+#: as `F12` is not: one key, one meaning, and `instance` refuses a component that wants it.
+BAR_ROWS_KEY = "F3"
+
+
+def bar_rows_cap(rows: int | None) -> int:
+    """How tall this frame's strips may grow right now — the *cap*
+    `slots.bar_rows_wanted` takes, out of what the operator has cycled to.
+
+    *rows* is `state.bar_rows`' answer: ``None`` for a frame nobody has pressed
+    :data:`BAR_ROWS_KEY` in, which is every frame at launch, and which is
+    :data:`BAR_ROWS_DEFAULT`.
+
+    **``None`` needs no branch of its own**, and there was one until the deletion sweep
+    asked about it: ``None`` is not in :data:`_BAR_ROWS`, so the membership test already
+    answers for it with the same number a `rows is not None` guard in front would have
+    produced. Written as two expressions, one of them was an equivalent mutant by
+    construction — `collapse-ifexp` to `rows` changed no answer for any input — which is
+    the line this repository deletes rather than documents.
+
+    **A cap and not a height.** A strip still grows only as far as its own names need
+    (`slots.bar_rows_wanted` measures, `_grown` spends), so pressing the key on a plane
+    whose names already fit on one row changes nothing on screen — which is the honest
+    outcome: there is nothing to put on a second row. What the key raises is the ceiling
+    that was stopping a strip which DOES overflow.
+
+    **Anything outside :data:`_BAR_ROWS` degrades to the default rather than clamping**,
+    and that is `instance.density_level`'s discipline: the value is read back off a file,
+    so `0`, `7`, `-1` and a truncated write are all "this frame has not chosen", not "this
+    frame chose something charter will round for it". Clamping a `7` to `3` would leave a
+    frame silently at the ceiling because a byte went missing.
+    """
+    return rows if rows in _BAR_ROWS else BAR_ROWS_DEFAULT
+
+
+def next_bar_rows(rows: int | None) -> int:
+    """The height :data:`BAR_ROWS_KEY` moves to from *rows* — 1 → 2 → 3 → 1.
+
+    **Through :func:`bar_rows_cap` and not off the raw number**, so the cycle has exactly
+    one idea of what "where we are now" means: a frame that has chosen nothing is at
+    :data:`BAR_ROWS_DEFAULT` and its first press asks for two, and a file charter cannot
+    read is at the default too rather than sending the next press somewhere no one asked
+    for. Written as one clamp shared with the reader, because two clamps are two chances to
+    disagree about whether `3` wraps.
+
+    Wrapping rather than stopping at the ceiling: every press has to do something, which is
+    `builtin_actions._register_strip`'s own rule for the tab walk one surface over. A key
+    that silently did nothing at the top is a key an operator presses twice and then stops
+    trusting.
+    """
+    now = bar_rows_cap(rows)
+    return now + 1 if now < BAR_MAX_ROWS else BAR_ROWS_DEFAULT
 
 #: One row per pane border. tmux charges a horizontal split one row for the divider on
 #: top of the pane's own height — measured on 3.7c: a 50-row window split `-l 8` reads
@@ -947,7 +1042,10 @@ def _grown(sizes: dict[str, int], wanted: dict[str, int], *,
     **This GROWS and never trims**, which is why the shortfall is tested for positivity in
     the loop rather than filtered out of the map: a plane that pinned its strip to three
     rows in its own `[[frame.component]]` table asked for three rows (#687), and a
-    measurement saying its names fit on one is not that operator changing their mind. There
+    measurement saying its names fit on one is not that operator changing their mind. That
+    is also what keeps #687 whole after #880 lowered the default to
+    :data:`BAR_ROWS_DEFAULT`: a want of one against a pin of three leaves the three alone,
+    so a plane that always wants a tall strip still says so once in its own file. There
     is no early return for an empty map either — the loop does not run and the answer is
     the map it was handed, so a guard in front of it is a line no input could make
     observable, which is the survivor `tools/sweep.py` reports and this repository deletes.

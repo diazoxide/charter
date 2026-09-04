@@ -57,7 +57,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
     NAMES = ["api.1", "api.2", "api.3"]
 
     def _row(self, width, names=None, here="api.2", **kw):
-        rows = slots._bar("chats", list(names or self.NAMES), here, width, **kw)
+        rows = slots._bar(list(names or self.NAMES), here, width, **kw)
         self.assertLessEqual(
             len(rows), 1,
             "a strip given one row draws one row or none — the rungs below are what it "
@@ -86,7 +86,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         is already standing on — correct, and inert. What the row can hold is drawn
         instead, and the rest is counted at whichever end it fell off.
         """
-        row = self._row(30)
+        row = self._row(23)
         self.assertIn("*api.2", row)
         self.assertIn("api.1", row, "the row had room for a neighbour and drew none")
         self.assertNotIn("api.3", row)
@@ -124,8 +124,8 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         a name away**. The reserve is what keeps the ladder monotone: without it a wider
         room cuts a page one name longer, the leading count that page has to carry was
         never budgeted for, the row overflows and the whole rung is given up. Measured on
-        the mutant — with these fifteen names the row is drawn at 31 columns, gone at 42
-        through 45, and back at 46. A bar that loses its names when the pane gets bigger is
+        the mutant — with these fifteen names the row is drawn at 24 columns, gone at 35
+        through 38, and back at 39. A bar that loses its names when the pane gets bigger is
         a bug an operator reports as a flicker.
 
         Every name of the list, at every width from 0 to 200, plus the narrowest row for
@@ -141,9 +141,9 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
             self.assertEqual(missing, [],
                              f"{here} was drawn at {min(drawn)} columns and gone at "
                              f"{missing[:3]} — the pane got wider and lost a name")
-        for here, expected in (("workspace-02", "chats  +2  *workspace-02  +12"),
-                               ("workspace-07", "chats  +7  *workspace-07  +7"),
-                               ("workspace-13", "chats  +13  *workspace-13  +1")):
+        for here, expected in (("workspace-02", "+2  *workspace-02  +12"),
+                               ("workspace-07", "+7  *workspace-07  +7"),
+                               ("workspace-13", "+13  *workspace-13  +1")):
             narrowest = min(w for w in range(201)
                             if here in self._row(w, names=names, here=here))
             row = self._row(narrowest, names=names, here=here)
@@ -212,10 +212,10 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         ws = ThisPlaneIsWhyTheRungIsWindowed.NAMES
         drawn = []
         for width in (100, 120, 160, 200, 240):
-            rows = slots._bar("workspaces", list(ws), "harness-wrapper", width)
+            rows = slots._bar(list(ws), "harness-wrapper", width)
             row = rows[0] if rows else ""
             drawn.append(len([n for n in ws if n in row]))
-        self.assertEqual(drawn, [4, 6, 8, 10, 13],
+        self.assertEqual(drawn, [6, 7, 9, 11, 13],
                          "the rescue took a tab off a plane it was not for")
 
     def test_the_page_is_the_same_page_for_every_name_on_it(self):
@@ -244,12 +244,12 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
     def test_a_row_with_no_room_for_a_name_says_where_you_are_and_how_many(self):
         """§3.6's "marks only", and a count IS the mark: `2/3` says where you are, which
         three dots do not."""
-        self.assertEqual(self._row(16).strip(), "chats  2/3")
+        self.assertEqual(self._row(9).strip(), "2/3")
 
     def test_a_row_with_no_room_for_the_count_draws_nothing_at_all(self):
         """Rather than a fragment of one. A bar that could not say anything true says
         nothing — nothing is lost but the reminder (§3.6)."""
-        self.assertEqual(self._row(11), "")
+        self.assertEqual(self._row(4), "")
 
     def test_no_name_is_ever_shown_in_part_at_any_width(self):
         """**The property §3.6 asks `slots._NAME_MIN_W` to guarantee, asserted directly.**
@@ -260,23 +260,21 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         could reach. Asked at every width from 0 to 200 so there is no gap between the
         three widths the spec names.
 
-        Asserted on the row's FIELDS rather than by substring search: every name shares a
-        prefix with the heading and with each other, so `name[:3] in row` answers yes for
-        rows that are perfectly correct. Splitting the row on its own gap and asking what
-        each field IS is the property; anything else is a coincidence about spelling.
+        Asserted on the row's FIELDS rather than by substring search: the names share a
+        prefix with each other, so `name[:3] in row` answers yes for rows that are
+        perfectly correct. Splitting the row on its own gap and asking what each field IS
+        is the property; anything else is a coincidence about spelling.
         """
         names = ["api-staging.1", "api-standby.2", "api.3"]
         counts = {f"+{n}" for n in range(1, len(names) + 1)}
         positions = {f"{i}/{len(names)}" for i in range(1, len(names) + 1)}
         for width in range(0, 201):
-            row = slots._bar("chats", list(names), "api-standby.2", width)
+            row = slots._bar(list(names), "api-standby.2", width)
             text = _plain(row[0]) if row else ""
             self.assertLessEqual(tui.width(text), width, repr(text))
             if not text:
                 continue
-            head, _, body = text.strip().partition(" ")
-            self.assertEqual(head, "chats", repr(text))
-            for field in body.split(" " * slots._BAR_GAP):
+            for field in text.strip().split(" " * slots._BAR_GAP):
                 field = field.strip()
                 if not field:
                     continue
@@ -317,7 +315,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         self.assertNotIn(slots.ADD_CHAT, row, repr(row))
 
     def test_no_names_at_all_is_no_row(self):
-        self.assertEqual(slots._bar("chats", [], "api.1", 200), [])
+        self.assertEqual(slots._bar([], "api.1", 200), [])
 
     def test_a_row_you_are_not_on_still_lists_and_still_counts(self):
         """`here` naming nothing in the list is a real state — the workspace bar draws it
@@ -328,7 +326,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         self.assertNotIn(slots._BAR_MARK[0], wide)
         for name in self.NAMES:
             self.assertIn(name, wide)
-        self.assertEqual(self._row(16, here="nowhere").strip(), "chats  3")
+        self.assertEqual(self._row(9, here="nowhere").strip(), "3")
 
     def test_the_only_chat_is_never_counted_as_plus_zero(self):
         """The count is of the OTHERS, so one name has none. `+0` would be a field that
@@ -337,7 +335,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         self.assertNotIn("+0", row)
 
     def _rung(self, width, names=None, here="api.2", note=""):
-        rows = slots._bar("chats", list(names or self.NAMES), here, width, note=note)
+        rows = slots._bar(list(names or self.NAMES), here, width, note=note)
         return rows[0] if rows else ""
 
     def _fits_at(self, names, here, note=""):
@@ -392,7 +390,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         self.assertTrue(rung2, "rung 2 was never reached with the first name marked")
         self.assertIn(f"{slots._BAR_MARK[0]}api.1", rung2[0])
         counted = [r for r, _ in self._fits_at(self.NAMES, "api.1") if "/" in r]
-        self.assertEqual([r.strip() for r in counted], ["chats  1/3"])
+        self.assertEqual([r.strip() for r in counted], ["1/3"])
 
     def test_a_row_with_no_note_spends_no_columns_pretending_to_have_one(self):
         """`note and …` — without it an empty note still buys its own gap, and the row
@@ -445,7 +443,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         (`chats.ID_RE` and `workspace.valid_name` both refuse those characters), which is
         why the index is taken before containment rather than left to be found later."""
         names = ["api x", "apix"]
-        row = _plain(slots._bar("chats", list(names), "apix", 200)[0])
+        row = _plain(slots._bar(list(names), "apix", 200)[0])
         marks = [f for f in row.split(" " * slots._BAR_GAP)
                  if f.strip().startswith(slots._BAR_MARK[0])]
         self.assertEqual(len(marks), 1,
@@ -459,7 +457,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         one line of."""
         hostile = "z" * 20 + " " + "y" * 20
         for width in (200, 80, 40):
-            row = slots._bar("chats", ["api.1", hostile], "api.1", width)
+            row = slots._bar(["api.1", hostile], "api.1", width)
             text = row[0] if row else ""
             self.assertEqual(text, "".join(text.splitlines()), repr(text))
             self.assertLessEqual(tui.width(tui.strip_ansi(text)), width, repr(text))
@@ -493,7 +491,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self.addCleanup(slots.TABS.forget)
 
     def _draw(self, width, names=None, here="api.2", note=""):
-        rows = slots._bar("chats", list(names or self.NAMES), here, width, note=note)
+        rows = slots._bar(list(names or self.NAMES), here, width, note=note)
         return rows[0] if rows else ""
 
     def _cells(self, row, field):
@@ -655,7 +653,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         names = [f"workspace-{i:02d}" for i in range(15)]
         here = "workspace-07"
         row = self._draw(80, names=names, here=here)
-        self.assertTrue(row.lstrip().split("  ")[1].startswith("+"),
+        self.assertTrue(row.lstrip().split("  ")[0].startswith("+"),
                         f"this row has no leading count to displace anything: {row!r}")
         drawn = [n for n in names if n in row and n != here]
         self.assertTrue(drawn, f"no switchable tab on the page: {row!r}")
@@ -666,8 +664,8 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
 
     def test_the_rung_that_says_only_where_you_are_has_no_tabs_at_all(self):
         """`2/3` is a position, not a name, and there is no name on the row to click."""
-        row = _plain(self._draw(16, here="api.2"))
-        self.assertEqual(row.strip(), "chats  2/3", repr(row))
+        row = _plain(self._draw(9, here="api.2"))
+        self.assertEqual(row.strip(), "2/3", repr(row))
         for col in range(0, 200):
             self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col} of {row!r}")
 
@@ -678,13 +676,15 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         the counts are, saying the same thing about all three names instead of about nine
         of fifteen, so it opens the same chooser.
 
-        The heading and the space past it stay inert, which is what says the cells were
-        measured rather than the whole row being made live."""
-        row = _plain(self._draw(16, here="api.2"))
+        The inset every row starts at and the space past the field stay inert, which is
+        what says the cells were measured rather than the whole row being made live. (The
+        left-hand control was the strip's own heading until #880 deleted it; the inset is
+        what is left of that side of the row, and it is the same assertion.)"""
+        row = _plain(self._draw(9, here="api.2"))
         for col in self._cells(row, "2/3"):
             self.assertTrue(slots.TABS.more_at(0, col), f"column {col} of {row!r}")
-        for col in self._cells(row, "chats"):
-            self.assertFalse(slots.TABS.more_at(0, col), f"the heading opened a picker")
+        for col in range(slots.INSET):
+            self.assertFalse(slots.TABS.more_at(0, col), "the inset opened a picker")
         self.assertFalse(slots.TABS.more_at(0, tui.width(row) + 5),
                          "the space past the row opened a picker")
 
@@ -696,7 +696,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         self._draw(80, names=[f"workspace-{i:02d}" for i in range(15)],
                    here="workspace-07")
         self.assertTrue(any(slots.TABS.more_at(0, c) for c in range(80)))
-        self.assertEqual(self._draw(11), "")
+        self.assertEqual(self._draw(4), "")
         self.assertEqual([c for c in range(200) if slots.TABS.more_at(0, c)], [],
                          "a bar that drew no row kept the counts it is no longer drawing")
 
@@ -708,7 +708,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         wide = self._draw(200, here="nowhere")
         col = self._cells(wide, "api.3").start
         self.assertEqual(slots.TABS.switch_to(0, col), "api.3")
-        for width in (30, 16, 11):
+        for width in (23, 9, 4):
             self._draw(width, here="api.2")
             self.assertIsNone(slots.TABS.switch_to(0, col),
                               f"width {width} kept a stale tab")
@@ -718,7 +718,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         could not scan, and `_bar` answers `[]` for an empty list — so this is the
         unreadable-plane path, and it must leave nothing clickable behind either."""
         self._draw(200, here="nowhere")
-        self.assertEqual(slots._bar("chats", [], "api.1", 200), [])
+        self.assertEqual(slots._bar([], "api.1", 200), [])
         for col in range(0, 200):
             self.assertIsNone(slots.TABS.switch_to(0, col), f"column {col}")
 
@@ -796,7 +796,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         for names in lists:
             for here in names:
                 for width in range(0, 120):
-                    rows = slots._bar("chats", list(names), here, width)
+                    rows = slots._bar(list(names), here, width)
                     row = rows[0] if rows else ""
                     self.assertNotIn("+-", row,
                                      f"{names} at {width}: a count went negative: {row!r}")
@@ -823,7 +823,7 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         this asks with a name that needs repairing rather than waiting for a caller to stop
         refusing one."""
         raw = "api\t1"
-        row = slots._bar("chats", [raw, "api.2"], "api.2", 200)[0]
+        row = slots._bar([raw, "api.2"], "api.2", 200)[0]
         drawn = contain.one_line(raw)
         self.assertNotEqual(drawn, raw, "this name needs no repair, so it measures none")
         at = row.index(drawn)
@@ -896,7 +896,7 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
         self.addCleanup(slots.TABS.forget)
 
     def _row(self, width=200, names=None, here="api.2"):
-        rows = slots._bar("chats", list(names or self.NAMES), here, width)
+        rows = slots._bar(list(names or self.NAMES), here, width)
         return rows[0] if rows else ""
 
     def test_the_tab_you_are_on_is_a_block_and_no_other_tab_is(self):
@@ -1001,7 +1001,7 @@ class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
 
     def _row(self, width=200, names=None, here="api.2", rules="hidden"):
         with self._with(rules):
-            rows = slots._bar("chats", list(names or self.NAMES), here, width)
+            rows = slots._bar(list(names or self.NAMES), here, width)
         return rows[0] if rows else ""
 
     def test_a_plane_whose_rules_are_hidden_draws_the_row_it_always_drew(self):
@@ -1009,12 +1009,12 @@ class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
         row that is already short of columns. Byte for byte the old composition: two
         blanks between two tabs and no glyph anywhere."""
         row = _plain(self._row(rules="hidden"))
-        self.assertEqual(row.strip(), "chats   api.1  *api.2   api.3")
+        self.assertEqual(row.strip(), "api.1  *api.2   api.3")
         self.assertNotIn(slots._BAR_RULE, row)
 
     def test_a_plane_whose_rules_are_visible_puts_one_between_every_pair(self):
         row = _plain(self._row(rules="visible"))
-        self.assertEqual(row.strip(), "chats   api.1 | *api.2 |  api.3")
+        self.assertEqual(row.strip(), "api.1 | *api.2 |  api.3")
         self.assertEqual(row.count(slots._BAR_RULE), len(self.NAMES) - 1)
 
     def test_the_rule_is_a_glyph_no_terminal_draws_two_cells_wide(self):
@@ -1084,7 +1084,7 @@ class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
         names = [f"workspace-{i:02d}" for i in range(15)]
         for width in range(0, 301):
             with self._with("visible"):
-                rows = slots._bar("workspaces", list(names), "workspace-07", width)
+                rows = slots._bar(list(names), "workspace-07", width)
             text = _plain(rows[0]) if rows else ""
             self.assertLessEqual(tui.width(text), width, f"{width}: {text!r}")
         widest = next(w for w in range(500)
@@ -1102,9 +1102,9 @@ class ThisPlaneIsWhyTheRungIsWindowed(unittest.TestCase):
 
     **The measurement #725 shipped with, kept as a test.** That change made both bars
     clickable and the `workspaces` bar stayed inert on the plane it was reported from:
-    those names need 274 columns for rung 1, so every real width fell to a rung whose only
-    drawn tab was the one the operator was already on. "Clickable" and "reaches nothing"
-    are the same screen.
+    those names need 262 columns for rung 1 — 274 while the strip still drew a heading
+    (#880) — so every real width fell to a rung whose only drawn tab was the one the
+    operator was already on. "Clickable" and "reaches nothing" are the same screen.
 
     Written against the real names rather than a fixture of even-width ones, because the
     greedy cut is about the widths names actually have — `relations-and-delegations` is 25
@@ -1124,19 +1124,21 @@ class ThisPlaneIsWhyTheRungIsWindowed(unittest.TestCase):
         self.addCleanup(slots.TABS.forget)
 
     def _switchable(self, width):
-        rows = slots._bar("workspaces", list(self.NAMES), self.HERE, width)
+        rows = slots._bar(list(self.NAMES), self.HERE, width)
         row = rows[0] if rows else ""
         self.assertLessEqual(tui.width(row), width, repr(row))
         return row, {slots.TABS.switch_to(0, col) for col in range(width)} - {None}
 
-    def test_rung_one_still_needs_two_hundred_and_seventy_four_columns(self):
+    def test_rung_one_still_needs_two_hundred_and_sixty_two_columns(self):
         """The number the whole change is about. Measured off the ladder, so it follows
-        the inset and the gap if either moves."""
+        the inset and the gap if either moves — and it did move: it was 274 for as long as
+        the strip drew a `workspaces` heading, and #880 gave those twelve columns back to
+        the names."""
         widest = next(w for w in range(400)
-                      if len(slots._bar("workspaces", list(self.NAMES), self.HERE, w)) == 1
-                      and all(n in slots._bar("workspaces", list(self.NAMES),
+                      if len(slots._bar(list(self.NAMES), self.HERE, w)) == 1
+                      and all(n in slots._bar(list(self.NAMES),
                                               self.HERE, w)[0] for n in self.NAMES))
-        self.assertEqual(widest, 274)
+        self.assertEqual(widest, 262)
 
     def test_every_real_width_now_reaches_workspaces_the_operator_is_not_on(self):
         """120, 160 and 200 columns. Before this change each of them drew

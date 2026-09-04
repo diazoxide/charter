@@ -3420,11 +3420,11 @@ class _Tabs:
         *columns* maps a ``(row, column)`` of the component's OWN canvas — the rectangle
         `ctx.width` and `ctx.height` describe, which is what `events.Dispatcher._on_canvas`
         delivers a click in — to the name of the tab drawn there. Absent means the operator
-        clicked a cell this bar drew no tab into: the heading, the blank under it on a
-        strip that grew a second row, the gap between two tabs, EITHER `+N` count,
-        the `n/N`, the empty space past the last name. `events.Dispatcher._on_canvas` applies
-        the identical rule one axis over for the pad, and `_Viewport.publish` applies it
-        for the table's heading row.
+        clicked a cell this bar drew no tab into: the left inset every row starts at, the
+        gap between two tabs, EITHER `+N` count, the `n/N`, the empty space past the last
+        name. (A strip's own heading was the sixth of those until #880 deleted it.)
+        `events.Dispatcher._on_canvas` applies the identical rule one axis over for the
+        pad, and `_Viewport.publish` applies it for the table's heading row.
 
         *here* is the name this frame is ON, taken from the same paint that drew the
         mark. Not re-resolved when a click arrives: `switch.current_workspace` reads the
@@ -3726,11 +3726,18 @@ def _cuts(fields: list[str], room: int, gap: int) -> list[int]:
     #
     # **Balancing every page instead was measured and is WORSE**, which is why only the
     # last one is rescued. Equal-sized pages ignore what names actually cost: on this
-    # project's own fifteen workspaces it drew 4/4/5/7/7 tabs at 100/120/160/200/240
-    # columns where filling each page draws 4/6/8/10/13, and across those 82 lists it left
+    # project's own fifteen workspaces it drew 4/4/5/7/7 tabs in ROOMS of 86/106/146/186/226
+    # cells where filling each page draws 4/6/8/10/13, and across those 82 lists it left
     # MORE pages holding a single tab (6,969 against 4,775), not fewer. Packing the last
     # page from the right instead removes the drops and puts them on a middle name: the
-    # same fifteen workspaces then draw 8 tabs at 160 and 6 at 200.
+    # same fifteen workspaces then draw 8 tabs in a room of 146 and 6 in one of 186.
+    #
+    # **Stated as a ROOM and not as a pane width, which is what #880 cost to learn.** Those
+    # numbers were written down as the widths a `workspaces` strip was drawn at, and the
+    # heading that strip carried was twelve of those columns; taking it off moved every one
+    # of them and left a paragraph quoting measurements of a row nothing draws any more.
+    # `room` is this function's own argument, so the numbers now follow the lead wherever
+    # it goes.
     #
     # **One condition, and the two that used to sit beside it were deleted rather than
     # documented.** They were written as guards against an empty page before the last one
@@ -3778,9 +3785,9 @@ def _cuts(fields: list[str], room: int, gap: int) -> list[int]:
     return cuts
 
 
-def _bar(head: str, names: list[str], here: str, width: int, *,
-         note: str = "", rows: int = 1, busy=()) -> list[str]:
-    """One bar: *head*, then *names* with *here* marked, in *rows* x *width* cells.
+def _bar(names: list[str], here: str, width: int, *,
+         note: str = "", rows: int = 1, busy=(), counts=None) -> list[str]:
+    """One bar: *names* with *here* marked, in *rows* x *width* cells.
 
     :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
     :data:`TABS`, so "the map describes what is on screen" is a property of two lines
@@ -3790,17 +3797,17 @@ def _bar(head: str, names: list[str], here: str, width: int, *,
     the launcher's answer overwrite the panel's — a map describing a strip nobody is
     looking at.
 
-    *busy* is :func:`_compose`'s and is passed straight through — see there.
+    *busy* and *counts* are :func:`_compose`'s and are passed straight through — see there.
     """
-    lines, cols, more, add = _compose(head, names, here, width,
-                                      note=note, rows=rows, busy=busy)
+    lines, cols, more, add = _compose(names, here, width, note=note, rows=rows,
+                                      busy=busy, counts=counts)
     TABS.publish(cols, here, more, add)
     return lines
 
 
-def _compose(head: str, names: list[str], here: str, width: int, *,
-             note: str = "", rows: int = 1, busy=()):
-    """The strip *head*/*names*/*here* composes to, and the cells its tabs landed in.
+def _compose(names: list[str], here: str, width: int, *,
+             note: str = "", rows: int = 1, busy=(), counts=None):
+    """The strip *names*/*here* composes to, and the cells its tabs landed in.
 
     Answers ``(lines, columns, more, add)`` — the rows to draw, the ``(row, col)`` map
     :meth:`_Tabs.publish` takes, and the two cell sets that are not tabs. :func:`_bar` is
@@ -3847,11 +3854,11 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
        run that is the whole list is never short.
 
        **This rung used to draw the marked name alone**, and on a real plane that made
-       the whole bar inert: fifteen workspaces need 274 columns for rung 1, so every
-       width an operator actually runs at drew `*harness-wrapper  +14` — one tab, the one
-       they were already on, which `_Tabs.switch_to` correctly refuses. The bar was
-       clickable and reached nothing. A page reaches five more at 120 columns, seven at
-       160 and nine at 200.
+       the whole bar inert: fifteen workspaces need 262 columns for rung 1 (274 while the
+       strip still drew a heading — #880), so every width an operator actually runs at
+       drew `*harness-wrapper  +14` — one tab, the one they were already on, which
+       `_Tabs.switch_to` correctly refuses. The bar was clickable and reached nothing. A
+       page reaches six more at 120 columns, eight at 160 and ten at 200.
     3. **`n/N` alone** — which position you are in and how many there are. This is the
        rung §3.6 calls "marks only", and a count IS what a mark per chat degenerates to
        once there is no room to draw one per chat. It says strictly more: `2/3` tells you
@@ -3881,6 +3888,15 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
     "add chat" affordance, and nothing else today. Dropped first, before any name, because
     it is a reminder and the names are the readout.
 
+    *counts* is how many chats each name holds, or ``None`` for a strip with no count field
+    at all (:func:`_chats_strip`). Where it is a map, EVERY tab reserves
+    :data:`TAB_COUNT_W` cells whatever the map says — see that constant for why a field
+    that came and went would re-cut the strip under a pointer, and :func:`_workspace_counts`
+    for the one grouped read behind it. A name the map does not carry counts zero and draws
+    blank. The reserve being unconditional is also what keeps :func:`bar_rows_wanted`
+    honest: the sizer composes with the same map the renderer will and could compose with
+    any map at all and still measure the same width.
+
     *busy* is the names whose harness is working right now (#853) — chat ids, straight off
     `inflight.working_chats`. Each one drawn on the strip gets :data:`TAB_SPINNER` in the
     cell :data:`_BAR_MARK` would otherwise leave blank, so **the ladder above cannot see
@@ -3896,9 +3912,9 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
     **Every rung answers with its own cell map**, which is what makes the bar clickable at
     all and is the same discipline `_repos` keeps for the table's rows: the handler
     resolves a click against WHAT WAS DRAWN rather than against what it thinks would have
-    been. Only the names actually on the strip get cells — the heading, the blank under it,
-    the gaps, BOTH `+N` counts, the `n/N` and the affordance are cells this bar drew no tab
-    into and a click on one of them switches nothing. **The rungs that draw NOTHING answer
+    been. Only the names actually on the strip get cells — the left inset, the gaps, BOTH
+    `+N` counts, the `n/N` and the affordance are cells this bar drew no tab into and a
+    click on one of them switches nothing. **The rungs that draw NOTHING answer
     too**, with an empty map, and that is the half `_Viewport.blank` exists for one axis
     over: a bar that kept its last map through a resize down to `2/3`, down to one row, or
     down to no row at all, would switch to a tab the operator can see is not on screen.
@@ -3910,22 +3926,25 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
     :func:`_tab_columns` walking the fields each row actually joined), so there is no
     second walk of the ladder to disagree with the first.
     """
-    # **`head` and `note` are NOT contained, and the deletion sweep is what settled it.**
-    # Both are charter's own literals — `"chats"`, `"workspaces"`, :data:`ADD_CHAT` — and
-    # no caller can hand this an open-alphabet one, so a `contain.one_line` on either is a
-    # call whose result is provably its argument. The sweep found both as survivors for
-    # exactly that reason: no input could make the mutation differ. The NAMES are
-    # contained, below, which is where the open alphabet actually is.
+    # **`note` is NOT contained, and the deletion sweep is what settled it.** It is
+    # charter's own literal — :data:`ADD_CHAT` — and no caller can hand this an
+    # open-alphabet one, so a `contain.one_line` on it is a call whose result is provably
+    # its argument. The sweep found it as a survivor for exactly that reason: no input
+    # could make the mutation differ. The NAMES are contained, below, which is where the
+    # open alphabet actually is. (`head` said the same thing beside it until #880 removed
+    # the heading it named.)
     from . import chrome
-    lead = _inset() + head + " " * _BAR_GAP
-    # **The rows under the first start where the first row's tabs do.** The heading names
-    # the strip once — a `chats` repeated down the left of a three-row strip is the same
-    # word three times where names are competing for columns — and the blank under it is
-    # what keeps every row's tabs in one column, so a run of pages reads as one block
-    # rather than as three rows that happen to be adjacent. It is also what lets every page
-    # be cut against ONE `room`: a second row starting further left would be a wider row
-    # than the cut was made for, and the cut is what a click's stability rests on.
-    under = " " * tui.width(lead)
+    # **Every row of the strip starts at the same column, and that column is the frame's
+    # own left edge and nothing more** (#880). It used to carry the strip's heading —
+    # `workspaces `/`chats ` plus a :data:`_BAR_GAP` — with a blank of the same width under
+    # it on rows two and three, so that a run of pages read as one block rather than as
+    # three adjacent rows. The heading is gone and the blank went with it: a lead that is
+    # the same on every row is one expression, where a lead and an `under` that happened to
+    # be equal were two things a reader had to check agreed. What the single lead still
+    # buys is what the blank did — every page is cut against ONE `room`, and a second row
+    # starting further left would be a wider row than the cut was made for, which is what a
+    # click's stability rests on.
+    lead = _inset()
     # **Resolved ONCE, here, and handed to everything below it.** The cut
     # (:func:`_cuts`), the composition and the map (:func:`_tab_columns`) all need to
     # agree about how wide the seam between two tabs is, and `charter.toml` is re-read
@@ -3966,9 +3985,8 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
         cols: dict = {}
         lines: list[str] = []
         for r, (before, body, drawn) in enumerate(drawn_rows):
-            head_cells = lead if r == 0 else under
-            cols.update(_tab_columns(r, tui.width(head_cells + before), drawn, gapw))
-            lines.append(head_cells + before + body)
+            cols.update(_tab_columns(r, tui.width(lead + before), drawn, gapw))
+            lines.append(lead + before + body)
         return lines, cols, more, add
 
     def row(body: str = "", drawn=(), before: str = "", more=(), add=()):
@@ -3996,6 +4014,20 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
     # the raw name beside the drawn field: a click has to switch to what is on disk.
     at = names.index(here) if here in names else -1
     shown = [contain.one_line(n) for n in names]
+    # **The count rides the NAME's field, so the map gives its cells to that name's tab**
+    # (#880): a press on `(5)` switches to the workspace it is the count of, which is the
+    # only thing it could sensibly be about. Applied after `contain.one_line` and never
+    # before — the repair is for the open-alphabet name, and charter minted these digits.
+    #
+    # **`counts is None` is "this strip has no count field", not "every count is zero"**,
+    # and the two must stay tellable apart: the chats strip reserves nothing and the
+    # workspaces strip reserves :data:`TAB_COUNT_W` on every tab whatever the numbers are.
+    # That is what lets `bar_rows_wanted` — which composes with the counts the strip's own
+    # entry answered — measure the identical width the renderer draws, and it is why the
+    # reserve is unconditional: a strip whose counts were all zero must still be cut for
+    # the field, or the first chat to open would re-cut it.
+    if counts is not None:
+        shown = [n + _tab_count(counts.get(raw, 0)) for raw, n in zip(names, shown)]
     # **The mark's cell carries the spinner too, and it is decided on the RAW name for the
     # reason the paragraph above gives about the index**: `busy` holds chat ids off disk,
     # `shown` holds text `contain.one_line` may have repaired, and matching a mark against
@@ -4174,6 +4206,68 @@ def _compose(head: str, names: list[str], here: str, width: int, *,
 ADD_CHAT = "+"
 
 
+#: The largest chat count a workspace tab draws as a number. Above it the field says
+#: ``(99+)``, which is the same width and stops being a number rather than growing into one.
+#:
+#: **A constant and not a measurement of the plane, because the FIELD IS FIXED-WIDTH** —
+#: see :data:`TAB_COUNT_W`, which is the whole design. A ceiling derived from the widest
+#: count on the plane would change the moment a workspace crossed ten chats, and every tab
+#: on the strip would move.
+#:
+#: Two digits rather than `state._CHAT_ORDINAL_MAX`'s five: that constant bounds the
+#: ORDINAL a chat id may carry (`api.10000`), not how many chats are open at once, and
+#: sizing a field on every tab for a number no plane reaches would spend three columns per
+#: name on nothing. `state.reap` is what bounds the entries this is counted from, and a
+#: workspace with a hundred live chats has stopped being something a one-row readout is
+#: about — `+N` and the palette are what that operator has.
+TAB_COUNT_MAX = 99
+
+#: How many columns EVERY workspace tab reserves for its chat count, drawn or not.
+#:
+#: **Always reserved, and that is the constraint the whole field is built around.** Tab
+#: widths decide where :func:`_cuts` falls, so a suffix that appeared when a chat opened and
+#: vanished when one closed would move every tab to its right — and the cell the operator
+#: was about to press would hold another workspace's name a moment later. That is the
+#: double-press #767 exists to stop, and it is exactly the shape :data:`TAB_SPINNER` was
+#: refused in: *"A spinner drawn beside a name would re-cut the strip the moment a sibling
+#: started thinking."* The spinner took the mark's cell instead; a count has no cell to
+#: take, so it buys one on every tab and pays for it whether or not it has anything to say.
+#:
+#: **Zero renders blank**, so every count on screen means something. A `(0)` beside twelve
+#: of fifteen names is a column of noise that says only "this feature is on".
+#:
+#: Derived from the widest thing the field can hold rather than written down as `6`, so a
+#: change to :data:`TAB_COUNT_MAX` cannot leave the reserve behind. `tui.width` and never
+#: `len` for this module's own reason, though every character here is ASCII: a field is
+#: display text and the question is cells.
+TAB_COUNT_W = tui.width(f" ({TAB_COUNT_MAX}+)")
+
+
+def _tab_count(n: int) -> str:
+    """The count field for a workspace holding *n* chats — always :data:`TAB_COUNT_W` cells.
+
+    A blank for none, ``(5)`` for five, ``(99+)`` for more than :data:`TAB_COUNT_MAX`,
+    each padded to the reserve. `tui.pad` and not an f-string width, for :func:`_inset`'s
+    reason: it measures with `tui.width`, so the field is the same number of CELLS whatever
+    is in it — which is the property :data:`TAB_COUNT_W` exists to state and the one the cut
+    depends on.
+
+    **Parentheses and ASCII**, :data:`_BAR_RULE`'s rule rather than a preference: a click on
+    this row is resolved by COLUMN, so a glyph a terminal may draw two cells wide would move
+    every field after it. They also keep the count off the name — `alpha 5` reads as a
+    workspace called `alpha 5`, and `workspace.valid_name` is not a strong enough argument
+    to lean on when a parenthesis costs one cell of a field that is reserved anyway.
+
+    A negative *n* cannot arrive — it is `len()` of a list one function over — and is not
+    guarded against separately for that reason: `n <= 0` is the blank, so the one branch
+    that exists answers for it, where a second would be a line no input could reach.
+    """
+    if n <= 0:
+        return " " * TAB_COUNT_W
+    return tui.pad(f" ({n})" if n <= TAB_COUNT_MAX else f" ({TAB_COUNT_MAX}+)",
+                   TAB_COUNT_W)
+
+
 def working_chats() -> frozenset:
     """Which chats' harnesses are working right now — a set of chat ids, possibly empty.
 
@@ -4197,15 +4291,58 @@ def working_chats() -> frozenset:
 
 
 def _chats_strip(fid: str):
-    """What the chat strip is a strip OF — its heading, its names, the one you are typing
-    in, and its note.
+    """What the chat strip is a strip OF — its names, the one you are typing in, its note,
+    and no count field.
+
+    **``None`` for the counts and not an empty map**, which are different instructions to
+    :func:`_compose`: ``None`` reserves nothing, ``{}`` reserves :data:`TAB_COUNT_W` on
+    every tab and draws a blank in it. A chat has nothing to count — it is the leaf — and a
+    strip of chats that reserved six columns per name for a field it never fills would be
+    the widest thing on this row spent on nothing.
 
     Never raises for a plane it cannot read: `chats.roster` already answers with the chat
     asking and nothing else for a frame root it could not scan, and `_bar` answers `[]`
     for an empty list.
+
+    **No heading, and no strip has one since #880.** This answered `"chats"` first for as
+    long as the strip drew that word down its left edge; what the word bought was telling
+    two adjacent strips apart, and position, the `+` and the spinner do that without
+    spending nine columns of a row whose names are competing for them.
     """
     from . import chats as chats_mod
-    return "chats", [c.id for c in chats_mod.roster(fid)], fid, ADD_CHAT
+    return [c.id for c in chats_mod.roster(fid)], fid, ADD_CHAT, None
+
+
+def _workspace_counts() -> dict:
+    """How many chats each workspace holds — the field :data:`TAB_COUNT_W` reserves.
+
+    `chats.counts_by_workspace` behind a guard, and a wrapper for :func:`working_chats`'
+    reason, which is this whole module's rule for a read on the repaint path: **never
+    raises.** A panel that threw out of `render` loses its pane, and a plane charter cannot
+    scan is "no counts" — every tab draws a blank field of exactly the width it would have
+    drawn a number in, so a failed read costs the strip nothing but the numbers.
+
+    **One grouped pass and not one call per name** (#880). `chats.of_workspace` is an
+    `os.scandir` plus two small reads per chat and is uncached by design; asked once per
+    workspace it is roughly 15 x 30 x 2 = 900 reads for one repaint of one row.
+    `chats.counts_by_workspace` is the same walk done once.
+
+    **This is the first thing the workspaces strip reads out of chat state, and it does NOT
+    put the strip on a clock.** :data:`BAR_ANIMATED` is the chats strip and only the chats
+    strip: that one draws a spinner, which changes with nothing but time, so `panel._watch`
+    gives it a ticking gate. A count changes when a chat is opened or closed, which is a
+    thing that happens to the plane and not to the clock, so this rides the repaint the
+    strip already had — `state.version`, one `stat`. The cost is stated rather than hidden:
+    a count can be one repaint stale, and the repaint that clears it is the one a switch
+    back into the window causes anyway (`commands_frame._drop_panels` tears a background
+    window's panels down, so the strip an operator is looking at was drawn after they
+    arrived).
+    """
+    from . import chats as chats_mod
+    try:
+        return chats_mod.counts_by_workspace()
+    except Exception:  # noqa: BLE001 - a readout must never cost a pane
+        return {}
 
 
 def _workspaces_strip(fid: str):
@@ -4220,10 +4357,15 @@ def _workspaces_strip(fid: str):
     argument that "a picker that creates on a typo leaves litter". A `+` here would have to
     open something that takes a name, which is `charter workspace create` and is not a
     thing a one-row strip can be.
+
+    **The counts are this strip's and the chat strip has none** (#880) — see
+    :func:`_workspace_counts` for the one grouped read and for why it does not put this
+    strip on a clock, and :data:`TAB_COUNT_W` for why the field is there on every tab even
+    when the number is not.
     """
     from . import switch as switch_mod
-    return ("workspaces", switch_mod.workspaces(),
-            switch_mod.current_workspace(fid), "")
+    return (switch_mod.workspaces(), switch_mod.current_workspace(fid), "",
+            _workspace_counts())
 
 
 #: The slots that draw a TAB STRIP, mapped to what each one is a strip of.
@@ -4304,12 +4446,12 @@ def bar_rows_wanted(fid: str, slot: str, *, pane_cols: int, cap: int) -> int:
     entry = BARS.get(slot)
     if entry is None:
         return 1
-    head, names, here, note = entry(fid)
+    names, here, note, counts = entry(fid)
     width = pane_cols - 2 * pad_for(slot, pane_cols)
     filled = 1
     for rows in range(1, cap + 1):
-        lines, _cols, _more, _add = _compose(head, names, here, width,
-                                             note=note, rows=rows)
+        lines, _cols, _more, _add = _compose(names, here, width,
+                                             note=note, rows=rows, counts=counts)
         if len(lines) == rows:
             filled = rows
     return filled
@@ -4334,8 +4476,9 @@ def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     dispatches and this chat's notice dwell, and neither is "a sibling chat's harness
     started working".
     """
-    head, names, here, note = _chats_strip(fid)
-    return _bar(head, names, here, width, note=note, rows=rows, busy=working_chats())
+    names, here, note, counts = _chats_strip(fid)
+    return _bar(names, here, width, note=note, rows=rows, busy=working_chats(),
+                counts=counts)
 
 
 def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
@@ -4344,8 +4487,8 @@ def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     :func:`chats_bar`'s rules and its ladder, one noun over — see :func:`_workspaces_strip`
     for what it draws and why it draws no `+`.
     """
-    head, names, here, note = _workspaces_strip(fid)
-    return _bar(head, names, here, width, note=note, rows=rows)
+    names, here, note, counts = _workspaces_strip(fid)
+    return _bar(names, here, width, note=note, rows=rows, counts=counts)
 
 
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no

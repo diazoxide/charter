@@ -160,6 +160,66 @@ def of_workspace(workspace: str) -> list[str]:
     cached: a cache here is a second source of truth for a fact `.charter/frame/` already
     holds and free to disagree with it, which is the #411 shape this module's own opening
     paragraph refuses.
+
+    **The scan itself is :func:`_by_workspace` since #880**, which groups every chat by its
+    workspace in the walk this used to do for one. Nothing above changes — the same
+    membership rule, the same order, the same cost for this caller — and what it buys is
+    :func:`counts_by_workspace`, which the tab strip needs for fifteen names at once and
+    could not have afforded as fifteen calls to this.
+    """
+    return _by_workspace().get(workspace, [])
+
+
+def counts_by_workspace() -> dict[str, int]:
+    """How many chats each workspace on this plane holds — every workspace at once (#880).
+
+    **The whole point is that it is ONE scan.** The workspaces strip draws a count beside
+    every tab, and asking :func:`of_workspace` per workspace would be one `os.scandir` and
+    two small reads per chat PER NAME: on this repository's own plane that is roughly
+    15 x 30 x 2 = 900 reads for one repaint of one row. :func:`_by_workspace` already
+    computes every chat's workspace on its way to answering about one, so grouping is the
+    same walk and the counts are free.
+
+    **Keyed by the same rule the roster is**, because it is literally the same call —
+    `state.own_workspace`, the chat-owned rungs in the ladder's own order (see
+    :func:`of_workspace`, which is where that argument lives). A count that agreed with
+    nothing the operator can click would be worse than no count.
+
+    A workspace with no chats is ABSENT rather than zero, which is what a caller wants: it
+    is asking about the names on its own strip (`switch.workspaces`), and this answers about
+    the names on disk. The two lists are not the same list — a workspace directory with no
+    chat in it is in the first and not the second, and a chat whose workspace directory has
+    been deleted is in the second and not the first — so the caller reads this with a
+    default rather than trusting the keys.
+
+    Chats whose workspace charter cannot read are left out entirely. They are in no
+    workspace's roster either (:func:`of_workspace` answers for a NAME), so counting them
+    somewhere would be a number no tab on the strip could be pressed to see.
+
+    Never raises, for :func:`of_workspace`'s reason and through the same guard: this is on
+    a panel's render path and an unreadable frame root is "no chats", not an exception.
+    """
+    return {ws: len(ids) for ws, ids in _by_workspace().items() if ws is not None}
+
+
+def _by_workspace() -> dict[str | None, list[str]]:
+    """Every chat on this plane, grouped by the workspace it says it is in.
+
+    The scan both :func:`of_workspace` and :func:`counts_by_workspace` are, written once —
+    the discipline `state.own_workspace` itself is an instance of, said one level up: two
+    walks of `.charter/frame/` that decided membership separately would be two answers to
+    "whose chat is this", and #733 is the bill for having had two.
+
+    **The grouping key is `state.own_workspace`'s answer VERBATIM, ``None`` included**, and
+    that is equivalence with the loop this replaced rather than tidiness. That loop asked
+    ``state.own_workspace(n) == workspace``, so a caller asking about ``None`` was answered
+    with the chats charter cannot place — a state no caller reaches today and one this
+    keeps reachable rather than quietly closing on the way past. :func:`counts_by_workspace`
+    drops the key; :func:`of_workspace` looks its own name up and never asks for it.
+
+    Sorted per group by :func:`_order`, which is where :func:`of_workspace`'s ordinal order
+    is argued. Every group is sorted rather than the one being asked about, and on the ~30
+    entries `state.reap` bounds this to that is not a cost worth a second code path.
     """
     try:
         # **`is_dir()` — kept, and honestly no longer measurable from out here.** A
@@ -190,10 +250,12 @@ def of_workspace(workspace: str) -> list[str]:
         # one, and an unreadable one is the same answer for the caller: no chats to
         # offer. Never a raise — a picker that could not scan refuses with its own
         # sentence one layer up.
-        return []
-    return sorted((n for n in names
-                   if is_chat(n) and state.own_workspace(n) == workspace),
-                  key=_order)
+        return {}
+    out: dict[str | None, list[str]] = {}
+    for name in names:
+        if is_chat(name):
+            out.setdefault(state.own_workspace(name), []).append(name)
+    return {ws: sorted(ids, key=_order) for ws, ids in out.items()}
 
 
 #: How many digits an ordinal `state.new_chat_id` can mint has, derived from its own

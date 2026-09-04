@@ -444,7 +444,10 @@ class AClickOnTheOverflowCountOpensThePalette(_ABarThatWasDrawn, unittest.TestCa
         for chat in [f"api.{i}" for i in range(1, 13)]:
             _plant(chat, workspace="api")
         with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "api"}):
-            row = tui.strip_ansi(slots.chats_bar("api.6", 44)[0])
+            # 37 rather than 44: `_column_of` refuses a field that is not unique on the
+            # row, and at 44 this list draws `+4` at BOTH ends. That was 51 columns while
+            # the strip still spent nine on a `chats` heading (#880).
+            row = tui.strip_ansi(slots.chats_bar("api.6", 37)[0])
         counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
                   if f.strip().startswith("+")]
         self.assertTrue(counts, f"this width draws no count: {row!r}")
