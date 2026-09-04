@@ -673,8 +673,9 @@ def sent_length(body: str) -> int:
 #: held back, and it reshaped two releases GitHub would have taken whole: 0.52.0, whose
 #: published Release carries all 24 of its notes in full and none as a link, rendered here
 #: as 20 notes and four links — `charter news --for 0.52.0` printing a document GitHub does
-#: not hold — and 0.56.0, four notes short at 115,155 bytes against an allowance of 125,000.
-#: At 122,000 both render whole and the archive agrees with itself again.
+#: not hold — and the release this landed in, whose notes came to 115,155 bytes when #878 was
+#: filed, against an allowance of 125,000, and lost four of them for it. At 122,000 both
+#: render whole and the archive agrees with itself again.
 #:
 #: **A fraction of the limit was the other rejected shape** — `RELEASE_BODY_MAX * 0.85`, and
 #: the ceiling case used to compute one. A fraction re-derives itself whenever the limit

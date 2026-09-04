@@ -37,7 +37,15 @@ bound below from insurance into the ordinary path.
 
 ## What this suite holds, and why it is not one assertion
 
-Three groups, and they fail for different reasons at different times.
+Four groups, and they fail for different reasons at different times.
+
+**The budget sits in a window, and the window is one number read from both ends.**
+`_BODY_BUDGET` too high is a release refused after the PyPI upload; too low is every release
+becoming a table of contents, which every length assertion below still passes. `RESERVE` and
+the `CEILING` derived from it are what both guards read — and reading one number is not
+decoration: the two used to read different ones, the floor's demand grew with history while
+the ceiling never moved, and #878 is what happened when they crossed. Neither end depends on
+entries being staged, so neither goes quiet on a release commit.
 
 **It fits.** `news.render_body` bounds what it returns, so every version — shipped or
 staged — renders a body `gh release create` will accept. Asserted against the *shipped
