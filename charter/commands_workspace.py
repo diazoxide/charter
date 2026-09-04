@@ -1235,12 +1235,27 @@ def cmd_workspace_reinit(args) -> int:
     if not names:
         util.info("No workspaces to reinitialize.")
         return 0
-    healed = 0
-    #: Workspaces whose manifest `reinit` was asked for and could not write. Counted
-    #: separately from `healed` so the closing line does not say "nothing to do" over an
-    #: error two lines above it — a repair command that contradicts itself is one nobody
-    #: trusts the next time.
-    blocked = 0
+    #: How many individual repairs were applied, and WHICH workspaces got at least one.
+    #: Two counters because they are two units, and #876 is what one counter cost: a
+    #: workspace can need several repairs — the harness layer is a row per file, the
+    #: structure bump is another — so a single `healed` incremented per repair and then
+    #: printed against `len(names)` said *"Healed 32 of 17 workspace(s); the rest were
+    #: current."* on a 17-workspace plane. A numerator above its own denominator, and a
+    #: "rest" that is negative, in the one line an operator reads to confirm a bulk
+    #: mutation landed.
+    #:
+    #: `repaired` is a SET OF NAMES drawn from `names`, and that is the fix rather than a
+    #: subtraction that happens to come out right: `len(repaired) <= len(names)` holds
+    #: because a set of members of `names` cannot be bigger than `names`, so no arithmetic
+    #: below is in a position to state a count greater than the total. The per-repair
+    #: number is not thrown away — it is named as what it is.
+    repairs = 0
+    repaired: set[str] = set()
+    #: Workspaces whose manifest `reinit` was asked for and could not write. Kept apart
+    #: from `repaired` so the closing line does not say "nothing to do" — or, worse,
+    #: "the rest were current" — over an error two lines above it. A repair command that
+    #: contradicts itself is one nobody trusts the next time.
+    blocked: set[str] = set()
     for n in names:
         before = workspace.reinit(n)
         # The HARNESS LAYER, reported as its own line rather than folded into the
@@ -1266,7 +1281,8 @@ def cmd_workspace_reinit(args) -> int:
                 util.err(f"'{n}': {rel} could not be written — something is in the way at "
                          f"that path. charter never deletes or renames existing content.")
             else:
-                healed += 1
+                repairs += 1
+                repaired.add(n)
                 util.ok(f"Reinitialized '{n}' → "
                         f"{'wrote' if did == 'created' else 'refreshed'} {rel} "
                         f"(charter's harness layer).")
@@ -1284,14 +1300,15 @@ def cmd_workspace_reinit(args) -> int:
         # sweep found the conjunct as a survivor and it was right — an equivalent mutant
         # and dead code are one finding.
         if not workspace.manifest_path(n).exists():
-            blocked += 1
+            blocked.add(n)
             before["missing"] = [m for m in before["missing"] if m != "workspace.json"]
             before["ok"] = not before["missing"] and before["version"] >= before["target"]
             util.err(f"'{n}': workspace.json could not be written — something is in the "
                      f"way at that path. charter never deletes or renames existing content.")
         if before["ok"]:
             continue
-        healed += 1
+        repairs += 1
+        repaired.add(n)
         what = (", ".join(before["missing"]) if before["missing"]
                 else f"structure v{before['version']} → v{before['target']}")
         util.ok(f"Reinitialized '{n}' → added {what}.")
@@ -1301,10 +1318,17 @@ def cmd_workspace_reinit(args) -> int:
         # command that prints "Nothing to save".
         if workspace.is_live(n) and set(before["missing"]) & _LIVE_SHARED_COMPONENTS:
             util.info(f"  '{n}' is LIVE — commit the restored files: charter workspace save {n}")
-    if healed == 0 and blocked == 0:
+    if not repaired and not blocked:
         util.ok(f"Up to date (structure v{workspace.STRUCTURE_VERSION}) — nothing to do.")
     elif len(names) > 1:
-        util.info(f"Healed {healed} of {len(names)} workspace(s); the rest were current.")
+        # Two units, named as two. "Applied N repair(s)" is the number the per-workspace
+        # rows above add up to; "across M of T workspace(s)" is the number an operator is
+        # actually checking against the plane they know the size of. A workspace charter
+        # could not repair is called out rather than swept into "the rest were current",
+        # which would contradict the error it just printed.
+        stuck = f"{len(blocked)} could not be repaired; " if blocked else ""
+        util.info(f"Applied {repairs} repair(s) across {len(repaired)} of {len(names)} "
+                  f"workspace(s); {stuck}the rest were current.")
     return 0
 
 
