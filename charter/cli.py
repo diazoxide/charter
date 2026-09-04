@@ -785,7 +785,7 @@ def _add_frame_parsers(sub) -> None:
                                          "frame-resize", "frame-gather", "frame-switch",
                                          "frame-toggle", "frame-chrome", "frame-chat",
                                          "frame-new-chat", "frame-quit", "frame-close",
-                                         "frame-transcript"}
+                                         "frame-transcript", "frame-bar-rows"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -1006,6 +1006,21 @@ def _add_frame_parsers(sub) -> None:
     # (`#{@charter_chat}` in this component's own `bind -n`), same reason it is optional.
     tg.add_argument("--chat", dest="chat", default="")
     tg.set_defaults(func=commands_frame.cmd_toggle)
+
+    # Internal, and a top-level sibling for `frame-toggle`'s reason. Fired by
+    # `layout.BAR_ROWS_KEY`'s own `bind -n` and typeable by hand from inside a frame; it
+    # cycles the RUNNING frame's tab strips 1 -> 2 -> 3 rows and back, and charter.toml is
+    # not touched, for `frame-density`'s reason.
+    #
+    # **No argument at all, which is the whole shape of it.** A height is not a name an
+    # operator picks off a set — it is the next one, and `layout.next_bar_rows` is where
+    # that arithmetic lives. A `--rows N` would be a second way to say a thing one key
+    # already says, and a number off an argv that would then need a gate.
+    br = sub.add_parser("frame-bar-rows")
+    # Which chat the key was pressed in — `frame-toggle`'s twin, same source
+    # (`#{@charter_chat}` in the bind), same reason it is optional.
+    br.add_argument("--chat", dest="chat", default="")
+    br.set_defaults(func=commands_frame.cmd_bar_rows)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
     # ones above. Started DETACHED by a palette row whose argv is exactly

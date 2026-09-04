@@ -623,12 +623,29 @@ chat id ends in an ordinal. A label that never changes is chrome you stop seeing
 Fifteen workspaces need 262 columns to fit on one row, so on a real terminal the bar is
 usually drawing a page. At 120 columns it draws seven of them, at 160 nine, at 200 eleven.
 
-**A strip that cannot fit its names on one row is given another one — up to three.** It is
-one row whenever the names fit, so a plane whose strip is not overflowing never loses a row
-to this; and the rows it does take come out of what your session has above its own 12-row
-floor, so a short terminal grows nothing at all. Fifteen workspaces take two rows at 160
-columns and three at 120, and every name on every row is clickable. Resize the terminal and
-the strip follows: widen it past 262 columns and the strip gives its extra rows back.
+**A strip starts one row deep, and `F3` cycles it 1 → 2 → 3.** Every run starts at one row
+— a strip that overflows is not a strip that has asked for the room, and the `+N` it draws
+instead is clickable and opens the palette, which lists every name. So a collapsed strip is
+one press from the complete list, not a dead end.
+
+`F3` raises what a strip *may* grow to; what it does grow to is still what its names need.
+Press it on a plane whose names already fit and nothing moves, because there is nothing to
+put on a second row. Press it on one that overflows and the strip takes the rows there are
+names for — out of what your session has above its own 12-row floor, so a short terminal
+grows nothing at all. Fifteen workspaces take two rows at 160 columns and three at 120, and
+every name on every row is clickable. Resize the terminal and the strip follows: widen it
+past 352 columns and the strip gives its extra rows back.
+
+**The height you choose does not survive a restart.** It lives in the frame's own state
+directory, which charter deletes when the frame ends, exactly like the density a palette row
+chose and the panels a toggle key hid. If your plane always wants three rows, say so once in
+`charter.toml` — `[[frame.component]] size = 3` on the bar — and every launch starts there;
+`F3` is the gesture for right now.
+
+`F3` is the third key charter binds, after `F2` for the palette and `F12` for the escape
+hatch. Like `F12` and unlike `F2` it is not configurable, and a component may not claim it
+for its own toggle — charter refuses that table rather than letting a committed key silently
+take the one that cycles your strips.
 
 Below tmux 3.3 that last part does not happen on its own. `window-resized` is a hook tmux
 added in 3.3, so charter has nothing to trigger a recompute on and the strip keeps the

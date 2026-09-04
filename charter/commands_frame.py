@@ -881,6 +881,21 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     and that this exact bind text survives `source-file` intact (`list-keys` reads it
     back byte for byte).
 
+    **`layout.BAR_ROWS_KEY` is the third key charter binds by default** (#880), and being
+    a third one is the whole of its cost. A `bind -n` is server-wide and takes the key
+    before the harness pane sees it, which is exactly why charter binds NO component toggle
+    by default — but a tab strip's height is charter's own gesture rather than one of an
+    open set, and the alternative the issue weighed (a tmux drag) is recomputed away on the
+    next layout pass because the layout owns bar heights. It runs
+    `charter frame-bar-rows`, which cycles this frame's strips 1 → 2 → 3 and back.
+
+    **It sits with the mouse binds, above the toggles**, for the toggles' own reason read
+    the other way round: emitting it after them would let a component's committed key
+    silently take charter's, and `instance.component_arrangement` refuses that collision
+    precisely so it cannot happen — a refusal that only works while charter's own binds go
+    first. `layout.BAR_ROWS_KEY` is in that function's `bound` set beside
+    `overlay.HATCH_KEY` and the mouse keys.
+
     *toggles* is ``{component name: key}`` (`instance.frame_toggles`) and each pair
     becomes one more `bind -n`, running `charter frame-toggle <name>` — which shows or
     hides that one component on the running frame. Empty for every plane spelled with
@@ -952,6 +967,9 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
         f"bind -n {tmuxctl.CLICK_KEY} if-shell -F -t = '#{{{_PANEL_OPTION}}}'"
         " 'send-keys -M' 'select-pane -t =; send-keys -M'",
+        f"bind -n {layout.BAR_ROWS_KEY} run-shell "
+        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-bar-rows "
+        f"--chat \"#{{{_CHAT_OPTION}}}\"'",
     ]
     for name, key in (toggles or {}).items():
         if not component.usable_id(name):
@@ -2227,10 +2245,20 @@ def _slot_sizes(fid: str, slots: list[str], *, window_rows: int, pane_cols: int,
     **A tab strip is a third such fact and it arrives the same way** (#829). How many rows
     a strip needs is a function of the names this plane has — `chats.roster`,
     `switch.workspaces` — so it is a plane read, which is what this function is the
-    boundary for, and `frame_slots.bar_rows_wanted` is the one place it is made. The
-    ceiling on it is `layout.BAR_MAX_ROWS`, carried down from here rather than read there,
-    for `layout.repos_rows`' reason about *pinned_rows*: a policy applied at both ends is a
-    bound one end cannot make observable.
+    boundary for, and `frame_slots.bar_rows_wanted` is the one place it is made.
+
+    **The ceiling on it is the frame's OWN, and that is #880.** It was `layout
+    .BAR_MAX_ROWS` flat, so a plane with many names launched two rows deep whether or not
+    its operator wanted the harness two rows shorter. What is carried down now is
+    `layout.bar_rows_cap` of this frame's recorded height — `layout.BAR_ROWS_DEFAULT` (one)
+    for every frame at launch, and 2 or 3 for a frame whose operator has pressed
+    `layout.BAR_ROWS_KEY`. It is read HERE, once, for the same reason the pin and the
+    content height are: this function is the boundary where a frame's own state becomes a
+    pane height, and a policy applied at both ends is a bound one end cannot make
+    observable.
+
+    A cap is not a height: `bar_rows_wanted` still answers with the rows the strip actually
+    FILLS, so raising the ceiling on a plane whose names fit on one row changes nothing.
 
     **Every slot is asked, and there is deliberately no `slot in BARS` filter in front of
     it.** There was one, and the deletion sweep reported dropping it as a survivor — the
@@ -2265,7 +2293,7 @@ def _slot_sizes(fid: str, slots: list[str], *, window_rows: int, pane_cols: int,
         content_rows=frame_slots.repos_rows_wanted(fid, pane_cols=pane_cols),
         pinned_rows=layout.pinned_repo_rows(),
         bar_rows={slot: frame_slots.bar_rows_wanted(
-            fid, slot, cap=layout.BAR_MAX_ROWS,
+            fid, slot, cap=layout.bar_rows_cap(state.bar_rows(fid)),
             pane_cols=layout.pane_cols(order, slot, window_cols=window_cols))
             for slot in slots})
 
@@ -6928,6 +6956,63 @@ def cmd_toggle(args) -> int:
     # which is what keeps a name that has since left the operator's config from living in
     # this file for the rest of the frame's life.
     state.record_hidden(fid, [n for n in arrangement if n in hidden])
+    _apply_arrangement(fid, where=where,
+                       want=[n for n in arrangement if n not in hidden])
+    return 0
+
+
+def cmd_bar_rows(args) -> int:
+    """`charter frame-bar-rows` — cycle this frame's tab strips 1 → 2 → 3 rows, live.
+
+    Fired by `layout.BAR_ROWS_KEY`'s own `bind -n` (:func:`conf_text`), and typeable by
+    hand from inside a frame. The chat is resolved by :func:`_pressers_chat` — the
+    `--chat` the bind carries out of the presser's own window, falling back to
+    `$CHARTER_SESSION_ID` — because one bind text is shared by every frame on `SOCKET`.
+
+    **charter.toml is not touched**, and every word of :func:`cmd_toggle`'s argument for
+    that applies unchanged: `[[frame.component]] size` says what a strip STARTS at (#687),
+    this changes what one running frame IS, and the override lives in the frame's own state
+    directory (`state.record_bar_rows`) which `state.reap` deletes entire when the frame
+    ends. Relaunch and every strip is back at `layout.BAR_ROWS_DEFAULT`, which is what
+    #880 promises: **the chosen height does not survive a restart.**
+
+    **It raises a CEILING and does not set a height.** `frame_slots.bar_rows_wanted` still
+    answers with the rows a strip actually fills, so a press on a plane whose names already
+    fit on one row moves nothing — there is nothing to put on a second row, and drawing a
+    blank one would be rows off the harness for a picture. What the press buys is the
+    ceiling coming off a strip that IS overflowing.
+
+    **No name to refuse, and that is the difference from :func:`cmd_toggle`.** That command
+    takes a component and has to check it against this frame's arrangement before the word
+    reaches a `split-window`; this takes nothing at all. The height it writes is
+    `layout.next_bar_rows` of what is on disk — charter's own arithmetic over charter's own
+    file — so there is no argument here for a validator to be about.
+
+    **Always 0, and every refusal is a quiet no-op** except the one that is certainly the
+    asker's, for `cmd_toggle`'s reason: this normally runs as a `run-shell` child of a
+    keypress, where the only screen left to report on is the agent's own. `if not fid` says
+    so on the frame's own row when the command is typed outside a frame, exactly as
+    `cmd_toggle` does and pinned by the same test module.
+
+    The relayout is :func:`_apply_arrangement` with the arrangement this frame is already
+    drawing — the same call `cmd_toggle` makes with a changed visible set, made here with
+    an unchanged one. Nothing is added or removed; what moves is `_reassert_sizes`, which
+    re-asks :func:`_slot_sizes`, which reads the height just written. One live re-layout
+    path, which is that function's own requirement.
+    """
+    fid = _pressers_chat(args)
+    if not fid:
+        return outside_a_frame("charter frame-bar-rows")
+    where = _relayout_target(fid)
+    if where is None:
+        return 0
+    # Recorded BEFORE the re-layout, on `_apply_arrangement`'s own discipline: a re-layout
+    # that fails halfway still leaves the panels that survive drawing the height that was
+    # asked for.
+    state.record_bar_rows(fid, layout.next_bar_rows(state.bar_rows(fid)))
+    frame = config.FRAME
+    arrangement = instance.frame_arrangement(frame)
+    hidden = set(_hidden_now(fid, frame))
     _apply_arrangement(fid, where=where,
                        want=[n for n in arrangement if n not in hidden])
     return 0

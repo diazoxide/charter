@@ -834,7 +834,11 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
     #: are asserted to be on the drawn row in `setUp` rather than assumed, so a change to
     #: the cut fails loudly here instead of silently clicking empty cells.
     HERE = "harness-wrapper"
-    THERE = "authority-audit"
+    #: `news-dispatch-guard` and not `authority-audit`: since #880 every workspace tab
+    #: reserves `slots.TAB_COUNT_W` for its chat count, so at :data:`COLS` the page the
+    #: mark falls on starts at `harness-wrapper` rather than at the head of the list. The
+    #: assertion in `setUp` is what caught it, which is why it is an assertion.
+    THERE = "news-dispatch-guard"
 
     def setUp(self) -> None:
         super().setUp()

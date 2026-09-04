@@ -1244,6 +1244,64 @@ def density(fid: str) -> str | None:
         return None
 
 
+def record_bar_rows(fid: str, rows: int) -> None:
+    """Write down how tall THIS RUNNING FRAME's tab strips may grow (#880).
+
+    :func:`record_density`'s shape and every word of its argument: `[[frame.component]]
+    size` is hand-maintained and committed, this directory is machine-written, and `reap`
+    deletes it whole when the frame ends. So `commands_frame.cmd_bar_rows` writes here and
+    the operator's own file is left alone.
+
+    **And that is also what makes "the height does not survive a restart" true without a
+    new kind of state.** A file here IS per-frame runtime state — the same file `density`
+    and `hidden` are — so there is nothing for `doctor` to explain and nothing an operator
+    has to clean up: every run starts at `layout.BAR_ROWS_DEFAULT` because there is no file
+    yet, and the one that a frame wrote goes when the frame does. A plane that genuinely
+    always wants three rows says so once in `charter.toml`, where every other layout
+    decision already lives.
+
+    Written as text and read back through `int()` (:func:`bar_rows`), not because a number
+    needs a format but because this file is read by another process on the repaint path and
+    every other file in this directory is one line of text.
+
+    Same must-not-raise, atomic-write shape as :func:`bump` and :func:`record_density`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    tmp = d / "bar_rows.tmp"
+    try:
+        config.write_for(tmp, f"{int(rows)}\n")
+        os.replace(tmp, d / "bar_rows")
+    except OSError:
+        return
+
+
+def bar_rows(fid: str) -> int | None:
+    """How tall this frame's strips have been told they may grow, or ``None``.
+
+    ``None`` is the ordinary case and is not a failure: a frame comes up at
+    `layout.BAR_ROWS_DEFAULT` and only a keypress writes here. It is also what an
+    unreadable or unparseable file answers, which is :func:`exit_code`'s ``except (OSError,
+    ValueError)`` for :func:`version`'s reason — this is read on a sizing path that runs
+    inside the `frame-resize` child, and a half-written file must degrade to the default
+    rather than take the recompute down.
+
+    **The number is NOT ranged here**, and that is :func:`density`'s split rather than a
+    deferral: `layout.bar_rows_cap` is the one gate and it sits at the point of use, so a
+    file holding `7` degrades exactly the way an out-of-range `[[frame.component]] size`
+    does. A second half-copy of the range living in this module is the thing that comes
+    apart.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return int((d / "bar_rows").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def record_chrome(fid: str, level: str) -> None:
     """Write down the pane surface THIS RUNNING FRAME is on, overriding `[frame] chrome`.
 
@@ -1469,8 +1527,9 @@ def clear_shape(fid: str) -> None:
     """Forget the shape, the pane map and the harness session recorded under *fid*,
     because a NEW frame is claiming the id.
 
-    "The shape" is two files: the ``density`` a keypress chose and the ``hidden`` set a
-    component's own toggle key wrote (:func:`record_hidden`). Both are one operator's
+    "The shape" is three files: the ``density`` a keypress chose, the ``hidden`` set a
+    component's own toggle key wrote (:func:`record_hidden`), and the ``bar_rows`` a press
+    of `layout.BAR_ROWS_KEY` cycled to (:func:`record_bar_rows`). Each is one operator's
     decision about one frame, and that frame is over.
 
     The fourth and fifth lines on :func:`clear_exit`'s bill, and the same recycled pid
@@ -1515,6 +1574,14 @@ def clear_shape(fid: str) -> None:
       take resume away, which is why it is named here rather than only where it is
       written.
 
+    * ``bar_rows`` is the same keypress said about a HEIGHT (:func:`record_bar_rows`), and
+      it inherits with density's consequence in the one place it is worst: a brand-new
+      frame would come up with three rows of tab strip and a three-row-shorter harness,
+      taken from somebody else's session, with nothing on screen to say why. That the
+      height does not survive a restart is the feature's own stated promise (#880), so a
+      file inherited across a recycled id would break exactly the sentence the feature is
+      written to keep.
+
     * ``selection`` is the same keypress or the same click said about a ROW
       (:func:`record_selection`), and it inherits with the mildest of these consequences
       and the same shape: a brand-new frame comes up with one repo highlighted and its
@@ -1527,7 +1594,7 @@ def clear_shape(fid: str) -> None:
     d = frame_dir(fid)
     if d is None:
         return
-    for name in ("density", "hidden", "panes", "session", "selection"):
+    for name in ("density", "hidden", "panes", "session", "selection", "bar_rows"):
         try:
             (d / name).unlink(missing_ok=True)
         except OSError:

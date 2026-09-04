@@ -57,8 +57,9 @@ def _await(predicate, timeout: float = _DEADLINE) -> bool:
     return predicate()
 
 #: The fifteen workspaces this repository's own plane has — the list #725 measured the
-#: windowed rung against. At 120 columns they need three rows and at 300 they need one,
-#: which is exactly the band a resize crosses.
+#: windowed rung against. At 120 columns they need three rows and at 360 they need one,
+#: which is exactly the band a resize crosses. (300 was the top of that band until #880
+#: gave every workspace tab a `slots.TAB_COUNT_W` reserve for its chat count.)
 NAMES = sorted([
     "authority-audit", "autonomy", "charter-update-skill", "default", "fleet",
     "harness-wrapper", "news-dispatch-guard", "opencode-integration", "plane-shape",
@@ -109,6 +110,13 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
         self.assertEqual(_tmux("resize-window", "-t", session,
                                "-x", str(cols), "-y", str(rows)).returncode, 0)
         fid = state.frame_id(session, os.getpid())
+        # **The ceiling is raised first, and since #880 that is what makes any of this
+        # measurable.** A launch is one row deep whatever the names need, so a case about
+        # the recompute giving a strip its rows has to have pressed `layout.BAR_ROWS_KEY`
+        # — this is `commands_frame.cmd_bar_rows`' write, made directly because what is
+        # under test here is the RESIZE and not the keypress
+        # (`tests/test_a_key_cycles_the_tab_strips_height.py` is that one).
+        state.record_bar_rows(fid, layout.BAR_MAX_ROWS)
         with mock.patch.dict(config.FRAME, self.placed), \
                 mock.patch("charter.frame.slots.repos_rows_wanted", return_value=6):
             commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
@@ -138,13 +146,13 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
 
     def test_widening_the_window_takes_the_rows_back(self):
         """The gesture in both directions, which is the half a launch-time-only answer
-        cannot have. 300 columns draws all fifteen names on one row, so the strip that
+        cannot have. 360 columns draws all fifteen names on one row, so the strip that
         grew to three gives two of them back to the harness rather than keeping a height
         it no longer needs."""
         harness, panes = self._window("shrink-strip", 120, 40)
         self._reassert("shrink-strip", harness, panes, 120, 40)
         self.assertEqual(self._height(panes["workspaces"]), 3)
-        self._reassert("shrink-strip", harness, panes, 300, 40)
+        self._reassert("shrink-strip", harness, panes, 360, 40)
         self.assertEqual(self._height(panes["workspaces"]), 1)
         self.assertEqual(self._height(harness), 27)
 
@@ -159,8 +167,14 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
         `slots.chats_bar`'s sibling. A renderer handed the width alone would leave the row
         the resize just bought blank, and nothing above would notice.
 
-        Asserted on what the pane SHOWS, captured from tmux: the `+6` that stood for the
-        six workspaces one row could not draw is gone, and the six names are there.
+        Asserted on what the pane SHOWS, captured from tmux: the `+8` that stood for the
+        eight workspaces one row could not draw is gone, and the eight names are there.
+
+        **Three rows and not two**, since #880: every workspace tab reserves
+        `slots.TAB_COUNT_W` for its chat count, so 160 columns holds seven names a row and
+        the fifteen need three. The property is the one it always was — the panel draws
+        into every row its pane was given — and the number it takes is measured rather than
+        assumed.
         """
         plane = make_plane(self)
         for name in NAMES:
@@ -198,16 +212,16 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
         self.assertTrue(_await(lambda: "harness-wrapper" in shown()),
                         f"the panel never drew its strip: {shown()!r}")
         one = shown()
-        self.assertIn("+6", one, f"160 columns drew every name on one row: {one!r}")
+        self.assertIn("+8", one, f"160 columns drew every name on one row: {one!r}")
 
-        self.assertEqual(_tmux("resize-pane", "-t", pane, "-y", "2").returncode, 0)
-        self.assertTrue(_await(lambda: "+6" not in shown()),
-                        f"the panel kept one row's worth of names in a two-row pane: "
+        self.assertEqual(_tmux("resize-pane", "-t", pane, "-y", "3").returncode, 0)
+        self.assertTrue(_await(lambda: "+8" not in shown()),
+                        f"the panel kept one row's worth of names in a three-row pane: "
                         f"{shown()!r}")
-        two = shown()
+        grown = shown()
         for name in NAMES:
-            self.assertIn(name, two, f"{name} is on neither row: {two!r}")
-        self.assertEqual(len([ln for ln in two.splitlines() if ln.strip()]), 2, two)
+            self.assertIn(name, grown, f"{name} is on no row: {grown!r}")
+        self.assertEqual(len([ln for ln in grown.splitlines() if ln.strip()]), 3, grown)
 
     def test_a_short_window_keeps_its_harness_and_the_strip_stays_one_row(self):
         """The bound, against the server that would otherwise grant it. A 22-row window

@@ -37,7 +37,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, config, instance, tui
-from charter.frame import layout, slots, tmuxctl
+from charter.frame import layout, slots, state, tmuxctl
 from tests._isolation import PersonaIso
 from tests.test_frame_chat_switch import _plant
 
@@ -626,15 +626,39 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
         self.enterContext(mock.patch.dict(config.FRAME, _placed()))
 
+    def test_a_frame_nobody_has_pressed_the_key_in_launches_one_row_deep(self):
+        """**The default #880 changed, at the widths where the old one was visible.**
+        `bar_rows_wanted` still measures what these fifteen names need — three rows at 160
+        columns — and the boundary hands it a ceiling of `layout.BAR_ROWS_DEFAULT` instead,
+        so a plane with many names no longer launches two rows deep and two rows shorter in
+        the harness. What it launches with instead is `+N`, which is clickable and opens
+        the palette; a collapsed strip is one press from the complete list.
+        """
+        for cols in (100, 160, 200, 360):
+            with self.subTest(cols=cols):
+                got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50,
+                                                 pane_cols=cols, order=SLOTS,
+                                                 window_cols=cols)
+                self.assertEqual(got["workspaces"], 1, got)
+
     def test_the_boundary_asks_the_strip_and_hands_the_answer_to_the_arithmetic(self):
+        """With the ceiling raised, which since #880 is the only way to reach a strip
+        taller than one row: `state.bar_rows` is what `layout.bar_rows_cap` reads and the
+        boundary carries down."""
+        state.record_bar_rows("f-1", 3)
         got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
                                          order=SLOTS, window_cols=160)
         self.assertEqual(got["workspaces"], 3, got)
 
-    def test_a_wide_window_leaves_the_strip_at_one_row(self):
-        """360 columns and not 300: every workspace tab reserves `slots.TAB_COUNT_W` for
-        its chat count now (#880), so these fifteen names need 352 columns for one row
-        rather than 262."""
+    def test_a_raised_ceiling_is_not_a_height_and_a_wide_window_stays_at_one_row(self):
+        """**A cap and not a demand.** The key raises what a strip MAY grow to; what it
+        does grow to is still what its names need, so a pane wide enough for every name
+        stays one row however high the ceiling has been cycled.
+
+        360 columns and not 300: every workspace tab reserves `slots.TAB_COUNT_W` for its
+        chat count now (#880), so these fifteen names need 352 columns for one row rather
+        than 262."""
+        state.record_bar_rows("f-1", 3)
         got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=360,
                                          order=SLOTS, window_cols=360)
         self.assertEqual(got["workspaces"], 1, got)
@@ -642,7 +666,11 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
     def test_the_height_the_strip_asked_for_reaches_split_window(self):
         """The measurement #687 filed for the pinned height, asked for the measured one:
         a number that stopped at `slot_sizes` would be the inert value the whole seam is
-        written against."""
+        written against.
+
+        The ceiling is raised first, because since #880 a launch is one row deep and the
+        seam this is about would then be carrying a number no press had changed."""
+        state.record_bar_rows("f-1", 3)
         sizes = commands_frame._launch_sizes("f-1", SLOTS, window_cols=160,
                                              window_rows=50)
         argvs = layout.panel_argvs(slots=SLOTS, session="s", socket="k",
@@ -657,6 +685,7 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         inset = ["right", "top", "workspaces", "bottom", "repos"]
         self.assertEqual(layout.pane_cols(inset, "workspaces", window_cols=160), 137)
         self.assertEqual(layout.pane_cols(SLOTS, "workspaces", window_cols=160), 160)
+        state.record_bar_rows("f-1", 3)
         wide = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
                                           order=SLOTS, window_cols=360)
         narrow = commands_frame._slot_sizes(
