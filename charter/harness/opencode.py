@@ -732,13 +732,14 @@ class OpenCodeHarness(Harness):
     #: Naming the surface is what stops "charter declares no layer here" from being read as
     #: "there is nowhere to write one".
     layer_note = (
-        "charter writes no in-repo layer for opencode — it arrives from "
+        "charter has not measured opencode's discovery rules, so this row cannot say "
+        "what a session here would find — the layer arrives from "
         "`~/.config/opencode/` and the plugin, which every directory on this machine "
         "reads. opencode DOES read an in-repo `opencode.json` at the repository root and "
         "`.opencode/agent/` from the project (measured, 1.18.23); charter mirrors the "
-        "plane's `.opencode/agent/` into a workspace's checkouts, and neither writes nor "
-        "mirrors `opencode.json` — that is where `charter guard` keeps this plane's own "
-        "permission grants")
+        "plane's `.opencode/agent/` into a workspace's checkouts and leaves "
+        "`opencode.json` alone — that file is where `charter guard` keeps this plane's "
+        "own permission grants")
 
     #: What a checkout inside a workspace stops seeing, in opencode's spelling (#868).
     #:

@@ -187,11 +187,11 @@ class CodexHarness(Harness):
     #: "no" with confidence — and a model asked whether it can see a file will happily go
     #: and `sed` the file you just named, so the trace is the evidence and not the answer.
     layer_note = (
-        "charter writes no in-repo layer for Codex — it arrives from "
+        "charter has not measured Codex's discovery rules, so this row cannot say "
+        "what a session here would find — the layer arrives from "
         "`~/.codex/config.toml` and the plugin, and a project `.codex/config.toml` is "
         "ignored. Codex DOES read an in-repo `.codex/skills/` (measured, 0.147.0); "
-        "charter mirrors the plane's copy of that into a workspace's checkouts and "
-        "writes nothing here")
+        "charter mirrors the plane's copy of that into a workspace's checkouts")
 
     #: What a checkout inside a workspace stops seeing, in Codex's spelling (#868).
     #:
