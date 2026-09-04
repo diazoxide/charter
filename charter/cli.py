@@ -121,6 +121,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preflight: check python/git/glab/auth/ssh/inventory before working.",
     )
     doc_check.add_argument("--json", action="store_true", help="Emit machine-readable results.")
+    # The second of the two doors an install may come through (#881); `charter init` is the
+    # first. A flag rather than a behaviour, because a preflight that installed software
+    # every time it ran would be doing it as a side effect of a question — and `doctor` runs
+    # from a SessionStart hook on every session.
+    doc_check.add_argument("--fix", action="store_true",
+                           help="Install what charter can install for this plane before "
+                                "reporting — today, the Claude Code plugin. Never runs "
+                                "without this flag.")
     doc_check.set_defaults(func=commands.cmd_doctor)
 
     ri = sub.add_parser(

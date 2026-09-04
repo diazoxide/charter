@@ -321,6 +321,30 @@ class Harness:
         """
         return []
 
+    def provision(self, root: Path) -> list[tuple[str, str]]:
+        """Install this harness's own ARTIFACT for the plane at *root*, if it has one.
+
+        Same ``(status, label)`` vocabulary as :meth:`wire`, so `init` reports both through
+        one code path — and the same restraint one level up: `wire` writes files charter
+        can see, while this asks a package manager charter does not own to install
+        something. Neither repairs what it finds.
+
+        **Empty by default, and that is a statement about the other harnesses rather than
+        an unfinished method.** Only Claude Code ships an artifact charter can install
+        without touching a machine-global file. opencode's plugin already arrives through
+        :meth:`wire` — one file under ``~/.config/opencode/``, because that is the only
+        place opencode reads for every project — and Codex's wiring is ``~/.codex/
+        config.toml``, which charter writes ONLY from `charter harness install codex`,
+        where running the command IS the consent (ADR 0003). `doctor` reports those gaps;
+        nothing here closes one by writing a machine-global file nobody asked it to.
+
+        **Never reached except from a command a person typed** — `charter init` and
+        `charter doctor --fix`. Installing software as a side effect of an unrelated
+        command is #857's surprise, so this is deliberately NOT called from
+        `commands._wire_harnesses`, which runs from `reinit` as well.
+        """
+        return []
+
     def workspace_files(self) -> dict[str, str]:
         """What this harness needs inside a directory charter OWNS — ``{relpath: text}``.
 
