@@ -806,9 +806,11 @@ def snapshot(session_id: str | None = None) -> dict:
         f = _ceiling_file(sid)
         config.private_mkdir(f.parent)
         config.touch_for(_marker_file(sid))   # before the ceiling: see `_marker_file`
-        tmp = f.with_name(f.name + ".tmp")
-        config.write_for(tmp, json.dumps(data, sort_keys=True))
-        os.replace(tmp, f)
+        # `replace_for` and not a temp name of this function's own: two harnesses can
+        # reach a snapshot for one session id — a SessionStart hook and a first gated
+        # Bash call under trust-on-first-use — and a shared temp name is how the second
+        # publishes the first's zero bytes as a ceiling that approves nothing (#893).
+        config.replace_for(f, json.dumps(data, sort_keys=True))
     except OSError:
         return {}
     return data

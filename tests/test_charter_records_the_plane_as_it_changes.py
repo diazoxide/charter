@@ -353,11 +353,20 @@ class TheRecordIsWrittenAtomically(PersonaIso, unittest.TestCase):
         self.assertEqual([c.resume for c in reopen.read().all_chats()], ["conv-1"])
 
     def test_a_temp_file_that_cannot_be_made_is_a_record_that_did_not_land(self):
-        """A full filesystem answers here rather than at the write, and the caller does the
-        same thing with either: tell the operator the plane was not recorded."""
+        """A full filesystem answers here rather than at the rename, and the caller does
+        the same thing with either: tell the operator the plane was not recorded.
+
+        **Injected at `config.write_for`, and #893 is why it is no longer
+        `tempfile.mkstemp`.** Making the temp file and writing it are one event now —
+        `config.replace_for` names a path and hands it to the state-file dispatch, which
+        creates it — so a mock aimed at `mkstemp` was aimed at a call nobody makes and this
+        case went green having exercised nothing. Repointed rather than deleted: "the temp
+        file could not be made" is still a real way for this to fail, and it is still not
+        the rename below.
+        """
         reopen.write([_frame("alpha", "alpha.1", resume="conv-1")], focus="alpha")
 
-        with mock.patch("tempfile.mkstemp", side_effect=OSError("no space")):
+        with mock.patch.object(config, "write_for", side_effect=OSError("no space")):
             self.assertFalse(reopen.write([_frame("beta", "beta.1")], focus="beta"))
 
         self.assertEqual([c.resume for c in reopen.read().all_chats()], ["conv-1"])

@@ -224,7 +224,10 @@ class TheHeightIsRememberedForThisFrameAndNoLonger(PersonaIso, unittest.TestCase
         d = state.frame_dir(self.FID)
         self.assertTrue((d / "bar_rows").is_file())
         self.assertEqual((d / "bar_rows").read_text(), "2\n")
-        self.assertFalse((d / "bar_rows.tmp").exists(),
+        # A GLOB and not `d / "bar_rows.tmp"`, which is #893: the temp file's name carries
+        # the writing process's pid and a random tail, so a case naming one fixed spelling
+        # would be asserting the absence of a file nothing ever writes.
+        self.assertEqual(list(d.glob("bar_rows.*")), [],
                          "the atomic write left its temp file behind")
 
 

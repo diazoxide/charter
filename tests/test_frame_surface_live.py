@@ -205,7 +205,11 @@ class TheTwoNewStateAccessorsRefuseRatherThanRaise(PersonaIso, unittest.TestCase
         real = state.config.write_for
 
         def refuse(path, data):
-            if pathlib.Path(path).name == "chrome.tmp":
+            # `startswith` and not `== "chrome.tmp"`, which is #893: the temp file carries
+            # the writing process's pid and a random tail now, so the one name this used to
+            # match is a name nothing writes — and a mock aimed at it lets the write
+            # succeed and the case go green having refused nothing.
+            if pathlib.Path(path).name.startswith("chrome."):
                 raise OSError("no space left on device")
             return real(path, data)
 

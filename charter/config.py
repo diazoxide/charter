@@ -510,6 +510,105 @@ def write_for(p, data) -> None:
         f.write(data)
 
 
+#: What every temp file this module publishes through is called, appended to a name that
+#: already carries its target and this writer. ``.tmp`` and not something charter-shaped,
+#: because the two suites that look for litter beside an atomic write ask for this suffix —
+#: `TheWriteIsAtomic.test_no_temporary_file_is_left_beside_it` and the ``glob("*.tmp")`` in
+#: `test_the_state_directory_is_charters_to_choose` — and both assert they find NONE, so a
+#: rename here would leave them looking for a name nothing writes and reporting a clean
+#: directory forever.
+TEMP_SUFFIX = ".tmp"
+
+
+def temp_beside(p) -> Path:
+    """A name for the temp file :func:`replace_for` will publish *p* through — **beside
+    *p*, and private to the process asking**.
+
+    Beside it, because ``os.replace`` cannot cross filesystems: an atomic write into
+    ``.charter/`` has to be written in ``.charter/`` for the rename to be a rename.
+
+    Private to the asker, and that is the whole of #893. The pid and the random tail are
+    not decoration and not debugging aid — they are what makes the *name* unshared, which
+    is the property ``os.replace`` is unable to supply on its own. ``os.replace`` is atomic
+    about the moment the destination changes; it says nothing about the file being renamed,
+    so while every writer for one target agreed on one temp name, two of them wrote into
+    one inode: A's ``open(tmp, "w")`` truncated it to zero, B renamed those zero bytes over
+    the destination, and A's own rename then published a file B had already moved. That is
+    reachable in one ``open()`` and it *was* reached — a `frame/gather.py` cache came out
+    of CI existing and empty, read as truth by `gather.cached`, which deliberately has no
+    freshness check.
+
+    `os.getpid` **and** a random tail rather than either alone. The pid separates processes
+    and nothing else: a frame process writes a gather cache from a thread while
+    `notify.plane_changed_everywhere` bumps every frame on the plane from another, so two
+    writers for one target inside one process is ordinary rather than exotic. The random
+    tail separates those, and separates a pid the kernel has recycled onto a writer that
+    crashed mid-publish. `os.urandom` and not `random`, because the latter is seeded per
+    process and a `fork` hands both sides the same stream.
+
+    NOT `tempfile.mkstemp`, which `frame/reopen.py` reached for when it found this defect
+    on its own file (#845) and which `inflight` still uses for a file it names rather than
+    publishes. Its 0600 is the mode charter's own state wants and the wrong one for a
+    *committed* file: `workspace._write_manifest` publishes ``workspaces/<n>/workspace.json``
+    through this, and creating the source at 0600 would carry 0600 onto a file in the
+    operator's own git tree — charter tightening what is not its own, which is #331.
+    The mode is left to :func:`write_for`, which asks the one question that decides it
+    (*where is this path*) and asks it of the temp file, which is the file `os.replace`
+    carries. So the naming is here and the mode is there, and neither one guesses.
+    """
+    p = Path(p)
+    return p.with_name(f"{p.name}.{os.getpid()}.{os.urandom(6).hex()}{TEMP_SUFFIX}")
+
+
+def replace_for(p, data) -> None:
+    """Write *data* to *p* **whole or not at all** — through a temp file of this writer's
+    own (:func:`temp_beside`) and one ``os.replace``.
+
+    The single atomic writer for this package. There were twenty-one spellings of it before
+    #893 — seventeen in `frame/state.py`, plus `gather.save`, `toolgate.snapshot`,
+    `workspace._write_manifest` and `reopen.write` — and twenty of them were the same four
+    lines with the same defect in them, which is the argument for one function rather than
+    twenty edits: the next writer that needs "a reader must never see half of this" calls
+    this instead of copying the shape, and it has nowhere to copy the shape from. (The
+    twenty-first, `reopen.write`, had already answered it for itself and is here so there
+    is one rule rather than two.)
+
+    Two guarantees, and they are different guarantees. ``os.replace`` gives the second: the
+    destination is the old content or the new one, never a prefix of either. The temp
+    file's *name* gives the first: no other writer is inside this file, so what lands is
+    one writer's whole content rather than a splice of two. `write_for` for the temp and
+    never `Path.write_text`, because `os.replace` carries the SOURCE's mode onto the
+    target (#582), so the dispatch has to happen on the file that moves.
+
+    **The temp file is removed when the rename does not happen**, on every failure and not
+    only on `OSError` — a name nothing can predict is a name nothing can collect, and none
+    of the directories this writes into has a sweep that would find one. The removal is
+    itself best-effort: a temp that cannot be unlinked is litter, and raising *that* at a
+    caller which was told its write failed would replace the real reason with a tidying-up
+    one.
+
+    Raises exactly what `write_for` and `os.replace` raise — `OSError` for every way a
+    filesystem says no, and whatever the content itself is (a `str` this cannot encode).
+    Callers keep their own answer to a failed write, because they do not agree on one: a
+    hook swallows it, `workspace._write_manifest` lets it out.
+
+    A ``str`` destination is as good as a `Path`, like everywhere else in this module — and
+    there is no ``p = Path(p)`` here to make that true, because there is nothing left for it
+    to do: :func:`temp_beside` takes either and ``os.replace`` takes either. A line whose
+    removal changes no outcome is a line the deletion sweep is right to call equivalent.
+    """
+    tmp = temp_beside(p)
+    try:
+        write_for(tmp, data)
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def touch_for(p) -> None:
     """`Path.touch` for a path that may be charter's own state.
 

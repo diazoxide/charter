@@ -1134,12 +1134,16 @@ def _write_manifest(name: str, data: dict) -> None:
     """:func:`write_manifest` without the `ensure` — the writer this module calls, because
     `ensure` scaffolds and scaffolding is what calls this.
 
-    **Atomic**: a temp file plus ``os.replace``, the shape `state.bump` and `gather.save`
-    already use, for a reason a committed file sharpens — one of this file's readers is
-    `git add`, so half a manifest is not a glitch somebody re-runs past, it is half a
-    manifest a teammate pulls. The temp file goes through `config.write_for` for
-    `state.bump`'s stated reason: ``os.replace`` carries the SOURCE's mode onto the target,
-    so the dispatch has to happen on the file that is moved rather than the one it lands on.
+    **Atomic**: `config.replace_for`, the call `state.bump` and `gather.save` make, for a
+    reason a committed file sharpens — one of this file's readers is `git add`, so half a
+    manifest is not a glitch somebody re-runs past, it is half a manifest a teammate pulls.
+    It writes through `config.write_for` for `state.bump`'s stated reason: ``os.replace``
+    carries the SOURCE's mode onto the target, so the dispatch has to happen on the file
+    that is moved rather than the one it lands on — and that is also why the temp file is
+    not `tempfile.mkstemp`'s, whose 0600 would land on a file in the operator's own git
+    tree. The temp NAME carries this writer's pid, which is #893: `ensure` scaffolds a
+    manifest and `record_members` rewrites one, and two commands doing that at once for one
+    workspace used to share a single ``workspace.json.tmp``.
 
     `contain.writable` first and by itself: a manifest path redirected out of the plane by a
     symlink is refused here rather than followed (#328), and the refusal RAISES, because
@@ -1149,9 +1153,7 @@ def _write_manifest(name: str, data: dict) -> None:
     p = contain.writable(manifest_path(name))
     doc = dict(data)
     doc[MANIFEST_MARKER] = content_digest(_manifest_body(doc))
-    tmp = p.with_name(p.name + ".tmp")
-    config.write_for(tmp, json.dumps(doc, indent=2) + "\n")
-    os.replace(tmp, p)
+    config.replace_for(p, json.dumps(doc, indent=2) + "\n")
 
 
 def _now() -> str:
