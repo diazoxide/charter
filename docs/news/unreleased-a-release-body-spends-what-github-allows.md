@@ -15,7 +15,7 @@ was a fixed fraction of the limit and never moved.
 Most of that fraction was the units. GitHub refuses with `body is too long (maximum is
 125000 characters)`, and whether the validator behind it counts code points or bytes is not
 something charter can run and find out — so 15% was held back in case they differed.
-`news._sent_length` settles it on the string: it measures the encoded body, which is never
+`news.sent_length` settles it on the string: it measures the encoded body, which is never
 below the character count, so the bound holds either way. Measured across every version
 charter has cut, that costs between 0.25% and 1.22%.
 

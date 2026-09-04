@@ -2850,13 +2850,13 @@ def cmd_news(args) -> int:
         # the file is the off-by-one that would show up only at the ceiling — which is the
         # one place nobody gets a second try.
         #
-        # `news._sent_length` rather than `len`, and the same call `render_body` bounds
+        # `news.sent_length` rather than `len`, and the same call `render_body` bounds
         # itself with, so the number that decides an elision and the number that decides
         # this refusal cannot disagree. It is the encoded length: never below the character
         # count, so this refuses whichever unit GitHub's validator is really counting. The
         # message says "characters" because that is the word in GitHub's own refusal and
         # the reader is being told what GitHub will say.
-        sent = news._sent_length(body) + 1
+        sent = news.sent_length(body) + 1
         if sent > news.RELEASE_BODY_MAX:
             util.err(
                 f"the release notes for {version} come to {sent:,} characters and GitHub "

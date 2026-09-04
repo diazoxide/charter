@@ -615,13 +615,13 @@ def for_version(version: str) -> list[Entry]:
 #: ``✗``, ``⬢`` — so the two measures differ, by 793 on the body 0.56.0 publishes and by
 #: 3,603 on 0.54.0's 86 notes rendered whole. This line used to resolve that by taking the
 #: message at its word and measuring code points, which is a guess about somebody else's
-#: validator standing between an irreversible upload and a release body. :func:`_sent_length`
+#: validator standing between an irreversible upload and a release body. :func:`sent_length`
 #: measures the larger of the two instead, so the question stops mattering: what it costs is
 #: under 1% of the limit and it is measured on the string rather than reserved for.
 RELEASE_BODY_MAX = 125_000
 
 
-def _sent_length(body: str) -> int:
+def sent_length(body: str) -> int:
     """How long *body* is by the more conservative of the two measures GitHub might apply.
 
     The encoded length, which for UTF-8 is never below the character count and is above it
@@ -650,7 +650,7 @@ def _sent_length(body: str) -> int:
 
 
 #: How much of :data:`RELEASE_BODY_MAX` :func:`render_body` will actually spend, measured
-#: by :func:`_sent_length`. **Charter's number, and the 3,000 it leaves unspent is what the
+#: by :func:`sent_length`. **Charter's number, and the 3,000 it leaves unspent is what the
 #: number is actually about.**
 #:
 #: **What the reserve still holds.** One thing: something added to the body that charter did
@@ -663,7 +663,7 @@ def _sent_length(body: str) -> int:
 #: **What it no longer holds, and this is the change.** It used to hold the gap between the
 #: string charter measured and the string GitHub counts — code points here, possibly bytes
 #: there — which was a guess about somebody else's validator, sized at a fifth of the
-#: allowance. :func:`_sent_length` settles that on the string instead, at a measured cost
+#: allowance. :func:`sent_length` settles that on the string instead, at a measured cost
 #: under 1%. It also used to hold slack against "just under is a state nobody notices", and
 #: that reason retired when the bound landed: a release over this budget is not refused, it
 #: is *reshaped*, and the only cliff is at :data:`RELEASE_BODY_MAX` — where
@@ -808,12 +808,12 @@ def render_body(version: str) -> str:
     twenty stamped versions do. Past that, the notes that fit are rendered whole and the
     rest become a headline and a link, with :func:`_elision` between them saying so.
 
-    **Measured by :func:`_sent_length`, not by :func:`len`.** The two differ by under 1% and
+    **Measured by :func:`sent_length`, not by :func:`len`.** The two differ by under 1% and
     the difference is entirely in charter's favour: a body under the budget by the encoded
     measure is under it by the character measure too, so the bound holds whichever unit
     GitHub's validator is counting. What that costs is a note's worth of allowance on the
     largest releases; what it replaces was a fifth of the allowance held back for the same
-    uncertainty. `_sent_length`'s docstring carries the measurements.
+    uncertainty. `sent_length`'s docstring carries the measurements.
 
     Three properties decide the shape, and each of them rules out an easier one:
 
@@ -850,14 +850,14 @@ def render_body(version: str) -> str:
     entries = for_version(version)
     whole = [_part(e) for e in entries]
     body = "\n\n".join(whole)
-    if _sent_length(body) <= _BODY_BUDGET:
+    if sent_length(body) <= _BODY_BUDGET:
         return body
     brief = [_brief(e) for e in entries]
     smallest = ""
     for k in range(len(entries) - 1, -1, -1):
         candidate = "\n\n".join([*whole[:k], _elision(k, len(entries), len(body)),
                                  *brief[k:]])
-        if _sent_length(candidate) <= _BODY_BUDGET:
+        if sent_length(candidate) <= _BODY_BUDGET:
             return candidate
         smallest = candidate
     return smallest

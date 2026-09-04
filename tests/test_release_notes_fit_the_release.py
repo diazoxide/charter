@@ -79,7 +79,7 @@ from tests.test_workflows import _release
 
 #: GitHub's documented maximum for a release body. The refusal reads `body is too long
 #: (maximum is 125000 characters)`, and whether the validator behind it counts code points
-#: or bytes is not something charter can run and find out — so `news._sent_length` measures
+#: or bytes is not something charter can run and find out — so `news.sent_length` measures
 #: the larger of the two and this file compares against it in that measure.
 #:
 #: **Written out here rather than imported from `news`**, and that duplication is the
@@ -102,7 +102,7 @@ GITHUB_RELEASE_BODY_MAX = 125_000
 #: at 443 bytes. This is seven of those.
 #:
 #: The gap between the string charter measures and the string GitHub counts is deliberately
-#: NOT in here: `news._sent_length` closes it on the string, and the newline `print` adds is
+#: NOT in here: `news.sent_length` closes it on the string, and the newline `print` adds is
 #: counted by `commands.cmd_news` where it happens. A reserve holding hazards that are
 #: measured elsewhere is a reserve nobody can size.
 RESERVE = 3_000
@@ -147,7 +147,7 @@ def _within_the_reserve() -> dict[str, int]:
     charter will spend is one charter is *supposed* to reshape; asking it to render whole
     would be asking for the reserve back.
     """
-    sizes = {v: news._sent_length(_whole(v))
+    sizes = {v: news.sent_length(_whole(v))
              for v in [*sorted(_versions()), news.UNRELEASED] if news.for_version(v)}
     return {v: n for v, n in sizes.items() if n <= CEILING}
 
@@ -181,7 +181,7 @@ class ReleaseBodyFits(unittest.TestCase):
         """
         for version in sorted(_versions()):
             with self.subTest(version=version):
-                size = news._sent_length(news.render_body(version)) + 1
+                size = news.sent_length(news.render_body(version)) + 1
                 self.assertLessEqual(
                     size, GITHUB_RELEASE_BODY_MAX,
                     f"the notes file announce would write for {version} is {size:,} "
@@ -201,7 +201,7 @@ class ReleaseBodyFits(unittest.TestCase):
         staged = news.for_version(news.UNRELEASED)
         if not staged:
             self.skipTest("no entries staged for the next release")
-        size = news._sent_length(news.render_body(news.UNRELEASED)) + 1
+        size = news.sent_length(news.render_body(news.UNRELEASED)) + 1
         self.assertLessEqual(
             size, GITHUB_RELEASE_BODY_MAX,
             f"{len(staged)} entries are staged for the next release and they render to "
@@ -327,13 +327,13 @@ class ReleaseBodyFits(unittest.TestCase):
             f"on a stamped release branch the way its predecessor did.")
 
     def test_the_number_charter_bounds_by_is_the_size_of_the_file_announce_writes(self):
-        """What `news._sent_length` claims to be, checked against the thing itself.
+        """What `news.sent_length` claims to be, checked against the thing itself.
 
         `announce` redirects `charter news --for` into a file and hands GitHub the file, so
         the length that decides an elision and a refusal has to be the length of that file —
         the body, encoded, plus the newline `print` writes. Asserted as an equality against
         the encoded string, which is the one construction of it that does not go through
-        `_sent_length`.
+        `sent_length`.
 
         **And the two measures really do differ here**, or the equality above would hold for
         `len` as well and this would pin nothing. The second assertion says so on real
@@ -347,10 +347,10 @@ class ReleaseBodyFits(unittest.TestCase):
             body = news.render_body(version)
             with self.subTest(version=version):
                 self.assertEqual(
-                    news._sent_length(body) + 1, len((body + "\n").encode()),
+                    news.sent_length(body) + 1, len((body + "\n").encode()),
                     "the number charter bounds and refuses on is not the size of the "
                     "file announce writes")
-            differ += news._sent_length(body) > len(body)
+            differ += news.sent_length(body) > len(body)
         self.assertTrue(
             differ, "no version's encoded body is longer than its character count, so "
                     "the case above cannot tell the two measures apart")
@@ -471,19 +471,19 @@ class ABodyThatFitsIsUntouched(NewsDir):
         number and the claim under test is what the comparison means by it, not what the
         number is.
 
-        Measured with `news._sent_length` and not `len`, because that is what the budget is
+        Measured with `news.sent_length` and not `len`, because that is what the budget is
         denominated in — an ASCII fixture makes the two agree, and a case that only holds
         while the fixture stays ASCII is one a `—` in a headline would silently retire.
         """
         for slug in ("a-one", "b-two", "c-three"):
             self.write(f"{_V}-{slug}.md", _entry(_V, slug, self.filler(f"BODY-{slug}")))
         whole = "\n\n".join(news._part(e) for e in news.for_version(_V))
-        with mock.patch.object(news, "_BODY_BUDGET", news._sent_length(whole)):
+        with mock.patch.object(news, "_BODY_BUDGET", news.sent_length(whole)):
             self.assertEqual(
                 news.render_body(_V), whole,
                 "a body of exactly the budget went through the elision path, so the "
                 "budget is being read as exclusive")
-        with mock.patch.object(news, "_BODY_BUDGET", news._sent_length(whole) - 1):
+        with mock.patch.object(news, "_BODY_BUDGET", news.sent_length(whole) - 1):
             self.assertIn(
                 "listed by headline only", news.render_body(_V),
                 "one character under the budget changed nothing, so the case above is "
@@ -535,7 +535,7 @@ class NothingIsDroppedToMakeItFit(NewsDir):
 
     def test_the_bound_holds(self):
         self.oversized()
-        self.assertLessEqual(news._sent_length(news.render_body(_V)), news._BODY_BUDGET)
+        self.assertLessEqual(news.sent_length(news.render_body(_V)), news._BODY_BUDGET)
 
     def test_every_entry_still_has_its_own_heading(self):
         """In its own place in the order. Twelve entries in, twelve headings out."""
@@ -896,7 +896,7 @@ class TheGateRefusesABodyItCannotBound(NewsDir):
         sizing a fixture to the character: the number is charter's own policy dial and the
         claim under test is what the comparison means by it, so the dial is what moves.
 
-        `news._sent_length` and not `len`, and here the two genuinely differ: the fixture is
+        `news.sent_length` and not `len`, and here the two genuinely differ: the fixture is
         ASCII but `news._elision`'s notice — which only an elided body carries — has an em
         dash in it. A budget set from the character count would be two under the byte count
         the render is comparing, and this case would be measuring an off-by-two instead of
@@ -904,7 +904,7 @@ class TheGateRefusesABodyItCannotBound(NewsDir):
         """
         self.oversized()
         body = news.render_body(_V)
-        exact = news._sent_length(body)
+        exact = news.sent_length(body)
         with mock.patch.object(news, "_BODY_BUDGET", exact):
             self.assertEqual(
                 news.render_body(_V), body,
@@ -912,7 +912,7 @@ class TheGateRefusesABodyItCannotBound(NewsDir):
                 "being read as exclusive")
         with mock.patch.object(news, "_BODY_BUDGET", exact - 1):
             self.assertLess(
-                news._sent_length(news.render_body(_V)), exact,
+                news.sent_length(news.render_body(_V)), exact,
                 "one character under the budget changed nothing, so the case above is "
                 "not measuring the boundary it claims to")
 
