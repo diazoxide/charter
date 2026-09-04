@@ -1,7 +1,6 @@
 ---
 version: unreleased
 headline: '`charter doctor`''s `session root` row stops telling you agents and skills do not walk up, one line above the row that correctly says they do'
-check: doctor
 ---
 
 Two rows, printed one under the other, about the same directory. `session root` said *"the
