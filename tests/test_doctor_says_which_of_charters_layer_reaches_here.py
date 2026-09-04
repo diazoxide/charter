@@ -770,6 +770,25 @@ class TheTwoRowsNarrateOneSetOfRules(LayerCase):
         self.assertIn("git root", detail)
         self.assertIn("session layer", detail)
 
+    def test_the_parts_are_named_in_the_order_the_harness_declares_them(self):
+        """`dict.fromkeys` and not a `set`, and declaration order and not `sorted`, for the
+        reason the trust clause below uses the same call: string hashing is randomised per
+        process, so a set would render this sentence one way on one run and another way on
+        the next — a row whose text moves between runs of an unchanged tree.
+
+        Driven off a stub declaring five cwd-only parts rather than off the shipped layer's
+        two. With two there is one wrong order and a set finds it half the time, which is a
+        pin that passes by luck; with five, declaration order is also neither alphabetical
+        nor its reverse, so `sorted` is caught outright.
+        """
+        names = ("delta", "alpha", "echo", "charlie", "bravo")
+        stub = _StubHarness("many", "gate")
+        stub.layer = tuple(base.LayerPart(n, (".nowhere",), False, "why") for n in names)
+        with mock.patch.object(registry, "all", return_value=[stub]):
+            os.environ.pop("CHARTER_HARNESS", None)
+            self.assertEqual(doctor._discovery_rules(), (list(names), []))
+            self.assertIn("delta, alpha, echo, charlie and bravo", self.root())
+
     def test_the_two_rows_name_the_same_parts(self):
         """Whatever a harness declares, both rows account for all of it. A part added to
         `Harness.layer` and rendered by only one of them is how they came apart."""

@@ -479,13 +479,22 @@ class ABodyThatFitsIsUntouched(NewsDir):
         number and the claim under test is what the comparison means by it, not what the
         number is.
 
-        Measured with `news.sent_length` and not `len`, because that is what the budget is
-        denominated in — an ASCII fixture makes the two agree, and a case that only holds
-        while the fixture stays ASCII is one a `—` in a headline would silently retire.
+        **And the fixture carries an em dash on purpose.** This is the only case that
+        reaches `render_body`'s early return — the branch that hands back the whole body
+        untouched — so it is the only case that can say what that comparison measures.
+        With an ASCII fixture the two measures agree, `len` and `sent_length` are
+        interchangeable there, and the release path's most-taken branch is denominated in
+        whichever one somebody last typed. Measured: the mutation survives an ASCII
+        fixture and reddens this one.
         """
         for slug in ("a-one", "b-two", "c-three"):
-            self.write(f"{_V}-{slug}.md", _entry(_V, slug, self.filler(f"BODY-{slug}")))
+            self.write(f"{_V}-{slug}.md",
+                       _entry(_V, slug, self.filler(f"BODY-{slug} — not ASCII")))
         whole = "\n\n".join(news._part(e) for e in news.for_version(_V))
+        self.assertGreater(
+            news.sent_length(whole), len(whole),
+            "the fixture is pure ASCII, so this case cannot tell the budget's two "
+            "candidate measures apart and the early return is unpinned")
         with mock.patch.object(news, "_BODY_BUDGET", news.sent_length(whole)):
             self.assertEqual(
                 news.render_body(_V), whole,
