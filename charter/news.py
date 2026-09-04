@@ -612,8 +612,8 @@ def for_version(version: str) -> list[Entry]:
 #:
 #: **Whether it counts characters or bytes charter does not know, and no longer has to.**
 #: The refusal says "characters" and charter's entries are not ASCII — they carry ``—``,
-#: ``✗``, ``⬢`` — so the two measures differ, by 793 on the body 0.56.0 publishes and by
-#: 3,603 on 0.54.0's 86 notes rendered whole. This line used to resolve that by taking the
+#: ``✗``, ``⬢`` — so the two measures differ, by 3,603 on 0.54.0's 86 notes rendered whole
+#: and by 2,468 on 0.55.0's 54. This line used to resolve that by taking the
 #: message at its word and measuring code points, which is a guess about somebody else's
 #: validator standing between an irreversible upload and a release body. :func:`sent_length`
 #: measures the larger of the two instead, so the question stops mattering: what it costs is
