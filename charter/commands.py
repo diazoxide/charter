@@ -2574,8 +2574,8 @@ def cmd_reinit(args) -> int:
 # --------------------------------------------------------------------------- #
 # doctor                                                                       #
 # --------------------------------------------------------------------------- #
-def doctor_fix(root: Path) -> list[tuple[str, str]]:
-    """Install what `doctor` can install for the plane at *root*. ``(status, label)`` pairs.
+def _run_doctor_fix() -> None:
+    """Install what `doctor` can install for this plane, and say what happened (#881).
 
     The other half of #881's answer, and the reason `doctor` gained a flag rather than a
     behaviour: **installation happens where somebody asked for it and nowhere else.**
@@ -2583,22 +2583,17 @@ def doctor_fix(root: Path) -> list[tuple[str, str]]:
     effect of an ordinary command, which is #857's surprise and the same reason charter
     refuses to write `~/.claude/settings.json` unasked.
 
-    Deliberately the same call `init` makes — `_provision_harnesses` — rather than a second
-    installer that could drift from it. `doctor`'s own row names this command, so the two
-    would be a remedy and a report disagreeing about what the remedy does.
+    Deliberately the same call `init` makes — :func:`_provision_harnesses` — rather than a
+    second installer that could drift from it. `doctor`'s own row names this command, so
+    the two would be a remedy and a report disagreeing about what the remedy does.
 
-    `doctor.py` stays read-only ("Nothing here changes the system"), which is why this lives
-    here and not beside the row that hints at it.
-    """
-    return _provision_harnesses(root)
+    `doctor.py` stays read-only ("Nothing here changes the system"), which is why this
+    lives here and not beside the row that hints at it.
 
-
-def _run_doctor_fix() -> None:
-    """Print what `--fix` did. Never raises, and never changes `doctor`'s verdict.
-
-    The rows below are the verdict: a fix that failed must show up as the row it failed to
-    turn green, not as an exit code from the fixing. Everything here goes to **stderr**
-    (`util.*`), so `charter doctor --json --fix` still emits parseable JSON on stdout.
+    Never raises, and never changes `doctor`'s verdict: the rows are the verdict, so a fix
+    that failed shows up as the row it did not turn green rather than as an exit code from
+    the fixing. Everything here goes to **stderr** (`util.*`), so `charter doctor --json
+    --fix` still emits parseable JSON on stdout.
     """
     if not config.HAS_CONTROL_PLANE:
         util.warn("no control plane here (no charter.toml in this directory or any "
@@ -2607,7 +2602,7 @@ def _run_doctor_fix() -> None:
         util.info("  Run `charter init` in the directory you want to be a control plane; "
                   "it installs the plugin as part of scaffolding.")
         return
-    done = doctor_fix(config.ROOT)
+    done = _provision_harnesses(config.ROOT)
     if not done:
         util.info("--fix had nothing to install.")
         return
