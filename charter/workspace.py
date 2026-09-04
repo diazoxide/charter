@@ -24,6 +24,7 @@ Secrets are deliberately *not* part of this — vaults are cross-workspace.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import os
@@ -1054,9 +1055,209 @@ def read_manifest(name: str) -> dict:
         return {}
 
 
+#: The key charter stamps into a manifest it wrote, holding the digest of everything else
+#: in the document.
+#:
+#: :data:`GENERATED_MARKER`'s rule in the one spelling this file can carry. That marker is a
+#: SIDECAR because the document it describes belongs to Claude Code, and an unknown key in
+#: it would be charter making a claim on somebody else's schema. `workspace.json` is
+#: charter's own document, so there is no such claim to make — and a sidecar could not do
+#: this job anyway: everything beside a manifest is gitignored and the manifest itself is
+#: COMMITTED, so a teammate who pulls the plane would get the file and none of charter's
+#: bookkeeping, and every shared manifest would read as hand-written on every machine but
+#: the one that wrote it.
+#:
+#: A digest rather than a flag, for `_charter_owned`'s reason: a file whose content no
+#: longer matches what charter wrote is the operator's now, and the writers nobody asked
+#: for leave it completely alone.
+MANIFEST_MARKER = "charter_generated"
+
+
+def _manifest_body(doc: dict) -> str:
+    """The text :data:`MANIFEST_MARKER` is the digest OF — the document without it.
+
+    One function, so the stamp and the check are not two spellings of "the same content";
+    :func:`content_digest` records what that costs when they drift. Canonical (sorted keys)
+    rather than the bytes on disk, so re-indenting a manifest by hand does not take it away
+    from charter while every value in it is still charter's.
+    """
+    return json.dumps({k: v for k, v in doc.items() if k != MANIFEST_MARKER},
+                      indent=2, sort_keys=True, default=str)
+
+
+def manifest_owner(name: str) -> str:
+    """Whose manifest is on disk: ``"absent"``, ``"charter"``, or ``"operator"``.
+
+    The ownership question #884 turns on. charter creates this file and maintains its
+    membership, and it must never overwrite one somebody else wrote — so "there is no
+    manifest" and "there is one charter did not write" have to be different answers.
+
+    **Present-but-unreadable answers ``"operator"``, never ``"absent"``.** A file charter
+    cannot parse is emphatically not one charter wrote, and treating it as absent would
+    make the automatic writers create a fresh manifest over exactly the hand-made file this
+    rule exists to protect.
+    """
+    p = manifest_path(name)
+    try:
+        if not p.exists():
+            return "absent"
+    except (OSError, ValueError):
+        # `exists()` raises on a path holding a NUL (ValueError) and can raise EACCES on
+        # Linux, where pathlib does not swallow it — `_unreadable`'s case, answered the
+        # cautious way: something is there that charter cannot account for.
+        return "operator"
+    doc = read_manifest(name)
+    if isinstance(doc, dict) and doc and doc.get(MANIFEST_MARKER) == content_digest(
+            _manifest_body(doc)):
+        return "charter"
+    return "operator"
+
+
 def write_manifest(name: str, data: dict) -> None:
+    """Replace *name*'s manifest with *data*, stamped as charter's.
+
+    The DELIBERATE writer — `snapshot`, `fork`, `rename` — which is why it asks
+    :func:`manifest_owner` nothing: an operator who types `charter workspace snapshot` is
+    asking for this file to be rewritten, and #884's rule is about the writes nobody asked
+    for. Those are :func:`scaffold_manifest` and :func:`record_members`, and they check.
+    """
     ensure(name)
-    contain.writable(manifest_path(name)).write_text(json.dumps(data, indent=2) + "\n")
+    _write_manifest(name, data)
+
+
+def _write_manifest(name: str, data: dict) -> None:
+    """:func:`write_manifest` without the `ensure` — the writer this module calls, because
+    `ensure` scaffolds and scaffolding is what calls this.
+
+    **Atomic**: a temp file plus ``os.replace``, the shape `state.bump` and `gather.save`
+    already use, for a reason a committed file sharpens — one of this file's readers is
+    `git add`, so half a manifest is not a glitch somebody re-runs past, it is half a
+    manifest a teammate pulls. The temp file goes through `config.write_for` for
+    `state.bump`'s stated reason: ``os.replace`` carries the SOURCE's mode onto the target,
+    so the dispatch has to happen on the file that is moved rather than the one it lands on.
+
+    `contain.writable` first and by itself: a manifest path redirected out of the plane by a
+    symlink is refused here rather than followed (#328), and the refusal RAISES, because
+    every caller of this is on a command path where a write that quietly did nothing would
+    print a tick over a fact nobody recorded.
+    """
+    p = contain.writable(manifest_path(name))
+    doc = {k: v for k, v in data.items() if k != MANIFEST_MARKER}
+    doc[MANIFEST_MARKER] = content_digest(_manifest_body(doc))
+    tmp = p.with_name(p.name + ".tmp")
+    config.write_for(tmp, json.dumps(doc, indent=2, default=str) + "\n")
+    os.replace(tmp, p)
+
+
+def _now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def _author() -> str:
+    """Who charter records as having last touched a manifest, WITHOUT a subprocess.
+
+    `commands_workspace._git_user` asks `git config user.name`, which is the better answer
+    and costs a child process. This one runs from :func:`ensure`, which a tab press reaches
+    with no operator waiting and which this module has never started a process from — so
+    the cheap reading is the right one here. The field is provenance rather than identity,
+    and `snapshot` restamps it with git's answer the moment anybody pins a branch.
+    """
+    return os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
+
+
+def _membership_rows(name: str) -> list[dict]:
+    """The workspace's repos as MEMBERSHIP — a name each, and deliberately no branch.
+
+    #884: recording a branch here would record whatever happens to be checked out at that
+    instant, which for a workspace mid-work is a scratch branch — and a scratch branch
+    written into a teammate's restore target is confidently wrong where an empty one is
+    honestly empty, with `snapshot` there to fill it the moment an operator means to.
+
+    It is also exactly where ADR 0010 draws its line. A branch in this file carries
+    `snapshot`'s enforce-push promise — *"a manifest branch is only meaningful if it's
+    actually on the remote"* — and a writer that runs without being asked can make no such
+    promise, so it records the half of the file that needs none.
+    """
+    return [{"name": d.name} for d in clones(name)]
+
+
+def scaffold_manifest(name: str) -> None:
+    """Create the workspace's manifest if it has none. Never touches one that is there.
+
+    #884: the file is committed *precisely so a teammate can restore someone else's
+    workspace*, and while `snapshot` was its only writer it existed wherever somebody
+    happened to run that command — 5 of 17 workspaces on the plane this was measured on. A
+    file designed to be shared cannot be an opt-in side effect, so a workspace has one from
+    birth and its presence is an invariant rather than a coincidence.
+
+    A new workspace's manifest says ``repos: []``, which is a true and useful statement:
+    this workspace exists, it is called *name*, and it has no repos yet. `repos` is one
+    field among several rather than the point of the file. A workspace that already has
+    clones when this first runs — every workspace the backfill reaches, via
+    `charter workspace reinit` — records them as membership, unpinned
+    (:func:`_membership_rows`).
+
+    **Swallows its own failures.** `scaffold` runs from :func:`ensure`, which a tab press
+    reaches with nobody waiting, and the components after this one in `scaffold` still have
+    to run: a manifest that could not be written leaves the workspace exactly as it was, and
+    `structure_status` goes on reporting the file missing, which is the honest answer and
+    the one `charter workspace reinit` acts on.
+    """
+    try:
+        if manifest_owner(name) != "absent":
+            return
+        _write_manifest(name, {"name": name, "description": "",
+                               "repos": _membership_rows(name),
+                               "updated_at": _now(), "updated_by": _author()})
+    except (OSError, ValueError, contain.Refused):
+        return
+
+
+def record_members(name: str, repos) -> str:
+    """Record *repos* as members of *name*'s workspace. Returns what happened —
+    ``"unchanged"``, ``"recorded"``, ``"operator"`` or ``"blocked"``.
+
+    The auto-update half of #884: membership is a fact about the workspace, so a repo
+    cloned into one changes the manifest, and a manifest that learns its own membership
+    only when somebody runs `snapshot` describes the workspaces nobody shared.
+
+    **Additive, and that is a measurement rather than a shortcut.** Absence from disk does
+    not mean a repo was removed: `restore --on-demand` deliberately leaves every recorded
+    repo uncloned, and `restore` itself skips the ones this machine cannot reach
+    (*"Partial access is normal"*). A reconcile against the directory would therefore erase
+    the restore target of the teammate this file exists for, on their first launch, and
+    their next `charter save` would push the erasure. Removal is recorded by
+    `charter workspace snapshot`, which sets the list outright because an operator asked it
+    to.
+
+    **Never a branch** — see :func:`_membership_rows`.
+
+    ``"operator"`` for a manifest charter did not write, which is left byte for byte alone.
+    The caller says so rather than this deciding for them: a clone that could not be
+    recorded is a fact the person at the keyboard can act on (`snapshot` rewrites the file
+    deliberately), and swallowing it would make the invariant quietly untrue.
+    """
+    owner = manifest_owner(name)
+    if owner == "operator":
+        return "operator"
+    doc = read_manifest(name) if owner == "charter" else {}
+    rows = [r for r in (doc.get("repos") or []) if isinstance(r, dict) and r.get("name")]
+    have = {str(r["name"]) for r in rows}
+    add = [n for n in dict.fromkeys(str(r) for r in repos) if n and n not in have]
+    if not add and owner == "charter":
+        return "unchanged"
+    doc.setdefault("name", name)
+    doc.setdefault("description", "")
+    # Sorted, so the committed file has one row order however the rows arrived — a clone,
+    # a snapshot and a backfill all produce the same diff for the same membership.
+    doc["repos"] = sorted(rows + [{"name": n} for n in add], key=lambda r: str(r["name"]))
+    doc["updated_at"] = _now()
+    doc["updated_by"] = _author()
+    try:
+        _write_manifest(name, doc)
+    except (OSError, ValueError, contain.Refused):
+        return "blocked"
+    return "recorded"
 
 
 def merge_repo_rows(manifest_rows, disk_rows) -> tuple[list[dict], list[str]]:
@@ -1150,6 +1351,7 @@ def scaffold(name: str) -> None:
         rr.write_text(f"# {name} — task references\n\nDrop docs, links, and snippets for "
                       f"this task here (local, gitignored).\n")
     scaffold_charter(name)  # workspace.md — the living vision/context/glossary charter
+    scaffold_manifest(name)  # workspace.json — the committed manifest (#884)
     wire_harnesses(name)    # the harness layer — see `harness_layer`
     _structure_marker(name).write_text(str(STRUCTURE_VERSION) + "\n")  # stamp the layout version
 
@@ -1984,9 +2186,16 @@ def read_vision(name: str) -> str:
 # workspace picks up the three new un-ignore lines. Without it a plane that went LIVE
 # before this version keeps a block that never mentions `changes`, and the records simply
 # never travel — the same silent half-failure `todos/` had.
-STRUCTURE_VERSION = 4  # v2: memory is a per-file DB (MEMORY.md index), not a lone notes.md
+# v5 is the backfill #884 asks for, and it is why the manifest is a required component
+# rather than only something `scaffold` now writes. 12 of this plane's 17 workspaces
+# predate the invariant; without a bump they would go on having no `workspace.json` until
+# somebody happened to run `snapshot`, which is the state the issue exists to end. With
+# one, each flags itself in the status line and `charter workspace reinit --all` writes
+# every missing manifest — membership only, branches unpinned.
+STRUCTURE_VERSION = 5  # v2: memory is a per-file DB (MEMORY.md index), not a lone notes.md
                        # v3: the managed .gitignore block shares `changes/` (not its log)
                        # v4: the workspace carries charter's harness layer (#850)
+                       # v5: every workspace has a workspace.json, from birth (#884)
 _STRUCTURE_MARKER = ".charter-structure"
 _LEGACY_STRUCTURE_MARKER = ".edm-structure"   # pre-rename; migrated in place on read
 
@@ -2019,6 +2228,7 @@ def _required_components(name: str) -> dict[str, Path]:
     scaffold(). Add to this (and bump STRUCTURE_VERSION) when the layout grows."""
     return {
         "workspace.md": charter_file(name),
+        "workspace.json": manifest_path(name),
         "memory/MEMORY.md": memory_index(name),
         "refs/README.md": refs_dir(name) / "README.md",
     }
