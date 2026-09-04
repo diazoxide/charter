@@ -46,6 +46,40 @@ that fires on the intended state teaches people to ignore warnings.
 
 `snapshot` stays the only writer, and its enforce-push guard keeps meaning what it says.
 
+**Amended by #884 (2026-09-04): `snapshot` is the only writer of BRANCHES.** The paragraph
+above stated the rule one level too broadly, and the file it protected went on not existing:
+5 of 17 workspaces on the plane this was measured on had a `workspace.json` at all. A file
+that is committed *precisely so a teammate can restore someone else's workspace* cannot be a
+side effect of a command somebody happened to run, so its presence is now an invariant —
+`workspace.ensure` creates it, `charter workspace reinit` backfills the ones that predate
+this, and `charter clone` records what it just cloned.
+
+Read what this section actually names as the harm: *"it fills the manifest with branches
+recorded outside `snapshot`'s guarantee — so `restore` starts failing on branches that were
+never pushed, which is the one thing the manifest exists to prevent."* That is a statement
+about **branches**, and every writer added here records **membership only** —
+`workspace._membership_rows` writes `{"name": …}` and no `branch`, on every path. So no
+branch enters this file except through `snapshot` and its enforce-push guard, and there is
+nothing for `restore` to fail on: an unpinned row is restored by the clone existing.
+
+The second objection stands and is honoured rather than argued with: *"it makes read
+commands mutate a committed, shared file."* None of the writers is a read command. `ensure`
+and `clone` are write paths by definition; `reinit` is the repair command an operator types.
+`status` and `workspace list` still only scan.
+
+One reading is stronger after this, not weaker. **Absence from disk is still not removal** —
+`restore --on-demand` deliberately leaves every recorded repo uncloned and `restore` skips
+what this machine cannot reach — so the automatic maintenance is additive and never
+reconciles the file against the directory. A workspace's membership shrinks when an operator
+runs `snapshot`, which sets the list outright because they asked for it. The union
+`merge_repo_rows` returns is unchanged and still the answer to "which repos", because a
+manifest still cannot see a clone nobody has recorded yet.
+
+And the ownership rule is new, because presence brought a file charter maintains into
+workspaces where somebody may already have written one by hand: a manifest whose contents no
+longer match the digest charter stamped into it is the operator's, and the automatic writers
+leave it completely alone.
+
 The union is not a merge of equals and must not become one. If a future change starts
 writing the manifest automatically, the guard is gone whether or not the code still calls
 it — and `restore` will fail on someone else's machine, which is the failure that is
