@@ -1082,7 +1082,7 @@ def _manifest_body(doc: dict) -> str:
     from charter while every value in it is still charter's.
     """
     return json.dumps({k: v for k, v in doc.items() if k != MANIFEST_MARKER},
-                      indent=2, sort_keys=True, default=str)
+                      sort_keys=True)
 
 
 def manifest_owner(name: str) -> str:
@@ -1107,7 +1107,12 @@ def manifest_owner(name: str) -> str:
         # cautious way: something is there that charter cannot account for.
         return "operator"
     doc = read_manifest(name)
-    if isinstance(doc, dict) and doc and doc.get(MANIFEST_MARKER) == content_digest(
+    # `isinstance` and not a truth test: `read_manifest` hands back whatever JSON the file
+    # holds, and `[]` is valid JSON. A committed file is an untrusted file (`restore`'s own
+    # comment says so), and the digest is not a secret — anybody editing this by hand can
+    # compute a matching one — so a list here would reach `.get` and take the command down
+    # rather than being told it is the operator's.
+    if isinstance(doc, dict) and doc.get(MANIFEST_MARKER) == content_digest(
             _manifest_body(doc)):
         return "charter"
     return "operator"
@@ -1142,10 +1147,10 @@ def _write_manifest(name: str, data: dict) -> None:
     print a tick over a fact nobody recorded.
     """
     p = contain.writable(manifest_path(name))
-    doc = {k: v for k, v in data.items() if k != MANIFEST_MARKER}
+    doc = dict(data)
     doc[MANIFEST_MARKER] = content_digest(_manifest_body(doc))
     tmp = p.with_name(p.name + ".tmp")
-    config.write_for(tmp, json.dumps(doc, indent=2, default=str) + "\n")
+    config.write_for(tmp, json.dumps(doc, indent=2) + "\n")
     os.replace(tmp, p)
 
 
@@ -1161,8 +1166,13 @@ def _author() -> str:
     with no operator waiting and which this module has never started a process from — so
     the cheap reading is the right one here. The field is provenance rather than identity,
     and `snapshot` restamps it with git's answer the moment anybody pins a branch.
+
+    ``"unknown"`` rather than an absent field or an empty string, which is what
+    `_git_user` answers too: a shell with no `$USER` is ordinary (a `cron`, a container),
+    and a manifest field somebody has to guess the meaning of is worse than one that says
+    nobody knows.
     """
-    return os.environ.get("USER") or os.environ.get("LOGNAME") or "unknown"
+    return os.environ.get("USER") or "unknown"
 
 
 def _membership_rows(name: str) -> list[dict]:
@@ -1237,17 +1247,25 @@ def record_members(name: str, repos) -> str:
     recorded is a fact the person at the keyboard can act on (`snapshot` rewrites the file
     deliberately), and swallowing it would make the invariant quietly untrue.
     """
+    if manifest_owner(name) == "absent":
+        # `ensure` gives every workspace a manifest, so getting here means the creating
+        # write failed (a `workspaces/` nobody can write into) and a clone has since
+        # succeeded. Through the one constructor rather than a second shape of "a fresh
+        # manifest" assembled here — two of those drift, and the drift is invisible until
+        # a field one of them omits is read.
+        scaffold_manifest(name)
     owner = manifest_owner(name)
-    if owner == "operator":
-        return "operator"
-    doc = read_manifest(name) if owner == "charter" else {}
+    if owner != "charter":
+        return "operator" if owner == "operator" else "blocked"
+    doc = read_manifest(name)
+    # Rows that are not rows are dropped rather than crashed on. A committed manifest is an
+    # untrusted document and the digest is not a secret, so `repos: [1, 2, 3]` with a
+    # matching stamp is a file somebody can hand this plane.
     rows = [r for r in (doc.get("repos") or []) if isinstance(r, dict) and r.get("name")]
     have = {str(r["name"]) for r in rows}
     add = [n for n in dict.fromkeys(str(r) for r in repos) if n and n not in have]
-    if not add and owner == "charter":
+    if not add:
         return "unchanged"
-    doc.setdefault("name", name)
-    doc.setdefault("description", "")
     # Sorted, so the committed file has one row order however the rows arrived — a clone,
     # a snapshot and a backfill all produce the same diff for the same membership.
     doc["repos"] = sorted(rows + [{"name": n} for n in add], key=lambda r: str(r["name"]))

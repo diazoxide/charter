@@ -71,6 +71,16 @@ class AWorkspaceIsBornWithOne(ManifestCase):
         self.assertEqual(m["updated_by"], "ada")
         self.assertRegex(m["updated_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
 
+    def test_a_shell_with_no_user_records_unknown(self):
+        """A `cron` or a container has no `$USER`, and `ensure` runs there too. "unknown"
+        rather than an absent field or an empty string, which is `_git_user`'s answer as
+        well — a field somebody has to guess the meaning of is worse than one that says
+        nobody knows."""
+        with mock.patch.dict(os.environ):
+            os.environ.pop("USER", None)
+            workspace.ensure("alpha")
+        self.assertEqual(self.manifest("alpha")["updated_by"], "unknown")
+
     def test_a_new_workspace_records_no_repos_rather_than_no_manifest(self):
         """*"this workspace exists, is called alpha, and has no repos yet"* is a true and
         useful statement, and it is the one that lets anything else rely on the file."""
@@ -185,6 +195,10 @@ class TheManifestIsPartOfTheLayout(ManifestCase):
         wd.chmod(0o700)
         self.assertIn("workspace.json could not be written", said)
         self.assertNotIn("added workspace.json", said)
+        self.assertNotIn("Reinitialized", said,
+                         "a workspace whose only gap could not be filled was reported healed")
+        self.assertNotIn("Up to date", said,
+                         "a repair command that contradicts its own error two lines up")
 
     def test_a_backfilled_live_workspace_is_told_to_commit_it(self):
         """`workspace.json` is the first path in the managed LIVE block, so a backfill that
@@ -255,24 +269,109 @@ class MembershipIsMaintained(ManifestCase):
         self.assertEqual(self.manifest("alpha")["updated_by"], "ada")
         self.assertNotEqual(self.manifest("alpha")["updated_at"], "1999-01-01T00:00:00+00:00")
 
-    def test_cloning_records_the_repo_it_just_cloned(self):
-        """End to end through `cmd_clone`, which is the structural change: a repo cloned
-        into a workspace is a member of it, and a manifest that learns that only when
-        somebody runs `snapshot` describes the workspaces nobody shared."""
+    def test_a_repo_named_twice_is_recorded_once(self):
         workspace.ensure("alpha")
-        dest = _clone("alpha", "svc")
-        r = {"name": "svc", "default_branch": "main", "forge": "github",
-             "path_with_namespace": "g/svc"}
-        with mock.patch.object(commands, "_clone_one",
-                               lambda rr, wd: {"repo": rr, "dest": dest, "status": "ok",
-                                               "forge": SimpleNamespace(cli="gh")}), \
+        workspace.record_members("alpha", ["svc", "svc"])
+        self.assertEqual(self.manifest("alpha")["repos"], [{"name": "svc"}])
+
+    def test_a_nameless_repo_is_not_a_member(self):
+        """A row with no name is a row `restore` cannot act on and `merge_repo_rows`
+        already skips — recording one would put an entry in a committed file that every
+        reader has to know to ignore."""
+        workspace.ensure("alpha")
+        self.assertEqual(workspace.record_members("alpha", [""]), "unchanged")
+        self.assertEqual(self.manifest("alpha")["repos"], [])
+
+    def test_the_rows_are_sorted_however_they_arrived(self):
+        """One row order for one membership, so a clone, a snapshot and a backfill produce
+        the same diff rather than three."""
+        workspace.ensure("alpha")
+        workspace.record_members("alpha", ["svc"])
+        workspace.record_members("alpha", ["api"])
+        self.assertEqual([r["name"] for r in self.manifest("alpha")["repos"]],
+                         ["api", "svc"])
+
+    def test_rows_that_are_not_rows_are_dropped_rather_than_crashed_on(self):
+        """A committed manifest is an untrusted document — `restore` says so in as many
+        words — and the stamp is not a secret, so `repos: [1, 2, 3]` carrying a matching
+        digest is a file somebody can hand this plane."""
+        workspace.ensure("alpha")
+        workspace.write_manifest("alpha", {"name": "alpha",
+                                           "repos": ["svc", 3, None, {"branch": "main"}]})
+        self.assertEqual(workspace.record_members("alpha", ["svc"]), "recorded")
+        self.assertEqual(self.manifest("alpha")["repos"], [{"name": "svc"}])
+
+    def test_membership_cannot_be_recorded_where_no_manifest_can_be_created(self):
+        """`blocked`, not `recorded`: the caller is told the fact did not land rather than
+        being handed a tick over a file that is not there."""
+        wd = workspace.workspace_dir("alpha")
+        wd.mkdir(parents=True)
+        wd.chmod(0o500)
+        self.addCleanup(wd.chmod, 0o700)
+        self.assertEqual(workspace.record_members("alpha", ["svc"]), "blocked")
+
+
+class CloningRecordsWhatItCloned(ManifestCase):
+    """End to end through `cmd_clone`, which is the structural change: a repo cloned into a
+    workspace is a member of it, and a manifest that learns that only when somebody runs
+    `snapshot` describes the workspaces nobody shared."""
+
+    def clone(self, ws: str, repo: str, status: str) -> str:
+        dest = workspace.workspace_dir(ws) / repo
+        r = {"name": repo, "default_branch": "main", "forge": "github",
+             "path_with_namespace": f"g/{repo}"}
+        result = {"repo": r, "dest": dest, "status": status,
+                  "forge": SimpleNamespace(cli="gh"), "stderr": "", "reason": "no"}
+        buf = io.StringIO()
+        with mock.patch.object(commands, "_clone_one", lambda rr, wd: result), \
                 mock.patch.object(commands.workspace, "banner", lambda *a, **k: None), \
                 mock.patch.object(commands.inventory, "load", lambda: {}), \
                 mock.patch.object(commands.inventory, "repos", lambda d=None: [r]), \
-                mock.patch.object(commands, "_resolve_targets", lambda a, d: [r]):
-            rc = commands.cmd_clone(SimpleNamespace(repos=["svc"], workspace="alpha"))
-        self.assertEqual(rc, 0)
+                mock.patch.object(commands, "_resolve_targets", lambda a, d: [r]), \
+                redirect_stderr(buf):
+            commands.cmd_clone(SimpleNamespace(repos=[repo], workspace=ws))
+        return buf.getvalue()
+
+    def test_the_repo_it_cloned_is_a_member(self):
+        workspace.ensure("alpha")
+        _clone("alpha", "svc")
+        self.clone("alpha", "svc", "ok")
         self.assertEqual(self.manifest("alpha")["repos"], [{"name": "svc"}])
+
+    def test_a_repo_that_was_already_there_is_a_member_too(self):
+        """`exists` is the ordinary outcome of re-cloning into a workspace, and it is as
+        much a statement of membership as a fresh clone — a manifest that only learned
+        from first clones would never catch up on a workspace built before this."""
+        workspace.ensure("alpha")
+        _clone("alpha", "svc")
+        self.clone("alpha", "svc", "exists")
+        self.assertEqual(self.manifest("alpha")["repos"], [{"name": "svc"}])
+
+    def test_a_clone_that_failed_is_not_a_member(self):
+        """Membership is what the workspace HAS. A repo whose clone failed — no access, no
+        network — is not in it, and recording it would send `restore` after a repo this
+        machine could not reach in the first place."""
+        workspace.ensure("alpha")
+        self.clone("alpha", "svc", "failed")
+        self.assertEqual(self.manifest("alpha")["repos"], [])
+
+    def test_it_says_a_hand_written_manifest_was_left_alone(self):
+        """The invariant is quietly untrue there until somebody acts, so the person at the
+        keyboard is told rather than left to find out from a restore."""
+        workspace.workspace_dir("alpha").mkdir(parents=True)
+        workspace.manifest_path("alpha").write_text('{"name": "alpha", "repos": []}\n')
+        _clone("alpha", "svc")
+        said = self.clone("alpha", "svc", "ok")
+        self.assertIn("was not written by charter", said)
+
+    def test_a_clone_that_landed_nothing_says_nothing_about_the_manifest(self):
+        """The warning above is about a repo that could not be recorded. With no repo to
+        record there is nothing to warn about, and a line that fires on a failed clone
+        blames the manifest for the network."""
+        workspace.workspace_dir("alpha").mkdir(parents=True)
+        workspace.manifest_path("alpha").write_text('{"name": "alpha", "repos": []}\n')
+        said = self.clone("alpha", "svc", "failed")
+        self.assertNotIn("was not written by charter", said)
 
 
 class AManifestCharterDidNotWriteIsNeverOverwritten(ManifestCase):
@@ -326,6 +425,41 @@ class AManifestCharterDidNotWriteIsNeverOverwritten(ManifestCase):
         workspace.ensure("alpha")
         doc = workspace.read_manifest("alpha")
         workspace.manifest_path("alpha").write_text(json.dumps(doc))   # one line, no indent
+        self.assertEqual(workspace.manifest_owner("alpha"), "charter")
+
+    def test_a_manifest_that_is_not_even_an_object_is_the_operators(self):
+        """`[]` is valid JSON, `read_manifest` hands back whatever the file holds, and the
+        digest is not a secret — so a list here has to be told it is somebody else's rather
+        than reaching `.get` and taking the command down."""
+        before = self.hand_written("alpha", "[]\n")
+        self.assertEqual(workspace.manifest_owner("alpha"), "operator")
+        workspace.record_members("alpha", ["svc"])
+        self.assertEqual(workspace.manifest_path("alpha").read_bytes(), before)
+
+    def test_a_manifest_that_cannot_be_stat_ed_is_the_operators(self):
+        """`Path.exists` raises EACCES on Linux, where pathlib does not swallow it, and
+        answers False on macOS — `workspace._unreadable`'s divergence, at the one call
+        where guessing wrong means writing over somebody's file."""
+        from pathlib import Path
+        real = Path.exists
+        target = workspace.manifest_path("alpha")
+
+        def strict(self_, *a, **kw):
+            if self_ == target:
+                raise PermissionError(13, "Permission denied", str(self_))
+            return real(self_, *a, **kw)
+
+        Path.exists = strict
+        self.addCleanup(setattr, Path, "exists", real)
+        self.assertEqual(workspace.manifest_owner("alpha"), "operator")
+
+    def test_reordering_the_keys_does_not_take_it_away_from_charter(self):
+        """The digest is over the document, not over one serialisation of it. A manifest
+        round-tripped through a tool that sorts keys differently is still charter's."""
+        workspace.ensure("alpha")
+        doc = workspace.read_manifest("alpha")
+        flipped = {k: doc[k] for k in reversed(list(doc))}
+        workspace.manifest_path("alpha").write_text(json.dumps(flipped, indent=2) + "\n")
         self.assertEqual(workspace.manifest_owner("alpha"), "charter")
 
     def test_a_manifest_charter_cannot_read_is_not_a_missing_one(self):
@@ -422,6 +556,19 @@ class RestoringAWorkspaceWhoseBranchesAreUnpinned(ManifestCase):
         with redirect_stderr(buf):
             cw.cmd_workspace_restore(SimpleNamespace(name="alpha", on_demand=False))
         self.assertIn("no branch recorded", buf.getvalue())
+
+    def test_a_branch_that_is_an_option_in_disguise_is_still_refused(self):
+        """#334's guard, asked of the value git is actually handed. `" -b"` does not
+        `startswith("-")` and `git checkout` reads the argument it is given, so the reading
+        and the guard have to be the same string."""
+        workspace.ensure("alpha")
+        _clone("alpha", "svc")
+        workspace.write_manifest("alpha", {"name": "alpha",
+                                           "repos": [{"name": "svc", "branch": " -b"}]})
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            cw.cmd_workspace_restore(SimpleNamespace(name="alpha", on_demand=False))
+        self.assertIn("may not begin with '-'", buf.getvalue())
 
     def test_the_on_demand_listing_survives_a_row_with_no_branch(self):
         """`r['branch']` was a KeyError waiting for the first manifest charter wrote

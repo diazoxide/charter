@@ -516,8 +516,12 @@ def _pin(row) -> str:
     its own writes ``{"name"}`` alone (#884). `row['branch']` was a `KeyError` waiting for
     the first manifest charter wrote itself, and one function is what keeps the reading and
     the reporting from disagreeing about which rows have a branch.
+
+    Stripped, so the value the leading-dash guard inspects is the value git is handed:
+    ``" -b"`` is not a ref anybody writes and `startswith` says nothing about it, while
+    `git checkout` reads the argument it is actually given (#334).
     """
-    return str((row or {}).get("branch") or "").strip()
+    return str(row.get("branch") or "").strip()
 
 
 def _git_user() -> str:
