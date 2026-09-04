@@ -92,10 +92,14 @@ The paths are new; the restraints are not, and each is re-asked of them:
   `foreign`, and a stale copy is refreshed rather than left for the next upgrade;
 - removing the workspace removes them, pruning the directories that emptied.
 
-**`CLAUDE.md` is still deliberately left behind**, and so is any equivalent. It walks up on
-the same rule, so the gap is real for it too — and it is the one file a repo of its own is
-most likely to have opinions about. A guest hides its own files; it does not narrate the
-host's.
+**`CLAUDE.md` is still deliberately left behind**, and so is any equivalent — and the reason
+is not the one that applies to the directories above. It walks up on a **different** rule:
+measured on Claude Code 2.1.259 it is not git-bounded at all, so the plane's own copy
+already reaches a clone inside it and there is no gap here to fill. Copying it in would put
+the plane's project instructions inside somebody else's repository, to be read there as that
+repository's own — which is a claim of a different size from mirroring a settings key, and
+it is the one file a repo of its own is most likely to have opinions about. A guest hides
+its own files; it does not narrate the host's.
 
 A workspace **directory** gets none of this and needs none of it: every one of these paths
 is resolved from inside the plane's own repository, so the plane's copies already reach it

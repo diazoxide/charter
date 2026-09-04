@@ -77,9 +77,9 @@ offer a quit made.
 
 ## What the restore says: one line, and never silence
 
-`charter reopen` is a deliberate act, so its per-chat report is read and is unchanged. The
-automatic restore happens because you typed `charter` and wanted a terminal, so it is one
-line — and when part of the plane cannot come back, the rest is named on that same line:
+`charter reopen` is a deliberate act, so its per-chat report is read — and it grew a line
+later in this release, in *a restored chat comes back in its workspace*. The automatic
+restore happens because you typed `charter` and wanted a terminal, so it is one line — and when part of the plane cannot come back, the rest is named on that same line:
 
 ```
 ✓ charter: restored 3 of the 4 chats this plane last recorded — beta.1 did not come back

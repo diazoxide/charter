@@ -91,19 +91,19 @@ So every path degrades to *never fires*: an absent or unspellable tab is not an 
 the ordinary palette opening instead. Nothing is refused, nothing is half-drawn, and `F2`
 still reaches both rows.
 
-## One cost, measured and left open
+## One cost, measured — and closed later in this release
 
 With `[frame] mouse = true`, tmux's forwarding branch for button 3 is
 `{ select-pane -t = ; send-keys -M }` — it **selects the pane before forwarding**. That is
-the focus steal charter already fixed for the left button, one button over, and it is not
-closed here: a right-click that lands on a panel and opens nothing leaves the keyboard on
-that panel until you click the harness or press `F12`. It costs the gesture this change is
-for nothing, because a menu that opens takes the keyboard anyway and gives it back on the way
-out.
+the focus steal charter already fixed for the left button, one button over: a right-click
+that lands on a panel and opens nothing left the keyboard on that panel until you clicked
+the harness or pressed `F12`. It costs the gesture this change is for nothing, because a
+menu that opens takes the keyboard anyway and gives it back on the way out — which is why it
+was written up here rather than fixed in passing.
 
-The left button's fix works because tmux's default for that key is two commands charter can
-write out verbatim in the else-branch. Button 3's else-branch is a `display-menu` a page long
-built out of a dozen formats, and it differs between the tmux versions charter supports — so
-replacing it would take tmux's own pane menu away from the harness and from panes you split
-yourself, inside charter's window, to fix a steal that one click puts right. It is written up
-where it lives rather than fixed in passing.
+It was then fixed in passing, in this same release, and not by the shape that was rejected
+here: see *a right-click on a panel stays where it points*. Replacing tmux's own
+`MouseDown3Pane` would have taken its pane menu away from the harness and from panes you
+split yourself; charter **wraps** the binding instead, keeping the `send-keys -M` this
+feature rides on and dropping only the `select-pane`. That entry carries the measurement on
+tmux 3.2 and 3.7c.

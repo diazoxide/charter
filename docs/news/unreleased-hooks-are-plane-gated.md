@@ -7,8 +7,11 @@ headline: charter's hooks stop writing into repositories that are not control pl
 denials inside `pretooluse` and `_state_write_reason`. ADR 0015 raises the objection this
 answers — *"a plugin installed for every project does run charter's hooks in repos with no
 control plane"* — and answers it with a promise: *"the guards gate on
-`config.HAS_CONTROL_PLANE` and stay silent outside a plane."* Six of the eleven handlers in
-`hooks._HANDLERS` had never heard of the flag.
+`config.HAS_CONTROL_PLANE` and stay silent outside a plane."* Six of the handlers in
+`hooks._HANDLERS` had never heard of the flag. (Eleven of them when this was written;
+twelve by the end of the release, because *a chat tab shows when its harness is working*
+adds one — and it arrives gated, since the property below is driven off `_HANDLERS` rather
+than written out per handler.)
 
 Outside a plane `config.STATE_DIR` is `<cwd>/.charter`, so what those handlers wrote, they
 wrote into whatever repository you happened to be standing in. Measured on 0.55.0, each

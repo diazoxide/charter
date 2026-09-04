@@ -136,7 +136,7 @@ The strip does not tick unless a chat is actually working, and learning that cos
 | `slots.chats_bar`, 3 chats, two working | 454.1 µs | **0.227% of a core** |
 | `inflight.turn_bump()`, one hook | 11.5 µs | per tool call |
 
-An idle plane pays the 4.8 µs and nothing else, forever — and only on the pane that draws
+An idle plane pays the 4.6 µs and nothing else, forever — and only on the pane that draws
 the strip. Against `slots.ANIMATED`'s own recorded budget, *"one `render("right")` costs
 4 816 µs … at 5Hz that one pane alone is ~2.4% of a core"*, an animated chat strip is a
 tenth of what this frame already animates.

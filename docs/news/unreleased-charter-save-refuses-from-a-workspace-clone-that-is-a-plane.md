@@ -65,7 +65,7 @@ manifest all follow `config.ROOT` outward — and split the plane in two.
 ## What still works from inside a clone
 
 Only the **unbounded** stage refuses. `charter save` is the sole caller that stages the whole
-tree; reactive memory, the dispatch tally, the workspace manifest and `version pin --push`
+tree; reactive memory, the dispatch tally, the workspace manifest and `version bump --push`
 all name plane-state files, and those keep committing to the plane from anywhere. Working
 inside a clone is the ordinary way work happens on a charter plane, and every agent doing it
 writes memory — refusing that would have been a larger harm than the one being fixed.

@@ -119,7 +119,7 @@ true; you decide.
 **The cold-start line is untouched.** `⋯ gathering this workspace's repos…` still appears
 for the seconds it was always right for, in a workspace that exists.
 
-**One predicate, three surfaces.** `charter quit` already recorded a chat whose workspace had
+**One predicate, three surfaces.** `charter: quit` already recorded a chat whose workspace had
 gone (`homeless`) and `charter reopen` already noted it on that chat's line. Both spelled the
 question inline; all three now ask `workspace.exists`, so the frame and the quit path cannot
 come to disagree about whether a workspace is there.

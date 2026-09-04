@@ -33,10 +33,17 @@ comes from `root.find_root`, which **walks up** from the working directory until
 `charter.toml`. That is exactly right for identity — the plane is who you are, from anywhere
 inside it.
 
-The host does not walk up. Claude Code reads project settings, agents, skills and commands
-from the session's own directory and nowhere above it; only `CLAUDE.md` walks. So the two
-answers differ for every chat that is not rooted at the plane, and doctor reported the one
-the operator was not in.
+The host does not walk up for **settings**. Claude Code reads `.claude/settings.json` from
+the session's own directory and nowhere above it, and `statusLine` is a key in that file, so
+it inherits the rule. So the two answers differ for every chat that is not rooted at the
+plane, and doctor reported the one the operator was not in.
+
+(This paragraph, and the row below it, once said agents, skills and commands were read the
+same way and that only `CLAUDE.md` walks. Measured later in this release, that is wrong on
+both halves: `.claude/agents/` and `.claude/skills/` walk up and stop at the git root, and
+`CLAUDE.md` walks up and is not git-bounded at all. See *doctor answers whether a session
+started here can see charter's layer*. Charter has measured no rule for `.claude/commands`,
+so the row no longer claims one.)
 
 **That is the shape of the defect, not the shape of one plane.** Doctor is what an operator
 runs *because something felt wrong in that chat*, and a checker that reports on a different
@@ -49,9 +56,11 @@ A new `session root` row, and every row that reads settings answers for that dir
 
 ```
   ✓  session root     /…/plane/workspaces/fleet — not the plane (/…/plane)
-        ↳ the host reads project settings, agents, skills and commands from the session's
-          own directory and does not walk up, so the plane's .claude/ is not in force here
-          — the rows below read /…/plane/workspaces/fleet/.claude/ and ~/.claude/
+        ↳ the host reads settings and status line from the session's own directory and
+          does not walk up, so the plane's .claude/ is not in force for them — the rows
+          below read /…/plane/workspaces/fleet/.claude/ and ~/.claude/
+        ↳ skills+agents DO walk up, as far as the git root — which of them reach here is
+          the `session layer` row below, not this one
         ↳ the plane is still this session's identity: personas, the vault, memory and
           workspaces resolve to /…/plane from anywhere inside it
   !  plane-root guard  pretooluse is not wired — branch moves in the plane root are NOT

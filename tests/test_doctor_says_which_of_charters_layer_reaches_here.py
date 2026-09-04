@@ -713,6 +713,175 @@ class TheRowIsInTheReport(LayerCase):
         self.assertEqual(names[names.index("session root") + 1], "session layer")
 
 
+class TheTwoRowsNarrateOneSetOfRules(LayerCase):
+    """#879: `session root` and `session layer` are printed one under the other and told an
+    operator opposite things about the same directory.
+
+    The older row said the host reads *"project settings, agents, skills and commands from
+    the session's own directory and does not walk up"*. The newer one — added in the same
+    release, from the measurement — said `.claude/agents` and `.claude/skills` walk up and
+    stop at the git boundary. Both were describing Claude Code 2.1.259, and an operator in a
+    workspace clone was told on one line that their agents were out of reach and on the next
+    that they were not.
+
+    The words were fixable; the shape was the defect. Two rows restating one discovery rule
+    from two independent sources drift by default, and nothing renders them together, so
+    nobody sees it. These cases hold both rows to `Harness.layer` — the source
+    `check_session_layer` already reads — and to each other.
+    """
+
+    def root(self) -> str:
+        self.rooted_at(self.workspace)
+        return doctor.check_session_root().detail
+
+    def parts(self) -> tuple[list[str], list[str]]:
+        """What the harness declares, split by rule. Hand-spelling these would be a second
+        copy of the thing under test; `TheHarnessesDeclareWhatWasMeasured` is where the
+        declaration itself is pinned against the measurement."""
+        layer = claude_code.ClaudeCodeHarness().layer
+        return ([p.what for p in layer if not p.walks],
+                [p.what for p in layer if p.walks])
+
+    def test_no_walking_part_is_named_in_the_clause_that_says_the_host_does_not_walk_up(self):
+        """The defect itself, in the one direction it did harm. `agents` and `skills` stood
+        inside the sentence ending "and does not walk up"."""
+        cwd_only, walking = self.parts()
+        clause = next(ln for ln in self.root().splitlines() if "does not walk up" in ln)
+        for what in walking:
+            self.assertNotIn(
+                what, clause,
+                f"`{what}` walks up per the harness and this row says it does not: "
+                f"{clause.strip()}")
+        for what in cwd_only:
+            self.assertIn(what, clause,
+                          f"`{what}` is cwd-only per the harness and the row that explains "
+                          f"why the plane's .claude/ is not in force does not name it")
+
+    def test_the_walking_parts_are_named_as_walking_and_handed_to_the_row_below(self):
+        """Naming only the cwd-only half would leave "the plane's .claude/ is not in force"
+        reading as "none of it reaches", which is the same wrong answer with the false
+        sentence removed rather than corrected. The row says what walks and then declines to
+        say whether the walk arrives — that is a fact about this directory's git root, and
+        `session layer` is the row that resolves it."""
+        detail = self.root()
+        for what in self.parts()[1]:
+            self.assertIn(what, detail)
+        self.assertIn("DO walk up", detail)
+        self.assertIn("git root", detail)
+        self.assertIn("session layer", detail)
+
+    def test_the_parts_are_named_in_the_order_the_harness_declares_them(self):
+        """`dict.fromkeys` and not a `set`, and declaration order and not `sorted`, for the
+        reason the trust clause below uses the same call: string hashing is randomised per
+        process, so a set would render this sentence one way on one run and another way on
+        the next — a row whose text moves between runs of an unchanged tree.
+
+        Driven off a stub declaring five cwd-only parts rather than off the shipped layer's
+        two. With two there is one wrong order and a set finds it half the time, which is a
+        pin that passes by luck; with five, declaration order is also neither alphabetical
+        nor its reverse, so `sorted` is caught outright.
+        """
+        names = ("delta", "alpha", "echo", "charlie", "bravo")
+        stub = _StubHarness("many", "gate")
+        stub.layer = tuple(base.LayerPart(n, (".nowhere",), False, "why") for n in names)
+        with mock.patch.object(registry, "all", return_value=[stub]):
+            os.environ.pop("CHARTER_HARNESS", None)
+            self.assertEqual(doctor._discovery_rules(), (list(names), []))
+            self.assertIn("delta, alpha, echo, charlie and bravo", self.root())
+
+    def test_the_two_rows_name_the_same_parts(self):
+        """Whatever a harness declares, both rows account for all of it. A part added to
+        `Harness.layer` and rendered by only one of them is how they came apart."""
+        self.rooted_at(self.workspace)
+        root, layer = doctor.check_session_root().detail, self.detail()
+        for what in sum(self.parts(), []):
+            with self.subTest(what=what):
+                self.assertIn(what, root)
+                self.assertIn(what, layer)
+
+    def test_the_row_restates_no_discovery_rule_of_its_own(self):
+        """The structural half, and the reason the words above stay fixed. No artefact is
+        named in this row's code — the names come from the harness — so there is no second
+        copy of the rules here to drift from the measurement again.
+
+        Comments are stripped, deliberately, per `_code`: a comment naming `agents` is
+        exactly what a decision like this should carry, while a literal is the thing being
+        refused.
+        """
+        code = _code(doctor.check_session_root) + _code(doctor._discovery_rules)
+        for artefact in ("agents", "skills", "commands", "CLAUDE.md", "settings.json"):
+            self.assertNotIn(
+                artefact, code,
+                f"`{artefact}` is spelled into the session root row rather than read from "
+                f"the harness, which is how the two rows disagreed")
+
+    def test_a_harness_charter_has_not_met_borrows_no_rules_from_one_it_has(self):
+        """`check_session_layer` refuses to report an unregistered runtime under Claude
+        Code's rules. Reporting it one row up would be the same borrowed answer, in the row
+        an operator reads first."""
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "somethingelse"}):
+            detail = self.root()
+        self.assertNotIn("walk up", detail)
+        for what in sum(self.parts(), []):
+            self.assertNotIn(what, detail)
+        self.assertIn("not the plane", detail)
+        self.assertIn("identity", detail,
+                      "the row dropped the half that is true of every harness")
+
+    def test_the_running_harness_answers_alone_and_not_every_registered_one(self):
+        """The rules named are the rules of the harness this session is in.
+
+        Every registered harness answering would be right only while one of them declares a
+        layer — which is true today and is exactly why it needs a case. Register a second
+        one with a part of its own and the row must still name Claude Code's, or a session
+        under one harness is told another's discovery rules in the row it reads first.
+        """
+        other = _StubHarness("second", "gate")
+        other.layer = (base.LayerPart("elsewhere", (".nowhere",), True, "why"),)
+        with mock.patch.object(
+                registry, "all",
+                return_value=[claude_code.ClaudeCodeHarness(), other]):
+            detail = self.root()
+        self.assertNotIn("elsewhere", detail,
+                         "a harness this session is not running answered for it")
+        for what in sum(self.parts(), []):
+            self.assertIn(what, detail)
+
+    def test_no_harness_named_and_every_registered_one_answers(self):
+        """The other branch, and the reason it is not `[live]` unconditionally: a `charter
+        doctor` typed in a plain terminal has no harness to report for, and picking one
+        would be a guess — the same answer `check_session_layer` gives."""
+        other = _StubHarness("second", "gate")
+        other.layer = (base.LayerPart("elsewhere", (".nowhere",), True, "why"),)
+        with mock.patch.object(
+                registry, "all",
+                return_value=[claude_code.ClaudeCodeHarness(), other]):
+            os.environ.pop("CHARTER_HARNESS", None)
+            detail = self.root()
+        self.assertIn("elsewhere", detail,
+                      "with no harness named, a registered one went unanswered for")
+
+
+class TheRulesAreJoinedIntoASentence(_isolation.PersonaIso):
+    """`doctor._named`, alone. Its branches are reachable from the row only while the
+    shipped layer happens to have two cwd-only parts and one walking one — so a harness
+    declaring one of each, or three, would move the row's grammar with nothing watching."""
+
+    def test_nothing_is_nothing(self):
+        self.assertEqual(doctor._named([]), "")
+
+    def test_one_stands_alone_with_no_conjunction(self):
+        """The branch the row takes for `skills+agents` today. Falling through to the join
+        below would write `" and skills+agents"`, leading space and all."""
+        self.assertEqual(doctor._named(["a"]), "a")
+
+    def test_two_are_joined_by_and_with_no_comma(self):
+        self.assertEqual(doctor._named(["a", "b"]), "a and b")
+
+    def test_three_take_a_comma_and_then_the_and(self):
+        self.assertEqual(doctor._named(["a", "b", "c"]), "a, b and c")
+
+
 if __name__ == "__main__":
     import unittest
 

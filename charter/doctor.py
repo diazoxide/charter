@@ -658,12 +658,21 @@ def session_root() -> Path:
     **Not the plane, and that is the whole point.** `config.ROOT` comes from
     `root.find_root`, which walks UP from the working directory until it finds a
     `charter.toml` — so it lands on the plane from anywhere inside it, which is exactly
-    right for identity. Claude Code does not walk up: project settings, agents, skills and
-    commands are read from the session's own directory and nowhere above it (only
-    `CLAUDE.md` walks). A chat launched at `workspaces/<ws>/` — where the `+` button and
-    every workspace tab put one — therefore reads none of the plane's `.claude/`, while
-    `doctor` read all of it and reported the plugin enabled and the guard wired over a
-    session that had neither.
+    right for identity. **Project settings do not walk up**: `.claude/settings.json` is read
+    from the session's own directory and nowhere above it, which is the rule this function
+    exists to serve — every settings row below reads what it returns. A chat launched at
+    `workspaces/<ws>/` — where the `+` button and every workspace tab put one — therefore
+    reads none of the plane's settings, while `doctor` read all of them and reported the
+    plugin enabled and the guard wired over a session that had neither.
+
+    This paragraph used to say agents, skills and commands were read the same way. They are
+    not: `.claude/agents/` and `.claude/skills/` walk up and stop at the git root, and
+    `CLAUDE.md` walks up and is not git-bounded at all — measured on Claude Code 2.1.259 and
+    declared on `Harness.layer`, which is where every part of that answer now lives (#879).
+    Charter has measured no rule for `.claude/commands` and this therefore claims none.
+    Settings are the only artefact this function answers for, and the only one it should:
+    which of the rest reach a directory is `check_session_layer`'s question, resolved
+    against that directory's real git root rather than stated in prose here.
 
     ``os.getcwd()`` is the evidence available, and it is the right evidence rather than a
     stand-in: doctor runs *inside* the session it is reporting on, so the directory this
@@ -834,6 +843,65 @@ def _plugin_declaring_guard(root: Path | None = None) -> str | None:
     return None
 
 
+def _named(items: list[str]) -> str:
+    """*items* as English — ``a``, ``a and b``, ``a, b and c``."""
+    if len(items) < 2:
+        return "".join(items)
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _discovery_rules() -> tuple[list[str], list[str]]:
+    """Which parts of charter's layer are read from the session's own directory, and which
+    walk up — as the **harnesses** declare them, never as a sentence in this file.
+
+    Read from `Harness.layer` so that `session root` and `session layer` narrate one set of
+    rules from one source. They did not, and #879 is what that cost: this row said the host
+    reads "project settings, agents, skills and commands from the session's own directory
+    and does not walk up", while the row printed directly under it — added one pull request
+    later, from a measurement against Claude Code 2.1.259 — said `.claude/agents` and
+    `.claude/skills` **do** walk up and stop at the git boundary. Both rows described the
+    same binary; only one of them had measured it. An operator in a workspace clone reading
+    both was told their agents and skills were out of reach on the line above the line that
+    said they were not.
+
+    Prose was the wrong shape for it rather than merely the wrong words. Two rows narrating
+    one discovery rule from two independent sources is the drift this file already refuses
+    on the harness side — `check_session_layer` says the rules live on the harness *"and the
+    day a fourth harness is registered it would silently be reported under Claude Code's
+    rules"*. This row was that failure with the harness list of one.
+
+    ``commands`` is dropped rather than reworded. Charter has measured no discovery rule for
+    `.claude/commands`, so no `LayerPart` names it, so this row cannot: under-claiming is the
+    direction that cannot mislead, which is `_search_dirs`'s reasoning about an unmeasured
+    walk boundary.
+
+    **A harness charter has not met answers for nothing**, and both lists come back empty
+    for it. `check_session_layer` refuses to report an unregistered runtime under Claude
+    Code's rules; reporting it here instead would be the same borrowed answer one row up.
+
+    `dict.fromkeys` and not a set, for `check_session_layer`'s reason: string hashing is
+    randomised per process, so a set would order this sentence differently from one run to
+    the next.
+    """
+    from .harness import registry as _registry
+
+    current = _registry.current()
+    live = _registry.get(current)
+    if current and live is None:
+        return [], []
+    harnesses = [live] if live else _registry.all()
+    # `h.layer` and not `h.layer or ()`, and the distinction is which side of charter the
+    # value comes from. `Harness.layer` is a class attribute charter declares — `tuple[
+    # LayerPart, ...] = ()` on the base, a tuple on all three registered harnesses — so an
+    # `or ()` in front of it guards a shape charter itself guarantees one file away: a
+    # branch nothing can reach, which the deletion sweep charged as a survivor and was right
+    # to. A fallback in front of somebody ELSE's answer is a different thing and stays; this
+    # was one in front of charter's own. `check_session_layer` reads the attribute bare too.
+    parts = [p for h in harnesses for p in h.layer]
+    return (list(dict.fromkeys(p.what for p in parts if not p.walks)),
+            list(dict.fromkeys(p.what for p in parts if p.walks)))
+
+
 def check_session_root() -> Result:
     """Which directory answered for the settings rows — and whether it is the plane (#851).
 
@@ -843,6 +911,15 @@ def check_session_root() -> Result:
     up front, in the vocabulary charter already uses for it: **the plane is identity, the
     directory you are standing in is artifacts** (`config.in_tree`, `docs/control-plane.md`
     → *What follows the plane, and what follows the tree*).
+
+    **And the rules it names come from :func:`_discovery_rules`, not from a sentence here**
+    (#879). This row told an operator that agents and skills are read from the session's own
+    directory and do not walk up; the `session layer` row, printed on the very next line,
+    told them the opposite and was right. See `_discovery_rules` for why the fix is a shared
+    source rather than better words. What is left in this row's own voice is the one thing
+    it owns — which directory answered — and the walking half is handed to `session layer`
+    unanswered, because whether the walk arrives is a question about this directory's git
+    root and that row is the one that resolves it.
 
     **A fact, never a verdict — OK even when the two differ.** A chat rooted in a workspace
     is the designed workflow: the `+` button and every workspace tab put one there, and a
@@ -870,16 +947,27 @@ def check_session_root() -> Result:
         return Result(name, OK, detail=f"{here} — no control plane found")
     if session_is_the_plane():
         return Result(name, OK, detail=f"{here} — the plane")
-    return Result(
-        name, OK,
-        detail=(f"{here} — not the plane ({_config.ROOT})\n"
-                f"        ↳ the host reads project settings, agents, skills and commands "
-                f"from the session's own directory and does not walk up, so the plane's "
-                f".claude/ is not in force here — the rows below read {here}/.claude/ and "
-                f"~/.claude/\n"
-                f"        ↳ the plane is still this session's identity: personas, the "
-                f"vault, memory and workspaces resolve to {_config.ROOT} from anywhere "
-                f"inside it"))
+    cwd_only, walking = _discovery_rules()
+    lines = [f"{here} — not the plane ({_config.ROOT})"]
+    if cwd_only:
+        lines.append(f"the host reads {_named(cwd_only)} from the session's own directory "
+                     f"and does not walk up, so the plane's .claude/ is not in force for "
+                     f"them — the rows below read {here}/.claude/ and ~/.claude/")
+    else:
+        lines.append(f"the rows below read {here}/.claude/ and ~/.claude/, not the "
+                     f"plane's")
+    if walking:
+        # Said here, in the row that would otherwise be read as "none of it reaches",
+        # and said WITHOUT an answer: whether the walk actually delivers anything from
+        # this directory depends on where its git root is, and `session layer` is the row
+        # that resolves that against the real filesystem. Two rows answering it would be
+        # #879 again in the other direction.
+        lines.append(f"{_named(walking)} DO walk up, as far as the git root — which of "
+                     f"them reach here is the `session layer` row below, not this one")
+    lines.append(f"the plane is still this session's identity: personas, the vault, "
+                 f"memory and workspaces resolve to {_config.ROOT} from anywhere inside "
+                 f"it")
+    return Result(name, OK, detail="\n        ↳ ".join(lines))
 
 
 def _git_root_of(here: Path) -> Path | None:

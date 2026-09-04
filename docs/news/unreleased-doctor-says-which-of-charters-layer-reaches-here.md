@@ -36,11 +36,18 @@ exactly what "it felt half-configured" meant, and no single row could say so.
         about this directory
 ```
 
-**A fact, never a verdict — OK even when nothing reaches.** A chat rooted in a clone gets
-none of this and that is the designed workflow: charter deliberately writes nothing inside
-`workspaces/<ws>/<repo>/`. A row that warned there is a row operators learn to skip.
-Whatever is missing *and* fixable already warns where it can name its own remedy —
-`workspace layer` for a generated file gone stale, `plane-root guard` for the guard.
+**A fact, never a verdict — OK even when nothing reaches.** A chat can be rooted in a
+directory that reaches none of this and be exactly where it belongs — a clone charter has
+not wired yet, or one whose harness declares no layer parts. A row that warned there is a
+row operators learn to skip. Whatever is missing *and* fixable already warns where it can
+name its own remedy — `workspace layer` for a generated file gone stale, `plane-root guard`
+for the guard.
+
+This paragraph read *"charter deliberately writes nothing inside `workspaces/<ws>/<repo>/`"*.
+Two entries in this same release retract it: *a clone inside a workspace gets the layer*
+writes it there, and *a clone inside a workspace carries every harness's in-repo surface*
+decides what it carries. The argument is unchanged; it now rests on what a session would
+find rather than on charter having written nothing.
 
 It is about the **layer**, not the plugin, so it does not reopen `check_guard_wired`'s
 reasoning: *"Whether the plane runs as a plugin is an implementation detail. Whether the
@@ -103,9 +110,15 @@ both ignore project config, so probing with them yields a confident false negati
 model asked whether it can see a file will cheerfully go and `sed` the file you just named
 — so the trace, not the answer, is the evidence.
 
-So all three harnesses have an in-repo surface. Charter writes one for Claude Code only,
-and the other two now say that in the row rather than implying the surface does not exist.
-Charter still writes **nothing** into `~/.config/opencode/` or `~/.codex/config.toml`: it
+So all three harnesses have an in-repo surface, and the row says so for each of them rather
+than implying the surface does not exist. This entry went on to say charter *writes* one for
+Claude Code only, and by the end of this release that is no longer true either: every
+harness declares its own `inherited_paths` — `.claude/agents` and `.claude/skills`,
+`.opencode/agent`, `.codex/skills` — and a clone inside a workspace carries all of them (*a
+clone inside a workspace carries every harness's in-repo surface*). What is still Claude
+Code's alone is the generated `.claude/settings.json` per workspace **directory**, because
+the other two have no per-workspace config scope to hold one. Charter still writes
+**nothing** into `~/.config/opencode/` or `~/.codex/config.toml`: it
 writes no machine-global state on the operator's behalf, which is a decision and not an
 oversight.
 

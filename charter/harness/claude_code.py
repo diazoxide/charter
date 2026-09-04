@@ -93,7 +93,11 @@ LAYER = (
 #: Settings arrive by :meth:`ClaudeCodeHarness.workspace_files`, which every checkout gets
 #: through `_harness_files`; listing it here as well would mirror the plane's file over the
 #: generated one. `CLAUDE.md` is the project-instructions line `Harness.inherited_paths`
-#: draws — it walks up on the same rule as the two below and is left behind on purpose.
+#: draws, and it is left behind on purpose — but **not** on the rule the two below follow,
+#: which is what this comment used to say. :data:`LAYER` has the measurement: it walks up
+#: and is NOT git-bounded, so the plane's own copy already reaches a checkout inside the
+#: plane and there is no gap here for a mirror to close. What a mirror would add is the
+#: plane's instructions inside somebody else's repository, read there as that repository's.
 WALKUP_DIRS = (".claude/agents", ".claude/skills")
 
 
