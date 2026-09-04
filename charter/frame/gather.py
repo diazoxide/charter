@@ -368,18 +368,22 @@ def scan(workspace: str | None = None, cwd: str | None = None) -> dict:
 def save(fid: str, data: dict) -> None:
     """Write *data* (from :func:`scan`) as JSON under *fid*'s frame directory.
 
-    Atomic — a temp file plus ``os.replace``, the same shape ``state.bump`` uses
-    and for the same reason: a reader must never observe a half-written cache.
+    Atomic — `config.replace_for`, the same call ``state.bump`` makes and for the same
+    reason: a reader must never observe a half-written cache. **Nor another writer's
+    half**, which is the part ``os.replace`` alone never gave and #893 is. While the temp
+    file was named after its target and nothing else, two savers for one *fid* wrote into
+    one inode, and this cache is where that surfaced: a frame's ``gather.json`` came out
+    of CI existing and zero bytes, and :func:`cached` hands back whatever parses, so an
+    empty scan is read as a true one rather than as a file to distrust.
+
     Never raises: this runs from a hook (Task 2), where a failure here must
     degrade to "the cache did not update" rather than cost the session its turn.
     """
     f = _cache_file(fid, create=True)
     if f is None:
         return
-    tmp = f.with_name(f.name + ".tmp")
     try:
-        config.write_for(tmp, json.dumps(data))
-        os.replace(tmp, f)
+        config.replace_for(f, json.dumps(data))
     except OSError:
         return
 

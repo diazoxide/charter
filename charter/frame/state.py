@@ -314,20 +314,24 @@ def frame_dir(fid: str, *, create: bool = False) -> Path | None:
 def bump(fid: str) -> None:
     """Record that the frame changed. A caller on a must-not-crash path (a hook).
 
-    Written to a temp file and moved into place with ``os.replace``. A failed write is
-    swallowed (see below), not raised — which is exactly why the atomic replace matters
-    more here than it would if a failure were still visible: ``os.replace`` only ever
-    touches the target file by fully replacing it, never partially, so a write that
-    cannot complete leaves the previous version exactly as a reader last saw it rather
-    than corrupting it silently.
+    Published through `config.replace_for` — a temp file of this writer's own, then one
+    ``os.replace``. A failed write is swallowed (see below), not raised — which is exactly
+    why the atomic replace matters more here than it would if a failure were still
+    visible: ``os.replace`` only ever touches the target file by fully replacing it, never
+    partially, so a write that cannot complete leaves the previous version exactly as a
+    reader last saw it rather than corrupting it silently.
 
-    **The temp file goes through `config.write_for`, and that is what settles the mode of
-    the destination too.** ``os.replace`` carries the SOURCE's mode onto the target, so
-    while this was `Path.write_text` it wrote a 0644 temp file and then moved 0644 onto
-    ``version`` — with nothing in the directory ever looking wrong. Ten writers in this
-    module share that shape (#582). ``os.replace`` itself needs no dispatch: a rename
-    cannot cross filesystems, so an atomic write into ``.charter/`` is written beside its
-    destination and is a state path by construction.
+    **The temp file's mode and its NAME are both settled there, and each closed a defect
+    of its own.** ``os.replace`` carries the SOURCE's mode onto the target, so while this
+    was `Path.write_text` it wrote a 0644 temp file and then moved 0644 onto ``version`` —
+    with nothing in the directory ever looking wrong (#582); `config.write_for`, which
+    `replace_for` writes through, is what asks where the path is. And while every writer
+    for one frame shared one temp NAME, two of them wrote into one inode and published
+    each other's half-written file — #893, and the reason the seventeen writers in this
+    module are seventeen calls to one function rather than seventeen copies of four lines.
+    ``os.replace`` itself needs no dispatch: a rename cannot cross filesystems, so an
+    atomic write into ``.charter/`` is written beside its destination and is a state path
+    by construction.
 
     Does nothing for an *fid* :func:`frame_dir` refuses, and
     nothing for a write that fails after the directory exists (a full filesystem, say) —
@@ -337,10 +341,8 @@ def bump(fid: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "version.tmp"
     try:
-        config.write_for(tmp, f"{time.time_ns()}\n")
-        os.replace(tmp, d / "version")
+        config.replace_for(d / "version", f"{time.time_ns()}\n")
     except OSError:
         # The directory existing doesn't guarantee the write does too (a filesystem
         # that fills up between the two calls above, say) — same must-not-raise
@@ -419,9 +421,9 @@ def say(fid: str, message: str, *, seconds: float = NOTICE_SECONDS) -> None:
       not a message aimed at a server.
 
     Best effort, never raises: the callers are switch outcomes, and one that cannot write
-    its notice must still return the exit status it owes tmux. Same atomic
-    `write_for`-then-`os.replace` shape as :func:`bump`, so a reader never sees half a
-    line, and a failed write leaves the previous notice exactly as it was.
+    its notice must still return the exit status it owes tmux. Same `config.replace_for`
+    as :func:`bump`, so a reader never sees half a line, never sees another writer's half
+    either (#893), and a failed write leaves the previous notice exactly as it was.
 
     The expiry is stored, not the duration, so a reader needs only the clock and never
     has to know when the write happened. `time.time()` rather than `time.monotonic()`:
@@ -447,10 +449,8 @@ def say(fid: str, message: str, *, seconds: float = NOTICE_SECONDS) -> None:
     text = contain.one_line(message).strip()
     if not text:
         return
-    tmp = d / "notice.tmp"
     try:
-        config.write_for(tmp, f"{time.time() + float(seconds)}\n{text}\n")
-        os.replace(tmp, d / "notice")
+        config.replace_for(d / "notice", f"{time.time() + float(seconds)}\n{text}\n")
     except OSError:
         # `OSError` alone, exactly as `bump` and `record_exit` above — one shape for the
         # three writers in this module rather than a wider net here. `ValueError` and
@@ -529,10 +529,8 @@ def record_exit(fid: str, code: int) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "exit.tmp"
     try:
-        config.write_for(tmp, f"{int(code)}\n")
-        os.replace(tmp, d / "exit")
+        config.replace_for(d / "exit", f"{int(code)}\n")
     except OSError:
         return
 
@@ -632,10 +630,8 @@ def record_harness_pane(fid: str, pane: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "harness.tmp"
     try:
-        config.write_for(tmp, f"{pane}\n")
-        os.replace(tmp, d / "harness")
+        config.replace_for(d / "harness", f"{pane}\n")
     except OSError:
         return
 
@@ -695,10 +691,8 @@ def record_harness_session(fid: str, sid: str) -> bool:
     d = frame_dir(fid, create=True)
     if d is None:
         return False
-    tmp = d / "session.tmp"
     try:
-        config.write_for(tmp, f"{sid}\n")
-        os.replace(tmp, d / "session")
+        config.replace_for(d / "session", f"{sid}\n")
     except OSError:
         return False
     _record_kept_session(d, sid)
@@ -771,10 +765,8 @@ def _record_kept_session(d: Path, sid: str) -> None:
     cannot be resumed later. Returning nothing rather than a bool is the same statement —
     there is no caller that could do anything with the answer.
     """
-    tmp = d / "session.durable.tmp"
     try:
-        config.write_for(tmp, f"{sid}\n")
-        os.replace(tmp, d / _KEPT_SESSION_FILE)
+        config.replace_for(d / _KEPT_SESSION_FILE, f"{sid}\n")
     except OSError:
         return
 
@@ -822,10 +814,8 @@ def record_server(fid: str, server: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "server.tmp"
     try:
-        config.write_for(tmp, f"{server}\n")
-        os.replace(tmp, d / "server")
+        config.replace_for(d / "server", f"{server}\n")
     except OSError:
         return
 
@@ -890,10 +880,8 @@ def record_workspace(fid: str, name: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "workspace.tmp"
     try:
-        config.write_for(tmp, f"{name}\n")
-        os.replace(tmp, d / "workspace")
+        config.replace_for(d / "workspace", f"{name}\n")
     except OSError:
         return
 
@@ -1215,10 +1203,8 @@ def record_density(fid: str, level: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "density.tmp"
     try:
-        config.write_for(tmp, f"{level}\n")
-        os.replace(tmp, d / "density")
+        config.replace_for(d / "density", f"{level}\n")
     except OSError:
         return
 
@@ -1271,10 +1257,8 @@ def record_bar_rows(fid: str, rows: int) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "bar_rows.tmp"
     try:
-        config.write_for(tmp, f"{int(rows)}\n")
-        os.replace(tmp, d / "bar_rows")
+        config.replace_for(d / "bar_rows", f"{int(rows)}\n")
     except OSError:
         return
 
@@ -1331,10 +1315,8 @@ def record_chrome(fid: str, level: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "chrome.tmp"
     try:
-        config.write_for(tmp, f"{level}\n")
-        os.replace(tmp, d / "chrome")
+        config.replace_for(d / "chrome", f"{level}\n")
     except OSError:
         return
 
@@ -1380,10 +1362,8 @@ def record_change(fid: str, slug: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "change.tmp"
     try:
-        config.write_for(tmp, f"{slug}\n")
-        os.replace(tmp, d / "change")
+        config.replace_for(d / "change", f"{slug}\n")
     except OSError:
         return
 
@@ -1443,10 +1423,8 @@ def record_selection(fid: str, name: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "selection.tmp"
     try:
-        config.write_for(tmp, f"{name}\n")
-        os.replace(tmp, d / "selection")
+        config.replace_for(d / "selection", f"{name}\n")
     except OSError:
         return
 
@@ -1495,10 +1473,8 @@ def record_hidden(fid: str, names) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "hidden.tmp"
     try:
-        config.write_for(tmp, "".join(f"{n}\n" for n in names))
-        os.replace(tmp, d / "hidden")
+        config.replace_for(d / "hidden", "".join(f"{n}\n" for n in names))
     except OSError:
         return
 
@@ -1656,10 +1632,8 @@ def record_identity(fid: str, values: dict[str, str]) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "identity.tmp"
     try:
-        config.write_for(tmp, json.dumps(dict(values)))
-        os.replace(tmp, d / "identity")
+        config.replace_for(d / "identity", json.dumps(dict(values)))
     except (OSError, TypeError, ValueError):
         return
 
@@ -1726,10 +1700,8 @@ def record_panes(fid: str, *, panels: dict[str, str]) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "panes.tmp"
     try:
-        config.write_for(tmp, json.dumps(dict(panels)))
-        os.replace(tmp, d / "panes")
+        config.replace_for(d / "panes", json.dumps(dict(panels)))
     except (OSError, TypeError, ValueError):
         return
 
@@ -1807,10 +1779,8 @@ def record_cwd(fid: str, path: str) -> None:
     d = frame_dir(fid, create=True)
     if d is None:
         return
-    tmp = d / "cwd.tmp"
     try:
-        config.write_for(tmp, f"{path}\n")
-        os.replace(tmp, d / _CWD_FILE)
+        config.replace_for(d / _CWD_FILE, f"{path}\n")
     except OSError:
         return
 
