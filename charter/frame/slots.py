@@ -479,6 +479,14 @@ def _top(fid: str) -> str:
     that predates the fourth field — answers `[]` and draws nothing, rather than a
     confident `ctx 0%`. Pinned by `tests.test_frame_slots.TopRenderer`.
 
+    **And #895 made "not knowing" the ordinary case.** Charter stopped wiring a
+    `statusLine`, so on a plane charter set up nothing pipes a per-turn payload into
+    `statusline.main` at all and no usage is recorded for any harness. The gauge is
+    therefore absent from this row until somebody wires that key themselves — a deliberate
+    cost, taken with the operator's decision, and the rule above is exactly what keeps it
+    honest: an empty row rather than a `ctx 0%` nobody can act on. Not a line of this
+    function changed for it, which is the point of the rule having been written first.
+
     **The persona ROSTER is drawn only when the sidebar is not (#530), and the active
     persona always is.** The operator asked why the top bar lists every persona when the
     sidebar lists them too, and they were right for the frame they were looking at: since

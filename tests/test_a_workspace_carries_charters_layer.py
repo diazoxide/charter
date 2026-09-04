@@ -24,7 +24,14 @@ from tests import _isolation
 
 
 def _plane_settings(root: Path, **extra) -> Path:
-    """The plane's own `.claude/settings.json`, shaped like this repo's committed one."""
+    """The plane's own `.claude/settings.json`, shaped like a plane an older charter set up.
+
+    It carries a `statusLine` on purpose and this repo's own committed file no longer does
+    (#895). That is the case worth fixturing: charter stopped WRITING the key, it did not
+    start removing it, so the planes this code meets in the wild are the ones that still
+    have it — and every assertion about what a workspace inherits has to be made against a
+    plane where the key is really present.
+    """
     d = root / ".claude"
     d.mkdir(parents=True, exist_ok=True)
     p = d / "settings.json"
@@ -55,15 +62,23 @@ class WorkspaceLayer(_isolation.PersonaIso):
 
 
 class WhatIsWritten(WorkspaceLayer):
-    def test_a_workspace_gets_the_planes_three_keys_and_only_those(self):
-        """`enabledPlugins`, `statusLine` and `env` — the plugin alone loses the last two."""
+    def test_a_workspace_gets_the_planes_two_keys_and_only_those(self):
+        """`enabledPlugins` and `env` — the plugin alone loses the second.
+
+        Three until #895. The plane fixture still HAS a `statusLine` — `_plane_settings`
+        writes one, the way a plane set up by an older charter still carries it — so this
+        is not "the key was absent from both files": it is in the plane's document, and
+        `WORKSPACE_KEYS` no longer names it, so it stays there.
+        """
         p = self.settings()
         self.assertTrue(p.is_file(), "workspaces/api/.claude/settings.json was not written")
         doc = json.loads(p.read_text())
-        self.assertEqual(sorted(doc), ["enabledPlugins", "env", "statusLine"])
+        self.assertEqual(sorted(doc), ["enabledPlugins", "env"])
         self.assertEqual(doc["enabledPlugins"], {"charter@charter": True})
         self.assertEqual(doc["env"], {"CHARTER_HARNESS": "claude-code"})
-        self.assertEqual(doc["statusLine"]["command"], "charter statusline")
+        self.assertIn("statusLine", json.loads(
+            (config.ROOT / ".claude" / "settings.json").read_text()),
+            "fixture no longer carries the key this test is about")
 
     def test_the_planes_other_keys_stay_in_the_plane(self):
         """A `permissions` block is the plane's decision about the plane's own root."""
@@ -155,12 +170,25 @@ class OwnershipIsASidecar(WorkspaceLayer):
 class StalenessIsRegenerateAndCompare(WorkspaceLayer):
     def test_a_workspace_reads_stale_when_the_plane_moves(self):
         """Regenerate and compare, the way `persona lint --only stale` does — the
-        generator's own wording drifts, so a stored diff would answer the wrong question."""
+        generator's own wording drifts, so a stored diff would answer the wrong question.
+
+        Moved a `statusLine` until #895. That key is no longer mirrored, so moving it
+        would now leave the layer correctly unchanged and this would assert nothing —
+        which is the point of the test directly below.
+        """
+        _plane_settings(config.ROOT, env={"CHARTER_HARNESS": "claude-code", "MOVED": "1"})
+        self.assertEqual(dict(workspace.harness_layer(self.ws))[".claude/settings.json"],
+                         "stale")
+
+    def test_moving_the_planes_status_line_does_not_make_a_workspace_stale(self):
+        """#895, from the staleness side. `statusLine` is out of `WORKSPACE_KEYS`, so a
+        plane that changes one has changed nothing a workspace mirrors — and a workspace
+        told to reinit over a key it does not carry is churn for its own sake."""
         _plane_settings(config.ROOT, statusLine={"type": "command",
                                                  "command": "charter statusline",
                                                  "padding": 0, "refreshInterval": 5})
         self.assertEqual(dict(workspace.harness_layer(self.ws))[".claude/settings.json"],
-                         "stale")
+                         "ok")
 
     def test_reading_staleness_writes_nothing(self):
         _plane_settings(config.ROOT, env={"CHARTER_HARNESS": "claude-code", "X": "1"})
@@ -482,14 +510,14 @@ class WhatThePlaneHasToOfferIsAskedThreeWays(WorkspaceLayer):
 
     All three were sweep survivors, and they are not one question: *no settings file at
     all*, *a settings file charter cannot parse*, and *a settings file with none of the
-    three mirrored keys* are different planes, and the middle one is the one charter must
+    mirrored keys* are different planes, and the middle one is the one charter must
     not guess over. Its own docstring is the specification — *"Empty here means the
     workspace gets no file and no marker at all, which is the honest rendering of 'there is
     nothing to mirror'; writing an empty `{}` would look like a layer."*
 
-    The `k in settings` filter is the third: without it a plane declaring one of the three
-    keys would carry the other two as absent entries, and a workspace would hold a document
-    asserting something the plane never said.
+    The `k in settings` filter is the third: without it a plane declaring one of the
+    mirrored keys would carry the rest as absent entries, and a workspace would hold a
+    document asserting something the plane never said.
     """
 
     def test_a_plane_with_no_settings_file_offers_nothing(self):
@@ -524,7 +552,7 @@ class TheBoundaryAsksTheNameFirst(WorkspaceLayer):
     and its parent is `WORKSPACES_DIR`, so a comparison alone answers *yes* for the one
     directory the whole mechanism exists to keep its hands off. The plane root's
     `.claude/settings.json` is user-owned and git-tracked; generating into it is the
-    failure `commands._ensure_statusline`'s never-repair restraint is written against.
+    failure `commands._ensure_guard_hook`'s never-repair restraint is written against.
     """
 
     def test_the_plane_root_reached_as_dot_dot_is_not_a_workspace(self):
@@ -604,8 +632,8 @@ class TheRowsQuietStates(WorkspaceLayer):
                         "no workspace at all — the count below would be zero either way")
         r = doctor.check_workspace_harness()
         self.assertEqual(r.status, doctor.OK)
-        self.assertIn("nothing to mirror — the plane declares no plugin, status line or "
-                      "env of its own", r.detail)
+        self.assertIn("nothing to mirror — the plane declares no plugin or env of its "
+                      "own", r.detail)
         self.assertNotIn("generated file(s)", r.detail)
 
 
@@ -729,7 +757,7 @@ class APathThatWouldLeaveTheWorkspaceIsNeverWritten(WorkspaceLayer):
     **What it costs is not a stray file.** `wire_harnesses` writes what `_layer_files`
     returns, so a `rel` climbing out of the workspace is charter generating into a
     directory it never claimed — the plane root's own `.claude/settings.json` is one `..`
-    away, git-tracked and the operator's, and `commands._ensure_statusline`'s never-repair
+    away, git-tracked and the operator's, and `commands._ensure_guard_hook`'s never-repair
     restraint is written against exactly that write.
     """
 
@@ -854,10 +882,11 @@ class WhatReinitSaysAboutTheLayer(WorkspaceLayer):
         self.assertIn("Up to date", " ".join(m for _, m in said))
 
     def test_a_file_charter_owns_and_the_plane_moved_reads_refreshed(self):
-        # One of the THREE mirrored keys, not `permissions` — that one stays in the plane,
-        # so moving it leaves the layer correctly unchanged and this would assert nothing.
-        _plane_settings(config.ROOT, statusLine={"type": "command",
-                                                 "command": "charter statusline --wide"})
+        # One of the two MIRRORED keys, not `permissions` and — since #895 — not
+        # `statusLine` either: both stay in the plane, so moving one leaves the layer
+        # correctly unchanged and this would assert nothing.
+        _plane_settings(config.ROOT, enabledPlugins={"charter@charter": True,
+                                                     "other@market": True})
         said = self._reinit()
         self.assertIn(
             f"Reinitialized '{self.ws}' → refreshed .claude/settings.json "

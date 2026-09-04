@@ -58,10 +58,20 @@ class TestFreshDirectory(InitIso):
         self.assertIn("workspaces/", body)
         self.assertIn(".charter/", body)
 
-    def test_writes_a_statusline_when_none_is_configured(self):
+    def test_writes_no_statusline_at_all(self):
+        """#895. `init` wrote a `statusLine` key here for charter's whole life, and the
+        operator asked for it to stop. Asserted on the parsed document rather than on the
+        summary text, so a key written under a different spelling still fails.
+
+        The rest of what `init` puts in this file is untouched: the plugin's `env` and the
+        plane-root guard are both here, which is what makes this a removal rather than a
+        file `init` stopped writing.
+        """
         self._init()
         s = json.loads((self.root / ".claude" / "settings.json").read_text())
-        self.assertIn("charter statusline", s["statusLine"]["command"])
+        self.assertNotIn("statusLine", s)
+        self.assertIn("env", s)
+        self.assertIn("hooks", s)
 
 
 class TestAdditiveOnly(InitIso):
@@ -71,6 +81,19 @@ class TestAdditiveOnly(InitIso):
         self.assertIn("# mine", (self.root / "charter.toml").read_text())
 
     def test_an_existing_statusline_is_left_alone(self):
+        """It always was somebody else's key; since #895 it is somebody else's key that
+        charter has no writer for at all — and that is exactly why this test stays.
+
+        The question #895 had to answer is what happens to a plane whose committed
+        `.claude/settings.json` still carries the `statusLine` charter used to write. The
+        answer is *nothing*: `init` and `reinit` are additive, they never delete, and a
+        key charter has stopped writing is not thereby a key charter may remove from
+        somebody's git-tracked file. So an existing plane's footer goes on working until
+        its owner takes it out, which is their edit to make. Spelled as `my-own-thing`
+        rather than `charter statusline` deliberately — charter's restraint here has never
+        depended on whose command is in there, and pinning it on the foreign value keeps
+        that true.
+        """
         d = self.root / ".claude"
         d.mkdir()
         (d / "settings.json").write_text(json.dumps(
@@ -79,6 +102,20 @@ class TestAdditiveOnly(InitIso):
         self._init()
         s = json.loads((d / "settings.json").read_text())
         self.assertEqual(s["statusLine"]["command"], "my-own-thing")
+
+    def test_charters_own_old_statusline_is_left_alone_too(self):
+        """The other half, and the one that could have gone the other way: this is
+        charter's OWN key, written by an older charter, on a plane being re-run by a newer
+        one. Silently rewriting an operator's committed file is not defensible even when
+        charter put the value there — so `init` leaves it, byte for byte."""
+        d = self.root / ".claude"
+        d.mkdir()
+        mine = {"type": "command", "command": "charter statusline", "padding": 0,
+                "refreshInterval": 10}
+        (d / "settings.json").write_text(json.dumps({"statusLine": mine}))
+        self._init()
+        s = json.loads((d / "settings.json").read_text())
+        self.assertEqual(s["statusLine"], mine)
 
     def test_unrelated_settings_keys_survive(self):
         d = self.root / ".claude"
@@ -105,11 +142,18 @@ class TestAdditiveOnly(InitIso):
         self.assertEqual((d / "settings.json").read_text(), "{ not json")
 
 
-class TestStatuslineFormattingPreserved(InitIso):
-    """F1: adding `statusLine` to an existing settings.json must disturb the rest of the
+class TestSettingsFormattingPreserved(InitIso):
+    """F1: adding a key to an existing settings.json must disturb the rest of the
     file as little as practical — not re-indent/reformat everything `json.dumps(...,
     indent=2)` touches. These pin the *formatting*, not just the values (the vacuous
-    check `test_unrelated_settings_keys_survive` already covers values)."""
+    check `test_unrelated_settings_keys_survive` already covers values).
+
+    **Written against `statusLine` until #895, and retargeted rather than deleted.** The
+    property was never the status line's: it belongs to `_json_style`, which every writer
+    of this file goes through, and the two that are left — `_ensure_guard_hook`'s `hooks`
+    and `_ensure_env`'s `env` — exercise it identically. Deleting these with the key would
+    have taken a live guarantee off a file charter still edits.
+    """
 
     def test_compact_single_line_file_stays_single_line(self):
         d = self.root / ".claude"
@@ -123,7 +167,8 @@ class TestStatuslineFormattingPreserved(InitIso):
         s = json.loads(text)
         self.assertEqual(s["permissions"]["allow"], ["Bash(ls)"])
         self.assertEqual(s["env"]["FOO"], "bar")
-        self.assertIn("statusLine", s)
+        self.assertIn("hooks", s)
+        self.assertNotIn("statusLine", s)
 
     def test_existing_indent_width_is_matched_not_forced_to_two(self):
         d = self.root / ".claude"
@@ -140,15 +185,19 @@ class TestStatuslineFormattingPreserved(InitIso):
         text = (d / "settings.json").read_text()
         # The file's own 4-space indent must be reused, not overwritten with 2.
         self.assertIn('\n    "permissions"', text)
-        self.assertIn('\n    "statusLine"', text)
+        self.assertIn('\n    "hooks"', text)
         self.assertNotIn('\n  "permissions"', text)
 
 
 class TestExitCodeReflectsSkips(InitIso):
     """F2: any requested piece that could not be created must be visible in the exit
-    code, not just as a warning — a malformed settings.json (statusLine silently not
-    written) is the same shape of failure as a blocked baseline directory (already
-    non-zero), so both must return non-zero."""
+    code, not just as a warning — a malformed settings.json (the plane-root guard
+    silently not written) is the same shape of failure as a blocked baseline directory
+    (already non-zero), so both must return non-zero.
+
+    It was the status line that went unwritten when this was first pinned; #895 removed
+    that writer and the guard hook, which shares the file, now carries the verdict.
+    """
 
     def test_malformed_settings_json_is_a_nonzero_exit(self):
         d = self.root / ".claude"
@@ -209,8 +258,13 @@ class TestSummaryStaysReadable(InitIso):
         # keeps the line readable.
         out = buf.getvalue()
         self.assertEqual(out.count(".claude/settings.json"), 1, out)
-        self.assertIn("statusLine", out)
+        # Both remaining notes, named, so the fold is exercised rather than satisfied by
+        # there being only one thing to fold. It was `statusLine` and `plane-root guard`
+        # until #895; `env` is the other writer of this file and takes the vacated slot —
+        # without a second note the count above would be trivially 1.
+        self.assertIn("env", out)
         self.assertIn("plane-root guard", out)
+        self.assertNotIn("statusLine", out)
 
     def test_the_line_stays_under_a_readable_width(self):
         import io

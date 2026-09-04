@@ -58,7 +58,15 @@ class TestTheStampIsUsable(unittest.TestCase):
     def test_every_capture_is_stamped(self):
         """A capture added without a stamp would be exempt from the check forever. The
         drawings (`model.svg`, `social-card.svg`) have no source to re-run and are
-        deliberately not listed — see docs/assets/README.md."""
+        deliberately not listed — see docs/assets/README.md.
+
+        **`statusline.svg` stays on this list after #895**, which proposed removing it with
+        the Claude Code footer. It is not a picture of that footer; it is a capture of
+        `charter statusline`, a command that survives because opencode's `/charter` pipes
+        it, `--watch` loops it, and the frame's panels are built out of the same renderers.
+        Dropping the name here would have taken a capture of a live command out of the
+        freshness gate permanently, which is the one thing this test exists to stop.
+        """
         doc = json.loads(_STAMP.read_text())
         captures = {"demo.svg", "personas.svg", "statusline.svg"}
         self.assertEqual(captures - set(doc), set(),

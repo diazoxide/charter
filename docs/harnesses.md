@@ -38,6 +38,11 @@ offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 | | how it is installed | how it updates | what it cannot carry | what to do about it |
 | --- | --- | --- | --- | --- |
 | Claude Code | `charter init` — the plugin, at `project` scope, for the plane it creates (`charter doctor --fix` for a plane that already exists) | `claude plugin update charter@charter` | — | — |
+
+Claude Code's row is empty because nothing charter offers is out of reach there, not
+because charter fills every surface it has: since 0.57.0 charter writes no `statusLine`
+key, so its footer is the operator's to wire or leave empty. That is a choice, not a
+ceiling, which is why it is written here and not in the table.
 | opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, compared byte for byte (`read_bytes`) with the one charter generates; anything else in that plugin directory is named too, and nothing charter did not write is ever overwritten | no status bar; no per-turn prompt hook; no ask at tool time; no per-workspace config; **no isolation from other plugins** | `charter statusline --watch`; mid-session notes ride tool output already; charter's own tool-time asks allow and are not shown — denials are unaffected; a second plugin in that directory shares charter's globals and can disable its guards, so `doctor` names it — charter reports the realm, it cannot contain it |
 | Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions; no project-level config *file*, so no per-workspace config (a project `.codex/skills/` **is** read — a skills surface, not config) | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
 
@@ -67,10 +72,11 @@ reason charter refuses to write `~/.claude/settings.json` unasked.
 **Plus one generated file per workspace, and only for Claude Code.** Claude Code reads
 project settings from the session's working directory and does not walk up, so a chat
 launched in `workspaces/<ws>/` — which is where the `+` and every workspace tab put it —
-would otherwise get no plugin, no status line and no `$CHARTER_HARNESS`. Charter mirrors
-the plane's `enabledPlugins`, `statusLine` and `env` into
-`workspaces/<ws>/.claude/settings.json` at launch, records what it wrote in a
-`.charter-generated` sidecar, and never touches a file whose hash it cannot vouch for.
+would otherwise get no plugin and no `$CHARTER_HARNESS`. Charter mirrors the plane's
+`enabledPlugins` and `env` into `workspaces/<ws>/.claude/settings.json` at launch, records
+what it wrote in a `.charter-generated` sidecar, and never touches a file whose hash it
+cannot vouch for. (`statusLine` was the third key mirrored until 0.57.0; charter no longer
+writes one anywhere, so a plane that still carries one keeps it to itself.)
 `charter doctor`'s `workspace layer` row reports staleness; `charter workspace reinit` is
 the repair.
 
@@ -137,6 +143,12 @@ The one worth knowing. It repaints the plane state in place in any spare termina
 status-bar socket, no multiplexer, the same render on every harness including the one that
 has a bar. It shows the plane, not the session, so the token and context columns are blank
 and it says so.
+
+**It is why `charter statusline` outlived charter's Claude Code footer.** #895 asked
+whether the status line was used for anything but that footer. It is: this loop, opencode's
+`/charter` slash command (whose body pipes the same command), and the frame, whose panels
+are built out of the same renderers. So charter stopped WIRING a status line and kept the
+command that draws one.
 
 ## The one exception: Codex
 

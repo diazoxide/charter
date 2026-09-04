@@ -96,7 +96,7 @@ class TestItWritesTheHostsRule(GuardCase):
         self.assertEqual(self.read()["statusLine"]["command"], "charter statusline")
 
     def test_a_malformed_settings_file_is_never_overwritten(self):
-        """The same restraint `_ensure_statusline` keeps: charter does not rewrite a file it
+        """The same restraint `_ensure_guard_hook` keeps: charter does not rewrite a file it
         could not parse, because the operator's content is in there."""
         p = self.settings()
         p.parent.mkdir(parents=True, exist_ok=True)

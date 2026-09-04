@@ -2,12 +2,6 @@
   "env": {
     "CHARTER_HARNESS": "claude-code"
   },
-  "statusLine": {
-    "type": "command",
-    "command": "charter statusline",
-    "padding": 0,
-    "refreshInterval": 10
-  },
   "enabledPlugins": {
     "charter@charter": true
   }

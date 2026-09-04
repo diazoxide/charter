@@ -428,8 +428,9 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         78%`. This reopen restores no such mapping and cannot: a reopened chat is a FRESH
         chat id, so its directory has no `session` file, `state.harness_session` answers
         ``None``, and `frame/slots.py`'s rule — no gauge rather than a wrong one — applies
-        on its own. The mapping is written on the chat's first turn by Claude Code's own
-        `statusLine` hook, from the live payload.
+        on its own. The mapping is written at `sessionstart` by `hooks._record_harness_
+        session`, from that hook's own payload — by Claude Code's `statusLine` hook, on the
+        chat's first turn, until #895 unwired it.
 
         That makes the argument independent of whether `claude --resume` preserves the
         harness's session id, which is the measurement the gate was traded against. It

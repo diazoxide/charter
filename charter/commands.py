@@ -1070,27 +1070,22 @@ def _ensure_gitignore(root: Path) -> bool:
     return True
 
 
-#: What `init` writes into `.claude/settings.json`'s `statusLine` key.
-#: `refreshInterval` re-runs the status line every N seconds IN ADDITION to the event-driven
-#: updates. Set because charter's status line is mostly things that change without a session
-#: event: `silent 12m` ages with wall-clock, piece counts move as background workers claim
-#: and declare, and the plane-root warning fires on state another agent created. The docs
-#: name this case exactly — "the event-driven triggers can go quiet when the main session is
-#: idle, for example while a coordinator waits on background subagents".
-#:
-#: TEN, not the permitted minimum of one. Charter renders silence in MINUTES, so a
-#: one-second timer is ~60x finer than the coarsest thing displayed — and a render is ~80ms
-#: on a two-clone plane (a `git status` per tree), so it would burn ~8% of a core
-#: continuously to refresh a number that changes once a minute. Ten is still six times finer
-#: than the granularity, at a tenth of the cost.
-_STATUSLINE = {"type": "command", "command": "charter statusline", "padding": 0,
-               "refreshInterval": 10}
-
-
-def _statusline_snippet() -> str:
-    """The exact JSON to hand a user whose `.claude/settings.json` we could not safely
-    touch — so they can paste the `statusLine` key in themselves."""
-    return json.dumps({"statusLine": _STATUSLINE}, indent=2)
+# `_STATUSLINE`, `_statusline_snippet` and `_ensure_statusline` used to live here: the
+# `statusLine` key `init` wrote into `.claude/settings.json`, its ten-second
+# `refreshInterval`, and the writer that put them there. **#895 removed all three.**
+# Charter does not put a status line in Claude Code any more, so it writes nothing under
+# that key, offers no snippet to paste, and reports on none of it.
+#
+# What is NOT gone is the renderer. `charter statusline` is still a command, because
+# removing it would take opencode's `/charter` (whose body is ``!`echo '{}' | charter
+# statusline` ``) and both non-Claude harnesses' `--watch` remedy with it — the issue asked
+# whether the status line was "only used for" Claude Code and the measured answer is no.
+# What is gone is charter WIRING it into a harness that already has a footer of its own.
+#
+# The restraint the deleted writer carried — never repair, never rewrite, touch only the
+# one key charter owns and only when it is absent — did not go with it: it is stated in
+# full on :func:`_ensure_guard_hook`, which keeps it for the same file, and every docstring
+# that used to cite `_ensure_statusline` for it now cites that one.
 
 
 #: The ONE hook charter wires itself, and only this one.
@@ -1145,13 +1140,20 @@ def _plugin_dispatches_guard(root: Path) -> str | None:
 def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     """Wire `charter hook pretooluse` into ``.claude/settings.json`` IF ABSENT.
 
-    Same contract and the same restraint as :func:`_ensure_statusline`, for the same
-    reason: that file is user-owned and git-tracked and holds keys charter has no business
-    touching. This adds one entry under one key, only when no charter `pretooluse` hook is
-    already declared there, and never rewrites a malformed file.
+    **The canonical statement of charter's restraint over `.claude/settings.json`**, and
+    it is here rather than one function up because #895 deleted the one that used to hold
+    it (`_ensure_statusline`). That file is user-owned, git-tracked, has no comment syntax,
+    and holds keys charter has no business touching — ``permissions``,
+    ``extraKnownMarketplaces``, a ``statusLine`` somebody wired themselves. So charter
+    touches *only* the one key it owns, and only when that key is not already there. A
+    malformed existing file is left completely alone: never rewritten, never "repaired" —
+    the operator's content is in there, and a repair is a rewrite wearing a helpful word.
+
+    This adds one entry under one key, only when no charter `pretooluse` hook is already
+    declared there.
 
     Returns ``(status, detail)`` — ``"created"`` / ``"present"`` / ``"malformed"`` /
-    ``"blocked"``, matching `_ensure_statusline` so callers report both the same way.
+    ``"blocked"``; `_ensure_env` matches the vocabulary so callers report both the same way.
     """
     d = root / ".claude"
     p = d / "settings.json"
@@ -1507,7 +1509,7 @@ def _load_settings(root: Path) -> tuple[dict | None, Path]:
 
     A missing file reads as ``{}`` — writing the first rule into a plane that has no
     settings yet is ordinary. A *malformed* one reads as ``None`` so callers refuse rather
-    than repair: the operator's content is in there, and `_ensure_statusline` already keeps
+    than repair: the operator's content is in there, and `_ensure_guard_hook` already keeps
     that restraint for the same file.
     """
     p = _settings_path(root)
@@ -1717,7 +1719,7 @@ def cmd_guard_ask(args) -> int:
     `charter.toml` list would be a second engine that could not win: *"a matching ask rule
     still prompts even when the hook returned `allow` or `ask`"*.
 
-    `_ensure_statusline`'s docstring says settings.json holds keys "charter has no business
+    `_ensure_guard_hook`'s docstring says settings.json holds keys "charter has no business
     touching (``permissions``, …)". That still holds for `init`, which writes unasked. This
     is the opposite: the operator named the rule and the command that writes it, so charter
     is the editor rather than the author.
@@ -1876,70 +1878,6 @@ def _warn_if_shadowing(rule: str) -> None:
                   f"declares — an ask rule outranks charter's tool-gate.")
 
 
-def _ensure_statusline(root: Path) -> tuple[str, Path | None]:
-    """Write ``.claude/settings.json``'s ``statusLine`` key IF ABSENT. That file is
-    user-owned, git-tracked, has no comment syntax, and holds keys charter has no
-    business touching (``permissions``, ``enabledPlugins``, ``extraKnownMarketplaces``,
-    …) — so this touches *only* the one key it owns, and only when the key isn't already
-    there. A malformed existing file is left completely alone: never rewritten, never
-    "repaired".
-
-    Returns ``(status, detail)``:
-    - ``"created"``, ``None`` — file (or just the key) was written.
-    - ``"present"``, ``None`` — a ``statusLine`` already exists; untouched.
-    - ``"updated"``, ``None`` — charter's OWN status line gained a field it now writes
-      (currently ``refreshInterval``). Only ever charter's own, only ever a field that was
-      absent — a hand-set value is never reverted.
-    - ``"malformed"``, the settings path — exists but isn't valid JSON; untouched.
-    - ``"blocked"``, the ``.claude`` path — that path exists and isn't a directory.
-    """
-    d = root / ".claude"
-    p = d / "settings.json"
-    if not p.exists():
-        try:
-            d.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            return "blocked", d
-        p.write_text(json.dumps({"statusLine": dict(_STATUSLINE)}, indent=2) + "\n")
-        return "created", None
-    raw = p.read_text()
-    try:
-        settings = json.loads(raw)
-    except (OSError, json.JSONDecodeError):
-        return "malformed", p
-    if not isinstance(settings, dict):
-        return "malformed", p
-    existing = settings.get("statusLine")
-    if isinstance(existing, dict):
-        # Charter's OWN status line, missing a field charter has since started writing.
-        # Adding it is updating a key charter wrote, which is a different act from touching
-        # a user's — and without it the field would reach only brand-new planes. A status
-        # line running someone else's script is left alone, and so is a value someone set by
-        # hand: silently reverting a deliberate choice is what this function exists not to do.
-        if (existing.get("command") == _STATUSLINE["command"]
-                and "refreshInterval" not in existing):
-            existing["refreshInterval"] = _STATUSLINE["refreshInterval"]
-            indent, separators = _json_style(raw)
-            rewritten = json.dumps(settings, indent=indent, separators=separators)
-            if raw.endswith("\n"):
-                rewritten += "\n"
-            p.write_text(rewritten)
-            return "updated", None
-        return "present", None
-    if "statusLine" in settings:
-        return "present", None
-    settings["statusLine"] = dict(_STATUSLINE)
-    indent, separators = _json_style(raw)
-    rewritten = json.dumps(settings, indent=indent, separators=separators)
-    # Match the original's trailing newline (or lack of one) rather than forcing one —
-    # same "disturb it as little as practical" rule applied to the one byte outside the
-    # JSON grammar itself.
-    if raw.endswith("\n"):
-        rewritten += "\n"
-    p.write_text(rewritten)
-    return "created", None
-
-
 def _fold_entries(entries: list[str]) -> list[str]:
     """``a.json (x)``, ``a.json (y)`` → ``a.json (x, y)``, order preserved.
 
@@ -1970,7 +1908,7 @@ def ensure_env_var(root: Path, key: str, value: str) -> tuple[str, Path | None]:
     territory (it already owns the status line, the guard hook and the ask rules in that
     same file), so the plumbing stays here and the harness asks for it.
 
-    Same contract and restraint as :func:`_ensure_statusline`. An `env` that is not an
+    Same contract and restraint as :func:`_ensure_guard_hook`. An `env` that is not an
     object, or a key someone set by hand, is left alone — reverting a deliberate choice
     is what these writers exist not to do.
     """
@@ -2397,20 +2335,6 @@ def cmd_init(args) -> int:
     else:
         present.append(".gitignore")
 
-    sl_status, sl_detail = _ensure_statusline(root)
-    if sl_status == "created":
-        created.append(".claude/settings.json (statusLine)")
-    elif sl_status == "updated":
-        created.append(".claude/settings.json (statusLine refreshInterval)")
-    elif sl_status == "present":
-        present.append(".claude/settings.json (statusLine already set)")
-    elif sl_status == "malformed":
-        util.warn(f"{sl_detail} is not valid JSON — left it completely untouched (charter "
-                  f"never rewrites or 'repairs' it). Add the status line yourself:\n"
-                  f"{_statusline_snippet()}")
-    elif sl_status == "blocked":
-        blocked.append((".claude", sl_detail))
-
     # The plane-root branch guard (#157). Wired here because #168: it shipped inert on any
     # plane not running the plugin, with `doctor` showing a green tick over it — and a
     # safety feature that ships off by default stays off.
@@ -2427,7 +2351,10 @@ def cmd_init(args) -> int:
     #
     # `claude plugin install --scope project` writes `enabledPlugins` into the plane's own
     # `.claude/settings.json` — measured on a real machine, where that file holds exactly
-    # `enabledPlugins`, `env` and `statusLine` and no `hooks` block. So by the time
+    # `enabledPlugins`, `env` and `statusLine` and no `hooks` block. (The measurement is
+    # left as taken. That plane was set up before #895, which is why a `statusLine` is in
+    # it; what the measurement is FOR is the absent `hooks` block, and that has not moved.)
+    # So by the time
     # `_ensure_guard_hook` runs, `_plugin_dispatches_guard` finds an enabled plugin that
     # dispatches `charter hook pretooluse` and correctly writes nothing.
     #
@@ -2463,10 +2390,15 @@ def cmd_init(args) -> int:
 
     # Same failure shape either way — "you asked for this, it did not happen" — so both
     # exit non-zero: a blocked baseline path (file already prints its own util.err above)
-    # and a malformed settings.json (its util.warn already fired where sl_status was
+    # and a malformed settings.json (its util.warn already fired where `gh_status` was
     # decided). Scripted/CI callers must be able to tell from the exit code alone that
     # something requested was skipped, not just from stderr text.
-    if blocked or sl_status == "malformed":
+    #
+    # `gh_status`, and until #895 `sl_status` was ORed in beside it. There is no second
+    # writer of that file any more, so the guard hook's own verdict is the whole answer —
+    # and it is the same file, so a malformed settings.json still exits non-zero exactly
+    # as it did.
+    if blocked or gh_status == "malformed":
         for name, p in blocked:
             util.err(f"{name}/ can't be created — {p} already exists and is not a "
                      f"directory. charter never deletes or renames existing content; "
@@ -2560,18 +2492,12 @@ def cmd_reinit(args) -> int:
 
     # The plane-root guard, on the SAME terms as init. `doctor`'s hint for an unwired plane
     # names `charter reinit`, so reinit has to be the command that actually wires it (#168).
-    # The status line, on the same terms as the guard hook below: charter's own key gains a
-    # field charter has since started writing (`refreshInterval`), and nothing else is
-    # touched. Without this the field would reach only brand-new planes.
-    sl_status, sl_detail = _ensure_statusline(config.ROOT)
-    if sl_status == "created":
-        created.append(".claude/settings.json (statusLine)")
-    elif sl_status == "updated":
-        created.append(".claude/settings.json (statusLine refreshInterval)")
-    elif sl_status == "malformed":
-        util.warn(f"{sl_detail} is not valid JSON — left it completely untouched. Add the "
-                  f"status line yourself:\n{_statusline_snippet()}")
-
+    #
+    # The status line used to be wired here too, on the same terms, so that charter's own
+    # key could gain a field charter had since started writing. #895 removed it: charter
+    # writes no `statusLine` at all now, and a plane that already carries one keeps it
+    # untouched — never re-written, never removed. `reinit` is additive, and deleting a key
+    # out of an operator's committed, git-tracked file is the opposite of that.
     unvouched: list[str] = []
     for status, label in _wire_harnesses(config.ROOT):
         if status == "created":

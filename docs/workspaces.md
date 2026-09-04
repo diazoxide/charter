@@ -27,13 +27,18 @@ The name is `[workspace] default` if your `charter.toml` sets one.
 
 Claude Code reads project settings from the session's working directory and **does not walk
 up** for them. A chat launched in `workspaces/<name>/` — which is where the `+` and every
-workspace tab put it — would therefore get no plugin, no status line and no
-`$CHARTER_HARNESS`, while its agents and skills arrived anyway, because those *do* walk up
-and this directory is not a git boundary.
+workspace tab put it — would therefore get no plugin and no `$CHARTER_HARNESS`, while its
+agents and skills arrived anyway, because those *do* walk up and this directory is not a
+git boundary.
 
 So charter generates one file here, at launch: `.claude/settings.json`, holding the plane's
-own `enabledPlugins`, `statusLine` and `env` and nothing else. Skills come with the plugin
-and agents already walk up; a second copy of either would shadow the plugin's.
+own `enabledPlugins` and `env` and nothing else. Skills come with the plugin and agents
+already walk up; a second copy of either would shadow the plugin's.
+
+`statusLine` was the third key mirrored here until 0.57.0. Charter no longer writes one
+into any settings file, so there is nothing of charter's under that key to carry sideways
+— and a `statusLine` an operator wired themselves stays where they put it, the way
+`permissions` always has.
 
 It is **charter's file, and only while it stays charter's**. A `.charter-generated` sidecar
 records a hash of what charter wrote. A file that still matches is refreshed when the

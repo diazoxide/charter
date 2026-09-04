@@ -187,11 +187,15 @@ channel = "dev"
 [harness]
 # Bare `charter` opens the frame with this harness — the same command as `charter
 # claude`, which still works and is what this expands to. Claude Code and not one of the
-# other two, and the reason is not preference: it is the only harness that writes its
-# session id where charter can read it (`state.record_harness_session`, whose one caller
-# is Claude Code's own `statusLine` hook), so it is the only one with a context gauge in
-# the top bar. codex and opencode both carry a `status-bar` deficit saying charter cannot
-# render into their chrome at all.
+# other two, and the reason is not preference: it is the only harness that puts its own
+# session id where charter can read it (`hooks._record_harness_session`), so it is the only
+# one whose chats `charter reopen` can resume. codex and opencode both carry a `status-bar`
+# deficit saying charter cannot render into their chrome at all.
+#
+# The reason used to be the top bar's context gauge, and #895 took that away rather than
+# this default: charter no longer wires a `statusLine`, and `context_window` reaches that
+# command and nothing else, so no harness has a gauge now. Resume is what is left, and it
+# is still Claude Code alone.
 #
 # A plane that writes no default keeps argparse's usage message, which is what charter does
 # for every plane but this one. And `charter 2>&1 | head` still prints that usage rather

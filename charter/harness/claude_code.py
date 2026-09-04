@@ -16,7 +16,7 @@ from .base import Harness, LayerPart
 NAME = "claude-code"
 
 #: The keys charter mirrors from the plane's own `.claude/settings.json` into a workspace
-#: directory, and the reason there are three rather than one.
+#: directory, and the reason there are two rather than one.
 #:
 #: Claude Code reads project settings from the session's working directory and **does not
 #: walk up**, so a chat whose cwd is `workspaces/<ws>/` reads no settings at all. Agents,
@@ -26,16 +26,20 @@ NAME = "claude-code"
 #: would shadow the plugin's own non-deterministically; Claude Code says so itself, by
 #: name: *"is already taken by X, which takes precedence"*.
 #:
-#: `enabledPlugins` alone is not enough, which is the correction this list records.
-#: `statusLine` has no plugin surface at all, and `env` is where `$CHARTER_HARNESS` comes
-#: from on a harness with no per-shell hook. A workspace given only the plugin loads
-#: charter's skills and hooks and still renders no status line and cannot say which
-#: harness it is.
+#: `enabledPlugins` alone is not enough, which is the correction this list records: `env`
+#: is where `$CHARTER_HARNESS` comes from on a harness with no per-shell hook, so a
+#: workspace given only the plugin loads charter's skills and hooks and still cannot say
+#: which harness it is.
+#:
+#: **`statusLine` was the third and is gone (#895).** Charter no longer writes a status
+#: line into Claude Code's settings at all, so there is nothing of charter's under that key
+#: to mirror. An operator who wires one by hand owns it the way they own `permissions`:
+#: charter neither copies it sideways nor reports on it.
 #:
 #: Nothing else. `permissions` is the plane's decision about the plane's own root, and
 #: copying a grant sideways into a directory nobody granted it in puts a permission in
 #: force where no one clicked for it.
-WORKSPACE_KEYS = ("enabledPlugins", "statusLine", "env")
+WORKSPACE_KEYS = ("enabledPlugins", "env")
 
 #: Where the mirrored document goes, relative to the workspace directory.
 WORKSPACE_SETTINGS = ".claude/settings.json"
@@ -47,19 +51,21 @@ _PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 
 #: Charter's layer, one part per discovery rule — every rule measured on binary 2.1.259.
 #:
-#: **Three parts and not one, because three rules.** `settings` is cwd-only; `skills+agents`
-#: walk up and stop at the git boundary; and the status line rides in the settings file, so
-#: it inherits that file's cwd-only rule rather than the walking one. `CLAUDE.md` is the
-#: fourth rule and is deliberately NOT a part here: it walks up and is **not** git-bounded,
-#: so it arrives almost everywhere — which is exactly why the reported chat read as
-#: half-configured rather than as absent, and `doctor` says so in the row instead of
-#: checking for a file that is always found.
+#: **Two parts and not one, because two rules.** `settings` is cwd-only; `skills+agents`
+#: walk up and stop at the git boundary. `CLAUDE.md` is the third rule and is deliberately
+#: NOT a part here: it walks up and is **not** git-bounded, so it arrives almost
+#: everywhere — which is exactly why the reported chat read as half-configured rather than
+#: as absent, and `doctor` says so in the row instead of checking for a file that is always
+#: found.
 #:
-#: The status line is its own part rather than folded into `settings` for the correction
-#: :data:`WORKSPACE_KEYS` already records: *a workspace given only the plugin loads
-#: charter's skills and hooks and still renders no status line.* Two facts that go missing
-#: separately have to be reported separately, or the one that is present hides the one
-#: that is not.
+#: **There was a third part, `status line`, and #895 removed it.** It existed because two
+#: facts that go missing separately have to be reported separately — but the two stopped
+#: being separate the moment charter stopped writing `statusLine`. The part answered
+#: *"does this directory carry charter's footer"* against a key charter no longer puts
+#: anywhere, so on every plane charter sets up it could only ever answer ✗, and a row that
+#: is always red about a surface nobody asked for is the cry-wolf failure `check_harness`
+#: records. What a hand-wired footer does is its author's business, the same way
+#: `permissions` is.
 LAYER = (
     LayerPart(
         "settings", _PROJECT_SETTINGS, False,
@@ -72,11 +78,6 @@ LAYER = (
         "charter wrote above that boundary is out of reach, while CLAUDE.md walks up and "
         "is NOT git-bounded, which is why a session like this reads as half-configured "
         "rather than empty"),
-    LayerPart(
-        "status line", _PROJECT_SETTINGS, False,
-        "`statusLine` is a key in that same settings file, so it is cwd-only too — a "
-        "directory can carry the plugin and still render nothing",
-        keys=("statusLine",)),
 )
 
 
@@ -114,7 +115,14 @@ class ClaudeCodeHarness(Harness):
     #: `workspaces/<ws>/` rides the plane's acceptance (it is inside the plane's own
     #: repository) while a clone at `workspaces/<ws>/<repo>` or a linked worktree has a
     #: git root of its own and needs its own.
-    trust_gate = "hooks or the status line"
+    #:
+    #: This read "hooks or the status line" until #895. The binary still gates both — that
+    #: measurement is unchanged — but charter now writes only one of them, and naming a
+    #: surface charter no longer wires would send an operator looking for a footer that is
+    #: not there. **Hooks are the half that still matters and the half that is still
+    #: named**: an untrusted directory is a plane-root guard that does not fire, which is
+    #: the whole reason this condition is printed at all.
+    trust_gate = "hooks"
 
     #: Empty on purpose. Claude Code carries every surface charter has — it is the
     #: runtime charter grew inside, so it is the reference ceiling rather than a harness
@@ -200,7 +208,7 @@ class ClaudeCodeHarness(Harness):
                  f"{plugincache.INSTALL_SCOPE}`.")]
 
     def workspace_files(self) -> dict[str, str]:
-        """The plane's own three settings keys, as one document for a workspace to hold.
+        """The plane's own settings keys, as one document for a workspace to hold.
 
         **A 1:1 sync, and v1 has no overrides on purpose.** The whole of the requirement
         is that a chat standing in `workspaces/<ws>/` gets the layer a chat standing in
@@ -209,12 +217,12 @@ class ClaudeCodeHarness(Harness):
         specific one would ship a mechanism nothing exercises — ADR 0007's objection.
 
         **Read from the plane's committed file rather than composed from charter's own
-        constants**, and that is what makes it a sync rather than a second generator.
-        `commands._STATUSLINE` is one of the two things that would have to be spelled
-        here, and a plane whose operator changed their status line by hand would then get
-        charter's default mirrored into every workspace — silently reverting a deliberate
-        choice, in a new place, which is the one thing `_ensure_statusline` exists not to
-        do.
+        constants**, and that is what makes it a sync rather than a second generator. The
+        argument survived #895 unchanged even though the constant it used to name did not:
+        a plane whose operator edited one of these keys by hand would otherwise get
+        charter's default mirrored into every workspace, silently reverting a deliberate
+        choice in a new place. Reading the file cannot do that; composing from constants
+        always can.
 
         Empty for a plane with no settings of its own, and empty for one whose settings
         are not parseable: `_load_settings` returns ``None`` for the second, and charter

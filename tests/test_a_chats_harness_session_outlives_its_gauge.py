@@ -249,5 +249,113 @@ class TheReaderAnswersNoneRatherThanRaising(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.kept_harness_session(FID))
 
 
+class AHookIsTheWriterNow(PersonaIso, unittest.TestCase):
+    """#895 deleted the only process that wrote this id, so a hook writes it instead.
+
+    Charter no longer puts a `statusLine` in Claude Code's settings, and that command was
+    `record_harness_session`'s one caller. Without a replacement every Claude Code chat
+    would answer `charter reopen` with *"no session id recorded for this chat yet"* — a
+    feature going out silently, which #895 neither asked for nor mentioned. A hook holds
+    both ids for the same two reasons the status line did: it runs in the chat's own pane,
+    so `$CHARTER_SESSION_ID` is in its environment, and its stdin payload carries
+    `session_id`.
+    """
+
+    def _run(self, *, harness="claude-code", chat=FID, sid=SID, in_plane=True):
+        import os
+
+        from charter import hooks
+        env = {}
+        if chat is not None:
+            env["CHARTER_SESSION_ID"] = chat
+        if harness is not None:
+            env["CHARTER_HARNESS"] = harness
+        with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.object(hooks, "_in_a_plane", return_value=in_plane):
+            if chat is None:
+                os.environ.pop("CHARTER_SESSION_ID", None)
+            if harness is None:
+                os.environ.pop("CHARTER_HARNESS", None)
+            hooks._record_harness_session({"session_id": sid} if sid else {})
+
+    def test_a_claude_code_hook_records_the_id_reopen_asks_with(self):
+        self._run()
+        self.assertEqual(state.harness_session(FID), SID)
+        self.assertEqual(state.kept_harness_session(FID), SID)
+
+    def test_it_wakes_the_frame_so_a_panel_sees_the_new_chat(self):
+        """`record_harness_session` returning True is what the old writer used to decide a
+        repaint on, and a panel that never learns the mapping changed draws the previous
+        chat's row until something else happens to bump it."""
+        before = state.version(FID)
+        self._run()
+        self.assertNotEqual(state.version(FID), before)
+
+    def test_a_second_hook_with_the_same_id_writes_nothing_new(self):
+        """`sessionstart` fires on resume, clear and compact as well as startup. The no-op
+        guard is what keeps that from being a repaint storm."""
+        self._run()
+        after_first = state.version(FID)
+        self._run()
+        self.assertEqual(state.version(FID), after_first)
+
+    def test_another_harness_records_nothing(self):
+        """The gate `_turn_begin` already keeps, for `state.harness_session`'s reason:
+        nothing but Claude Code is handed a usage payload, and `leave.resumable_harness`
+        offers a resume for nothing else — so an id written here would be a record with no
+        reader."""
+        self._run(harness="opencode")
+        self.assertIsNone(state.harness_session(FID))
+
+    def test_an_unknown_harness_records_nothing_either(self):
+        self._run(harness=None)
+        self.assertIsNone(state.harness_session(FID))
+
+    def test_a_payload_with_no_session_id_records_nothing(self):
+        """A hook can fire before the harness has an id to give. Writing an empty one would
+        put a chat into the resumable state holding nothing to resume."""
+        self._run(sid=None)
+        self.assertIsNone(state.harness_session(FID))
+
+    def test_outside_a_frame_there_is_no_chat_to_record_against(self):
+        self._run(chat=None)
+        self.assertIsNone(state.harness_session(FID))
+
+    def test_outside_a_plane_nothing_is_written(self):
+        """#852's rule, kept: the record lands under `config.STATE_DIR`, which outside a
+        plane is a `.charter/` in somebody else's checkout."""
+        self._run(in_plane=False)
+        self.assertIsNone(state.harness_session(FID))
+
+    def test_an_id_that_is_not_a_string_is_recorded_as_text(self):
+        """`str(sid)`, and it is load-bearing rather than defensive. The payload is JSON
+        the harness composed, `record_harness_session` calls `.strip()` on what it is
+        given, and a number would raise there — swallowed by this function's own except,
+        which means the chat quietly stops being resumable. Nothing else in charter reads
+        this field back as anything but text."""
+        self._run(sid=1234)
+        self.assertEqual(state.harness_session(FID), "1234")
+
+    def test_a_write_that_fails_does_not_break_the_session(self):
+        """`sessionstart` runs before the operator has typed anything. A hook that raised
+        over bookkeeping would take the persona briefing, the memory digest and the todo
+        list with it — the rule every helper in this section keeps."""
+        from charter import hooks
+        with mock.patch.object(state, "record_harness_session",
+                               side_effect=OSError("disk full")):
+            self._run()
+        self.assertIsNone(state.harness_session(FID))
+        self.assertTrue(hasattr(hooks, "_record_harness_session"))
+
+    def test_sessionstart_is_where_it_is_called_from(self):
+        """The wiring, not just the helper. A function nothing dispatches into records
+        nothing, and that is exactly the state this class exists to prevent returning to."""
+        import inspect
+
+        from charter import hooks
+        self.assertIn("_record_harness_session(data)",
+                      inspect.getsource(hooks.sessionstart))
+
+
 if __name__ == "__main__":
     unittest.main()

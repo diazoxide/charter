@@ -95,5 +95,40 @@ class WatchIsReachableFromTheCli(unittest.TestCase):
         self.assertEqual(buf.getvalue().strip(), "ONCE")
 
 
+class TheIntervalIsJustified(unittest.TestCase):
+    """The cadence argument, rehoused (#895).
+
+    It used to sit in `tests/test_statusline_refresh.py` against
+    `commands._STATUSLINE["refreshInterval"]` — the value charter wrote into Claude Code's
+    settings. That key is gone and so is that module, but the ARGUMENT is not about Claude
+    Code at all: it is about what charter renders and what a render costs, and
+    `WATCH_INTERVAL` is now the only place charter states a repaint cadence. Deleting the
+    bound with the key would have left the surviving number unpinned.
+    """
+
+    def test_it_is_not_the_aggressive_minimum(self):
+        """A one-second timer is ~60x finer than the minute granularity charter displays,
+        for ~8% of a core continuously (a render is ~80ms on a two-clone plane, and it runs
+        a `git status` per tree). The number tracks what is shown, not what is possible."""
+        self.assertGreaterEqual(statusline.WATCH_INTERVAL, 5)
+
+    def test_it_is_fine_enough_to_beat_the_display_granularity(self):
+        """Silence renders in minutes; a timer coarser than that would notice a stalled
+        worker late, which is the case an ambient render exists for."""
+        self.assertLessEqual(statusline.WATCH_INTERVAL, 30)
+
+    def test_the_default_is_what_the_loop_actually_uses(self):
+        """A bound on a constant nothing reads is a bound on nothing. `watch()` called with
+        no argument must sleep for exactly the value the two tests above police."""
+        seen = []
+        with mock.patch.object(statusline.time, "sleep",
+                               side_effect=lambda s: (seen.append(s),
+                                                      (_ for _ in ()).throw(KeyboardInterrupt))), \
+                mock.patch.object(statusline, "render", return_value="PLANE"), \
+                redirect_stdout(io.StringIO()):
+            statusline.watch()
+        self.assertEqual(seen, [statusline.WATCH_INTERVAL])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,11 +10,12 @@ so they inherit the capture's freshness and are regenerated the same way.
 
 | File | Kind | What it is | How to update |
 | --- | --- | --- | --- |
-| `statusline.svg` | capture | The status line, rendered against the demo plane below | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
+| `statusline.svg` | capture | The plane render, taken against the demo plane below | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
 | `demo.svg` | capture | The quickstart, animated | `capture-demo.sh` → `ansi2svg.py --animate` |
 | `personas.svg` | capture | The persona roster, rendered against the demo plane below | `demo-plane.sh` → `charter persona list` → `ansi2svg.py` |
 | `model.svg` | drawing | The on-disk model | Edit by hand |
 | `social-card.svg` | composed | GitHub's social preview — the image link previews show | `social-card.py` (re-reads `statusline.svg`) |
+| | | *Both of the above are due for replacement by a capture of the **frame** — see "What #895 left stale" below.* | |
 | `social-card.png` | rendered | `social-card.svg` at 2560×1280 (2:1), for upload | See below; do not edit the PNG |
 
 `social-card.png` is the only asset here that is not used by the repo itself: GitHub stores
@@ -75,7 +76,8 @@ agent shell or a CI runner does not have.
 
 **`social-card.py`** composes the social preview: the wordmark and tagline over a crop of
 `statusline.svg`, embedded as a nested `<svg>` rather than re-rendered, so the card cannot
-disagree with the image the README leads with. It used to be a hand drawing that said only
+disagree with the image the README leads with. Untouched by #895 and deliberately so — see
+"What #895 left stale" above. It used to be a hand drawing that said only
 what could never go stale — a wordmark and three nouns — which also meant it never showed
 the one thing that actually argues for charter. The bottom fade is load-bearing: the footer
 sits on it, and a shallower one leaves the URL unreadable on live terminal rows.
@@ -114,10 +116,33 @@ Three things in that command are load-bearing, and the previous capture had none
 * **`context_window` in the payload.** `ctx 38% · cache 92%` is read from there and from
   nowhere else. Without it `_session_strip` is empty, the whole bottom row disappears, and
   the brand collapses onto the last persona row.
-* **`--compose`.** The status line never appears alone — it renders directly beneath
-  Claude Code's prompt box. A render without it shows the asset out of the only context it
-  is ever seen in. This is the one **drawing** inside a capture; everything above the box
-  is still real output.
+* **`--compose`.** This drew Claude Code's prompt box under the render, because the
+  status line never appeared alone — it rendered directly beneath that box, and an asset
+  without it was out of the only context it was ever seen in. **That stopped being true in
+  0.57.0 (#895)**: charter no longer wires a `statusLine`, so this render does not sit
+  under a Claude Code prompt anywhere. Drop the flag on the next regeneration. It is the
+  one **drawing** inside a capture; everything above the box is still real output.
+
+## What #895 left stale
+
+Charter stopped putting a status line in Claude Code's footer, and two assets here were
+built on it being there.
+
+**`statusline.svg` is still a real capture of a real command** — `charter statusline` is
+what opencode's `/charter` pipes, what `--watch` loops, and what the frame's panels are
+built out of — so it is kept, kept stamped, and kept in the freshness gate. Un-stamping it
+would have exempted a live capture from the check forever, which is the failure
+`tests/test_asset_freshness.py` exists to prevent. Two things about it are now out of
+date, and neither is fixable by editing the SVG:
+
+* the `--compose` prompt box above (drop the flag), and
+* the framing itself — the operator has chosen to lead with a capture of the **frame**
+  instead, which is a separate change and a different capture recipe.
+
+**`social-card.svg` still embeds it**, so `social-card.py` goes on working exactly as
+documented; it was left pointed at a file that still exists rather than broken loudly,
+because the card's replacement is that same follow-up and a card that cannot be
+regenerated in the meantime helps nobody.
 
 
 `personas.svg` comes from the same plane, and needs no payload — it is one command's own

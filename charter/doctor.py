@@ -58,14 +58,14 @@ class Result:
         this table means *do this*; there is nothing to do about a check that passed, and a
         column of green arrows is how the yellow ones stop being read. A fact a passing row
         still needs to state goes in :attr:`detail`, on a ``↳`` continuation line — the
-        shape `check_harness` uses for its capability ceilings and `check_frame` for a
-        status line a frame is deliberately blanking.
+        shape `check_harness` uses for its capability ceilings.
 
         That rule is only safe while it is loud, and for one release it was not:
-        `check_frame` passed its status-line note as a hint on the OK path and the note
-        was silently discarded on every healthy machine (#856). `TestAGreenRowKeepsNothingBack`
-        holds every check to it, so the next row to try this fails the suite rather than
-        losing a sentence.
+        `check_frame` passed a note as a hint on the OK path and it was silently discarded
+        on every healthy machine (#856). That particular note said a frame was blanking
+        Claude Code's footer and went with the footer in #895, but the rule it cost is the
+        one that matters: `TestAGreenRowKeepsNothingBack` holds every check to it, so the
+        next row to try this fails the suite rather than losing a sentence.
         """
         code, glyph = _SYMBOL[self.status]
         if _color():
@@ -930,8 +930,8 @@ def check_session_root() -> Result:
     (ADR 0013).
 
     **Trust is deliberately not asked here, and that is a real gap rather than an
-    oversight.** Claude Code gates hook execution and the status line on the directory
-    being trusted, globally, whatever declared them — so "the plugin is enabled here" and
+    oversight.** Claude Code gates hook execution on the directory being trusted,
+    globally, whatever declared it — so "the plugin is enabled here" and
     "charter's hooks actually run here" are two different questions, and an untrusted
     directory answers yes to the first and no to the second. That belongs to
     `check_guard_seen`, which already answers dispatch from evidence (a guard that ran)
@@ -1040,9 +1040,9 @@ def check_session_layer() -> Result:
     its own row, where it can name its own remedy: `workspace layer` for a generated file
     that has gone stale or vanished, `plane-root guard` for the guard.
 
-    **Trust is a CONDITION, not a verdict (#859).** The harness gates hook execution and
-    the status line on the directory being trusted, globally — the gate takes no argument
-    saying which settings source declared them — so *"a file this session reads declares
+    **Trust is a CONDITION, not a verdict (#859).** The harness gates hook execution on
+    the directory being trusted, globally — the gate takes no argument saying which
+    settings source declared it — so *"a file this session reads declares
     `charter hook pretooluse`"* and *"the guard will fire here"* are two facts, and an
     untrusted directory answers yes to the first and no to the second. Charter asks the
     question it **owns**: trust is inherited up to the git root, so a directory with a git
@@ -1342,10 +1342,19 @@ def check_frame() -> Result:
     and had no resize recovery. Written as one list because that is now three
     independent conditions over two version thresholds and a config value, and the
     nested-`if` shape this replaced already had to repeat the slot ceiling in two
-    branches to stay honest. `_statusline_suppressed_note` rides on the same hint but is
-    deliberately NOT one of them: every ceiling is a capability this machine does not
-    have, and a status line blanked because a frame is drawing instead is a capability
-    working exactly as designed (ADR 0019).
+    branches to stay honest.
+
+    **A fourth thing used to ride here and does not any more (#895).**
+    `_statusline_suppressed_note` appended a `↳` line saying *this session's status line is
+    intentionally blank, the frame is drawing instead* (ADR 0019). Charter no longer wires
+    a status line into Claude Code, so on every plane charter sets up there is no footer
+    for a frame to blank — and the note asked only "am I inside a live frame", which meant
+    it would have gone on telling every framed session that a surface it does not have was
+    being suppressed. A sentence that is true of nothing is worse than silence: it sends
+    the reader looking for a footer to un-blank. The suppression itself is untouched —
+    `statusline.a_frame_owns_this_surface` still refuses to draw into a frame, which is
+    still right for anyone who wires `statusLine` by hand — only doctor's narration of it
+    is gone.
     """
     from . import config
     from .frame import slots as frame_slots, tmuxctl
@@ -1370,64 +1379,10 @@ def check_frame() -> Result:
     missing = frame_slots.unimplemented(config.FRAME["slots"])
     if missing:
         ceilings.append(commands_frame_no_renderer(missing))
-    # A blank status line is the one frame behaviour that shows the operator NOTHING —
-    # ADR 0019's own rule is that a surface which vanished for an invisible reason is the
-    # worst outcome available, so the reason is said out loud on the surface built to
-    # answer on demand. Appended to whatever else this row reports rather than replacing
-    # it: it is a statement of fact about right now, never a warning — which is also why
-    # it is not a `ceilings` entry: every one of those is a capability this machine does
-    # not have, and a suppressed status line is a capability working as designed.
-    #
-    # **Said in the DETAIL, never in the hint (#856).** `Result.render` prints a hint only
-    # on a row that is not green, so on the clean path — a current tmux, every slot
-    # implemented, which is the ordinary machine and the one most likely to be running a
-    # frame — this note was constructed, handed to `Result`, and dropped without a trace.
-    # The one row written to admit the blank footer was silent in exactly the situation
-    # that produces one, which is the failure it exists to prevent, one level down.
-    #
-    # A `↳` continuation, the shape `check_harness` already uses for its ceilings, rather
-    # than a `→` remedy: in this table `→` means *do this* and `↳` means *and also this*,
-    # and a status line blanked because a frame is drawing is nothing to do anything about.
-    # That is the same distinction the paragraph above draws in refusing to make it a
-    # `ceilings` entry, now carried through to how it is printed.
-    quiet = _statusline_suppressed_note()
     detail = f"tmux {v[0]}.{v[1]}"
-    if quiet:
-        detail += f"\n        ↳ {quiet}"
     if ceilings:
         return Result(name, WARN, detail=detail, hint=" ".join(ceilings))
     return Result(name, OK, detail=detail)
-
-
-def _statusline_suppressed_note() -> str:
-    """The sentence naming the frame this session's status line is being blanked for, or `""`.
-
-    **No leading space, and the caller does no stripping.** It carried one, and its single
-    caller stripped it straight back off — the sweep found that `.strip()` as a survivor and
-    was right to: the note is either empty or one leading space and never any trailing
-    whitespace, so `strip` and `lstrip` answer identically for every value this can return.
-    A normalisation nothing can observe is not a guard, and pinning it would have been a test
-    asserting that two spellings of the same answer agree.
-
-    Asks the same question `statusline.main` asks, through the same function, so the two
-    can never disagree about whether a line is suppressed — the failure this note exists
-    to make impossible is an operator seeing a blank footer and finding nothing anywhere
-    that admits it is deliberate. `charter doctor` runs in the operator's own shell, whose
-    stdout may well be a tty, so the tty rung of `a_frame_owns_this_surface` is deliberately
-    not consulted here: the question is "is this session's footer being suppressed", not
-    "would MY stdout be".
-    """
-    import os
-
-    from .frame import state as frame_state
-
-    fid = os.environ.get("CHARTER_SESSION_ID", "")
-    if not fid or not frame_state.is_live(fid, pane=os.environ.get("TMUX_PANE", "")):
-        return ""
-    return (f"This session's status line is intentionally blank: frame {fid} is drawing "
-            f"the plane instead (ADR 0019). `charter statusline` still runs — it records "
-            f"this session's token usage — and still prints in full when you run it "
-            f"yourself.")
 
 
 def commands_frame_no_renderer(missing: list[str]) -> str:
@@ -1857,8 +1812,8 @@ def check_workspace_harness() -> Result:
 
     A chat launched in `workspaces/<ws>/` gets its settings from that directory and
     nowhere else — Claude Code does not walk up for them — so the generated
-    `.claude/settings.json` there is the whole of whether that chat has a status line, a
-    plugin and a `$CHARTER_HARNESS`. It is generated from the plane's own settings, so it
+    `.claude/settings.json` there is the whole of whether that chat has a plugin and a
+    `$CHARTER_HARNESS`. It is generated from the plane's own settings, so it
     goes stale the moment the plane's do, and nothing else notices.
 
     **Regenerate and compare** (`workspace.harness_layer`), which is
@@ -1921,8 +1876,8 @@ def check_workspace_harness() -> Result:
     if not findings:
         if not total:
             return Result(name, OK,
-                          detail=f"nothing to mirror — the plane declares no plugin, "
-                                 f"status line or env of its own{aside}")
+                          detail=f"nothing to mirror — the plane declares no plugin "
+                                 f"or env of its own{aside}")
         return Result(name, OK,
                       detail=f"{total} generated file(s) across all workspaces, "
                              f"all current{aside}")
@@ -2779,7 +2734,8 @@ def _plugin_install(name: str) -> Result:
         #
         # **Reported, never fixed**, and `--fix` deliberately does not enable it. Somebody
         # disabling a plugin is a choice, and charter does not revert a deliberate edit —
-        # the rule `_ensure_statusline` exists to keep. The row says what is not happening;
+        # the rule `commands._ensure_guard_hook` exists to keep. The row says what is not
+        # happening;
         # the operator decides.
         if entry.get("enabled") is False:
             return Result(

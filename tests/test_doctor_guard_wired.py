@@ -239,7 +239,7 @@ class TestInitAndReinitWireIt(GuardWiredCase):
         self.assertEqual(len(body["hooks"]["PreToolUse"]), 1)
 
     def test_it_preserves_keys_charter_does_not_own(self):
-        """`_ensure_statusline`'s rule, applied: that file is user-owned and holds keys
+        """`_ensure_guard_hook`'s rule, applied: that file is user-owned and holds keys
         charter has no business touching. Only the one entry is added."""
         p = Path(config.ROOT) / ".claude" / "settings.json"
         self.settings(p, {"permissions": {"allow": ["Bash(ls:*)"]},

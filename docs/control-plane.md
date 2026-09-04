@@ -432,9 +432,8 @@ That wording is literal — a running process cannot replace itself mid-call, so
 invocation finishes on the old build and every later `charter …` in the session uses the
 new one.
 
-It never runs on the status line (which renders every turn) and never mid-turn: the
-install replaces the binary enforcing the credential guard, and a session boundary is the
-only safe moment for that.
+It never runs on the plane render and never mid-turn: the install replaces the binary
+enforcing the credential guard, and a session boundary is the only safe moment for that.
 
 **A failed auto-update never blocks you.** Offline, no `uv`, or a pin that does not exist
 — charter warns, names the manual command, and the session proceeds on whatever is
@@ -505,7 +504,7 @@ On `dev`, three things change and nothing else does:
 | --- | --- | --- |
 | "newer" means | a higher version is on PyPI | `main`'s head commit is not the one installed |
 | `charter update` installs | `charter-cp==<version>` | `git+https://github.com/diazoxide/charter@main` |
-| the status line's brand chip | `⬢ charter 0.51.0` | `⬢ charter 0.51.0 dev` |
+| the brand chip (frame top bar, `charter statusline`) | `⬢ charter 0.51.0` | `⬢ charter 0.51.0 dev` |
 
 `charter update` on `dev` also force-refreshes the Claude Code plugin, because a
 version-keyed `claude plugin update` cannot see a change that does not move the version —
@@ -524,7 +523,7 @@ version number as the release it was built from — so a pin would silently rein
 published wheel over it at every session start. Declare both and charter installs neither,
 and says which two keys disagree.
 
-**Nothing installs itself.** The status line nudges when `main` moves; you run `charter
+**Nothing installs itself.** The render nudges when `main` moves; you run `charter
 update`.
 
 ## Schema drift and healing
@@ -538,11 +537,17 @@ charter versions can add baseline directories (`personas/`, `inventory/`, `works
 a control plane predates, and `charter reinit` creates whatever's missing, additively,
 never touching what's already there.
 
-## The status line
+## The plane, rendered
 
-Wired by `charter init` into `.claude/settings.json`, rendered by Claude Code on every
-turn. It is grouped by **scope** — each zone answers exactly one question, and a count
-always sits next to the thing it counts:
+`charter statusline` — the whole plane read off disk in one block. **`charter init` does
+not wire it into Claude Code's footer** and has not since 0.57.0 (#895): you reach this
+render through the frame's panels (`charter claude`), through `charter statusline --watch`
+in any spare terminal, through opencode's `/charter`, or by running `charter statusline`
+yourself. A `statusLine` key in `.claude/settings.json` still works exactly as it always
+did if you write one; charter neither adds it nor removes it.
+
+It is grouped by **scope** — each zone answers exactly one question, and a count always
+sits next to the thing it counts:
 
 ```
 ⬢ umbrella-improvements · todo 3 · ws 9                           ← WHERE am I

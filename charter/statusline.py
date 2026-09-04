@@ -1,12 +1,28 @@
-"""Claude Code status-line renderer for the control plane.
+"""The control plane, rendered as one block of text — and charter's rendering library.
 
-Wired via ``.claude/settings.json`` → ``statusLine``. Claude Code pipes a JSON
-payload on stdin (session/model/workspace context) and renders this command's
-stdout in the footer on every turn.
+**Charter no longer wires this into Claude Code (#895).** `init` used to write a
+``statusLine`` key into ``.claude/settings.json`` so the footer redrew every turn;
+it does not any more, and nothing charter writes invokes this command on a per-turn
+schedule. The issue asked whether the status line was *only* used for that. It is
+not, which is why the module and the command both survive:
 
-Contract we honor (see docs/workspaces.md): read *all* of stdin, stay fast, no
-network, never raise (fall back to a minimal string), and exit 0. ANSI colour
-and multiple lines are supported.
+* **The frame draws with it.** :mod:`charter.frame.slots`, `layout`, `chrome` and
+  `gather` call about thirteen functions in here — `render`, `_repo_rows`,
+  `_persona_chips`, `_pick_rows`, `accent`, `_tree_cells`, `_session_news`,
+  `_row_plan`, `_persona_line_parts`, `_dev_chip`, `_detail_worktrees` among them.
+  This is the TUI's renderer, and #895 changed none of it.
+* **opencode's `/charter`** is a slash command whose body is
+  ``!`echo '{}' | charter statusline` `` (`harness/opencode.py`'s ``COMMAND``), which
+  puts plane state into the agent's own context — something no panel can do.
+* **`charter statusline --watch`** is the standing remedy both opencode and Codex
+  carry for having no status bar (`Harness.deficits`, ADR 0015).
+
+The stdin contract is therefore still honoured, for those callers and for anyone who
+wires a footer by hand: read *all* of stdin, stay fast, no network, never raise (fall
+back to a minimal string), and exit 0. ANSI colour and multiple lines are supported.
+What no longer arrives on any charter-created plane is Claude Code's per-turn payload
+— so the token and context columns, and the usage history the frame's `ctx`/`cache`
+gauge reads back, are fed only when somebody wires ``statusLine`` themselves.
 
 **On subprocesses.** This used to claim "no git subprocess", which was never true
 of the module as a whole and misled at least one change into asserting it: dirt
@@ -39,6 +55,13 @@ process environment, exactly as it spawns every other subprocess. The same probe
 the other half this module now depends on: **stdout is a pipe, never a tty**. Both facts
 are load-bearing for :func:`main`'s frame check, so they are written down as measurements
 rather than left as beliefs — the previous sentence here was a belief, and it was wrong.
+
+The probe went through a `statusLine` invocation, which charter stopped wiring in #895 —
+and the measurement is **kept**, because neither fact was ever about the status line. They
+are about how Claude Code spawns *any* subprocess of a session, so they still decide what
+:func:`a_frame_owns_this_surface` sees from opencode's ``/charter`` pipe and from a footer
+somebody wires by hand. Deleting them would leave that function's three rungs resting on
+nothing.
 """
 
 from __future__ import annotations
@@ -689,6 +712,17 @@ def recorded_context_gauge(sid: str) -> list[str]:
     is worse than no gauge, and every "unknown" here — no sid, no file, a file with no
     percentage recorded yet, a session whose turns all predate the fourth field — comes
     back empty rather than as a confident 0%.
+
+    **#895 made "not actually known" the ordinary case, and that is a real loss rather
+    than a tidy-up.** Claude Code hands `context_window.current_usage` to the `statusLine`
+    command and to nothing else — no hook has ever seen those numbers — so with charter no
+    longer wiring that key, no charter-created plane feeds this history any more and the
+    frame's top row simply has no `ctx`/`cache` gauge. Nothing here was deleted for it:
+    `record_usage`, `_record_turn` and `frame.state.record_harness_session` are all intact,
+    so an operator who wires ``statusLine`` to `charter statusline` themselves gets the
+    gauge back with no further change. Charter is out of the business of wiring it, not out
+    of the business of reading it. The rule above is what keeps the loss honest — no feed
+    means no gauge, never a confident `ctx 0%`.
 
     Never raises: this is drawn by a panel, where an exception is a hole in the frame.
     """
@@ -2774,9 +2808,21 @@ def _columns(left_lines: list[str], right_lines: list[str] | None, width: int) -
     return "\n".join(node.render(width))
 
 
-#: How often the ambient render repaints. The same cadence charter writes into Claude
-#: Code's `statusLine.refreshInterval`, so the plane state ages at one rate whichever
-#: harness you are looking at it through.
+#: How often the ambient render repaints.
+#:
+#: Ten seconds, and the argument for it is the render's own and always was — it only used
+#: to be *stated* as "the same cadence charter writes into Claude Code's
+#: `statusLine.refreshInterval`", which charter no longer writes (#895). The number is
+#: unchanged because nothing it was derived from moved: charter renders silence in
+#: MINUTES, so a one-second timer is ~60x finer than the coarsest thing on the screen,
+#: and a render costs ~80ms on a two-clone plane (a `git status` per tree) — repainting
+#: every second would burn ~8% of a core to refresh a number that changes once a minute.
+#: Ten is still six times finer than the granularity, at a tenth of the cost.
+#:
+#: Nothing else is keyed to it. `glstate`'s three brakes — `REFRESH_TTL` 300s,
+#: `SPAWN_COOLDOWN` 120s, `DISPLAY_TTL` 2h — are all wall-clock ages compared against a
+#: cache timestamp, not multiples of a repaint interval, so they age at the same rate
+#: whether this repaints every ten seconds or never.
 WATCH_INTERVAL = 10.0
 
 _HOME_CLEAR = "\033[H\033[J"

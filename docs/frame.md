@@ -2,7 +2,8 @@
 
 `charter claude` runs the harness inside a frame charter composes: the harness in the
 middle, charter's own panels on the edges. It works on every harness, which is the point —
-a status line is Claude Code's own surface, and Codex and opencode have none at all.
+and since 0.57.0 it is the only ambient surface charter wires anywhere, because charter no
+longer writes a `statusLine` into Claude Code's settings either (#895).
 
     charter claude               # or codex, opencode
     charter                      # the same thing, on a plane with [harness] default
@@ -1020,8 +1021,11 @@ thing about a named harness. The record is still there for `charter reopen` when
 it.
 
 **Resume is Claude Code only, and the warning says so per chat.** Charter records a harness's
-own session id from Claude Code's status-line hook, which is the only harness that supplies
-one — so it is the only harness whose conversation charter can ask for back. A chat that
+own session id from the chat's `sessionstart` hook — Claude Code is the only harness that
+supplies one anywhere charter can read it, so it is the only harness whose conversation
+charter can ask for back. (It came off the status line's stdin payload until 0.57.0, when
+charter stopped wiring one; a hook holds the same two ids, so nothing about resume
+changed.) A chat that
 cannot be resumed still comes back: its directory, its workspace and its persona return, and
 only the conversation is gone. A chat whose *workspace* has been deleted comes back too, into
 a remade and empty one, and says the workspace was missing; charter never quietly re-homes a
@@ -1214,17 +1218,25 @@ status line's own renderers, so leaving both on drew the plane's state on the ed
 then again in Claude Code's footer three lines below them. The frame owns the surface
 (ADR 0019); outside a frame the status line is unchanged in every respect.
 
-Two things it does anyway, and they are deliberate:
+**Charter no longer wires that footer at all (#895).** Read what follows as the rule the
+suppression still keeps rather than as something you will see: on a plane charter set up,
+nothing pipes a per-turn payload into this command, so there is no footer to go quiet.
+The suppression stays because a `statusLine` you wire yourself is still yours, and drawing
+the plane twice on one screen would still be the defect it always was.
+
+Two things the suppressed command does anyway, and they are deliberate:
 
 - **It keeps running, and keeps recording.** Claude Code passes this session's token usage
   to the `statusLine` command and nowhere else — no hook ever sees those numbers — so the
   command still reads its payload and still writes the cache-hit and prefix-rebuild
-  history. Unwiring `statusLine` from `.claude/settings.json` because it "prints nothing
-  now" would delete that record rather than remove a duplicate.
+  history. Unwiring `statusLine` because it "prints nothing now" deletes that record rather
+  than removing a duplicate: that is exactly what #895 chose to spend, and the frame's
+  `ctx`/`cache` gauge is what it cost. The chat's session id was the other thing this
+  command wrote; `hooks._record_harness_session` writes that one now, so resume is intact.
 - **A human asking still gets an answer.** Run `charter statusline` yourself in any
-  terminal, or `charter statusline --watch`, and it renders in full. Only the piped
-  invocation — which is how Claude Code calls it — goes blank, and only while a frame with
-  this session's id is actually running.
+  terminal, or `charter statusline --watch`, and it renders in full. Only a piped
+  invocation goes blank, and only while a frame with this session's id is actually
+  running.
 
 **Only Claude Code's footer goes quiet, because it is the only one being duplicated.**
 opencode has no status bar, so charter wires the plane in as an on-demand `/charter`
@@ -1235,11 +1247,13 @@ codex is unaffected in either direction — `charter statusline --watch` never c
 of this.
 
 `ctx NN%` and `cache NN%` lived on the status line, and for one release a framed Claude
-Code session did not show them anywhere. It does now: the `top` row draws them, out of the
-history the suppressed status line goes on recording. The suppressed command is also what
-makes that possible at all — it is the one process that sees both this frame's id and
-Claude Code's session id, so it writes the mapping down; a panel reads it back and finds
-the numbers.
+Code session did not show them anywhere. It showed them again from 0.53.0, out of the
+history the suppressed status line went on recording — **and since 0.57.0 it does not**,
+because charter no longer wires the command that writes that history and no hook is given
+those numbers. The panel is unchanged and the rule it keeps is what makes the loss honest:
+a gauge that silently reads zero is worse than no gauge, so a frame with no recorded turns
+draws nothing rather than `ctx 0%`. Wire a `statusLine` to `charter statusline` yourself
+and every part of the path is still there; the gauge comes back with it.
 
 The panel's gauge is not a second implementation: both surfaces share the colours and the
 labels, so a green 60% in a frame and a green 60% in a footer mean the same thing. What a
@@ -1261,8 +1275,9 @@ frame, the frame **is** the charter session. The agent's shell, each panel and a
 persona or a lock chosen inside the frame is one thing chosen for the whole frame, not one
 per pane.
 
-Claude Code's own session id has not gone anywhere; it arrives in the status line's stdin
-payload and keys what comes with it (the usage history, the session trace). Two ids, two
+Claude Code's own session id has not gone anywhere; it arrives in every hook's stdin
+payload — and in the status line's, for anyone who wires one — and keys what comes with it
+(the session trace, and the usage history when there is a footer feeding it). Two ids, two
 jobs. See ADR 0019.
 
 **Which workspace the panels draw is decided once, at launch, by the launcher.** A panel

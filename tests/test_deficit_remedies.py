@@ -38,6 +38,39 @@ class RemediesAreOffered(unittest.TestCase):
                     with self.subTest(harness=h.name, key=d.key):
                         self.assertIn("charter ", d.remedy)
 
+    def test_every_remedy_names_a_subcommand_the_cli_actually_registers(self):
+        """A substring test is not enough, and #895 is why it is written down.
+
+        `assertIn("charter ", …)` above passes for `charter definitely-not-a-command`, so
+        the remedy could name a subcommand that had been deleted and every test here would
+        stay green. #895 proposed removing `charter statusline` on the grounds that Claude
+        Code's footer was its only consumer — and both remedies on this page are
+        `charter statusline --watch`, which nothing in the suite would have noticed going
+        away. It is measured against the parser rather than a hand-kept list, so a
+        subcommand renamed is caught the same way one deleted is.
+        """
+        from charter import cli
+
+        registered = set(cli.build_parser()._subparsers._group_actions[0].choices)
+        # **Unkillable by design, and the reason is recorded rather than left to a sweep.**
+        # This asserts nothing about charter's behaviour; it asserts that the SET below is
+        # a real one. Reaching into `_subparsers` is the only way to enumerate argparse's
+        # choices, and a refactor that made it come back empty would turn every `assertIn`
+        # below into a check that passes because there is nothing to check — the exact
+        # shape this whole test was written to close.
+        self.assertIn("statusline", registered,
+                      "the parser this test reads has no subcommands in it")
+        for h in registry.all():
+            for d in h.deficits:
+                if not d.remedy:
+                    continue
+                words = d.remedy.split()
+                self.assertEqual(words[0], "charter", d.remedy)
+                with self.subTest(harness=h.name, key=d.key):
+                    self.assertIn(words[1], registered,
+                                  f"{h.name}/{d.key} sends the operator to "
+                                  f"`{' '.join(words[:2])}`, which is not a command")
+
 
 class DoctorShowsThem(unittest.TestCase):
     def test_the_row_carries_the_remedy_beside_the_ceiling(self):

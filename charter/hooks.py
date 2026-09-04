@@ -4340,6 +4340,60 @@ def _turn_begin() -> None:
         pass
 
 
+def _record_harness_session(data: dict) -> None:
+    """Write down Claude Code's own session id for this chat. Best-effort, never raises.
+
+    **This is #895's replacement writer, and it exists because the old one was deleted.**
+    Until then `frame.state.record_harness_session` had exactly one caller: the
+    `statusLine` command, the one process that saw the frame id in its environment and
+    Claude Code's session id in the JSON payload on its stdin. Charter no longer wires a
+    `statusLine`, so that process no longer runs — and without a second writer, no chat
+    would ever have an id again and `charter reopen` would answer *"reopens empty — no
+    session id recorded for this chat yet"* for every Claude Code chat, forever. That is a
+    feature going out silently, which the issue neither asked for nor mentioned.
+
+    **A hook sees both ids too, which is the whole reason this is possible.** The chat id
+    is `$CHARTER_SESSION_ID` (:func:`_chat_id`, and the launcher puts it on the window),
+    and the harness's own id arrives in this hook's stdin payload as `session_id` — the
+    same field `_touch_piece`, `_trace` and `toolgate.snapshot` already read here. Nothing
+    new is measured and nothing new is spawned.
+
+    **What it cannot bring back is the GAUGE.** `context_window.current_usage` reaches the
+    `statusLine` command and nothing else — no hook has ever seen those numbers — so the
+    frame's `ctx NN%` / `cache NN%` really is gone with the key, and
+    `statusline.recorded_context_gauge` says so in full. The mapping and the usage history
+    were two things one process happened to write; only one of them a hook can write.
+
+    **Gated on Claude Code**, the same gate and the same idiom as :func:`_turn_begin`, so
+    that `state.harness_session`'s four-reasons-one-answer docstring stays true: nothing
+    else is handed a usage payload, and an id recorded for a harness `leave.resumable_
+    harness` will not offer a resume for would be a record nothing reads.
+
+    Earlier than the writer it replaces, and that is a small improvement rather than a
+    risk: the status line recorded on the chat's first TURN, and this records at
+    `sessionstart`, so a chat abandoned before its first prompt is now resumable too.
+    """
+    chat = _chat_id()
+    if not chat or not _in_a_plane():
+        return
+    try:
+        from .harness import claude_code
+        if os.environ.get("CHARTER_HARNESS") != claude_code.NAME:
+            return
+        # `data.get`, not `(data or {}).get`: `_read_stdin` returns a dict or `{}` and
+        # never `None`, and a payload that is somehow neither raises here into this
+        # function's own `except` — which is where it belongs. A second guard for a case
+        # the first one already covers is what the deletion sweep charges as a survivor.
+        sid = data.get("session_id")
+        if not sid:
+            return
+        from .frame import state as frame_state
+        if frame_state.record_harness_session(chat, str(sid)):
+            frame_state.bump(chat)
+    except Exception:  # noqa: BLE001 - bookkeeping must never break a session
+        pass
+
+
 def _turn_bump() -> None:
     """This chat's turn is still going — refresh its TTL, never raise a mark.
 
@@ -5410,6 +5464,10 @@ def sessionstart() -> int:
     # below would otherwise replace the holder's mark with ours and hide the collision.
     piece_note = _piece_announcement(data)
     _touch_piece(data)
+    # The chat -> harness-session mapping `charter reopen` resumes from. Here since #895,
+    # which deleted the `statusLine` command that used to write it — see
+    # `_record_harness_session` for what that writer did and what a hook cannot replace.
+    _record_harness_session(data)
     # Freeze what every persona's `tools:` says, before this session has had a turn in
     # which to rewrite one (#432). Best-effort: a plane that cannot store the snapshot
     # gets prompts, never a block. Must run before the context block below, which can
