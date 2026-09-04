@@ -809,6 +809,59 @@ class TheTwoRowsNarrateOneSetOfRules(LayerCase):
         self.assertIn("identity", detail,
                       "the row dropped the half that is true of every harness")
 
+    def test_the_running_harness_answers_alone_and_not_every_registered_one(self):
+        """The rules named are the rules of the harness this session is in.
+
+        Every registered harness answering would be right only while one of them declares a
+        layer — which is true today and is exactly why it needs a case. Register a second
+        one with a part of its own and the row must still name Claude Code's, or a session
+        under one harness is told another's discovery rules in the row it reads first.
+        """
+        other = _StubHarness("second", "gate")
+        other.layer = (base.LayerPart("elsewhere", (".nowhere",), True, "why"),)
+        with mock.patch.object(
+                registry, "all",
+                return_value=[claude_code.ClaudeCodeHarness(), other]):
+            detail = self.root()
+        self.assertNotIn("elsewhere", detail,
+                         "a harness this session is not running answered for it")
+        for what in sum(self.parts(), []):
+            self.assertIn(what, detail)
+
+    def test_no_harness_named_and_every_registered_one_answers(self):
+        """The other branch, and the reason it is not `[live]` unconditionally: a `charter
+        doctor` typed in a plain terminal has no harness to report for, and picking one
+        would be a guess — the same answer `check_session_layer` gives."""
+        other = _StubHarness("second", "gate")
+        other.layer = (base.LayerPart("elsewhere", (".nowhere",), True, "why"),)
+        with mock.patch.object(
+                registry, "all",
+                return_value=[claude_code.ClaudeCodeHarness(), other]):
+            os.environ.pop("CHARTER_HARNESS", None)
+            detail = self.root()
+        self.assertIn("elsewhere", detail,
+                      "with no harness named, a registered one went unanswered for")
+
+
+class TheRulesAreJoinedIntoASentence(_isolation.PersonaIso):
+    """`doctor._named`, alone. Its branches are reachable from the row only while the
+    shipped layer happens to have two cwd-only parts and one walking one — so a harness
+    declaring one of each, or three, would move the row's grammar with nothing watching."""
+
+    def test_nothing_is_nothing(self):
+        self.assertEqual(doctor._named([]), "")
+
+    def test_one_stands_alone_with_no_conjunction(self):
+        """The branch the row takes for `skills+agents` today. Falling through to the join
+        below would write `" and skills+agents"`, leading space and all."""
+        self.assertEqual(doctor._named(["a"]), "a")
+
+    def test_two_are_joined_by_and_with_no_comma(self):
+        self.assertEqual(doctor._named(["a", "b"]), "a and b")
+
+    def test_three_take_a_comma_and_then_the_and(self):
+        self.assertEqual(doctor._named(["a", "b", "c"]), "a, b and c")
+
 
 if __name__ == "__main__":
     import unittest
