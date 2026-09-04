@@ -622,7 +622,7 @@ class TheDoctorRowReportsTheGapWithoutCryingWolf(PersonaIso):
 
     def test_fix_does_not_enable_a_plugin_somebody_turned_off(self):
         """charter reports; it does not revert a deliberate edit. Disabling a plugin is a
-        choice, and a `--fix` that silently undid it is the thing `_ensure_statusline`
+        choice, and a `--fix` that silently undid it is the thing `_ensure_guard_hook`
         exists not to do."""
         entry = {"id": "charter@charter", "scope": "project", "enabled": False,
                  "projectPath": str(self.tmp)}

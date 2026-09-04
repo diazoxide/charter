@@ -12,7 +12,7 @@ the other direction. A guard running twice is not broken, which is exactly why n
 it: two denials for one command read as one stubborn denial.
 
 Charter reports and does not delete. The file is the operator's, git-tracked, and holds keys
-charter has no business touching — the restraint `_ensure_statusline` has kept since it was
+charter has no business touching — the restraint `_ensure_guard_hook` has kept since it was
 written.
 """
 

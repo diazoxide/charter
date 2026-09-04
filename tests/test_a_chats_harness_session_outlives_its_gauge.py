@@ -327,6 +327,26 @@ class AHookIsTheWriterNow(PersonaIso, unittest.TestCase):
         self._run(in_plane=False)
         self.assertIsNone(state.harness_session(FID))
 
+    def test_an_id_that_is_not_a_string_is_recorded_as_text(self):
+        """`str(sid)`, and it is load-bearing rather than defensive. The payload is JSON
+        the harness composed, `record_harness_session` calls `.strip()` on what it is
+        given, and a number would raise there — swallowed by this function's own except,
+        which means the chat quietly stops being resumable. Nothing else in charter reads
+        this field back as anything but text."""
+        self._run(sid=1234)
+        self.assertEqual(state.harness_session(FID), "1234")
+
+    def test_a_write_that_fails_does_not_break_the_session(self):
+        """`sessionstart` runs before the operator has typed anything. A hook that raised
+        over bookkeeping would take the persona briefing, the memory digest and the todo
+        list with it — the rule every helper in this section keeps."""
+        from charter import hooks
+        with mock.patch.object(state, "record_harness_session",
+                               side_effect=OSError("disk full")):
+            self._run()
+        self.assertIsNone(state.harness_session(FID))
+        self.assertTrue(hasattr(hooks, "_record_harness_session"))
+
     def test_sessionstart_is_where_it_is_called_from(self):
         """The wiring, not just the helper. A function nothing dispatches into records
         nothing, and that is exactly the state this class exists to prevent returning to."""

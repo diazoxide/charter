@@ -1452,7 +1452,7 @@ def is_workspace_dir(path) -> bool:
     The boundary the whole mechanism draws, asked in one place. A clone under a workspace
     (`workspaces/<ws>/<repo>/`) answers **no** — it is somebody else's repo — and so does
     the plane root, whose `.claude/settings.json` is user-owned, git-tracked and governed
-    by the never-repair restraint `commands._ensure_statusline` records.
+    by the never-repair restraint `commands._ensure_guard_hook` records.
 
     :func:`valid_name` is asked first for :func:`exists`' reason: ``WORKSPACES_DIR / ".."``
     is the plane root, so a parent-directory comparison alone answers *yes* for a name
@@ -1727,7 +1727,7 @@ def _materialise(base: Path, want_all: dict[str, str]) -> list[tuple[str, str]]:
     if wrote:
         # Only when something was actually generated. Rewriting the marker on every
         # `ensure` would make a workspace's mtimes move for a call that changed nothing,
-        # which is the noise `_ensure_statusline` avoids one file over.
+        # which is the noise `_ensure_guard_hook` avoids one file over.
         try:
             (base / GENERATED_MARKER).write_text(json.dumps(marker, indent=2) + "\n")
         except OSError:
