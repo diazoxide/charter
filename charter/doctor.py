@@ -886,9 +886,9 @@ def _discovery_rules() -> tuple[list[str], list[str]]:
     from .harness import registry as _registry
 
     current = _registry.current()
-    if current and _registry.get(current) is None:
-        return [], []
     live = _registry.get(current)
+    if current and live is None:
+        return [], []
     harnesses = [live] if live else _registry.all()
     parts = [p for h in harnesses for p in (h.layer or ())]
     return (list(dict.fromkeys(p.what for p in parts if not p.walks)),
