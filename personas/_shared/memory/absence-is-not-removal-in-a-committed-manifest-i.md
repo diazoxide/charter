@@ -1,0 +1,5 @@
+# ABSENCE IS NOT REMOVAL IN A COMMITTED MANIFEST — I SPECIFIED A RECONCILE
+
+_2026-09-04 14:07 · persistent_
+
+ABSENCE IS NOT REMOVAL IN A COMMITTED MANIFEST — I SPECIFIED A RECONCILE THAT WOULD HAVE DESTROYED TEAMMATES DATA. For #884 I wrote "auto-update on structural change - a repo cloned into the workspace, or removed". The clone half is safe; the REMOVAL half is not, and the agent refused it with evidence. charter has no command that takes a repo out of a workspace, and a repo missing from disk does not mean removed: `restore --on-demand` deliberately leaves every recorded repo uncloned, and plain `restore` skips what a machine cannot reach ("Partial access is normal"). So a reconcile keyed on absence would erase a teammates restore target on their first launch, and their next `charter save` would push the erasure. Manifest maintenance must be ADDITIVE; deliberate removal belongs to `snapshot`, which is the operator asking. General rule: before writing a rule that DELETES rows from committed shared state on the basis of what is on this machine right now, ask what a machine that has fetched less than everything looks like.

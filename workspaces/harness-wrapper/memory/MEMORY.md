@@ -81,3 +81,4 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [The plane guard's mention gate is `charter|edm` with NO word boundaries ](20260903-004457-the-plane-guard-s-mention-gate-is-charter-edm-wi.md)
 - [tmux 'server exited unexpectedly' rc 1 in a test fixture is always #713'](20260903-084351-tmux-server-exited-unexpectedly-rc-1-in-a-test-f.md)
 - [tmux's default MouseDown3Pane forwarding branch is '{ select-pane -t = ;](20260903-124147-tmux-s-default-mousedown3pane-forwarding-branch-.md)
+- [state.workspace_for(fid) reads $CHARTER_WORKSPACE out of the CALLING pro](20260904-123341-state-workspace-for-fid-reads-charter-workspace-.md)

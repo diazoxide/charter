@@ -98,3 +98,6 @@ Written by the persona as it learns; committed and shared.
 - [THE DELETION SWEEP SCOPES AGAINST origin/main, SO A STACKED BRANCH IS CH](the-deletion-sweep-scopes-against-origin-main-so.md)
 - [A POLLER WHOSE EXIT CONDITION OMITS THE THING YOU ARE WAITING FOR SETTLE](a-poller-whose-exit-condition-omits-the-thing-yo.md)
 - [A LAYER THAT MIRRORS CONFIG MUST CARRY CAPABILITY AND NEVER A GRANT. #86](a-layer-that-mirrors-config-must-carry-capabilit.md)
+- [FROM OUTSIDE A FRAME, ASK state.own_workspace — NEVER state.workspace_fo](from-outside-a-frame-ask-state-own-workspace-nev.md)
+- [ABSENCE IS NOT REMOVAL IN A COMMITTED MANIFEST — I SPECIFIED A RECONCILE](absence-is-not-removal-in-a-committed-manifest-i.md)
+- [A SHARED TEMP FILENAME LOSES THE ATOMICITY THE RENAME GIVES YOU. os.repl](a-shared-temp-filename-loses-the-atomicity-the-r.md)

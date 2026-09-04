@@ -51,3 +51,7 @@ Written by the persona as it learns; committed and shared.
 - [A release has a FIFTH version site the charter never listed: docs/assets](a-release-has-a-fifth-version-site-the-charter-n.md)
 - [twine's --skip-existing is evaluated PER FILE, not per version: upload.p](twine-s-skip-existing-is-evaluated-per-file-not-.md)
 - [A test fixture that isolates with mock.patch.object(config, 'ROOT', tmp)](a-test-fixture-that-isolates-with-mock-patch-obj.md)
+- [0.56.0: _BODY_BUDGET has NO legal value — its two guards demand disjoint](0-56-0-body-budget-has-no-legal-value-its-two-gu.md)
+- [Cutting a release from a workspace clone (workspaces/<ws>/charter) is th](cutting-a-release-from-a-workspace-clone-workspa.md)
+- [0.56.0 (post-#883): _BODY_BUDGET is 122_000 measured by news.sent_length](0-56-0-post-883-body-budget-is-122-000-measured-.md)
+- [When a release branch is overtaken by a PR that EDITS the same docs/news](when-a-release-branch-is-overtaken-by-a-pr-that-.md)
