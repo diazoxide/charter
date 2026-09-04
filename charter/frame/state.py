@@ -345,7 +345,7 @@ def bump(fid: str) -> None:
         config.replace_for(d / "version", f"{time.time_ns()}\n")
     except OSError:
         # The directory existing doesn't guarantee the write does too (a filesystem
-        # that fills up between the two calls above, say) — same must-not-raise
+        # that fills up between the `mkdir` and the write, say) — same must-not-raise
         # promise as the mkdir guard in frame_dir, covering the step after it.
         return
 
