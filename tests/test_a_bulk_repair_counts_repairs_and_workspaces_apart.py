@@ -89,6 +89,18 @@ class BulkRepairCase(PersonaIso):
         workspace.ensure(name)
         (workspace.workspace_dir(name) / ".charter-structure").write_text("3\n")
 
+    def layer_only(self, name: str) -> None:
+        """Stale LAYER only — current layout, one row, from the other of the two loops.
+
+        The mirror of `one_repair`, and it exists so neither place that records a
+        workspace as repaired is the only one a fixture ever exercises: with every
+        one-repair workspace stale in the same half, dropping the record from the OTHER
+        half changes no number any case here reads.
+        """
+        workspace.ensure(name)
+        (workspace.workspace_dir(name) / ".claude" / "settings.json").unlink()
+        (workspace.workspace_dir(name) / workspace.GENERATED_MARKER).unlink()
+
     def two_repairs(self, name: str) -> None:
         """Stale layer AND stale structure — the shape a plane older than #884 is in.
 
@@ -154,15 +166,40 @@ class ACountNeverExceedsItsTotal(BulkRepairCase):
 
     def test_the_repair_count_is_the_number_of_rows_printed_above_it(self):
         """The summary adds up the report it closes: whatever the mix, the first number is
-        exactly how many `✓ Reinitialized` lines an operator scrolled past."""
+        exactly how many `✓ Reinitialized` lines an operator scrolled past.
+
+        Both one-repair shapes appear, and on purpose. A workspace is recorded as repaired
+        in two separate places — the harness-layer loop and the structure branch — and a
+        mix that is stale in only one half leaves the other half unmeasured.
+        """
         self.two_repairs("alpha")
         self.two_repairs("beta")
         self.one_repair("gamma")
-        self.current("delta")
+        self.layer_only("delta")
+        self.current("epsilon")
         said = self.reinit_all()
         repairs, across, total = self.summary(said)
         self.assertEqual(repairs, len(self.rows(said)))
-        self.assertEqual((repairs, across, total), (5, 3, 4))
+        self.assertEqual((repairs, across, total), (6, 4, 5))
+
+    def test_a_workspace_whose_only_gap_is_the_layer_still_counts_as_one(self):
+        """The layer loop's own record, isolated. Its layout is current — the ONLY thing
+        stale about it is `.claude/settings.json`, so nothing but that loop can put it in
+        the count, and `1 of 2` is the whole assertion."""
+        self.layer_only("alpha")
+        self.current("beta")
+        said = self.reinit_all()
+        self.assertEqual(len(self.rows(said)), 1, said)
+        self.assertEqual(self.summary(said), (1, 1, 2))
+
+    def test_a_workspace_whose_only_gap_is_the_structure_still_counts_as_one(self):
+        """And the structure branch's, isolated the same way — the two are asserted as a
+        pair so neither can be the one nothing measures."""
+        self.one_repair("alpha")
+        self.current("beta")
+        said = self.reinit_all()
+        self.assertEqual(len(self.rows(said)), 1, said)
+        self.assertEqual(self.summary(said), (1, 1, 2))
 
 
 class TheSentenceNamesWhatItCounts(BulkRepairCase):
