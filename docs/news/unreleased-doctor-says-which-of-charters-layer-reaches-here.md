@@ -43,12 +43,11 @@ row operators learn to skip. Whatever is missing *and* fixable already warns whe
 name its own remedy — `workspace layer` for a generated file gone stale, `plane-root guard`
 for the guard.
 
-This paragraph read *"charter deliberately writes nothing inside `workspaces/<ws>/<repo>/`"*
-and that is no longer the reason, in this same release: *a clone inside a workspace gets the
-layer, and hides it in the clone's `info/exclude`* writes it there, and *a clone inside a
-workspace carries every harness's in-repo surface* decides what it carries. The argument is
-unchanged — a row that warns on the designed workflow teaches operators to skip it — and it
-now rests on what a session would find rather than on charter having written nothing.
+This paragraph read *"charter deliberately writes nothing inside `workspaces/<ws>/<repo>/`"*.
+Two entries in this same release retract it: *a clone inside a workspace gets the layer*
+writes it there, and *a clone inside a workspace carries every harness's in-repo surface*
+decides what it carries. The argument is unchanged; it now rests on what a session would
+find rather than on charter having written nothing.
 
 It is about the **layer**, not the plugin, so it does not reopen `check_guard_wired`'s
 reasoning: *"Whether the plane runs as a plugin is an implementation detail. Whether the

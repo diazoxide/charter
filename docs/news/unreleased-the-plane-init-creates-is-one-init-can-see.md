@@ -23,8 +23,10 @@ That made it a trap rather than a fault: correct until somebody adds a code path
 
 Somebody did. Gating `hooks.context_block` on `HAS_CONTROL_PLANE` (#852/#857) broke a fresh
 `charter init` — the gate asked during `init`, the answer was `False`, and the generated
-opencode context file came out empty. That gate was reverted rather than shipped, and this
-is why it can be written now.
+opencode context file came out empty. That half was reverted; the rest of #857 shipped,
+gating every handler in `hooks._HANDLERS`. And with this fix in, the gate still stays out —
+it no longer breaks a fresh `init`, so what it would add is a branch nothing can reach.
+`hooks.context_block` carries both halves of that.
 
 ## What init does differently
 

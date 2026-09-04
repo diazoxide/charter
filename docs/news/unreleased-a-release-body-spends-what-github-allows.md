@@ -13,11 +13,10 @@ history, and required all but one to render whole — a demand that only grows. 
 was a fixed fraction of the limit and never moved.
 
 Most of that fraction was the units. GitHub refuses with `body is too long (maximum is
-125000 characters)`, and whether the validator behind it counts code points or bytes is not
-something charter can run and find out — so 15% was held back in case they differed.
-`news.sent_length` settles it on the string: it measures the encoded body, which is never
-below the character count, so the bound holds either way. Measured across every version
-charter has cut, that costs between 0.25% and 1.22%.
+125000 characters)`, and whether the validator counts code points or bytes is not something
+charter can run and find out — so 15% was held back in case they differed. `news.sent_length`
+measures the encoded body, never below the character count, so the bound holds either way.
+Across every version charter has cut, that costs 0.25%–1.22%.
 
 What is left to reserve for is one thing — something added to the body that charter did not
 render, landing after the PyPI upload. It is 3,000 now, a subtraction rather than a

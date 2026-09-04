@@ -26,9 +26,8 @@ nothing renders them together, so nobody sees it. `session root` now reads the r
 ```
 
 It says nothing about whether the walk *arrives*: that depends on this directory's git root,
-and the row below is the one that resolves it. `commands` is dropped rather than reworded —
-charter has measured no rule for `.claude/commands`, so no `LayerPart` names it and this row
-cannot claim one. A harness charter has never met gets no rule sentence at all, because
-reporting it under Claude Code's rules would be a borrowed answer in the row read first.
-
-No artefact name is spelled into the row's code any more, and a test holds that.
+and the row below resolves it. `commands` is dropped rather than reworded — charter has
+measured no rule for `.claude/commands`, so no `LayerPart` names it. A harness charter has
+never met gets no rule sentence at all: reporting it under Claude Code's rules would be a
+borrowed answer in the row read first. No artefact name is spelled into this row's code any
+more, and a test holds that.
