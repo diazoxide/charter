@@ -10,19 +10,19 @@ so they inherit the capture's freshness and are regenerated the same way.
 
 | File | Kind | What it is | How to update |
 | --- | --- | --- | --- |
+| `frame.svg` | capture | The frame — charter's panels around a harness pane, borders and all | `capture-frame.sh` → `ansi2svg.py` |
 | `statusline.svg` | capture | The plane render, taken against the demo plane below | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
 | `demo.svg` | capture | The quickstart, animated | `capture-demo.sh` → `ansi2svg.py --animate` |
 | `personas.svg` | capture | The persona roster, rendered against the demo plane below | `demo-plane.sh` → `charter persona list` → `ansi2svg.py` |
 | `model.svg` | drawing | The on-disk model | Edit by hand |
-| `social-card.svg` | composed | GitHub's social preview — the image link previews show | `social-card.py` (re-reads `statusline.svg`) |
-| | | *Both of the above are due for replacement by a capture of the **frame** — see "What #895 left stale" below.* | |
+| `social-card.svg` | composed | GitHub's social preview — the image link previews show | `social-card.py` (re-reads `frame.svg`) |
 | `social-card.png` | rendered | `social-card.svg` at 2560×1280 (2:1), for upload | See below; do not edit the PNG |
 
 `social-card.png` is the only asset here that is not used by the repo itself: GitHub stores
 the social preview separately, uploaded through **Settings → General → Social preview**,
 which has no CLI. The PNG is committed so the upload is reproducible rather than a one-off
 that exists only inside a settings page. Regenerate both in order — the SVG re-reads
-`statusline.svg`, so a stale status line makes a stale card:
+`frame.svg`, so a stale frame makes a stale card:
 
 ```bash
 python3 docs/assets/social-card.py
@@ -68,19 +68,38 @@ right edge. `--animate` reveals the capture line by line on a loop, using CSS ra
 script so it plays inside an `<img>`; a renderer that ignores the animation shows the
 finished transcript, which is a worse asset but never a broken one.
 
+It draws reverse video (`ESC[7m`) as a filled cell, which is the one attribute here that
+is not about how a glyph looks: it is how a terminal says which thing is **chosen** — the
+frame's active workspace tab, its active chat tab, the persona row. A renderer that
+dropped it produced a capture with no selection visible anywhere and no way to tell from
+the file that anything was missing.
+
 **`ptyrun.py`** runs a command with its output on a pseudo-terminal. charter decides
 whether to colour its output from `sys.stderr.isatty()`, read once at import time with no
 environment override, so a capture taken down a plain pipe comes out monochrome. `script`
 does the same job in one word but needs the *parent* to already own a terminal, which an
 agent shell or a CI runner does not have.
 
+**`capture-frame.sh`** captures the frame, which no `ptyrun` can: the frame is tmux's
+composition of six processes, and the borders between them belong to none of them. So it
+renders the frame inside a **second** tmux and captures the outer pane — the same nesting
+`tests/test_a_planes_frame_really_reads_that_way.py` uses to measure a border's colour,
+because tmux composes borders and default cells for a *client*, so only another terminal
+can see them. It also puts this tree into a throwaway stdlib venv (a `.pth` line, no pip,
+no network) rather than a `$PATH` shim: charter starts each panel as
+`sys.executable -P -m charter panel …` from the tmux server's own environment, so a shim
+reaches none of them — measured as four dead panels and `No module named charter` where
+the capture should have been.
+
 **`social-card.py`** composes the social preview: the wordmark and tagline over a crop of
-`statusline.svg`, embedded as a nested `<svg>` rather than re-rendered, so the card cannot
-disagree with the image the README leads with. Untouched by #895 and deliberately so — see
-"What #895 left stale" above. It used to be a hand drawing that said only
-what could never go stale — a wordmark and three nouns — which also meant it never showed
-the one thing that actually argues for charter. The bottom fade is load-bearing: the footer
-sits on it, and a shallower one leaves the URL unreadable on live terminal rows.
+`frame.svg`, embedded as a nested `<svg>` rather than re-rendered, so the card cannot
+disagree with the capture it is made of. It used to be a hand drawing that said only what
+could never go stale — a wordmark and three nouns — which also meant it never showed the
+one thing that actually argues for charter. Which capture it crops is one constant
+(`CAPTURE`), and it moved off `statusline.svg` with #898, because a preview of a status
+line charter no longer wires anywhere was the wrong first impression to hand a link. The
+bottom fade is load-bearing: the footer sits on it, and a shallower one leaves the URL
+unreadable on live terminal rows.
 
 **`demo-plane.sh`** builds a throwaway control plane worth screenshotting: real `charter`
 commands, real git repos, real branches and real dirty/unpushed state. Only the *org* is
@@ -98,16 +117,26 @@ a plane without a record shows a roster where nobody is working, beside prose ab
 badge. Add the fixture in the same change as the feature, or the next regeneration comes
 back quietly half-stale.
 
+The frame capture added two more of the same kind, and neither is live state — they are
+*configuration* and *content*, which fail identically. Charter places neither tab bar
+unless a plane writes a `[[frame.component]]` table naming one (`frame/builtins.py`), so
+this script writes the whole arrangement out longhand; and a plane with one workspace draws
+a workspace strip with one tab on it, which shows nothing about what a strip is for, so
+there is a second workspace with a clone of its own.
+
 ```bash
 ./docs/assets/demo-plane.sh /tmp/demo-plane
 cd /tmp/demo-plane
-COLUMNS=150 sh -c 'echo "{\"workspace\":{\"current_dir\":\"$PWD\"},\"model\":{\"display_name\":\"Opus 5\"},\"session_id\":\"demo\",\"context_window\":{\"used_percentage\":38,\"current_usage\":{\"cache_read_input_tokens\":74000,\"cache_creation_input_tokens\":6000}}}" | charter statusline' \
+cat > /tmp/payload.json <<EOF
+{"workspace":{"current_dir":"$PWD"},"model":{"display_name":"Opus 5"},"session_id":"demo","context_window":{"used_percentage":38,"current_usage":{"cache_read_input_tokens":74000,"cache_creation_input_tokens":6000}}}
+EOF
+COLUMNS=150 python3 docs/assets/ptyrun.py sh -c 'charter statusline < /tmp/payload.json' \
   | python3 docs/assets/ansi2svg.py --title "charter statusline" \
-      --compose 'get payments-service onto the new idempotency keys' \
       -o docs/assets/statusline.svg
 ```
 
-Three things in that command are load-bearing, and the previous capture had none of them:
+Three things in that command are load-bearing, and the capture this recipe replaced had
+none of them:
 
 * **`COLUMNS=150`.** The persona column needs `_LEFT_W + _COL_SEP + _RIGHT_MIN_W` = 134
   inner columns. At 110 the layout correctly falls back to stacking personas as rows, so
@@ -116,34 +145,23 @@ Three things in that command are load-bearing, and the previous capture had none
 * **`context_window` in the payload.** `ctx 38% · cache 92%` is read from there and from
   nowhere else. Without it `_session_strip` is empty, the whole bottom row disappears, and
   the brand collapses onto the last persona row.
-* **`--compose`.** This drew Claude Code's prompt box under the render, because the
-  status line never appeared alone — it rendered directly beneath that box, and an asset
-  without it was out of the only context it was ever seen in. **That stopped being true in
-  0.57.0 (#895)**: charter no longer wires a `statusLine`, so this render does not sit
-  under a Claude Code prompt anywhere. Drop the flag on the next regeneration. It is the
-  one **drawing** inside a capture; everything above the box is still real output.
+* **`ptyrun.py`, and the payload in a FILE because of it.** `charter statusline` reads its
+  payload on stdin, and `ptyrun` gives its child no stdin at all — the pty is what the
+  child's *output* is on. Piping the payload in instead works only from a terminal, where
+  `sys.stderr.isatty()` happens to be true; run the same line from an agent's shell or CI
+  and the capture comes back monochrome with nothing to say it did.
 
-## What #895 left stale
+**There is no `--compose` here any more.** That flag drew Claude Code's prompt box under
+the render, because the status line never appeared alone — it sat directly beneath that
+box, and an asset without it was out of the only context the thing was ever seen in. #895
+ended that: charter wires no `statusLine`, so this render sits under a Claude Code prompt
+nowhere. It was the one **drawing** inside a capture, and there is none left.
 
-Charter stopped putting a status line in Claude Code's footer, and two assets here were
-built on it being there.
-
-**`statusline.svg` is still a real capture of a real command** — `charter statusline` is
-what opencode's `/charter` pipes, what `--watch` loops, and what the frame's panels are
-built out of — so it is kept, kept stamped, and kept in the freshness gate. Un-stamping it
-would have exempted a live capture from the check forever, which is the failure
-`tests/test_asset_freshness.py` exists to prevent. Two things about it are now out of
-date, and neither is fixable by editing the SVG:
-
-* the `--compose` prompt box above (drop the flag), and
-* the framing itself — the operator has chosen to lead with a capture of the **frame**
-  instead, which is a separate change and a different capture recipe.
-
-**`social-card.svg` still embeds it**, so `social-card.py` goes on working exactly as
-documented; it was left pointed at a file that still exists rather than broken loudly,
-because the card's replacement is that same follow-up and a card that cannot be
-regenerated in the meantime helps nobody.
-
+`charter statusline` itself is untouched by that and stays a capture here. It is what
+opencode's `/charter` pipes, what `--watch` loops, and what the frame's panels are built
+out of — so it is kept, kept stamped, and kept in the freshness gate. Un-stamping a live
+capture would exempt it from the check forever, which is the failure
+`tests/test_asset_freshness.py` exists to prevent.
 
 `personas.svg` comes from the same plane, and needs no payload — it is one command's own
 output. `COLUMNS=96` because the roster is narrow; the plane's own `.charter/` state
@@ -161,6 +179,21 @@ env -u CHARTER_WORKSPACE -u CHARTER_PERSONA COLUMNS=96 \
 The vault rows are the reason `demo-plane.sh` writes three secrets. Without them every row
 reads `not created yet`, and the capture shows charter's empty state beside prose about the
 credentials it is holding.
+
+**`capture-frame.sh`** is the third capture and the only one that takes no plane of its
+own: it builds one, launches a frame against it, and prints the whole screen. One command,
+because everything in it has to agree — the plane, the charter that built it and the
+charter running the frame are one build, and the window size is the one the panels laid
+themselves out for:
+
+```bash
+./docs/assets/capture-frame.sh /tmp/frame-capture \
+  | python3 docs/assets/ansi2svg.py --title "charter frame" -o docs/assets/frame.svg
+```
+
+`COLUMNS` and `LINES` size the window (150×30 by default). 150 for the persona column's
+own reason above — below 134 inner columns the sidebar stacks — and 30 because the repo
+table is sized to its content and a taller window buys empty harness rows and nothing else.
 
 ## Checking a change
 

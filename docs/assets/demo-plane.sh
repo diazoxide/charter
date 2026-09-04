@@ -19,10 +19,41 @@ charter init --forge github --owner acme >/dev/null
 
 # The render resolves its workspace from the *session*, and a captured render has no
 # session lock — so the plane names its own default instead.
+#
+# The `[[frame.component]]` list is the frame's arrangement, and it is here for exactly
+# the reason the fabricated dispatch records below are: **neither tab bar is placed on a
+# default plane** (`frame/builtins.py` — "registered and NOT placed"), so a frame captured
+# against a plane that has not written this table shows charter's four panels and no tab
+# strips at all, beside prose about tabs. The four charter ships are written out longhand
+# because the table REPLACES the arrangement rather than adding to it, and their order is
+# split order — identity first, then the two bars under it, then the panels that carve off
+# the harness's own edges.
 cat >> charter.toml <<'EOF'
 
 [workspace]
 default = "billing-migration"
+
+[[frame.component]]
+use = "identity"
+
+[[frame.component]]
+use  = "workspaces"
+edge = "top"
+size = 1
+
+[[frame.component]]
+use  = "chats"
+edge = "top"
+size = 1
+
+[[frame.component]]
+use = "attention"
+
+[[frame.component]]
+use = "repos"
+
+[[frame.component]]
+use = "sidebar"
 EOF
 
 # ── inventory ────────────────────────────────────────────────────────────────
@@ -57,8 +88,12 @@ charter ws todo "get payments-service onto the new idempotency keys" >/dev/null
 # Real clones would come from `charter clone`; with no forge to clone from, these are
 # real git repos placed where a clone would land, so every marker the status line
 # draws (branch, dirty, ahead) is git's own answer rather than a fixture.
-mk() { # <repo> <branch> <dirty?> <ahead>
-  local d="workspaces/billing-migration/$1"
+#
+# The workspace is a PARAMETER rather than the constant it used to be, because the frame
+# draws a workspace tab bar and a plane with one workspace draws a bar with one tab on it
+# — a strip that shows nothing about what a strip is for. See the second workspace below.
+mk() { # <workspace> <repo> <branch> <dirty?> <ahead>
+  local d="workspaces/$1/$2"
   mkdir -p "$d" && git -C "$d" init -q -b main
   git -C "$d" config user.email demo@acme.test && git -C "$d" config user.name Demo
   # For the same reason the identity is pinned above: a throwaway demo repo must not
@@ -68,28 +103,38 @@ mk() { # <repo> <branch> <dirty?> <ahead>
   # halfway through the plane. charter's own repos are token-only and unsigned by policy
   # (`charter git-policy`); these fixtures hold that line too.
   git -C "$d" config commit.gpgsign false
-  echo "# $1" > "$d/README.md"
+  echo "# $2" > "$d/README.md"
   git -C "$d" add -A && git -C "$d" commit -qm "initial commit"
   # A bare "remote" so ahead/behind is genuinely computed against an upstream.
-  git init -q --bare "$d/../.remotes/$1.git"
-  git -C "$d" remote add origin "../.remotes/$1.git"
+  git init -q --bare "$d/../.remotes/$2.git"
+  git -C "$d" remote add origin "../.remotes/$2.git"
   git -C "$d" push -q -u origin main
-  [ "$2" != main ] && git -C "$d" checkout -qb "$2" && git -C "$d" push -q -u origin "$2"
+  [ "$3" != main ] && git -C "$d" checkout -qb "$3" && git -C "$d" push -q -u origin "$3"
   # `seq 1 0` counts DOWN on BSD/macOS (prints "1 0") where GNU seq prints nothing —
   # unguarded, every "0 commits ahead" repo silently got two.
-  if [ "$4" -gt 0 ]; then
-    for i in $(seq 1 "$4"); do
+  if [ "$5" -gt 0 ]; then
+    for i in $(seq 1 "$5"); do
       echo "change $i" >> "$d/README.md"
       git -C "$d" commit -qam "wire up step $i"
     done
   fi
-  [ "$3" = dirty ] && echo "work in progress" >> "$d/README.md"
+  [ "$4" = dirty ] && echo "work in progress" >> "$d/README.md"
   return 0
 }
-mk billing-api      migrate/ledger-cutover dirty 2
-mk billing-core     migrate/ledger-cutover clean 0
-mk payments-service fix/idempotency-keys   dirty 1
-mk checkout-ui      main                   clean 0
+mk billing-migration billing-api      migrate/ledger-cutover dirty 2
+mk billing-migration billing-core     migrate/ledger-cutover clean 0
+mk billing-migration payments-service fix/idempotency-keys   dirty 1
+mk billing-migration checkout-ui      main                   clean 0
+
+# ── a second workspace, so the workspace tab bar has two tabs ─────────────────
+# Created WITHOUT `--use`, so `billing-migration` stays the active one and everything
+# below still lands where it did. It holds a clone of its own because a tab that opens
+# onto an empty workspace is a tab nobody would click twice — and because `charter
+# status`, which the frame capture runs in its harness pane, prints the clone count.
+charter workspace create checkout-redesign \
+  --vision "Ship the new checkout without a flag day." >/dev/null
+charter ws todo --workspace checkout-redesign "price the guest-checkout experiment" >/dev/null
+mk checkout-redesign checkout-ui redesign/guest-checkout dirty 0
 
 # ── personas ─────────────────────────────────────────────────────────────────
 charter persona create devops   --role "DevOps Engineer" \

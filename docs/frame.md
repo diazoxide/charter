@@ -5,6 +5,14 @@ middle, charter's own panels on the edges. It works on every harness, which is t
 and since 0.57.0 it is the only ambient surface charter wires anywhere, because charter no
 longer writes a `statusLine` into Claude Code's settings either (#895).
 
+![charter's frame: an identity row naming the workspace, persona and vault; a strip of workspace tabs and a strip of chat tabs with the current one marked; the harness pane in the middle with a persona column beside it; the repo table underneath with each repo's branch, dirty and unpushed markers and CI state; and an attention row along the bottom.](assets/frame.svg)
+
+That is a real frame, captured off a real terminal — `docs/assets/capture-frame.sh` builds
+the plane and runs the thing. The two tab strips are on because that plane places them; on
+a plane that has not, the frame is the four panels around them (*Neither is drawn unless a
+plane places it*, below). The middle pane is the harness's and charter draws nothing in it
+(ADR 0018), so a capture with no agent to run has `charter status` in there.
+
     charter claude               # or codex, opencode
     charter                      # the same thing, on a plane with [harness] default
     charter frame -- <cmd>       # anything charter has never met

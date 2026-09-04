@@ -59,14 +59,16 @@ def cell_width(s: str) -> int:
 
 
 class Style:
-    __slots__ = ("fg", "bold", "dim", "underline")
+    __slots__ = ("fg", "bold", "dim", "underline", "reverse")
 
     def __init__(self):
         self.fg, self.bold, self.dim, self.underline = None, False, False, False
+        self.reverse = False
 
     def copy(self) -> "Style":
         s = Style()
         s.fg, s.bold, s.dim, s.underline = self.fg, self.bold, self.dim, self.underline
+        s.reverse = self.reverse
         return s
 
     def apply(self, params: str) -> None:
@@ -74,16 +76,21 @@ class Style:
         for c in codes:
             if c == 0:
                 self.fg, self.bold, self.dim, self.underline = None, False, False, False
+                self.reverse = False
             elif c == 1:
                 self.bold = True
             elif c == 2:
                 self.dim = True
             elif c == 4:
                 self.underline = True
+            elif c == 7:
+                self.reverse = True
             elif c in (22, 21):
                 self.bold = self.dim = False
             elif c == 24:
                 self.underline = False
+            elif c == 27:
+                self.reverse = False
             elif c == 39:
                 self.fg = None
             elif c in PALETTE:
@@ -186,6 +193,22 @@ def render(lines, title: str | None, animate: bool = False) -> str:
         if animate:
             out.append(f'<g class="ln l{row}">')
         for text, st in runs:
+            # **Reverse video is a filled cell, and it is the only attribute here that
+            # needs one.** SGR 7 is how a terminal marks a choice — the frame's active
+            # workspace tab, its active chat tab, the persona row a click selected — so a
+            # renderer that drops it produces a capture with no selection visible at all,
+            # which is precisely the quiet drift this directory exists to prevent. It is
+            # drawn per RUN rather than per glyph because the run's own whitespace is part
+            # of the mark: `*billing-migration (1)  ` is a highlighted tab, and painting
+            # only its words would leave the highlight ragged.
+            if st.reverse:
+                span = cell_width(text)
+                if span:
+                    out.append(
+                        f'<rect x="{PAD_X + col * CHAR_W:.2f}" y="{top + row * LINE_H:.2f}" '
+                        f'width="{span * CHAR_W:.2f}" height="{LINE_H:.2f}" '
+                        f'fill="{st.fg or FG}"/>'
+                    )
             # Whitespace is never drawn — it is the gap between two positioned chunks.
             # Emitting it inside a <text> put the layout at the mercy of the renderer's
             # xml:space handling, which is what collapsed "todo 2" into "todo2".
@@ -200,7 +223,7 @@ def render(lines, title: str | None, animate: bool = False) -> str:
                     xs.append(f"{PAD_X + c * CHAR_W:.2f}")
                     c += cell_width(ch)
                 attrs = [f'x="{" ".join(xs)}"', f'y="{y:.2f}"',
-                         f'fill="{st.fg or FG}"']
+                         f'fill="{BG if st.reverse else (st.fg or FG)}"']
                 if st.bold:
                     attrs.append('font-weight="600"')
                 if st.dim:

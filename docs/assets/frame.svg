@@ -1,40 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640"
-     role="img" aria-label="charter — a control plane for coding agents across many repos: durable personas, per-task workspaces, and a credential vault the model never reads from. Below the wordmark, charter's real frame: a tab strip of workspaces, a tab strip of agent chats, and a persona column beside the session it is running.">
-  <style>
-    .mono { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace; }
-  </style>
-  <defs>
-    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0d1117" stop-opacity="0"/>
-      <stop offset="0.62" stop-color="#0d1117" stop-opacity="0.94"/>
-      <stop offset="1" stop-color="#0d1117" stop-opacity="1"/>
-    </linearGradient>
-    <clipPath id="crop">
-      <rect x="72" y="336" width="1136" height="304"/>
-    </clipPath>
-  </defs>
-
-  <rect width="1280" height="640" fill="#0d1117"/>
-
-  <text class="mono" x="72" y="150" font-size="76" font-weight="700" fill="#e6edf3">
-    <tspan fill="#39c5cf">⬢</tspan> charter
-  </text>
-  <text class="mono" x="76" y="206" font-size="27" fill="#8b949e">A control plane for coding agents working across many repos</text>
-
-  <g class="mono" font-size="24">
-    <text x="76" y="266" fill="#bc8cff">personas</text>
-    <text x="200" y="266" fill="#6e7681">·</text>
-    <text x="226" y="266" fill="#58a6ff">workspaces</text>
-    <text x="378" y="266" fill="#6e7681">·</text>
-    <text x="404" y="266" fill="#39c5cf">worktrees</text>
-    <text x="542" y="266" fill="#6e7681">·</text>
-    <text x="568" y="266" fill="#d29922">a vault the model never reads</text>
-  </g>
-
-  <!-- The argument itself: the same frame the README leads with, cropped and bled. -->
-  <g clip-path="url(#crop)">
-    <svg x="72" y="336" width="1136" height="304.06"
-         viewBox="0 0 1206.0 322.8" preserveAspectRatio="xMidYMin slice">
+<svg xmlns="http://www.w3.org/2000/svg" width="1206" height="663" viewBox="0 0 1206.00 662.50" role="img" aria-label="charter frame">
 <rect x="0.5" y="0.5" width="1205.00" height="661.50" rx="9" fill="#0d1117" stroke="#30363d"/>
 <path d="M0.5 9.5a9 9 0 0 1 9-9h1187.00a9 9 0 0 1 9 9v21.00h-1205.00z" fill="#161b22" stroke="#30363d"/>
 <circle cx="18" cy="15.0" r="5" fill="#ff5f57"/>
@@ -204,9 +168,3 @@
 <text x="205.20 213.00" y="641.35" fill="#c9d1d9">F2</text>
 <text x="228.60 236.40 244.20 252.00 259.80 267.60 275.40" y="641.35" fill="#c9d1d9">palette</text>
 </g></svg>
-  </g>
-  <rect x="0" y="450" width="1280" height="190" fill="url(#fade)"/>
-
-  <text class="mono" x="72" y="614" font-size="22" fill="#6e7681">github.com/diazoxide/charter</text>
-  <text class="mono" x="1208" y="614" font-size="22" text-anchor="end" fill="#6e7681">MIT · uv tool install charter-cp</text>
-</svg>
