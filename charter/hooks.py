@@ -4380,7 +4380,11 @@ def _record_harness_session(data: dict) -> None:
         from .harness import claude_code
         if os.environ.get("CHARTER_HARNESS") != claude_code.NAME:
             return
-        sid = (data or {}).get("session_id")
+        # `data.get`, not `(data or {}).get`: `_read_stdin` returns a dict or `{}` and
+        # never `None`, and a payload that is somehow neither raises here into this
+        # function's own `except` — which is where it belongs. A second guard for a case
+        # the first one already covers is what the deletion sweep charges as a survivor.
+        sid = data.get("session_id")
         if not sid:
             return
         from .frame import state as frame_state

@@ -52,6 +52,12 @@ class RemediesAreOffered(unittest.TestCase):
         from charter import cli
 
         registered = set(cli.build_parser()._subparsers._group_actions[0].choices)
+        # **Unkillable by design, and the reason is recorded rather than left to a sweep.**
+        # This asserts nothing about charter's behaviour; it asserts that the SET below is
+        # a real one. Reaching into `_subparsers` is the only way to enumerate argparse's
+        # choices, and a refactor that made it come back empty would turn every `assertIn`
+        # below into a check that passes because there is nothing to check — the exact
+        # shape this whole test was written to close.
         self.assertIn("statusline", registered,
                       "the parser this test reads has no subcommands in it")
         for h in registry.all():
