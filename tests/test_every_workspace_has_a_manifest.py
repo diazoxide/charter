@@ -311,6 +311,34 @@ class MembershipIsMaintained(ManifestCase):
         self.assertEqual(workspace.record_members("alpha", ["svc"]), "blocked")
 
 
+class MembershipIsNotASnapshot(ManifestCase):
+    """`merge_repo_rows` reports which repos got their BRANCH from disk rather than from a
+    snapshot, and `fork` says so out loud: *"their branch is whatever is checked out now,
+    which may not be pushed."* Since every manifest charter writes lists repos with no
+    branch, "is it in the manifest" stopped being the same question."""
+
+    def test_a_repo_recorded_as_membership_is_still_attributed_to_disk(self):
+        rows, disk_only = workspace.merge_repo_rows([{"name": "svc"}],
+                                                    [{"name": "svc", "branch": "scratch"}])
+        self.assertEqual(disk_only, ["svc"])
+        self.assertEqual(rows, [{"name": "svc", "branch": "scratch"}])
+
+    def test_a_snapshotted_repo_is_not(self):
+        """The positive control: a pinned branch was recorded under `snapshot`'s promise
+        that it is on the remote, and that one is not a disk reading."""
+        rows, disk_only = workspace.merge_repo_rows([{"name": "svc", "branch": "release"}],
+                                                    [{"name": "svc", "branch": "scratch"}])
+        self.assertEqual(disk_only, [])
+        self.assertEqual(rows, [{"name": "svc", "branch": "release"}])
+
+    def test_a_membership_row_with_nothing_on_disk_still_forks(self):
+        """A teammate who has just pulled the plane has no clones at all, and the manifest
+        is the only thing that can tell them which repos this workspace is made of."""
+        rows, disk_only = workspace.merge_repo_rows([{"name": "svc"}], [])
+        self.assertEqual(rows, [{"name": "svc", "branch": "HEAD"}])
+        self.assertEqual(disk_only, [])
+
+
 class CloningRecordsWhatItCloned(ManifestCase):
     """End to end through `cmd_clone`, which is the structural change: a repo cloned into a
     workspace is a member of it, and a manifest that learns that only when somebody runs

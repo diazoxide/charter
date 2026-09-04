@@ -1300,8 +1300,16 @@ def merge_repo_rows(manifest_rows, disk_rows) -> tuple[list[dict], list[str]]:
     `snapshot`'s guarantee that the branch was pushed, where the disk only knows whatever
     happens to be checked out now.
 
-    Returns ``(rows, disk_only)`` — rows sorted by name, and the names no snapshot
-    recorded, which the caller reports rather than silently passing off as snapshotted.
+    Returns ``(rows, disk_only)`` — rows sorted by name, and the names whose BRANCH came
+    off the disk rather than out of a snapshot, which the caller reports rather than
+    silently passing off as snapshotted.
+
+    **Membership without a branch does not count as recorded, and since #884 that is the
+    ordinary case.** Every manifest charter writes itself lists the workspace's repos with
+    no branch, so keying this on "is the repo in the manifest" would have made `fork` stop
+    saying *"their branch is whatever is checked out now, which may not be pushed"* about
+    exactly the repos that sentence is true of. What the caller is warning about is the
+    provenance of the BRANCH, so that is what is asked.
     """
     by_name: dict[str, dict] = {}
     for r in disk_rows or []:
@@ -1313,9 +1321,11 @@ def merge_repo_rows(manifest_rows, disk_rows) -> tuple[list[dict], list[str]]:
         n = str(r.get("name") or "").strip()
         if not n:
             continue
-        disk_only.discard(n)
+        pinned = str(r.get("branch") or "").strip()
+        if pinned:
+            disk_only.discard(n)
         by_name[n] = {"name": n,
-                      "branch": r.get("branch") or by_name.get(n, {}).get("branch") or "HEAD"}
+                      "branch": pinned or by_name.get(n, {}).get("branch") or "HEAD"}
     return [by_name[n] for n in sorted(by_name)], sorted(disk_only)
 
 
