@@ -587,8 +587,12 @@ def replace_for(p, data) -> None:
     filesystem says no, and whatever the content itself is (a `str` this cannot encode).
     Callers keep their own answer to a failed write, because they do not agree on one: a
     hook swallows it, `workspace._write_manifest` lets it out.
+
+    A ``str`` destination is as good as a `Path`, like everywhere else in this module — and
+    there is no ``p = Path(p)`` here to make that true, because there is nothing left for it
+    to do: :func:`temp_beside` takes either and ``os.replace`` takes either. A line whose
+    removal changes no outcome is a line the deletion sweep is right to call equivalent.
     """
-    p = Path(p)
     tmp = temp_beside(p)
     try:
         write_for(tmp, data)

@@ -249,6 +249,26 @@ class TheTempFileIsThisWritersOwn(PersonaIso):
         target = Path(config.STATE_DIR) / "frame" / "alpha.1" / "gather.json"
         self.assertIn(str(os.getpid()), config.temp_beside(target).name)
 
+    def test_the_suffix_is_the_one_the_litter_sweeps_look_for(self) -> None:
+        """``.tmp`` is load-bearing rather than decorative, which is the only reason a case
+        asserts a constant. Two suites look for a temp file left beside an atomic write by
+        that suffix — `TheWriteIsAtomic.test_no_temporary_file_is_left_beside_it` and the
+        `glob("*.tmp")` in `test_the_state_directory_is_charters_to_choose` — and both
+        assert that they find NONE, so a rename here would leave them looking for a name
+        nothing writes and reporting a clean directory forever."""
+        self.assertEqual(config.TEMP_SUFFIX, ".tmp")
+
+    def test_a_target_spelled_as_a_string_is_the_same_target(self) -> None:
+        """`config.write_for` and `config.open_for` both take either, and a writer that
+        took only one of the two would be a trap laid for the next caller rather than a
+        contract — the paths in this package come from `contain.child`, from a `/` join and
+        out of `os.environ`, and the last of those is a `str`."""
+        target = Path(config.STATE_DIR) / "frame" / "alpha.1" / "version"
+        config.private_mkdir(target.parent)
+        config.replace_for(str(target), "1\n")
+        self.assertEqual(target.read_text(), "1\n")
+        self.assertEqual(config.temp_beside(str(target)).parent, target.parent)
+
 
 class AFailedPublishLeavesNothingBehind(PersonaIso):
     """A temp name nothing can predict is a temp name nothing can collect. None of the
@@ -289,6 +309,20 @@ class AFailedPublishLeavesNothingBehind(PersonaIso):
         with mock.patch.object(config, "open_for", refusing):
             with self.assertRaises(OSError):
                 config.replace_for(target, "1\n")
+        self.assertEqual(list(target.parent.iterdir()), [])
+
+    def test_a_content_that_cannot_be_encoded_removes_the_temp_file_too(self) -> None:
+        """``except BaseException`` and not ``except OSError``, which is what a reader of
+        this function will want to narrow. A failed write is not always a filesystem
+        saying no: a lone surrogate in a value charter read off disk is a
+        `UnicodeEncodeError` at the `write`, and `reopen.write` catches `TypeError` and
+        `ValueError` for its own `json.dumps` for the same reason. Narrow the clause and
+        every one of those leaves its temp file behind, in a directory with no collector.
+        """
+        target = Path(config.STATE_DIR) / "frame" / "alpha.1" / "identity"
+        config.private_mkdir(target.parent)
+        with self.assertRaises(UnicodeEncodeError):
+            config.replace_for(target, "a lone surrogate: \ud800\n")
         self.assertEqual(list(target.parent.iterdir()), [])
 
     def test_a_temp_file_that_cannot_be_removed_is_still_the_real_failure(self) -> None:
