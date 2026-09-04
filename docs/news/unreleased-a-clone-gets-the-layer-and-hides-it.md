@@ -72,11 +72,10 @@ measured against the installed binaries — `.claude/agents` and `.claude/skills
 `.opencode/agent` (1.18.23), `.codex/skills` (0.147.0). See *a clone carries every harness's
 layer*, in this same release.
 
-**CLAUDE.md is deliberately not carried in.** It walks up on the same rule, so the gap is
-real for it too — and it is the one file a repo of its own is most likely to have opinions
-about. Dropping the plane's project instructions into somebody else's repo, to be read
-there as that repo's instructions, is a claim of a different size from mirroring a settings
-key. A guest may hide its own files; it does not narrate the host's.
+**CLAUDE.md is deliberately not carried in**, on grounds of its own rather than the ones
+above — it walks up and is not git-bounded, so it already arrives here. The argument is in
+*a clone carries every harness's in-repo surface*, in this same release, beside the paths
+that are carried.
 
 ## Removal, and why it is not `rm -rf`
 

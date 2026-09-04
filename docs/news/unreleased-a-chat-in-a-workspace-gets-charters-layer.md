@@ -14,9 +14,10 @@ workspaces/*/   nothing — not one had a .claude
 ```
 
 Claude Code reads project settings from the session's working directory and **does not walk
-up**. Agents, skills and CLAUDE.md *do* walk up and stop at a git boundary, and a workspace
-directory is not one — it is a plain directory inside the plane's own repo — so those
-already arrived. What did not was everything that comes from a settings file: no plugin, no
+up**. Agents and skills *do* walk up and stop at a git boundary, and a workspace directory
+is not one — it is a plain directory inside the plane's own repo — so those already arrived.
+`CLAUDE.md` walks up too and, measured later in this release, is not git-bounded at all, so
+it arrives from further still. What did not was everything that comes from a settings file: no plugin, no
 status line, no `$CHARTER_HARNESS`. On this plane `fleet.1` and `opencode-integration.1`
 had been running that way all along.
 
@@ -98,7 +99,7 @@ differ per workspace, into a directory charter itself creates.
 The staleness bookkeeping comes back, and is paid for by the `doctor` row above. The
 `.git/info/exclude` entry per checkout does not arrive **for the workspace directory**:
 `/workspaces/*/*` is already in the plane's `.gitignore` and the managed LIVE block
-un-ignores four named paths, none of them `.claude/`. Nothing generated there can reach a
+un-ignores five named paths, none of them `.claude/`. Nothing generated there can reach a
 commit. One directory deeper it does arrive, and #870 is the entry that argues for it.
 
 ## To adopt
