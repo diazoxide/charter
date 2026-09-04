@@ -409,6 +409,13 @@ def cmd_clone(args) -> int:
         report_submodule_drift(dest, r["name"])
         _hint_repo_docs(dest, r)
     _wire_clones(ws)
+    # The manifest records what was cloned BEFORE the frames are told to repaint
+    # (#884 under #886): the fan-out below is what makes a frame re-read this plane,
+    # and a repaint that arrives ahead of the write reads a manifest one command out of
+    # date — the same off-by-one #886 exists to end, moved from the clone to the file
+    # describing it.
+    _record_membership(ws, [res["dest"].name for res in results
+                            if res["status"] in ("ok", "exists")])
     # **The reported symptom of #886**: this command wrote clones to disk and told nobody,
     # so the `repos` component stayed empty until charter was restarted. Here rather than
     # inside the loop above because ten repos are ONE change to the plane — `notify` has no
@@ -426,6 +433,36 @@ def cmd_clone(args) -> int:
     from .frame import notify
     notify.plane_changed_everywhere()
     return 1 if failures else 0
+
+
+def _record_membership(ws: str, repos: list[str]) -> None:
+    """Put the repos now in *ws* into its committed manifest (#884).
+
+    The structural change the manifest is maintained for: membership is a fact about the
+    workspace, and a `workspace.json` that learns it only when somebody runs `snapshot`
+    describes the workspaces nobody shared. Here rather than in `_clone_one`, for
+    `cmd_clone`'s own reason: eight workers must not write one file, and this runs once,
+    from the thread that already renders their results.
+
+    **No branch is recorded** — `workspace.record_members` will not write one — which is
+    what keeps ADR 0010's enforce-push guarantee intact: a branch in this file promises
+    `restore` can check it out on another machine, and a clone makes no such promise.
+    `charter workspace snapshot` still pins them.
+
+    Silent on success. A clone already announces itself per repo, and a second line saying
+    the manifest agrees is the kind of confirmation people learn to stop reading — but a
+    manifest charter may not touch is different, because the invariant is quietly untrue
+    there until somebody acts.
+
+    The frame is NOT told the roster moved; that is #886's, deliberately, so the two
+    changes do not each grow half a notification.
+    """
+    if not repos:
+        return
+    if workspace.record_members(ws, repos) == "operator":
+        util.warn(f"workspaces/{ws}/workspace.json was not written by charter — left "
+                  f"untouched, so it does not record what was just cloned. "
+                  f"`charter workspace snapshot {ws}` rewrites it deliberately.")
 
 
 def _wire_clones(ws: str) -> None:

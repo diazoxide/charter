@@ -508,6 +508,22 @@ def _repo_branch(clone) -> str:
     return _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=clone).stdout.strip() or "HEAD"
 
 
+def _pin(row) -> str:
+    """The branch a manifest row pins, or ``""`` for one that pins none.
+
+    Two shapes reach this and both are ordinary. `snapshot` writes ``{"name", "branch"}``,
+    because an operator asked for the branches to be captured; everything charter writes on
+    its own writes ``{"name"}`` alone (#884). `row['branch']` was a `KeyError` waiting for
+    the first manifest charter wrote itself, and one function is what keeps the reading and
+    the reporting from disagreeing about which rows have a branch.
+
+    Stripped, so the value the leading-dash guard inspects is the value git is handed:
+    ``" -b"`` is not a ref anybody writes and `startswith` says nothing about it, while
+    `git checkout` reads the argument it is actually given (#334).
+    """
+    return str(row.get("branch") or "").strip()
+
+
 def _git_user() -> str:
     return _git(["config", "user.name"]).stdout.strip() or os.environ.get("USER", "unknown")
 
@@ -605,7 +621,8 @@ def cmd_workspace_restore(args) -> int:
               f"(updated {m.get('updated_at', '?')} by {m.get('updated_by', '?')}).")
     if getattr(args, "on_demand", False):
         for r in repos:
-            util.info(f"  on-demand: {r['name']} @ {r['branch']} (clone when you enter it)")
+            util.info(f"  on-demand: {r.get('name')} @ {_pin(r) or 'no branch recorded'} "
+                      f"(clone when you enter it)")
         util.info("Enter the workspace and clone as you go: charter clone <repo> -w " + name)
         return 0
     # #325/#334/#328 all describe this join and each frames it as another's: #325 claims
@@ -645,6 +662,17 @@ def cmd_workspace_restore(args) -> int:
         if not workspace.is_git_repo(d):
             util.warn(f"  {r['name']}: not cloned (no access?) — skipped.")
             continue
+        # An UNPINNED row is restored by existing (#884). Every manifest charter writes
+        # itself records membership and no branch — a branch here carries `snapshot`'s
+        # promise that it is on the remote, and the writers nobody asked for cannot make
+        # it — so `restore` has to read a row that has none. Before the forge lookup,
+        # because there is nothing to check out and nothing to pull: the clone above is
+        # already on whatever the remote calls default, which is what "unpinned" means.
+        if not _pin(r):
+            util.ok(f"  {r['name']} @ default branch (no branch recorded — "
+                    f"`charter workspace snapshot {name}` pins one)")
+            ok += 1
+            continue
         forge = gitpolicy.forge_for(d)  # THIS clone's own forge — never a hardcoded one.
         if forge is None:
             # Unrecognised host (not a default forge, not declared in charter.toml) —
@@ -663,7 +691,7 @@ def cmd_workspace_restore(args) -> int:
         # `-b`, because a leading dash is legal inside a ref. Ref grammar answers a
         # different question than argv safety, and reaching for it here would have cost a
         # subprocess per repo while closing nothing.
-        branch = str(r.get("branch") or "")
+        branch = _pin(r)   # the value the guard below inspects IS the one git is handed
         if branch.startswith("-"):
             util.err(f"  {r['name']}: refused branch {branch!r} — a branch read from a "
                      f"committed manifest may not begin with '-', which git would read as "
@@ -1182,7 +1210,12 @@ def cmd_workspace_fork(args) -> int:
 #: Baseline components a LIVE workspace actually shares (see the managed block in
 #: .gitignore that `workspace live` writes). A workspace's refs/ and its structure
 #: marker stay local, so restoring only those gives `save` nothing to commit.
-_LIVE_SHARED_COMPONENTS = {"workspace.md", "memory/MEMORY.md"}
+#:
+#: `workspace.json` joined the baseline with #884, and it belongs here rather than only in
+#: `_required_components`: it is the FIRST path in the managed LIVE block, so a backfill
+#: that healed it and then said nothing would leave the manifest this whole change exists
+#: to share sitting uncommitted on one machine.
+_LIVE_SHARED_COMPONENTS = {"workspace.md", "workspace.json", "memory/MEMORY.md"}
 
 
 def cmd_workspace_reinit(args) -> int:
@@ -1203,6 +1236,11 @@ def cmd_workspace_reinit(args) -> int:
         util.info("No workspaces to reinitialize.")
         return 0
     healed = 0
+    #: Workspaces whose manifest `reinit` was asked for and could not write. Counted
+    #: separately from `healed` so the closing line does not say "nothing to do" over an
+    #: error two lines above it — a repair command that contradicts itself is one nobody
+    #: trusts the next time.
+    blocked = 0
     for n in names:
         before = workspace.reinit(n)
         # The HARNESS LAYER, reported as its own line rather than folded into the
@@ -1232,6 +1270,25 @@ def cmd_workspace_reinit(args) -> int:
                 util.ok(f"Reinitialized '{n}' → "
                         f"{'wrote' if did == 'created' else 'refreshed'} {rel} "
                         f"(charter's harness layer).")
+        # The BACKFILL half of #884, and the reason it is checked after rather than read
+        # off `before`: `workspace.scaffold_manifest` swallows its own failure, because it
+        # runs from `ensure` on a launch path where raising would cost the operator their
+        # tab. That is the right trade there and it costs this command its honesty unless
+        # the file is looked at again — "added workspace.json" printed over a manifest that
+        # is not there is exactly the tick that stops somebody checking.
+        #
+        # The absence is the whole test, and the `"workspace.json" in before["missing"]`
+        # half this started with is gone: `structure_status` derives `missing` from the
+        # same `exists()`, so before `scaffold` runs the two always agree, and after it the
+        # only way the file is still absent is that this call could not write it. The
+        # sweep found the conjunct as a survivor and it was right — an equivalent mutant
+        # and dead code are one finding.
+        if not workspace.manifest_path(n).exists():
+            blocked += 1
+            before["missing"] = [m for m in before["missing"] if m != "workspace.json"]
+            before["ok"] = not before["missing"] and before["version"] >= before["target"]
+            util.err(f"'{n}': workspace.json could not be written — something is in the "
+                     f"way at that path. charter never deletes or renames existing content.")
         if before["ok"]:
             continue
         healed += 1
@@ -1244,7 +1301,7 @@ def cmd_workspace_reinit(args) -> int:
         # command that prints "Nothing to save".
         if workspace.is_live(n) and set(before["missing"]) & _LIVE_SHARED_COMPONENTS:
             util.info(f"  '{n}' is LIVE — commit the restored files: charter workspace save {n}")
-    if healed == 0:
+    if healed == 0 and blocked == 0:
         util.ok(f"Up to date (structure v{workspace.STRUCTURE_VERSION}) — nothing to do.")
     elif len(names) > 1:
         util.info(f"Healed {healed} of {len(names)} workspace(s); the rest were current.")

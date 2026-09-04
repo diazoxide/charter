@@ -116,7 +116,7 @@ Three stores, three jobs. Putting a thing in the wrong one is the common mistake
 | --- | --- | --- |
 | `workspace.md` | Vision, Context & decisions, Glossary | when the *task* changes |
 | `memory/` | facts learned while working | constantly, one file per fact |
-| `workspace.json` | repos + branches | when you `snapshot` |
+| `workspace.json` | which repos, and which branches | membership when a repo is cloned; branches when you `snapshot` |
 
 Two more stores sit beside them with their own lifetimes: `todos/` (intent, which expires —
 [ADR 0004](adr/0004-intent-is-its-own-store.md)) and `changes/`, one file per cross-repo
@@ -135,8 +135,24 @@ adds one; `charter recall <query>` searches **across every base at once** — wo
 memory, persona memory, shared memory and refs — which is the only search you need to
 remember.
 
-**`workspace.json` is a snapshot, not an inventory.** It records what was there when you
-asked, and is what `restore` rebuilds from. It does not track drift; see ADR 0010.
+**`workspace.json` is there from the start.** Every workspace has one — `workspace.ensure`
+writes it, saying which workspace this is and that it has no repos yet. The file exists to
+be shared: make the workspace LIVE (below) and it is committed, which is how a *teammate*
+rebuilds it with `restore`. A file for that cannot depend on somebody having run a command
+first, so its presence is an invariant rather than a coincidence. A workspace made by an
+earlier charter gets one from `charter workspace reinit --all`.
+
+**Its two halves have different lifetimes.** Membership is maintained: a repo cloned into
+the workspace is recorded, because which repos a workspace is made of is a fact about the
+workspace. Branches are not — they are a fact about this minute, and writing one on every
+`git checkout` would churn a committed file. So charter records a repo with no branch, and
+`snapshot` is where an operator deliberately pins the branches somebody else will restore.
+Nothing but `snapshot` ever writes a branch here; see ADR 0010 for why that line is where it
+is. `restore` treats an unpinned repo as restored by being cloned at all.
+
+**A manifest you wrote is yours.** charter stamps the file with a digest of what it wrote;
+a `workspace.json` whose contents no longer match is left completely untouched — no
+membership is recorded into it — until you rewrite it with `snapshot`.
 
 ## LIVE or LOCAL — where your notes go
 
@@ -179,14 +195,17 @@ line says so:
     ⚠ reinit 3 ws · charter ws reinit --all
 
 `charter workspace reinit <name>` creates what is missing and re-stamps the marker. It is
-additive: nothing you wrote is touched.
+additive: nothing you wrote is touched. `--all` is also the **backfill** for a structural
+element that older workspaces predate — v5 is `workspace.json`, written with the repos the
+workspace has and no branches.
 
 ## Moving a workspace around
 
 - **`fork <src> <new>`** — a new workspace pre-loaded with the source's charter, manifest
   and memory, so a branch of the work starts with the context rather than without it.
   Repos come with `--restore`, or on demand later.
-- **`snapshot`** — write the current repos and branches into `workspace.json`.
+- **`snapshot`** — pin the current repos *and branches* into `workspace.json`. Refuses
+  while a repo has unpushed work, so a recorded branch is one `restore` can check out.
 - **`restore <name>`** — rebuild from that manifest on another machine: clone each repo,
   check out each branch.
 - **`rename <old> <new>`** — moves the clones and the memory, and commits the move if the

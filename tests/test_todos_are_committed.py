@@ -223,12 +223,16 @@ class TestTheStructureBumpFlagsEveryOlderWorkspace(PersonaIso):
         workspace.reinit("alpha")
         self.assertFalse(change.changes_dir("alpha").exists())
 
-    def test_the_version_this_layout_stamps_is_four(self):
+    def test_the_version_this_layout_stamps_is_five(self):
         """The NUMBER, not merely that it moved. The marker file records this value on
         every machine that scaffolds a workspace, and `structure_status` compares against
         it — so it is the plane's upgrade anchor rather than a counter, and changing it is
-        a deliberate act that belongs in the same commit as the layout it describes."""
-        self.assertEqual(workspace.STRUCTURE_VERSION, 4)
+        a deliberate act that belongs in the same commit as the layout it describes.
+
+        v5 is #884: every workspace has a `workspace.json` from birth, and the bump is what
+        backfills the ones that predate the invariant.
+        """
+        self.assertEqual(workspace.STRUCTURE_VERSION, 5)
 
     def test_a_fresh_workspace_is_current(self):
         """Positive control: the bump must flag OLD workspaces, not every workspace."""

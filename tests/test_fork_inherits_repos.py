@@ -133,7 +133,7 @@ class ForkCase(unittest.TestCase):
 
 
 class TestForkingAnUnsnapshottedWorkspace(ForkCase):
-    """The live report: nine clones, no manifest, `fork` inherits nothing."""
+    """The live report: nine clones, nothing recorded, `fork` inherits nothing."""
 
     def setUp(self):
         super().setUp()
@@ -141,8 +141,18 @@ class TestForkingAnUnsnapshottedWorkspace(ForkCase):
         self._clone("src", "repoA")
         self._clone("src", "repoB")
 
-    def test_the_premise_holds_there_is_no_manifest(self):
-        self.assertEqual(workspace.read_manifest("src"), {})
+    def test_the_premise_holds_the_manifest_records_no_repos(self):
+        """The premise moved with #884 and the defect it describes did not.
+
+        This used to read `read_manifest("src") == {}` — there was no file at all, because
+        `snapshot` was the only thing that wrote one. Since #884 every workspace has a
+        manifest from birth, and these clones were made by the fixture rather than by
+        `charter clone`, so the manifest is present and its `repos` is empty. That is the
+        same divergence #81 is about, and the same one `merge_repo_rows` closes: what the
+        workspace HAS and what it RECORDED are two lists, and forking from the second alone
+        inherits nothing.
+        """
+        self.assertEqual(workspace.read_manifest("src").get("repos"), [])
         self.assertEqual(len(workspace.clones("src")), 2)
 
     def test_the_fork_inherits_the_clones(self):
