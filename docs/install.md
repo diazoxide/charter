@@ -203,8 +203,9 @@ every merge, multiplying exactly the exposure that workflow is already being nar
 about. CI verifies the git install on every push to `main` instead: same coverage, no
 publish, no token.
 
-**Which channel you are on is on the status line.** The brand chip reads `⬢ charter 0.51.0
-dev`, so `↑a1b2c3d` beside it can only mean one thing — main moved. `charter --version`
+**Which channel you are on is in the render.** The brand chip — on the frame's top bar,
+and in `charter statusline` wherever you run it — reads `⬢ charter 0.51.0 dev`, so
+`↑a1b2c3d` beside it can only mean one thing: main moved. `charter --version`
 answers the other half, which is what you are actually running:
 
 ```

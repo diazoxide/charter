@@ -656,12 +656,21 @@ def record_harness_session(fid: str, sid: str) -> bool:
     """Write down the HARNESS's own session id for this frame. ``True`` when the recorded
     value actually changed.
 
-    **The mapping #413 is about, and there is exactly one process that can write it.**
-    Claude Code's per-turn token usage is keyed by ITS session id, and a panel never sees
-    that id — a panel only ever knows ``$CHARTER_SESSION_ID``, which the frame launcher
-    sets to the FRAME's id. The one moment both ids are in the same process is the
-    suppressing `statusline.main`: it has the frame id in its environment and Claude
-    Code's id in the JSON payload on its stdin. So it writes this, and a panel reads it.
+    **The mapping #413 is about.** Claude Code's per-turn token usage is keyed by ITS
+    session id, and a panel never sees that id — a panel only ever knows
+    ``$CHARTER_SESSION_ID``, which the frame launcher sets to the FRAME's id. A writer has
+    to be a process holding both, which is why for a long time there was exactly one: the
+    suppressing `statusline.main`, with the frame id in its environment and Claude Code's
+    id in the JSON payload on its stdin.
+
+    **Since #895 the writer is `hooks._record_harness_session` instead**, and it holds both
+    for the same two reasons — a hook runs in the chat's own pane, so `$CHARTER_SESSION_ID`
+    is right there, and every hook payload carries `session_id`. Charter stopped wiring a
+    `statusLine`, so the old writer no longer runs at all; without this one no chat would
+    ever have an id again and `charter reopen` would answer "no session id recorded" for
+    every Claude Code chat. What did NOT survive the move is the usage history beside it:
+    `context_window` reaches the status line and nothing else, so `recorded_context_gauge`
+    now has nothing to read and the frame draws no gauge.
 
     **In the frame's own directory, and that placement is the answer to "must not leak
     between planes".** `frame_dir` sits under `config.STATE_DIR`, which is per-plane; the
@@ -669,10 +678,11 @@ def record_harness_session(fid: str, sid: str) -> bool:
     the launcher's pid dies. Nothing is committed, nothing is shared, and nothing outlives
     the frame it describes.
 
-    Returns whether it CHANGED, because the caller runs on the status line's own render
-    path — several times per turn — and uses the answer to decide whether the frame's
-    panels have anything new to repaint for. Reading before writing is also what keeps
-    this to one `stat`-shaped read on the overwhelmingly common no-op path.
+    Returns whether it CHANGED, because the caller uses the answer to decide whether the
+    frame's panels have anything new to repaint for. That mattered most when the caller ran
+    on the status line's render path several times per turn; at `sessionstart` it fires
+    once, and the cheap answer is still the right shape. Reading before writing is also
+    what keeps this to one `stat`-shaped read on the overwhelmingly common no-op path.
 
     Same atomic-write, never-raise shape as :func:`record_harness_pane`, and for the same
     reason: a frame whose harness session could not be recorded simply draws no gauge,

@@ -24,7 +24,14 @@ from tests import _isolation
 
 
 def _plane_settings(root: Path, **extra) -> Path:
-    """The plane's own `.claude/settings.json`, shaped like this repo's committed one."""
+    """The plane's own `.claude/settings.json`, shaped like a plane an older charter set up.
+
+    It carries a `statusLine` on purpose and this repo's own committed file no longer does
+    (#895). That is the case worth fixturing: charter stopped WRITING the key, it did not
+    start removing it, so the planes this code meets in the wild are the ones that still
+    have it — and every assertion about what a workspace inherits has to be made against a
+    plane where the key is really present.
+    """
     d = root / ".claude"
     d.mkdir(parents=True, exist_ok=True)
     p = d / "settings.json"

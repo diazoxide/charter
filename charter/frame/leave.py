@@ -291,9 +291,12 @@ def _count(n: int, noun: str) -> str:
 RESUMES = "conversation resumes"
 
 #: What a chat charter cannot resume is told, and it names the reason rather than the
-#: symptom. §2.8: the context gauge and the session id have exactly one writer, Claude
-#: Code's `statusLine` hook, so no other harness has an id to ask with. An operator reading
-#: "reopens empty" alone would reasonably file a bug.
+#: symptom. §2.8: only Claude Code puts its own session id anywhere charter can read it, so
+#: no other harness has an id to ask with. (That used to be *"the `statusLine` hook is the
+#: one writer"*; #895 unwired the status line and moved the write to
+#: `hooks._record_harness_session`, which is gated on the same harness for the same reason.
+#: The gauge did not move with it — see that function.) An operator reading "reopens empty"
+#: alone would reasonably file a bug.
 NO_RESUME_HARNESS = "reopens empty — {harness} records no session id to resume from"
 
 #: The same outcome for the harness that CAN resume, when this particular chat has no id
@@ -390,8 +393,9 @@ def resumable_harness(name: str) -> bool:
     """Whether *name* is a harness charter can ask for a conversation back.
 
     **Claude Code alone, and asked of the registry rather than spelled here** (§2.8 and
-    §4e): `record_harness_session` has exactly one caller, Claude Code's `statusLine` hook,
-    so it is the only harness that has ever written an id. A literal ``"claude-code"`` in
+    §4e): `record_harness_session` has exactly one caller — `hooks._record_harness_session`
+    since #895, Claude Code's `statusLine` hook before it — and it is gated on Claude Code,
+    so that is the only harness that has ever written an id. A literal ``"claude-code"`` in
     this module would be a second place that knows which harness resumes, and the day a
     second one starts writing an id the two would disagree.
 

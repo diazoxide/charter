@@ -7,19 +7,26 @@
 
 **Your agent forgets everything, holds every credential, and works in one checkout.**
 
-![The charter status line: the active workspace and its open todos, four cloned repos with their branches, dirty and unpushed markers, CI status and open pull requests, then the personas with their vault and memory state.](docs/assets/statusline.svg)
+![The charter plane render: the active workspace and its open todos, four cloned repos with their branches, dirty and unpushed markers, CI status and open pull requests, then the personas with their vault and memory state.](docs/assets/statusline.svg)
 
 charter is a control plane for coding agents working across many repos on GitHub or
 GitLab: durable **personas**, isolated per-task **workspaces**, and a credential **vault**
 the model never reads from. It runs inside **Claude Code, opencode and Codex**, enforcing
 the same rules in each.
 
-That image is the status line under Claude Code, redrawn from disk every turn — the task
+That image is `charter statusline` — the whole plane read off disk in one block: the task
 you're on, the repos it owns and what branch each is sitting on, which are dirty or
-unpushed, CI and open PRs, and the roles you can hand work to. No git subprocess and no
-network on the render path. It is generated, not mocked: `docs/assets/` holds the script
-that produced it. On a harness with no status bar, `charter statusline --watch` puts the
-same render in any spare terminal.
+unpushed, CI and open PRs, and the roles you can hand work to. No network on the render
+path. It is generated, not mocked: `docs/assets/` holds the script that produced it.
+
+**Charter does not put it in Claude Code's footer.** It used to — `charter init` wrote a
+`statusLine` key into `.claude/settings.json` — and as of 0.57.0 it does not touch that
+key at all (#895). This render reaches you three other ways: `charter statusline --watch`
+paints it in any spare terminal on a harness with no status bar, opencode's `/charter`
+puts it in the agent's own context, and inside `charter claude` the **frame** draws the
+same content on the edges around the agent. If you want it in Claude Code's footer, that
+is a `statusLine` key you write yourself, and charter will neither add it nor take it
+away.
 
 ## 60 seconds
 
@@ -48,8 +55,8 @@ says whether its plugin is there and `charter doctor --fix` puts it there.
 → **[docs/install.md](docs/install.md)**
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,
-  `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, the status line above,
-  and Claude Code's charter plugin for this plane. Additive and idempotent — re-running it
+  `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and Claude Code's
+  charter plugin for this plane. Additive and idempotent — re-running it
   is always safe. It converts *the directory it runs in* into a control plane, so run it
   somewhere you mean to.
 - **`charter doctor`** preflights python, git, git identity, the forge CLI and its auth,
@@ -229,10 +236,11 @@ N agents are logged in as N different users at once).
 
 ## Seeing what every agent is actually doing
 
-The status line at the top of this page is the whole point: one render, from disk, every
-turn. The active task and its open todos, every cloned repo with its branch, dirty and
+The render at the top of this page is the whole point: the whole plane, from disk, in one
+block. The active task and its open todos, every cloned repo with its branch, dirty and
 unpushed markers, CI status and open PRs pulled from each clone's own forge, and the
-personas with their vault and memory state.
+personas with their vault and memory state — as a frame's panels, as `charter statusline
+--watch`, or as `/charter` in the agent's context.
 
 **Who is in which tree.** A repo or worktree row says which persona was last seen working
 in it and how long ago — `▸steward now`, `▸forge 7m +1`. An observation with an age, never
@@ -302,11 +310,12 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
   them untrusted input: they arrive from someone else's machine. What differs is not what charter enforces but what each harness *lets*
   charter offer, and `charter harness list` prints that gap rather than leaving you to find
   it. Neither `opencode` nor `codex` has a status bar charter can render into, which is what
-  `charter statusline --watch` is for; `codex` needs one extra command
+  `charter statusline --watch` is for — and charter no longer renders into Claude Code's
+  either, so the frame is now the ambient surface on all three; `codex` needs one extra command
   (`charter harness install codex`) because nothing in a plugin can tell a shell which
   harness it is.
   → [docs/harnesses.md](docs/harnesses.md)
-- **A status line only one of your three harnesses has.** `charter claude` (or `codex`,
+- **The plane on screen, on every harness.** `charter claude` (or `codex`,
   or `opencode`) runs the harness inside a frame charter composes: the agent in the middle,
   charter's own panels on the edges — the active workspace, open todos, what wants
   attention — repainting when charter's hooks say the plane changed. tmux composes and
