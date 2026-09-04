@@ -7,6 +7,17 @@ suppression that unwired the command would delete the record rather than hide a
 duplicate. `FrameOwnsTheSurface.test_the_turn_is_still_recorded_while_the_line_is_blank`
 is what a "this command prints nothing, remove it" change has to get past.
 
+**#895 unwired it from Claude Code anyway, deliberately, and the operator was told what
+it costs.** Charter no longer writes a `statusLine` key, so on a charter-made plane
+nothing pipes a per-turn payload in and that record is simply not written — which is why
+the frame's `ctx`/`cache` gauge has nothing to read. Every test below still means what it
+meant: they drive `statusline.main` with a payload directly, which is exactly what a
+hand-wired footer and opencode's `/charter` still do, and the recording path they pin is
+untouched. What went with the key is `SuppressionSaysSoOnDemand`, the class that held
+`charter doctor`'s frame row to explaining a blank footer — there is no footer for the row
+to explain any more, and a note that fires for every framed session about a surface it does
+not have is worse than silence. The suppression itself is still pinned, above.
+
 **Every fixture id ends in a pid that is really that pid.** `state.is_live` reads the
 number at the end of a frame id and asks whether that process exists, so `something-1`
 is `launchd` — permanently alive — and a fixture named that way makes "the frame was
@@ -300,45 +311,6 @@ class FrameOwnsTheSurface(PersonaIso, unittest.TestCase):
         (or absent) harness answers "not the surface being duplicated", so the worst case
         is the duplicate line this release removes — never a surface that vanished."""
         self.assertIn("charter", self._run(fid=self._a_live_frame(), harness=""))
-
-
-class SuppressionSaysSoOnDemand(PersonaIso, unittest.TestCase):
-    """A blank footer is the one frame behaviour that shows nothing at all, so something
-    has to admit it is deliberate. ADR 0019's own rule is that a surface which vanished
-    for an invisible reason is the worst outcome available — `charter doctor`'s frame row
-    is the surface built to answer on demand."""
-
-    def _row(self, env: dict):
-        from charter import doctor
-        env = {**_gitguard.environment(), **env}      # `clear=True`, see `_run` above
-        with mock.patch.dict(os.environ, env, clear=True), \
-             mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)):
-            return doctor.check_frame()
-
-    def test_the_frame_row_names_the_frame_that_is_drawing_instead(self):
-        """**Asserted on what the row PRINTS, never on which field it was put in (#856).**
-
-        This test read `row.hint`, and it was true and about the wrong thing:
-        `Result.render` drops a hint on a green row, so on the ordinary machine this test
-        covers — a current tmux, every slot implemented — the sentence it was checking for
-        reached nobody. Its own docstring promises the note is *explained somewhere*, and
-        `row.hint` is not somewhere; `row.render()` is the operator's actual reading
-        surface, and it is the only one that can keep that promise."""
-        fid = f"demo-{os.getpid()}"
-        state.bump(fid)
-        state.record_server(fid, "charter")
-        state.record_harness_pane(fid, "%7")
-        row = self._row({"CHARTER_SESSION_ID": fid, "TMUX_PANE": "%7"})
-        printed = row.render()
-        self.assertIn(fid, printed,
-                      "a suppressed status line must be explained somewhere the reader "
-                      "actually sees")
-        self.assertIn("blank", printed.lower())
-
-    def test_a_session_that_is_not_suppressed_is_not_told_that_it_is(self):
-        """The control, and the one that fails if the row simply always says it: an
-        ordinary session's frame row must carry no such note."""
-        self.assertNotIn("blank", self._row({}).render().lower())
 
 
 class PanelFollowsWorkspaceUseOnAFrameWithNoRecord(PersonaIso, unittest.TestCase):

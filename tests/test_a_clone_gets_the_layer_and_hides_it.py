@@ -105,10 +105,15 @@ class TheLayerArrives(CloneLayer):
     def test_the_clone_gets_the_planes_settings(self):
         """The half that never walked up: Claude Code reads project settings from the
         session's cwd and nowhere else, so this file is the whole of whether a chat in the
-        clone has a plugin, a status line and a `$CHARTER_HARNESS`."""
+        clone has a plugin and a `$CHARTER_HARNESS`.
+
+        A status line was the third thing that sentence used to name; #895 took the key out
+        of `WORKSPACE_KEYS`, so the plane's own — which the fixture still writes — stays in
+        the plane.
+        """
         self.wire()
         doc = json.loads((self.clone / ".claude" / "settings.json").read_text())
-        self.assertEqual(sorted(doc), ["enabledPlugins", "env", "statusLine"])
+        self.assertEqual(sorted(doc), ["enabledPlugins", "env"])
         self.assertEqual(doc["enabledPlugins"], {"charter@charter": True})
 
     def test_the_clone_gets_the_planes_agents(self):
@@ -833,13 +838,18 @@ class TheAnnouncement(CloneLayer):
         self.assertIn("info/exclude", err.getvalue())
 
     def test_a_refreshed_layer_is_announced_too(self):
-        """`created` is not the only thing worth saying. A plane whose status line moved
+        """`created` is not the only thing worth saying. A plane whose mirrored keys moved
         makes the next clone REFRESH what is already there, and charter has written into
         the operator's repo again — the announcement is about the write, not about it
-        being the first one."""
+        being the first one.
+
+        Moved the plane's `statusLine` until #895, which is no longer a key a clone
+        carries: moving it now refreshes nothing, so the fixture moves `enabledPlugins`,
+        which it does.
+        """
         commands._wire_clones(self.ws)
         _plane_settings(config.ROOT,
-                        statusLine={"type": "command", "command": "charter frame"})
+                        enabledPlugins={"charter@charter": True, "other@market": True})
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             commands._wire_clones(self.ws)
