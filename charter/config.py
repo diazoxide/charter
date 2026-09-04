@@ -512,9 +512,10 @@ def write_for(p, data) -> None:
 
 #: What every temp file this module publishes through is called, appended to a name that
 #: already carries its target and this writer. ``.tmp`` and not something charter-shaped,
-#: because the one sweep that looks for litter beside an atomic write
-#: (`TheWriteIsAtomic.test_no_temporary_file_is_left_beside_it`) looks for this suffix, and
-#: a rename here that left that test looking for a name nothing writes would report a clean
+#: because the two suites that look for litter beside an atomic write ask for this suffix —
+#: `TheWriteIsAtomic.test_no_temporary_file_is_left_beside_it` and the ``glob("*.tmp")`` in
+#: `test_the_state_directory_is_charters_to_choose` — and both assert they find NONE, so a
+#: rename here would leave them looking for a name nothing writes and reporting a clean
 #: directory forever.
 TEMP_SUFFIX = ".tmp"
 
@@ -545,11 +546,12 @@ def temp_beside(p) -> Path:
     crashed mid-publish. `os.urandom` and not `random`, because the latter is seeded per
     process and a `fork` hands both sides the same stream.
 
-    NOT `tempfile.mkstemp`, which `frame/reopen.py` uses for this same job and is right to.
-    Its 0600 is the mode charter's own state wants and the wrong one for a *committed*
-    file: `workspace._write_manifest` publishes ``workspaces/<n>/workspace.json`` through
-    this, and creating the source at 0600 would carry 0600 onto a file in the operator's
-    own git tree — charter tightening what is not its own, which is #331's whole finding.
+    NOT `tempfile.mkstemp`, which `frame/reopen.py` reached for when it found this defect
+    on its own file (#845) and which `inflight` still uses for a file it names rather than
+    publishes. Its 0600 is the mode charter's own state wants and the wrong one for a
+    *committed* file: `workspace._write_manifest` publishes ``workspaces/<n>/workspace.json``
+    through this, and creating the source at 0600 would carry 0600 onto a file in the
+    operator's own git tree — charter tightening what is not its own, which is #331.
     The mode is left to :func:`write_for`, which asks the one question that decides it
     (*where is this path*) and asks it of the temp file, which is the file `os.replace`
     carries. So the naming is here and the mode is there, and neither one guesses.
@@ -562,12 +564,14 @@ def replace_for(p, data) -> None:
     """Write *data* to *p* **whole or not at all** — through a temp file of this writer's
     own (:func:`temp_beside`) and one ``os.replace``.
 
-    The single atomic writer for this package. There were twenty spellings of it before
-    #893 — seventeen in `frame/state.py`, `gather.save`, `toolgate.snapshot`,
-    `workspace._write_manifest` — and every one of them was the same four lines with the
-    same defect in them, which is the argument for one function rather than twenty edits:
-    the next writer that needs "a reader must never see half of this" calls this instead
-    of copying the shape, and it has nowhere to copy the shape from.
+    The single atomic writer for this package. There were twenty-one spellings of it before
+    #893 — seventeen in `frame/state.py`, plus `gather.save`, `toolgate.snapshot`,
+    `workspace._write_manifest` and `reopen.write` — and twenty of them were the same four
+    lines with the same defect in them, which is the argument for one function rather than
+    twenty edits: the next writer that needs "a reader must never see half of this" calls
+    this instead of copying the shape, and it has nowhere to copy the shape from. (The
+    twenty-first, `reopen.write`, had already answered it for itself and is here so there
+    is one rule rather than two.)
 
     Two guarantees, and they are different guarantees. ``os.replace`` gives the second: the
     destination is the old content or the new one, never a prefix of either. The temp
