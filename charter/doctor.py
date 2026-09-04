@@ -890,7 +890,14 @@ def _discovery_rules() -> tuple[list[str], list[str]]:
     if current and live is None:
         return [], []
     harnesses = [live] if live else _registry.all()
-    parts = [p for h in harnesses for p in (h.layer or ())]
+    # `h.layer` and not `h.layer or ()`, and the distinction is which side of charter the
+    # value comes from. `Harness.layer` is a class attribute charter declares — `tuple[
+    # LayerPart, ...] = ()` on the base, a tuple on all three registered harnesses — so an
+    # `or ()` in front of it guards a shape charter itself guarantees one file away: a
+    # branch nothing can reach, which the deletion sweep charged as a survivor and was right
+    # to. A fallback in front of somebody ELSE's answer is a different thing and stays; this
+    # was one in front of charter's own. `check_session_layer` reads the attribute bare too.
+    parts = [p for h in harnesses for p in h.layer]
     return (list(dict.fromkeys(p.what for p in parts if not p.walks)),
             list(dict.fromkeys(p.what for p in parts if p.walks)))
 
