@@ -2351,8 +2351,10 @@ def cmd_init(args) -> int:
     #
     # `claude plugin install --scope project` writes `enabledPlugins` into the plane's own
     # `.claude/settings.json` — measured on a real machine, where that file holds exactly
-    # `enabledPlugins`, `env` and `statusLine` and no `hooks` block (that plane predates
-    # #895, which is where the `statusLine` came from). So by the time
+    # `enabledPlugins`, `env` and `statusLine` and no `hooks` block. (The measurement is
+    # left as taken. That plane was set up before #895, which is why a `statusLine` is in
+    # it; what the measurement is FOR is the absent `hooks` block, and that has not moved.)
+    # So by the time
     # `_ensure_guard_hook` runs, `_plugin_dispatches_guard` finds an enabled plugin that
     # dispatches `charter hook pretooluse` and correctly writes nothing.
     #
