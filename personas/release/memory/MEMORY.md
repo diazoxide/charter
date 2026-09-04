@@ -49,3 +49,5 @@ Written by the persona as it learns; committed and shared.
 - [A git worktree of the charter repo is NOT an isolated control plane: con](a-git-worktree-of-the-charter-repo-is-not-an-iso.md)
 - [macOS has no 'timeout' command. 'timeout N python3 -m unittest discover](macos-has-no-timeout-command-timeout-n-python3-m.md)
 - [A release has a FIFTH version site the charter never listed: docs/assets](a-release-has-a-fifth-version-site-the-charter-n.md)
+- [twine's --skip-existing is evaluated PER FILE, not per version: upload.p](twine-s-skip-existing-is-evaluated-per-file-not-.md)
+- [A test fixture that isolates with mock.patch.object(config, 'ROOT', tmp)](a-test-fixture-that-isolates-with-mock-patch-obj.md)
