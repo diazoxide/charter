@@ -145,18 +145,29 @@ class AnInstallBelongingToSomebodyElsesCheckoutIsNotAnAnswerHere(unittest.TestCa
         """Not a test-only nicety. macOS resolves `/tmp` to `/private/tmp` and `/var` to
         `/private/var`, so a plane under either is spelled one way by `claude plugin list`
         and another by the shell — and an unresolved compare would report "not installed"
-        for an install that is right there."""
+        for an install that is right there.
+
+        **Both directions, because one direction pins only one `resolve()`.** The first
+        version put the symlink on the *asking* side only, and dropping `resolve()` from
+        the `projectPath` side then changed nothing: on a Linux runner `/tmp` is a real
+        directory, so the unresolved `projectPath` already equalled the resolved query.
+        The deletion sweep found exactly that. The install can be recorded under either
+        spelling, so both are asked.
+        """
         import os
         import tempfile
 
-        real = Path(tempfile.mkdtemp(prefix="charter-samedir-"))
+        real = Path(tempfile.mkdtemp(prefix="charter-samedir-")).resolve()
         self.addCleanup(lambda: __import__("shutil").rmtree(real, ignore_errors=True))
         link = real.parent / (real.name + "-link")
         os.symlink(real, link)
         self.addCleanup(lambda: link.unlink(missing_ok=True))
-        entry = {"id": "charter@charter", "scope": "project", "projectPath": str(real)}
-        with rows([entry]):
-            self.assertIsNotNone(plugincache.installed_for(link))
+        for recorded, asked in ((real, link), (link, real)):
+            entry = {"id": "charter@charter", "scope": "project",
+                     "projectPath": str(recorded)}
+            with rows([entry]):
+                self.assertIsNotNone(plugincache.installed_for(asked),
+                                     f"recorded as {recorded}, asked about {asked}")
 
     def test_a_path_that_cannot_be_resolved_answers_no_rather_than_raising(self):
         """A symlink loop or an unreadable ancestor makes `Path.resolve` raise, and this
@@ -257,6 +268,30 @@ class TheInstallItself(unittest.TestCase):
             status, detail = plugincache.install("/planes/a")
         self.assertEqual(status, "failed")
         self.assertIn("offline", detail)
+
+    def test_the_reason_is_the_last_line_of_output_with_no_whitespace_on_it(self):
+        """`claude` writes a trailing newline, and a multi-line failure buries the useful
+        sentence at the bottom. The detail is one line of a `doctor` hint and of `init`'s
+        warning, so a trailing newline pushed into it breaks the row it lands in — which is
+        what `.strip()` before `.splitlines()` is for, and what dropping it to `.lstrip()`
+        would silently undo."""
+        def run(cmd, cwd=None, check=True, **kw):
+            failed = "install" in cmd and "marketplace" not in cmd
+            return mock.Mock(returncode=1 if failed else 0, stdout="",
+                             stderr="  setting up\nnot logged in  \n\n" if failed else "")
+
+        with rows([]), mock.patch.object(plugincache.util, "run", run):
+            _status, detail = plugincache.install("/planes/a")
+        self.assertTrue(detail.endswith("not logged in"), repr(detail))
+        self.assertNotIn("setting up", detail, "the LAST line is the reason")
+
+    def test_a_failure_with_no_output_at_all_still_names_the_exit_code(self):
+        """A `claude` that fails silently. Without the fallback the detail would end at
+        `failed: ` and say nothing at all — the shape of a report that looks delivered."""
+        calls: list = []
+        with rows([]), spawns(calls, code=3, err=""):
+            _status, detail = plugincache.install("/planes/a")
+        self.assertIn("exit 3", detail)
 
     def test_an_already_registered_marketplace_does_not_stop_the_install(self):
         """`claude plugin marketplace add` exits non-zero when the marketplace is already
@@ -364,21 +399,40 @@ class InstallationHappensWhereSomebodyAskedForIt(PersonaIso):
             commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
         self.assertEqual(order, ["provision", "guard"])
 
-    def test_init_lists_what_it_installed_and_warns_about_what_it_could_not(self):
-        """The two buckets `init` renders differently. A path under "already present" is
-        true about the filename and false about everything a reader takes from it (#433),
-        which is why an install charter could not vouch for is a warning instead."""
+    def test_init_renders_each_provision_status_in_its_own_bucket(self):
+        """Three statuses, three renderings, and the difference is the whole point. A
+        sentence listed under "already present" is true about the label and false about
+        everything a reader takes from it (#433), which is why an install charter could not
+        vouch for is a warning instead.
+
+        **Each case asserts what the OTHER two would have printed is absent**, and the
+        first version did not: it looked for the label text, which every bucket prints. So
+        collapsing `created if status == "created" else present` to `created`, or forcing
+        the `unvouched` test either way, changed nothing a test could see — three sweep
+        survivors in five lines.
+        """
         import io
         from contextlib import redirect_stderr
 
-        for status, label, expect in (("created", "a thing", "+ a thing"),
-                                      ("unvouched", "it went wrong", "it went wrong")):
+        # `init` always prints an "already present:" line for its own reasons, so the
+        # question is never "does that line exist" but "is the LABEL on it".
+        def buckets(out: str) -> dict:
+            present = next((ln for ln in out.splitlines() if "already present:" in ln), "")
+            return {"created": "+ a thing" in out,
+                    "present": "a thing" in present,
+                    "unvouched": "! a thing" in out}
+
+        for status in ("created", "present", "unvouched"):
             buf = io.StringIO()
             with redirect_stderr(buf), \
                     mock.patch.object(claude_code.ClaudeCodeHarness, "provision",
-                                      return_value=[(status, label)]):
+                                      return_value=[(status, "a thing")]):
                 commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
-            self.assertIn(expect, buf.getvalue(), status)
+            out = buf.getvalue()
+            self.assertEqual(buckets(out), {"created": status == "created",
+                                            "present": status == "present",
+                                            "unvouched": status == "unvouched"},
+                             f"{status} did not land in its own bucket:\n{out}")
 
     def test_fix_outside_a_plane_installs_nothing_and_says_where_to_go(self):
         """The plugin is installed per PROJECT, so with no plane there is no directory to
@@ -409,20 +463,32 @@ class InstallationHappensWhereSomebodyAskedForIt(PersonaIso):
             commands._run_doctor_fix()
         self.assertIn("nothing to install", buf.getvalue())
 
-    def test_fix_warns_about_an_install_it_could_not_vouch_for(self):
-        """`unvouched` carries a sentence, and a `--fix` that failed must not read as a
-        `--fix` that worked — the row it did not turn green is the verdict, but the reason
-        is only here."""
+    def test_fix_says_which_of_the_three_things_happened(self):
+        """A `--fix` that failed must not read as a `--fix` that worked, and one that had
+        nothing to do must not read as one that installed something.
+
+        **The glyph is the assertion, not the label.** `util.warn`/`ok`/`info` each print a
+        different mark, and the label is the same string in all three — so the first
+        version of this test, which looked for the label, passed with the whole dispatch
+        forced to any one branch. The sweep found it as three survivors.
+        """
         import io
         from contextlib import redirect_stderr
 
         commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
-        buf = io.StringIO()
-        with redirect_stderr(buf), \
-                mock.patch.object(commands, "_provision_harnesses",
-                                  return_value=[("unvouched", "it did not work because X")]):
-            commands._run_doctor_fix()
-        self.assertIn("it did not work because X", buf.getvalue())
+        cases = (("unvouched", "! it did not work", ("Installed", "Already there")),
+                 ("created", "✓ Installed it did not work", ("Already there",)),
+                 ("present", "• Already there: it did not work", ("Installed",)))
+        for status, expect, absent in cases:
+            buf = io.StringIO()
+            with redirect_stderr(buf), \
+                    mock.patch.object(commands, "_provision_harnesses",
+                                      return_value=[(status, "it did not work")]):
+                commands._run_doctor_fix()
+            out = buf.getvalue()
+            self.assertIn(expect, out, f"{status}: {out!r}")
+            for gone in absent:
+                self.assertNotIn(gone, out, f"{status} rendered as {gone!r}: {out!r}")
 
     def test_the_flag_is_reachable_from_the_command_line(self):
         """A flag argparse does not define is a flag nobody can type."""
@@ -494,7 +560,25 @@ class TheDoctorRowReportsTheGapWithoutCryingWolf(PersonaIso):
         with rows([]):
             res = doctor.check_plugin_install()
         self.assertEqual(res.status, doctor.WARN)
-        self.assertIn(doctor.PLUGIN_FIX_CMD, res.hint)
+        self.assertIn("charter doctor --fix", res.hint)
+
+    def test_the_remedy_is_a_command_the_parser_actually_accepts(self):
+        """`assertIn(doctor.PLUGIN_FIX_CMD, res.hint)` was the whole of this, and it is a
+        sentence comparing itself: respell the constant and the hint respells with it, so
+        the sweep respelled it to `dibsufs epdups --gjy` and nothing noticed.
+
+        Asked of `cli.build_parser` instead, which is the property that actually matters —
+        a hint naming a command charter does not have is worse than no hint, because the
+        reader types it, gets `unrecognized arguments`, and stops trusting the row. The
+        parser answers for the verb, the flag and the handler at once.
+        """
+        from charter import cli
+
+        argv = doctor.PLUGIN_FIX_CMD.split()
+        self.assertEqual(argv[0], "charter", doctor.PLUGIN_FIX_CMD)
+        args = cli.build_parser().parse_args(argv[1:])
+        self.assertIs(args.func, commands.cmd_doctor)
+        self.assertTrue(args.fix)
 
     def test_it_is_never_a_FAIL(self):
         """`cmd_doctor` exits non-zero only on FAIL, and that exit code is what makes the
@@ -577,6 +661,14 @@ class TheDoctorRowReportsTheGapWithoutCryingWolf(PersonaIso):
             res = doctor.check_plugin_install()
         self.assertEqual(res.status, doctor.WARN)
         self.assertIn("not checked", res.detail)
+        # The REASON, not merely the status — the trap `test_plugin_freshness` records
+        # verbatim for its own copy of this branch, and which the deletion sweep found
+        # here: delete `if entry is UNKNOWN` and the sentinel falls through, `entry.get`
+        # raises on a bare `object()`, and the row-level crash guard turns it into a WARN
+        # reading "not checked ('object' object has no attribute 'get')". A test that
+        # stopped at the status would accept that as this branch working — a guard passing
+        # because a different guard caught it.
+        self.assertIn("claude plugin list", res.detail)
 
     def test_a_raising_check_costs_one_row_and_not_the_whole_preflight(self):
         """`doctor._checks()` is an eager list literal with no per-check guard, so one

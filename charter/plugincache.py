@@ -186,10 +186,16 @@ def _our_entries():
     standing between `charter doctor --fix` and a plugin that is not charter's to touch.
     """
     entries = _claude_json(["list"])
-    if entries is None:
-        return UNKNOWN
+    # ONE test, and it used to be two. `_claude_json` answers `None` for every way a read
+    # can fail, and the line above it — `if entries is None: return UNKNOWN` — was carried
+    # here from `installed_charter_plugin` and is strictly subsumed by this one: `None` is
+    # not a list either, and both returned the same sentinel. The deletion sweep found it
+    # as a survivor no test could tell from its own absence, which is the honest name for a
+    # branch nothing can reach. What the two spellings meant is preserved here: "could not
+    # read" and "`--json` answered something that is not a list of rows" are the same
+    # answer — nothing is known — and neither is "there is nothing installed".
     if not isinstance(entries, list):
-        return UNKNOWN          # `--json` answered something that is not a list of rows
+        return UNKNOWN
     ours = []
     for e in entries:
         if not isinstance(e, dict):
