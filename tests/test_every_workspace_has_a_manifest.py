@@ -200,6 +200,39 @@ class TheManifestIsPartOfTheLayout(ManifestCase):
         self.assertNotIn("Up to date", said,
                          "a repair command that contradicts its own error two lines up")
 
+    def _unwritable_manifest(self, ws: str):
+        """A manifest path charter refuses to write and nothing else in the workspace.
+
+        A symlink out of the plane, dangling: `contain.writable` refuses the write (#328),
+        `Path.exists` answers False through it, and every other component stays writable —
+        which is what lets a case ask whether the rest of the repair still happened.
+        """
+        workspace.manifest_path(ws).symlink_to(self.tmp / "nowhere.json")
+
+    def test_the_rest_of_the_repair_still_lands_when_the_manifest_cannot(self):
+        """One component charter cannot write must not swallow the report of the ones it
+        did. The blocked manifest is taken out of `missing`, and what is left is still a
+        heal that happened and has to be named."""
+        workspace.ensure("alpha")
+        workspace.manifest_path("alpha").unlink()
+        workspace.charter_file("alpha").unlink()
+        self._unwritable_manifest("alpha")
+        said = self.reinit("alpha")
+        self.assertIn("workspace.json could not be written", said)
+        self.assertIn("added workspace.md", said)
+        self.assertTrue(workspace.charter_file("alpha").is_file())
+
+    def test_a_stale_layout_is_still_reported_when_the_manifest_cannot_be_written(self):
+        """The other half of the same recomputation: nothing is missing any more once the
+        blocked manifest is taken out, and the workspace is still older than this layout."""
+        workspace.ensure("alpha")
+        workspace.manifest_path("alpha").unlink()
+        workspace._structure_marker("alpha").write_text("0\n")
+        self._unwritable_manifest("alpha")
+        said = self.reinit("alpha")
+        self.assertIn("workspace.json could not be written", said)
+        self.assertIn(f"structure v0 → v{workspace.STRUCTURE_VERSION}", said)
+
     def test_a_backfilled_live_workspace_is_told_to_commit_it(self):
         """`workspace.json` is the first path in the managed LIVE block, so a backfill that
         healed it and said nothing would leave the manifest this change exists to share
@@ -258,6 +291,27 @@ class MembershipIsMaintained(ManifestCase):
         workspace.record_members("alpha", ["web"])
         self.assertEqual([r["name"] for r in self.manifest("alpha")["repos"]],
                          ["gone", "svc", "web"])
+
+    def test_a_manifest_with_no_repos_key_at_all_is_read_as_no_repos(self):
+        """A field this charter writes is not a field every manifest has. `repos` missing
+        and `repos: []` are the same statement, and the second must not be the only shape
+        that can be read."""
+        workspace.ensure("alpha")
+        workspace.write_manifest("alpha", {"name": "alpha", "description": "no repos key"})
+        self.assertEqual(workspace.record_members("alpha", ["svc"]), "recorded")
+        self.assertEqual(self.manifest("alpha")["repos"], [{"name": "svc"}])
+
+    def test_a_workspace_whose_manifest_went_missing_gets_one_back(self):
+        """`ensure` gives every workspace a manifest, so this is one whose creating write
+        failed and where a clone has since succeeded. Recorded through the one constructor
+        rather than a second shape of "a fresh manifest" — two of those drift, and the
+        drift is invisible until a field one of them omits is read."""
+        workspace.ensure("alpha")
+        workspace.manifest_path("alpha").unlink()
+        self.assertEqual(workspace.record_members("alpha", ["svc"]), "recorded")
+        m = self.manifest("alpha")
+        self.assertEqual(m["name"], "alpha")
+        self.assertEqual(m["repos"], [{"name": "svc"}])
 
     def test_membership_is_restamped_with_who_and_when(self):
         workspace.ensure("alpha")
@@ -330,6 +384,15 @@ class MembershipIsNotASnapshot(ManifestCase):
                                                     [{"name": "svc", "branch": "scratch"}])
         self.assertEqual(disk_only, [])
         self.assertEqual(rows, [{"name": "svc", "branch": "release"}])
+
+    def test_a_branch_of_whitespace_pins_nothing(self):
+        """The same reading `_pin` makes one module over. Two answers to "does this row
+        record a branch" is how a workspace gets forked with a warning it deserved
+        withheld."""
+        rows, disk_only = workspace.merge_repo_rows([{"name": "svc", "branch": "  "}],
+                                                    [{"name": "svc", "branch": "scratch"}])
+        self.assertEqual(disk_only, ["svc"])
+        self.assertEqual(rows, [{"name": "svc", "branch": "scratch"}])
 
     def test_a_membership_row_with_nothing_on_disk_still_forks(self):
         """A teammate who has just pulled the plane has no clones at all, and the manifest
@@ -526,6 +589,25 @@ class AManifestCharterDidNotWriteIsNeverOverwritten(ManifestCase):
                                                       description=None))
         self.assertEqual(workspace.manifest_owner("alpha"), "charter")
         self.assertEqual(workspace.record_members("alpha", ["web"]), "recorded")
+
+
+class TheMarkersNameIsPartOfTheOnDiskContract(ManifestCase):
+    """`charter_generated` is spelled out here once, by hand.
+
+    Every other reference in this suite reads `workspace.MANIFEST_MARKER`, which agrees
+    with itself however it is renamed — and the rename lands on manifests that are already
+    committed. The old key is one this charter does not look for, so every workspace on
+    every machine hands its manifest back to the operator at once and membership silently
+    stops being maintained. The name is on disk, in git, on other people's clones; it is
+    part of the format, not a variable.
+    """
+
+    def test_the_key_charter_stamps_is_named(self):
+        self.assertEqual(workspace.MANIFEST_MARKER, "charter_generated")
+
+    def test_it_is_the_key_that_actually_lands_in_the_file(self):
+        workspace.ensure("alpha")
+        self.assertIn('"charter_generated"', workspace.manifest_path("alpha").read_text())
 
 
 class TheWriteIsAtomic(ManifestCase):
