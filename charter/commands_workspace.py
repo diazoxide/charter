@@ -1276,7 +1276,14 @@ def cmd_workspace_reinit(args) -> int:
         # tab. That is the right trade there and it costs this command its honesty unless
         # the file is looked at again — "added workspace.json" printed over a manifest that
         # is not there is exactly the tick that stops somebody checking.
-        if "workspace.json" in before["missing"] and not workspace.manifest_path(n).exists():
+        #
+        # The absence is the whole test, and the `"workspace.json" in before["missing"]`
+        # half this started with is gone: `structure_status` derives `missing` from the
+        # same `exists()`, so before `scaffold` runs the two always agree, and after it the
+        # only way the file is still absent is that this call could not write it. The
+        # sweep found the conjunct as a survivor and it was right — an equivalent mutant
+        # and dead code are one finding.
+        if not workspace.manifest_path(n).exists():
             blocked += 1
             before["missing"] = [m for m in before["missing"] if m != "workspace.json"]
             before["ok"] = not before["missing"] and before["version"] >= before["target"]

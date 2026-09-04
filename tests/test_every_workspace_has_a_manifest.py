@@ -138,9 +138,12 @@ class TheManifestIsPartOfTheLayout(ManifestCase):
     def test_reinit_writes_the_missing_manifest(self):
         workspace.ensure("alpha")
         workspace.manifest_path("alpha").unlink()
-        cw.cmd_workspace_reinit(SimpleNamespace(name="alpha", all=False))
+        said = self.reinit("alpha")
         self.assertTrue(workspace.manifest_path("alpha").is_file())
         self.assertFalse(workspace.needs_reinit("alpha"))
+        self.assertIn("added workspace.json", said)
+        self.assertNotIn("Up to date", said,
+                         "a repair that wrote a manifest reported having nothing to do")
 
     def test_reinit_all_backfills_every_workspace_that_lacks_one(self):
         """The command the operator runs once: 12 of 17 workspaces on the plane this was
@@ -393,6 +396,16 @@ class MembershipIsNotASnapshot(ManifestCase):
                                                     [{"name": "svc", "branch": "scratch"}])
         self.assertEqual(disk_only, ["svc"])
         self.assertEqual(rows, [{"name": "svc", "branch": "scratch"}])
+
+    def test_a_pin_is_trimmed_at_both_ends(self):
+        """Both ends, because only one of them is dangerous and neither is a ref. A
+        leading space hides an option from the `-` guard (`" -b"`); a trailing one is
+        simply a branch `git checkout` will not find, and the reading that produces the
+        row is the reading that produces the argument."""
+        rows, _ = workspace.merge_repo_rows([{"name": "svc", "branch": "release "}], [])
+        self.assertEqual(rows, [{"name": "svc", "branch": "release"}])
+        self.assertEqual(cw._pin({"branch": "release "}), "release")
+        self.assertEqual(cw._pin({"branch": " release"}), "release")
 
     def test_a_membership_row_with_nothing_on_disk_still_forks(self):
         """A teammate who has just pulled the plane has no clones at all, and the manifest
