@@ -610,69 +610,101 @@ def for_version(version: str) -> list[Entry]:
 #: rather than trimming to fit — so a version whose notes render past it does not publish
 #: shorter notes, it publishes **none**.
 #:
-#: Characters, not bytes, and the distinction is load-bearing in both directions. The API
-#: counts code points and charter's entries are not ASCII — they carry ``—``, ``✗``, ``⬢``
-#: — so ``len(body.encode())`` reports a bigger number than the one GitHub applies and
-#: would refuse a release GitHub would have accepted. 0.54.0's 86 notes differ by 438
-#: between the two measures in the body that shipped, and by 3,603 rendered whole.
+#: **Whether it counts characters or bytes charter does not know, and no longer has to.**
+#: The refusal says "characters" and charter's entries are not ASCII — they carry ``—``,
+#: ``✗``, ``⬢`` — so the two measures differ, by 793 on the body 0.56.0 publishes and by
+#: 3,603 on 0.54.0's 86 notes rendered whole. This line used to resolve that by taking the
+#: message at its word and measuring code points, which is a guess about somebody else's
+#: validator standing between an irreversible upload and a release body. :func:`_sent_length`
+#: measures the larger of the two instead, so the question stops mattering: what it costs is
+#: under 1% of the limit and it is measured on the string rather than reserved for.
 RELEASE_BODY_MAX = 125_000
 
-#: How much of :data:`RELEASE_BODY_MAX` :func:`render_body` will actually spend. **Charter's
-#: number, and deliberately well below GitHub's**, for three reasons that are not one
-#: reason said three ways:
+
+def _sent_length(body: str) -> int:
+    """How long *body* is by the more conservative of the two measures GitHub might apply.
+
+    The encoded length, which for UTF-8 is never below the character count and is above it
+    for every entry charter has published — so a body under this number is under
+    :data:`RELEASE_BODY_MAX` whichever unit the API's validator is actually counting.
+
+    **Measuring code points was the alternative and it was a guess.** The refusal reads
+    ``body is too long (maximum is 125000 characters)``, which is evidence and not proof:
+    the word in an error message is not the expression that produced it, and the one place
+    the difference shows up is a body within 1% of the limit — i.e. exactly the bodies this
+    module exists for. Charter cannot run that validator, so it satisfies both readings.
+
+    **And the cost of doing so is measured rather than reserved for**, which is the trade
+    that makes this cheap. Across every version charter has stamped, the encoded body runs
+    between 0.25% and 1.22% longer than the character count (worst: 0.47.0, at 1.22%; the
+    two largest releases, 0.54.0 and 0.55.0, at 0.85%). Taking the conservative measure
+    therefore spends about a thousand characters of a 125,000-character allowance. The
+    reserve it replaces — a flat 15% of the limit, held back in case the units differed —
+    cost 0.52.0 four notes and 0.56.0 another four, for a hazard under a hundredth of it.
+
+    Used by :func:`render_body` to bound what it renders and by
+    :func:`commands.cmd_news` to decide what it refuses to print, so the number that
+    decides an elision and the number that decides a refusal are the same number.
+    """
+    return len(body.encode())
+
+
+#: How much of :data:`RELEASE_BODY_MAX` :func:`render_body` will actually spend, measured
+#: by :func:`_sent_length`. **Charter's number, and the 3,000 it leaves unspent is what the
+#: number is actually about.**
 #:
-#: *The string charter measures is not quite the string GitHub counts.* `charter news --for`
-#: ``print``s this body, so the file `announce` redirects into is one character longer than
-#: what was measured here, and nothing downstream re-measures. One character is enough at a
-#: bound set exactly at the ceiling, and that is the smallest of the three.
+#: **What the reserve still holds.** One thing: something added to the body that charter did
+#: not render. `announce` writes the file `gh release create` uploads, and a preamble, a
+#: footer or a wrapper added to that step lands on a body already at this budget — after the
+#: PyPI upload, which is the failure this whole mechanism exists to move to the cheap end.
+#: The largest block charter itself adds to a body no entry wrote is :func:`_elision`'s
+#: notice, at 443 bytes; 3,000 is seven of those.
 #:
-#: *A ceiling reached is a ceiling with nothing left for the next change.* A preamble, a
-#: footer, a wrapper someone adds to the announce step — any of them lands on a body already
-#: at the limit, and lands there **after** the PyPI upload, which is the failure this whole
-#: mechanism exists to move to the cheap end.
+#: **What it no longer holds, and this is the change.** It used to hold the gap between the
+#: string charter measured and the string GitHub counts — code points here, possibly bytes
+#: there — which was a guess about somebody else's validator, sized at a fifth of the
+#: allowance. :func:`_sent_length` settles that on the string instead, at a measured cost
+#: under 1%. It also used to hold slack against "just under is a state nobody notices", and
+#: that reason retired when the bound landed: a release over this budget is not refused, it
+#: is *reshaped*, and the only cliff is at :data:`RELEASE_BODY_MAX` — where
+#: :func:`commands.cmd_news` counts the newline `print` adds and refuses.
 #:
-#: *And "just under" is a state nobody notices.* 0.52.0 published at 111,723 characters —
-#: 3,277 short of the refusal — and nothing in the repository remarked on it, because
-#: nothing was looking. Entries accumulate one pull request at a time and each author sees
-#: only their own.
+#: **100,000 was the rejected value and it cost real notes.** A round fifth of the limit
+#: held back, and it reshaped two releases GitHub would have taken whole: 0.52.0, whose
+#: published Release carries all 24 of its notes in full and none as a link, rendered here
+#: as 20 notes and four links — `charter news --for 0.52.0` printing a document GitHub does
+#: not hold — and 0.56.0, four notes short at 115,155 bytes against an allowance of 125,000.
+#: At 122,000 both render whole and the archive agrees with itself again.
 #:
-#: 100,000 rather than a fraction of the limit, because a fraction invites re-deriving it:
-#: this is a round number a human holds, and it leaves a fifth of the API's allowance
-#: unspent.
+#: **A fraction of the limit was the other rejected shape** — `RELEASE_BODY_MAX * 0.85`, and
+#: the ceiling case used to compute one. A fraction re-derives itself whenever the limit
+#: moves and never says what the remainder is *for*, which is how a 15% reserve came to be
+#: guarding a 1% hazard. The remainder is the whole content of this number, so it is written
+#: as a subtraction a reader can check: 125,000 − 3,000.
 #:
-#: **It reaches for one release GitHub would have taken whole, and that is still 0.52.0, at
-#: 111,723.** This line used to say "above every release charter has ever cut but one",
-#: which counted elided releases rather than the thing the number decides — and 0.54.0
-#: retired that phrasing rather than merely dating it: 86 notes, 423,196 characters rendered
-#: whole, 3.4× the ceiling in :data:`RELEASE_BODY_MAX`. No value of this budget publishes
-#: that body, so eliding it is the bound doing the job it was added for and not the dial
-#: creeping down. The set this dial governs is the releases GitHub *would* have accepted
-#: whole, and there 0.52.0 is still the only one it reshapes.
+#: **The window is pinned from both ends, and both ends now read one number.**
+#: `tests/test_release_notes_fit_the_release.py` declares `RESERVE` beside its own copy of
+#: GitHub's limit and derives `CEILING` from them.
+#: `test_the_budget_keeps_the_reserve_it_declares` holds this line at or below that
+#: ceiling, and `test_the_bound_is_an_exception_rather_than_the_normal_path` requires
+#: every version whose whole body fits **under that same ceiling** to render whole.
+#: The floor's set is bounded by the ceiling, so its demand can never rise past it — which
+#: is the defect #878 reported: a floor counting all of history against a fixed fraction of
+#: the limit, growing every release until the two crossed and no value of this line was
+#: legal.
 #:
-#: **The deletion sweep reports this line as unpinned, and it is right to.** `retune-constant`
-#: rewrites it as ``100_001`` and the suite stays green, because it must: this is a dial, and
-#: one character of it changes no output anyone can name. What IS pinned is the *window* the
-#: dial has to sit in, from both ends and for different reasons —
-#: `test_the_staged_release_has_headroom` from above, so GitHub keeps real slack, and
-#: `test_the_bound_is_an_exception_rather_than_the_normal_path` from below, so a budget small
-#: enough to turn ordinary releases into a table of contents cannot pass while every length
-#: assertion still does. 100,001 is inside that window, which is exactly why it survives.
+#: **The deletion sweep used to report this line as unpinned and no longer can.** With the
+#: budget at the ceiling, `retune-constant`'s ``122_001`` reddens the case above. The floor
+#: is what a ``120_000`` or a ``90_000`` reddens, so the dial is held from both sides by
+#: cases that measure rendered bodies rather than read the literal back at itself.
 #:
-#: **The upper half of that window is open on a release branch, and that is where raising
-#: this number would be proposed.** `test_the_staged_release_has_headroom` measures
-#: ``render_body(UNRELEASED)`` and skips when nothing is staged — which is precisely the
-#: tree `charter news stamp` leaves behind, i.e. every release commit. So on the one commit
-#: where this number decides a body that is about to be published, the case that objects to
-#: raising it does not run, and a skipped case reports success. The floor below is the only
-#: half still speaking there. Treat a proposal to raise `_BODY_BUDGET` on a stamped tree as
-#: unguarded: measure it by hand, or make the case on a branch that still has entries
-#: staged — the alternative is discovering it in `announce`, after the upload.
-#:
-#: This is the "explained equivalent" the sweep's own docstring reserves, not a suppression:
-#: there is no suppression list and this needs none. The only test that would redden on
-#: ``100_001`` is one asserting the literal back at itself, and a test that reads the source
-#: it is checking is the assertion this file has watched fail more than once.
-_BODY_BUDGET = 100_000
+#: **Neither end skips on a release commit.** The ceiling case reads two constants, and the
+#: floor reads the stamped versions *and* the staged one — so it gives the same answer on a
+#: branch with entries staged and on the tree `charter news stamp` leaves behind. The old
+#: ceiling read `render_body(UNRELEASED)` and skipped when nothing was staged, which is
+#: every release commit: the one place this number decides a body about to be published was
+#: the one place the case objecting to raising it did not run.
+_BODY_BUDGET = 122_000
 
 
 def _part(e: Entry) -> str:
@@ -772,10 +804,16 @@ def render_body(version: str) -> str:
     The label comes from :func:`marker`, which the offline view calls too.
 
     **And the result is bounded, because the far end of it refuses a long one.** The whole
-    body is returned whenever it fits :data:`_BODY_BUDGET`, which is what sixteen of the
-    seventeen stamped versions do, and what keeps this function's output byte-identical to
-    what it has always been for them. Past that, the notes that fit are rendered whole and the rest become a headline
-    and a link, with :func:`_elision` between them saying so.
+    body is returned whenever it fits :data:`_BODY_BUDGET`, which is what eighteen of the
+    twenty stamped versions do. Past that, the notes that fit are rendered whole and the
+    rest become a headline and a link, with :func:`_elision` between them saying so.
+
+    **Measured by :func:`_sent_length`, not by :func:`len`.** The two differ by under 1% and
+    the difference is entirely in charter's favour: a body under the budget by the encoded
+    measure is under it by the character measure too, so the bound holds whichever unit
+    GitHub's validator is counting. What that costs is a note's worth of allowance on the
+    largest releases; what it replaces was a fifth of the allowance held back for the same
+    uncertainty. `_sent_length`'s docstring carries the measurements.
 
     Three properties decide the shape, and each of them rules out an easier one:
 
@@ -812,14 +850,14 @@ def render_body(version: str) -> str:
     entries = for_version(version)
     whole = [_part(e) for e in entries]
     body = "\n\n".join(whole)
-    if len(body) <= _BODY_BUDGET:
+    if _sent_length(body) <= _BODY_BUDGET:
         return body
     brief = [_brief(e) for e in entries]
     smallest = ""
     for k in range(len(entries) - 1, -1, -1):
         candidate = "\n\n".join([*whole[:k], _elision(k, len(entries), len(body)),
                                  *brief[k:]])
-        if len(candidate) <= _BODY_BUDGET:
+        if _sent_length(candidate) <= _BODY_BUDGET:
             return candidate
         smallest = candidate
     return smallest
