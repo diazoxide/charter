@@ -253,10 +253,12 @@ def _rows_of(f: Path) -> list[dict]:
         return hit[1]
     rows: list[dict] = []
     for ln in f.read_text(errors="replace").splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
         try:
+            # No blank-line guard above this: `json.loads` raises ValueError on an empty
+            # or whitespace-only line exactly as it does on a truncated one, so the pair
+            # of lines that used to check for it here was a branch nothing could go red
+            # without. It tolerates surrounding whitespace on a real row, too, and
+            # `splitlines` has already taken the line endings off.
             o = json.loads(ln)
         except ValueError:
             continue
@@ -267,10 +269,10 @@ def _rows_of(f: Path) -> list[dict]:
 
 
 def _read_all() -> list[dict]:
-    out: list[dict] = []
     d = _dir()
     if not d.exists():
-        return out
+        return []
+    out = []
     for f in sorted(d.glob("*.jsonl")):
         try:
             out.extend(_rows_of(f))

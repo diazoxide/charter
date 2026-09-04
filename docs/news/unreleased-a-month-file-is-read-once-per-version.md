@@ -22,16 +22,26 @@ lives. So the reading was monotonic in **how long the plane has existed** and in
 anybody did. Re-measured on charter's own plane, at its ~225 dispatches a month, against
 synthesized stores of that shape:
 
-| log age | rows | before | after a first read |
+| log age | rows | before | after, every repaint |
 |---|---|---|---|
 | today | 450 | 0.37 ms | 0.06 ms |
-| 1 year | 2 700 | 2.06 ms | 0.26 ms |
-| 2 years | 5 400 | 4.14 ms | 0.52 ms |
-| 5 years | 13 500 | 11.12 ms | 1.27 ms |
+| 1 year | 2 700 | 2.10 ms | 0.27 ms |
+| 2 years | 5 400 | 4.22 ms | 0.54 ms |
+| 5 years | 13 500 | 10.71 ms | 1.32 ms |
 
 Nothing was slow today. The point is the column on the left: it degrades silently, and
 only on the planes that have been used longest — the ones whose operators would least
 expect it.
+
+**The FIRST call in a process still costs the left column**, to within measurement noise,
+and that is the honest shape of this: the memo removes a repeated read, not a read. A
+panel is a held process that repaints for the life of the frame, so it pays that once.
+What is left in the right-hand column is no longer file reading — it is walking the rows
+already in memory to add them up, which at five years is 1.32 ms of which the reading is
+0.28 ms. That term is still linear in the age of the plane, and deliberately left alone:
+it is a smaller and different thing from the one this fixed, and inventing a cache of
+counts to chase it is exactly the move that got this issue filed instead of folded into
+#882.
 
 ## The key is the invalidation, not a summary
 

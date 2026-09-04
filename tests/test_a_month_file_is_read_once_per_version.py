@@ -6,7 +6,8 @@ switcher's order (#882), `statusline._persona_chip_cells` draws that column, and
 `_read_all` walked EVERY month file under `personas/_dispatch/` and parsed every line —
 a cost monotonic in the age of the plane and in nothing an operator does. Measured on
 charter's own plane at its ~225 dispatches a month: 0.37 ms today, 2.10 ms after a year,
-11.12 ms after five.
+4.22 ms after two, 10.71 ms after five — against 0.06 / 0.27 / 0.54 / 1.32 ms once each
+closed month has been read once.
 
 `dispatch._rows_of` now memoises each file's parsed rows on ``(path, mtime_ns, size)``.
 A month file that is not the current one is closed — `path_for` only ever writes
@@ -37,6 +38,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -166,24 +168,109 @@ class TheKeyIsAWholePath(MonthStore):
 
     def test_two_planes_do_not_share_one_months_rows(self):
         dispatch.record("aaa")
-        name = sorted(dispatch._dir().glob("*.jsonl"))[0].name
+        first = sorted(dispatch._dir().glob("*.jsonl"))[0]
         self.assertEqual(dispatch.tally(), {"aaa": 1})
 
-        first = dispatch._dir() / name
         other = Path(tempfile.mkdtemp(prefix="edm-test-other-"))
         self.addCleanup(shutil.rmtree, other, True)
         point_config_at(self, other)
         d = dispatch._dir()
         d.mkdir(parents=True, exist_ok=True)
-        (d / name).write_text(json.dumps(
-            {"agent": "bbb", "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")},
-            sort_keys=True) + "\n")
-        self.assertNotEqual(d / name, first,
-                            "the case needs two planes, not one read twice")
-        self.assertEqual((d / name).name, first.name,
-                         "the two month files have to be identically NAMED to say anything")
+        second = d / first.name
+        second.write_text(first.read_text().replace('"aaa"', '"bbb"'))
+        # The two files are made INDISTINGUISHABLE except by path: same name, same
+        # length, same mtime to the nanosecond. Anything less and the stamps differ, the
+        # memo misses for a reason that has nothing to do with the key, and a name-keyed
+        # memo passes this case while still being wrong — which is how it passed the
+        # first time this was written. `cp -p`, `rsync -a` and an unpacked tarball all
+        # carry an mtime across, so two clones of one plane really can reach this.
+        st = first.stat()
+        os.utime(second, ns=(st.st_atime_ns, st.st_mtime_ns))
+        self.assertNotEqual(second, first, "the case needs two planes, not one read twice")
+        self.assertEqual((second.stat().st_mtime_ns, second.stat().st_size),
+                         (st.st_mtime_ns, st.st_size),
+                         "the two month files have to be stamped alike to say anything")
         self.assertEqual(dispatch.tally(), {"bbb": 1},
                          "a second plane was answered out of the first plane's memo")
+
+
+class TheStatComesBeforeTheRead(MonthStore):
+    """The order of two statements, and it is the difference between late and never.
+
+    `record` opens the current month file ``O_APPEND`` from any process on the machine, so
+    a row can land between the stat and the read. Stamped BEFORE, that row is memoised
+    under the older stamp and the next call re-reads the file — the row is one repaint
+    late. Stamped AFTER, the SAME row is memoised under the newer stamp, so every later
+    call is a hit and the row is invisible for the whole life of the process — and a frame
+    panel is a process that lives as long as the frame does.
+
+    The race is made deterministic rather than waited for: `Path.read_text` appends the
+    row itself, once, at the exact instant the window is open.
+    """
+
+    def test_a_row_that_lands_during_the_read_is_not_lost(self):
+        p = self.month("aaa")
+        real, fired = Path.read_text, []
+
+        def racing(self_, *a, **kw):
+            text = real(self_, *a, **kw)
+            if self_ == p and not fired:
+                fired.append(True)
+                with open(p, "a") as fh:
+                    fh.write(json.dumps(
+                        {"agent": "bbb",
+                         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")},
+                        sort_keys=True) + "\n")
+            return text
+
+        with mock.patch.object(Path, "read_text", racing):
+            self.assertEqual(dispatch.tally()["aaa"], 1)
+        self.assertTrue(fired, "the case needs the append to have happened mid-read")
+        self.assertEqual(dispatch.tally()["bbb"], 1,
+                         "a row appended during the read was memoised away for good")
+
+
+class ACorruptLineIsSkippedAndNotTheFile(MonthStore):
+    """A half-written line costs its own row and no other — and now costs it once.
+
+    The store is append-only from any process (`record` uses ``O_APPEND``), so a machine
+    that dies mid-append leaves a truncated line behind forever; the file is also
+    committed, so a bad merge can leave anything at all in it. Parsing is now MEMOISED,
+    which is why these belong here rather than only beside the writer: whatever the parse
+    decides about a line, it decides once and every later repaint inherits.
+    """
+
+    def rows(self, *lines: str) -> None:
+        p = dispatch.path_for()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("".join(f"{ln}\n" for ln in lines))
+
+    def test_a_truncated_line_costs_only_itself(self):
+        good = json.dumps({"agent": "devops", "ts": "2026-09-01T00:00:00+00:00"},
+                          sort_keys=True)
+        self.rows(good, '{"agent": "qa", "ts', good)
+        self.assertEqual(dispatch.tally(), {"devops": 2})
+
+    def test_a_blank_line_is_not_a_row(self):
+        good = json.dumps({"agent": "devops", "ts": "2026-09-01T00:00:00+00:00"},
+                          sort_keys=True)
+        self.rows(good, "", "   ", good)
+        self.assertEqual(dispatch.tally(), {"devops": 2})
+
+    def test_a_line_that_is_valid_json_but_not_an_object_is_not_a_row(self):
+        good = json.dumps({"agent": "devops", "ts": "2026-09-01T00:00:00+00:00"},
+                          sort_keys=True)
+        self.rows(good, '["devops", 3]', "7", '"devops"', good)
+        self.assertEqual(dispatch.tally(), {"devops": 2},
+                         "a JSON array or scalar was read as a dispatch row")
+
+    def test_an_object_carrying_neither_an_agent_nor_an_event_is_not_a_row(self):
+        good = json.dumps({"agent": "devops", "ts": "2026-09-01T00:00:00+00:00"},
+                          sort_keys=True)
+        self.rows(good, '{"ts": "2026-09-01T00:00:00+00:00"}', "{}", good)
+        self.assertEqual(sum(dispatch.tally().values()), 2)
+        self.assertEqual(len(dispatch._rows_of(dispatch.path_for())), 2,
+                         "a row with neither an agent nor an event was kept")
 
 
 class AMonthFileThatGoesAway(MonthStore):
