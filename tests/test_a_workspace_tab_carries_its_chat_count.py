@@ -153,6 +153,17 @@ class TheFieldIsReservedWhetherOrNotItIsDrawn(unittest.TestCase):
             self.assertEqual(slots.TABS.switch_to(0, col), "alpha",
                              f"column {col} of {row!r}")
 
+    def test_the_reserve_is_six_columns_a_tab_and_that_is_the_price(self):
+        """**Spelled, because it is what this feature costs and the cost is the argument
+        against it.** Six columns on every workspace tab is why these fifteen names need
+        352 columns for one row rather than 262, and every other case here reads
+        `TAB_COUNT_W` on both sides — so a wider ceiling would spend more of the row with
+        nothing going red. A change to `TAB_COUNT_MAX` has to come back to this line and
+        restate the price, which is `layout.BAR_MAX_ROWS`' own discipline one constant
+        over."""
+        self.assertEqual(slots.TAB_COUNT_W, 6)
+        self.assertEqual(slots.TAB_COUNT_MAX, 99)
+
     def test_the_reserve_is_derived_from_the_widest_thing_it_can_hold(self):
         """A `6` written down beside a ceiling of 99 is two numbers that can drift apart.
         Asked of the function rather than of the constant, at both ends and past them."""

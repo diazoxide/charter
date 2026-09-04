@@ -306,6 +306,13 @@ def bar_rows_cap(rows: int | None) -> int:
     :data:`BAR_ROWS_KEY` in, which is every frame at launch, and which is
     :data:`BAR_ROWS_DEFAULT`.
 
+    **``None`` needs no branch of its own**, and there was one until the deletion sweep
+    asked about it: ``None`` is not in :data:`_BAR_ROWS`, so the membership test already
+    answers for it with the same number a `rows is not None` guard in front would have
+    produced. Written as two expressions, one of them was an equivalent mutant by
+    construction — `collapse-ifexp` to `rows` changed no answer for any input — which is
+    the line this repository deletes rather than documents.
+
     **A cap and not a height.** A strip still grows only as far as its own names need
     (`slots.bar_rows_wanted` measures, `_grown` spends), so pressing the key on a plane
     whose names already fit on one row changes nothing on screen — which is the honest
@@ -318,8 +325,7 @@ def bar_rows_cap(rows: int | None) -> int:
     frame chose something charter will round for it". Clamping a `7` to `3` would leave a
     frame silently at the ceiling because a byte went missing.
     """
-    now = rows if rows is not None else BAR_ROWS_DEFAULT
-    return now if now in _BAR_ROWS else BAR_ROWS_DEFAULT
+    return rows if rows in _BAR_ROWS else BAR_ROWS_DEFAULT
 
 
 def next_bar_rows(rows: int | None) -> int:

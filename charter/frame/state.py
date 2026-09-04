@@ -1261,8 +1261,10 @@ def record_bar_rows(fid: str, rows: int) -> None:
     decision already lives.
 
     Written as text and read back through `int()` (:func:`bar_rows`), not because a number
-    needs a format but because this file is read by another process on the repaint path and
-    every other file in this directory is one line of text.
+    needs a format but because this file is read by another process on the sizing path and
+    every other file in this directory is one line of text. The trailing newline is what
+    every other writer here puts there and `int()` ignores it — see :func:`bar_rows` for
+    why that read has no `.strip()` where :func:`density`'s has one.
 
     Same must-not-raise, atomic-write shape as :func:`bump` and :func:`record_density`.
     """
@@ -1292,12 +1294,18 @@ def bar_rows(fid: str) -> int | None:
     file holding `7` degrades exactly the way an out-of-range `[[frame.component]] size`
     does. A second half-copy of the range living in this module is the thing that comes
     apart.
+
+    **No `.strip()`, where :func:`density`'s read has one**, and the difference is real
+    rather than an oversight: `int()` already ignores surrounding whitespace, so a strip in
+    front of it is a call whose result is provably its argument — the sweep offered
+    `lstrip` for it and neither spelling could change an answer. `density` returns TEXT, so
+    the whitespace is the caller's problem there and this module's here.
     """
     d = frame_dir(fid)
     if d is None:
         return None
     try:
-        return int((d / "bar_rows").read_text().strip())
+        return int((d / "bar_rows").read_text())
     except (OSError, ValueError):
         return None
 

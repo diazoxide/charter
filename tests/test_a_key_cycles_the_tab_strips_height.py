@@ -188,6 +188,17 @@ class TheHeightIsRememberedForThisFrameAndNoLonger(PersonaIso, unittest.TestCase
         self.assertIsNone(state.bar_rows("../evil"))
         self.assertIsNone(state.bar_rows(""))
 
+    def test_a_write_that_fails_after_the_directory_exists_is_swallowed(self):
+        """The other half of `record_density`'s must-not-raise shape, and the half a
+        traversal-refusing id cannot reach: the directory is there and the WRITE fails — a
+        full filesystem, a permission that changed under the frame. This runs from a
+        keypress, where raising costs the frame its re-layout."""
+        state.frame_dir(self.FID, create=True)
+        with mock.patch.object(state.config, "write_for",
+                               side_effect=OSError("no space")):
+            state.record_bar_rows(self.FID, 3)
+        self.assertIsNone(state.bar_rows(self.FID))
+
     def test_an_unreadable_or_unparseable_file_is_the_default_and_not_a_raise(self):
         """This is read on a sizing path that runs inside the `frame-resize` child, so a
         half-written file must degrade rather than take the recompute down. The RANGE is
@@ -317,6 +328,22 @@ class TheKeyRunsTheCommandLive(PersonaIso, unittest.TestCase):
         self.assertEqual([c for c in fake.calls if "kill-pane" in c], [])
         self.assertEqual([c for c in fake.calls if "split-window" in c], [])
 
+    def test_a_press_never_brings_back_a_panel_a_toggle_key_hid(self):
+        """**The filter on `want`, and the harm it stops.** This hands
+        `_apply_arrangement` the arrangement the frame is ALREADY drawing, which means
+        subtracting the hidden set — `cmd_toggle`'s own read (`_hidden_now`). Without that
+        subtraction a press of a key about HEIGHT would split a pane for every component
+        the operator had dismissed, which is `cmd_toggle`'s work undone by a key that is
+        not about visibility at all."""
+        state.record_hidden(self.fid, ["repos"])
+        state.record_panes(self.fid, panels={"top": "%1", "chats": "%3",
+                                             "workspaces": "%6", "bottom": "%2",
+                                             "right": "%4"})
+        _rc, fake = self._press()
+        self.assertEqual([c for c in fake.calls if "split-window" in c], [],
+                         "a height key re-split a panel the operator had hidden")
+        self.assertNotIn("repos", state.panes(self.fid))
+
     def test_a_press_bumps_the_version_so_the_panels_repaint(self):
         before = state.version(self.fid)
         self._press()
@@ -346,6 +373,24 @@ class TheKeyRunsTheCommandLive(PersonaIso, unittest.TestCase):
 
 class TheKeyIsCharactersOwnAndNotAComponentsToTake(unittest.TestCase):
     """The cost of a third shipped `bind -n`, held down where the other two are."""
+
+    def test_the_key_is_F3_and_it_is_spelled(self):
+        """**Spelled, for `BAR_MAX_ROWS`' reason**: it is a choice with an argument behind
+        it rather than a derived value. `F3` sits beside the palette an operator already
+        knows, it is not a key Claude Code, codex or opencode binds, and it is in the
+        function-key band charter already claims. Every other case here reads the constant
+        on both sides, so a change to it would be silent without this line — and a change
+        to it takes a key off somebody's harness.
+
+        Asked with the two properties that make it usable as well as the value: it survives
+        the alphabet a committed key is held to (`instance._HOTKEY_RE`, through
+        `toggle_key`), and it is not one charter has already claimed elsewhere."""
+        self.assertEqual(layout.BAR_ROWS_KEY, "F3")
+        self.assertEqual(instance.toggle_key(layout.BAR_ROWS_KEY),
+                         layout.BAR_ROWS_KEY)
+        self.assertNotIn(layout.BAR_ROWS_KEY,
+                         {overlay.HATCH_KEY, *tmuxctl.MOUSE_KEYS,
+                          instance.FRAME_DEFAULTS["hotkey"]})
 
     def test_the_bind_reaches_the_config_charter_sources(self):
         text = commands_frame.conf_text(hotkey="F2", mouse=True, history_limit=5,
