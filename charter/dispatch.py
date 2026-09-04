@@ -202,6 +202,72 @@ def handoffs_since_first_advice() -> int:
                if o.get("agent") and (t := _ts(o)) and t >= since)
 
 
+#: Month files already parsed, keyed by path → ``((mtime_ns, size), rows)``.
+#: Read and written only by :func:`_rows_of`, whose docstring is the argument for it.
+_PARSED: dict[str, tuple[tuple[int, int], list[dict]]] = {}
+
+
+def _rows_of(f: Path) -> list[dict]:
+    """The rows of one month file, parsed at most once per version of that file.
+
+    :func:`_read_all` walks EVERY month file ever written, and :func:`tally` sits on a
+    per-turn repaint path: `persona.by_use` calls it for the switcher's order,
+    `statusline._persona_chip_cells` draws that column, and `frame/panel.run` holds a
+    process repainting it for as long as the frame lives. The cost of that walk is
+    monotonic in the AGE of the plane and in nothing an operator does — measured at this
+    plane's ~225 dispatches a month: 0.37 ms today, 2.10 ms after a year, 10.71 ms after
+    five. It degrades silently, and only on the planes that have been used longest, whose
+    operators would least expect it (#887).
+
+    A month file that is not the current one is **closed**: :func:`path_for` only ever
+    writes ``<this month>.<host>.jsonl``, and nothing reopens an earlier one. So every
+    month but one is a permanent hit here, and the walk is bounded by the current month
+    however old the plane is.
+
+    **The key is the invalidation, not a summary.** Nothing derived from a row is kept —
+    only the rows the jsonl already holds, discarded the instant the file they came from
+    is not the file that was read. That is what stops this becoming a second source of
+    truth for something the log answers, and ``(path, mtime, size)`` is the same shape
+    `statusline._usage_stamp` and `frame/gather` already invalidate on.
+
+    **Size is in the key because mtime alone is a filesystem's promise, not a fact.**
+    APFS keeps nanoseconds, but some ext4 configurations report whole seconds, and
+    :func:`record` appends to the current month file many times inside one such tick. Two
+    versions of an append-only log always differ in length, so the size catches precisely
+    what a coarse clock hides.
+
+    **The stat is taken BEFORE the read, and that order is the correctness.** A row
+    appended between the two is then memoised under the OLDER stamp and the next call
+    re-reads it; taken after, that same row would be memoised under the NEWER stamp and
+    stay invisible for the life of the process.
+
+    Rows are shared rather than copied — every caller in this module only reads them, and
+    a copy per call would hand back most of what the memo saves. A caller that wants to
+    mutate a row must copy it first.
+    """
+    key = str(f)
+    st = f.stat()
+    stamp = (st.st_mtime_ns, st.st_size)
+    hit = _PARSED.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    rows: list[dict] = []
+    for ln in f.read_text(errors="replace").splitlines():
+        try:
+            # No blank-line guard above this: `json.loads` raises ValueError on an empty
+            # or whitespace-only line exactly as it does on a truncated one, so the pair
+            # of lines that used to check for it here was a branch nothing could go red
+            # without. It tolerates surrounding whitespace on a real row, too, and
+            # `splitlines` has already taken the line endings off.
+            o = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(o, dict) and (o.get("agent") or o.get("event")):
+            rows.append(o)
+    _PARSED[key] = (stamp, rows)
+    return rows
+
+
 def _read_all() -> list[dict]:
     d = _dir()
     if not d.exists():
@@ -209,16 +275,7 @@ def _read_all() -> list[dict]:
     out = []
     for f in sorted(d.glob("*.jsonl")):
         try:
-            for ln in f.read_text(errors="replace").splitlines():
-                ln = ln.strip()
-                if not ln:
-                    continue
-                try:
-                    o = json.loads(ln)
-                except ValueError:
-                    continue
-                if isinstance(o, dict) and (o.get("agent") or o.get("event")):
-                    out.append(o)
+            out.extend(_rows_of(f))
         except OSError:
             continue
     return out
