@@ -723,11 +723,13 @@ back to that window.
 drawn, running the same command a click on that tab runs. It wraps, so every press moves
 something; a plane with nowhere else to go says so rather than sending you where you
 already are. Those four rows are the only route to *the next one* on a plane with `mouse =
-false`, which is the default — and charter will not bind a bare key to it for the reason
-the repo table's own rows give: a `bind -n` is server-wide and would take the key before
-your harness sees it. Unlike the repo rows they do not leave the palette open, because a
-switch moves your terminal to another window and the palette's pane is in the one you are
-leaving.
+false`, which is the default — and charter will not bind a bare key to **switching** for the
+reason the repo table's own rows give: a `bind -n` is server-wide and would take the key
+before your harness sees it, and *which tab* is an open set that would want a key each.
+`F3` is not a counter-example: a strip's height is one gesture, not one per name, which is
+why it is charter's own key and not a row. Unlike the repo rows these four do not leave the
+palette open, because a switch moves your terminal to another window and the palette's pane
+is in the one you are leaving.
 
 **They are tabs: with `mouse = true`, clicking a name switches to it.** A chat tab does
 exactly what `F2` → `chat` does — the same command, the same five refusals, the same
