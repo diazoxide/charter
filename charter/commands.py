@@ -2386,11 +2386,23 @@ def cmd_init(args) -> int:
         else:
             (created if status == "created" else present).append(label)
 
-    # After the wiring and before the guard hook, because the plugin is what DISPATCHES
-    # that guard — a plane whose settings name `charter hook pretooluse` and whose plugin
-    # is absent is wired to nothing. `init` is one of the two doors an install may come
-    # through (#881); `reinit` is not one of them, which is why this is not folded into
-    # `_wire_harnesses` above.
+    # BEFORE `_ensure_guard_hook`, and the order is load-bearing rather than tidy.
+    #
+    # `claude plugin install --scope project` writes `enabledPlugins` into the plane's own
+    # `.claude/settings.json` — measured on a real machine, where that file holds exactly
+    # `enabledPlugins`, `env` and `statusLine` and no `hooks` block. So by the time
+    # `_ensure_guard_hook` runs, `_plugin_dispatches_guard` finds an enabled plugin that
+    # dispatches `charter hook pretooluse` and correctly writes nothing.
+    #
+    # Run the other way round, `init` writes its own `hooks.PreToolUse` block first (the
+    # plugin is not installed yet, so there is nothing to find), the install enables the
+    # plugin a moment later, and the plane ends up with BOTH — the guard running twice on
+    # every Bash call, which is the doubling `doctor.check_guard_wired` reports as *declared
+    # twice* and which nobody finds, because two denials for one command read as one
+    # stubborn denial. That was the ordinary outcome of the old two-step install.
+    #
+    # `init` is one of the two doors an install may come through (#881); `reinit` is not one
+    # of them, which is why this is not folded into `_wire_harnesses` above.
     for status, label in _provision_harnesses(root):
         if status == "unvouched":
             unvouched.append(label)

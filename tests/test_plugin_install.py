@@ -339,6 +339,31 @@ class InstallationHappensWhereSomebodyAskedForIt(PersonaIso):
             self._provisions(
                 lambda: commands.cmd_doctor(SimpleNamespace(json=True, fix=True))), 1)
 
+    def test_init_installs_the_plugin_BEFORE_it_would_write_its_own_guard_hook(self):
+        """The order is load-bearing, and getting it wrong doubles the guard.
+
+        `claude plugin install --scope project` writes `enabledPlugins` into the plane's own
+        `.claude/settings.json` — measured on a real machine, where that file holds exactly
+        `enabledPlugins`, `env` and `statusLine` and no `hooks` block. `_ensure_guard_hook`
+        then sees an enabled plugin dispatching `charter hook pretooluse` and writes
+        nothing.
+
+        Reverse the two and `init` writes its own `hooks.PreToolUse` block first, because
+        the plugin is not installed yet; the install enables it a moment later; and the
+        plane carries both, running the guard twice on every Bash call. That is what
+        `check_guard_wired` reports as *declared twice*, and nobody finds it because two
+        denials for one command read as one stubborn denial.
+        """
+        order: list = []
+        real_guard = commands._ensure_guard_hook
+        with mock.patch.object(commands, "_provision_harnesses",
+                               side_effect=lambda root: order.append("provision") or []), \
+                mock.patch.object(commands, "_ensure_guard_hook",
+                                  side_effect=lambda root: (order.append("guard"),
+                                                            real_guard(root))[1]):
+            commands.cmd_init(SimpleNamespace(forge="github", owner="acme", host=None))
+        self.assertEqual(order, ["provision", "guard"])
+
     def test_init_lists_what_it_installed_and_warns_about_what_it_could_not(self):
         """The two buckets `init` renders differently. A path under "already present" is
         true about the filename and false about everything a reader takes from it (#433),
