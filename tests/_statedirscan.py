@@ -102,6 +102,11 @@ this scan already sees (an ``os.replace`` cannot cross filesystems, so an atomic
 0600 by construction. Both are pinned behaviourally in
 `TheDispatchOnWhereTheFileIs.test_the_atomic_writers_temp_file_is_private_by_construction`,
 so the reasoning is measured rather than assumed.
+
+Since #893 the first of those two is what nearly every atomic writer in the package is:
+`config.replace_for` is the one that names the temp file and hands it to `write_for`, so
+the source is a path this scan sees, beside a destination it already judged. `inflight` is
+the remaining `mkstemp` caller and the second clause is still for it.
 """
 
 from __future__ import annotations
@@ -129,7 +134,12 @@ THE_WALK = ("config.private_mkdir", "config._mkdir_0700", "config.mkdir_for",
 #: The routed spellings for a FILE (#505). Same shape as `ROUTED`, and the same reason it
 #: is documentation rather than a filter: none of these is named ``write_text``/``open``/
 #: ``touch``, so a routed call is simply not a site.
-ROUTED_WRITE = ("write_for", "open_for", "touch_for")
+#:
+#: ``replace_for`` is `write_for` plus a rename and a temp name of the writer's own (#893).
+#: It is here because it is the spelling an atomic writer should reach for and this list is
+#: where a reader looks for that; the scan needs no entry for it, since what it writes
+#: through is `write_for` one frame down.
+ROUTED_WRITE = ("write_for", "open_for", "touch_for", "replace_for")
 
 #: `config`'s own file writers, exempt for the reason `THE_WALK` is: they **are** the
 #: routing. ``_open_private``/``_private_fd`` are the private opener itself; ``open_for``'s
