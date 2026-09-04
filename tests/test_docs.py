@@ -5,7 +5,6 @@ drifted: the install command, the config keys, and the two framings that protect
 (the vault is not a password manager; memory defaults to local)."""
 from __future__ import annotations
 
-import json
 import re
 import unittest
 from pathlib import Path
@@ -32,6 +31,23 @@ class TestReadme(unittest.TestCase):
     def test_documents_both_artifacts(self):
         """Install is the CLI *and* the plugin — omitting the plugin leaves hooks dead."""
         self.assertIn("plugin", README.lower())
+
+    def test_the_install_section_asks_for_one_command(self):
+        """#881. The README used to print three commands and hope the reader ran all of
+        them; a CLI-only install leaves every hook inert while looking complete.
+
+        Asserted against the CODE BLOCK rather than the prose, because the prose still
+        names `claude plugin update charter@charter` — correctly, since updating the
+        plugin remains its own step — and a whole-document search would pass on a README
+        that had gone back to typing the install by hand.
+        """
+        block = next(b for b in re.findall(r"```bash\n(.*?)```", README, re.S)
+                     if "charter init" in b)
+        self.assertIn("uv tool install charter-cp", block)
+        for gone in ("claude plugin marketplace add", "claude plugin install"):
+            self.assertNotIn(gone, block,
+                             f"the 60-seconds block still types {gone!r} — `charter init` "
+                             f"installs the plugin (#881)")
 
     def test_frames_the_vault_honestly(self):
         """It stores plaintext at 0600. Saying anything that implies encryption at rest
@@ -74,21 +90,32 @@ class TestPasteInInstall(unittest.TestCase):
 
     Prose that drifts merely reads oddly; a prompt that drifts *fails*, in someone else's
     session, on their first contact with the project. Every command in it is therefore
-    checked against the thing it names — the distribution on PyPI, and the plugin id built
-    from the two manifests — rather than trusted to stay true.
+    checked against the thing it names — the distribution on PyPI — rather than trusted to
+    stay true. The plugin id and the order its two `claude plugin` steps run in used to be
+    checked here too; #881 moved both into code (`plugincache.install_argvs`) and
+    `tests/test_plugin_install.py` holds them there, against the same two manifests.
 
     The prompt is looked for in the README *and* in `docs/install.md`, because which page
     hosts it is a layout decision and these checks are not: they must keep holding when it
     moves, or moving it silently retires them.
     """
 
+    #: Fences are paired by ANCHORING both ends at the start of a line and letting the
+    #: opener carry an optional language, which is what keeps the pairing in phase.
+    #:
+    #: The previous spelling matched only a bare "```\n" as an opener, so a ```bash block
+    #: anywhere ABOVE the prompt put the whole document out of phase: its closing fence
+    #: reads as an opening one, and every pair from there on is shifted by one. #881 put a
+    #: `uv tool install charter-cp` block at the top of `docs/install.md` and the prompt
+    #: stopped being found at all — four cases failing for a document that still said the
+    #: right thing. The old comment named that hazard and defended against only half of it.
+    _FENCE = re.compile(r"^```[A-Za-z0-9_+-]*\n(.*?)^```", re.S | re.M)
+
     def _paste_block(self) -> str:
-        # Each document is scanned on its own. Concatenating them first puts the fence
-        # matcher out of phase — a ```bash block opens with "```bash", not "```\n", so
-        # its *closing* fence reads as an opening one and the pairing shifts by one from
-        # there on. Joined, the prompt stops being found at all.
+        # Each document is still scanned on its own: concatenating them would let a fence
+        # in one pair with a fence in the other.
         for doc in (README, INSTALL):
-            for block in re.findall(r"```\n(.*?)```", doc, re.S):
+            for block in self._FENCE.findall(doc):
                 if "Install charter" in block:
                     return block
         self.fail("the paste-in install prompt is gone from the docs")
@@ -100,18 +127,19 @@ class TestPasteInInstall(unittest.TestCase):
         pkg = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["name"]
         self.assertIn(pkg, self._paste_block())
 
-    def test_the_plugin_id_matches_both_manifests(self):
-        """`plugin@marketplace`, built from `.claude-plugin/plugin.json` and
-        `marketplace.json`. Rename either and the prompt keeps looking right while
-        installing nothing — the same silent-rot shape as the version drift."""
-        plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["name"]
-        market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())["name"]
-        self.assertIn(f"claude plugin install {plugin}@{market}", self._paste_block())
-
-    def test_it_adds_the_marketplace_before_installing_from_it(self):
+    def test_it_no_longer_types_the_plugin_install_by_hand(self):
+        """The two assertions this replaces — that the prompt names
+        `claude plugin install <plugin>@<marketplace>`, and that it adds the marketplace
+        first — were pinning a real mechanism to prose. #881 moved the mechanism into
+        `plugincache.install_argvs`, which `tests/test_plugin_install.py` now holds to both
+        facts against the same two manifests. What is left to say here is that the prompt
+        does not go back to typing them: it installs the CLI, and `charter init` installs
+        the plugin for the plane the reader picks."""
         block = self._paste_block()
-        self.assertLess(block.index("marketplace add"), block.index("plugin install"),
-                        "installing from a marketplace that has not been added fails")
+        self.assertNotIn("claude plugin install", block)
+        self.assertNotIn("marketplace add", block)
+        self.assertIn("charter init", block,
+                      "the prompt must still say which command installs the plugin")
 
     def test_it_does_not_tell_an_agent_to_run_init(self):
         """`charter init` inside an existing git repo makes THAT repo a control plane.

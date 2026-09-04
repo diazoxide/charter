@@ -37,7 +37,7 @@ offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 
 | | how it is installed | how it updates | what it cannot carry | what to do about it |
 | --- | --- | --- | --- | --- |
-| Claude Code | the plugin (`claude plugin install charter@charter`) | `claude plugin update charter@charter` | — | — |
+| Claude Code | `charter init` — the plugin, at `project` scope, for the plane it creates (`charter doctor --fix` for a plane that already exists) | `claude plugin update charter@charter` | — | — |
 | opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, compared byte for byte (`read_bytes`) with the one charter generates; anything else in that plugin directory is named too, and nothing charter did not write is ever overwritten | no status bar; no per-turn prompt hook; no ask at tool time; no per-workspace config; **no isolation from other plugins** | `charter statusline --watch`; mid-session notes ride tool output already; charter's own tool-time asks allow and are not shown — denials are unaffected; a second plugin in that directory shares charter's globals and can disable its guards, so `doctor` names it — charter reports the realm, it cannot contain it |
 | Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions; no project-level config *file*, so no per-workspace config (a project `.codex/skills/` **is** read — a skills surface, not config) | `charter statusline --watch`; `guard ask` rules stay in charter's own hook |
 
@@ -53,8 +53,16 @@ exist costs more to chase than an honest gap.
 
 ## Wiring, and when it happens
 
-`charter init` writes each harness's wiring into the plane. Nothing to install per harness,
-with one exception (Codex, below).
+`charter init` writes each harness's wiring into the plane, and installs the one artifact
+charter can install for you: Claude Code's charter plugin, at `project` scope, for the plane
+it is creating. Codex is the exception (below) — its wiring is machine-global, so it waits
+to be asked by name.
+
+**`init` and `charter doctor --fix`, and nothing else.** Installation never happens as a
+side effect of an ordinary command: `charter workspace list` does not install software, and
+`charter reinit` — which re-runs the *wiring* — does not either. Both doors are commands
+somebody typed, which is the same shape `charter harness install codex` has and the same
+reason charter refuses to write `~/.claude/settings.json` unasked.
 
 **Plus one generated file per workspace, and only for Claude Code.** Claude Code reads
 project settings from the session's working directory and does not walk up, so a chat

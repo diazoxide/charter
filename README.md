@@ -26,9 +26,7 @@ same render in any spare terminal.
 ![Terminal recording: charter init scaffolds a control plane, charter discover writes an inventory of every repo in the org, charter clone pulls one into the active workspace, and charter status shows the result.](docs/assets/demo.svg)
 
 ```bash
-uv tool install charter-cp                        # the CLI  — one per machine, for your terminal
-claude plugin marketplace add diazoxide/charter   # Claude Code's plugin — one per project, and it carries the version
-claude plugin install charter@charter
+uv tool install charter-cp
 
 mkdir my-control-plane && cd my-control-plane
 charter init --forge github --owner my-org
@@ -37,21 +35,26 @@ charter discover
 charter clone some-repo
 ```
 
-**Two artifacts, and you want both.** The CLI is a single machine-global install — what you
-type in your own terminal, and what CI or a cron job runs. The plugin is installed **per
-project**, out of a cache Claude Code keeps holding every version at once, which is why a
-*plane's* pinned version is the plugin's and not the binary's: two planes on one laptop can
-sit on different charters without fighting. A CLI-only install leaves the plugin's hooks
-inert, and the plugin ships no Python of its own — every hook it declares shells out to the
-CLI. The plugin loads on the **next** session, so restart after installing it.
+**One command, and Claude Code's plugin comes with it.** `uv tool install charter-cp` puts
+the `charter` CLI on your `PATH` — a single machine-global install, what you type in your
+own terminal and what CI or a cron job runs. `charter init` then installs charter's Claude
+Code plugin **for that plane**, out of a cache Claude Code keeps holding every version at
+once, which is why a *plane's* pinned version is the plugin's and not the binary's: two
+planes on one laptop can sit on different charters without fighting. The plugin ships no
+Python of its own — every hook it declares shells out to the CLI, which is why the CLI is
+the thing you install and the plugin is the thing it installs for you. It loads on the
+**next** session, so restart after `charter init`. Already have a plane? `charter doctor`
+says whether its plugin is there and `charter doctor --fix` puts it there.
 → **[docs/install.md](docs/install.md)**
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,
-  `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and the status line
-  above. Additive and idempotent — re-running it is always safe. It converts *the directory
-  it runs in* into a control plane, so run it somewhere you mean to.
+  `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, the status line above,
+  and Claude Code's charter plugin for this plane. Additive and idempotent — re-running it
+  is always safe. It converts *the directory it runs in* into a control plane, so run it
+  somewhere you mean to.
 - **`charter doctor`** preflights python, git, git identity, the forge CLI and its auth,
-  and names what's missing before anything else trips over it.
+  and names what's missing before anything else trips over it. `--fix` installs the pieces
+  charter can install; nothing is ever installed without it.
 - **`charter discover`** queries the forge and writes `inventory/repos.json` — the tracked
   map of every repo in the org, complete even when nothing is cloned yet.
 - **`charter clone <repo>`** clones on demand into the active workspace, already carrying
@@ -355,8 +358,9 @@ charter docs show secrets     # the page, from the install that implements it
 skill. It never tells you to delete it — an override may be deliberate — only that a local
 copy wins, is compared to nothing, and drifts unwatched in both directions.
 
-- [docs/install.md](docs/install.md) — both artifacts, alternatives to `uv`, and what
-  `charter init` writes before you let it.
+- [docs/install.md](docs/install.md) — the one command, alternatives to `uv`, what
+  `charter init` writes before you let it, and the by-hand version of the plugin install it
+  does for you.
 - [docs/control-plane.md](docs/control-plane.md) — `charter.toml` in full: every key, a
   self-hosted example, a mixed-forge example, the memory posture, the version pin.
 - [docs/personas.md](docs/personas.md) — the charter format, inheritance, the memory model,
