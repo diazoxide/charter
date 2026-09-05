@@ -2029,7 +2029,12 @@ def main(argv=None) -> int:
     # raises rather than refuses. `argv[0]` is the token the operator typed, `_bare_launch`
     # has already rewritten a bare `charter` into it, and the root parser carries no flag
     # that survives to this line, so it is the subcommand every time.
-    refusal = _plane_refusal(argv[0] if argv else None)
+    #
+    # Subscripted with no emptiness guard because `parse_args` has already made one: the
+    # subparsers are `required=True`, so an empty argv exits from inside it and never
+    # arrives here. A guard would be an unreachable branch, which is the shape this
+    # repository deletes.
+    refusal = _plane_refusal(argv[0])
     if refusal:
         util.err(refusal)
         return 1

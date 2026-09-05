@@ -668,9 +668,11 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: --version``), so a malformed ``charter.toml`` or a too-new schema must never crash
     #: import — ``instance.load`` keeps raising (its own tests pin that); here the failure
     #: is caught and recorded instead of propagated. ``doctor`` surfaces it to the user.
-    #: A plane whose format version this charter cannot place — the message, or ``None``.
     #:
-    #: **Split out of `CONFIG_ERROR` because the two failures deserve opposite answers.**
+    #: **``PLANE_REFUSAL`` is the narrower half, and it is split out because the two
+    #: failures deserve opposite answers.** It carries the message when the plane declares
+    #: a format version this charter cannot place, and ``None`` otherwise.
+    #:
     #: A malformed `charter.toml` is a file the operator can fix, and charter carrying on
     #: with empty defaults while `doctor` names it is a reasonable trade. A plane declaring
     #: a format version from the future is not that: every default charter would carry on
