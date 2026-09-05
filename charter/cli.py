@@ -1938,6 +1938,31 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     return [default, *argv], None
 
 
+#: The commands that still run on a plane charter has refused (`config.PLANE_REFUSAL`).
+#:
+#: Three of them, and each earns its place by being about CHARTER rather than about the
+#: plane's contents: `doctor` is where the refusal is reported, `version`/`_version-check`
+#: answer "which charter is this" — the first question anyone asks on reading the refusal —
+#: and `update` is the only remedy, since nothing but a newer charter can understand a
+#: newer plane. Refusing the remedy would leave a plane with no way out but a hand edit.
+#:
+#: `--version`, `-h` and `--help` need no entry: argparse's own actions exit from inside
+#: `parse_args`, above the gate, so help still works on a plane charter will not operate on.
+#:
+#: **`init` and `reinit` are NOT here.** Both write into the plane, and writing into a
+#: layout you have been told you do not understand is the guess in its most damaging form.
+#:
+#: **Neither is `hook`, and that is the deliberate half.** charter's hooks are the session
+#: briefing and the PreToolUse guard, and on a refused plane the guard is *already* covering
+#: nothing: `forge.registry.known_forges_report` opens `charter.toml` through
+#: `instance.load`, gets the refusal, and returns an empty forge set — a guard that looks
+#: present and denies nothing. Refusing out loud turns a silent fail-open into a visible
+#: one. It costs the session its briefing and not its turn, which is the standing rule for
+#: a charter hook: the exit code below is 1, never `hooks.DENY_EXIT`, so Claude Code shows
+#: the line and carries on.
+_DESPITE_REFUSAL = frozenset({"doctor", "update", "version", "_version-check"})
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # First, so what it returns is then hoisted, split and parsed exactly as the same
@@ -1956,6 +1981,17 @@ def main(argv=None) -> int:
         # gap signal needs catching here rather than a third `except` down there.
         _hint_gap_if_unknown_command(parser, argv)
         raise
+    # The refusal, and it is read HERE for two reasons. It is after `parse_args`, so charter
+    # has understood the command before declining it and `--version`/`--help` have already
+    # exited from inside argparse. And it is before the two rewrites below: `secret exec`
+    # overwrites `args.command` with the command line to run, so the subcommand's own name
+    # is only readable on this side of that line.
+    from . import config as _config
+    refusal = _config.PLANE_REFUSAL
+    if refusal and args.command not in _DESPITE_REFUSAL:
+        util.err(f"{refusal} Nothing was run. `charter doctor` reports it; "
+                 f"`charter update` is the way out.")
+        return 1
     if exec_command is not None:
         args.command = exec_command
     if frame_rest is not None:

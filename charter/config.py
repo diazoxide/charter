@@ -668,11 +668,27 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: --version``), so a malformed ``charter.toml`` or a too-new schema must never crash
     #: import — ``instance.load`` keeps raising (its own tests pin that); here the failure
     #: is caught and recorded instead of propagated. ``doctor`` surfaces it to the user.
+    #: A plane whose format version this charter cannot place — the message, or ``None``.
+    #:
+    #: **Split out of `CONFIG_ERROR` because the two failures deserve opposite answers.**
+    #: A malformed `charter.toml` is a file the operator can fix, and charter carrying on
+    #: with empty defaults while `doctor` names it is a reasonable trade. A plane declaring
+    #: a format version from the future is not that: every default charter would carry on
+    #: with is a GUESS about a layout it has already been told it does not understand, and
+    #: git's one rule for a program reading a repository it did not write is that it "MUST
+    #: NOT operate" (`instance.SCHEMA`). `cli.main` reads this and declines the command.
+    #:
+    #: `CONFIG_ERROR` is set as well, and deliberately: `doctor`'s ``charter.toml`` row and
+    #: `channel.channel`'s documented fallback both key off it, and neither becomes wrong
+    #: because a second, narrower name now exists beside it.
     try:
         cfg = _instance.load(root)
-        d["CONFIG_ERROR"] = None
-    except Exception as e:            # malformed TOML, schema too new, unreadable file
-        cfg, d["CONFIG_ERROR"] = {}, str(e)
+        d["CONFIG_ERROR"] = d["PLANE_REFUSAL"] = None
+    except _instance.PlaneFormatUnknown as e:      # a format version we cannot place
+        cfg = {}
+        d["CONFIG_ERROR"] = d["PLANE_REFUSAL"] = str(e)
+    except Exception as e:            # malformed TOML, unreadable file
+        cfg, d["CONFIG_ERROR"], d["PLANE_REFUSAL"] = {}, str(e), None
 
     #: The group/org whose repos this control plane tracks — from charter.toml, not baked in.
     d["GROUP"] = _instance.group_of(cfg, GROUP_FALLBACK)
