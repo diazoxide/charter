@@ -635,8 +635,17 @@ it.
 `chats` and `workspaces` are tab strips: the chat bar names every chat in this workspace
 with yours marked, and the workspace bar does the same for the plane. Where the names do
 not all fit the bar draws the page yours falls on and counts what is off each end
-(`+5  *harness-wrapper   news-dispatch-guard  …  +7`); narrower still it says only where you
+(`+5  harness-wrapper   news-dispatch-guard  …  +7`); narrower still it says only where you
 are (`2/3`). It never shows half a name.
+
+**The workspace bar leads with the workspaces you have been in.** Its order is worked out
+once, when the frame launches, from when charter last wrote anything about each
+workspace's chats — so the ones you are actually working in are on the left, where you look
+first and where a narrow strip's first page is. Then it *stops moving*: switching workspaces
+updates the record for the next frame and does not slide a single column now, which is what
+keeps a tab you just pressed the same tab a moment later. A workspace made while the frame
+is open goes on the end. The chat bar is unchanged and stays in ordinal order — `api.1`
+stays leftmost, where you learnt to look for it.
 
 **Neither strip is labelled.** They used to open with the word `chats` or `workspaces`, and
 that cost 9 and 14 columns of the row the names are competing for. What tells them apart is
@@ -644,8 +653,9 @@ where they are and what is on them: the strips are adjacent and always in the sa
 chat bar draws a `+` and a spinner and the workspace bar deliberately draws neither, and a
 chat id ends in an ordinal. A label that never changes is chrome you stop seeing after a day.
 
-Fifteen workspaces need 262 columns to fit on one row, so on a real terminal the bar is
-usually drawing a page. At 120 columns it draws seven of them, at 160 nine, at 200 eleven.
+Fifteen workspaces need 262 columns to fit on one row (307 with their count fields), so on
+a real terminal the bar is usually drawing a page. At 120 columns it draws seven of them, at
+160 nine, at 200 eleven.
 
 **A strip starts one row deep, and `F3` cycles it 1 → 2 → 3.** Every run starts at one row
 — a strip that overflows is not a strip that has asked for the room, and the `+N` it draws
@@ -658,7 +668,16 @@ put on a second row. Press it on one that overflows and the strip takes the rows
 names for — out of what your session has above its own 12-row floor, so a short terminal
 grows nothing at all. Fifteen workspaces take two rows at 160 columns and three at 120, and
 every name on every row is clickable. Resize the terminal and the strip follows: widen it
-past 352 columns and the strip gives its extra rows back.
+past 307 columns and the strip gives its extra rows back.
+
+**Dragging the strip's own pane border works too, and it means the same thing as `F3`.**
+tmux lets you drag a pane divider with the mouse; charter used to recompute that away on the
+next layout pass — a workspace switch was enough — so the obvious gesture failed in silence.
+Now a strip found standing at a height charter did not ask for is a strip *you* moved, and
+that height is adopted as this frame's choice: same stored number, same meaning, same
+ceiling behaviour. Drag it back down and that sticks too. charter tells your drag from its
+own resizes by remembering what it last asked each pane to be, so its own re-layouts are
+never mistaken for your hand.
 
 **The height you choose does not survive a restart.** It lives in the frame's own state
 directory, which charter deletes when the frame ends, exactly like the density a palette row
@@ -678,10 +697,17 @@ width it launched at. `charter frame-resize`, run in the frame's own window, put
 panel back at once, and it is the same command the frame already tells you about in that
 band.
 
-**The tab you are on is drawn as a block**, in reverse video — your own terminal's two
-colours exchanged, so it is right on every theme and needs no `[frame] chrome`. The `*`
-beside the name stays, which is what keeps the bar readable with `NO_COLOR` set, on a
-console that has no highlight to give, and with the pane's output redirected to a file.
+**The tab you are on is drawn as a block**, in reverse video with an underline under it —
+your own terminal's two colours exchanged, so it is right on every theme and needs no
+`[frame] chrome`, and an edge rather than only a band, because an edge is what a tab has.
+Both cost the row nothing.
+
+There used to be a `*` in front of the name as well, and it is gone. What that costs is a
+plane with `NO_COLOR` set, a console with no highlight to give, or a pane redirected to a
+file: with the escapes stripped, the strip lists your chats and no longer picks one out.
+`F2` says which one you are in at every width. The column it frees is not why it went — the
+lead cell in front of every name stays, because a shorter field on the active tab would
+re-cut the strip every time you switched and move the tab under your pointer.
 
 **`rules = "visible"` puts a separator between tabs.** The same key that decides whether
 you see the seams between panes decides whether you see them between tabs; at the shipped
@@ -692,11 +718,10 @@ draw it two cells wide where charter measured one — and on a row whose clicks 
 by *column*, ten separators drawn a cell wide each would put your press ten columns off the
 tab you aimed at.
 
-**A chat whose harness is working spins where an idle one shows a blank.** The mark column
+**A chat whose harness is working spins where an idle one shows a blank.** The one column
 in front of each name carries it — `✢`, `✶`, `✻` and back — so the strip is exactly as wide
 while three chats are thinking as while none is, and no tab moves under a press. The chat
-you are typing in keeps its `*` instead: it is the one whose harness you can watch
-directly, and the `*` is the only thing that survives `NO_COLOR`.
+you are typing in spins too, now that the `*` is not competing for that cell.
 
 charter reads this off the harness's hooks, never off its screen. Claude Code reports the
 start of a turn (`UserPromptSubmit`) and the end of one (`Stop`); a chat running a harness
@@ -726,16 +751,19 @@ plane declares no `[harness] default`; or charter cannot enter the workspace's d
 workspace is a directory and a *name*, which is `charter workspace create` — and a picker
 that creates on a typo leaves litter.
 
-**Each workspace tab says how many chats it holds** — `some-workspace (5)`. A workspace
-with none draws a blank, so every count you see means something, and past 99 the field says
-`(99+)` rather than growing a digit.
+**Each workspace tab says how many chats it holds** — `some-workspace 5`. A workspace with
+none draws a blank, so every count you see means something, and past nine the field says
+`9+` rather than growing a digit: ten open chats in one workspace is "a lot", not a number
+anyone reads precisely.
 
 The field is **always there**, whether or not it has a number in it, and that is not
 tidiness. Tab widths decide where the bar cuts its pages, so a suffix that appeared when you
 opened a chat and vanished when you closed one would move every tab to its right — and the
 cell you were about to click would hold another workspace's name. It is the same reason the
-chat spinner takes the mark's column instead of adding one. Six columns per tab is what it
-costs; those fifteen workspaces need 352 columns for one row now rather than 262.
+chat spinner takes the lead column instead of adding one. Three columns per tab is what it
+costs — it was six, with two digits and a pair of brackets, and two tabs with no count
+between them sat eight cells apart; they sit five apart now. Those fifteen workspaces need
+307 columns for one row rather than 262.
 
 It costs one directory scan per repaint for the whole strip, not one per workspace, and the
 strip still repaints on the same thing it always did — so a count can be a beat behind if
