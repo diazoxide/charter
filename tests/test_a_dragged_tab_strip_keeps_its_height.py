@@ -365,6 +365,15 @@ class TheRecordIsReadTheWayEveryOtherFileHereIs(PersonaIso, unittest.TestCase):
         self.assertEqual(was.panes, ("top",))
         self.assertEqual(was.rows, {"workspaces": 2})
 
+    def test_a_write_that_cannot_complete_is_a_no_op_and_never_an_exception(self):
+        """This runs inside the `frame-resize` child, on the path that puts every panel
+        back where it belongs. A full filesystem must cost the frame its next adoption and
+        nothing else — `record_panes`' own silence, for its own reason."""
+        with mock.patch.object(state.config, "replace_for",
+                               side_effect=OSError("no space")):
+            state.record_asserted_bars(FID, window_rows=50, panes=[], rows={})
+        self.assertEqual(state.asserted_bars(FID).window_rows, 0)
+
     def test_an_id_that_cannot_name_a_directory_writes_nothing_and_does_not_raise(self):
         """`fid` reaches `_reassert_sizes` off a tmux hook's argv, so it is untrusted the
         way every other id charter joins onto a path is (#442). `frame_dir` refuses it and

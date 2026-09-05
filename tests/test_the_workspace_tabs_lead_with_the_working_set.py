@@ -240,6 +240,24 @@ class TheOrderIsHeldForTheFramesLife(PersonaIso, unittest.TestCase):
         self.assertEqual(state.tab_order(self.FID), ["beta", "alpha"])
         self.assertEqual(switch.workspaces(self.FID)[:2], ["beta", "alpha"])
 
+    def test_whitespace_a_hand_left_around_a_name_is_taken_off_it(self):
+        """`density`'s read strips and this one does too, for the same reason: the file is
+        one name per line and a line is what is between two newlines, not what a hand left
+        beside one. `lstrip` would keep a trailing space and then hand `valid_name` a name
+        it correctly refuses — a workspace silently dropped off the strip because somebody
+        opened the file in an editor."""
+        (state.frame_dir(self.FID) / "tab_order").write_text("  beta  \n\talpha\t\n")
+        self.assertEqual(state.tab_order(self.FID), ["beta", "alpha"])
+
+    def test_a_write_that_cannot_complete_leaves_the_frame_recomputing(self):
+        """The order is written on a panel's render path. A full filesystem costs the
+        frame its held order — it recomputes on the next paint, which is the answer this
+        file was going to hold — and never a raise out of a strip."""
+        with mock.patch.object(state.config, "replace_for",
+                               side_effect=OSError("no space")):
+            state.record_tab_order(self.FID, ["beta"])
+        self.assertEqual(state.tab_order(self.FID), [])
+
     def test_an_unreadable_record_recomputes_rather_than_raising(self):
         """This is read on a panel's render path and inside the `frame-resize` child. A
         truncated write degrades to "no order recorded", which is the same answer the file

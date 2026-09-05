@@ -121,7 +121,7 @@ def workspaces(fid: str | None = None) -> list[str]:
 
     **No frame is the plain alphabetical answer**, and `""` is no frame exactly as `None`
     is — `choose.names_of` defaults its *fid* to the empty string and the launch picker
-    (`commands_frame._pick_workspace`) runs before any frame exists. Both want membership
+    (`commands_frame._choose_workspace`) runs before any frame exists. Both want membership
     and a list to read, neither is about which order a strip draws, and a falsy id would
     otherwise reach `state.tab_order`, be answered "nothing recorded" by
     `state.frame_dir`'s own refusal, and recompute the recency on every call — live
@@ -169,7 +169,8 @@ def _by_use(fid: str, names: list[str]) -> list[str]:
         state.record_tab_order(fid, recorded)
     known = set(names)
     kept = [n for n in recorded if n in known]
-    return kept + [n for n in names if n not in set(kept)]
+    seen = set(kept)
+    return kept + [n for n in names if n not in seen]
 
 
 def personas() -> list[str]:
