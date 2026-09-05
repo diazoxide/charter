@@ -46,9 +46,12 @@ So charter says what the format is:
 ```
 $ charter news --for 0.58.0
 ✗ the news for 0.58.0 quotes a value charter does not unquote:
-  0.58.0-a-thing.md: `headline:` opens and closes with ' and charter kept both. This
-  frontmatter is not YAML — it is flat `key: value`, and everything after the first colon
-  is the value — so '…' publishes as '…', quotes and all…
+•   0.58.0-a-thing.md: `headline:` opens and closes with ' and charter kept both. This
+frontmatter is not YAML — it is flat `key: value`, and everything after the first colon is
+the value — so '…' publishes as '…', quotes and all, in the GitHub Release and in `charter
+news` alike. Write the value unquoted; a backtick needs no quoting here, and a value that
+must really begin and end with ' has to be reworded, because a flat format has no way to
+say which pair is yours.
 ```
 
 ## Where it is asked

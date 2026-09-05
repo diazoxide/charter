@@ -168,6 +168,18 @@ class AMatchedPairIsFound(unittest.TestCase):
         self.assertIsNone(news.quoted("'"))
         self.assertIsNone(news.quoted('"'))
 
+    def test_a_value_that_is_nothing_but_the_pair(self):
+        """The other side of that boundary, and the deletion sweep is what asked for it:
+        ``len(v) >= 2`` re-spelled ``> 2`` survived every other test in this file.
+
+        Two characters is not a corner case, it is an entry. ``headline: ''`` is a matched
+        pair and nothing else — the emptiest headline there is — and it publishes as
+        ``### ''``, which is the defect at its most visible. Under ``> 2`` charter would
+        read it as unquoted and say nothing at all.
+        """
+        self.assertEqual(news.quoted("''"), "'")
+        self.assertEqual(news.quoted('""'), '"')
+
     def test_nothing_at_all(self):
         self.assertIsNone(news.quoted(""))
         self.assertIsNone(news.quoted("   "))
