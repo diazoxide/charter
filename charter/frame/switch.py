@@ -137,17 +137,32 @@ def workspaces(fid: str | None = None) -> list[str]:
         names.append(config.DEFAULT_WORKSPACE)
     if not fid:
         return sorted(names)
-    return _by_use(fid, sorted(names))
+    return _by_use(fid, names)
 
 
 def _by_use(fid: str, names: list[str]) -> list[str]:
     """*names* in the order frame *fid* draws them — the recorded one, computed and
     recorded here the first time it is asked for.
 
-    *names* arrives already sorted, and that is load-bearing twice over: it is the order a
-    name charter has never seen a use of falls back to, and it is the tie-break for two
-    workspaces whose newest chat was written in the same clock tick — so the answer is a
-    function of the plane rather than of `os.scandir`'s order.
+    **The ORDER *names* arrives in is not read, and that is a correction the deletion sweep
+    forced.** The caller used to hand this `sorted(names)` and this docstring claimed the
+    sortedness was "load-bearing twice over" — the fallback for a name charter has never
+    seen used, and the tie-break for two workspaces written in the same clock tick. Both
+    are false: each of those is done by the `n` in the sort KEY below, on a total order over
+    distinct names, so the incoming order cannot reach them. `tools/sweep.py` reported the
+    caller's `sorted` as a survivor and it was right to — every use of *names* here is
+    either re-sorted, or turned into a set, or walked in `recorded`'s order.
+
+    Every use but ONE, and that one is why the sort moved rather than went. The names this
+    record does not carry are appended, and they are appended **in name order** — a
+    workspace made while the frame is open goes on the end where it cannot move a column an
+    operator is already aiming at, and two of them go on in an order that is a function of
+    the plane rather than of `os.scandir`. That promise is kept HERE now, where it is made.
+    It used to be kept by accident: `workspace.list_workspaces` happens to answer in name
+    order, so the caller's sort was doing nothing the leftovers could not have got from the
+    filesystem — until a record that omits a name (a hand-edited `tab_order`, a record
+    written before `config.DEFAULT_WORKSPACE` was folded in) makes one of them a leftover
+    and the accident stops holding.
 
     **Sorted by the timestamp DESCENDING, so the newest is leftmost**, which is where an
     operator looks first and where `slots._compose` starts its first page. Reversing the
@@ -170,7 +185,7 @@ def _by_use(fid: str, names: list[str]) -> list[str]:
     known = set(names)
     kept = [n for n in recorded if n in known]
     seen = set(kept)
-    return kept + [n for n in names if n not in seen]
+    return kept + sorted(n for n in names if n not in seen)
 
 
 def personas() -> list[str]:

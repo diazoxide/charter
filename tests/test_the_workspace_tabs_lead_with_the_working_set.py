@@ -262,6 +262,34 @@ class TheOrderIsHeldForTheFramesLife(PersonaIso, unittest.TestCase):
         self.assertEqual(got[:len(first)], first)
         self.assertEqual(got[len(first):], ["aaa-new", "zzz-new"])
 
+    def test_names_the_record_does_not_carry_go_on_the_end_in_NAME_order(self):
+        """**The one thing the incoming order of `names` decides, pinned where it is
+        decided** (`switch._by_use`).
+
+        `tools/sweep.py` reported the caller's `sorted` as a survivor and chasing it found
+        why: every other use of that list is re-sorted, or made into a set, or walked in the
+        record's order. The leftovers are the exception — and they were coming out in name
+        order only because `workspace.list_workspaces` happens to answer that way, which is
+        an accident at the call site rather than a promise kept where it is made.
+
+        A record that does not carry every name is what makes the accident stop holding, and
+        it is reachable two ways: a hand-edited `tab_order`, and a record written before
+        `config.DEFAULT_WORKSPACE` was folded into the roster. `default` sorts between the
+        two names below, so an unsorted append would put it after `zzz` — where
+        `list_workspaces`' own order left it.
+        """
+        for name in ("aaa", "zzz"):
+            (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
+        state.record_tab_order(self.FID, ["alpha"])
+        self.assertFalse((config.WORKSPACES_DIR / config.DEFAULT_WORKSPACE).is_dir(),
+                         "this case needs a `default` with no directory, so that the "
+                         "roster appends it after every name it read off the plane")
+        got = switch.workspaces(self.FID)
+        self.assertEqual(got[0], "alpha", "the recorded name did not lead")
+        self.assertEqual(got[1:], ["aaa", "beta", config.DEFAULT_WORKSPACE, "gamma",
+                                   "zzz"],
+                         "a name the record does not carry went on the end out of order")
+
     def test_a_workspace_deleted_since_is_simply_not_drawn(self):
         """The record is an ORDER and never a roster: `workspace.list_workspaces` decides
         which names exist, so a stale line cannot resurrect a directory that has gone."""
