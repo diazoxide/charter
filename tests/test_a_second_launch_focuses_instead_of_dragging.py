@@ -19,7 +19,13 @@ are minted by the server and cannot be two planes' at once.
 `TwoPlanesOnOneMachine` is the test §7 asks for and the only one here that can fail for
 §3.3's reason: a single plane cannot be confused with anybody, so a single-plane test is
 structurally blind to it. It runs against a REAL tmux and is skipped, never failed, where
-the machine has none — which per §2.12 is every CI job charter has.
+the machine has none.
+
+**Where that is, is not "CI".** §2.12 says CI never runs a real tmux; 0.55.0's news already
+corrected it — `.github/workflows/test.yml` installs no tmux, but `ubuntu-latest` ships one,
+so this class RUNS on every `test (3.x)` job. #910 is the second time that correction was
+paid for: the class went red on `test (3.13)` alone, and a module written as if CI could
+only skip it is a module whose timing bugs are found by CI rather than by its author.
 """
 
 from __future__ import annotations
@@ -441,6 +447,27 @@ def _await(predicate, timeout: float = _DEADLINE) -> bool:
     return predicate()
 
 
+def _arrived(before: set[str], now: list[str]) -> bool:
+    """Is a client in `now` that `before` did not have — the question `_attach` waits on.
+
+    **The question it replaces was "is there ANY client", and that is #910.** On the first
+    attach the two agree, because the list starts empty and any client is the new one. On
+    the SECOND they do not: the first client is still there, so "any client" is already
+    true when `_await` is entered and the wait ends on its opening poll — measured, one
+    poll against the first attach's two — before the new `pty.fork()` has exec'd `tmux`.
+    `test_a_second_client_attaching_by_session_id_does_not_move_the_first` then counted
+    clients on a server the second one had not reached yet, and the only thing standing
+    between that and a red was the ~5ms a `list-clients` subprocess happens to cost.
+
+    Asked as a DIFFERENCE rather than as a count, because a count cannot tell an arrival
+    from a departure-and-arrival, and because it restores something the count had also
+    taken: `_attach`'s `_TERM_CANDIDATES` fallback only advances when `_await` returns
+    False, which under "any client" it could never do after the first attach. A refused
+    TERM was reported as a successful attach, with a dead child's fd handed back.
+    """
+    return bool(set(now) - before)
+
+
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
 class TwoPlanesOnOneMachine(unittest.TestCase):
     """§7's acceptance shape, reduced to the one question this stage decides.
@@ -500,9 +527,15 @@ class TwoPlanesOnOneMachine(unittest.TestCase):
                 pass
 
     def _attach(self):
-        """A real client on `SHARED`, or a skip naming what tmux refused."""
+        """A real client on `SHARED`, or a skip naming what tmux refused.
+
+        The wait is for the client THIS call started — `_arrived` against the set that was
+        there before the fork — so the second attach waits as long as the first does
+        instead of returning on a precondition the first attach already made true (#910).
+        """
         refusals = []
         for term in _TERM_CANDIDATES:
+            before = set(self._clients())
             pid, fd = pty.fork()
             if pid == 0:
                 try:
@@ -510,8 +543,7 @@ class TwoPlanesOnOneMachine(unittest.TestCase):
                     os.execvp("tmux", ["tmux", "-L", SOCKET, "attach", "-t", SHARED])
                 finally:
                     os._exit(127)
-            if _await(lambda: _tmux("list-clients", "-t", SHARED,
-                                    "-F", "#{client_name}").stdout.strip() != ""):
+            if _await(lambda: _arrived(before, self._clients())):
                 self.addCleanup(self._reap_pty, pid, fd)
                 return fd
             refusals.append(f"TERM={term}")
@@ -707,6 +739,39 @@ class ALaunchThatIsNotTheTerminalNeverFocuses(PersonaIso, unittest.TestCase):
             commands_frame.cmd_launch(args)
         self.assertEqual(fake.asked("attach"), 1)
         self.assertEqual(fake.asked("new-window"), 0)
+
+
+class TheAttachWaitAsksAboutTheClientItStarted(unittest.TestCase):
+    """#910, as data rather than as timing — and this is the half of it CI can decide.
+
+    `TwoPlanesOnOneMachine` needs a real tmux and, needing one, can only ever catch this
+    wait *probabilistically*: the bad predicate and the good one both end up true a few
+    milliseconds later, so a red depends on the runner losing a race it usually wins. Once
+    in a fail-fast CI run is what that looked like. The predicate itself is not a timing
+    question at all, and asked here as three fixed client lists it has one right answer
+    every time, on every machine, with no server to attach to.
+    """
+
+    def test_a_client_that_was_already_there_does_not_count_as_the_new_one(self):
+        """The #910 state exactly: the first client is still attached when the second
+        `_attach` starts waiting, and waiting for it to be there is waiting for nothing."""
+        self.assertFalse(_arrived({"/dev/ttys001"}, ["/dev/ttys001"]))
+
+    def test_the_client_that_just_arrived_counts(self):
+        self.assertTrue(_arrived({"/dev/ttys001"}, ["/dev/ttys001", "/dev/ttys002"]))
+
+    def test_the_first_attach_is_the_same_question(self):
+        """Nothing was there, so any client is the new one — which is why the old
+        predicate was right once and wrong every time after."""
+        self.assertFalse(_arrived(set(), []))
+        self.assertTrue(_arrived(set(), ["/dev/ttys001"]))
+
+    def test_a_client_leaving_is_not_a_client_arriving(self):
+        """Why it is a set difference and not `len(now) > len(before)`: a count cannot
+        tell a departure-and-arrival from neither, and both leave the total unmoved."""
+        self.assertFalse(_arrived({"/dev/ttys001", "/dev/ttys002"}, ["/dev/ttys001"]))
+        self.assertTrue(_arrived({"/dev/ttys001", "/dev/ttys002"},
+                                 ["/dev/ttys001", "/dev/ttys003"]))
 
 
 if __name__ == "__main__":
