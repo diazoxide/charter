@@ -274,6 +274,17 @@ class EverySpanInEverySentence(NewsDir):
         self.assertOneLine(why, "the unrecognised-key sentence")
         self.assertShown(why)
 
+    def test_the_filename_in_the_quoted_value_sentence(self):
+        """#902's sentence, and the shape #502 predicted in as many words: a further
+        untrusted span turning up in a report line written long after the fix. This one
+        deliberately does not quote the value back — the mistake is the two characters at
+        its ends and the author knows what they typed — so the ONLY thing it carries out
+        of the entry is the committed filename, which is the span #502 was about."""
+        self.write(f"{_V}-{_HOSTILE}.md", _entry(headline="'important'"))
+        why, = news.quoted_values(news.all())
+        self.assertOneLine(why, "the quoted-value sentence")
+        self.assertShown(why)
+
     def test_the_reason_a_file_is_not_an_entry(self):
         """`unreadable()` names files, and a file that is not an entry is the one whose
         name nobody has ever looked at."""

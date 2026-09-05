@@ -570,13 +570,16 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
     that as fact and prescribe `charter news stamp $version`. #486 gave it two more: an
     ordering value charter cannot read, and two entries both claiming `lead: true`; #503
     gave it two after that, a frontmatter key charter does not read (`Security:`,
-    `securiy:`) and a file in `docs/news` that is not an entry at all. Against any of
-    them, an annotation naming only the missing entry names a cause that is not the cause
-    and prescribes a command that changes nothing — and stamping a version that is already
-    stamped is a no-op, so the operator's next move produces no new information either.
+    `securiy:`) and a file in `docs/news` that is not an entry at all. #902 gave it one
+    more, and that one is not a "cannot honour" at all: a value the author wrapped in
+    quotes, which charter reads perfectly and publishes with the quotes inside the
+    heading. Against any of them, an annotation naming only the missing entry names a
+    cause that is not the cause and prescribes a command that changes nothing — and
+    stamping a version that is already stamped is a no-op, so the operator's next move
+    produces no new information either.
 
     Which is also why the vocabulary the two texts share is no longer the word "ordering".
-    Four of the five causes are not orderings, and a shared word that is true of one cause
+    Five of the six causes are not orderings, and a shared word that is true of one cause
     is the same narrowing that put #486 back through the field added to prevent it.
 
     Three properties, in ascending order of teeth.
@@ -633,6 +636,25 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
         explains it. `tests/test_release_notes_fit_the_release.py` holds the other end.
         """
         self.assertIn("too long", self.annotation)
+
+    def test_and_the_cause_where_the_entry_is_right_about_everything_but_the_format(self):
+        """#902's shape, and it needs its own clause for the mirror image of #665's
+        reason. There, nothing was wrong with the entries; here, nothing is wrong with
+        them *as charter reads them* — the value parses, renders, and ships. What is wrong
+        is that the author believed the frontmatter was YAML, which it looks exactly like,
+        and the quotes they added in good faith end up inside the published `###` heading.
+
+        An operator sent to look for "something charter cannot honour" would read six
+        well-formed entries and find nothing, which is how 0.56.0 published six of these.
+        So the annotation carries the word the command prints — `unquote` — and the pair
+        is asserted here rather than each against a hand-written string.
+        """
+        self.assertIn("unquote", self.annotation)
+
+    def test_a_quoted_value_prints_the_word_the_annotation_sends_a_reader_to_find(self):
+        self.three()
+        self.write(f"{_V}-z-important.md", _entry(_V, "'important'"))
+        self.assertIn("unquote", self._stderr_of(_V))
 
     def test_and_defers_to_the_command_for_which_of_them_it_was(self):
         """Rather than diagnosing. Two causes named in one line is only an improvement if
@@ -700,13 +722,17 @@ class TheGateAnnotationNamesWhatTheGateNowCatches(NewsDir):
         that a workflow annotation two directories away enumerates them. So the count is
         pinned here: raise it and this test names the file to update, in the same PR that
         creates the obligation.
+
+        It has already paid for itself once. #902 added the fourth — a value the entry
+        quoted — and this is the test that said the annotation had to grow a clause for it
+        in the same commit.
         """
         import inspect
 
         src = inspect.getsource(commands.cmd_news)
         branch = src.split("if version:", 1)[1].split("if getattr(args, \"pending\"", 1)[0]
         self.assertEqual(
-            branch.count("return 1"), 3,
+            branch.count("return 1"), 4,
             "`charter news --for` has a number of ways to refuse that this test no "
             "longer expects. That call is release.yml's pre-publish guard, and its "
             "`::error::` annotation enumerates the causes for an operator who has only "

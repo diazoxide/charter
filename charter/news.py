@@ -366,6 +366,56 @@ def _flag(raw: str | None) -> bool | None:
     return folded == "true" if folded in ("true", "false") else None
 
 
+#: The two characters a YAML habit wraps a scalar in. A backtick is deliberately not one:
+#: a headline that is entirely one code span opens and closes with a backtick and is
+#: *right* to, because that pair renders as markdown in the Release body rather than as
+#: itself. These two render as themselves.
+_QUOTES = ("'", '"')
+
+#: The text fields, derived from :data:`_KNOWN_FIELDS` rather than listed again. The two
+#: ordering fields are excluded because they are not text: ``lead: 'true'`` is already a
+#: value :func:`_flag` cannot read and :func:`entry_errors` already names it, and reporting
+#: it twice in two vocabularies would send an author looking for two mistakes.
+_TEXT_FIELDS = tuple(f for f in _KNOWN_FIELDS if f not in _ORDERING_FIELDS)
+
+
+def quoted(value: str) -> str | None:
+    """The quote character *value* is wrapped in — ``'`` or ``"`` — or ``None``.
+
+    **charter's frontmatter is not YAML, and this is the question that says so.** It opens
+    and closes with ``---``, which is exactly what YAML frontmatter looks like, so an author
+    who knows YAML is *correct* to quote a headline that starts with a backtick — a
+    reserved indicator there. `persona.parse` is flat ``key: value`` and takes everything
+    after the first colon verbatim, so both quotes are part of the value, and the value is
+    what `render_body` puts after ``### `` in a published GitHub Release (#902).
+
+    The rule is the whole of the matched pair and nothing narrower, and the corpus is why.
+    The tempting refinement — "and the same quote does not appear inside" — would model
+    YAML's own single-quoted scalar, where an inner ``'`` is written ``''``. One of the six
+    headlines 0.56.0 published is exactly that: ``'`charter doctor`''s `session root` row
+    …'``. The refinement drops it, so the narrower rule would have missed a sixth of the
+    entries this exists for while looking more precise.
+
+    What the broad rule costs is a headline that legitimately opens and closes with a quote
+    — ``"found" means "missing"`` — which is reported and has to be reworded. That cost is
+    accepted rather than engineered around, because this format genuinely cannot tell those
+    apart: there is no escape, and inventing one is how a flat parser becomes a YAML parser
+    a line at a time. Today's corpus holds three headlines that start *or* end with a quote
+    and none that does both, so the ambiguity is rarer than the mistake.
+
+    **Reporting rather than stripping is the decision, and it is the module's own.**
+    :func:`_flag` refuses to widen a truthy set because "which words mean yes" is a guard
+    against a spelling, and its ``_EMPTY_VALUE`` sentence already answers a *different* YAML
+    habit — a value on the continuation line — by naming the habit rather than by learning
+    to read it. Unquoting here would honour one YAML habit and go on dropping continuation
+    lines, anchors and backslash escapes, which is a format that is half a spec and tells
+    nobody which half. It would also make a headline that really does end in a quote
+    unwritable *silently*, where refusing at least says so.
+    """
+    v = value.strip()
+    return v[0] if len(v) >= 2 and v[0] in _QUOTES and v[-1] == v[0] else None
+
+
 def rank(e: Entry) -> int:
     """Where *e* sits among its own version's entries: 0 leads, 1 is a security fix, 2 is
     everything else. Lower first."""
@@ -480,6 +530,60 @@ def entry_errors(entries: list[Entry]) -> list[str]:
         if len(claimants) > 1:
             out.append(contain.sentence(_TWO_LEADS, version=version, count=len(claimants),
                                         names=sorted(c.path.name for c in claimants)))
+    return out
+
+
+#: A value the file wrapped in quotes and charter did not unwrap. Names the character, the
+#: field and the file, and not the value: the author already knows what they typed, the
+#: mistake is at both ends of it, and a 150-character headline quoted back and clipped at
+#: `contain.DISPLAY_LIMIT` would hide the two characters this sentence is about.
+_QUOTED_VALUE = ("{name}: `{field}:` opens and closes with {quote} and charter kept both. "
+                 "This frontmatter is not YAML — it is flat `key: value`, and everything "
+                 "after the first colon is the value — so {quote}…{quote} publishes as "
+                 "{quote}…{quote}, quotes and all, in the GitHub Release and in `charter "
+                 "news` alike. Write the value unquoted; a backtick needs no quoting here, "
+                 "and a value that must really begin and end with {quote} has to be "
+                 "reworded, because a flat format has no way to say which pair is yours.")
+
+
+def quoted_values(entries: list[Entry]) -> list[str]:
+    """Every value in *entries* that was written wrapped in quotes, as sentences.
+
+    Empty is the ordinary answer, and 257 entries deep it was the answer for 251 of them:
+    the dominant convention is unquoted and always rendered correctly. Six 0.56.0 entries
+    are the exception, and they are the reason this exists — they published with the quotes
+    in the heading, in the Release GitHub still holds, and neither the suite nor the release
+    gate said a word (#902).
+
+    **Its own function rather than a fourth branch of :func:`entry_errors`, and the split
+    is not cosmetic.** That function reports what an entry declared that charter *cannot
+    honour* — a value it could not read, a key it never looked up, two entries claiming one
+    position. A quoted headline is honoured perfectly: charter reads it, renders it, and
+    ships exactly the bytes the file holds. What went wrong is upstream of charter, in what
+    the author believed the format was. Folding the two together would put this in the range
+    view as well, where `cmd_news` warns rather than refuses — so every reader catching up
+    across 0.56.0 would be scolded, forever, about six files that cannot be corrected
+    without forking the repo's copy from the Release that was published from it.
+
+    So the consequence lands only at ``charter news --for``, which is `release.yml`'s
+    pre-publish guard and the one call that becomes something permanent — the same place
+    :func:`entry_errors` and :func:`unreadable` land, and the place that was silent while
+    0.56.0 went out. The *earlier* catch, the one that matters most because it is the one an
+    author meets, is `tests/test_news_frontmatter_is_not_yaml.py`, which asks this of the
+    whole committed corpus on every PR.
+
+    Asked of the :class:`Entry` rather than of the file, so it reads the same values every
+    other consumer reads and needs no second parse; and over :data:`_TEXT_FIELDS`, derived
+    from :data:`_KNOWN_FIELDS`, so a field added there is asked about here without anyone
+    remembering to.
+    """
+    out: list[str] = []
+    for e in sorted(entries, key=lambda e: e.path.name):
+        for field in _TEXT_FIELDS:
+            mark = quoted(getattr(e, field))
+            if mark is not None:
+                out.append(contain.sentence(_QUOTED_VALUE, name=e.path.name,
+                                            field=field, quote=mark))
     return out
 
 

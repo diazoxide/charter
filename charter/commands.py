@@ -2900,6 +2900,22 @@ def cmd_news(args) -> int:
             for why in problems:
                 util.info(f"  {why}")
             return 1
+        # A second refusal rather than six more lines in the first, because the reader is
+        # being told a different thing. Everything above is a declaration charter could not
+        # read; this is one it read exactly as written, from an author who believed the
+        # frontmatter was YAML — it opens and closes with `---`, so believing that is
+        # reasonable — and whose quotes would otherwise be published inside the heading.
+        # 0.56.0 shipped six of those and this gate was silent for all six (#902).
+        #
+        # Its own sentence for the same reason `_EMPTY_VALUE` has one: "charter cannot
+        # honour this" would send the release engineer looking for a malformed entry, and
+        # every entry here is well-formed. The fix is in the file's text, not its shape.
+        quoted = news.quoted_values(news.for_version(version))
+        if quoted:
+            util.err(f"the news for {version} quotes a value charter does not unquote:")
+            for why in quoted:
+                util.info(f"  {why}")
+            return 1
         body = news.render_body(version)
         if not body:
             util.err(f"no news entry for {version}.")
