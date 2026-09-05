@@ -41,6 +41,17 @@ sentence is assembled (`contain.sentence`) rather than at the spans somebody was
 about: the ordering VALUE was contained and the committed FILENAME beside it was not, so a
 filename holding a newline forged an extra line of charter's report (#502).
 
+**And the frontmatter is not YAML, which is said rather than half-implemented.** It opens
+and closes with ``---`` and `persona.parse` reads flat ``key: value``, so an author who
+quotes a headline — correctly, if this were YAML, because a headline usually starts with a
+backtick — gets both quotes published inside the ``###`` heading. 0.56.0 shipped six of
+those. :func:`quoted_values` reports them; nothing unquotes them, because unquoting would
+honour one YAML habit while :func:`_flag` goes on reporting another (a value on the
+continuation line) rather than reading it — half a spec, with nothing to tell the next
+author which half (#902). This is the one report that is NOT `entry_errors`': a quoted
+value is honoured exactly as written, so the consequence belongs at the release gate and in
+the suite, not in the range view where a reader would be scolded about a shipped file.
+
 **It ships in the wheel.** Entries travel with the code that implements them, resolved the
 way :mod:`charter.docsrc` resolves documentation — packaged copy first, the repo's
 ``docs/news/`` as the checkout fallback. A control plane has no reason to vendor a copy and
