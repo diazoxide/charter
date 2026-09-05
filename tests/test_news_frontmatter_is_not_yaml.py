@@ -230,6 +230,25 @@ class EveryTextFieldIsAsked(NewsDir):
         always reports."""
         self.assertEqual(self.said(_entry("important", check="doctor")), [])
 
+    def test_two_quoted_fields_in_one_entry_are_two_sentences(self):
+        """One line per finding, the way `entry_errors` reports. An author fixes fields,
+        not files, and a sentence naming an entry that has two mistakes in it leaves the
+        second to be discovered by the next CI run."""
+        said = self.said(_entry("'important'", adopt="'workspace reinit'"))
+        self.assertEqual(len(said), 2)
+
+    def test_and_the_report_is_in_filename_order(self):
+        """`sorted` on the path name, like `entry_errors` immediately above it. Asked of
+        a list handed over REVERSED rather than of `all()`'s output: `all()` already sorts
+        within a version, so a fixture that fed this function that list would prove the
+        sort of a function one layer up and nothing about this one."""
+        self.write(_entry("'first'"), name=f"{_V}-a-first.md")
+        self.write(_entry("'second'"), name=f"{_V}-z-second.md")
+        said = news.quoted_values(list(reversed(news.all())))
+        self.assertEqual(len(said), 2)
+        self.assertIn("a-first", said[0])
+        self.assertIn("z-second", said[1])
+
 
 class TheSentenceSaysWhatToDo(NewsDir):
     """A refusal an author cannot act on is a failed CI run and nothing else."""
