@@ -101,3 +101,5 @@ Written by the persona as it learns; committed and shared.
 - [FROM OUTSIDE A FRAME, ASK state.own_workspace — NEVER state.workspace_fo](from-outside-a-frame-ask-state-own-workspace-nev.md)
 - [ABSENCE IS NOT REMOVAL IN A COMMITTED MANIFEST — I SPECIFIED A RECONCILE](absence-is-not-removal-in-a-committed-manifest-i.md)
 - [A SHARED TEMP FILENAME LOSES THE ATOMICITY THE RENAME GIVES YOU. os.repl](a-shared-temp-filename-loses-the-atomicity-the-r.md)
+- [A SWEEP SURVIVORS DESCRIPTION NAMES AN OPERATOR, NOT A SITE — ADDRESS IT](a-sweep-survivors-description-names-an-operator-.md)
+- [subprocess.run(check=True, stderr=PIPE) THROWS AWAY THE DIAGNOSIS IT LOO](subprocess-run-check-true-stderr-pipe-throws-awa.md)
