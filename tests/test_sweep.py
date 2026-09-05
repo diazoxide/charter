@@ -6175,5 +6175,125 @@ class ABranchIsNotChargedForWhatMainGainedWhileItWasOpen(unittest.TestCase):
         self.assertIn("charter/theirs.py", {m.path for m in inflated})
 
 
+class ASandboxThatCannotBeBuiltSaysWhatTheMachineSaid(unittest.TestCase):
+    """#905, and the whole of it is one discarded sentence.
+
+    `test_no_shard_at_all_still_means_the_whole_plan` failed on CI as
+
+        subprocess.CalledProcessError: Command '['git', 'clone', '--quiet',
+        '--no-hardlinks', '--no-checkout', '/tmp/sweep-gate-yfa6_l8t',
+        '/tmp/sweep-gate-yfa6_l8t/wd/run-2274/w0']' returned non-zero exit status 128.
+
+    and that is the entire report. Same commit, same Python: `pull_request` green,
+    `push` red, a re-run of the red one green. The first hypothesis was the shape #893
+    and #894 had just fixed — concurrent writers through a shared temp name — and it is
+    **refuted**, structurally and by measurement. The sandbox path cannot collide:
+    `tempfile.mkdtemp` hands out a directory no other process holds, the workdir lives
+    inside it, and `run_dir` puts this process's pid under that. 1600 runs of the failing
+    test across 16 concurrent processes produced 1600 passes.
+
+    What it is instead was reproduced against a 20 MiB filesystem with 250 KiB left on
+    it: the traceback is character-for-character CI's, and `git clone` had written
+
+        fatal: failed to create directory '…/objects/82': No space left on device
+
+    onto a stderr this code piped, collected, and threw away. `check=True` builds the
+    exception with that text attached and never prints it, so a machine that ran out of
+    disk was reported as a deletion sweep that failed.
+
+    These cases hold the sentence to surviving. Not the disk — the disk is the
+    environment's business and charter does not get a vote — but the reader's ability to
+    tell which of the two happened, which is the thing #905 asked for.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="charter-sweep-nobox-")).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tmp, ignore_errors=True))
+        self.repo = self.tmp / "repo"
+        (self.repo / "charter").mkdir(parents=True)
+        (self.repo / "charter" / "m.py").write_text("x = 1\n")
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                   GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=self.repo, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        run("add", "-A")
+        run("commit", "-qm", "base")
+        self.head = sweep.git("rev-parse", "HEAD", cwd=self.repo).strip()
+
+    def test_a_clone_that_cannot_happen_carries_gits_own_sentence(self):
+        """The failing half of #905, in the one shape a test can force on any machine: a
+        source that is not a repository. The reason differs from CI's — the *losing* of
+        it is what this pins, and every `fatal:` is lost by the same line."""
+        not_a_repo = self.tmp / "not-a-repo"
+        not_a_repo.mkdir()
+        with self.assertRaises(sweep.NoSandbox) as caught:
+            sweep.Sandbox(not_a_repo, self.tmp / "w0", self.head, {})
+        said = str(caught.exception)
+        self.assertIn("fatal", said)                    # git's, not this code's
+        self.assertIn("exited 128", said)
+        self.assertIn(str(self.tmp / "w0"), said)
+        self.assertIn("cloning the tree", said)
+
+    def test_the_failure_says_it_is_the_machine_and_not_a_mutation(self):
+        """The sentence that would have saved the day of diagnosis. A sweep reports about
+        a branch; this one reports about the box, and it happens before any mutation is
+        measured, so nothing in it is a finding about anybody's code."""
+        with self.assertRaises(sweep.NoSandbox) as caught:
+            sweep.Sandbox(self.tmp / "nothing-here", self.tmp / "w0", self.head, {})
+        self.assertIn("not a verdict about any mutation", str(caught.exception))
+
+    def test_a_checkout_that_cannot_happen_names_the_ref_it_wanted(self):
+        """The second `check=True` on the way in, and it swallowed stderr identically. A
+        sandbox at the wrong ref is `NotApplied` for every mutation in the shard — a
+        whole file of guards reported unmeasurable — so which ref was asked for is the
+        first thing the reader needs."""
+        with self.assertRaises(sweep.NoSandbox) as caught:
+            sweep.Sandbox(self.repo, self.tmp / "w1", "no-such-ref", {})
+        said = str(caught.exception)
+        self.assertIn("checking out no-such-ref", said)
+        self.assertIn("fatal", said)
+
+    def test_a_command_that_fails_mutely_says_that_too(self):
+        """`_must` directly, with a stderr this case chooses to the byte, because the two
+        things a git version could vary are the exact wording and the surrounding
+        whitespace. The status is interpolated rather than assumed to be 128, and the
+        text is stripped on both sides: an error message with a newline dropped into the
+        middle of it is the same unreadability one notch quieter.
+        """
+        noisy = [sys.executable, "-c",
+                 "import sys; sys.stderr.write('  boom  \\n'); raise SystemExit(9)"]
+        with self.assertRaises(sweep.NoSandbox) as caught:
+            sweep.Sandbox._must(noisy, self.tmp / "w2", None, "trying it")
+        self.assertIn("exited 9 — boom. That is", str(caught.exception))
+
+        mute = [sys.executable, "-c", "raise SystemExit(7)"]
+        with self.assertRaises(sweep.NoSandbox) as caught:
+            sweep.Sandbox._must(mute, self.tmp / "w2", None, "trying it")
+        self.assertIn("exited 7 without saying why.", str(caught.exception))
+
+    def test_a_command_that_works_is_not_an_error(self):
+        """The other half of the branch, and the reason it is written down: a guard that
+        raises on everything is indistinguishable from this one until something passes
+        through it."""
+        self.assertIsNone(sweep.Sandbox._must([sys.executable, "-c", ""],
+                                              self.tmp / "w3", None, "trying it"))
+
+    def test_the_sandbox_path_no_two_runs_can_share(self):
+        """The refuted hypothesis, kept as a measurement rather than as a paragraph. If
+        `run_dir` ever stopped being per-process — a fixed name, a shared scratch — this
+        would be #894 one directory up, and the failure it produced would look exactly
+        like the environment failure above."""
+        seen = sweep.run_dir(Path("/w"))
+        self.assertEqual(seen, Path("/w") / f"run-{os.getpid()}")
+        self.assertNotEqual(seen, sweep.run_dir(Path("/w")).parent / "run-0")
+
+
 if __name__ == "__main__":      # pragma: no cover
     unittest.main()
