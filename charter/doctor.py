@@ -253,9 +253,17 @@ def check_ssh() -> Result:
 
 
 def check_control_plane_config() -> Result:
-    """``charter.toml`` failed to parse (malformed TOML, or a schema newer than this
-    charter understands). ``config`` swallows the exception so the CLI stays usable
-    (see ``config.CONFIG_ERROR``); this is where a user would look to find out why.
+    """``charter.toml`` failed to parse (malformed TOML, or a format version this charter
+    cannot place). ``config`` swallows the exception so the CLI stays usable (see
+    ``config.CONFIG_ERROR``); this is where a user would look to find out why.
+
+    **The hint differs by which failure it was**, because only one of them is survivable.
+    Malformed TOML is a file the operator edits, and charter carries on with empty defaults
+    while this row names it. A plane declaring a format version from the future is not
+    survivable and charter does not carry on at all (`config.PLANE_REFUSAL`, `cli.main`) —
+    promising a fallback there would describe behaviour that no longer exists. The
+    ``schema`` row carries the detail; this one must simply stop lying about what happens
+    next.
 
     A DIFFERENT, narrower failure lives one level down: the file parses fine but one
     ``[[forge]]`` block doesn't (a typo'd ``kind``, a missing field). ``registry.
@@ -271,8 +279,10 @@ def check_control_plane_config() -> Result:
             "charter.toml",
             FAIL,
             detail=_first_line(_config.CONFIG_ERROR),
-            hint="Fix or remove charter.toml, then re-run. Falling back to empty "
-                 "group/exclude/workspace defaults until it does.",
+            hint=("charter refuses to operate on this plane at all — see the `schema` row. "
+                  "`charter update`, then re-run.") if _config.PLANE_REFUSAL else
+                 ("Fix or remove charter.toml, then re-run. Falling back to empty "
+                  "group/exclude/workspace defaults until it does."),
         )
     # A committed `[plane] worktrees` that points outside the plane is IGNORED rather than
     # honoured (`config.worktrees_root_for`, #339) — and a setting silently ignored is a
@@ -374,11 +384,29 @@ def check_control_plane_schema() -> Result:
     the *detect* half of the same stamp/detect/heal pattern ``workspace reinit`` already
     proves for a single workspace's layout — lifted one level up to the whole control
     plane, healed by ``charter reinit`` — surfaced here so a stale control plane is
-    visible without running ``reinit`` first."""
+    visible without running ``reinit`` first.
+
+    **And, first, the refusal.** This row is named after the number, so it is where anyone
+    who has just read a refused command looks next. Until #913 it reported ``up to date
+    (schema 1)`` over a plane declaring schema 99 — ``drift`` only counts directories, and
+    a plane from the future has all three — so the one row that could have named the
+    declared version said the opposite of the truth. FAIL rather than WARN because every
+    other command now stops outright: a row scoring a hard stop as a warning is a row
+    disagreeing with the tool it reports on."""
     from . import config as _config, instance as _instance
 
     if not _config.HAS_CONTROL_PLANE:
         return Result("schema", OK, detail="no control plane found")
+    if _config.PLANE_REFUSAL:
+        return Result(
+            "schema",
+            FAIL,
+            detail=_first_line(_config.PLANE_REFUSAL),
+            hint="charter refuses to operate on a plane whose format version it cannot "
+                 "place, rather than guess at a layout it has been told it does not "
+                 "understand. `charter update` is the way out; every other command "
+                 "declines until it runs.",
+        )
     found = _instance.drift(_config.ROOT)
     if not found:
         return Result("schema", OK, detail=f"up to date (schema {_instance.SCHEMA})")

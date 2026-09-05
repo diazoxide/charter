@@ -1908,6 +1908,20 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
         return argv, None
     from . import config
 
+    # *The plane's format version is one charter cannot place.* Reported here for the same
+    # reason the refused-default arm below is: a plane charter has refused declares nothing
+    # charter can read, `[harness] default` included — `config.HARNESS` derives from the
+    # empty config every time — so falling through hands the operator argparse's usage
+    # message, byte-identical to what a plane that declared no default gets. Bare `charter`
+    # would then look like a plane with no harness rather than one charter refused. The
+    # gate in `main` cannot cover this: it reads the typed subcommand, and a bare argv has
+    # none. Both call the same :func:`_plane_refusal`, so there is one message and one
+    # exemption rule between them.
+    refusal = _plane_refusal(None)
+    if refusal:
+        util.err(refusal)
+        return argv, 1
+
     declared = config.HARNESS
     # Truthiness, not `is not None`, and the same test `doctor` makes of the same key.
     # `contain.readable` never returns a blank string, so on anything `harness_of` produced
@@ -1938,6 +1952,50 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     return [default, *argv], None
 
 
+#: The commands that still run on a plane charter has refused (`config.PLANE_REFUSAL`).
+#:
+#: Three of them, and each earns its place by being about CHARTER rather than about the
+#: plane's contents: `doctor` is where the refusal is reported, `version`/`_version-check`
+#: answer "which charter is this" — the first question anyone asks on reading the refusal —
+#: and `update` is the only remedy, since nothing but a newer charter can understand a
+#: newer plane. Refusing the remedy would leave a plane with no way out but a hand edit.
+#:
+#: `--version`, `-h` and `--help` need no entry: argparse's own actions exit from inside
+#: `parse_args`, above the gate, so help still works on a plane charter will not operate on.
+#:
+#: **`init` and `reinit` are NOT here.** Both write into the plane, and writing into a
+#: layout you have been told you do not understand is the guess in its most damaging form.
+#:
+#: **Neither is `hook`, and that is the deliberate half.** charter's hooks are the session
+#: briefing and the PreToolUse guard, and on a refused plane the guard is *already* covering
+#: nothing: `forge.registry.known_forges_report` opens `charter.toml` through
+#: `instance.load`, gets the refusal, and returns an empty forge set — a guard that looks
+#: present and denies nothing. Refusing out loud turns a silent fail-open into a visible
+#: one. It costs the session its briefing and not its turn, which is the standing rule for
+#: a charter hook: the exit code below is 1, never `hooks.DENY_EXIT`, so Claude Code shows
+#: the line and carries on.
+_DESPITE_REFUSAL = frozenset({"doctor", "update", "version", "_version-check"})
+
+
+def _plane_refusal(typed: str | None) -> str | None:
+    """What to print instead of running *typed*, or ``None`` to carry on.
+
+    One function for the two callers — `_bare_launch` (which has no subcommand to pass) and
+    the gate in :func:`main` (which passes the typed token) — so the message and the
+    exemption rule cannot come to differ between the bare form and the typed one.
+
+    ``None`` is never exempt, and that is deliberate rather than incidental: it is what a
+    bare ``charter`` passes, and opening a frame over a plane charter cannot place is the
+    most expensive guess available to it.
+    """
+    from . import config
+    refusal = config.PLANE_REFUSAL
+    if not refusal or typed in _DESPITE_REFUSAL:
+        return None
+    return (f"{refusal} Nothing was run. `charter doctor` reports it; "
+            f"`charter update` is the way out.")
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # First, so what it returns is then hoisted, split and parsed exactly as the same
@@ -1956,6 +2014,30 @@ def main(argv=None) -> int:
         # gap signal needs catching here rather than a third `except` down there.
         _hint_gap_if_unknown_command(parser, argv)
         raise
+    # The refusal, and both halves of where it sits are load-bearing.
+    #
+    # *After `parse_args`*, so charter has understood the command before declining it and,
+    # more to the point, so `--version` and `--help` are already gone: both are argparse
+    # actions that exit from inside `parse_args`, which is what keeps them working on a
+    # plane charter will not otherwise touch. A gate above this line would have to
+    # re-implement that, and would refuse the two questions an operator asks first.
+    #
+    # *Reading `argv[0]` and not `args.command`.* They agree for almost every command and
+    # then do not: `charter secret exec` gives its own positional the dest `command`
+    # (`_sa_exec`), so argparse overwrites the subparser name with the child command line
+    # and `args.command` is a LIST there — unhashable, and a `not in` against a frozenset
+    # raises rather than refuses. `argv[0]` is the token the operator typed, `_bare_launch`
+    # has already rewritten a bare `charter` into it, and the root parser carries no flag
+    # that survives to this line, so it is the subcommand every time.
+    #
+    # Subscripted with no emptiness guard because `parse_args` has already made one: the
+    # subparsers are `required=True`, so an empty argv exits from inside it and never
+    # arrives here. A guard would be an unreachable branch, which is the shape this
+    # repository deletes.
+    refusal = _plane_refusal(argv[0])
+    if refusal:
+        util.err(refusal)
+        return 1
     if exec_command is not None:
         args.command = exec_command
     if frame_rest is not None:

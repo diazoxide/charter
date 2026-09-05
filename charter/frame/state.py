@@ -149,6 +149,41 @@ _CHAT_ORDINAL_MAX = 10_000
 #: surface for a second caller to reach for.
 _CLAIM_FILE = "launcher"
 
+#: **What `.charter/frame/` promises a program that is not charter: nothing.**
+#:
+#: #913 gave the PLANE a format version a reader can refuse on (`instance.SCHEMA`) and
+#: asked the same question of the frame state underneath it: version it too, or say in
+#: code that it is private. This is the answer, and it is "private", for a reason narrower
+#: than "it is internal" — everything in charter is internal until somebody reads it.
+#:
+#: **A format version buys exactly one thing: the ability to refuse. Refusal is only worth
+#: anything when the writer and the reader can be different charters.** For a plane they
+#: routinely are: `charter.toml`, `personas/`, `inventory/` are committed, shared with a
+#: team, and outlive any install. Nothing here is. Every path under this directory is
+#: written by a frame launcher and read by the panels of the same frame — one process
+#: tree, one machine, one charter, one tmux session — and the residue of any *other* charter
+#: is :func:`reap`'d rather than read, because liveness here is a pid or a tmux window and
+#: both die with the install that made them. A version stamped here could never fire, and
+#: the issue's own rule is that a version nobody refuses on is decoration.
+#:
+#: Two consequences, and they are the whole of the promise:
+#:
+#: * charter may change the shape of anything under `.charter/frame/` in a patch release,
+#:   without bumping `instance.SCHEMA` and without a migration.
+#: * a program reading it has no contract to hold charter to. `charter frame …` is the
+#:   interface; this is the scratch underneath it.
+#:
+#: Stated as a value rather than left in prose so the claim has a name a test can hold and
+#: a future author has somewhere to change it. If frame state ever gains a durable reader
+#: — anything that survives the launcher — this constant is what must change first, and
+#: `tests/test_a_plane_declares_a_format_a_reader_can_refuse.py` is where it is pinned.
+NO_FORMAT_PROMISE = (
+    "`.charter/frame/` is charter's own scratch: per-frame, per-machine, gitignored, "
+    "reaped when the frame dies, and written and read by one charter within one process "
+    "tree. It carries no format version and no promise to any program outside charter. "
+    "Read `charter frame` instead; these files may change shape in any release."
+)
+
 
 def _root() -> Path:
     return Path(config.STATE_DIR) / "frame"

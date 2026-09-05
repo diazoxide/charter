@@ -17,19 +17,100 @@ from typing import NamedTuple
 from . import contain
 from .root import MARKER
 
-#: Layout version this engine understands.
+#: **The plane format version** — the layout of a control plane, as a single integer, in
+#: the one place a program that did not write the plane can read it: ``schema`` in
+#: ``charter.toml``. ``cmd_init`` stamps it (`commands._render_charter_toml`); :func:`load`
+#: reads it on the way into every command, because `config.derive` opens the plane through
+#: this function and nothing else does.
+#:
+#: **It buys exactly one thing: the ability to refuse.** It is not a schema and it is not a
+#: spec — the shape of `gather.json`, of `workspace.json`, of anything else charter writes
+#: is charter's own business and is documented to nobody. What this number says is what
+#: git's `core.repositoryformatversion` says, and no more: *an implementation that does not
+#: understand the version advertised on disk MUST NOT operate on that plane.* A consumer
+#: with no way to refuse guesses, and guessing is the failure this exists to prevent.
+#:
+#: **How it relates to `workspace.STRUCTURE_VERSION` — nested, and only the outer one
+#: refuses.** A workspace lives inside a plane, so this is the outer of the two numbers,
+#: but it does not subsume the inner one's *value* and is never compared against it:
+#:
+#: * This one is the REFUSAL number. It answers "may this charter operate on this plane at
+#:   all?" and the only answers are yes and no. Nothing heals a refusal but a newer charter.
+#: * `workspace.STRUCTURE_VERSION` is the REPAIR number. It answers "is this one
+#:   workspace's interior current?", and a stale answer is *healed* — flagged on the status
+#:   line, fixed by `charter workspace reinit`. A workspace an older charter can still read
+#:   is exactly what makes that repair additive.
+#:
+#: So a change to a workspace's layout that an older charter SURVIVES is, by definition,
+#: not a change that requires refusal, and it bumps `STRUCTURE_VERSION` alone. Two numbers
+#: can only come to disagree if something compares them; nothing does, and
+#: `tests/test_a_plane_declares_a_format_a_reader_can_refuse.py` is what keeps it that way.
 SCHEMA = 1
 
+#: What an ABSENT ``schema`` key means: **1** — the layout every plane had before planes
+#: declared one. Definite, and true: there has only ever been one plane format, so an
+#: unstamped plane is a version-1 plane and every charter can read it.
+#:
+#: **Deliberately not "whatever this charter is".** That was the old reading
+#: (``cfg.get("schema", SCHEMA)``), and it is the choice that makes the whole feature
+#: useless the first time it is needed: the day :data:`SCHEMA` moves to 2, every unstamped
+#: version-1 plane on disk would start claiming to be a version-2 plane, and a charter that
+#: understands 2 would read a version-1 layout with version-2 rules — the guess, arrived at
+#: through the version number that exists to prevent it.
+#:
+#: The two readings are indistinguishable today, because ``SCHEMA == 1``. That is why the
+#: test that pins this moves :data:`SCHEMA` before it looks.
+UNSTAMPED = 1
 
-class SchemaTooNew(Exception):
+
+class PlaneFormatUnknown(Exception):
+    """This charter cannot vouch for the plane's on-disk format, so it will not operate.
+
+    Raised by :func:`load`, recorded by `config.derive` as ``PLANE_REFUSAL``, reported by
+    `doctor`'s ``schema`` row, and acted on by `cli.main`, which declines to run the
+    command. A warning here would be decoration: a version nobody refuses on is a number.
+    """
+
+
+class SchemaTooNew(PlaneFormatUnknown):
     """The control plane was written by a newer charter than this one."""
+
+
+def plane_version(cfg: dict) -> int | None:
+    """The plane format version *cfg* declares — or ``None`` when it declares one this
+    charter cannot even compare against.
+
+    Three answers, and the third is the point:
+
+    * **absent** → :data:`UNSTAMPED`. See that constant for why it is 1 and not ``SCHEMA``.
+    * **an integer** → itself, whether or not this charter understands it. Reporting it is
+      not accepting it; :func:`load` decides that.
+    * **anything else** → ``None``. ``schema = "2"``, ``schema = 1.5``, ``schema = true``:
+      a plane that declares a version in a spelling this charter cannot read is a plane
+      this charter cannot place, which is the same position as one declaring a version from
+      the future. It used to pass straight through the ``isinstance`` test and be treated
+      as understood.
+
+    ``bool`` is excluded explicitly because ``isinstance(True, int)`` is ``True`` in
+    Python: ``schema = true`` in TOML would otherwise compare as 1 and read as current.
+    """
+    if "schema" not in cfg:
+        return UNSTAMPED
+    found = cfg["schema"]
+    if isinstance(found, bool) or not isinstance(found, int):
+        return None
+    return found
 
 
 def load(root: Path) -> dict:
     """Parse ``<root>/charter.toml``. Returns ``{}`` when there is no such file.
 
-    A *newer* schema raises rather than being read on a best-effort basis: silently
-    misreading a persona or workspace layout is worse than refusing to run.
+    A version this charter does not understand raises rather than being read on a
+    best-effort basis: silently misreading a persona or workspace layout is worse than
+    refusing to run. See :data:`SCHEMA` for what the number is and what it is not.
+
+    ``found > SCHEMA`` and not ``>=``: a plane declaring exactly the version this charter
+    understands is the ordinary case, and refusing it would refuse every plane there is.
     """
     p = Path(root) / MARKER
     try:
@@ -40,8 +121,15 @@ def load(root: Path) -> dict:
         cfg = tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         raise ValueError(f"{p} is not valid TOML: {e}") from None
-    found = cfg.get("schema", SCHEMA)
-    if isinstance(found, int) and found > SCHEMA:
+    found = plane_version(cfg)
+    if found is None:
+        raise PlaneFormatUnknown(
+            f"{p} declares schema {cfg['schema']!r}, which is not a plane format version "
+            f"this charter can compare against {SCHEMA}. charter will not operate on a "
+            f"plane whose format it cannot place. Fix the `schema` line, or upgrade "
+            f"charter: `uv tool install charter-cp --force --refresh`."
+        )
+    if found > SCHEMA:
         raise SchemaTooNew(
             f"{p} declares schema {found}, but this charter understands {SCHEMA}. "
             f"Upgrade charter: `uv tool install charter-cp --force --refresh`."

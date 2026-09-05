@@ -528,14 +528,50 @@ update`.
 
 ## Schema drift and healing
 
-`schema` is a stamp, not just a version number: a control plane written by a *newer*
-charter than the one you have installed refuses to load (`charter --version` still
-works; every command that needs the control plane fails with a clear "upgrade charter"
-message) rather than silently misreading a layout it doesn't fully understand. Going the
-other way — an *older* control plane opened by a newer charter — is always fine: newer
-charter versions can add baseline directories (`personas/`, `inventory/`, `workspaces/`)
-a control plane predates, and `charter reinit` creates whatever's missing, additively,
-never touching what's already there.
+`schema` is the plane's **format version**, and the one thing it buys is the ability to
+refuse. It is the same contract git states for a program reading a repository it did not
+write — *"an implementation which does not understand a particular version advertised by
+an on-disk repository MUST NOT operate on that repository"* — and no more than that. It is
+not a schema and not a spec: the shape of the files charter writes is charter's own
+business and is free to change. The commands are the interface.
+
+So a control plane written by a *newer* charter than the one you have installed is not
+operated on. Every command declines with the "upgrade charter" message and exits 1, except
+four, each of which is a question about charter rather than a read of the plane's contents:
+
+| still runs | why |
+|---|---|
+| `charter doctor` | where the refusal is reported — the `schema` row names both versions |
+| `charter --version`, `charter version`, `charter _version-check` | which charter is this |
+| `charter update` | the only remedy; nothing but a newer charter can understand a newer plane |
+
+`charter init` and `charter reinit` are deliberately **not** exempt: writing into a layout
+charter has been told it does not understand is the most damaging guess available to it.
+A `schema` charter cannot compare against at all — `schema = "2"`, `1.5`, `true` — is
+refused on the same terms as one from the future.
+
+**Omitting `schema` means 1**, not "whatever charter you are running". A plane created
+before planes declared a version *is* a version-1 plane, so it stays readable by every
+charter forever; reading it as "current" would be the same guess, arrived at through the
+number that exists to prevent it.
+
+Going the other way — an *older* control plane opened by a newer charter — is always fine:
+newer charter versions can add baseline directories (`personas/`, `inventory/`,
+`workspaces/`) a control plane predates, and `charter reinit` creates whatever's missing,
+additively, never touching what's already there.
+
+**`schema` and a workspace's own structure version are nested, and only `schema` refuses.**
+`charter workspace reinit` repairs a workspace whose interior an older charter laid out;
+that is a *repair* number, and a workspace charter can still read is exactly what makes the
+repair additive. `schema` is the *refusal* number, and nothing heals it but a newer charter.
+The two are never compared against each other.
+
+**`.charter/` carries no such promise, on purpose.** Everything under `.charter/frame/` is
+charter's own scratch — per frame, per machine, gitignored, reaped when the frame dies, and
+written and read by one charter inside one process tree. It has no format version and never
+will: a version is only worth stamping where the writer and the reader can be different
+charters. Read it through `charter frame`; the files themselves may change shape in any
+release.
 
 ## The plane, rendered
 
