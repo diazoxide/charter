@@ -226,6 +226,25 @@ class TheCliDeclinesRatherThanGuesses(PlaneIso):
         self.assertEqual(rc, 0)
         self.assertEqual(self.ran, ["cmd_update"])
 
+    def test_it_is_the_first_token_that_decides_and_not_some_other_one(self):
+        """The gate subscripts `argv`, so which end it reads is the whole of its meaning
+        and every case above is blind to it: `["status"]` and `["doctor"]` are one token
+        long, so `argv[0]` and `argv[-1]` agree on all of them. An exempt command carrying
+        a flag is where they part — `argv[-1]` would see `0.59.0`, find it nowhere in the
+        exempt set, and refuse the one command that is the way out of the refusal."""
+        self.declare_schema(str(instance.SCHEMA + 1))
+        rc, _ = self.run_cli(["update", "--to", "0.59.0"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.ran, ["cmd_update"])
+
+    def test_an_exempt_word_in_a_later_position_exempts_nothing(self):
+        """The other direction, because "reads the first token" needs both halves: a
+        refused command must stay refused however its own arguments are spelled."""
+        self.declare_schema(str(instance.SCHEMA + 1))
+        rc, _ = self.run_cli(["status", "--workspace", "doctor"])
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.ran, [])
+
     def test_every_exempt_command_is_about_charter_and_not_about_the_plane(self):
         """The exemptions, one case, by name. Each runs; each is a question about which
         charter this is or how to get a newer one — never a read of the plane's contents."""
