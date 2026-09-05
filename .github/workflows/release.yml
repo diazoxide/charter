@@ -234,15 +234,25 @@ jobs:
           # second copy of the limit in shell would be a second answer to one question, and
           # it is the announce-side answer that decides whether the release exists.
           #
-          # So the annotation names the three SHAPES — no entry; something the entries
-          # declare that charter cannot honour; or a body GitHub would refuse — and defers
-          # to the command's own stderr for which, since that stderr is already one
-          # sentence per finding. `>/dev/null` keeps it, dropping only stdout. Prescribing
-          # `news stamp` for any shape but the first would be prescribing a no-op for a
-          # failure stamping cannot fix.
+          # And for a fourth, which is the quietest of the lot (#902). charter's frontmatter
+          # opens and closes with `---` and is not YAML: it is flat `key: value`, so a
+          # headline an author wrapped in quotes — correctly, if it were YAML, because a
+          # headline usually starts with a backtick — keeps both quotes, and they render
+          # inside the `###` heading of the published Release. 0.56.0 shipped six of those
+          # and nothing here objected; 0.57.0's one was caught by a human reading the diff.
+          # The entries are well-formed, so it is not "cannot honour" and gets its own
+          # clause: the file is right about everything except what it thought the format
+          # was.
+          #
+          # So the annotation names the four SHAPES — no entry; something the entries
+          # declare that charter cannot honour; a value they quoted that charter does not
+          # unquote; or a body GitHub would refuse — and defers to the command's own stderr
+          # for which, since that stderr is already one sentence per finding. `>/dev/null`
+          # keeps it, dropping only stdout. Prescribing `news stamp` for any shape but the
+          # first would be prescribing a no-op for a failure stamping cannot fix.
           version=$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')
           if ! python -m charter news --for "$version" >/dev/null; then
-            echo "::error::the release notes for $version are not publishable: either no docs/news/$version-<slug>.md (every published version ships an entry, including a patch — run: charter news stamp $version), or something those entries declare that charter cannot honour — an ordering, a frontmatter key, or a file in docs/news that is not an entry — or a body GitHub would refuse as too long, which is a failure this step exists to catch before the upload rather than after it. See the error above for which."
+            echo "::error::the release notes for $version are not publishable: either no docs/news/$version-<slug>.md (every published version ships an entry, including a patch — run: charter news stamp $version), or something those entries declare that charter cannot honour — an ordering, a frontmatter key, or a file in docs/news that is not an entry — or a value one of them quotes that charter does not unquote, because this frontmatter is flat key: value and not YAML, so the quotes would publish inside the heading — or a body GitHub would refuse as too long, which is a failure this step exists to catch before the upload rather than after it. See the error above for which."
             exit 1
           fi
 

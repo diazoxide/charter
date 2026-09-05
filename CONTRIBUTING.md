@@ -113,6 +113,16 @@ command.
   to the release, which is the only vantage point from which "first" means anything.
   Without either, entries sort by filename as they always have.
 
+  **The frontmatter is flat `key: value`, and it is not YAML — do not quote the value.**
+  It opens and closes with `---`, so it looks exactly like YAML frontmatter, and a headline
+  usually starts with a backtick, which real YAML would need quoted. charter takes
+  everything after the first colon verbatim and unquotes nothing, so `headline: 'a thing'`
+  publishes as `### 'a thing'`, quotes and all. 0.56.0 shipped six of those before anything
+  checked. A backtick needs no quoting here; a value that must really begin and end with a
+  quote has to be reworded, because a flat format has no way to say which pair is yours.
+  The suite asks this of every entry in the tree, and `charter news --for` refuses at the
+  release gate (#902).
+
   **Those six keys are the whole set, and they are matched exactly.** `version`,
   `headline`, `check`, `adopt`, `lead`, `security` — anything else in an entry's
   frontmatter is reported at the release gate rather than ignored, `Security:` and
