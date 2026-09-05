@@ -82,6 +82,26 @@ it as four fixed client lists, with one right answer on every machine and no ser
 attach to. The first case is the #910 state exactly: a client that was already there does
 not count as the new one.
 
+## What the sweep found, hand-run
+
+The diff is tests-only and the deletion sweep charges `charter/`, so CI reported **nothing
+to sweep**. Hand-run against the two lines that carry the logic, by `file:line` rather than
+by description — the file holds several similar-looking client-list expressions:
+
+* `tests/…_dragging.py:469`, `_arrived`'s body — seven mutations (operands swapped,
+  negated, `-`→`&`, `-`→`|`, always-true, always-false, and *the #910 predicate itself*,
+  `bool(set(now))`). **All seven killed.**
+* `tests/…_dragging.py:539`, `before = set(self._clients())` — **one survivor on the first
+  pass**, `before = set()`. That is #910 put back at the call site instead of in the
+  predicate: `_arrived` stays correct and cannot see it, and the real-tmux test can only
+  catch it by losing the same 5ms race that made #910 a once-per-CI-run red.
+
+A survivor there is the defect itself sitting unguarded, so it was killed rather than
+pinned. `TheAttachHelperWaitsOnTheSetItTookBeforeForking` runs the real `_attach` against a
+scripted client list — `pty.fork` forking nothing, `_reap_pty` killing nothing, `_await`
+giving up in 50ms — and pins the refusal property. Both mutations of `:539` die on it.
+**Zero survivors.**
+
 ## And the module stops saying CI has no tmux
 
 The docstring closed with the claim that this class is skipped *"where the machine has none
