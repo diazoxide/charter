@@ -121,8 +121,20 @@ under the cell you were about to press. What #880's report objected to was the p
 constraint. Those fifteen workspaces need **307** columns for one row now, where they needed
 352.
 
-## What that costs to read
+## The picture of this is one release out of date, and it was already
 
-`docs/assets/frame.svg` is a capture of this surface taken before these changes; the
-freshness gate allows one minor of lag, so it is regenerated on the next pass rather than in
-this one.
+`docs/assets/frame.svg` is a capture of exactly this surface, taken before these changes —
+so the count field it shows is six cells wide and the tabs on it are in name order. It is
+not regenerated here: `tests/test_asset_freshness.py` allows a capture to fall one minor
+behind, and at 0.57.0 it does.
+
+**It does not survive the bump that ships this.** All four captures in `docs/assets/` are
+stamped `0.56.0`, so 0.58.0 puts every one of them two minors back and
+`TestTheCapturesAreNotStale` goes red — with or without this change. That debt is older
+than this branch and this branch does not pay it; what this branch adds is a reason the
+frame capture in particular is worth re-taking rather than merely re-stamped, because the
+surface in the picture is no longer the surface charter draws.
+
+`docs/assets/capture-frame.sh` is the whole of it — it builds its own synthetic plane and
+its own tmux, needs no network and no toolchain — and `docs/assets/README.md` carries the
+order the social card has to follow it in.
