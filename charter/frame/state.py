@@ -49,6 +49,7 @@ import re
 import shutil
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from .. import config, contain
 
@@ -1302,6 +1303,103 @@ def bar_rows(fid: str) -> int | None:
         return int((d / "bar_rows").read_text())
     except (OSError, ValueError):
         return None
+
+
+def record_asserted_bars(fid: str, *, window_rows: int, panes,
+                         rows: dict[str, int]) -> None:
+    """Write down what charter last ASKED each of this frame's tab strips to be, and the
+    window it asked in (#903).
+
+    **The reference point a drag is told from, and it exists because there is no other
+    one.** `commands_frame._reassert_sizes` is where charter states its intent about pane
+    heights; tmux is where the heights actually are. A strip that measures taller than
+    charter last asked for was moved by a hand, and adopting that height is what makes a
+    drag stick (`layout.adopted_bar_rows`, `state.record_bar_rows`). Comparing against the
+    PREVIOUS height instead would adopt charter's own resize and pin the strip at whatever
+    the layout last computed, forever — the hazard #903 names as the whole difficulty.
+
+    **The window's row count rides along, and it is what keeps tmux's own redistribution
+    out of the comparison.** A window resize rescales every pane proportionally before
+    anything charter runs, so on that path a measured height differs from the asserted one
+    for a reason that is not a hand. A reader that finds *window_rows* changed knows the
+    difference is explained and does not adopt; a reader that finds it unchanged knows tmux
+    moved nothing on its own.
+
+    *rows* is the asserted height of each bar slot and *panes* is every slot that was in
+    front of charter when it asserted them. Both key sets are as load-bearing as the
+    values: a re-layout adds and kills panes and tmux rescales the SURVIVORS when it does,
+    and :func:`commands_frame._relayout` hands `_reassert_sizes` only the panes it kept —
+    so a reader whose recorded sets differ from the ones in front of it is looking at a
+    frame whose shape moved, and a height that differs there is explained by the move.
+
+    JSON, read back through :func:`asserted_bars`, and :func:`record_panes`' atomic write
+    and silence on failure: a frame whose record could not be written simply cannot adopt a
+    drag on its next pass, which is one gesture not taking rather than a resize failing.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.replace_for(d / "asserted_bars", json.dumps(
+            {"window_rows": int(window_rows), "panes": sorted(panes),
+             "rows": {s: int(n) for s, n in rows.items()}}))
+    except (OSError, TypeError, ValueError):
+        return
+
+
+class AssertedBars(NamedTuple):
+    """What charter last asked one frame's strips to be — :func:`asserted_bars`' answer.
+
+    A record rather than a tuple of three, for `chats.Chat`'s reason: the caller compares
+    all three against what is in front of it and a positional unpack is where two of them
+    get swapped.
+    """
+
+    #: The window's row count when charter asserted. `0` for "nothing recorded" — not a
+    #: window any measurement can equal, so the sentinel cannot pass for one.
+    window_rows: int
+    #: Every slot charter had in front of it, sorted.
+    panes: tuple[str, ...]
+    #: The height it asked each BAR slot to be.
+    rows: dict[str, int]
+
+
+def asserted_bars(fid: str) -> AssertedBars:
+    """What charter last asked this frame's strips to be, or an empty record when it has
+    not asked yet or cannot tell.
+
+    An empty record is the ordinary case exactly once per frame and is also the corrupt
+    one, answered the same way for :func:`panes`' reason: this is read inside the
+    `frame-resize` child on a path that must not raise, and every degrade is "there is
+    nothing to compare against", which is the answer that adopts nothing.
+
+    Every value is shape-checked as it is read, exactly as :func:`panes`' are and for the
+    same reason: this file is JSON on disk, so a truncated write or a hand edit reaches
+    here as a plausible-looking map. What comes out of it decides whether charter writes a
+    height into `bar_rows`, so a string where an integer belongs must be "nothing
+    recorded" rather than a `TypeError` on the sizing path.
+    """
+    empty = AssertedBars(0, (), {})
+    d = frame_dir(fid)
+    if d is None:
+        return empty
+    try:
+        data = json.loads((d / "asserted_bars").read_text())
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    window_rows = data.get("window_rows")
+    panes = data.get("panes")
+    rows = data.get("rows")
+    if not isinstance(window_rows, int) or not isinstance(rows, dict):
+        return empty
+    if not isinstance(panes, list):
+        return empty
+    return AssertedBars(
+        window_rows,
+        tuple(s for s in panes if isinstance(s, str)),
+        {s: n for s, n in rows.items() if isinstance(s, str) and isinstance(n, int)})
 
 
 def record_tab_order(fid: str, names: list[str]) -> None:

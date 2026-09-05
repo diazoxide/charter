@@ -323,13 +323,12 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
                 self.assertGreater(len(drawn), 1, "this width drew no second row")
                 lead = tui.width(slots._inset())
                 indents = {tui.width(line) - tui.width(line.lstrip()) for line in drawn}
-                # A row whose first field is a tab carries `_BAR_MARK`'s blank in front of
-                # the name, so its text begins one cell past the lead; a row whose first
-                # field is a leading `+N`, or whose first tab is the marked one, begins at
-                # the lead itself. Both are the same lead — what this refuses is a row
-                # composed against a different one.
+                # A row whose first field is a tab carries `_TAB_LEAD` in front of the
+                # name, so its text begins one cell past the lead; a row whose first field
+                # is a leading `+N` begins at the lead itself. Both are the same lead —
+                # what this refuses is a row composed against a different one.
                 self.assertLessEqual(
-                    indents, {lead, lead + tui.width(slots._BAR_MARK[1])},
+                    indents, {lead, lead + tui.width(slots._TAB_LEAD)},
                     f"a row was composed against a different lead: {drawn!r}")
 
     def test_a_row_the_strip_did_not_draw_answers_nothing(self):
@@ -473,20 +472,23 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
     def test_switching_to_a_tab_that_is_drawn_leaves_every_row_where_it_was(self):
         """The property the cut exists for (`slots._cuts`), which a strip that grew has to
         keep: the run of pages is a function of the names, the width and the row count, so
-        pressing a drawn tab redraws the same run with only the `*` moved. A run that
-        moved would put a different name under the cell the operator just pressed."""
-        def shape(drawn):
-            """The rows with the mark taken out — every cell in its own column, and the
-            one thing switching is allowed to change removed.
+        pressing a drawn tab redraws the same run with only the paint moved. A run that
+        moved would put a different name under the cell the operator just pressed.
 
-            The two entries of `slots._BAR_MARK` are one cell each and neither a name nor
-            a count can contain a `*` (`workspace.valid_name`, `chats.ID_RE`), so blanking
-            it is exact rather than approximate. Comparing the map instead would not work:
-            `_Tabs.switch_to` answers `None` for the tab you are on, so the marked name
-            drops out of it and every switch would look like a move.
+        **Since #903 the comparison needs nothing taken out**, and that is the property
+        strengthening rather than the case weakening: the lead is one blank on every tab
+        whatever is marked (`slots._TAB_LEAD`), so the DRAWN TEXT of a strip does not
+        depend on where the mark is at all. The rows are compared as they are.
+        """
+        def shape(drawn):
+            """The rows as a terminal under `NO_COLOR` sees them — every cell in its own
+            column, and the paint, which is the one thing switching may change, deleted.
+
+            Comparing the click map instead would not work: `_Tabs.switch_to` answers
+            `None` for the tab you are on, so the marked name drops out of it and every
+            switch would look like a move.
             """
-            return [tui.strip_ansi(line).replace(slots._BAR_MARK[0], slots._BAR_MARK[1])
-                    for line in drawn]
+            return [tui.strip_ansi(line) for line in drawn]
 
         for rows in (1, 2, 3):
             for cols in (100, 120, 160, 200, 240):
@@ -655,12 +657,12 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         does grow to is still what its names need, so a pane wide enough for every name
         stays one row however high the ceiling has been cycled.
 
-        360 columns and not 300: every workspace tab reserves `slots.TAB_COUNT_W` for its
-        chat count now (#880), so these fifteen names need 352 columns for one row rather
-        than 262."""
+        320 columns and not 262: every workspace tab reserves `slots.TAB_COUNT_W` for its
+        chat count (#880), so these fifteen names need 307 columns for one row rather than
+        262. It was 352 while that field was six cells wide; #903 narrowed it to three."""
         state.record_bar_rows("f-1", 3)
-        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=360,
-                                         order=SLOTS, window_cols=360)
+        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=320,
+                                         order=SLOTS, window_cols=320)
         self.assertEqual(got["workspaces"], 1, got)
 
     def test_the_height_the_strip_asked_for_reaches_split_window(self):
@@ -686,11 +688,15 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         self.assertEqual(layout.pane_cols(inset, "workspaces", window_cols=160), 137)
         self.assertEqual(layout.pane_cols(SLOTS, "workspaces", window_cols=160), 160)
         state.record_bar_rows("f-1", 3)
+        # 320 and not 360, and the number moved with the count field: these fifteen names
+        # need 307 columns for one row (#903 took the field from six cells to three), so
+        # the window has to be wide enough for the strip at full width and NOT wide enough
+        # for it 23 columns in. At 360 both fit on one row and the case measured nothing.
         wide = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
-                                          order=SLOTS, window_cols=360)
+                                          order=SLOTS, window_cols=320)
         narrow = commands_frame._slot_sizes(
             "f-1", inset, window_rows=50, pane_cols=200, order=inset,
-            window_cols=360)
+            window_cols=320)
         self.assertEqual(wide["workspaces"], 1)
         self.assertEqual(narrow["workspaces"], 2,
                          "the strip was sized from the window rather than its pane")

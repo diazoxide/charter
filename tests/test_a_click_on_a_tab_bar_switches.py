@@ -190,7 +190,8 @@ class AClickOnAWorkspaceTabStartsTheWorkspaceSwitch(_ABarThatWasDrawn,
         state.record_workspace("f1", "beta")
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""},
                                           clear=False))
-        self.row = slots.workspaces_bar("f1", self.WIDTH)[0]
+        self.painted = slots.workspaces_bar("f1", self.WIDTH)[0]
+        self.row = tui.strip_ansi(self.painted)
         self.on_event = self._handler("workspaces", "f1")
 
     def test_a_press_on_another_workspaces_tab_starts_the_switch_to_it(self):
@@ -212,7 +213,7 @@ class AClickOnAWorkspaceTabStartsTheWorkspaceSwitch(_ABarThatWasDrawn,
         the map is published beside it in the same paint, so the tab that answers "you are
         already here" is the one the operator can see marked — never one this panel
         process would have resolved for itself out of a shared server's environment."""
-        self.assertIn("*beta", self.row)
+        self.assertIn("\x1b[7m\x1b[4m beta", self.painted)
         for col in range(0, self.WIDTH):
             self.assertNotEqual(slots.TABS.switch_to(0, col), "beta", f"column {col}")
         self.assertEqual(self.spawned, [])
@@ -269,8 +270,8 @@ class AClickIsTheWholeGesture(_ABarThatWasDrawn, unittest.TestCase):
         destroyed or started along the way."""
         self.on_event(_press(self.beta))
         state.record_workspace("f1", "beta")
-        back = slots.workspaces_bar("f1", self.WIDTH)[0]
-        self.assertIn("*beta", back)
+        back = tui.strip_ansi(slots.workspaces_bar("f1", self.WIDTH)[0])
+        self.assertIn(" beta", back)
         self.on_event(_press(self._column_of(back, " alpha")))
         self.assertEqual(
             [argv[-1] for argv, _fid in self.spawned], ["beta", "alpha"],
@@ -357,6 +358,13 @@ class AClickOnTheOverflowCountOpensThePalette(_ABarThatWasDrawn, unittest.TestCa
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
         state.frame_dir("f1", create=True)
         state.record_workspace("f1", self.HERE)
+        # **The order is recorded rather than left to the recency measurement** (#903).
+        # `switch.workspaces` leads with the workspace this frame is IN, which would put
+        # the marked tab on the first page and leave the row with no LEADING count — and
+        # this class is about pressing both. Writing the order down is what a frame does
+        # on its first repaint anyway (`state.record_tab_order`), so this pins the case's
+        # own premise instead of depending on which directory was written last.
+        state.record_tab_order("f1", list(self.NAMES))
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""},
                                           clear=False))
         self.row = tui.strip_ansi(slots.workspaces_bar("f1", self.WIDTH)[0])
