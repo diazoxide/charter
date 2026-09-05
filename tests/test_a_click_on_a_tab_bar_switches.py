@@ -357,6 +357,13 @@ class AClickOnTheOverflowCountOpensThePalette(_ABarThatWasDrawn, unittest.TestCa
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
         state.frame_dir("f1", create=True)
         state.record_workspace("f1", self.HERE)
+        # **The order is recorded rather than left to the recency measurement** (#903).
+        # `switch.workspaces` leads with the workspace this frame is IN, which would put
+        # the marked tab on the first page and leave the row with no LEADING count — and
+        # this class is about pressing both. Writing the order down is what a frame does
+        # on its first ask anyway (`state.record_tab_order`), so this pins the case's own
+        # premise instead of depending on which directory was written last.
+        state.record_tab_order("f1", list(self.NAMES))
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""},
                                           clear=False))
         self.row = tui.strip_ansi(slots.workspaces_bar("f1", self.WIDTH)[0])

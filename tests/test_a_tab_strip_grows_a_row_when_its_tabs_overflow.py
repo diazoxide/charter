@@ -655,12 +655,12 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         does grow to is still what its names need, so a pane wide enough for every name
         stays one row however high the ceiling has been cycled.
 
-        360 columns and not 300: every workspace tab reserves `slots.TAB_COUNT_W` for its
-        chat count now (#880), so these fifteen names need 352 columns for one row rather
-        than 262."""
+        320 columns and not 262: every workspace tab reserves `slots.TAB_COUNT_W` for its
+        chat count (#880), so these fifteen names need 307 columns for one row rather than
+        262. It was 352 while that field was six cells wide; #903 narrowed it to three."""
         state.record_bar_rows("f-1", 3)
-        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=360,
-                                         order=SLOTS, window_cols=360)
+        got = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=320,
+                                         order=SLOTS, window_cols=320)
         self.assertEqual(got["workspaces"], 1, got)
 
     def test_the_height_the_strip_asked_for_reaches_split_window(self):
@@ -686,11 +686,15 @@ class TheLauncherSplitsThePaneTheStripAskedFor(PersonaIso, unittest.TestCase):
         self.assertEqual(layout.pane_cols(inset, "workspaces", window_cols=160), 137)
         self.assertEqual(layout.pane_cols(SLOTS, "workspaces", window_cols=160), 160)
         state.record_bar_rows("f-1", 3)
+        # 320 and not 360, and the number moved with the count field: these fifteen names
+        # need 307 columns for one row (#903 took the field from six cells to three), so
+        # the window has to be wide enough for the strip at full width and NOT wide enough
+        # for it 23 columns in. At 360 both fit on one row and the case measured nothing.
         wide = commands_frame._slot_sizes("f-1", SLOTS, window_rows=50, pane_cols=200,
-                                          order=SLOTS, window_cols=360)
+                                          order=SLOTS, window_cols=320)
         narrow = commands_frame._slot_sizes(
             "f-1", inset, window_rows=50, pane_cols=200, order=inset,
-            window_cols=360)
+            window_cols=320)
         self.assertEqual(wide["workspaces"], 1)
         self.assertEqual(narrow["workspaces"], 2,
                          "the strip was sized from the window rather than its pane")

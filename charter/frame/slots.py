@@ -3237,6 +3237,25 @@ SLOTS = {"top": _top, "bottom": _bottom, "repos": _repos, "right": _right}
 #: others. Two entries of the same width by construction, so the mark moving does not move
 #: the names beside it.
 #:
+#: **#903 asked for the `*` to go and the measurement sent it back**, which is worth
+#: recording because the argument for dropping it was a good one right up to the point it
+#: was checked. The report wanted an EDGE instead of a caption — an underline reads as the
+#: edge of a tab where a `*` reads as a footnote — and expected the mark's column back for
+#: it. `chrome.block` draws the edge now (reverse video *and* an underline, two escapes and
+#: no cells). The column, though, cannot be had: :func:`_cuts` is taken over the MARKED
+#: fields, so an active field one cell narrower than the same field inactive makes the page
+#: boundaries a function of WHERE THE MARK IS — switching would re-cut the strip and shift
+#: every tab right of the mark one column left, which is the double-press #767 exists to
+#: stop. The cell is spent either way, and the only question left is what is in it.
+#:
+#: A `*` and not a blank, and that is #880's sentence surviving contact with the change
+#: that questioned it: **`panel._write` strips every escape from every row under
+#: `NO_COLOR`**, and the Linux console has no highlight worth the name — so reverse and
+#: underline are both nothing there, and a blank in this cell would leave such a reader with
+#: no answer at all to "which tab am I on". The mark degrades to a character; the paint
+#: degrades to nothing. What #903 buys on this row is therefore the underline on top,
+#: which costs no column, and not the `*`'s column, which was never available.
+#:
 #: **ASCII, deliberately** — `overlay._MARK`'s own rule and `_persona_chips`' measurement
 #: behind it: `●`, `◆` and the pointing triangles are East-Asian *Ambiguous* and have
 #: broken this layout twice. `choose.MARK` is the same decision one surface over and is
@@ -3248,7 +3267,7 @@ _BAR_MARK = ("*", " ")
 
 #: The frames a chat tab cycles through while that chat's harness is working (#853).
 #:
-#: **It takes the mark's cell rather than adding one, and that is the whole of why a
+#: **It takes the lead's cell rather than adding one, and that is the whole of why a
 #: spinner is affordable on a strip whose click map is per COLUMN.** Every tab already
 #: carries a one-cell prefix (:data:`_BAR_MARK`) and every frame here is one cell, so a
 #: chat starting a turn changes not one column of the strip's arithmetic: the cut
@@ -3259,13 +3278,14 @@ _BAR_MARK = ("*", " ")
 #: name — the double-press #767 exists to prevent, arriving through a spinner.
 #:
 #: **The ACTIVE chat keeps its `*` and never shows this**, which is a limit rather than an
-#: oversight. There is one cell and the two facts compete for it; `*` wins because it is
-#: the only one of the two that has no other way to be seen. `chrome.block` paints the
-#: active tab in reverse video, but `[frame] chrome = "off"` is the shipped default and
-#: `panel._write` strips SGR under `NO_COLOR`, so on a plain plane the `*` is the ONLY
-#: thing saying where you are (:func:`_compose` says so at the paint). The chat you are
-#: typing in, meanwhile, is the one whose harness you can watch directly. The readout is
-#: for the chats you are not looking at.
+#: oversight, and #903 re-opened it and closed it the same way. There is one cell and the
+#: two facts compete for it; `*` wins because it is the only one of the two that has no
+#: other way to be seen. `chrome.block` paints the active tab in reverse video with an
+#: underline, but `[frame] chrome = "off"` is the shipped default and `panel._write` strips
+#: SGR under `NO_COLOR`, so on a plain plane the `*` is the ONLY thing saying where you are
+#: (:func:`_compose` says so at the paint). The chat you are typing in, meanwhile, is the
+#: one whose harness you can watch directly. The readout is for the chats you are not
+#: looking at.
 #:
 #: **Which glyphs, and the two that were asked for and refused.** The request was Claude
 #: Code's own spinner, `· ✢ ✶ ✳ ✽ ✻`. `tui.width` answers 1 for all six, and `tui.width` is
@@ -4043,11 +4063,12 @@ def _compose(names: list[str], here: str, width: int, *,
     #
     # `i != at` before the membership test, so the active tab keeps its `*` — see
     # :data:`TAB_SPINNER` for why that one cell goes to the mark rather than to the
-    # spinner. Read once, outside the comprehension: every tab on a strip shows the same
-    # frame (`tab_spinner_frame`), and reading the clock per name would let a wide strip
-    # start a row on one frame and finish it on the next. Read unconditionally, too: an
-    # `if busy` in front of it would change no output at all, only one `time.monotonic()`,
-    # which is the equivalent mutant this repository deletes rather than documents.
+    # spinner, and :data:`_BAR_MARK` for why #903 left it there after asking. Read once,
+    # outside the comprehension: every tab on a strip shows the same frame
+    # (`tab_spinner_frame`), and reading the clock per name would let a wide strip start a
+    # row on one frame and finish it on the next. Read unconditionally, too: an `if busy`
+    # in front of it would change no output at all, only one `time.monotonic()`, which is
+    # the equivalent mutant this repository deletes rather than documents.
     frame = tab_spinner_frame()
     marked = [f"{_BAR_MARK[0] if i == at else (frame if names[i] in busy else _BAR_MARK[1])}{n}"
               for i, n in enumerate(shown)]
@@ -4064,8 +4085,10 @@ def _compose(names: list[str], here: str, width: int, *,
     # And it is reverse video rather than a colour for `chrome`'s stated reason: it is the
     # operator's own two colours exchanged, so it cannot be wrong on a theme charter
     # cannot see, and `[frame] chrome = "off"` — the shipped default — has nothing to do
-    # with it. Under `NO_COLOR` `panel._write` strips it and the `*` is still there, which
-    # is why the mark stays and was not replaced by the highlight.
+    # with it. **An underline goes on top of it since #903** (`chrome._UNDERLINE`), because
+    # an edge is what a tab has where a band is what a highlighted word has, and it costs
+    # the row nothing. Under `NO_COLOR` `panel._write` strips both and the `*` is still
+    # there, which is why the mark stays and was not replaced by the highlight.
     painted = [chrome.block(f) if i == at else f for i, f in enumerate(marked)]
     room = width - tui.width(lead)
     joined = gap.join(marked)
@@ -4215,20 +4238,28 @@ ADD_CHAT = "+"
 
 
 #: The largest chat count a workspace tab draws as a number. Above it the field says
-#: ``(99+)``, which is the same width and stops being a number rather than growing into one.
+#: ``9+``, which is the same width and stops being a number rather than growing into one.
 #:
 #: **A constant and not a measurement of the plane, because the FIELD IS FIXED-WIDTH** —
 #: see :data:`TAB_COUNT_W`, which is the whole design. A ceiling derived from the widest
 #: count on the plane would change the moment a workspace crossed ten chats, and every tab
 #: on the strip would move.
 #:
-#: Two digits rather than `state._CHAT_ORDINAL_MAX`'s five: that constant bounds the
-#: ORDINAL a chat id may carry (`api.10000`), not how many chats are open at once, and
-#: sizing a field on every tab for a number no plane reaches would spend three columns per
-#: name on nothing. `state.reap` is what bounds the entries this is counted from, and a
-#: workspace with a hundred live chats has stopped being something a one-row readout is
-#: about — `+N` and the palette are what that operator has.
-TAB_COUNT_MAX = 99
+#: **One digit rather than #880's two, and the report that asked for it is the one #880
+#: predicted** (#903). That issue wrote *"the reserve is visibly wide… that is the
+#: constraint working as specified, but it is the first thing an operator will remark
+#: on"*, and it was: two adjacent tabs with no count sat **eight** cells apart, six of them
+#: this field and two the :data:`_BAR_GAP`. A workspace holding ten or more chats is not a
+#: number anyone reads precisely — it is "a lot" — so the second digit was buying
+#: resolution nobody spends it on, on **every** tab, whether or not it had anything to say.
+#: Three cells, and two tabs with no count now sit five apart.
+#:
+#: Still not `state._CHAT_ORDINAL_MAX`'s five: that constant bounds the ORDINAL a chat id
+#: may carry (`api.10000`), not how many chats are open at once. `state.reap` is what
+#: bounds the entries this is counted from, and a workspace with a hundred live chats has
+#: stopped being something a one-row readout is about — `+N` and the palette are what that
+#: operator has.
+TAB_COUNT_MAX = 9
 
 #: How many columns EVERY workspace tab reserves for its chat count, drawn or not.
 #:
@@ -4241,30 +4272,40 @@ TAB_COUNT_MAX = 99
 #: started thinking."* The spinner took the mark's cell instead; a count has no cell to
 #: take, so it buys one on every tab and pays for it whether or not it has anything to say.
 #:
-#: **Zero renders blank**, so every count on screen means something. A `(0)` beside twelve
+#: **Narrowing it is not loosening it** (#903). What #880's report objected to was the
+#: PRICE of the reserve, not the reserve — so the field got cheaper and stayed
+#: unconditional. A field that appeared only where there was a number to put in it would
+#: cost nothing at all and would re-cut the strip under a pointer, which is the one thing
+#: this constant exists to prevent.
+#:
+#: **Zero renders blank**, so every count on screen means something. A `0` beside twelve
 #: of fifteen names is a column of noise that says only "this feature is on".
 #:
-#: Derived from the widest thing the field can hold rather than written down as `6`, so a
+#: Derived from the widest thing the field can hold rather than written down as `3`, so a
 #: change to :data:`TAB_COUNT_MAX` cannot leave the reserve behind. `tui.width` and never
 #: `len` for this module's own reason, though every character here is ASCII: a field is
 #: display text and the question is cells.
-TAB_COUNT_W = tui.width(f" ({TAB_COUNT_MAX}+)")
+TAB_COUNT_W = tui.width(f" {TAB_COUNT_MAX}+")
 
 
 def _tab_count(n: int) -> str:
     """The count field for a workspace holding *n* chats — always :data:`TAB_COUNT_W` cells.
 
-    A blank for none, ``(5)`` for five, ``(99+)`` for more than :data:`TAB_COUNT_MAX`,
-    each padded to the reserve. `tui.pad` and not an f-string width, for :func:`_inset`'s
+    A blank for none, `` 5`` for five, `` 9+`` for more than :data:`TAB_COUNT_MAX`, each
+    padded to the reserve. `tui.pad` and not an f-string width, for :func:`_inset`'s
     reason: it measures with `tui.width`, so the field is the same number of CELLS whatever
     is in it — which is the property :data:`TAB_COUNT_W` exists to state and the one the cut
     depends on.
 
-    **Parentheses and ASCII**, :data:`_BAR_RULE`'s rule rather than a preference: a click on
-    this row is resolved by COLUMN, so a glyph a terminal may draw two cells wide would move
-    every field after it. They also keep the count off the name — `alpha 5` reads as a
-    workspace called `alpha 5`, and `workspace.valid_name` is not a strong enough argument
-    to lean on when a parenthesis costs one cell of a field that is reserved anyway.
+    **The parentheses are gone with the second digit, and that is a trade rather than an
+    oversight** (#903). ``(5)`` kept the count off the name — `alpha 5` can be read as a
+    workspace called `alpha 5` — and cost one cell of a six-cell field to do it. At three
+    cells the same two brackets are two thirds of the field, and what they were insuring
+    against is a misreading that the LEADING BLANK plus a two-cell gap to the next tab
+    already separates: a count never touches its name and never touches its neighbour.
+    ASCII throughout, :data:`_BAR_RULE`'s rule rather than a preference — a click on this
+    row is resolved by COLUMN, so a glyph a terminal may draw two cells wide would move
+    every field after it.
 
     A negative *n* cannot arrive — it is `len()` of a list one function over — and is not
     guarded against separately for that reason: `n <= 0` is the blank, so the one branch
@@ -4272,7 +4313,7 @@ def _tab_count(n: int) -> str:
     """
     if n <= 0:
         return " " * TAB_COUNT_W
-    return tui.pad(f" ({n})" if n <= TAB_COUNT_MAX else f" ({TAB_COUNT_MAX}+)",
+    return tui.pad(f" {n}" if n <= TAB_COUNT_MAX else f" {TAB_COUNT_MAX}+",
                    TAB_COUNT_W)
 
 
@@ -4372,7 +4413,7 @@ def _workspaces_strip(fid: str):
     when the number is not.
     """
     from . import switch as switch_mod
-    return (switch_mod.workspaces(), switch_mod.current_workspace(fid), "",
+    return (switch_mod.workspaces(fid), switch_mod.current_workspace(fid), "",
             _workspace_counts())
 
 

@@ -59,6 +59,28 @@ from . import pane
 _REVERSE = "\x1b[7m"
 _OFF = tui.RESET
 
+#: Underline on — the EDGE of the tab you are on, and only :func:`block` writes it (#903).
+#:
+#: **Two attributes rather than one, because they say two different things.** Reverse
+#: video says "this field is picked out"; it is a band, and a band is what
+#: :func:`reverse` draws across a whole row. An underline says "this field has an edge",
+#: which is what a tab is — every tab strip an operator has used draws one. Together they
+#: read as a tab rather than as a highlighted word.
+#:
+#: **It costs the row nothing.** `tui.width` counts no SGR, so the field is the same
+#: number of cells underlined as not — which is the whole reason it is affordable on a row
+#: whose names are competing for columns, and why it is added BESIDE `slots._BAR_MARK`
+#: rather than instead of it. Side glyphs (`▏name▕`) would have been the more literal
+#: border and cost two columns per active tab.
+#:
+#: **SGR 4 and not 21 or 4:3**, on this module's own no-second-dialect rule: 4 is the
+#: plain underline every terminal tmux downsamples for has carried since vt100, where the
+#: doubled and curly forms are extensions a client may render as nothing or as something
+#: else. `tui.sanitize` passes every SGR through untouched, so it reaches the pane; `_OFF`
+#: is a full reset and turns this off with everything else, which is why there is no
+#: matching `24` here.
+_UNDERLINE = "\x1b[4m"
+
 #: One SGR escape, with its parameter list captured. Deliberately the same shape
 #: `tui._SGR` matches, because :func:`tui.sanitize` has already deleted everything else
 #: that claims to be an escape by the time a row reaches this module.
@@ -955,7 +977,8 @@ def reverse(row: str, width: int) -> str:
 
 
 def block(text: str) -> str:
-    """*text* drawn as a reverse-video block — ONE FIELD of a row, never a whole row.
+    """*text* drawn as an underlined reverse-video block — ONE FIELD of a row, never a
+    whole row.
 
     :func:`reverse`'s sibling and deliberately not a call to it. That one answers "this
     ROW is the one you picked": it fills to the pane's last column, so the highlight is a
@@ -984,14 +1007,25 @@ def block(text: str) -> str:
     its own row. And `NO_COLOR` is honoured in `panel._write`, the one place anything
     reaches a pane's screen, so a gate here would be a second answer to a question that is
     already answered once for every row in the frame. Under it the strip still says which
-    tab you are on, because `slots._BAR_MARK` is a character and not an attribute.
+    tab you are on, because `slots._BAR_MARK` is a character and not an attribute — and
+    that sentence is why #903 could add the underline here and could NOT take the `*` away
+    with it. Everything this function emits is an escape; under `NO_COLOR` all of it is
+    nothing.
 
-    An empty *text* comes back as a bare `\x1b[7m\x1b[0m` rather than `""`, and there is
-    deliberately no guard: no caller can reach it — a tab field always carries a mark —
-    so the guard would be a line no input could turn red, which is `fill`'s own recorded
-    reason for not having one either.
+    **The underline is #903's whole gain on this row and this is where it lands** — see
+    :data:`_UNDERLINE`. Reverse alone is a band, which reads as a highlighted word; an edge
+    is what a tab has, and *"borders on active tabs"* is what the report asked for. It is
+    one escape and no cells (`tui.width` counts no SGR), so the strip's arithmetic cannot
+    see it — the same property the reverse has and the reason both are affordable on a row
+    competing for columns. The mark's COLUMN was the other thing that change asked for and
+    it was not available: `slots._BAR_MARK` carries the measurement.
+
+    An empty *text* comes back as a bare `\x1b[7m\x1b[4m\x1b[0m` rather than `""`, and
+    there is deliberately no guard: no caller can reach it — a tab field always carries a
+    mark — so the guard would be a line no input could turn red, which is `fill`'s own
+    recorded reason for not having one either.
     """
-    return _REVERSE + text + _OFF
+    return _REVERSE + _UNDERLINE + text + _OFF
 
 
 def _restated(m: re.Match) -> str:

@@ -346,6 +346,35 @@ def next_bar_rows(rows: int | None) -> int:
     now = bar_rows_cap(rows)
     return now + 1 if now < BAR_MAX_ROWS else BAR_ROWS_DEFAULT
 
+
+def adopted_bar_rows(rows: int) -> int:
+    """The height a frame records when the operator DRAGGED a strip to *rows* (#903) —
+    :data:`_BAR_ROWS`, clamped.
+
+    **A drag and :data:`BAR_ROWS_KEY` write the same file and mean the same thing**, which
+    is #903's whole requirement for the gesture: *"writing the same stored value `F3`
+    records, so both gestures have one meaning and one place to look"*. So this is a
+    sibling of :func:`next_bar_rows` and lives beside it, where the range does — a clamp
+    spelled at the call site in `commands_frame` would be a second copy of `_BAR_ROWS`
+    free to disagree about what the ceiling is.
+
+    **It CLAMPS where :func:`bar_rows_cap` degrades to the default, and the two are
+    answering different questions.** That one reads a value back off a file, where `0`,
+    `7` and a truncated write are all "this frame has not chosen" — rounding a corrupt byte
+    into a height would leave a frame silently at the ceiling. This one takes a
+    MEASUREMENT of a pane a hand just moved: an operator who dragged a strip to five rows
+    asked for as many rows as they can have, and answering that with one row is the silent
+    discard #903 was filed about. A drag below one row is not reachable — tmux gives no
+    pane zero rows — and clamps up for the same reason rather than being guarded
+    separately.
+
+    A cap and not a height, exactly as `F3`'s is: `slots.bar_rows_wanted` still answers
+    with the rows the strip FILLS, so a drag on a plane whose names fit on one row gives
+    the rows back on the next layout pass. That is the honest outcome and it is the one
+    that keeps one meaning for one file — there is nothing to put on the second row.
+    """
+    return min(max(rows, BAR_ROWS_DEFAULT), BAR_MAX_ROWS)
+
 #: One row per pane border. tmux charges a horizontal split one row for the divider on
 #: top of the pane's own height — measured on 3.7c: a 50-row window split `-l 8` reads
 #: back as a 41-row harness and an 8-row panel, which is 49. Counted explicitly rather

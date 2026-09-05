@@ -877,19 +877,32 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
     which is the shipped `off`: that key paints the pane's BACKGROUND through a tmux pane
     option and says nothing about what a renderer writes into its own row.
 
+    **An UNDERLINE went on top of the reverse video in #903**, because the report asked for
+    *"borders on active tabs"* and reverse alone is a band — which reads as a highlighted
+    word where an underline reads as the edge of a tab. Both together cost the row nothing:
+    `tui.width` counts no SGR.
+
     **`slots._BAR_MARK` stays, and that is what makes the design read with no colour at
     all.** `panel._write` strips every escape from every row on a plane under `NO_COLOR`,
     and the Linux console can carry no highlight worth the name — so a strip whose only
     answer to "which tab am I on" was the paint would have no answer there. The `*` is a
     character. The block is on top of it, never instead of it.
+
+    **#903 proposed taking the `*` away for its column and the measurement sent it back**,
+    which is the strongest form this paragraph has ever had. The column was not available:
+    `slots._cuts` is taken over the marked fields, so an active tab one cell narrower than
+    the same tab inactive makes the page boundaries a function of where the mark is. The
+    cell is spent whatever is in it — so what is in it is the half that survives the paint
+    being deleted, and `test_with_every_escape_stripped_the_row_still_says_where_you_are`
+    is the case that says so.
     """
 
     NAMES = ["api.1", "api.2", "api.3"]
-    #: Spelled out rather than read off `chrome._REVERSE` and `chrome._OFF`. A case built
-    #: from the constants it is about agrees with any value they take, which is the
-    #: survivor `commands_change.BLOCK_END` produced — so the escape a terminal actually
-    #: receives is written here, by hand, a second time.
-    ON, OFF = "\x1b[7m", "\x1b[0m"
+    #: Spelled out rather than read off `chrome._REVERSE`, `chrome._UNDERLINE` and
+    #: `chrome._OFF`. A case built from the constants it is about agrees with any value
+    #: they take, which is the survivor `commands_change.BLOCK_END` produced — so the
+    #: escapes a terminal actually receives are written here, by hand, a second time.
+    ON, OFF = "\x1b[7m\x1b[4m", "\x1b[0m"
 
     def setUp(self):
         slots.TABS.forget()
@@ -903,6 +916,17 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
         row = self._row()
         self.assertIn(f"{self.ON}*api.2{self.OFF}", row)
         self.assertEqual(row.count(self.ON), 1, f"more than one block: {row!r}")
+
+    def test_the_block_is_reversed_and_underlined_and_not_one_of_the_two(self):
+        """**Two attributes, asserted as two** (#903). Reverse says "this field is picked
+        out" and an underline says "this field has an edge"; the report asked for the
+        second and the first is what was already there, so a change that dropped either is
+        a change to what the operator sees. Asked as the parameters a terminal receives
+        rather than as one string, because tmux is free to re-spell an SGR run.
+        """
+        row = self._row()
+        self.assertIn("\x1b[7m", row, f"the block is not reversed: {row!r}")
+        self.assertIn("\x1b[4m", row, f"the block has no edge: {row!r}")
 
     def test_the_block_covers_the_mark_and_the_name_and_stops(self):
         """**Exactly the cells `slots.TABS` gives that tab, which is the point.** A block

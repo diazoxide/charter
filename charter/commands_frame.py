@@ -293,6 +293,38 @@ _WINDOW_SIZE_FORMAT = "#{window_width}:#{window_height}"
 #: the pane after the side panels have been put back where they belong.
 _PANE_WIDTH_FORMAT = "#{pane_width}"
 
+#: The format that reports EVERY pane of a window as ``<id>:<height>`` — one line each,
+#: which is the reading :func:`_dragged_bar_rows` compares against what charter last
+#: asserted (#903).
+#:
+#: **`list-panes` and not one `display-message` per strip**, and that is a cost decision
+#: rather than a style one. This is asked on the `window-resized` path, which runs once per
+#: size change while an operator is still dragging their terminal; one round trip is ~5ms
+#: on this machine, dominated by spawning the `tmux` CLIENT, so a frame placing two bars
+#: would pay twice for a question one invocation answers for the whole window.
+#:
+#: Heights and not the full geometry: which pane is which is `state.panes`' answer and
+#: never a position (`state.record_panes` says why inferring it is the "indices move" trap),
+#: so the id is here to JOIN on and the height is the measurement.
+_PANE_HEIGHTS_FORMAT = "#{pane_id}:#{pane_height}"
+
+#: What one line of :data:`_PANE_HEIGHTS_FORMAT` has to look like — tmux's own `%N` and a
+#: count of rows, with nothing else on the line.
+#:
+#: **A pattern rather than a `partition`, and the deletion sweep is what settled it.** The
+#: obvious parse is `line.strip().partition(":")`, and the sweep reported BOTH of its verbs
+#: as survivors: `strip` against `lstrip`, and `partition` against `rpartition`. Neither can
+#: be pinned, because neither can be made to matter — the format emits exactly one colon and
+#: no surrounding whitespace, so "which end" and "how much" are questions this data never
+#: asks. An equivalent mutant and dead code are the same finding, so the ambiguity is
+#: removed rather than documented: a `fullmatch` has no end to choose.
+#:
+#: It is also the stricter reading. `partition` answers for a line it did not understand —
+#: `nonsense` partitions to `("nonsense", "", "")` and is then only rejected because `""`
+#: is not a digit — where this refuses the line itself, which is what `_PANE_ID_RE` already
+#: does one argv over for the same values.
+_PANE_HEIGHT_RE = re.compile(r"(%\d+):(\d+)")
+
 #: The format that says WHERE a pane is — the session and the window it belongs to, as
 #: tmux's own ids rather than as names (#684).
 #:
@@ -6136,6 +6168,117 @@ def _variable_pane_cols(socket: str, *, panes: dict[str, str], window_cols: int)
     return layout.repos_cols(list(panes), window_cols=window_cols)
 
 
+def _pane_rows(socket: str, *, panes: dict[str, str]) -> dict[str, int]:
+    """How many rows each of *panes* has RIGHT NOW, by slot — ``{}`` when tmux will not
+    say (#903).
+
+    :func:`_variable_pane_cols`' sibling one axis over, and asked for the same reason that
+    one is: the pane's geometry is tmux's and charter's copy of it is an intention. What is
+    different is what the answer is FOR. That one measures so a pane can be sized
+    correctly; this one measures so charter can tell its own last resize from a hand's.
+
+    **One `list-panes` for the whole window**, keyed back onto slots through *panes* — see
+    :data:`_PANE_HEIGHTS_FORMAT` for the cost that decides it. The target is any pane of
+    the window and the first recorded one is used, because `list-panes -t <pane>` reports
+    that pane's whole window; a frame with no recorded panes has nothing to ask about and
+    is refused by the id check before any argv is built.
+
+    **Every id is checked on the way in and on the way back**, which is #475's rule on both
+    ends of one read: the target comes off disk (`state.panes`) and goes into a `-t`, and a
+    line tmux answers with has to be tmux's own shape (:data:`_PANE_HEIGHT_RE`) before it is
+    matched against that map. A pane in the window that charter did not record — the harness
+    itself, and anything an operator split by hand — simply does not join and contributes
+    nothing.
+
+    **Never raises and never guesses.** A timeout, a non-zero exit, a line that does not
+    parse: each contributes no entry, and a caller handed `{}` compares nothing and adopts
+    nothing, which is exactly the behaviour that shipped before this existed.
+    """
+    target = next((p for p in panes.values() if _PANE_ID_RE.fullmatch(p)), "")
+    if not target:
+        return {}
+    out = tmuxctl.run("measuring this frame's own pane heights",
+                      tmuxctl.server_argv(socket, "list-panes", "-t", target,
+                                          "-F", _PANE_HEIGHTS_FORMAT),
+                      timeout=5, report=False)
+    if out.returncode != 0:
+        return {}
+    heights: dict[str, int] = {}
+    for line in out.stdout.splitlines():
+        said = _PANE_HEIGHT_RE.fullmatch(line)
+        if said:
+            heights[said[1]] = int(said[2])
+    return {slot: heights[pid] for slot, pid in panes.items() if pid in heights}
+
+
+def _adopt_dragged_bars(socket: str, *, fid: str, panes: dict[str, str],
+                        window_rows: int) -> None:
+    """Record the operator's own height for this frame's tab strips when one of them has
+    been dragged since charter last asserted a size (#903).
+
+    *"when switching between workspaces — resized tabs resetting to one line. it should
+    preserve sizes."* Measured on the reporting plane: **no frame had a recorded
+    `bar_rows` at all**, so the gesture was a tmux pane drag rather than
+    `layout.BAR_ROWS_KEY` — and `layout._grown` recomputes the height on the next layout
+    pass, which a workspace switch triggers (`_switch_client` → `_apply_arrangement` →
+    :func:`_relayout` → :func:`_reassert_sizes`). #880 chose a keybinding over the drag
+    *because* the layout owns bar heights and judged teaching it otherwise "a much larger
+    change than the one-row default"; that left the obvious gesture failing in SILENCE.
+
+    **The comparison is against what charter last ASKED FOR, and that is the whole
+    difficulty.** charter resizes these panes itself, on every `window-resized` and every
+    re-layout, so a comparison against the previous HEIGHT would read charter's own resize
+    as the operator's choice and pin the strip at whatever the layout last computed —
+    forever. `state.asserted_bars` is the intent, written by :func:`_reassert_sizes` at the
+    end of every pass; a strip standing at a height charter did not ask for was moved by a
+    hand.
+
+    **Three ways there is nothing to compare, and each is a reason a difference would be
+    explained by something other than a hand:**
+
+    * nothing recorded — the frame has not been through :func:`_reassert_sizes` yet, so
+      there is no intent for a height to differ from;
+    * the WINDOW has changed rows — tmux rescales every pane proportionally before this
+      runs, so on that path every height differs and none of them was dragged;
+    * the frame's SLOTS are not the slots charter asserted for — a re-layout adds and kills
+      panes and tmux rescales the survivors when it does, and :func:`_relayout` hands this
+      only the panes it KEPT, so a changed set is a frame whose shape moved and whose
+      heights moved with it.
+
+    Each of those returns before the measurement is taken, and the saving is stated
+    exactly rather than rounded up: a drag that changes the window's HEIGHT — the one that
+    fires `window-resized` most often, and the one this path is the hot path of — costs no
+    extra tmux call at all, because the second condition is false at every step of it. A
+    drag that changes only the WIDTH pays one `list-panes` per step, which is ~5ms on a
+    child whose median is ~35ms (:func:`cmd_resize` measures both numbers), and it buys
+    the case where an operator widens their terminal after having dragged a strip. What
+    else pays for a reading is the resize that finds the window exactly where it left it,
+    which is the re-layout a workspace switch performs.
+
+    **The tallest difference wins**, and there is one number to write: `state.bar_rows` is
+    the frame's ceiling and both strips share it (`layout.bar_rows_cap`). A frame with two
+    bars whose operator dragged one of them taller has asked for that much room; taking the
+    tallest is what gives it to them, and `slots.bar_rows_wanted` still holds each strip to
+    the rows its own names fill, so the other one does not grow to match.
+
+    Nothing is written when the adopted height is the one already recorded — a `bar_rows`
+    file rewritten with its own contents on every resize is an `os.replace` per drag step
+    for no change.
+    """
+    was = state.asserted_bars(fid)
+    if not was.rows or was.window_rows != window_rows:
+        return
+    if was.panes != tuple(sorted(panes)):
+        return
+    now = _pane_rows(socket, panes=panes)
+    dragged = [now[s] for s, n in was.rows.items() if s in now and now[s] != n]
+    if not dragged:
+        return
+    chose = layout.adopted_bar_rows(max(dragged))
+    if chose != state.bar_rows(fid):
+        state.record_bar_rows(fid, chose)
+
+
 def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
                     harness_pane: str | None,
                     window_cols: int, window_rows: int) -> None:
@@ -6219,6 +6362,17 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     its own `or ""` — which is why the deletion sweep found the line unpinned and
     `test_reassert_sizes_takes_no_harness_pane_at_all_without_raising` now drives it.
 
+    **This is also where charter states its intent about the tab strips, and #903 is what
+    made that a written record rather than a passing thought.** A tmux pane drag is the
+    gesture an operator reaches for to make a strip taller and there is no hook that fires
+    on one; what noticed the height had moved was nothing, so the next layout pass
+    recomputed it away in silence. Between the two passes below, this now reads the strips'
+    real heights, adopts one the operator moved (:func:`_adopt_dragged_bars`) and writes
+    down what it is about to ask for (`state.record_asserted_bars`) — the reference point
+    the NEXT pass tells a hand from charter's own resize by. Both sit inside the row pass's
+    own function rather than in its two callers, because "what charter asked for" has to be
+    written by whatever writes it, and there is one such place.
+
     `report=False` throughout: a pane that has since died (the operator closed it, a panel
     crashed between the map being read and this running) makes `resize-pane` fail, and that
     is not an integration failure worth printing over the agent's own screen.
@@ -6234,9 +6388,24 @@ def _reassert_sizes(socket: str, *, fid: str, panes: dict[str, str],
     # here, and it has to land before anything is measured — see :func:`_variable_pane_cols`
     # for the tmux measurement that makes this an order rather than a preference.
     _apply_sizes(socket, panes=panes, sizes=layout.column_sizes(order), flag="-x")
+    # **The operator's own drag is adopted BEFORE the sizes are computed** (#903), because
+    # `_slot_sizes` is what reads `state.bar_rows` and a height written after it would take
+    # one whole resize to reach the screen. The columns above have already landed and move
+    # no row, so what this measures is the heights as they stood when this pass began —
+    # which is what a comparison against charter's own last intent needs.
+    _adopt_dragged_bars(socket, fid=fid, panes=panes, window_rows=window_rows)
     sizes = _slot_sizes(
         fid, order, window_rows=window_rows, order=order, window_cols=window_cols,
         pane_cols=_variable_pane_cols(socket, panes=panes, window_cols=window_cols))
+    # **What charter is about to ASK FOR, written down before it asks** (#903). This is the
+    # reference point the next pass tells a drag from — see :func:`_adopt_dragged_bars` for
+    # why it cannot be the previous height, and `state.record_asserted_bars` for why the
+    # window and the slot set ride along with it. Written for every pass, including the
+    # ones that adopt nothing: a pass that skipped the record would leave the NEXT one
+    # comparing against an intent two resizes old.
+    state.record_asserted_bars(
+        fid, window_rows=window_rows, panes=order,
+        rows={s: n for s, n in sizes.items() if s in frame_slots.BARS})
     # Pass two: the ROWS, and the harness below them — **one command list, not two**
     # (#844). It was two, and the second carried one `resize-pane` that is very often a
     # no-op; measured on 3.7c and at the 3.2 floor, a no-op write costs the client the

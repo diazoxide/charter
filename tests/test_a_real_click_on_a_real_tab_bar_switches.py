@@ -41,6 +41,7 @@ from __future__ import annotations
 import fcntl
 import itertools
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -57,6 +58,12 @@ from tests import _tmuxreap
 from tests._isolation import PersonaIso, make_plane
 
 _HAS_TMUX = shutil.which("tmux") is not None
+
+#: One SGR escape with its parameter list captured — `chrome._SGR`'s shape, spelled again
+#: here for `test_frame_bars.TheTabYouAreOnIsDrawnAsOne`'s reason: a case built from the
+#: constants it is about agrees with any value they take, and what a real terminal receives
+#: is exactly what these cases exist to check.
+_SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
 
 def _NOT_OPEN(ws: str) -> str:
@@ -307,6 +314,36 @@ class _ARealFrameWithBars(PersonaIso):
     def _bar_row(self, pane: str) -> str:
         return self._shown(pane).split("\n")[0].rstrip()
 
+    def _lit(self, pane: str) -> tuple[str, set[int]]:
+        """The field *pane*'s first row draws PAINTED, and the SGR parameters it is painted
+        with — read off the bytes tmux is holding for that pane (#903).
+
+        `capture-pane` without `-e` deletes every escape, which is what every other case
+        here wants: the `*` survives that deletion and is the thing they match on. This is
+        the one question that cannot be asked that way — whether the reverse video and the
+        underline `chrome.block` composes actually reach a terminal.
+
+        Parsed rather than string-matched, because tmux re-emits SGR in ITS OWN spelling:
+        it is free to merge `\x1b[7m\x1b[4m` into one escape, to order the parameters
+        either way, and to re-state attributes at a line break. What is stable is the
+        meaning — 7 turns reverse on, 0 and 27 turn it off — which is `chrome
+        .cancels_reverse`' own reading of the same numbers.
+        """
+        row = self._tmux("capture-pane", "-p", "-e", "-t",
+                         pane).stdout.split("\n")[0]
+        on, lit, params, at = False, [], set(), 0
+        for m in _SGR.finditer(row):
+            if on:
+                lit.append(row[at:m.start()])
+            said = [int(p or "0") for p in m.group(1).split(";")]
+            if on:
+                params.update(said)
+            on = 7 in said or (on and not any(p in (0, 27) for p in said))
+            if 7 in said:
+                params.update(said)
+            at = m.end()
+        return "".join(lit).strip(), params
+
     def _window_size(self, session: str) -> tuple[int, int]:
         r = self._tmux("display-message", "-p", "-t", session,
                   "#{window_width} #{window_height}")
@@ -453,6 +490,23 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         row = self._bar_row(self.bar)
         self.assertIn(f"*{self.HERE}", row, row)
         self.assertNotIn(f"*{self.THERE}", row, row)
+
+    def test_a_real_terminal_receives_the_mark_the_star_and_the_edge(self):
+        """**#903's own gain on this row, asked of the pane and not of the composition.**
+        The report wanted *"borders on active tabs"*; `chrome.block` answers with reverse
+        video AND an underline, and every other case in this file captures the row with
+        the escapes deleted — so nothing here could say whether either reaches a terminal.
+
+        Both, and the `*` under them: the mark is what a `NO_COLOR` reader is left with
+        once `panel._write` strips the pair, which is why #903 could add the edge and could
+        not take the character away for its column.
+        """
+        painted, params = self._lit(self.bar)
+        self.assertEqual(painted, f"*{self.HERE}",
+                         f"the block covers something other than the marked tab: "
+                         f"{painted!r}")
+        self.assertIn(7, params, "the marked tab reaches the pane without reverse video")
+        self.assertIn(4, params, "the marked tab reaches the pane without its edge")
 
     def test_the_click_leaves_the_keyboard_on_the_harness(self):
         """The property `mouse = true` used to take away and #634 gave back, asserted
@@ -834,11 +888,15 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
     #: are asserted to be on the drawn row in `setUp` rather than assumed, so a change to
     #: the cut fails loudly here instead of silently clicking empty cells.
     HERE = "harness-wrapper"
-    #: `news-dispatch-guard` and not `authority-audit`: since #880 every workspace tab
-    #: reserves `slots.TAB_COUNT_W` for its chat count, so at :data:`COLS` the page the
-    #: mark falls on starts at `harness-wrapper` rather than at the head of the list. The
-    #: assertion in `setUp` is what caught it, which is why it is an assertion.
-    THERE = "news-dispatch-guard"
+    #: `fleet` and not `authority-audit`: every workspace tab reserves
+    #: `slots.TAB_COUNT_W` for its chat count (#880), so where the page the mark falls on
+    #: starts and stops moves with that field. It was `news-dispatch-guard` while the field
+    #: was six cells wide and the page began AT `harness-wrapper`; #903 narrowed the field
+    #: to three, six more columns of names fit, and the mark's page now runs from the head
+    #: of the list to `harness-wrapper` — with `news-dispatch-guard` the first name off it.
+    #: The assertion in `setUp` is what caught it both times, which is why it is an
+    #: assertion.
+    THERE = "fleet"
 
     def setUp(self) -> None:
         super().setUp()

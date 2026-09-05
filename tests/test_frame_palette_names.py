@@ -309,7 +309,7 @@ class TheRosterIsNeverReadUntilSomethingIsTyped(_Frame, unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self.ws = self.enterContext(mock.patch.object(
-            switch, "workspaces", side_effect=lambda: list(self.WORKSPACES)))
+            switch, "workspaces", side_effect=lambda _fid=None: list(self.WORKSPACES)))
         self.pe = self.enterContext(mock.patch.object(
             switch, "personas", side_effect=lambda: list(self.PERSONAS)))
 

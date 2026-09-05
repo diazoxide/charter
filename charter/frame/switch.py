@@ -87,8 +87,10 @@ class Outcome(NamedTuple):
     message: str
 
 
-def workspaces() -> list[str]:
-    """Every workspace a switcher may offer, name-checked on the way out.
+def workspaces(fid: str | None = None) -> list[str]:
+    """Every workspace a switcher may offer, name-checked on the way out and — asked about
+    a FRAME — **ordered by last use, once, and then held still for that frame's life**
+    (#903).
 
     `workspace.list_workspaces` reads directory names off the plane, so the check is the
     same floor `state.frame_workspace` applies to its own read: these names go on to a
@@ -97,12 +99,93 @@ def workspaces() -> list[str]:
     directory exists yet, matching `commands_workspace.cmd_workspace_use` — it is
     documented as the always-present workspace and `workspace.ensure` makes it on demand,
     and a fresh plane that has never made one would otherwise offer an empty list.
+
+    **The order is not this function's, and it is the same split :func:`personas` already
+    makes** (#882). `chats.touched_by_workspace` owns the recency and `state.tab_order`
+    owns the holding-still; what happens here is that the first process to ask about a
+    frame writes the answer down and every process afterwards reads it. So the strip, the
+    palette and the launcher's own sizing pass (`slots.bar_rows_wanted`) cannot draw the
+    same roster in two orders, and a switch — which tears every panel down and re-splits it
+    — redraws the identical columns.
+
+    *"active last used tabs should be in first order, then olds."* A switch updates the
+    mtimes this reads for the NEXT frame; it moves nothing now. `state.record_tab_order`
+    carries the argument about why that is the whole of the feature and why live reordering
+    was refused twice before it.
+
+    **The recorded order is an ORDER and not a roster**, which is what keeps a stale line
+    from resurrecting a deleted workspace: the names on the strip are always
+    `list_workspaces`' answer, and the record only says how to sort them. A workspace
+    created since goes on the end, in name order, where it cannot move a column an operator
+    is already aiming at; a workspace deleted since simply is not there.
+
+    **No frame is the plain alphabetical answer**, and `""` is no frame exactly as `None`
+    is — `choose.names_of` defaults its *fid* to the empty string and the launch picker
+    (`commands_frame._choose_workspace`) runs before any frame exists. Both want membership
+    and a list to read, neither is about which order a strip draws, and a falsy id would
+    otherwise reach `state.tab_order`, be answered "nothing recorded" by
+    `state.frame_dir`'s own refusal, and recompute the recency on every call — live
+    reordering, arriving through the one caller that has no frame to hold an order for.
+    One test, not two, for `if fid is None` and `if not fid` cannot both be observable.
+
+    Written as a default rather than a second function, so there is one place that decides
+    what the set of workspaces IS.
     """
     from .. import config, workspace as ws_mod
     names = [n for n in ws_mod.list_workspaces() if ws_mod.valid_name(n)]
     if config.DEFAULT_WORKSPACE not in names:
         names.append(config.DEFAULT_WORKSPACE)
-    return sorted(names)
+    if not fid:
+        return sorted(names)
+    return _by_use(fid, names)
+
+
+def _by_use(fid: str, names: list[str]) -> list[str]:
+    """*names* in the order frame *fid* draws them — the recorded one, computed and
+    recorded here the first time it is asked for.
+
+    **The ORDER *names* arrives in is not read, and that is a correction the deletion sweep
+    forced.** The caller used to hand this `sorted(names)` and this docstring claimed the
+    sortedness was "load-bearing twice over" — the fallback for a name charter has never
+    seen used, and the tie-break for two workspaces written in the same clock tick. Both
+    are false: each of those is done by the `n` in the sort KEY below, on a total order over
+    distinct names, so the incoming order cannot reach them. `tools/sweep.py` reported the
+    caller's `sorted` as a survivor and it was right to — every use of *names* here is
+    either re-sorted, or turned into a set, or walked in `recorded`'s order.
+
+    Every use but ONE, and that one is why the sort moved rather than went. The names this
+    record does not carry are appended, and they are appended **in name order** — a
+    workspace made while the frame is open goes on the end where it cannot move a column an
+    operator is already aiming at, and two of them go on in an order that is a function of
+    the plane rather than of `os.scandir`. That promise is kept HERE now, where it is made.
+    It used to be kept by accident: `workspace.list_workspaces` happens to answer in name
+    order, so the caller's sort was doing nothing the leftovers could not have got from the
+    filesystem — until a record that omits a name (a hand-edited `tab_order`, a record
+    written before `config.DEFAULT_WORKSPACE` was folded in) makes one of them a leftover
+    and the accident stops holding.
+
+    **Sorted by the timestamp DESCENDING, so the newest is leftmost**, which is where an
+    operator looks first and where `slots._compose` starts its first page. Reversing the
+    list after an ascending sort was the alternative and is not equivalent for the ties:
+    negating the key keeps equal timestamps in name order, where reversing puts them in
+    reverse name order — a difference no test of a two-workspace plane can see and one that
+    would show on the day two directories share a second.
+
+    The record is written even when it changes nothing (a plane with one workspace, a plane
+    charter has no timestamp for at all), because what is being written down is not "this
+    order is interesting" but "this frame has decided" — and a frame that re-decided on its
+    next repaint would be the live reordering this exists to refuse.
+    """
+    from . import chats as chats_mod
+    recorded = state.tab_order(fid)
+    if not recorded:
+        touched = chats_mod.touched_by_workspace()
+        recorded = sorted(names, key=lambda n: (-touched.get(n, 0.0), n))
+        state.record_tab_order(fid, recorded)
+    known = set(names)
+    kept = [n for n in recorded if n in known]
+    seen = set(kept)
+    return kept + sorted(n for n in names if n not in seen)
 
 
 def personas() -> list[str]:
