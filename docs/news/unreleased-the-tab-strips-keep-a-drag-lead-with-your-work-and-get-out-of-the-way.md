@@ -121,20 +121,34 @@ under the cell you were about to press. What #880's report objected to was the p
 constraint. Those fifteen workspaces need **307** columns for one row now, where they needed
 352.
 
-## The picture of this is one release out of date, and it was already
+## The picture of this stops being old and starts being wrong
 
 `docs/assets/frame.svg` is a capture of exactly this surface, taken before these changes —
-so the count field it shows is six cells wide and the tabs on it are in name order. It is
-not regenerated here: `tests/test_asset_freshness.py` allows a capture to fall one minor
-behind, and at 0.57.0 it does.
+so the count field in it is six cells wide, the tabs on it are in name order, and the tab it
+marks carries no edge. It is not regenerated here, and that is two separate facts rather
+than one.
 
-**It does not survive the bump that ships this.** All four captures in `docs/assets/` are
-stamped `0.56.0`, so 0.58.0 puts every one of them two minors back and
-`TestTheCapturesAreNotStale` goes red — with or without this change. That debt is older
-than this branch and this branch does not pay it; what this branch adds is a reason the
-frame capture in particular is worth re-taking rather than merely re-stamped, because the
-surface in the picture is no longer the surface charter draws.
+**The freshness gate is the smaller one, and it is not this branch's.** All four captures in
+`docs/assets/` are stamped `0.56.0` against a charter at `0.57.0`, so they are already at
+the one minor of lag `tests/test_asset_freshness.py` allows and the 0.58.0 bump puts every
+one of them two back — `TestTheCapturesAreNotStale` goes red with or without this change.
+That debt predates this branch and this branch does not pay it.
+
+**The bigger one is this branch's, and it is about `frame.svg` alone.** A capture's whole
+contract is the one `docs/assets/README.md` states — *"generated from real command output…
+none should ever be hand-edited — regenerate instead, so a screenshot cannot quietly drift
+from what charter actually prints"*. Until now that picture was merely OLD: everything in it
+was something charter had drawn, just not lately. From the moment this merges it is WRONG —
+it shows a strip charter will not draw at any width, on any plane. A capture that is
+confidently wrong is worse than one that is out of date, because the contract invites a
+reader to trust it exactly as far as a screenshot of real output deserves to be trusted.
+
+So the frame capture wants re-taking straight after this rather than before the next
+release, and the other three are untouched by this change: `demo.svg`, `personas.svg` and
+`statusline.svg` are as accurate as they were, and only the shared stamp puts them in the
+same sentence.
 
 `docs/assets/capture-frame.sh` is the whole of it — it builds its own synthetic plane and
-its own tmux, needs no network and no toolchain — and `docs/assets/README.md` carries the
-order the social card has to follow it in.
+its own tmux, needs no network and no toolchain. `social-card.svg` re-reads `frame.svg`
+whole, so the card and the PNG that renders from it follow the capture, in that order
+(`docs/assets/README.md`).
