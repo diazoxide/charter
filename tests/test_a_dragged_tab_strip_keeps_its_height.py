@@ -220,6 +220,20 @@ class CharterOwnResizeIsNotAGesture(_AFrameThatHasBeenSized):
         self._resize(panes={s: p for s, p in PANES.items() if s != "repos"})
         self.assertIsNone(state.bar_rows(FID))
 
+    def test_a_frame_that_places_no_bar_asks_tmux_nothing_at_all(self):
+        """**The commonest frame on the plane, and it must not pay for this feature.**
+        charter places neither bar by default, so the record's `rows` map is empty for
+        nearly every frame there is — and an empty map has nothing a drag could differ
+        from. Refused before the read, so the ordinary frame's resize costs exactly what
+        it cost before #903.
+        """
+        bare = {s: p for s, p in PANES.items() if s != "workspaces"}
+        self._resize(panes=bare)
+        self.assertEqual(state.asserted_bars(FID).rows, {})
+        self.calls.clear()
+        self._resize(panes=bare)
+        self.assertEqual([c for c in self.calls if "list-panes" in c], [])
+
     def test_the_first_pass_of_a_frames_life_adopts_nothing(self):
         """There is no intent for a height to differ from yet, so there is nothing to
         measure against — and nothing is measured."""
@@ -296,6 +310,67 @@ class ADragIsAdoptedAsThisFramesChoice(_AFrameThatHasBeenSized):
         self.heights["workspaces"] = 3
         self._resize()
         self.assertEqual((state.frame_dir(FID) / "bar_rows").stat().st_mtime_ns, was)
+
+
+class TheRecordIsReadTheWayEveryOtherFileHereIs(PersonaIso, unittest.TestCase):
+    """`state.asserted_bars` — shape-checked on the way out, for `state.panes`' reason.
+
+    This file is JSON on disk, so a truncated write or a hand edit reaches the reader as a
+    plausible-looking map; what comes out of it decides whether charter writes a height
+    into `bar_rows`, so a string where an integer belongs must be "nothing recorded"
+    rather than a `TypeError` on the sizing path.
+    """
+
+    def setUp(self):
+        super().setUp()
+        state.frame_dir(FID, create=True)
+
+    def _wrote(self, text: str):
+        (state.frame_dir(FID) / "asserted_bars").write_text(text)
+        return state.asserted_bars(FID)
+
+    def test_a_frame_nothing_has_been_asserted_for_reads_as_an_empty_record(self):
+        """And the window is `0`, which is not a window any measurement can equal — so the
+        sentinel cannot pass for a real one in the caller's own comparison."""
+        was = state.asserted_bars(FID)
+        self.assertEqual((was.window_rows, was.panes, was.rows), (0, (), {}))
+
+    def test_a_round_trip_answers_what_was_written(self):
+        state.record_asserted_bars(FID, window_rows=50, panes=["top", "workspaces"],
+                                   rows={"workspaces": 2})
+        was = state.asserted_bars(FID)
+        self.assertEqual((was.window_rows, was.panes, was.rows),
+                         (50, ("top", "workspaces"), {"workspaces": 2}))
+
+    def test_the_panes_are_sorted_so_the_comparison_is_about_the_SET(self):
+        """The caller compares against `sorted(panes)`, and both callers hand it a map
+        whose insertion order is the split order — which a re-layout permutes without
+        changing which panes there are."""
+        state.record_asserted_bars(FID, window_rows=50, panes=["repos", "top"], rows={})
+        self.assertEqual(state.asserted_bars(FID).panes, ("repos", "top"))
+
+    def test_every_shape_a_hand_edit_can_produce_reads_as_nothing_recorded(self):
+        for text in ('not json at all', '[]', '"a string"', '{}',
+                     '{"window_rows": "50", "panes": [], "rows": {}}',
+                     '{"window_rows": 50, "panes": [], "rows": []}',
+                     '{"window_rows": 50, "rows": {}}',
+                     '{"window_rows": 50, "panes": {}, "rows": {}}'):
+            with self.subTest(text=text):
+                was = self._wrote(text)
+                self.assertEqual((was.window_rows, was.panes, was.rows), (0, (), {}))
+
+    def test_a_member_of_the_wrong_type_is_dropped_and_the_rest_kept(self):
+        was = self._wrote('{"window_rows": 50, "panes": ["top", 7], '
+                          '"rows": {"workspaces": 2, "chats": "two"}}')
+        self.assertEqual(was.panes, ("top",))
+        self.assertEqual(was.rows, {"workspaces": 2})
+
+    def test_an_id_that_cannot_name_a_directory_writes_nothing_and_does_not_raise(self):
+        """`fid` reaches `_reassert_sizes` off a tmux hook's argv, so it is untrusted the
+        way every other id charter joins onto a path is (#442). `frame_dir` refuses it and
+        this writes nothing, rather than raising out of the resize child."""
+        state.record_asserted_bars("../evil", window_rows=50, panes=[], rows={})
+        self.assertEqual(state.asserted_bars("../evil").window_rows, 0)
 
 
 class ADragOutsideTheRangeIsClampedAndNotDiscarded(unittest.TestCase):

@@ -231,20 +231,24 @@ def touched_by_workspace() -> dict[str, float]:
 
     Never raises, for :func:`of_workspace`'s reason and through the same guard: a chat
     directory that has gone between the scan and the `stat` contributes nothing rather than
-    taking a launch down.
+    taking a launch down. **`state.frame_dir` cannot answer ``None`` for one of these and
+    there is deliberately no branch for it**: every id here came off `os.scandir` through
+    :func:`is_chat`'s :data:`ID_RE`, which admits no separator and no bare `..`, so
+    `contain.child` resolves it — and :func:`_by_workspace` has already had
+    `state.own_workspace` read files inside that same directory to place the chat at all. A
+    guard no input could reach is the survivor `tools/sweep.py` reports and this repository
+    deletes.
     """
     out: dict[str, float] = {}
     for ws, ids in _by_workspace().items():
         if ws is None:
             continue
         for fid in ids:
-            d = state.frame_dir(fid)
             try:
-                seen = d.stat().st_mtime if d is not None else None
+                seen = state.frame_dir(fid).stat().st_mtime
             except OSError:
                 continue
-            if seen is not None and seen > out.get(ws, 0.0):
-                out[ws] = seen
+            out[ws] = max(seen, out.get(ws, 0.0))
     return out
 
 
