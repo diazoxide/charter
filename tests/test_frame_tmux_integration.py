@@ -6918,8 +6918,15 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
                       f"{sorted(state.panes(f'{self.WS}.2'))}")
             drew = self._wait_for_text(pane, f"{self.WS}.1")
         self.assertIn(f"{self.WS}.1", drew, f"the chat bar painted {drew!r}")
-        self.assertIn(f"*{self.WS}.2", drew,
-                      f"the chat bar did not mark the chat switched to: {drew!r}")
+        # **Both chats and the affordance, which is the strip a two-chat workspace draws.**
+        # Which of them is MARKED is not asked here and has not been since #903: the `*`
+        # is gone and the mark is `chrome.block`, two escapes that `capture-pane` without
+        # `-e` deletes. `tests/test_a_real_click_on_a_real_tab_bar_switches._lit` is where
+        # a real pane is asked which tab it says you are on; what this case is about is
+        # that the switch SPLIT the placed strip and that the strip painted the roster.
+        self.assertIn(f"{self.WS}.2", drew,
+                      f"the chat bar did not draw the chat switched to: {drew!r}")
+        self.assertIn(frame_slots.ADD_CHAT, drew, f"the chat bar painted {drew!r}")
         self.assertNotIn("unknown slot", drew)
 
     def _wait_for_text(self, pane: str, needle: str) -> str:

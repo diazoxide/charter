@@ -41,6 +41,7 @@ from __future__ import annotations
 import fcntl
 import itertools
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -57,6 +58,12 @@ from tests import _tmuxreap
 from tests._isolation import PersonaIso, make_plane
 
 _HAS_TMUX = shutil.which("tmux") is not None
+
+#: One SGR escape with its parameter list captured — `chrome._SGR`'s shape, spelled again
+#: here for `TheTabYouAreOnIsDrawnAsOne`'s reason: a case built from the constants it is
+#: about agrees with any value they take, and what a real terminal receives is exactly
+#: what these cases exist to check.
+_SGR = re.compile(r"\x1b\[([0-9;]*)m")
 
 
 def _NOT_OPEN(ws: str) -> str:
@@ -307,6 +314,32 @@ class _ARealFrameWithBars(PersonaIso):
     def _bar_row(self, pane: str) -> str:
         return self._shown(pane).split("\n")[0].rstrip()
 
+    def _lit(self, pane: str) -> str:
+        """The field *pane*'s first row draws in reverse video — which tab it says you
+        are on, read off the bytes tmux is holding for that pane.
+
+        **There is no character to look for since #903.** The strip drew a `*` in front of
+        the active name and every case here found the mark by searching the captured text;
+        the `*` is gone and what says "you are here" is `chrome.block` — reverse video and
+        an underline, two escapes and no cells. `capture-pane -e` is what keeps them.
+
+        Parsed rather than string-matched, because tmux re-emits SGR in ITS OWN spelling:
+        it is free to merge `\x1b[7m\x1b[4m` into one escape, to order the parameters
+        either way, and to re-state attributes at a line break. What is stable is the
+        meaning — 7 turns reverse on, 0 and 27 turn it off — which is `chrome
+        .cancels_reverse`' own reading of the same numbers.
+        """
+        row = self._tmux("capture-pane", "-p", "-e", "-t",
+                         pane).stdout.split("\n")[0]
+        on, lit, at = False, [], 0
+        for m in _SGR.finditer(row):
+            if on:
+                lit.append(row[at:m.start()])
+            params = [int(p or "0") for p in m.group(1).split(";")]
+            on = 7 in params or (on and not any(p in (0, 27) for p in params))
+            at = m.end()
+        return "".join(lit).strip()
+
     def _window_size(self, session: str) -> tuple[int, int]:
         r = self._tmux("display-message", "-p", "-t", session,
                   "#{window_width} #{window_height}")
@@ -405,7 +438,7 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         self.assertEqual(self._tmux("select-pane", "-t", self.harness).returncode, 0)
         self.fd = self._attach(self.fid)
         self.assertTrue(
-            _await(lambda: f"*{self.HERE}" in self._bar_row(self.bar)),
+            _await(lambda: f" {self.HERE}" in self._bar_row(self.bar)),
             f"the bar never painted: {self._bar_row(self.bar)!r}")
         self.assertEqual(self._active(), self.harness,
                          "the harness is not the active pane, so a report reaching the "
@@ -450,9 +483,9 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         self._click(self.bar, col=self._column_of(self.bar, f" {self.THERE}"))
         self.assertTrue(_await(lambda: state.version(self.fid) != was),
                         "the click never bumped the frame, so nothing repaints")
-        row = self._bar_row(self.bar)
-        self.assertIn(f"*{self.HERE}", row, row)
-        self.assertNotIn(f"*{self.THERE}", row, row)
+        self.assertEqual(self._lit(self.bar), self.HERE,
+                         f"the mark moved off the chat's own workspace: "
+                         f"{self._bar_row(self.bar)!r}")
 
     def test_the_click_leaves_the_keyboard_on_the_harness(self):
         """The property `mouse = true` used to take away and #634 gave back, asserted
@@ -471,7 +504,7 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         real handler, and the notice is what tells the two apart: an empty attention row
         means nothing ran."""
         before = self._bar_row(self.bar)
-        self._click(self.bar, col=self._column_of(self.bar, f"*{self.HERE}"))
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.HERE}"))
         time.sleep(2.0)
         self.assertEqual(state.frame_workspace(self.fid), self.HERE)
         self.assertEqual(state.notice(self.fid), "",
@@ -629,7 +662,7 @@ class ARealClickOnTheChatBarMovesTheClient(_ARealChatBarOverTwoChats, unittest.T
         which tab is marked, so the gesture costs nothing at all rather than costing an
         interpreter start and a refusal."""
         window = self._current_window(self.WS)
-        self._click(self.bar, col=self._column_of(self.bar, f"*{self.here}"))
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.here}"))
         time.sleep(2.0)
         self.assertEqual(self._current_window(self.WS), window)
         self.assertEqual(self._active(), self.harness)
@@ -705,7 +738,7 @@ class ARealRightClickOnTheChatBarOpensARealMenu(_ARealChatBarOverTwoChats,
     def test_a_right_press_on_the_tab_you_are_ON_opens_its_menu(self):
         """`slots._Tabs.tab_at`'s one difference from `switch_to`, end to end. The left
         click on this same cell is asserted three cases up to move nothing at all."""
-        self._click(self.bar, col=self._column_of(self.bar, f"*{self.here}"),
+        self._click(self.bar, col=self._column_of(self.bar, f" {self.here}"),
                     button=self.BUTTON)
         self.assertIn(f"chat {self.here}", self._shown(self._await_menu(self.here)))
 
@@ -834,11 +867,15 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
     #: are asserted to be on the drawn row in `setUp` rather than assumed, so a change to
     #: the cut fails loudly here instead of silently clicking empty cells.
     HERE = "harness-wrapper"
-    #: `news-dispatch-guard` and not `authority-audit`: since #880 every workspace tab
-    #: reserves `slots.TAB_COUNT_W` for its chat count, so at :data:`COLS` the page the
-    #: mark falls on starts at `harness-wrapper` rather than at the head of the list. The
-    #: assertion in `setUp` is what caught it, which is why it is an assertion.
-    THERE = "news-dispatch-guard"
+    #: `fleet` and not `authority-audit`: every workspace tab reserves
+    #: `slots.TAB_COUNT_W` for its chat count (#880), so where the page the mark falls on
+    #: starts and stops moves with that field. It was `news-dispatch-guard` while the
+    #: field was six cells wide and the page began AT `harness-wrapper`; #903 narrowed the
+    #: field to three, six more columns of names fit, and the mark's page now runs from
+    #: the head of the list to `harness-wrapper` — with `news-dispatch-guard` the first
+    #: name off it. The assertion in `setUp` is what caught it both times, which is why it
+    #: is an assertion.
+    THERE = "fleet"
 
     def setUp(self) -> None:
         super().setUp()
@@ -855,7 +892,7 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         self.assertEqual(self._tmux("select-pane", "-t", self.harness).returncode, 0)
         self.fd = self._attach(self.fid)
         self.assertTrue(
-            _await(lambda: f"*{self.HERE}" in self._bar_row(self.bar)),
+            _await(lambda: f" {self.HERE}" in self._bar_row(self.bar)),
             f"the bar never painted: {self._bar_row(self.bar)!r}")
         row = self._bar_row(self.bar)
         self.assertNotIn(self.NAMES[-1], row,

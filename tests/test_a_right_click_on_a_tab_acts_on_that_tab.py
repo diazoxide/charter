@@ -132,7 +132,7 @@ class ARightClickResolvesToTheTabItLandedOn(_ABarThatWasDrawn, unittest.TestCase
         always meant — so a menu that refused the marked tab would refuse the commonest
         click there is.
         """
-        at = self._column_of("*" + self.FID)
+        at = self._column_of(slots._TAB_LEAD + self.FID)
         self.assertIsNone(slots.TABS.switch_to(0, at))
         self.assertEqual(slots.TABS.tab_at(0, at), self.FID)
 
@@ -183,7 +183,7 @@ class ARightClickOpensTheMenuAndNothingElse(_ABarThatWasDrawn, unittest.TestCase
             [(util.self_relaunch_argv("frame-palette", "--tab", "api.3"), self.FID)])
 
     def test_a_right_press_on_the_tab_you_are_on_opens_its_menu_too(self):
-        self._handler("chats")(_click(0, self._column_of("*" + self.FID), name="right"))
+        self._handler("chats")(_click(0, self._column_of(slots._TAB_LEAD + self.FID), name="right"))
         self.assertEqual(
             self.spawned,
             [(util.self_relaunch_argv("frame-palette", "--tab", self.FID), self.FID)])
@@ -225,7 +225,7 @@ class ARightClickOpensTheMenuAndNothingElse(_ABarThatWasDrawn, unittest.TestCase
         """`slots._Tabs.switch_to`'s rule, which `tab_at` deliberately does not share:
         re-switching is 41 tmux calls to arrive where you are. A handler that had started
         reading the new map for the old gesture would fail here."""
-        self._handler("chats")(_click(0, self._column_of("*" + self.FID), name="left"))
+        self._handler("chats")(_click(0, self._column_of(slots._TAB_LEAD + self.FID), name="left"))
         self.assertEqual(self.spawned, [])
 
     def test_a_middle_press_on_a_tab_does_nothing(self):
