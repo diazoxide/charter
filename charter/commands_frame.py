@@ -6228,11 +6228,15 @@ def _adopt_dragged_bars(socket: str, *, fid: str, panes: dict[str, str],
       only the panes it KEPT, so a changed set is a frame whose shape moved and whose
       heights moved with it.
 
-    Each of those returns before the measurement is taken, which is what keeps a terminal
-    drag — where the window's rows change at every step — costing no extra tmux call at
-    all. What pays for the reading is the resize that finds the window exactly where it
-    left it, which is the re-layout a workspace switch performs and the second event of a
-    drag that ended.
+    Each of those returns before the measurement is taken, and the saving is stated
+    exactly rather than rounded up: a drag that changes the window's HEIGHT — the one that
+    fires `window-resized` most often, and the one this path is the hot path of — costs no
+    extra tmux call at all, because the second condition is false at every step of it. A
+    drag that changes only the WIDTH pays one `list-panes` per step, which is ~5ms on a
+    child whose median is ~35ms (:func:`cmd_resize` measures both numbers), and it buys
+    the case where an operator widens their terminal after having dragged a strip. What
+    else pays for a reading is the resize that finds the window exactly where it left it,
+    which is the re-layout a workspace switch performs.
 
     **The tallest difference wins**, and there is one number to write: `state.bar_rows` is
     the frame's ceiling and both strips share it (`layout.bar_rows_cap`). A frame with two

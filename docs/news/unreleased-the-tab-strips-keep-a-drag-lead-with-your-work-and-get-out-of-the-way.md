@@ -43,8 +43,10 @@ down at the end of every resize alongside the window's size and the frame's slot
 states adopt nothing and are refused before tmux is asked anything: a frame that has not
 been sized yet, a window whose height changed (tmux rescales every pane proportionally on
 its own, so every height differs and none was dragged), and a frame whose panes were added
-to or removed. That last exclusion is also why a terminal drag costs no extra tmux call at
-all.
+to or removed. That second exclusion is also why dragging your terminal TALLER or shorter
+costs no extra tmux call at all — every step of it is a window whose rows changed.
+Dragging it only wider pays one `list-panes` per step, ~5ms on a child whose median is
+~35ms.
 
 Below tmux 3.3 this does not happen on its own, for the reason the strip's height already
 did not: there is no `window-resized` hook to notice. `charter frame-resize` typed in the
