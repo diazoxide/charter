@@ -449,7 +449,7 @@ def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None 
     * **There is no chooser for a select-then-confirm bar to be confirmed with.** On the
       table, selecting is a real intermediate state (a highlighted row, a detail on the
       attention strip) and `Enter` in the palette is the chooser. A bar has no such
-      state — the tab you are on IS the selection, drawn with `slots._TAB_LEAD` — and
+      state — the tab you are on IS the selection, drawn with `slots._BAR_MARK` — and
       `key` is in `component.EVENT_KINDS` but deliberately NOT in `events.DELIVERED`,
       because the harness owns the keyboard and tmux routes typing to the active pane. So
       a bar that "selected" would draw a second mark nothing on the machine could act on:

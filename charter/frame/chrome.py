@@ -68,9 +68,10 @@ _OFF = tui.RESET
 #: read as a tab rather than as a highlighted word.
 #:
 #: **It costs the row nothing.** `tui.width` counts no SGR, so the field is the same
-#: number of cells underlined as not — which is what let `slots._TAB_LEAD` give the `*`'s
-#: character up for it. Side glyphs would have been the more literal border and cost two
-#: columns per active tab.
+#: number of cells underlined as not — which is the whole reason it is affordable on a row
+#: whose names are competing for columns, and why it is added BESIDE `slots._BAR_MARK`
+#: rather than instead of it. Side glyphs (`▏name▕`) would have been the more literal
+#: border and cost two columns per active tab.
 #:
 #: **SGR 4 and not 21 or 4:3**, on this module's own no-second-dialect rule: 4 is the
 #: plain underline every terminal tmux downsamples for has carried since vt100, where the
@@ -991,7 +992,7 @@ def block(text: str) -> str:
     :func:`reverse` runs `_SGR.sub(_restated, …)` because it wraps a row a renderer already
     finished, and charter's rows carry `statusline._R` after every coloured span — a full
     reset inside the run cancels reverse for the rest of it (the measured defect in that
-    function's docstring). A tab field is `slots._TAB_LEAD` plus a name that has been
+    function's docstring). A tab field is `slots._BAR_MARK` plus a name that has been
     through `contain.one_line`, which turns an `ESC` into the four characters `\x1b`. There
     is no SGR inside it to cancel anything, so a substitution here would be a pass whose
     output is provably its input — the survivor the deletion sweep reports and this
@@ -1005,22 +1006,23 @@ def block(text: str) -> str:
     default and is about the pane's BACKGROUND, not about what a renderer may write into
     its own row. And `NO_COLOR` is honoured in `panel._write`, the one place anything
     reaches a pane's screen, so a gate here would be a second answer to a question that is
-    already answered once for every row in the frame. **Under it the strip no longer says
-    which tab you are on**, and #903 is where that was decided: `slots._TAB_LEAD` used to
-    put a `*` under the paint and now puts a blank, so what a `NO_COLOR` plane sees is a
-    row of tabs with none of them picked out. That cost is stated at the constant, where
-    the character was given up.
+    already answered once for every row in the frame. Under it the strip still says which
+    tab you are on, because `slots._BAR_MARK` is a character and not an attribute — and
+    that sentence is why #903 could add the underline here and could NOT take the `*` away
+    with it. Everything this function emits is an escape; under `NO_COLOR` all of it is
+    nothing.
 
-    **The underline is the second half of the answer and this is where it lands** — see
-    :data:`_UNDERLINE`. Reverse alone was measured as too quiet on the workspaces strip,
-    where the mark competes with a count field on every tab; an edge reads as a tab where
-    a band reads as a highlighted word. It is one escape and no cells (`tui.width` counts
-    no SGR), so the strip's arithmetic cannot see it — the same property the reverse has
-    and the reason both are affordable on a row competing for columns.
+    **The underline is #903's whole gain on this row and this is where it lands** — see
+    :data:`_UNDERLINE`. Reverse alone is a band, which reads as a highlighted word; an edge
+    is what a tab has, and *"borders on active tabs"* is what the report asked for. It is
+    one escape and no cells (`tui.width` counts no SGR), so the strip's arithmetic cannot
+    see it — the same property the reverse has and the reason both are affordable on a row
+    competing for columns. The mark's COLUMN was the other thing that change asked for and
+    it was not available: `slots._BAR_MARK` carries the measurement.
 
     An empty *text* comes back as a bare `\x1b[7m\x1b[4m\x1b[0m` rather than `""`, and
     there is deliberately no guard: no caller can reach it — a tab field always carries a
-    lead — so the guard would be a line no input could turn red, which is `fill`'s own
+    mark — so the guard would be a line no input could turn red, which is `fill`'s own
     recorded reason for not having one either.
     """
     return _REVERSE + _UNDERLINE + text + _OFF

@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: dragging a tab strip taller now sticks, the workspace tabs lead with the workspaces you have been in, and the strip spends five cells between tabs where it spent eight
+headline: dragging a tab strip taller now sticks, the workspace tabs lead with the workspaces you have been in, the active tab gets an edge, and the strip spends five cells between tabs where it spent eight
 ---
 
 Four changes to the tab strips, reported together from a running plane and made together
@@ -11,7 +11,7 @@ before
    authority-audit (2)   autonomy   charter-update-skill   default   fleet  *harness-wrapper (3)   news-dispatch-guard  +8
 
 after
-   harness-wrapper 3   authority-audit 2   autonomy   charter-update-skill   default   fleet   news-dispatch-guard   plane-shape  +7
+  *harness-wrapper 3    authority-audit 2    autonomy   charter-update-skill   default   fleet   news-dispatch-guard   plane-shape  +7
 ```
 
 ## A drag sticks
@@ -78,24 +78,30 @@ numbered siblings than recency would be, and nothing about that changed.
 
 ## The tab you are on gets an edge
 
-It was reverse video plus a `*`. It is reverse video plus an **underline** now — an
-underline reads as the edge of a tab where a band reads as a highlighted word, and it costs
-zero columns. Side glyphs (`▏name▕`) are the more literal border and cost two columns per
-active tab, which is the opposite of what the same report asked for one field over.
+*"borders on active tabs."*
 
-The `*` is gone with it, and **what that costs is stated rather than waved past**: with
-`NO_COLOR` set, on a console with no highlight to give, or with a pane redirected to a file,
-every escape is stripped and the strip no longer says which tab is yours. `F2` answers that
-at every width. #880 held the `*` for exactly this reason and #903 traded it.
+It was reverse video plus a `*`. It is reverse video **and an underline** plus a `*` now.
+Reverse alone is a band, which reads as a highlighted word; an underline is an edge, which
+is what a tab has and what every tab strip you have used draws. Both are escapes and cost
+the row nothing — `tui.width` counts no SGR — which is the whole reason a second attribute
+is affordable on a row whose names are competing for columns. Side glyphs (`▏name▕`) are the
+more literal border and cost two columns per active tab, which is the opposite of what the
+same report asked for one field over.
 
-**What the `*` did not buy back is its column.** The report expected one: drop the mark, free
-a cell. Measured against the cut, that cannot be had — the pages are cut from the marked
-fields, so an active tab one cell narrower than the same tab inactive makes the page
-boundaries a function of *where the mark is*. Switching would then re-cut the strip and shift
-every tab right of the mark one column left, which is precisely the double-press #767 exists
-to stop. So the lead cell stays one blank on every tab, and one thing did come free from it:
-**the chat you are typing in now shows its spinner**, where before the `*` had that cell and
-a working chat you were standing in looked idle.
+**The `*` was going to go with it, and the measurement sent it back.** The case for dropping
+it was its column: an edge says "you are here" without spending one, so the mark looked like
+a footnote charter no longer needed. That column turned out not to be available. The strip
+cuts its pages from the *marked* fields, so an active tab one cell narrower than the same tab
+inactive makes the page boundaries depend on **which tab is marked** — switching would re-cut
+the row and shift every tab right of the mark one column left, which is exactly the
+double-press #767 exists to stop.
+
+So the cell is spent whatever is in it, and the only question left is what. It holds the `*`,
+because reverse and underline are both escapes: `panel._write` strips every escape under
+`NO_COLOR`, the Linux console has no highlight worth the name, and a pane redirected to a
+file keeps none of it. A blank there would buy nothing and cost those readers the single
+thing telling them which tab is active. #880 said as much — *"the `*` is the ONLY thing
+saying where you are"* — and it still holds.
 
 ## The margins come in, and it is #880's fault
 

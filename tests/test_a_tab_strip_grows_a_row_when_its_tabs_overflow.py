@@ -323,12 +323,13 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
                 self.assertGreater(len(drawn), 1, "this width drew no second row")
                 lead = tui.width(slots._inset())
                 indents = {tui.width(line) - tui.width(line.lstrip()) for line in drawn}
-                # A row whose first field is a tab carries `_TAB_LEAD` in front of the
-                # name, so its text begins one cell past the lead; a row whose first field
-                # is a leading `+N` begins at the lead itself. Both are the same lead —
-                # what this refuses is a row composed against a different one.
+                # A row whose first field is a tab carries `_BAR_MARK`'s blank in front of
+                # the name, so its text begins one cell past the lead; a row whose first
+                # field is a leading `+N`, or whose first tab is the marked one, begins at
+                # the lead itself. Both are the same lead — what this refuses is a row
+                # composed against a different one.
                 self.assertLessEqual(
-                    indents, {lead, lead + tui.width(slots._TAB_LEAD)},
+                    indents, {lead, lead + tui.width(slots._BAR_MARK[1])},
                     f"a row was composed against a different lead: {drawn!r}")
 
     def test_a_row_the_strip_did_not_draw_answers_nothing(self):
@@ -472,23 +473,20 @@ class EveryRowOfAGrownStripIsClickable(unittest.TestCase):
     def test_switching_to_a_tab_that_is_drawn_leaves_every_row_where_it_was(self):
         """The property the cut exists for (`slots._cuts`), which a strip that grew has to
         keep: the run of pages is a function of the names, the width and the row count, so
-        pressing a drawn tab redraws the same run with only the paint moved. A run that
-        moved would put a different name under the cell the operator just pressed.
-
-        **Since #903 the comparison needs nothing taken out**, and that is the property
-        strengthening rather than the case weakening: the lead is one blank on every tab
-        whatever is marked (`slots._TAB_LEAD`), so the DRAWN TEXT of a strip does not
-        depend on where the mark is at all. The rows are compared as they are.
-        """
+        pressing a drawn tab redraws the same run with only the `*` moved. A run that
+        moved would put a different name under the cell the operator just pressed."""
         def shape(drawn):
-            """The rows as a terminal under `NO_COLOR` sees them — every cell in its own
-            column, and the paint, which is the one thing switching may change, deleted.
+            """The rows with the mark taken out — every cell in its own column, and the
+            one thing switching is allowed to change removed.
 
-            Comparing the click map instead would not work: `_Tabs.switch_to` answers
-            `None` for the tab you are on, so the marked name drops out of it and every
-            switch would look like a move.
+            The two entries of `slots._BAR_MARK` are one cell each and neither a name nor
+            a count can contain a `*` (`workspace.valid_name`, `chats.ID_RE`), so blanking
+            it is exact rather than approximate. Comparing the map instead would not work:
+            `_Tabs.switch_to` answers `None` for the tab you are on, so the marked name
+            drops out of it and every switch would look like a move.
             """
-            return [tui.strip_ansi(line) for line in drawn]
+            return [tui.strip_ansi(line).replace(slots._BAR_MARK[0], slots._BAR_MARK[1])
+                    for line in drawn]
 
         for rows in (1, 2, 3):
             for cols in (100, 120, 160, 200, 240):

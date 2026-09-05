@@ -635,7 +635,7 @@ it.
 `chats` and `workspaces` are tab strips: the chat bar names every chat in this workspace
 with yours marked, and the workspace bar does the same for the plane. Where the names do
 not all fit the bar draws the page yours falls on and counts what is off each end
-(`+5  harness-wrapper   news-dispatch-guard  …  +7`); narrower still it says only where you
+(`+5  *harness-wrapper   news-dispatch-guard  …  +7`); narrower still it says only where you
 are (`2/3`). It never shows half a name.
 
 **The workspace bar leads with the workspaces you have been in.** Its order is worked out
@@ -702,12 +702,13 @@ your own terminal's two colours exchanged, so it is right on every theme and nee
 `[frame] chrome`, and an edge rather than only a band, because an edge is what a tab has.
 Both cost the row nothing.
 
-There used to be a `*` in front of the name as well, and it is gone. What that costs is a
-plane with `NO_COLOR` set, a console with no highlight to give, or a pane redirected to a
-file: with the escapes stripped, the strip lists your chats and no longer picks one out.
-`F2` says which one you are in at every width. The column it frees is not why it went — the
-lead cell in front of every name stays, because a shorter field on the active tab would
-re-cut the strip every time you switched and move the tab under your pointer.
+The `*` in front of the name stays, and that is what keeps the bar readable with `NO_COLOR`
+set, on a console that has no highlight to give, and with the pane's output redirected to a
+file — reverse and underline are both escapes, and under `NO_COLOR` both are nothing. It
+was going to go, for its column; the column turned out not to be available. A shorter field
+on the active tab would make the strip's page boundaries depend on which tab is marked, so
+switching would re-cut the row and move the tab under your pointer. The cell is spent
+whichever character is in it, so it holds the one that survives the paint being deleted.
 
 **`rules = "visible"` puts a separator between tabs.** The same key that decides whether
 you see the seams between panes decides whether you see them between tabs; at the shipped
@@ -718,10 +719,11 @@ draw it two cells wide where charter measured one — and on a row whose clicks 
 by *column*, ten separators drawn a cell wide each would put your press ten columns off the
 tab you aimed at.
 
-**A chat whose harness is working spins where an idle one shows a blank.** The one column
+**A chat whose harness is working spins where an idle one shows a blank.** The mark column
 in front of each name carries it — `✢`, `✶`, `✻` and back — so the strip is exactly as wide
 while three chats are thinking as while none is, and no tab moves under a press. The chat
-you are typing in spins too, now that the `*` is not competing for that cell.
+you are typing in keeps its `*` instead: it is the one whose harness you can watch
+directly, and the `*` is the only thing that survives `NO_COLOR`.
 
 charter reads this off the harness's hooks, never off its screen. Claude Code reports the
 start of a turn (`UserPromptSubmit`) and the end of one (`Stop`); a chat running a harness
@@ -760,7 +762,7 @@ The field is **always there**, whether or not it has a number in it, and that is
 tidiness. Tab widths decide where the bar cuts its pages, so a suffix that appeared when you
 opened a chat and vanished when you closed one would move every tab to its right — and the
 cell you were about to click would hold another workspace's name. It is the same reason the
-chat spinner takes the lead column instead of adding one. Three columns per tab is what it
+chat spinner takes the mark's column instead of adding one. Three columns per tab is what it
 costs — it was six, with two digits and a pair of brackets, and two tabs with no count
 between them sat eight cells apart; they sit five apart now. Those fifteen workspaces need
 307 columns for one row rather than 262.

@@ -465,11 +465,11 @@ class TheStripDrawsItWithoutMovingACell(PersonaIso, unittest.TestCase):
         return tui.strip_ansi(rows[0]) if rows else ""
 
     def test_an_idle_strip_is_the_strip_that_shipped(self):
-        self.assertEqual("   api.1   api.2   api.3", self._row().rstrip())
+        self.assertEqual("   api.1  *api.2   api.3", self._row().rstrip())
 
     def test_a_working_chat_wears_the_spinner_where_an_idle_one_wears_a_blank(self):
         """Hand-spelled, and the whole row, because what is being asserted is a POSITION:
-        the glyph is in the cell `slots._TAB_LEAD` would have left blank, and every
+        the glyph is in the cell `slots._BAR_MARK[1]` would have left blank, and every
         other character of the row is where it was.
 
         **`rstrip` and never `strip`**, which #880 is what made load-bearing. These rows
@@ -478,31 +478,23 @@ class TheStripDrawsItWithoutMovingACell(PersonaIso, unittest.TestCase):
         gone, `strip` eats exactly the cell this case is about and an idle row and a
         working one would compare equal. The two leading spaces are `slots.INSET`.
         """
-        self.assertEqual("  ✢api.1   api.2   api.3",
+        self.assertEqual("  ✢api.1  *api.2   api.3",
                          self._row(busy={"api.1"}, now=0.0).rstrip())
-        self.assertEqual("   api.1   api.2  ✶api.3",
+        self.assertEqual("   api.1  *api.2  ✶api.3",
                          self._row(busy={"api.3"}, now=slots.SPINNER_PERIOD).rstrip())
 
-    def test_the_chat_you_are_typing_in_shows_its_spinner_too(self):
-        """**#903 gave the cell one occupant, and this is what that bought.** It used to
-        hold two facts and `*` won: `chrome.block` paints the active tab, but under
-        `NO_COLOR` every escape is stripped, so the `*` was the only thing saying where
-        you were and the working chat you were standing in had to look idle. "You are
-        here" is an edge now (`slots._TAB_LEAD`, `chrome.block`'s underline), so the lead
-        answers one question for every tab and the chat you are typing in spins like the
-        rest.
-
-        The cost travelled with it and is pinned one class over
-        (`tests/test_frame_bars.TheTabYouAreOnIsDrawnAsOne`): with the paint deleted, the
-        row no longer says which chat is yours.
-        """
-        self.assertEqual("   api.1  ✢api.2   api.3",
+    def test_the_chat_you_are_typing_in_keeps_its_star(self):
+        """One cell, two facts, and `*` wins. `chrome.block` paints the active tab in
+        reverse video, but `[frame] chrome = "off"` is the shipped default and
+        `panel._write` strips SGR under `NO_COLOR` — so on a plain plane the `*` is the
+        only thing saying where you are. The chat you are IN is also the one whose harness
+        you can watch directly."""
+        self.assertEqual("   api.1  *api.2   api.3",
                          self._row(busy={"api.2"}).rstrip())
 
     def test_every_tab_on_a_row_shows_the_same_frame(self):
-        row = self._row(busy={"api.1", "api.2", "api.3"},
-                        now=slots.SPINNER_PERIOD * 2)
-        self.assertEqual("  ✻api.1  ✻api.2  ✻api.3", row.rstrip())
+        row = self._row(busy={"api.1", "api.3"}, now=slots.SPINNER_PERIOD * 2)
+        self.assertEqual("  ✻api.1  *api.2  ✻api.3", row.rstrip())
 
     def test_a_chat_starting_a_turn_moves_no_column_of_the_click_map(self):
         """**The property the whole design turns on.** The map resolves a click BY COLUMN,
@@ -630,11 +622,11 @@ class TheGlyphsAreCheckedBeforeTheyGoOnARow(unittest.TestCase):
                     "the sequence must repeat rather than run out")
 
     def test_the_mark_and_the_spinner_are_the_same_width(self):
-        """The load-bearing equality: the spinner takes the lead's cell, so the two must
+        """The load-bearing equality: the spinner takes the mark's cell, so the two must
         measure alike or the strip is one cell wider exactly while a chat is working."""
         for ch in slots.TAB_SPINNER:
             with self.subTest(glyph=ch):
-                self.assertEqual(tui.width(slots._TAB_LEAD), tui.width(ch))
+                self.assertEqual(tui.width(slots._BAR_MARK[1]), tui.width(ch))
 
 
 class OnlyTheChatStripSpins(PersonaIso, unittest.TestCase):
