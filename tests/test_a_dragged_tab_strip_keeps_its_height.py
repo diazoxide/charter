@@ -155,6 +155,20 @@ class WhatCharterAskedForIsWrittenDown(_AFrameThatHasBeenSized):
         self.assertEqual(was.window_rows, 44)
         self.assertEqual(was.panes, tuple(sorted(PANES)))
 
+    def test_a_frame_with_no_state_directory_records_nothing(self):
+        """**The resize path must not MINT state for a frame that has none.** It runs on
+        every `window-resized` for a frame whose panes are already recorded, so the
+        directory is there by construction — and a writer that created it would let the
+        hot path resurrect a frame `state.reap` had removed, which is the failure
+        `state.frame_dir`'s own `create=False` default exists to prevent for readers.
+        """
+        import shutil
+        shutil.rmtree(state.frame_dir(FID))
+        self._resize()
+        self.assertEqual(state.asserted_bars(FID).rows, {})
+        self.assertFalse(state.frame_dir(FID).exists(),
+                         "a resize made a state directory for a frame that had none")
+
     def test_every_pass_records_even_when_it_adopts_nothing(self):
         """A pass that skipped the record would leave the NEXT one comparing against an
         intent two resizes old — which is a difference explained by the resize in

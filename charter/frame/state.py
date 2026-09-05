@@ -1332,12 +1332,21 @@ def record_asserted_bars(fid: str, *, window_rows: int, panes,
     so a reader whose recorded sets differ from the ones in front of it is looking at a
     frame whose shape moved, and a height that differs there is explained by the move.
 
+    **No ``create``, where every other writer in this module passes it** — and that is a
+    fact about the caller rather than caution. `commands_frame._reassert_sizes` runs on
+    every `window-resized` for a frame whose panes are already recorded, so the directory
+    is there by construction; passing ``create=True`` would let the hot resize path MINT
+    state for a frame that has none, which is exactly what `frame_dir`'s own default
+    argues against for the readers ("a panel polling the version of a frame that `reap()`
+    already removed must see it stay gone"). A frame with no directory records nothing,
+    adopts nothing on its next pass, and is left exactly as it was.
+
     JSON, read back through :func:`asserted_bars`, and :func:`record_panes`' atomic write
     and silence on failure: a frame whose record could not be written simply cannot adopt a
     drag on its next pass, which is one gesture not taking rather than a resize failing.
     """
-    d = frame_dir(fid, create=True)
-    if d is None:
+    d = frame_dir(fid)
+    if d is None or not d.is_dir():
         return
     try:
         config.replace_for(d / "asserted_bars", json.dumps(
