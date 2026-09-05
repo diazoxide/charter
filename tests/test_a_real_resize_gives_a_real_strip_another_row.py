@@ -70,7 +70,19 @@ NAMES = sorted([
 
 @unittest.skipUnless(_HAS_TMUX, "tmux is not installed")
 class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
-    """One real server, one real window, and `_reassert_sizes` driven across a resize."""
+    """One real server, one real window, and `_reassert_sizes` driven across a resize.
+
+    **#903 added a second question to the same fixture and it is asked here for a
+    reason.** A tmux pane drag is `resize-pane -y` — there is no other way to say it, and
+    no hook that fires on one (`window-resized` is about the WINDOW) — so charter notices
+    a drag on its NEXT resize, by comparing the strips' real heights against what it last
+    asserted. Both halves of that turn on facts only the server has: that asserting every
+    strip and then the harness leaves the strips where they were put (or every resize
+    adopts a height nobody chose and the strip freezes for the life of the frame), and
+    that a real `resize-pane` by a hand is visible to the same comparison.
+    `tests/test_a_dragged_tab_strip_keeps_its_height.py` tells charter what the heights
+    are; only this file can ask tmux.
+    """
 
     def setUp(self):
         super().setUp()
@@ -122,6 +134,19 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
             commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
                                            harness_pane=harness,
                                            window_cols=cols, window_rows=rows)
+
+    def _pass(self, session, harness, panes, cols, rows):
+        """One `_reassert_sizes` over a real window — :meth:`_reassert` WITHOUT its
+        `record_bar_rows`, because a case about what charter ADOPTS may not start by
+        recording the answer it is asking about (#903).
+        """
+        fid = state.frame_id(session, os.getpid())
+        with mock.patch.dict(config.FRAME, self.placed), \
+                mock.patch("charter.frame.slots.repos_rows_wanted", return_value=6):
+            commands_frame._reassert_sizes(SOCKET, fid=fid, panes=panes,
+                                           harness_pane=harness,
+                                           window_cols=cols, window_rows=rows)
+        return fid
 
     def test_a_narrow_window_leaves_the_strip_the_rows_its_names_need(self):
         """120 columns cuts these fifteen names into three pages, so the strip that was
@@ -222,6 +247,61 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
         for name in NAMES:
             self.assertIn(name, grown, f"{name} is on no row: {grown!r}")
         self.assertEqual(len([ln for ln in grown.splitlines() if ln.strip()]), 3, grown)
+
+    def test_charters_own_resize_is_never_read_as_a_gesture(self):
+        """**The freeze, asked of the server** (#903). charter asserts every strip and
+        then the harness, in one chain, and `resize-pane -y` moves one boundary at a time
+        — so whether the strips are still where they were put once the harness has been
+        asserted is tmux's answer and not charter's. If they are not, every resize adopts
+        a height nobody chose and the strip stops following its names for the life of the
+        frame, which is a worse defect than the one being fixed and one a drag cannot
+        undo.
+        """
+        harness, panes = self._window("no-drag", 120, 40)
+        fid = self._pass("no-drag", harness, panes, 120, 40)
+        for _ in range(3):
+            self._pass("no-drag", harness, panes, 120, 40)
+        self.assertIsNone(state.bar_rows(fid),
+                          "charter adopted its own resize as the operator's choice")
+        self.assertEqual(self._height(panes["workspaces"]), 1)
+
+    def test_a_real_drag_of_the_divider_is_adopted_and_kept(self):
+        """The gesture, end to end on a real server: charter states an intent, a hand
+        moves the pane, and the next pass finds the strip somewhere charter did not put it
+        and takes that as this frame's choice.
+
+        Three rows because these fifteen names need three at 120 columns — what is adopted
+        is a CEILING, exactly as `F3`'s is, so a drag on a plane whose names fit on one row
+        would give the rows straight back.
+        """
+        harness, panes = self._window("real-drag", 120, 40)
+        fid = self._pass("real-drag", harness, panes, 120, 40)
+        self.assertEqual(self._height(panes["workspaces"]), 1)
+        self.assertIsNone(state.bar_rows(fid))
+        # The operator's hand: `resize-pane -y` is what a drag on the divider performs,
+        # and tmux exposes no other way to say it.
+        self.assertEqual(_tmux("resize-pane", "-t", panes["workspaces"],
+                               "-y", "3").returncode, 0)
+        self.assertEqual(self._height(panes["workspaces"]), 3,
+                         "the drag this case is about did not move the pane")
+        self._pass("real-drag", harness, panes, 120, 40)
+        self.assertEqual(state.bar_rows(fid), 3,
+                         "the drag was recomputed away instead of adopted")
+        self.assertEqual(self._height(panes["workspaces"]), 3,
+                         "the adopted height did not reach the pane")
+
+    def test_the_drag_survives_the_layout_pass_that_used_to_undo_it(self):
+        """*"when switching between workspaces — resized tabs resetting to one line."* A
+        workspace switch re-lays the frame out, which is this call again — so the report's
+        own sequence is a drag followed by more passes, and the strip has to be three rows
+        at the end of them."""
+        harness, panes = self._window("drag-holds", 120, 40)
+        fid = self._pass("drag-holds", harness, panes, 120, 40)
+        _tmux("resize-pane", "-t", panes["workspaces"], "-y", "3")
+        for _ in range(3):
+            self._pass("drag-holds", harness, panes, 120, 40)
+        self.assertEqual(state.bar_rows(fid), 3)
+        self.assertEqual(self._height(panes["workspaces"]), 3)
 
     def test_a_short_window_keeps_its_harness_and_the_strip_stays_one_row(self):
         """The bound, against the server that would otherwise grant it. A 22-row window
