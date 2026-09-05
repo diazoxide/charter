@@ -2009,8 +2009,54 @@ class NotApplied(Exception):
     """The mutant tree is not a mutant. See :meth:`Sandbox.apply`."""
 
 
+class NoSandbox(Exception):
+    """The sandbox could not be built, and here is what the machine said.
+
+    A category of its own, and the category is the point. Every other way this tool ends
+    badly is a statement about the branch — a mutation survived, a suite went red, an
+    edit would not apply to the tree it was read from. This one is a statement about the
+    machine, made before a single mutation has been measured, and reading it as the
+    first kind is how #905 cost a day.
+
+    See :meth:`Sandbox._must` for what was actually lost.
+    """
+
+
 class Sandbox:
     """A private clone of the tree. The operator's checkout is never written to."""
+
+    @staticmethod
+    def _must(argv: list[str], where: Path, cwd: Path | None, doing: str) -> None:
+        """Run one setup command, and **keep what git said** when it will not run.
+
+        `check=True` raises a :class:`subprocess.CalledProcessError`, and that exception's
+        `__str__` is the argv and the exit status and nothing else. The stderr it was
+        constructed with is carried on the object and never printed by it. So a command
+        that failed for a stated reason arrives as a command that failed.
+
+        **Measured (#905).** A `git clone … → exit 128` reached CI as exactly that line
+        and no more, from a test that touches no sweep code, on a tree that had passed
+        the same job minutes earlier. Reproduced here against a filesystem with 250 KiB
+        left on it: the traceback is character-for-character the one CI printed, and what
+        git had written — and this code had collected and dropped — was
+        `fatal: failed to create directory '…/objects/82': No space left on device`.
+
+        Nothing about that sentence is charter's doing, which is the other half of why it
+        has to survive. Without it the only reading available is that the deletion sweep
+        is broken; with it, the reader is told the disk filled up and the sweep never got
+        as far as having an opinion.
+        """
+        done = subprocess.run(argv, cwd=None if cwd is None else str(cwd), check=False,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if not done.returncode:
+            return
+        said = done.stderr.decode("utf-8", "replace").strip()
+        raise NoSandbox(
+            f"the sandbox at {where} could not be built — {doing}: "
+            f"`{' '.join(argv)}` exited {done.returncode}"
+            + (f" — {said}" if said else " without saying why") + ". "
+            "That is the machine this sweep is running on, not a verdict about any "
+            "mutation: nothing had been measured yet when it happened.")
 
     def __init__(self, root: Path, where: Path, ref: str, dirty: dict[str, bytes]):
         # Resolved on the way in, once. Everything downstream hangs off this path — the
@@ -2025,12 +2071,10 @@ class Sandbox:
         # read the repository, and a tree with no `.git` costs a dozen errors that have
         # nothing to do with any mutation. `--no-hardlinks` so a sandbox cannot reach back
         # into the objects of the checkout it came from.
-        subprocess.run(["git", "clone", "--quiet", "--no-hardlinks", "--no-checkout",
-                        str(root), str(where)], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        subprocess.run(["git", "checkout", "--quiet", "--detach", ref],
-                       cwd=str(where), check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self._must(["git", "clone", "--quiet", "--no-hardlinks", "--no-checkout",
+                    str(root), str(where)], where, None, "cloning the tree")
+        self._must(["git", "checkout", "--quiet", "--detach", ref], where, where,
+                   f"checking out {ref}")
         for rel, blob in dirty.items():
             target = where / rel
             target.parent.mkdir(parents=True, exist_ok=True)
