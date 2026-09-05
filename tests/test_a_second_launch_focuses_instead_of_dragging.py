@@ -36,6 +36,7 @@ import os
 import pty
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -772,6 +773,57 @@ class TheAttachWaitAsksAboutTheClientItStarted(unittest.TestCase):
         self.assertFalse(_arrived({"/dev/ttys001", "/dev/ttys002"}, ["/dev/ttys001"]))
         self.assertTrue(_arrived({"/dev/ttys001", "/dev/ttys002"},
                                  ["/dev/ttys001", "/dev/ttys003"]))
+
+
+class TheAttachHelperWaitsOnTheSetItTookBeforeForking(unittest.TestCase):
+    """`_attach` itself, with no tmux and no fork — the half `_arrived` cannot pin alone.
+
+    A correct predicate handed the wrong `before` is the same defect one line over, and
+    `TwoPlanesOnOneMachine` can only catch that by losing a race. So `_attach` is run here
+    against a scripted client list: `pty.fork` patched to fork nothing, `_reap_pty` to kill
+    nothing — nothing here may send a signal to a pid this process did not make — and
+    `_await` to give up in 50ms rather than `_DEADLINE`'s 20 seconds.
+
+    The property is the one the old predicate had quietly repealed: **an attach that never
+    produces a client is a refusal, not a success.** With `before` taken after the fork, or
+    not taken at all, the client already on the server answers for the one that never came.
+    """
+
+    def _run_attach(self, lists):
+        """`_attach` against `lists` — one client list per `_clients()` call, last repeating."""
+        case = TwoPlanesOnOneMachine("test_the_plane_that_opened_it_focuses_it")
+        seen = list(lists)
+        case._clients = lambda: seen.pop(0) if len(seen) > 1 else seen[0]
+        case._reap_pty = lambda pid, fd: None
+        module = sys.modules[TwoPlanesOnOneMachine.__module__]
+        # Bound to the function OBJECT, not to the module name `_await` is about to stop
+        # meaning — the name would resolve back to the patch and recurse until the stack
+        # ran out, which is what it did the first time this was written.
+        waiting = _await
+        with mock.patch.object(pty, "fork", return_value=(4321, 9)), \
+             mock.patch.object(module, "_await",
+                               lambda pred, timeout=None: waiting(pred, 0.05)):
+            return case._attach()
+
+    def test_a_client_list_that_never_grows_is_a_refusal(self):
+        """The first client is there throughout and no second one ever arrives. Every TERM
+        candidate is tried and the helper skips, naming them — which is only reachable
+        because `_await` can still return False after the first attach."""
+        with self.assertRaises(unittest.SkipTest) as raised:
+            self._run_attach([["/dev/ttys001"]])
+        for term in _TERM_CANDIDATES:
+            self.assertIn(f"TERM={term}", str(raised.exception))
+
+    def test_the_client_that_arrives_is_the_one_it_returns_on(self):
+        """The control: the same list, plus an arrival. Without it the test above is
+        satisfied by a helper that can only ever skip."""
+        self.assertEqual(
+            self._run_attach([["/dev/ttys001"],
+                              ["/dev/ttys001", "/dev/ttys002"]]), 9)
+
+    def test_an_empty_server_still_attaches(self):
+        """The first attach, unchanged by any of this."""
+        self.assertEqual(self._run_attach([[], ["/dev/ttys001"]]), 9)
 
 
 if __name__ == "__main__":
