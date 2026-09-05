@@ -334,7 +334,7 @@ class _Strip(NamedTuple):
 _STRIPS = (
     _Strip("chat", lambda fid: [c.id for c in chats.roster(fid)], lambda fid: fid,
            ("frame-chat",), chats.ONLY_CHAT),
-    _Strip("workspace", lambda _fid: switch.workspaces(), switch.current_workspace,
+    _Strip("workspace", switch.workspaces, switch.current_workspace,
            ("frame-switch", "--workspace"), ONLY_WORKSPACE),
 )
 

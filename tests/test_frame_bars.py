@@ -46,6 +46,26 @@ def _plain(row: str) -> str:
     return tui.strip_ansi(row)
 
 
+def _marked(row: str) -> str | None:
+    """The field *row* drew as the tab you are on, or ``None`` when it drew none.
+
+    **The one reader of "which tab is marked" since #903**, and it exists because there is
+    no longer a character to look for. The strip drew a `*` in front of the active name
+    and every case here found the mark by searching the plain text for it; the `*` is gone
+    and what says "you are here" is `chrome.block` — reverse video and an underline, two
+    escapes and no cells. So the question moved from the plain row to the painted one, and
+    it is asked in one place rather than re-spelled in nine.
+
+    The escapes are spelled out here rather than read off `chrome._REVERSE` and
+    `chrome._UNDERLINE` for :class:`TheTabYouAreOnIsDrawnAsOne`'s own reason: a case built
+    from the constants it is about agrees with any value they take.
+    """
+    on, off = "\x1b[7m\x1b[4m", "\x1b[0m"
+    if on not in row:
+        return None
+    return row.split(on, 1)[1].split(off, 1)[0]
+
+
 class TheLadderGivesUpWholeThings(unittest.TestCase):
     """`slots._bar` alone, against a list of names and a width — no plane underneath it.
 
@@ -68,16 +88,26 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         row = self._row(200)
         for name in self.NAMES:
             self.assertIn(name, row)
-        self.assertIn(f"{slots._BAR_MARK[0]}api.2", row)
-        self.assertNotIn(f"{slots._BAR_MARK[0]}api.1", row)
+        self.assertEqual(_marked(row), f"{slots._TAB_LEAD}api.2")
 
-    def test_the_two_marks_are_the_same_width_so_the_names_do_not_shift(self):
-        """A mark that moved the names beside it would make the row jump every time the
-        operator switched — `overlay._MARK`'s own rule, and why both entries are ASCII."""
-        self.assertEqual(tui.width(slots._BAR_MARK[0]),
-                         tui.width(slots._BAR_MARK[1]))
-        widths = {tui.width(self._row(200, here=n)) for n in self.NAMES}
-        self.assertEqual(len(widths), 1, "the row changed width when the mark moved")
+    def test_the_lead_is_one_cell_on_every_tab_so_the_names_do_not_shift(self):
+        """**The strongest form this property has ever had, and #903 is what made it
+        reachable.** A lead that differed between the tab you are on and the others would
+        move the names beside it every time the operator switched — `overlay._MARK`'s own
+        rule, and what the two equal-width entries of the old `_BAR_MARK` bought. The lead
+        is now ONE cell on every tab whatever is marked, so the property is not that two
+        widths agree but that the drawn TEXT does not depend on the mark at all: switching
+        changes escapes and nothing else.
+
+        That is what makes the cut safe (`slots._cuts` is taken over the marked fields), and
+        it is the reason #903's *"drop the `*` and free its column"* could not be taken
+        literally — an active field one cell narrower makes the page boundaries a function
+        of where the mark is, which is the double-press #767 exists to stop.
+        """
+        self.assertEqual(tui.width(slots._TAB_LEAD), 1)
+        plain = {_plain(self._row(200, here=n)) for n in self.NAMES}
+        self.assertEqual(len(plain), 1,
+                         f"the drawn text changed when the mark moved: {plain!r}")
 
     def test_a_row_with_no_room_for_every_name_draws_the_page_yours_is_on(self):
         """The names that FIT, not the one you are on and a count of everything else.
@@ -87,7 +117,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         instead, and the rest is counted at whichever end it fell off.
         """
         row = self._row(23)
-        self.assertIn("*api.2", row)
+        self.assertEqual(_marked(row), f"{slots._TAB_LEAD}api.2")
         self.assertIn("api.1", row, "the row had room for a neighbour and drew none")
         self.assertNotIn("api.3", row)
         self.assertIn("+1", row, "the name left off the row was not counted")
@@ -100,7 +130,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         """
         names = [f"workspace-{i:02d}" for i in range(15)]
         row = self._row(80, names=names, here="workspace-07")
-        self.assertIn("*workspace-07", row)
+        self.assertEqual(_marked(row), f"{slots._TAB_LEAD}workspace-07")
         counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
                   if f.strip().startswith("+")]
         self.assertEqual(len(counts), 2, f"one end went uncounted: {row!r}")
@@ -141,9 +171,9 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
             self.assertEqual(missing, [],
                              f"{here} was drawn at {min(drawn)} columns and gone at "
                              f"{missing[:3]} — the pane got wider and lost a name")
-        for here, expected in (("workspace-02", "+2  *workspace-02  +12"),
-                               ("workspace-07", "+7  *workspace-07  +7"),
-                               ("workspace-13", "+13  *workspace-13  +1")):
+        for here, expected in (("workspace-02", "+2   workspace-02  +12"),
+                               ("workspace-07", "+7   workspace-07  +7"),
+                               ("workspace-13", "+13   workspace-13  +1")):
             narrowest = min(w for w in range(201)
                             if here in self._row(w, names=names, here=here))
             row = self._row(narrowest, names=names, here=here)
@@ -278,8 +308,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
                 field = field.strip()
                 if not field:
                     continue
-                bare = field[len(slots._BAR_MARK[0]):] \
-                    if field.startswith(slots._BAR_MARK[0]) else field
+                bare = field
                 self.assertIn(bare, {*names, *counts, *positions},
                               f"{width}: {field!r} is not a whole name, a count or a "
                               f"position — {text!r}")
@@ -323,7 +352,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         unmarked row that silently claims you are somewhere. Nothing is marked, and the
         narrow rungs say how many there are without claiming a position."""
         wide = self._row(200, here="nowhere")
-        self.assertNotIn(slots._BAR_MARK[0], wide)
+        self.assertIsNone(_marked(wide))
         for name in self.NAMES:
             self.assertIn(name, wide)
         self.assertEqual(self._row(9, here="nowhere").strip(), "3")
@@ -388,7 +417,7 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         rung2 = [r for r, _ in self._fits_at(self.NAMES, "api.1")
                  if "+2" in r]
         self.assertTrue(rung2, "rung 2 was never reached with the first name marked")
-        self.assertIn(f"{slots._BAR_MARK[0]}api.1", rung2[0])
+        self.assertEqual(_marked(rung2[0]), f"{slots._TAB_LEAD}api.1")
         counted = [r for r, _ in self._fits_at(self.NAMES, "api.1") if "/" in r]
         self.assertEqual([r.strip() for r in counted], ["1/3"])
 
@@ -443,13 +472,11 @@ class TheLadderGivesUpWholeThings(unittest.TestCase):
         (`chats.ID_RE` and `workspace.valid_name` both refuse those characters), which is
         why the index is taken before containment rather than left to be found later."""
         names = ["api x", "apix"]
-        row = _plain(slots._bar(list(names), "apix", 200)[0])
-        marks = [f for f in row.split(" " * slots._BAR_GAP)
-                 if f.strip().startswith(slots._BAR_MARK[0])]
-        self.assertEqual(len(marks), 1,
+        row = slots._bar(list(names), "apix", 200)[0]
+        self.assertEqual(row.count("\x1b[7m"), 1,
                          f"two names were repaired into one marked row: {row!r}")
-        self.assertTrue(row.rstrip().endswith(f"{slots._BAR_MARK[0]}apix"),
-                        f"the mark landed on the repaired name: {row!r}")
+        self.assertEqual(_marked(row), f"{slots._TAB_LEAD}apix",
+                         f"the mark landed on the repaired name: {row!r}")
 
     def test_a_hostile_name_is_contained_before_the_width_arithmetic(self):
         """#472, at the position it was filed about: a row that sized itself from a raw
@@ -524,18 +551,18 @@ class AClickResolvesAgainstWhatWasDrawn(unittest.TestCase):
         """A tab is its mark and its name together — the operator sees one field, and
         clicking either half of it means the same thing.
 
-        Asserted on BOTH marks, because they are different characters in the same cell:
-        the inactive `_BAR_MARK[1]` is the blank in front of a name you can switch to, and
-        the active `_BAR_MARK[0]` is the `*`. The second is measured by drawing the same
-        names with `here` somewhere else, which moves no column (the two marks are the
-        same width — `test_the_two_marks_are_the_same_width…`), so the star's own cell can
-        be asked about while it belongs to a tab that is not the current one.
+        Asserted on the lead cell of BOTH an inactive tab and the active one. Since #903
+        they hold the same character — `slots._TAB_LEAD`, one blank, whatever is marked —
+        so the second is measured by drawing the same names with `here` somewhere else,
+        which moves no column at all (the drawn text does not depend on the mark —
+        `test_the_lead_is_one_cell_on_every_tab…`), and that cell can then be asked about
+        while it belongs to a tab that is not the current one.
         """
         row = self._draw(200, here="api.2")
         blank = self._cells(row, " api.3").start
         self.assertEqual(slots.TABS.switch_to(0, blank), "api.3",
-                         "the blank mark in front of an inactive tab is not part of it")
-        star = self._cells(row, "*api.2").start
+                         "the blank lead in front of an inactive tab is not part of it")
+        star = self._cells(row, " api.2").start
         self.assertIsNone(slots.TABS.switch_to(0, star), "the tab you are on switched")
         self._draw(200, here="nowhere")
         self.assertEqual(slots.TABS.switch_to(0, star), "api.2",
@@ -877,19 +904,32 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
     which is the shipped `off`: that key paints the pane's BACKGROUND through a tmux pane
     option and says nothing about what a renderer writes into its own row.
 
-    **`slots._BAR_MARK` stays, and that is what makes the design read with no colour at
-    all.** `panel._write` strips every escape from every row on a plane under `NO_COLOR`,
-    and the Linux console can carry no highlight worth the name — so a strip whose only
-    answer to "which tab am I on" was the paint would have no answer there. The `*` is a
-    character. The block is on top of it, never instead of it.
+    **An UNDERLINE went on top of the reverse video and the `*` came off, and #903 is
+    where that was decided.** Reverse alone is a band, which reads as a highlighted word;
+    an underline is an edge, which is what every tab strip an operator has used draws.
+    Both together cost the row nothing — `tui.width` counts no SGR — which is what let the
+    `*` be given up for them.
+
+    **The `*` going costs a plane under `NO_COLOR`, and this class records the cost rather
+    than pretending it away.** `panel._write` strips every escape from every row there, and
+    the Linux console carries no highlight worth the name — so with the paint deleted the
+    strip no longer says which tab you are on. #880 held the `*` for exactly that reason
+    (*"the `*` is the ONLY thing saying where you are"*); #903 traded it, and
+    `test_with_every_escape_stripped_the_row_says_nothing_about_where_you_are` is that
+    trade written down where a future reader will find it before they go looking for a
+    regression.
+
+    What the `*` did NOT buy back, and the reason it could go at all, is its column: the
+    lead cell stays one blank on every tab (`slots._TAB_LEAD`), because a narrower active
+    field would make `slots._cuts` a function of where the mark is.
     """
 
     NAMES = ["api.1", "api.2", "api.3"]
-    #: Spelled out rather than read off `chrome._REVERSE` and `chrome._OFF`. A case built
-    #: from the constants it is about agrees with any value they take, which is the
-    #: survivor `commands_change.BLOCK_END` produced — so the escape a terminal actually
-    #: receives is written here, by hand, a second time.
-    ON, OFF = "\x1b[7m", "\x1b[0m"
+    #: Spelled out rather than read off `chrome._REVERSE`, `chrome._UNDERLINE` and
+    #: `chrome._OFF`. A case built from the constants it is about agrees with any value
+    #: they take, which is the survivor `commands_change.BLOCK_END` produced — so the
+    #: escapes a terminal actually receives are written here, by hand, a second time.
+    ON, OFF = "\x1b[7m\x1b[4m", "\x1b[0m"
 
     def setUp(self):
         slots.TABS.forget()
@@ -901,17 +941,27 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
 
     def test_the_tab_you_are_on_is_a_block_and_no_other_tab_is(self):
         row = self._row()
-        self.assertIn(f"{self.ON}*api.2{self.OFF}", row)
+        self.assertIn(f"{self.ON} api.2{self.OFF}", row)
         self.assertEqual(row.count(self.ON), 1, f"more than one block: {row!r}")
 
-    def test_the_block_covers_the_mark_and_the_name_and_stops(self):
+    def test_the_block_is_reversed_and_underlined_and_not_one_of_the_two(self):
+        """**Two attributes, asserted as two.** Reverse alone was measured as too quiet on
+        the workspaces strip, where the mark competes with a count field on every tab, and
+        an underline alone is too quiet everywhere — so the row carries both and a change
+        that dropped either would be a change to what the operator sees.
+        """
+        row = self._row()
+        self.assertIn("\x1b[7m", row, f"the block is not reversed: {row!r}")
+        self.assertIn("\x1b[4m", row, f"the block has no edge: {row!r}")
+
+    def test_the_block_covers_the_lead_and_the_name_and_stops(self):
         """**Exactly the cells `slots.TABS` gives that tab, which is the point.** A block
         one cell wide either way would highlight a column that answers for a different tab
         — or for no tab — and the operator would be pointing at what they can see is lit.
         """
         row = self._row()
         painted = row.split(self.ON, 1)[1].split(self.OFF, 1)[0]
-        self.assertEqual(painted, "*api.2")
+        self.assertEqual(painted, f"{slots._TAB_LEAD}api.2")
         start = tui.width(row[:row.index(self.ON)])
         for col in range(start, start + tui.width(painted)):
             self.assertIsNone(slots.TABS.switch_to(0, col),
@@ -939,14 +989,26 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
         row = self._row(here="nowhere")
         self.assertNotIn(self.ON, row, f"an unmarked row painted something: {row!r}")
 
-    def test_with_every_escape_stripped_the_row_still_says_where_you_are(self):
-        """`NO_COLOR`, the Linux console, `charter panel chats --session x > /tmp/log`.
-        The strip has to keep working on all three, and this is the property that says it
-        does: the answer survives the paint being deleted."""
+    def test_with_every_escape_stripped_the_row_says_nothing_about_where_you_are(self):
+        """**The cost #903 accepted, pinned so that it is a decision and not a
+        regression.** `NO_COLOR`, the Linux console, `charter panel chats --session x >
+        /tmp/log`: `panel._write` deletes every escape there, and what is left is a row of
+        names with none of them picked out. The `*` used to survive that deletion and no
+        longer exists.
+
+        What DOES survive is every name and the same columns — the row is the row, so the
+        strip is still a readout of which chats there are and the palette (`F2`) is still
+        the surface that says which one you are in at every width. A future change that
+        wants the mark back has to put a CHARACTER back and pay its column; this asserts
+        that today there is none, rather than leaving the old assertion to pass on a `*`
+        nothing draws.
+        """
         row = _plain(self._row())
-        self.assertIn(f"{slots._BAR_MARK[0]}api.2", row)
-        self.assertNotIn(f"{slots._BAR_MARK[0]}api.1", row)
-        self.assertNotIn(f"{slots._BAR_MARK[0]}api.3", row)
+        for name in self.NAMES:
+            self.assertIn(name, row)
+        self.assertEqual(row, _plain(self._row(here="api.3")),
+                         "the plain row still says which tab is marked")
+        self.assertNotIn("*", row, f"a mark survived the paint being deleted: {row!r}")
 
     def test_every_column_of_a_painted_row_still_answers_for_the_tab_under_it(self):
         """**The regression the paint could actually cause**, asked directly and at both
@@ -965,7 +1027,7 @@ class TheTabYouAreOnIsDrawnAsOne(unittest.TestCase):
                     continue
                 plain = _plain(row)
                 for name in (n for n in names if n in plain):
-                    at = plain.index(name) - tui.width(slots._BAR_MARK[0])
+                    at = plain.index(name) - tui.width(slots._TAB_LEAD)
                     want = None if name == "workspace-07" else name
                     for col in range(at, at + 1 + tui.width(name)):
                         self.assertEqual(slots.TABS.switch_to(0, col), want,
@@ -1009,12 +1071,12 @@ class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
         row that is already short of columns. Byte for byte the old composition: two
         blanks between two tabs and no glyph anywhere."""
         row = _plain(self._row(rules="hidden"))
-        self.assertEqual(row.strip(), "api.1  *api.2   api.3")
+        self.assertEqual(row.strip(), "api.1   api.2   api.3")
         self.assertNotIn(slots._BAR_RULE, row)
 
     def test_a_plane_whose_rules_are_visible_puts_one_between_every_pair(self):
         row = _plain(self._row(rules="visible"))
-        self.assertEqual(row.strip(), "api.1 | *api.2 |  api.3")
+        self.assertEqual(row.strip(), "api.1 |  api.2 |  api.3")
         self.assertEqual(row.count(slots._BAR_RULE), len(self.NAMES) - 1)
 
     def test_the_rule_is_a_glyph_no_terminal_draws_two_cells_wide(self):
@@ -1066,7 +1128,7 @@ class TheSeamBetweenTwoTabsIsThePlanesOwnAnswer(unittest.TestCase):
                 plain = _plain(row)
                 self.assertLessEqual(tui.width(plain), width, repr(plain))
                 for name in (n for n in names if n in plain):
-                    at = plain.index(name) - tui.width(slots._BAR_MARK[0])
+                    at = plain.index(name) - tui.width(slots._TAB_LEAD)
                     want = None if name == "workspace-07" else name
                     for col in range(at, at + 1 + tui.width(name)):
                         self.assertEqual(slots.TABS.switch_to(0, col), want,
@@ -1157,7 +1219,7 @@ class ThisPlaneIsWhyTheRungIsWindowed(unittest.TestCase):
         so it says strictly more than the `*harness-wrapper  +14` it replaces: which of
         the fifteen this is."""
         row, switchable = self._switchable(60)
-        self.assertIn(f"{slots._BAR_MARK[0]}{self.HERE}", row)
+        self.assertIn(f"{slots._TAB_LEAD}{self.HERE}", row)
         counts = [f.strip() for f in row.split(" " * slots._BAR_GAP)
                   if f.strip().startswith("+")]
         self.assertEqual(sum(int(c[1:]) for c in counts),
@@ -1196,9 +1258,10 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
         """
         _plant("api.1", workspace="api")
         _plant("api.2", workspace="api")
-        row = _plain(slots.chats_bar("api.2", 200)[0])
+        painted = slots.chats_bar("api.2", 200)[0]
+        row = _plain(painted)
         self.assertIn("api.1", row)
-        self.assertIn("*api.2", row)
+        self.assertEqual(_marked(painted), f"{slots._TAB_LEAD}api.2")
         self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
 
     def test_the_workspace_bar_offers_no_such_thing(self):
@@ -1241,9 +1304,8 @@ class TheWorkspaceBarReadsTheFrame(PersonaIso, unittest.TestCase):
         state.record_workspace("f1", "beta")
         with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""}, clear=False):
             row = slots.workspaces_bar("f1", 200)[0]
-        self.assertIn("*beta", row)
-        self.assertIn("alpha", row)
-        self.assertNotIn("*alpha", row)
+        self.assertEqual(_marked(row), f"{slots._TAB_LEAD}beta{slots._tab_count(1)}")
+        self.assertIn("alpha", _plain(row))
 
 
 class ABarIsPlaceableByConfig(unittest.TestCase):

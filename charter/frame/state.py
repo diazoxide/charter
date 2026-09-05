@@ -1304,6 +1304,82 @@ def bar_rows(fid: str) -> int | None:
         return None
 
 
+def record_tab_order(fid: str, names: list[str]) -> None:
+    """Write down the order THIS RUNNING FRAME draws its workspace tabs in (#903).
+
+    :func:`record_bar_rows`' shape and every word of its argument about where this lives —
+    machine-written, per frame, deleted whole by :func:`reap` when the frame ends. What is
+    different is who writes it and when: this is written ONCE, by whichever process first
+    asks `switch.workspaces` about this frame, and never again while the frame runs.
+
+    **Holding the order still is the whole feature, and it is why an order computed from
+    mtimes has to be written down at all.** #903 asks the strip to lead with the working
+    set — *"active last used tabs should be in first order, then olds"* — against two
+    measured refusals of LIVE reordering: `slots._cuts` (*"a window CENTRED on the marked
+    tab moves every column each time the operator switches… six of the nine drawn tabs
+    answer a second press at the identical column with a SECOND, different workspace"*) and
+    `chats.of_workspace` (*"`api.1` stays leftmost, where an operator learned to look for
+    it"*). Both are right about a row that re-sorts while you look at it. Neither argues
+    against an order that is fixed for as long as the frame is open — so the recency is
+    read once and this is where it stops moving.
+
+    **A file rather than a variable in the panel's process**, and the difference is
+    load-bearing rather than defensive. `panel.run` draws one component for the life of a
+    process, but those processes are torn down and re-split on every re-layout — which a
+    workspace switch performs (`commands_frame._switch_client`). A module-level cache would
+    therefore be recomputed by exactly the gesture that must not move a column. The
+    launcher, the `frame-resize` child and each panel all read this one file instead, which
+    is also what keeps `slots.bar_rows_wanted` measuring the strip the panel will draw.
+
+    **`workspace.list_workspaces` still decides WHICH names there are**, so this is an
+    order and never a roster: a name recorded here that has since been deleted is dropped
+    and a workspace created after this was written is appended, both by `switch.workspaces`
+    and neither by re-writing this file. That is what stops a stale line resurrecting a
+    workspace on a strip, and it is why there is no re-record on change.
+
+    One name per line, read back through :func:`tab_order`. Same must-not-raise,
+    atomic-write shape as :func:`record_bar_rows`.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.replace_for(d / "tab_order", "".join(f"{n}\n" for n in names))
+    except OSError:
+        return
+
+
+def tab_order(fid: str) -> list[str]:
+    """The order this frame draws its workspace tabs in, or ``[]`` for a frame that has
+    not been asked yet.
+
+    ``[]`` is the ordinary case exactly once per frame — the first call, before
+    :func:`record_tab_order` has run — and it is also what an unreadable or truncated file
+    answers, for :func:`bar_rows`' reason: this is read on a panel's render path and on the
+    sizing path inside the `frame-resize` child, and a half-written file must degrade to
+    "no order recorded" rather than take the repaint down. The caller's degrade for that is
+    to compute the order again, which is the same answer this file was written from.
+
+    **Name-checked on the way out**, like every other name charter reads off disk and
+    joins onto a path (`workspace.declared_default`, :func:`frame_workspace`). These names
+    go on to a `workspace_dir()` join and onto a tab a click switches to, and #442 is what
+    an unchecked one in that position already cost.
+
+    An empty line is dropped by the name check on its own terms — `workspace.valid_name("")`
+    is already False — so there is no `if line` in front of it for no input to make
+    observable.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return []
+    try:
+        lines = (d / "tab_order").read_text().splitlines()
+    except (OSError, ValueError):
+        return []
+    from .. import workspace as ws_mod
+    return [n for n in (line.strip() for line in lines) if ws_mod.valid_name(n)]
+
+
 def record_chrome(fid: str, level: str) -> None:
     """Write down the pane surface THIS RUNNING FRAME is on, overriding `[frame] chrome`.
 

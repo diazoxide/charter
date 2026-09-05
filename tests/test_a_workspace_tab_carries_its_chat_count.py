@@ -1,5 +1,5 @@
-"""`some-workspace (5)` — the chat count on a workspace tab, and the two constraints
-that decide its shape (#880).
+"""`some-workspace 5` — the chat count on a workspace tab, and the two constraints
+that decide its shape (#880, narrowed by #903).
 
 **Both constraints are measurements, and both are about a cell an operator is about to
 press.**
@@ -13,6 +13,14 @@ name would re-cut the strip the moment a sibling started thinking."* The spinner
 to take; a count has none, so it buys one on every workspace tab and pays for it whether or
 not it has a number to put there. `TheFieldIsReservedWhetherOrNotItIsDrawn` is that,
 asserted as the property it protects rather than as the width it happens to be.
+
+*And the price of it came down without the reserve loosening.* #880's own report predicted
+the objection — *"the reserve is visibly wide… the first thing an operator will remark
+on"* — and #903 is that remark arriving: two tabs with no count sat eight cells apart, six
+of them this field. The ceiling is one digit now and the parentheses are gone, so the field
+is three cells and the gap between two countless tabs is five. What did NOT change is that
+every tab reserves it whether or not it has a number, which is the constraint above and the
+whole reason the field exists in the shape it does.
 
 *One grouped pass.* `chats.of_workspace` is an `os.scandir` plus two small reads per chat
 and is uncached by design; asked once per workspace it is roughly 15 x 30 x 2 = 900 reads
@@ -59,42 +67,42 @@ class TheCountIsDrawnBesideTheName(unittest.TestCase):
         return _plain(slots._bar(list(names or NAMES), here, width, counts=counts))
 
     def test_a_workspace_with_chats_says_how_many(self):
-        self.assertIn("alpha (5)", self._row({"alpha": 5}))
+        self.assertIn("alpha 5", self._row({"alpha": 5}))
 
     def test_a_workspace_with_none_draws_a_blank_and_never_a_zero(self):
-        """Zero renders blank, so every count on screen means something. A `(0)` beside
+        """Zero renders blank, so every count on screen means something. A `0` beside
         twelve of fifteen names is a column of noise saying only that the feature is on."""
         row = self._row({"alpha": 5})
-        self.assertNotIn("(0)", row)
-        self.assertNotIn("beta (", row)
+        self.assertNotIn("0", row)
+        self.assertRegex(row, r"beta\s\s+gamma",
+                         "an empty count field drew something")
 
     def test_a_name_the_map_does_not_carry_counts_zero(self):
         """`chats.counts_by_workspace` answers about the chats on disk and the strip draws
         the workspaces on disk, and those are not the same list — a workspace directory
         with no chat in it is in the second and not the first. The strip reads the map with
         a default rather than trusting its keys."""
-        self.assertNotIn("(", self._row({}))
+        self.assertNotIn("0", self._row({}))
 
     def test_a_count_past_the_ceiling_stops_being_a_number(self):
-        """`(99+)` rather than `(100)`, and it is the same width — which is the point:
-        a field that grew a digit at a hundred chats would move every tab right of it."""
+        """`9+` rather than `10`, and it is the same width — which is the point: a field
+        that grew a digit at ten chats would move every tab right of it."""
         row = self._row({"alpha": slots.TAB_COUNT_MAX + 1})
-        self.assertIn(f"alpha ({slots.TAB_COUNT_MAX}+)", row)
+        self.assertIn(f"alpha {slots.TAB_COUNT_MAX}+", row)
 
     def test_the_ceiling_itself_is_still_drawn_as_a_number(self):
         """`n <= TAB_COUNT_MAX` and not `n <`: the ceiling is the last count drawn in full,
-        so `(99)` is a number and `(100)` is the overflow. One cell apart on screen and one
+        so `9` is a number and `10` is the overflow. One cell apart on screen and one
         boundary apart in the code, which is exactly the shift `tools/sweep.py` asks about
         and which the case above — asked at `MAX + 1` — cannot see."""
         row = self._row({"alpha": slots.TAB_COUNT_MAX})
-        self.assertIn(f"alpha ({slots.TAB_COUNT_MAX})", row)
+        self.assertIn(f"alpha {slots.TAB_COUNT_MAX} ", row)
         self.assertNotIn("+", row, "the ceiling itself was drawn as an overflow")
 
     def test_the_chats_strip_reserves_nothing_at_all(self):
         """``None`` and ``{}`` are different instructions: no field, against a field with
         nothing in it. A chat is the leaf and has nothing to count, so a strip of chats
-        that reserved six columns a name would be the widest thing on the row spent on
-        nothing."""
+        that reserved three columns a name would be spending them on nothing."""
         without = self._row(None)
         blank = self._row({})
         self.assertNotEqual(tui.width(without), tui.width(blank))
@@ -108,7 +116,7 @@ class TheFieldIsReservedWhetherOrNotItIsDrawn(unittest.TestCase):
 
     A chat opening or closing must move NO column of the strip: not the names, not the
     counts, not the cut, and not the click map. That is `slots.TAB_SPINNER`'s rule said
-    about a field that has no cell of its own — it takes six, on every tab, always.
+    about a field that has no cell of its own — it takes three, on every tab, always.
     """
 
     #: Every count a caller can reach, including both sides of the ceiling and a plane
@@ -148,24 +156,27 @@ class TheFieldIsReservedWhetherOrNotItIsDrawn(unittest.TestCase):
         name plus the count."""
         rows = slots._bar(list(NAMES), "beta", 120, counts={"alpha": 5})
         row = tui.strip_ansi(rows[0])
-        at = row.index("(5)")
-        for col in range(at, at + len("(5)")):
+        at = row.index("5")
+        for col in range(at, at + 1):
             self.assertEqual(slots.TABS.switch_to(0, col), "alpha",
                              f"column {col} of {row!r}")
 
-    def test_the_reserve_is_six_columns_a_tab_and_that_is_the_price(self):
+    def test_the_reserve_is_three_columns_a_tab_and_that_is_the_price(self):
         """**Spelled, because it is what this feature costs and the cost is the argument
-        against it.** Six columns on every workspace tab is why these fifteen names need
-        352 columns for one row rather than 262, and every other case here reads
-        `TAB_COUNT_W` on both sides — so a wider ceiling would spend more of the row with
-        nothing going red. A change to `TAB_COUNT_MAX` has to come back to this line and
-        restate the price, which is `layout.BAR_MAX_ROWS`' own discipline one constant
-        over."""
-        self.assertEqual(slots.TAB_COUNT_W, 6)
-        self.assertEqual(slots.TAB_COUNT_MAX, 99)
+        against it.** Three columns on every workspace tab, plus the two-cell `_BAR_GAP`,
+        is why two tabs with no count sit five cells apart — the number #903 asked to come
+        down from eight and the number a later report would have to argue with. Every
+        other case here reads `TAB_COUNT_W` on both sides, so a wider ceiling would spend
+        more of the row with nothing going red. A change to `TAB_COUNT_MAX` has to come
+        back to this line and restate the price, which is `layout.BAR_MAX_ROWS`' own
+        discipline one constant over."""
+        self.assertEqual(slots.TAB_COUNT_W, 3)
+        self.assertEqual(slots.TAB_COUNT_MAX, 9)
+        self.assertEqual(slots.TAB_COUNT_W + slots._BAR_GAP, 5,
+                         "two tabs with no count are not five cells apart")
 
     def test_the_reserve_is_derived_from_the_widest_thing_it_can_hold(self):
-        """A `6` written down beside a ceiling of 99 is two numbers that can drift apart.
+        """A `3` written down beside a ceiling of 9 is two numbers that can drift apart.
         Asked of the function rather than of the constant, at both ends and past them."""
         for n in (0, 1, 9, 10, 99, 100, 10_000):
             self.assertEqual(tui.width(slots._tab_count(n)), slots.TAB_COUNT_W, n)
@@ -176,8 +187,8 @@ class TheSizerAndTheRendererMeasureOneStrip(PersonaIso, unittest.TestCase):
     so a want the renderer does not fill is blank rows off the harness.
 
     The count field is where that could have gone wrong quietly — a sizer that composed
-    without the counts would plan a strip six cells a name narrower than the one that gets
-    drawn.
+    without the counts would plan a strip three cells a name narrower than the one that
+    gets drawn.
     """
 
     def test_the_want_is_the_rows_the_strip_then_fills(self):
@@ -205,9 +216,9 @@ class TheSizerAndTheRendererMeasureOneStrip(PersonaIso, unittest.TestCase):
             _plant(f"alpha.{i}", workspace="alpha")
         _plant("gamma.1", workspace="gamma")
         row = _plain(slots.workspaces_bar("alpha.1", 200))
-        self.assertIn("alpha (3)", row)
-        self.assertIn("gamma (1)", row)
-        self.assertNotIn("beta (", row)
+        self.assertIn("alpha 3", row)
+        self.assertIn("gamma 1", row)
+        self.assertNotIn("beta 0", row)
 
     def test_a_plane_it_cannot_read_costs_the_numbers_and_not_the_pane(self):
         """`_workspace_counts` is guarded for `slots.working_chats`' reason and this

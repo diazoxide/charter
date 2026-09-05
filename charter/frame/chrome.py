@@ -59,6 +59,27 @@ from . import pane
 _REVERSE = "\x1b[7m"
 _OFF = tui.RESET
 
+#: Underline on — the EDGE of the tab you are on, and only :func:`block` writes it (#903).
+#:
+#: **Two attributes rather than one, because they say two different things.** Reverse
+#: video says "this field is picked out"; it is a band, and a band is what
+#: :func:`reverse` draws across a whole row. An underline says "this field has an edge",
+#: which is what a tab is — every tab strip an operator has used draws one. Together they
+#: read as a tab rather than as a highlighted word.
+#:
+#: **It costs the row nothing.** `tui.width` counts no SGR, so the field is the same
+#: number of cells underlined as not — which is what let `slots._TAB_LEAD` give the `*`'s
+#: character up for it. Side glyphs would have been the more literal border and cost two
+#: columns per active tab.
+#:
+#: **SGR 4 and not 21 or 4:3**, on this module's own no-second-dialect rule: 4 is the
+#: plain underline every terminal tmux downsamples for has carried since vt100, where the
+#: doubled and curly forms are extensions a client may render as nothing or as something
+#: else. `tui.sanitize` passes every SGR through untouched, so it reaches the pane; `_OFF`
+#: is a full reset and turns this off with everything else, which is why there is no
+#: matching `24` here.
+_UNDERLINE = "\x1b[4m"
+
 #: One SGR escape, with its parameter list captured. Deliberately the same shape
 #: `tui._SGR` matches, because :func:`tui.sanitize` has already deleted everything else
 #: that claims to be an escape by the time a row reaches this module.
@@ -955,7 +976,8 @@ def reverse(row: str, width: int) -> str:
 
 
 def block(text: str) -> str:
-    """*text* drawn as a reverse-video block — ONE FIELD of a row, never a whole row.
+    """*text* drawn as an underlined reverse-video block — ONE FIELD of a row, never a
+    whole row.
 
     :func:`reverse`'s sibling and deliberately not a call to it. That one answers "this
     ROW is the one you picked": it fills to the pane's last column, so the highlight is a
@@ -969,7 +991,7 @@ def block(text: str) -> str:
     :func:`reverse` runs `_SGR.sub(_restated, …)` because it wraps a row a renderer already
     finished, and charter's rows carry `statusline._R` after every coloured span — a full
     reset inside the run cancels reverse for the rest of it (the measured defect in that
-    function's docstring). A tab field is `slots._BAR_MARK` plus a name that has been
+    function's docstring). A tab field is `slots._TAB_LEAD` plus a name that has been
     through `contain.one_line`, which turns an `ESC` into the four characters `\x1b`. There
     is no SGR inside it to cancel anything, so a substitution here would be a pass whose
     output is provably its input — the survivor the deletion sweep reports and this
@@ -983,15 +1005,25 @@ def block(text: str) -> str:
     default and is about the pane's BACKGROUND, not about what a renderer may write into
     its own row. And `NO_COLOR` is honoured in `panel._write`, the one place anything
     reaches a pane's screen, so a gate here would be a second answer to a question that is
-    already answered once for every row in the frame. Under it the strip still says which
-    tab you are on, because `slots._BAR_MARK` is a character and not an attribute.
+    already answered once for every row in the frame. **Under it the strip no longer says
+    which tab you are on**, and #903 is where that was decided: `slots._TAB_LEAD` used to
+    put a `*` under the paint and now puts a blank, so what a `NO_COLOR` plane sees is a
+    row of tabs with none of them picked out. That cost is stated at the constant, where
+    the character was given up.
 
-    An empty *text* comes back as a bare `\x1b[7m\x1b[0m` rather than `""`, and there is
-    deliberately no guard: no caller can reach it — a tab field always carries a mark —
-    so the guard would be a line no input could turn red, which is `fill`'s own recorded
-    reason for not having one either.
+    **The underline is the second half of the answer and this is where it lands** — see
+    :data:`_UNDERLINE`. Reverse alone was measured as too quiet on the workspaces strip,
+    where the mark competes with a count field on every tab; an edge reads as a tab where
+    a band reads as a highlighted word. It is one escape and no cells (`tui.width` counts
+    no SGR), so the strip's arithmetic cannot see it — the same property the reverse has
+    and the reason both are affordable on a row competing for columns.
+
+    An empty *text* comes back as a bare `\x1b[7m\x1b[4m\x1b[0m` rather than `""`, and
+    there is deliberately no guard: no caller can reach it — a tab field always carries a
+    lead — so the guard would be a line no input could turn red, which is `fill`'s own
+    recorded reason for not having one either.
     """
-    return _REVERSE + text + _OFF
+    return _REVERSE + _UNDERLINE + text + _OFF
 
 
 def _restated(m: re.Match) -> str:

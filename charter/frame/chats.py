@@ -202,6 +202,52 @@ def counts_by_workspace() -> dict[str, int]:
     return {ws: len(ids) for ws, ids in _by_workspace().items() if ws is not None}
 
 
+def touched_by_workspace() -> dict[str, float]:
+    """When charter last wrote anything about each workspace's chats — every workspace at
+    once, as a Unix timestamp (#903).
+
+    **The recency `switch.workspaces` orders by, and it is a MEASUREMENT rather than a
+    tally.** #903 asked for the workspace strip to lead with the working set, and asked for
+    it with no new state — so nothing counts a use here. What is read is the mtime of each
+    chat's own directory under `.charter/frame/`, and that moves whenever charter writes
+    anything about that chat: `state.bump` on every hook fire and every re-layout,
+    `state.record_workspace` and `state.record_identity` at launch, `state.record_exit`
+    when it ends. A workspace whose chats charter has just written about is a workspace
+    somebody is in.
+
+    **The directory and not one file inside it**, which is the same "no second answer"
+    discipline :func:`_by_workspace` keeps about membership: `version` would be the obvious
+    file (`state.bump` writes it and means exactly "the frame changed"), and picking it
+    would mean deciding which of this module's seventeen sibling writers also count. A
+    rename into a directory moves that directory's mtime, so the answer covers every writer
+    there is and grows one the day another is added.
+
+    **The same grouped walk as :func:`counts_by_workspace`**, one `stat` per chat further —
+    on the ~30 entries `state.reap` bounds this to, and asked once per frame launch rather
+    than once per repaint (`state.tab_order` is what holds the answer still). A workspace
+    with no chats is ABSENT rather than zero, exactly as it is there, and for the same
+    reason: this answers about what is on disk and the caller is asking about the names on
+    its own strip.
+
+    Never raises, for :func:`of_workspace`'s reason and through the same guard: a chat
+    directory that has gone between the scan and the `stat` contributes nothing rather than
+    taking a launch down.
+    """
+    out: dict[str, float] = {}
+    for ws, ids in _by_workspace().items():
+        if ws is None:
+            continue
+        for fid in ids:
+            d = state.frame_dir(fid)
+            try:
+                seen = d.stat().st_mtime if d is not None else None
+            except OSError:
+                continue
+            if seen is not None and seen > out.get(ws, 0.0):
+                out[ws] = seen
+    return out
+
+
 def _by_workspace() -> dict[str | None, list[str]]:
     """Every chat on this plane, grouped by the workspace it says it is in.
 

@@ -202,14 +202,17 @@ def names_of(noun: str, fid: str = "") -> list[str]:
     `workspace.valid_name` / `persona.valid_name` / `instance.change_name_ok` on the way
     out, which is #442's rule applied where a directory name becomes a row.
 
-    *fid* is required in practice for :data:`CHANGE` and ignored by the other two, because
-    changes are per WORKSPACE and which workspace is a question about the frame, not about
-    this process (#512). It defaults to `""` rather than being made positional-required so
-    that the two callers that predate it read unchanged; `switch.changes("")` resolves the
-    same "no frame, resolve locally" path every other frame surface takes for an empty id.
+    *fid* is required in practice for :data:`CHANGE` and for :data:`WORKSPACE`, and ignored
+    by :data:`PERSONA`. Changes are per WORKSPACE and which workspace is a question about
+    the frame, not about this process (#512); workspaces are ORDERED per frame since #903,
+    so that the palette and the strip beside it draw one roster in one order. It defaults
+    to `""` rather than being made positional-required so that the two callers that predate
+    it read unchanged; `switch.changes("")` resolves the same "no frame, resolve locally"
+    path every other frame surface takes for an empty id, and `switch.workspaces("")`
+    answers alphabetically rather than inventing an order it has nowhere to record.
     """
     if noun == WORKSPACE:
-        return switch.workspaces()
+        return switch.workspaces(fid)
     if noun == PERSONA:
         return switch.personas()
     if noun == CHAT:
