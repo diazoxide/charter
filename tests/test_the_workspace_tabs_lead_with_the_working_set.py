@@ -63,12 +63,24 @@ class TheRecencyIsMeasuredAndNotTallied(PersonaIso, unittest.TestCase):
 
     def test_a_workspace_is_as_recent_as_its_newest_chat(self):
         """The NEWEST and not the oldest or the mean: a workspace you were in an hour ago
-        is a workspace you were in an hour ago however long its other chats have sat."""
+        is a workspace you were in an hour ago however long its other chats have sat.
+
+        **Asked in BOTH ordinal orders, which is what makes it about the `max` rather than
+        about the walk.** `_by_workspace` hands its chats back in ordinal order, so a
+        fixture whose newest chat is also its LAST answers the same number whether the
+        newest wins or the last one does — `tools/sweep.py` reported exactly that, and
+        replacing `max(seen, out.get(ws, 0.0))` with `seen` passed the whole suite. The
+        second half below puts the newest FIRST, where "last wins" gets it wrong.
+        """
         _plant("alpha.1", workspace="alpha")
         _plant("alpha.2", workspace="alpha")
         _touched("alpha.1", DAY)
         _touched("alpha.2", DAY * 9)
         self.assertEqual(chats.touched_by_workspace(), {"alpha": DAY * 9})
+        _touched("alpha.1", DAY * 20)
+        _touched("alpha.2", DAY * 2)
+        self.assertEqual(chats.touched_by_workspace(), {"alpha": DAY * 20},
+                         "the newest chat lost to the last one walked")
 
     def test_a_workspace_with_no_chats_is_absent_rather_than_zero(self):
         """`counts_by_workspace`' own rule, and for its reason: this answers about the
@@ -94,17 +106,32 @@ class TheRecencyIsMeasuredAndNotTallied(PersonaIso, unittest.TestCase):
 
     def test_a_chat_directory_that_goes_between_the_scan_and_the_stat_is_skipped(self):
         """`state.reap` can remove a chat while this is walking. The one that vanished
-        contributes nothing and every other workspace is still timed."""
+        contributes nothing and every other workspace is still timed.
+
+        **The failure has to land on the `stat` and nowhere earlier**, which is what this
+        case got wrong first time and `tools/sweep.py` caught. It used to mock
+        `state.frame_dir` into answering a path that does not exist — which breaks
+        `_by_workspace` UPSTREAM of the walk, because `own_workspace` reads files inside
+        that same directory to place the chat at all. The chat then never reached the
+        `stat`, the `except OSError` was never entered, and narrowing it to
+        `ZeroDivisionError` passed all 11,516 tests. A case that passes for a reason other
+        than the one it names is worse than no case.
+
+        So the walk is left alone and the `stat` itself is what fails, which is also the
+        real shape: the directory is there when `os.scandir` lists it and gone by the time
+        it is measured.
+        """
         _plant("alpha.1", workspace="alpha")
         _plant("beta.1", workspace="beta")
         _touched("beta.1", DAY)
-        real = state.frame_dir
+        real = state.Path.stat
 
-        def gone(fid, **kw):
-            d = real(fid, **kw)
-            return d / "not-a-directory" if fid == "alpha.1" else d
+        def vanished(self, *a, **kw):
+            if self.name == "alpha.1":
+                raise OSError("reaped between the scan and the stat")
+            return real(self, *a, **kw)
 
-        with mock.patch.object(chats.state, "frame_dir", side_effect=gone):
+        with mock.patch.object(state.Path, "stat", vanished):
             self.assertEqual(chats.touched_by_workspace(), {"beta": DAY})
 
 
@@ -160,10 +187,22 @@ class TheStripLeadsWithTheWorkingSet(PersonaIso, unittest.TestCase):
     def test_a_caller_with_no_frame_gets_the_alphabet(self):
         """`to_workspace` wants membership and a "have: …" sentence, and the launch picker
         runs before any frame exists. Neither is about which order a strip draws, and
-        neither has a frame to record one in."""
+        neither has a frame to record one in.
+
+        **Spelled out rather than compared against `sorted` of itself**, which is the shape
+        `tools/sweep.py` reported: `sorted(names)` against `list(names)` passed the whole
+        suite, because a test that asks whether a list equals its own sorting cannot tell
+        the two apart. The names below are what makes the `sorted` observable —
+        `list_workspaces` answers in name order and `config.DEFAULT_WORKSPACE` is APPENDED
+        after it (it has no directory here), so the unsorted answer ends with `default`
+        where the sorted one puts it second.
+        """
         self._plane(alpha=DAY, beta=DAY * 3, gamma=DAY * 2)
-        self.assertEqual(switch.workspaces(), sorted(switch.workspaces()))
-        self.assertEqual(switch.workspaces(""), sorted(switch.workspaces()))
+        self.assertNotIn(config.DEFAULT_WORKSPACE, ("alpha", "beta", "gamma"),
+                         "this case needs a default that is not one of its own names")
+        self.assertEqual(switch.workspaces(),
+                         ["alpha", "beta", config.DEFAULT_WORKSPACE, "gamma"])
+        self.assertEqual(switch.workspaces(""), switch.workspaces())
 
     def test_asking_without_a_frame_records_nothing_for_any_frame(self):
         """The empty id must not reach `state.tab_order` and be answered "nothing
@@ -248,6 +287,18 @@ class TheOrderIsHeldForTheFramesLife(PersonaIso, unittest.TestCase):
         opened the file in an editor."""
         (state.frame_dir(self.FID) / "tab_order").write_text("  beta  \n\talpha\t\n")
         self.assertEqual(state.tab_order(self.FID), ["beta", "alpha"])
+
+    def test_an_id_that_cannot_name_a_directory_writes_nothing_and_does_not_raise(self):
+        """`fid` reaches `switch.workspaces` off a panel's argv and out of
+        `$CHARTER_SESSION_ID`, so it is untrusted the way every other id charter joins onto
+        a path is (#442). `frame_dir` refuses it, this writes nothing, and the strip
+        redraws — rather than a `TypeError` out of a render path.
+
+        Found as a survivor by `tools/sweep.py`: `record_asserted_bars` had this case and
+        its twin here did not, so the guard was correct and unasked-about.
+        """
+        state.record_tab_order("../evil", ["alpha"])
+        self.assertEqual(state.tab_order("../evil"), [])
 
     def test_a_write_that_cannot_complete_leaves_the_frame_recomputing(self):
         """The order is written on a panel's render path. A full filesystem costs the

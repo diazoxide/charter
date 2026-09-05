@@ -308,6 +308,23 @@ _PANE_WIDTH_FORMAT = "#{pane_width}"
 #: so the id is here to JOIN on and the height is the measurement.
 _PANE_HEIGHTS_FORMAT = "#{pane_id}:#{pane_height}"
 
+#: What one line of :data:`_PANE_HEIGHTS_FORMAT` has to look like — tmux's own `%N` and a
+#: count of rows, with nothing else on the line.
+#:
+#: **A pattern rather than a `partition`, and the deletion sweep is what settled it.** The
+#: obvious parse is `line.strip().partition(":")`, and the sweep reported BOTH of its verbs
+#: as survivors: `strip` against `lstrip`, and `partition` against `rpartition`. Neither can
+#: be pinned, because neither can be made to matter — the format emits exactly one colon and
+#: no surrounding whitespace, so "which end" and "how much" are questions this data never
+#: asks. An equivalent mutant and dead code are the same finding, so the ambiguity is
+#: removed rather than documented: a `fullmatch` has no end to choose.
+#:
+#: It is also the stricter reading. `partition` answers for a line it did not understand —
+#: `nonsense` partitions to `("nonsense", "", "")` and is then only rejected because `""`
+#: is not a digit — where this refuses the line itself, which is what `_PANE_ID_RE` already
+#: does one argv over for the same values.
+_PANE_HEIGHT_RE = re.compile(r"(%\d+):(\d+)")
+
 #: The format that says WHERE a pane is — the session and the window it belongs to, as
 #: tmux's own ids rather than as names (#684).
 #:
@@ -6166,10 +6183,10 @@ def _pane_rows(socket: str, *, panes: dict[str, str]) -> dict[str, int]:
     that pane's whole window; a frame with no recorded panes has nothing to ask about and
     is refused by the id check before any argv is built.
 
-    **Every id is checked on the way in and joined on the way out**, which is #475's rule
-    on both ends of one read: the target comes off disk (`state.panes`) and goes into a
-    `-t`, and the ids tmux reports back are matched against that same map rather than
-    trusted to name a slot. A pane in the window that charter did not record — the harness
+    **Every id is checked on the way in and on the way back**, which is #475's rule on both
+    ends of one read: the target comes off disk (`state.panes`) and goes into a `-t`, and a
+    line tmux answers with has to be tmux's own shape (:data:`_PANE_HEIGHT_RE`) before it is
+    matched against that map. A pane in the window that charter did not record — the harness
     itself, and anything an operator split by hand — simply does not join and contributes
     nothing.
 
@@ -6188,9 +6205,9 @@ def _pane_rows(socket: str, *, panes: dict[str, str]) -> dict[str, int]:
         return {}
     heights: dict[str, int] = {}
     for line in out.stdout.splitlines():
-        pane_id, _, rows = line.strip().partition(":")
-        if rows.isdigit():
-            heights[pane_id] = int(rows)
+        said = _PANE_HEIGHT_RE.fullmatch(line)
+        if said:
+            heights[said[1]] = int(said[2])
     return {slot: heights[pid] for slot, pid in panes.items() if pid in heights}
 
 
