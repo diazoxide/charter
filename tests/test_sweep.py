@@ -6495,6 +6495,10 @@ class TheFanOutIsSizedAgainstTheHeaviestHandAndNotTheTotal(unittest.TestCase):
         self.assertEqual(sweep.heaviest_hand(costs, 3), 12.0)  # 7+5, dealt to shard 1
         self.assertEqual(sweep.heaviest_hand(costs, 1), 17.0)
         self.assertEqual(sweep.heaviest_hand([], 4), 0)
+        # And the LAST shard counts. A range that stops one short reports the same answer
+        # whenever the worst hand is not the final one, which is most of the time — so the
+        # case that catches it has to put the expensive mutation on the last shard.
+        self.assertEqual(sweep.heaviest_hand([1.0, 1.0, 7.0], 3), 7.0)
 
     def test_a_hand_of_exactly_the_budget_fits_and_one_second_more_does_not(self):
         """The boundary, pinned on both sides. `<` where `<=` belongs here costs a shard
@@ -6538,6 +6542,13 @@ class TheFanOutIsSizedAgainstTheHeaviestHandAndNotTheTotal(unittest.TestCase):
         """
         costs = [float(sweep.per_shard_seconds())] * 40
         self.assertEqual(sweep.shards_for(costs), sweep.MAX_SHARDS)
+        # Nine mutations of exactly one budget each is the case that catches a fan-out
+        # allowed one machine past the cap: NINE shards would fit it perfectly, eight
+        # cannot fit it at all, and the answer has to be eight. `MAX_SHARDS` is a limit on
+        # how much of the runner pool one branch may hold, and a plan that wants more
+        # machines is exactly the plan that must not be given them.
+        self.assertEqual(sweep.shards_for([float(sweep.per_shard_seconds())] * 9),
+                         sweep.MAX_SHARDS)
         plan = [_mutation("charter/m.py", n) for n in range(40)]
         dealt = [m for i in range(1, sweep.MAX_SHARDS + 1)
                  for m in sweep.shard_of(plan, i, sweep.MAX_SHARDS)]
