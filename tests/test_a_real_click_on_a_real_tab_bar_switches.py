@@ -1107,18 +1107,35 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
                          "this frame already carries a notice, so the cases below could "
                          "pass on something the fixture said")
 
-    def _plus(self) -> int:
-        """The column the `+` is drawn in, read off the PANE.
+    #: What the chat strip ends in: the two affordances and the one cell between them
+    #: (`slots._affordances`). Composed from the constants rather than typed out, so a case
+    #: built on it agrees with whatever glyphs they take — `test_frame_bars` makes the same
+    #: call for the same reason.
+    TAIL = f"{slots.ADD_CHAT} {slots.CLOSE_CHAT}"
+
+    def _tail_at(self) -> int:
+        """The column the affordance PAIR starts in, read off the PANE.
 
         Not `self._column_of`, because that helper asserts the field is unique on the row
-        and a single `+` is a character an overflow count also starts with. The affordance
-        is the LAST field on the row by construction, so the last `+` is it — and the row
-        it is read off is the one tmux painted, which is what the operator's eye lands on.
+        and a single `+` is a character an overflow count also starts with. The pair is the
+        LAST thing on the row by construction (`slots._compose` draws it only where every
+        name fits, and a strip carrying it carries no `+N`), so the row's own end is where
+        it is — and the row it is read off is the one tmux painted, which is what the
+        operator's eye lands on.
         """
         row = self._bar_row(self.bar).rstrip()
-        self.assertTrue(row.endswith(slots.ADD_CHAT),
-                        f"the row does not end in the affordance: {row!r}")
-        return len(row) - 1
+        self.assertTrue(row.endswith(self.TAIL),
+                        f"the row does not end in the affordances: {row!r}")
+        return len(row) - len(self.TAIL)
+
+    def _plus(self) -> int:
+        """The column the `+` is drawn in."""
+        return self._tail_at()
+
+    def _minus(self) -> int:
+        """The column the `-` is drawn in — #921, and the reason `_plus` is no longer the
+        last cell of the row."""
+        return self._tail_at() + len(self.TAIL) - 1
 
     def test_a_press_on_the_plus_reaches_the_command_behind_it(self):
         """The whole chain, end to end, with the answer coming back on the frame's own
@@ -1154,6 +1171,40 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
             before, "a refused press still added a window")
         self.assertEqual(chats.of_workspace(self.WS), [self.here],
                          "a refused press still made a chat directory")
+
+    def test_the_strip_really_draws_both_affordances(self):
+        """**What #921 is about, on a real pane.** The strip advertising `+` and nothing
+        else is what made an operator conclude closing a chat was impossible; this is the
+        row tmux painted, read back off it, saying both halves."""
+        row = self._bar_row(self.bar).rstrip()
+        self.assertTrue(row.endswith(self.TAIL), repr(row))
+        self.assertEqual(self._minus(), self._plus() + 2, repr(row))
+
+    def test_a_press_on_the_minus_stops_nothing_and_makes_nothing(self):
+        """**§4i end to end for the one gesture that could destroy something.** What the
+        `-` starts is `charter frame-palette --tab <this chat>` — a SURFACE — so after a
+        press the chat is still on the plane, its window is still on the server, and the
+        frame's own attention row has nothing to say. The keypress that would stop it is
+        two surfaces away and no pointer can reach it."""
+        before = self._tmux("list-windows", "-t", self.WS, "-F", "#{window_id}").stdout
+        self._click(self.bar, col=self._minus())
+        time.sleep(2.0)
+        self.assertEqual(chats.of_workspace(self.WS), [self.here],
+                         "a press on the `-` closed a chat")
+        self.assertEqual(
+            self._tmux("list-windows", "-t", self.WS, "-F", "#{window_id}").stdout,
+            before, "a press on the `-` made or removed a window")
+        self.assertEqual(state.notice(self.here), "",
+                         "a press on the `-` reached a command that reports")
+
+    def test_the_cell_between_the_two_affordances_reaches_nothing(self):
+        """The separator belongs to neither, and here the two neighbours mean opposite
+        things — so picking the nearer one would guess between *make* and *unmake*."""
+        self._click(self.bar, col=self._plus() + 1)
+        time.sleep(2.0)
+        self.assertEqual(state.notice(self.here), "",
+                         "the cell between `+` and `-` reached a command")
+        self.assertEqual(chats.of_workspace(self.WS), [self.here])
 
     def test_the_cell_beside_the_plus_reaches_nothing(self):
         """The control every affordance case needs: a row that answers EVERY click is as
