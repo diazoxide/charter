@@ -8255,6 +8255,13 @@ def _draw_palette(args) -> int:
     fid = os.environ.get("CHARTER_SESSION_ID", "")
     socket = state.frame_server(fid) or SOCKET
     harness = state.harness_pane(fid) or ""
+    # **This process's own rectangle, read ONCE and used twice** — by :func:`_picker`, to
+    # unzoom a confirmation into the drawer it is (#921), and by `_close_palette` in the
+    # `finally`. tmux sets `$TMUX_PANE` in every process it starts and `frame/tabmenu
+    # .handback` reads the same variable for the same pane; a second read here would be a
+    # second answer to "which pane am I", on the one path where being wrong means resizing
+    # or killing the operator's harness.
+    here = os.environ.get("TMUX_PANE", "")
     reg = builtin_actions.build(fid, current_density=_current_density(fid),
                                 current_chrome=_current_chrome(fid))
     snapshot = gather.cached(fid) or {}
@@ -8270,7 +8277,7 @@ def _draw_palette(args) -> int:
             # leaves this one standing. Explicit rather than `_picker(...) or _again(...)`
             # — both answer a `Surface`, and a surface's truthiness is not a thing this
             # file gets to assume on `own_the_tty`'s behalf.
-            nxt = _picker(row, fid, opened)
+            nxt = _picker(row, fid, opened, socket=socket, pane=here)
             if nxt is not None:
                 return nxt
             return _again(row, surface, reg, fid=fid, snapshot=snapshot)
@@ -8335,8 +8342,7 @@ def _draw_palette(args) -> int:
         if not inv.started:
             _say_on_screen(fid, inv.reason)
     finally:
-        _close_palette(socket, harness=harness,
-                       overlay_pane=os.environ.get("TMUX_PANE", ""))
+        _close_palette(socket, harness=harness, overlay_pane=here)
     return 0
 
 
@@ -8396,8 +8402,47 @@ def _start_workspace_switch(fid: str, ws: str) -> None:
         util.self_relaunch_argv("frame-switch", "--workspace", ws), fid=fid)
 
 
-def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
+def _as_a_drawer(surface, *, socket: str, pane: str):
+    """Hand *surface* back, having given its pane the frame above it — #921.
+
+    **A confirmation is a drawer, and the palette is not.** `overlay.modal_argvs` ends in
+    `resize-pane -Z`, so every surface this pane holds takes the whole window; that is
+    right for the palette, which lists every action, every doorway and every name an
+    operator types towards, scrolls, and has no row cap by design. It is wrong for a
+    two-row question about one chat, which read as *"an entirely new window"* rather than
+    as something that had opened over the frame the operator was looking at.
+
+    **``None`` passes straight through, and that is what makes this one call rather than
+    an `if` at two call sites.** :func:`_picker` and `frame/tabmenu.opens` both answer
+    ``None`` for every row that opens nothing, so the surface arriving here IS the
+    condition — and a route that opened a confirmation without unzooming would be a
+    confirmation that behaved differently depending on which pointer press reached it.
+
+    A tmux round trip on a keypress the operator has just made, on the one path where a
+    scan of the frame root is already being paid for (`leave.plan`). `tmuxctl.run` is what
+    reports a server that would not answer; ``None`` from `overlay.unzoom_argv` is a pane
+    id charter could not spell, and a surface that stays zoomed is the surface this shipped
+    as — never a refusal, and never a `resize-pane` aimed at a target charter cannot parse.
+    """
+    if surface is None:
+        return None
+    argv = overlay.unzoom_argv(socket, overlay_pane=pane)
+    if argv is not None:
+        tmuxctl.run("making the confirmation a drawer", argv)
+    return surface
+
+
+def _picker(row, fid: str, opened: list, *, socket: str = "",
+            pane: str = "") -> "palette.Palette | None":
     """The surface *row* opens, or ``None`` when it opens none.
+
+    *socket* and *pane* are this process's own tmux and its own rectangle, and they are
+    read for exactly one row: a confirmation gives the window back and is drawn as a
+    drawer (:func:`_as_a_drawer`), where a picker keeps the whole pane for the same reason
+    the palette does. They default to empty so a test that only asks which surface a row
+    opens does not have to invent a tmux — `overlay.unzoom_argv` answers ``None`` for a
+    pane id it cannot spell, which is the same degrade every other builder in that module
+    makes.
 
     Handed to `palette.own_the_tty` as its *then*, so a picker is drawn in the palette's
     own pane with the tty never leaving raw mode — see that function for why a second pane
@@ -8443,8 +8488,9 @@ def _picker(row, fid: str, opened: list) -> "palette.Palette | None":
         # `cmd_quit`, which spells its own.
         p = leave.plan(live=live, focus=state.own_workspace(fid),
                        only=fid if verb == leave.CLOSE else "")
-        return palette.Palette(catalogue=leave.confirm_rows(p, verb=verb),
-                               label=verb, mouse=True)
+        return _as_a_drawer(palette.Palette(catalogue=leave.confirm_rows(p, verb=verb),
+                                            label=verb, mouse=True),
+                            socket=socket, pane=pane)
     noun = choose.noun_of(row)
     if noun is None:
         return None

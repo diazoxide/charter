@@ -399,9 +399,17 @@ def draw(args) -> int:
             # the same round trip `commands_frame._picker` makes for the identical
             # doorway, and it is what makes the warning describe the plane as it is under
             # the keypress rather than as it was when the pointer landed.
-            return opens(row, target,
-                         live=commands_frame._plane_live(
-                             commands_frame._plane_servers())[0])
+            #
+            # **The confirmation is a drawer here too, and through the same call** (#921).
+            # `commands_frame._as_a_drawer` passes `None` straight back, so the transcript
+            # row is untouched and the close doorway gives the window up — two routes to
+            # `leave.confirm_rows` that must not look different, which is the whole reason
+            # `opens` builds the identical surface `_picker` does.
+            return commands_frame._as_a_drawer(
+                opens(row, target,
+                      live=commands_frame._plane_live(
+                          commands_frame._plane_servers())[0]),
+                socket=socket, pane=overlay_pane)
 
         # `act` takes the cancel too (`own_the_tty` answers `None` for Escape, for the
         # hatch, and for a pane whose writer is gone), so there is no branch here that a

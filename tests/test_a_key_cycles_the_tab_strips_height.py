@@ -468,7 +468,7 @@ class TheStripStillMeasuresItsOwnNames(unittest.TestCase):
     the ceiling moved and the measurement did not."""
 
     def test_the_cap_is_still_the_callers_and_still_bounds_the_answer(self):
-        strip = lambda fid: (list(NAMES), "harness-wrapper", "", None)  # noqa: E731
+        strip = lambda fid: (list(NAMES), "harness-wrapper", "", "", None)  # noqa: E731
         with mock.patch.dict(slots.BARS, {"probe": strip}):
             answers = [slots.bar_rows_wanted("f-1", "probe", pane_cols=120, cap=c)
                        for c in (1, 2, 3)]

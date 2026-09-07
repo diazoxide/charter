@@ -84,7 +84,7 @@ def _placed(*, style=None, **sizes):
     return instance.frame_of({"frame": {"component": tables}})
 
 
-def _strip(names=NAMES, here=HERE, note="", counts=None):
+def _strip(names=NAMES, here=HERE, note="", counts=None, close=""):
     """A `slots.BARS` entry that answers *names* without touching a plane.
 
     The seam the sizer reads through, used as one. `TheRealStripsGoThroughTheSameSeam`
@@ -96,8 +96,14 @@ def _strip(names=NAMES, here=HERE, note="", counts=None):
     is `slots.TAB_COUNT_W` per tab and has its own cases; every number in this module is
     about how many rows a list of names needs, and folding a fixed six cells per name into
     them would measure the field as much as the ladder.
+
+    *close* defaults to `""` for the same reason *note* does: this fixture is the ladder's
+    arithmetic, and the chat strip's `-` (#921) rides the same field the `+` does
+    (`slots._affordances`) — it has its own cases in
+    `tests/test_the_chat_strip_says_closing_a_chat_is_possible.py`, where the property is
+    that the pair is measured together rather than that a width is a particular number.
     """
-    return lambda fid: (list(names), here, note, counts)
+    return lambda fid: (list(names), here, note, close, counts)
 
 
 class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):

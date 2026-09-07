@@ -533,6 +533,27 @@ def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None 
     pointer: `charter frame-quit`, which stops every harness on the plane, and which is
     behind a palette row with a confirmation for exactly that reason.
 
+    **A press on the `-` beside it opens the question of closing this chat** (#921) — the
+    fifth gesture, and the one that makes the fourth findable. *"we have plus button - that
+    adding new session tab, but no any option to delete/stop"*: closing was possible the
+    whole time through both `F2 → chat: close` and the right press below, and the strip
+    said neither. A row drawing `+` alone says making is offered and unmaking is not, which
+    is what the operator read off it and reported.
+
+    **It does NOT close on the press, and that is the paragraph above read the other way.**
+    The `+` may act because nothing is destroyed; this may not, so it does not act — it
+    spawns the same `charter frame-palette --tab` the right press does, targeted at *fid*,
+    which is what `slots._Tabs.tab_at` answers for the tab this frame is on. The menu's
+    `chat: close` row is a doorway, `leave.confirm_rows` is what it opens, and the
+    confirming row names the chat and says it will not come back. A pointer opens the
+    question; the keyboard answers it.
+
+    **The ACTIVE chat, and closing any other stays the right press.** One glyph at the end
+    of the row is what a strip can afford; a `×` on every tab would cost a column per tab
+    and re-cut the strip, which `slots.TAB_COUNT_W` and the `TAB_SPINNER` refusal both
+    forbid for one measured reason. The chat you are standing in is what a single glyph can
+    honestly be about, and it is the commonest chat anyone closes.
+
     **`add` is `None` for the workspaces bar and that is structural rather than a branch.**
     `slots.workspaces_bar` passes no note, so no rung ever publishes an affordance column
     for it and `add_at` cannot answer true — but the argument for a workspace `+` is a
@@ -610,6 +631,24 @@ def _bar_events(fid: str, command: tuple[str, ...], add: tuple[str, ...] | None 
         if name is None:
             if add is not None and _slots.TABS.add_at(ev.row, ev.col):
                 _spawn(util.self_relaunch_argv(*add), fid=fid)
+                return False
+            if menu and _slots.TABS.close_at(ev.row, ev.col):
+                # **The `-` beside the `+`, and it opens the menu about THIS chat**
+                # (`slots.CLOSE_CHAT`, #921). Byte for byte the argv the right press above
+                # builds, with *fid* where `tab_at` would have put the tab under the
+                # pointer: a left press on `-` IS a right press on the tab you are on. So
+                # this adds a route and no authority — what it opens is a surface whose
+                # `chat: close` row is a doorway onto `leave.confirm_rows`, and the
+                # keypress that commits is the one that module mints. §4i's *a pointer
+                # opens the question; the keyboard answers it*, which is the clause the
+                # `+` above meets the other way, by destroying nothing.
+                #
+                # **Gated on `menu` rather than on a fourth parameter**, and that is
+                # `add`'s data rule kept rather than an exception to it: what this spawns
+                # IS the tab menu, so a bar with no menu has nothing for a `-` to open.
+                # The workspaces bar is handed no menu and `slots._workspaces_strip` hands
+                # it no `-` to draw, so the two facts cannot come apart.
+                _spawn(util.self_relaunch_argv(*_TAB_MENU, fid), fid=fid)
                 return False
             if _slots.TABS.more_at(ev.row, ev.col):
                 # The same argv `_strip_events` spawns for a door, for its reasons — one

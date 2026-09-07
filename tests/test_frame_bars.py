@@ -1207,7 +1207,13 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
         _plant("api.1", workspace="api")
         row = _plain(slots.chats_bar("api.1", 200)[0])
         self.assertIn("api.1", row)
-        self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
+        self.assertIn(slots.ADD_CHAT, row)
+        # And how to get RID of one, which is the same sentence with the sign flipped —
+        # #921 is the operator who read a row offering only the first and concluded the
+        # second was not possible. `tests/test_the_chat_strip_says_closing_a_chat_is
+        # _possible.py` owns the pair; this says the one-chat row carries it too.
+        self.assertTrue(
+            row.rstrip().endswith(f"{slots.ADD_CHAT} {slots.CLOSE_CHAT}"), repr(row))
 
     def test_the_bar_lists_both_chats_when_there_are_two_and_still_offers_a_third(self):
         """The other half: "present with two" — and the `+` stays.
@@ -1223,7 +1229,8 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
         row = _plain(slots.chats_bar("api.2", 200)[0])
         self.assertIn("api.1", row)
         self.assertIn("*api.2", row)
-        self.assertTrue(row.rstrip().endswith(slots.ADD_CHAT), repr(row))
+        self.assertTrue(
+            row.rstrip().endswith(f"{slots.ADD_CHAT} {slots.CLOSE_CHAT}"), repr(row))
 
     def test_the_workspace_bar_offers_no_such_thing(self):
         """**A chat is a press; a workspace is a name.** A new chat has nothing for an
@@ -1241,8 +1248,13 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
                 row = _plain(rows[0]) if rows else ""
                 self.assertFalse(row.rstrip().endswith(slots.ADD_CHAT),
                                  f"{width}: the workspace bar drew a `+`: {row!r}")
+                self.assertNotIn(slots.CLOSE_CHAT, row,
+                                 f"{width}: the workspace bar drew a `-`: {row!r}")
                 self.assertEqual([c for c in range(width) if slots.TABS.add_at(0, c)], [],
                                  f"{width}: the workspace bar published an affordance")
+                self.assertEqual([c for c in range(width)
+                                  if slots.TABS.close_at(0, c)], [],
+                                 f"{width}: the workspace bar published a close cell")
 
     def test_only_this_workspaces_chats_are_on_the_bar(self):
         _plant("api.1", workspace="api")
