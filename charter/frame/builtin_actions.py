@@ -334,7 +334,10 @@ class _Strip(NamedTuple):
 _STRIPS = (
     _Strip("chat", lambda fid: [c.id for c in chats.roster(fid)], lambda fid: fid,
            ("frame-chat",), chats.ONLY_CHAT),
-    _Strip("workspace", switch.workspaces, switch.current_workspace,
+    # The workspace lister takes no frame since #923 — the strip draws a plane-wide
+    # list, so its order is the plane's and not this chat's — and the lambda is what
+    # keeps `names(fid)` one signature for both strips rather than two.
+    _Strip("workspace", lambda _fid: switch.workspaces(), switch.current_workspace,
            ("frame-switch", "--workspace"), ONLY_WORKSPACE),
 )
 

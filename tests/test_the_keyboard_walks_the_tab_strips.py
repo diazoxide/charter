@@ -45,7 +45,7 @@ class _AStripAKeyboardCanWalk(PersonaIso, unittest.TestCase):
     CHATS = ("api.1", "api.2", "api.3")
 
     #: Made on top of whatever `PersonaIso` scaffolds, which is why the cases below read
-    #: `switch.workspaces(FID)` rather than this tuple: a plane always has a `default`, so a
+    #: `switch.workspaces()` rather than this tuple: a plane always has a `default`, so a
     #: case that assumed its own three would be asserting about a list charter does not
     #: return. `_plant` also makes an `api` directory for the chats.
     WORKSPACES = ("alpha", "beta", "gamma")
@@ -138,14 +138,13 @@ class AWalkStartsTheSwitchATabClickStarts(_AStripAKeyboardCanWalk):
                          [(util.self_relaunch_argv("frame-chat", "api.1"), FID)])
 
     def test_the_next_workspace_is_the_one_drawn_next(self):
-        """The name after this frame's own, in `switch.workspaces(FID)`' order — which is
-        the order the `workspaces` bar draws, asked of the same function AND about the same
-        frame so the two cannot disagree. **The frame is the load-bearing half since
-        #903**: that order is per frame and recorded, so a walk that asked without an id
-        would walk the alphabet while the strip drew the working set. Read off the list
-        rather than spelled, because a plane always carries a `default` this fixture did
-        not make."""
-        names = switch.workspaces(FID)
+        """The name after this frame's own, in `switch.workspaces()`' order — which is the
+        order the `workspaces` bar draws, asked of the same function so the two cannot
+        disagree. **Asked without a frame since #923**: the order is the plane's, so a walk
+        that keyed it to this chat would step through a strip no frame draws. Read off the
+        list rather than spelled, because a plane always carries a `default` this fixture
+        did not make."""
+        names = switch.workspaces()
         want = names[names.index(self.here) + 1]
         self._run("workspace.next")
         self.assertEqual(
@@ -153,7 +152,7 @@ class AWalkStartsTheSwitchATabClickStarts(_AStripAKeyboardCanWalk):
             [(util.self_relaunch_argv("frame-switch", "--workspace", want), FID)])
 
     def test_the_previous_workspace_is_the_one_drawn_before(self):
-        names = switch.workspaces(FID)
+        names = switch.workspaces()
         want = names[names.index(self.here) - 1]
         self._run("workspace.previous")
         self.assertEqual(self.spawned[0][0][-1], want)
@@ -198,7 +197,7 @@ class AWalkStartsTheSwitchATabClickStarts(_AStripAKeyboardCanWalk):
         """
         self.assertEqual(self._run("chat.next"), "chat → api.3")
         self.assertEqual(self._run("chat.previous"), "chat → api.1")
-        names = switch.workspaces(FID)
+        names = switch.workspaces()
         want = names[names.index(self.here) + 1]
         self.assertEqual(self._run("workspace.next"), f"workspace → {want}")
 
@@ -230,7 +229,7 @@ class TheWalkWrapsAndStartsWhereTheDirectionCameFrom(_AStripAKeyboardCanWalk):
         sentinel for both was the first version of the repo walk and was wrong, and this
         is that decision reaching a second list."""
         state.record_workspace(FID, "nowhere-at-all")
-        names = switch.workspaces(FID)
+        names = switch.workspaces()
         self._run("workspace.next")
         self._run("workspace.previous")
         self.assertEqual([argv[-1] for argv, _fid in self.spawned],
