@@ -124,6 +124,38 @@ class TheStripDrawsBothAffordances(_ABarThatWasDrawn, unittest.TestCase):
         self.assertEqual([c for c in range(self.WIDTH) if slots.TABS.close_at(0, c)], [])
 
 
+class TheFieldTheTwoGlyphsShare(unittest.TestCase):
+    """`slots._affordances` — the one string both rungs compose, asked directly.
+
+    It is measured twice inside `slots._compose` (once for the rung that draws every name
+    on a row, once for the run that draws them over several) and the second glyph's cells
+    are found by subtracting its width from this string's. So what it composes for an
+    ABSENT field is load-bearing arithmetic rather than tidiness: a separator emitted for a
+    field that is not there is a column spent on nothing, on a row whose names are
+    competing for every one of them, and on the workspaces strip it would be a trailing
+    blank the bar did not draw before.
+    """
+
+    def test_neither_field_composes_to_nothing_at_all(self):
+        self.assertEqual(slots._affordances("", ""), "")
+
+    def test_one_field_composes_to_itself_with_no_separator(self):
+        self.assertEqual(slots._affordances(slots.ADD_CHAT, ""), slots.ADD_CHAT)
+        self.assertEqual(slots._affordances("", slots.CLOSE_CHAT), slots.CLOSE_CHAT)
+
+    def test_both_are_one_cell_apart(self):
+        self.assertEqual(slots._affordances(slots.ADD_CHAT, slots.CLOSE_CHAT),
+                         f"{slots.ADD_CHAT} {slots.CLOSE_CHAT}")
+
+    def test_the_workspaces_strip_composes_no_trailing_field_at_all(self):
+        """The strip that is handed neither draws exactly the row it drew before #921 —
+        not that row plus a blank. `slots._workspaces_strip` is what hands over the two
+        empties, so this is the arithmetic that fact rests on."""
+        self.assertEqual(slots._affordances("", ""), "")
+        row = slots._bar(["alpha", "beta"], "alpha", 60, note="", close="")[0]
+        self.assertEqual(row, row.rstrip(), f"a trailing field was drawn: {row!r}")
+
+
 class BothAffordancesOrNeither(unittest.TestCase):
     """**They are one field as far as the ladder is concerned.**
 

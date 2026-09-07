@@ -8412,6 +8412,17 @@ def _as_a_drawer(surface, *, socket: str, pane: str):
     two-row question about one chat, which read as *"an entirely new window"* rather than
     as something that had opened over the frame the operator was looking at.
 
+    **Both verbs, and the cost is stated rather than hidden.** `chat: close` is the
+    confirmation this was reported about and it is always two rows — the confirming row and
+    the one chat `leave.plan(only=…)` names — so it fits the drawer whole. `charter: quit`
+    lists every chat on the plane, and in five rows it draws two of them at a time under a
+    heading that says how many there are, scrolled with the same up/down as everything else
+    on this surface. §4f asks that the warning be drawn *at the moment the operator is
+    deciding*, which it is; what a full-window quit bought on top of that was seeing a long
+    blast radius without scrolling. One surface with one rule was chosen over two that read
+    differently depending on which doorway reached them, and if that trade turns out wrong
+    the place to change it is here, in one expression.
+
     **``None`` passes straight through, and that is what makes this one call rather than
     an `if` at two call sites.** :func:`_picker` and `frame/tabmenu.opens` both answer
     ``None`` for every row that opens nothing, so the surface arriving here IS the
