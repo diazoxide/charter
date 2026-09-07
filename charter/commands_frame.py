@@ -8191,7 +8191,7 @@ def _palette_catalogue(fid: str, reg, *, snapshot) -> tuple:
     catalogue is DATA and #921's rule is stated over it.** *Every row that makes a kind of
     thing has a counterpart row that unmakes that same kind, in the same surface* — and
     the report that produced the rule is an operator who read a strip drawing `+` and no
-    `−` and concluded, correctly from what was on screen, that closing a chat was
+    `-` and concluded, correctly from what was on screen, that closing a chat was
     impossible. `tests/test_the_palette_advertises_unmaking_what_it_makes.py` asks that
     question of what this returns, so the invariant is asked of the rows the palette is
     actually built from rather than of a second list a test composed to look like them.
