@@ -95,10 +95,16 @@ class EveryPlaneCommitOffersTheForgeToken(PersonaIso):
     """
 
     def test_memory_sync_delegates_to_the_one_committer(self):
+        from pathlib import Path
         from unittest import mock
-        from charter import commands_persona, planegit
-        with mock.patch.object(commands_persona, "_pending_memory",
-                               return_value=["personas/p/memory/m.md"]), \
+        from charter import commands_persona, gitstate, planegit
+        # A KNOWN state carrying one pending file. `_pending_memory` returns the paths AND
+        # the state they were read from since #917, because "nothing pending" and "charter
+        # could not ask" used to produce the same empty list — and the same green tick.
+        pending = (["personas/p/memory/m.md"],
+                   gitstate.TreeState(Path("/plane"), (" M personas/p/memory/m.md",),
+                                      None, None))
+        with mock.patch.object(commands_persona, "_pending_memory", return_value=pending), \
              mock.patch.object(planegit, "commit_push", return_value=0) as cp, \
              mock.patch("charter.hooks._secret_kind", return_value=None):
             rc = commands_persona.cmd_persona_memory_sync(_Args(no_push=False))

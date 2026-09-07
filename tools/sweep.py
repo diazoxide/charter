@@ -2199,11 +2199,33 @@ class Sandbox:
 
 
 def dirty_files(root: Path, paths: tuple[str, ...]) -> dict[str, bytes]:
-    """Uncommitted work under the swept paths, so the tool is usable before a commit."""
+    """Uncommitted work under the swept paths, so the tool is usable before a commit.
+
+    `check=False` used to hide the exit status here, and `git` returns only stdout, so a
+    failed `git status` produced an empty listing — the same value as a clean tree. The
+    sandbox was then built from committed HEAD alone and the whole sweep measured a tree
+    the operator was not looking at, reporting survivors and killed mutants against it,
+    with nothing anywhere saying so (#917).
+
+    That is :class:`NoSandbox`'s category exactly, twenty lines up in this same file: a
+    statement about the machine, made before a single mutation has been measured. Raising
+    it here rather than inventing a second one, because a reader who has met one of these
+    has met both.
+    """
     out: dict[str, bytes] = {}
-    listing = git("status", "--porcelain", "--untracked-files=all", "--", *paths,
-                  cwd=root, check=False)
-    for line in listing.splitlines():
+    done = subprocess.run(("git", "status", "--porcelain", "--untracked-files=all", "--",
+                           *paths), cwd=str(root), check=False,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if done.returncode != 0:
+        said = (done.stderr or "").strip()
+        raise NoSandbox(
+            f"the uncommitted work under {', '.join(paths)} could not be read — `git "
+            f"status` exited {done.returncode} in {root}"
+            + (f" — {said}" if said else " without saying why") + ". "
+            "That is the machine this sweep is running on, not a verdict about any "
+            "mutation: sweeping the committed tree instead would measure a tree nobody "
+            "is looking at.")
+    for line in done.stdout.splitlines():
         rel = line[3:].strip()
         if rel.endswith(".py") and (root / rel).exists():
             out[rel] = (root / rel).read_bytes()

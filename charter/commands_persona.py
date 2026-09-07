@@ -17,7 +17,8 @@ import json
 import os
 import sys
 
-from . import commands_secrets, config, contain, mcpseen, persona, root, trace, tui, util
+from . import (commands_secrets, config, contain, gitstate, mcpseen, persona, root, trace,
+               tui, util)
 from .secrets import base, registry
 
 #: The scaffold a new persona starts from.
@@ -1075,21 +1076,30 @@ def cmd_persona_forget(args) -> int:
 _MEM_PATH = __import__("re").compile(r"personas/[^/]+/(?:memory|refs)/")
 
 
-def _pending_memory(root) -> list[str]:
-    """Repo-relative persona memory/refs paths with uncommitted changes."""
-    import subprocess
-    r = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--", "personas"],
-                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10)
+def _pending_memory(root) -> tuple[list[str], gitstate.TreeState]:
+    """Repo-relative persona memory/refs paths with uncommitted changes, **and the state
+    they were read from**.
+
+    Two values because one could not hold the answer (#917). The list is empty when there
+    is nothing to sync AND when charter could not ask — the call used to send git's stderr
+    to ``DEVNULL`` and never look at its exit status, so an unreadable plane produced a
+    green ``✓ No uncommitted persona memory/refs — nothing to sync.`` over memory nobody
+    had looked at. Durable knowledge that an agent has been told is shared, and is not.
+
+    Its twin is `hooks._uncommitted_memory_nudge`, which asks the same question at session
+    start and used to fall silent on the same failure. Both halves of "is memory unsynced"
+    answered "no" for the same reason at the same time, which is precisely how a defect of
+    this shape survives being noticed.
+    """
+    st = gitstate.read(root, "personas", timeout=10)
     out = []
-    for line in r.stdout.splitlines():
-        if not line.strip():
-            continue
+    for line in st.rows:
         path = line[3:].strip()
         if " -> " in path:  # rename → take the destination
             path = path.split(" -> ", 1)[1]
         if _MEM_PATH.search("/" + path):
             out.append(path)
-    return out
+    return out, st
 
 
 def cmd_persona_memory_sync(args) -> int:
@@ -1107,7 +1117,20 @@ def cmd_persona_memory_sync(args) -> int:
     from .hooks import _secret_kind
 
     root = config.ROOT
-    changed = _pending_memory(root)
+    changed, state = _pending_memory(root)
+    if not state.known and not state.no_repo:
+        # A tick is a claim, and this one is about durable knowledge being safe. #917 is
+        # what a false one costs; `doctor`'s `_NOT_CHECKED_HINT` states the same rule for
+        # the same reason — "not checked" is the absence of information, not evidence of
+        # health, and a green glyph over it is read as the latter.
+        #
+        # `no_repo` is exempt: a plane `charter init` created and nobody ran `git init` in
+        # has nowhere to sync TO, which is a definite answer rather than an unread one, and
+        # `commit_push` already names that case in its own words.
+        util.err(f"Refusing to sync — {state.why()}")
+        for line in state.remedy():
+            util.info(f"  {line}")
+        return 1
     if not changed:
         util.ok("No uncommitted persona memory/refs — nothing to sync.")
         return 0

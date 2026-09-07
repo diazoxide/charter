@@ -16,7 +16,8 @@ import sys
 import time
 from types import SimpleNamespace
 
-from . import change, config, contain, gitpolicy, planegit, tui, util, workspace, worktree
+from . import (change, config, contain, gitpolicy, gitstate, planegit, tui, util,
+               workspace, worktree)
 from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory_reactive,
                        commit_push)
 
@@ -448,7 +449,16 @@ def _work_at_risk(name: str) -> list[str]:
     """
     out = []
     for d in workspace.clones(name):
-        if _git(["status", "--porcelain"], cwd=d).stdout.strip():
+        # #917, and the sharpest instance of it in this package: what this list is empty of
+        # is what `cmd_workspace_remove` hands to `shutil.rmtree`. Reading a `git status`
+        # that FAILED as "no uncommitted changes" makes a clone charter could not look at
+        # indistinguishable from one it looked at and found empty — and then deletes it.
+        # An unreadable clone is at risk by definition: charter cannot say what is in it.
+        dirt = gitstate.read(d)
+        if not dirt.known:
+            out.append(f"{d.name}: could not be read — {dirt.said}")
+            continue
+        if dirt.rows:
             out.append(f"{d.name}: uncommitted changes")
             continue
         up = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=d)
@@ -493,7 +503,14 @@ def _worktrees_at_risk(name: str) -> list[str]:
     for repo in repos:
         for wt in sorted(worktree.dirs_for(name, repo)):
             label = f"{repo}/{wt.name}"
-            if worktree.is_dirty(wt):
+            dirt = worktree.dirt(wt)
+            if not dirt.known:
+                # The same rmtree gate, the worktree half. Said in the shape the
+                # `unique_commits` line below has always used — this function already knew
+                # how to report "could not be checked" for one of its two questions.
+                out.append(f"{label}: could not be checked for uncommitted changes")
+                continue
+            if dirt.rows:
                 out.append(f"{label}: uncommitted changes")
                 continue
             alone = worktree.unique_commits(wt)
@@ -531,10 +548,21 @@ def _git_user() -> str:
 def _restore_blockers(name: str) -> list[str]:
     """Repos whose current branch wouldn't restore for another engineer — uncommitted
     work, unpushed commits, or a branch not on the remote at all. The 'enforce push'
-    guard: a manifest branch is only meaningful if it's actually on the remote."""
+    guard: a manifest branch is only meaningful if it's actually on the remote.
+
+    A clone charter could not read blocks too (#917). This list empty is what lets
+    `cmd_workspace_snapshot` write a manifest that claims to capture reality; a `git
+    status` that failed contributes the same emptiness as one that found nothing, and the
+    manifest then asserts a state nobody measured — to another engineer, on another
+    machine, who has no way to know it was never checked.
+    """
     out = []
     for d in workspace.clones(name):
-        if _git(["status", "--porcelain"], cwd=d).stdout.strip():
+        dirt = gitstate.read(d)
+        if not dirt.known:
+            out.append(f"{d.name}: could not be read — {dirt.said}")
+            continue
+        if dirt.rows:
             out.append(f"{d.name}: uncommitted changes")
             continue
         up = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=d)
@@ -815,7 +843,15 @@ def cmd_workspace_autosave(args) -> int:
         rel = _ws_meta_paths(name)
         if not rel:
             return 0
-        if not _git(["status", "--porcelain", "--", *rel], cwd=config.ROOT).stdout.strip():
+        # #917: `.stdout.strip()` alone made "nothing pending" and "charter could not ask"
+        # the same answer, on the path most likely to meet a real lock — this fires at the
+        # end of every turn, in the plane root, alongside `_commit_dispatch` and
+        # `commit_memory_reactive`, which is the exact contention `hooks._commit_dispatch`
+        # takes its own flock to avoid. An unknown state falls THROUGH to `commit_push`
+        # rather than returning here, because `commit_push` is now the thing that says why
+        # out loud; returning silently is how a memo stops being saved and nobody learns.
+        pending = gitstate.read(config.ROOT, *rel)
+        if pending.known and not pending.rows:
             return 0  # nothing pending
         marker = config.STATE_DIR / "ws-autosave" / name
         config.private_mkdir(marker.parent)

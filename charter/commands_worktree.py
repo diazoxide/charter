@@ -107,7 +107,15 @@ def cmd_worktree_add(args) -> int:
     if detached:
         util.warn(f"{args.repo} is on a DETACHED HEAD ({base}) — the piece branches off "
                   "that commit, not a branch.")
-    if worktree.is_dirty(clone):
+    dirt = worktree.dirt(clone)
+    if not dirt.known:
+        # An advisory line, so this stays a warning rather than becoming a refusal — but it
+        # says WHICH of the two it is. Silence here reads as "nothing to carry", which is
+        # the reading #917 is about.
+        util.warn(f"{args.repo}: {dirt.why()}")
+        for line in dirt.remedy():
+            util.info(f"  {line}")
+    elif dirt.rows:
         util.warn(f"{args.repo} has uncommitted changes — they stay in the clone and are "
                   "NOT carried into the worktree.")
 
@@ -269,7 +277,13 @@ def cmd_worktree_list(args) -> int:
                 # still lists the record, but there's no path left to run `status` on.
                 state = "missing"
             else:
-                state = "dirty" if worktree.is_dirty(Path(r["path"])) else "clean"
+                # A DISPLAY site, and it still gets the third word. `missing` above covers
+                # the one failure anybody had measured (#597); every other way `git status`
+                # can fail printed `clean` in a column an operator reads before deciding
+                # whether a piece is safe to drop.
+                dirt = worktree.dirt(Path(r["path"]))
+                state = ("unknown" if not dirt.known else
+                         "dirty" if dirt.rows else "clean")
             branch = r["branch"] or f"detached {r['path']}"
             who = pieces.claimant(claims.get((clone.name, r["piece"])))
             said = pieces.outcome(declared.get((clone.name, r["piece"])))
@@ -372,7 +386,19 @@ def cmd_worktree_remove(args) -> int:
     force = getattr(args, "force", False)
     if stale is None and not force:
         # Parallel agents are how work gets orphaned — refuse anything that would lose it.
-        if worktree.is_dirty(path):
+        dirt = worktree.dirt(path)
+        if not dirt.known:
+            # On the same terms as the `unique_commits` refusal ten lines below, which has
+            # said this since #104: a tree charter could not read is not a tree charter has
+            # cleared for deletion. Before #917 this branch did not exist and an unreadable
+            # worktree fell straight through to `git worktree remove`.
+            util.err(f"could not determine whether '{args.piece}' holds uncommitted "
+                     f"changes — refusing to remove. {dirt.why()}")
+            for line in dirt.remedy():
+                util.info(f"  {line}")
+            util.info("Check the worktree by hand, or discard with --force.")
+            return 1
+        if dirt.rows:
             util.err(f"'{args.piece}' has uncommitted changes — refusing to remove.")
             util.info("Commit them, or discard with --force.")
             return 1

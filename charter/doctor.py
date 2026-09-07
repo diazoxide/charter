@@ -15,7 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import contain, inventory, tui, util
+from . import contain, gitstate, inventory, tui, util
 from .forge.gitlab import GitLabForge
 
 OK, WARN, FAIL = "ok", "warn", "fail"
@@ -592,7 +592,19 @@ def check_plane_root() -> Result:
         # written to disk and never committed — so every plane a few days old carries
         # untracked files under `personas/*/memory/`. Counting those would put this row
         # permanently in the yellow, which costs the two findings that do matter.
+        #
+        # Read for its EXIT STATUS as well as its output (#917). This was the one rc-blind
+        # line in a function that checks every other git call it makes — `--show-toplevel`,
+        # `symbolic-ref`, both `rev-list`s and `@{upstream}` all branch on `returncode` —
+        # and an empty answer from a `git status` that failed produced `✓ plane root  clean
+        # on main`. The surrounding `try` already turned a TIMEOUT into an honest "not
+        # checked"; a non-zero exit deserves the same sentence, and `_NOT_CHECKED_HINT`
+        # exists to say why a tick over an unrun check is the wrong glyph.
         status = _git_in(root, "status", "--porcelain", "--untracked-files=no")
+        if status.returncode != 0:
+            return Result(name, WARN,
+                          detail=f"not checked (git status exited {status.returncode})",
+                          hint=_NOT_CHECKED_HINT)
         dirty = [ln for ln in status.stdout.splitlines() if ln.strip()]
         # How far the root has drifted behind its upstream. Read from the ALREADY-FETCHED
         # remote ref — never a live query, because this runs from the SessionStart hook and
@@ -678,6 +690,60 @@ def check_plane_root() -> Result:
              "<repo>; the plane root is one working tree every session shares.",
     )
 
+
+def check_index_lock() -> Result:
+    """A ``.git/index.lock`` left in the plane's own repository — noticed *before* a save
+    runs into it.
+
+    #917 is what happens when nothing does. The operator's lock had been there for
+    twenty-three hours, through however many sessions, and the first thing to look at it
+    was the `charter save` it broke — which then reported the tree clean and said nothing
+    about the file. A preflight row is where a fact like that belongs: it costs one `stat`
+    on a path charter can work out without a subprocess (`gitstate.git_dir_of` asks the
+    filesystem first), and it turns a silent trap into a line an operator reads at the top
+    of the session.
+
+    **A lock is not a fault, so a lock is not automatically a warning.** git takes one for
+    every write to the index; catching a legitimate `git commit` mid-flight and painting
+    the preflight yellow for it would be a false alarm on healthy behaviour, and a
+    permanently-yellow row is one people stop reading (`check_memory_indexes` records the
+    same concern for the same reason). A fresh lock is reported on an OK row — stated, on
+    the `↳` continuation `Result.render` gives a detail, because a green row keeps nothing
+    back.
+
+    **Zero bytes and hours old is different, and it is a WARN.** git creates the lock,
+    writes the new index into it, and renames it over the old one, so a lock that never
+    grew is one whose writer died before writing anything — a crash, not contention, and
+    something only a person can clear. WARN and not FAIL: `cmd_doctor` exits non-zero on
+    FAIL, and a stale lock is "the next save will refuse", not "you cannot work".
+
+    charter names it and stops there. The `rm` is the operator's, after the `ps` — see
+    `gitstate` for why that division is not a formality.
+    """
+    from . import config as _config
+
+    name = "index lock"
+    if not _config.HAS_CONTROL_PLANE:
+        return Result(name, OK, detail="no control plane found")
+    root = Path(_config.ROOT)
+    try:
+        lock = gitstate.for_repo(root, timeout=CHECK_TIMEOUT)
+    except (util.ProcTimeout, OSError) as e:
+        return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
+    if lock is None:
+        return Result(name, OK, detail="none held on the plane's index")
+    if not lock.crashed:
+        return Result(name, OK, detail=f"held now — {lock.size} byte(s), "
+                                       f"{gitstate.age_phrase(lock.age)} old; a git is "
+                                       f"probably writing")
+    return Result(
+        name, WARN,
+        detail=f"{lock.path} — {lock.size} byte(s), {gitstate.age_phrase(lock.age)} old",
+        hint="A git process crashed here and left the index locked; every `charter save` "
+             "and `git add` in this plane will refuse until it is gone. Check nothing "
+             "holds it (ps -eo pid,lstart,command | grep '[g]it'), then remove it "
+             f"yourself: rm -f {lock.path}  — charter never removes a lock.",
+    )
 
 
 def session_root() -> Path:
@@ -3131,7 +3197,8 @@ def _checks():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
     results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
-                check_plane_root(), check_session_root(), check_session_layer(),
+                check_plane_root(), check_index_lock(),
+                check_session_root(), check_session_layer(),
                 check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(), check_workspace_harness(), check_changes(),
                 check_inventory(), check_vaults(),
@@ -3172,7 +3239,8 @@ def _checks():
 _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
-    "git auth", "charter.toml", "schema", "plane root", "session root", "session layer",
+    "git auth", "charter.toml", "schema", "plane root", "index lock",
+    "session root", "session layer",
     "harness", "frame",
     "plane-root guard", "guard seen", "nested plane", "workspace clones",
     "workspace layer", "changes",

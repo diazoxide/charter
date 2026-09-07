@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import NamedTuple
 
-from . import config, util
+from . import config, gitstate, util
 from . import root as _root      # `root` is a PARAMETER name throughout this module
 
 
@@ -106,8 +106,12 @@ def commit_memory_reactive(paths: list[str], title: str) -> int:
     - ``push``   — committed locally and pushed in the BACKGROUND — so a memory reaches the
       shared repo the moment it's recorded, without blocking the turn. Best-effort.
 
-    Returns commit_push's rc (0 = committed / nothing to do / posture is local,
-    1 = a secret-shaped value was refused)."""
+    Returns commit_push's rc (0 = committed / nothing to do / posture is local, 1 = the
+    save was refused — a secret-shaped value, or a tree charter could not read (#917)).
+    Every caller ignores it: this fires reactively, from a hook, after a memory file has
+    already been written to disk, so there is nothing for it to abort. The refusal is
+    heard because `commit_push` says it out loud, not because anything here branches on
+    it."""
     from . import instance as _instance
     # Re-clamp defensively — see `instance.clamp_share`: `config.MEMORY_SHARE` is always
     # pre-clamped at import time, but this reactive path must not itself rely on that.
@@ -612,6 +616,50 @@ def stages_the_whole_tree(add_cmd: list) -> bool:
     return any(f in _WHOLE_TREE_FLAGS for f in flags)
 
 
+def _refuse_unreadable(root, git_dir, doing: str, said: str) -> int:
+    """Outcome three of three: charter could not determine the tree's state, so it stops.
+
+    **The refusal is the feature.** `charter save` returning 0 is what every caller — and
+    every operator — reads as "it is saved", and #917 is entirely made of what happens
+    downstream of believing that: a `git checkout`, a worktree removal, a machine going
+    away. So this is rc 1 and a red line, on a path that used to be a tick.
+
+    Three things are said, and each earns its place:
+
+    * **what charter was doing when git stopped**, and git's own words for why. Charter's
+      guess at the reason would be a second thing to be wrong about; `sweep.Sandbox._must`
+      made the same call for the same reason (#905).
+    * **the lock, if there is one — its path, its size and its age.** The age is what
+      changes the operator's next move: seconds old is somebody else's `git commit` and the
+      answer is to wait, hours old and zero bytes is a corpse and the answer is `rm`. A
+      message that said only "a lock is present" would send both to the same place.
+    * **the `ps` before the `rm`.** charter never removes a lock — see `gitstate` — and the
+      order the remedy is printed in is what makes handing over the `rm` safe.
+
+    The word "clean" appears nowhere on this path, deliberately, and a test holds it to
+    that: the whole defect was a sentence containing it.
+    """
+    util.err(f"Refusing to save — charter could not read the state of {root}, so it "
+             f"cannot tell an unchanged tree from an unreadable one.")
+    util.err(f"  {doing}" + (f" — {said}" if said else " without saying why"))
+    # No `if git_dir` guard: the caller builds it from `root` unconditionally, so it is
+    # always a Path and never falsy. The guard read as caution and was a branch nothing
+    # could enter — the deletion sweep found it, and `find` already answers `None` for a
+    # directory it cannot stat.
+    lock = gitstate.find(git_dir)
+    if lock:
+        util.info(f"  {lock.describe()}")
+        for line in lock.remedy():
+            util.info(f"  {line}")
+    else:
+        # No lock, so charter has nothing to name and says so rather than inventing a
+        # remedy. `git status` in that tree is where the reason is, and it is the operator's
+        # to read: this is the same shape as the "not a git repository" branch above.
+        util.info(f"  Nothing charter can name is holding this index. "
+                  f"`git -C {root} status` is where the reason will be.")
+    return 1
+
+
 def commit_push(root, add_cmd: list, message: str | None,
                 sign: bool = False, no_push: bool = False, background: bool = False) -> int:
     """Stage (``add_cmd``) → secret-scan staged memory/refs → commit → push via the
@@ -705,16 +753,41 @@ def commit_push(root, add_cmd: list, message: str | None,
     # the commit failed too, and `rev-parse --short HEAD` came back empty — printing
     # `✓ Committed : charter save: 0 file(s)` and exiting 0. The personas and memory
     # charter had just told the user to commit had no history at all.
-    if _git(["rev-parse", "--git-dir"], cwd=root).returncode != 0:
+    where = _git(["rev-parse", "--git-dir"], cwd=root)
+    if where.returncode != 0:
         util.err(f"{root} is not a git repository, so there is nothing to commit to.")
         util.info("  charter init does not create one. Run: git init && git remote add "
                   "origin <url>  — personas and memory are meant to be committed and shared.")
         return 1
+    # Kept, rather than thrown away with the return code it was asked for. It is where the
+    # index lock lives, and for a linked worktree that is `<plane>/.git/worktrees/<name>`
+    # rather than `<root>/.git` — the tree whose index this call is about.
+    git_dir = Path(root, where.stdout.strip() or ".git")
 
-    _git(add_cmd, cwd=root)
-    if _git(["diff", "--cached", "--quiet"], cwd=root).returncode == 0:
+    # #917: THE ADD'S EXIT STATUS IS THE WHOLE FIX. Under a held `.git/index.lock` this
+    # exits 128 and stages nothing, and the probe below then answers 0 — because there is
+    # no difference between HEAD and an index nothing was written to. Discarded, that made
+    # "charter could not stage anything" and "there was nothing to stage" the same value,
+    # and charter printed the second: a claim about durability that was false, to an
+    # operator whose next act is to stop worrying about the work.
+    added = _git(add_cmd, cwd=root)
+    if added.returncode != 0:
+        return _refuse_unreadable(
+            root, git_dir, f"`git {' '.join(add_cmd)}` exited {added.returncode}",
+            gitstate.said(added))
+
+    # Three outcomes, and `diff --quiet` has always answered in three: 0 for no difference,
+    # 1 for a difference, anything else for a failure. Read as `== 0` / else, the third
+    # collapsed into the second and reached `git commit` with a message about zero files
+    # (the shape the comment above records); read as `== 0` / `== 1` / else, it says which.
+    probe = _git(["diff", "--cached", "--quiet"], cwd=root)
+    if probe.returncode == 0:
         util.info("Nothing to save — the control-plane working tree is clean.")
         return 0
+    if probe.returncode != 1:
+        return _refuse_unreadable(
+            root, git_dir, f"`git diff --cached --quiet` exited {probe.returncode}",
+            gitstate.said(probe))
     staged = [ln for ln in _git(["diff", "--cached", "--name-only"], cwd=root).stdout.splitlines() if ln.strip()]
 
     # Secret guard: refuse if a staged memory/ref file looks like it holds a secret.
