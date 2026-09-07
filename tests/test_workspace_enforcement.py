@@ -78,7 +78,8 @@ class TestAutosaveGating(unittest.TestCase):
             setattr(config, k, v)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _run(self, pending: bool, live: bool = True, share: str = "push"):
+    def _run(self, pending: bool, live: bool = True, share: str = "push",
+             known: bool = True):
         config.MEMORY_SHARE = share
         # A KNOWN state, empty or not. `cmd_workspace_autosave` reads `gitstate.read` since
         # #917 — "nothing pending" and "charter could not ask" used to be the same empty
@@ -86,7 +87,8 @@ class TestAutosaveGating(unittest.TestCase):
         # turn, in the plane root, beside two other committers). An unknown state falls
         # through to `commit_push` deliberately, so it must not be what these cases stub.
         rows = ((" M workspaces/default/memory/notes.md",) if pending else ())
-        status = gitstate.TreeState(config.ROOT, rows, None, None)
+        status = gitstate.TreeState(config.ROOT, rows, None if known else "fatal: bad index",
+                                    None)
         with mock.patch.object(cw.gitstate, "read", return_value=status), \
              mock.patch.object(cw, "commit_push", return_value=0) as cp, \
              mock.patch.object(cw.subprocess, "Popen") as popen, \
@@ -99,6 +101,16 @@ class TestAutosaveGating(unittest.TestCase):
         cp, popen = self._run(pending=False)
         cp.assert_not_called()
         popen.assert_not_called()
+
+    def test_a_tree_it_could_not_read_is_not_nothing_pending(self):
+        """#917's shape on the path most likely to meet a real lock: this fires at the end
+        of every turn, in the plane root, beside `_commit_dispatch` and
+        `commit_memory_reactive` — the contention `hooks._commit_dispatch` takes its own
+        flock to avoid. An unknown state has NO rows, exactly as a clean tree has none, so
+        `not rows` alone reads it as nothing to do and the memo is never committed, silently
+        and forever. It falls through to `commit_push` instead, which says why out loud."""
+        cp, _popen = self._run(pending=False, known=False)
+        cp.assert_called_once()
 
     def test_commits_and_bg_pushes_when_pending(self):
         cp, popen = self._run(pending=True)

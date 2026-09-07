@@ -155,13 +155,24 @@ def find(git_dir: Path | str) -> IndexLock | None:
     ``None`` also when the directory cannot be stat-ed at all: this module answers "is
     there a lock", and turning an unreadable git directory into a lock-shaped answer would
     be the same conflation one layer down.
+
+    The path is **resolved**, because the whole point of printing it is that the operator
+    can paste it into an `rm`, and macOS hands out temp and home paths through symlinks
+    (``/var`` → ``/private/var``) — `planegit._refuse_unreadable` passes the git dir it got
+    from `rev-parse` without normalising it first.
+
+    The age is **not** clamped here. A future mtime — a clock that went backwards, a bad
+    archive — makes this negative, and `age_phrase` clamps on the way out, which is the one
+    place it can be observed. A second clamp read as belt and braces and was really a line
+    nothing could tell apart from its own absence; the deletion sweep found it, and this
+    repository treats that as dead code rather than as an equivalent mutant.
     """
     p = Path(git_dir) / LOCK_NAME
     try:
         st = p.stat()
     except OSError:
         return None
-    return IndexLock(p.resolve(), st.st_size, max(0.0, time.time() - st.st_mtime))
+    return IndexLock(p.resolve(), st.st_size, time.time() - st.st_mtime)
 
 
 def git_dir_of(root: Path | str, timeout: float | None = None) -> Path | None:
@@ -182,8 +193,14 @@ def git_dir_of(root: Path | str, timeout: float | None = None) -> Path | None:
     some larger repository has no ``.git`` of its own and a real git directory above it,
     and that is a layout `check_plane_root` explicitly supports.
 
-    ``rev-parse --git-dir`` answers relative to the cwd when the cwd is inside the working
-    tree, so the result is resolved against *root* before it is returned.
+    ``rev-parse --git-dir`` answers relative to the cwd when the cwd is at the top of the
+    working tree, so the result is joined onto *root* before it is returned. It is **not**
+    resolved on that path, and the reason is measured rather than assumed: git 2.50.1 asked
+    from a subdirectory answers with an absolute, already-physical path (a symlinked route
+    in is resolved away), and a subdirectory is the only way this branch is reached at all —
+    the filesystem above answers for every tree that has a ``.git`` of its own. A
+    normalisation with nothing left to normalise is a line nothing can tell apart from its
+    own absence, which the deletion sweep found and this repository deletes.
     """
     quick = util.git_dir(Path(root))
     if quick is not None:
@@ -196,7 +213,7 @@ def git_dir_of(root: Path | str, timeout: float | None = None) -> Path | None:
     out = r.stdout.strip()
     if r.returncode != 0 or not out:
         return None
-    return Path(root, out).resolve()
+    return Path(root, out)
 
 
 def for_repo(root: Path | str, timeout: float | None = None) -> IndexLock | None:
@@ -214,10 +231,17 @@ def said(proc) -> str:
     a broken sweep for a day. git's stderr under a held lock is four lines of which the
     first names the file, so the first line is the useful one and the rest is the advice
     charter is giving anyway.
+
+    Stripped ONCE, and bound. The first draft tested ``if line.strip()`` and then returned
+    ``line.strip()`` — two calls, of which only the second is observable: ``bool(s.strip())``
+    and ``bool(s.lstrip())`` agree for every string, so the test's half was an equivalent
+    mutant by construction. The deletion sweep reported it as a survivor and was right;
+    binding the value is what makes the question unaskable rather than merely unanswered.
     """
     for line in (getattr(proc, "stderr", "") or "").splitlines():
-        if line.strip():
-            return line.strip()
+        first = line.strip()
+        if first:
+            return first
     return ""
 
 
@@ -309,5 +333,9 @@ def read(where: Path | str, *pathspec: str, timeout: float | None = None) -> Tre
         git_dir = git_dir_of(where, timeout=timeout)
         return TreeState(Path(where), (), said(r) or f"git status exited {r.returncode}",
                          None if git_dir is None else find(git_dir), git_dir is None)
-    return TreeState(Path(where), tuple(ln for ln in r.stdout.splitlines() if ln.strip()),
+    # `splitlines()` and nothing else. A blank-line filter here was defensive against
+    # something porcelain v1 does not produce — every record is `XY <path>` and the format
+    # has no empty records — and `"a\n".splitlines()` yields no trailing empty string, so
+    # nothing could tell the filter apart from its own absence. The deletion sweep found it.
+    return TreeState(Path(where), tuple(r.stdout.splitlines()),
                      None, None)

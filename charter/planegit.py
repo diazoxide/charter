@@ -642,7 +642,11 @@ def _refuse_unreadable(root, git_dir, doing: str, said: str) -> int:
     util.err(f"Refusing to save — charter could not read the state of {root}, so it "
              f"cannot tell an unchanged tree from an unreadable one.")
     util.err(f"  {doing}" + (f" — {said}" if said else " without saying why"))
-    lock = gitstate.find(git_dir) if git_dir else None
+    # No `if git_dir` guard: the caller builds it from `root` unconditionally, so it is
+    # always a Path and never falsy. The guard read as caution and was a branch nothing
+    # could enter — the deletion sweep found it, and `find` already answers `None` for a
+    # directory it cannot stat.
+    lock = gitstate.find(git_dir)
     if lock:
         util.info(f"  {lock.describe()}")
         for line in lock.remedy():

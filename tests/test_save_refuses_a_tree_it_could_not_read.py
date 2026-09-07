@@ -388,6 +388,8 @@ class TestALockIsDescribedByThreeFacts(unittest.TestCase):
         self.assertEqual(gitstate.age_phrase(60), "1m")
         self.assertEqual(gitstate.age_phrase(3600), "1h")
         self.assertEqual(gitstate.age_phrase(23 * 3600), "23h")
+        self.assertEqual(gitstate.age_phrase(86399), "23h")
+        self.assertEqual(gitstate.age_phrase(86400), "1d")
         self.assertEqual(gitstate.age_phrase(86400 * 3), "3d")
 
     def test_a_negative_age_reads_as_now(self):
@@ -434,6 +436,105 @@ class TestALockedWorktreeIsItsOwnIndex(LockedPlane):
         deep = self.plane / "personas"
         self.assertIsNone(__import__("charter").util.git_dir(deep))
         self.assertEqual(gitstate.git_dir_of(deep), (self.plane / ".git").resolve())
+
+
+class TestTheRecordIsBuiltFromWhatCanBePasted(LockedPlane):
+    """The parts of `gitstate` a reader acts on: the path in an `rm`, git's own words, and
+    the remedy list a caller prints under them."""
+
+    def test_a_lock_is_named_by_its_physical_path(self):
+        """`resolve()`, and it is not cosmetic. macOS hands out temp and home paths through
+        symlinks (``/var`` → ``/private/var``), `planegit` passes the git dir straight from
+        `rev-parse` without normalising it, and the line charter prints is one the operator
+        is invited to paste into an `rm`."""
+        link = self.tmp / "linked-git"
+        link.symlink_to(self.plane / ".git")
+        self.lock_path.write_bytes(b"")
+        self.addCleanup(self.lock_path.unlink, missing_ok=True)
+        found = gitstate.find(link)
+        self.assertIsNotNone(found)
+        self.assertEqual(found.path, self.lock_path.resolve())
+        self.assertNotIn("linked-git", str(found.path))
+
+    def test_the_git_dir_of_a_symlinked_tree_is_the_physical_one(self):
+        link = self.tmp / "linked-tree"
+        link.symlink_to(self.plane)
+        self.assertEqual(gitstate.git_dir_of(link), (self.plane / ".git").resolve())
+
+    def test_the_filesystem_answers_without_starting_a_process(self):
+        """`doctor` asks this on every SessionStart preflight, inside a hook budget that a
+        stalled 1Password once ate whole. `util.git_dir` reads the `.git` entry directly —
+        so a git that cannot even be spawned still gets an answer here."""
+        with mock.patch.object(gitstate.util, "run",
+                               side_effect=AssertionError("started a process")):
+            self.assertEqual(gitstate.git_dir_of(self.plane),
+                             (self.plane / ".git").resolve())
+
+    def test_a_git_that_will_not_run_leaves_the_git_dir_unknown(self):
+        """The fallback's own failure. Reached only when the filesystem could not answer,
+        so both halves are stubbed: no `.git` to read, and no git to ask."""
+        with mock.patch.object(gitstate.util, "git_dir", return_value=None), \
+             mock.patch.object(gitstate.util, "run",
+                               side_effect=OSError("no git on PATH")):
+            self.assertIsNone(gitstate.git_dir_of(self.plane))
+
+    def test_a_proc_with_no_stderr_at_all_says_nothing(self):
+        """`stderr` is `None` on a `CompletedProcess` captured without text, and `None` has
+        no `.splitlines()`. The fallback is what keeps a refusal from becoming a traceback
+        on the path that exists to explain one."""
+        self.assertEqual(gitstate.said(subprocess.CompletedProcess([], 1, "", None)), "")
+        self.assertEqual(gitstate.said(SimpleNamespace()), "")
+
+    def test_git_is_quoted_without_its_whitespace(self):
+        """Both ends. git's stderr under a held lock is four lines, and the message this
+        goes into is one line — a trailing newline or an indent pasted into the middle of a
+        sentence is how a quoted reason stops reading as a quote."""
+        proc = subprocess.CompletedProcess([], 1, "", "\n\n   fatal: Unable to create  \n")
+        self.assertEqual(gitstate.said(proc), "fatal: Unable to create")
+
+    def test_a_known_tree_explains_nothing(self):
+        """`why()` is a sentence for a caller that has to explain itself. A tree charter
+        read has nothing to explain, and a caller printing this unconditionally would tell
+        every healthy plane that charter could not read it."""
+        self.assertEqual(gitstate.read(self.plane).why(), "")
+        self.assertNotEqual(gitstate.read(self.tmp / "nowhere").why(), "")
+
+    def test_a_state_with_no_lock_offers_no_remedy(self):
+        self.assertEqual(gitstate.read(self.plane).remedy(), [])
+        self.assertEqual(gitstate.read(self.tmp / "nowhere").remedy(), [])
+
+    def test_a_state_with_a_lock_offers_the_description_and_both_commands(self):
+        lock = gitstate.IndexLock(self.lock_path, 0, gitstate.STALE_AFTER + 1)
+        state = gitstate.TreeState(self.plane, (), "fatal: bad index file", lock)
+        remedy = state.remedy()
+        self.assertEqual(len(remedy), 3)
+        self.assertIn("crashed", remedy[0])
+        self.assertIn("ps -eo", remedy[1])
+        self.assertIn("rm -f", remedy[2])
+
+    def test_a_pathspec_bounds_what_is_read(self):
+        """Without the `--`, `read(root, "personas")` asks about the whole tree, and every
+        caller that scopes its question — the memory pair, the workspace autosave — starts
+        answering a different one."""
+        (self.plane / "elsewhere.txt").write_text("not a persona\n")
+        self.assertTrue(gitstate.read(self.plane).rows)
+        scoped = gitstate.read(self.plane, "elsewhere.txt")
+        self.assertEqual([r[3:] for r in scoped.rows], ["elsewhere.txt"])
+        for i in range(DIRTY_FILES):
+            (self.plane / "personas" / f"p{i}.md").write_text(f"# persona {i}\n")
+        self.assertEqual(gitstate.read(self.plane, "personas").rows, ())
+
+    def test_a_tree_that_could_not_be_read_still_carries_its_lock(self):
+        """The two facts arrive together or the refusal has nothing to name. Built from a
+        repository git will not stand in — an empty `.git` — with a lock inside it, because
+        a lock alone does not stop `git status` (measured above)."""
+        broken = self.tmp / "broken"
+        (broken / ".git").mkdir(parents=True)
+        (broken / ".git" / gitstate.LOCK_NAME).write_bytes(b"")
+        state = gitstate.read(broken)
+        self.assertFalse(state.known)
+        self.assertIsNotNone(state.lock)
+        self.assertEqual(state.lock.path, (broken / ".git" / gitstate.LOCK_NAME).resolve())
 
 
 class TestAGitThatCouldNotBeRunIsNotAnAnswer(LockedPlane):

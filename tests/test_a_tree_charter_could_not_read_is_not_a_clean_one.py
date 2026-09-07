@@ -263,14 +263,39 @@ class TestAWorktreeCharterCouldNotReadIsNotRemovable(Unreadable):
         self.assertTrue(any("could not be checked for uncommitted changes" in r
                             for r in cw._worktrees_at_risk("alpha")))
 
+    def listing(self) -> str:
+        _rc, said = _said(commands_worktree.cmd_worktree_list,
+                          SimpleNamespace(workspace="alpha", repo=None))
+        return next(ln for ln in said.splitlines() if "slice" in ln)
+
     def test_the_listing_prints_unknown(self):
         _clone, wt = self.wire()
         self.break_it(wt)
-        rc, said = _said(commands_worktree.cmd_worktree_list,
-                         SimpleNamespace(workspace="alpha", repo=None))
-        line = next(ln for ln in said.splitlines() if "slice" in ln)
+        line = self.listing()
         self.assertIn("unknown", line)
         self.assertNotIn("clean", line)
+
+    def test_the_listing_still_prints_clean_for_a_healthy_piece(self):
+        """All three words, or the column says one thing. A third state that swallowed the
+        other two would be the same defect wearing the fix's clothes."""
+        self.wire()
+        self.assertIn("clean", self.listing())
+
+    def test_the_listing_still_prints_dirty_for_a_piece_holding_work(self):
+        _clone, wt = self.wire()
+        (wt / "unsaved.txt").write_text("work nobody has committed\n")
+        line = self.listing()
+        self.assertIn("dirty", line)
+        self.assertNotIn("clean", line)
+
+    def test_worktree_add_warns_about_a_clone_it_could_not_read(self):
+        """Advisory, so a warning and not a refusal — but it says WHICH of the two it is.
+        Silence here reads as "nothing to carry", which is the reading #917 is about."""
+        clone = self.broken_clone(repo="svc")
+        rc, said = _said(commands_worktree.cmd_worktree_add,
+                         SimpleNamespace(workspace="alpha", repo="svc", piece="slice",
+                                         branch=None, force=False))
+        self.assertIn("could not read", said)
 
 
 class MemoryPlane(PersonaIso):
@@ -307,6 +332,36 @@ class TestBothHalvesOfIsMemoryUnsyncedStopAnsweringNo(MemoryPlane):
             said = hooks._uncommitted_memory_nudge()
         self.assertIn("could not read", said)
         self.assertIn("bad index file", said)
+
+    def known(self, *rows: str):
+        return mock.patch.object(
+            gitstate, "read",
+            return_value=gitstate.TreeState(config.ROOT, rows, None, None))
+
+    def test_the_nudge_counts_memory_and_refs_and_nothing_else(self):
+        """The filter this line has always carried, pinned now that the line moved. A
+        persona's charter is not durable knowledge waiting to be shared — it is a file the
+        operator edits — and counting it would put a nudge on every session that touched
+        one."""
+        with mock.patch.object(config, "MEMORY_SHARE", "commit"), \
+             self.known(" M personas/qa/memory/a.md", " M personas/qa/qa.md",
+                        " M personas/qa/refs/b.md"):
+            said = hooks._uncommitted_memory_nudge()
+        self.assertIn("2 persona memory/ref file(s)", said)
+
+    def test_a_tree_dirty_in_neither_store_says_nothing(self):
+        with mock.patch.object(config, "MEMORY_SHARE", "commit"), \
+             self.known(" M personas/qa/qa.md"):
+            self.assertEqual(hooks._uncommitted_memory_nudge(), "")
+
+    def test_a_refs_file_alone_is_enough(self):
+        """`/refs/` is half of what this counts, and the half with no other witness: a
+        persona's refs are knowledge too, and a spelling that matched only `/memory/` would
+        lose them silently."""
+        with mock.patch.object(config, "MEMORY_SHARE", "commit"), \
+             self.known(" M personas/qa/refs/b.md"):
+            self.assertIn("1 persona memory/ref file(s)",
+                          hooks._uncommitted_memory_nudge())
 
 
 class TestAPlaneWithNoRepositoryIsADefiniteAnswer(MemoryPlane):
