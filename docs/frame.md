@@ -646,13 +646,20 @@ not all fit the bar draws the page yours falls on and counts what is off each en
 are (`2/3`). It never shows half a name.
 
 **The workspace bar leads with the workspaces you have been in.** Its order is worked out
-once, when the frame launches, from when charter last wrote anything about each
-workspace's chats — so the ones you are actually working in are on the left, where you look
-first and where a narrow strip's first page is. Then it *stops moving*: switching workspaces
-updates the record for the next frame and does not slide a single column now, which is what
-keeps a tab you just pressed the same tab a moment later. A workspace made while the frame
-is open goes on the end. The chat bar is unchanged and stays in ordinal order — `api.1`
-stays leftmost, where you learnt to look for it.
+once per plane launch, from when charter last wrote anything about each workspace's chats —
+so the ones you are actually working in are on the left, where you look first and where a
+narrow strip's first page is. Then it *stops moving*: switching workspaces updates the
+record for the next launch and does not slide a single column now, which is what keeps a
+tab you just pressed the same tab a moment later. A workspace made while the plane is up
+goes on the end. The chat bar is unchanged and stays in ordinal order — `api.1` stays
+leftmost, where you learnt to look for it.
+
+**The order is the plane's, not each chat's**, and every frame on the plane draws the same
+columns — as do the palette, the keyboard walk and the list a mistyped name is answered
+with. It has to be: switching workspaces switches *chats*, so an order held per chat would
+hand you a differently-ordered strip after every switch, which is the shape this started
+out in. It is decided again when you next launch the plane — still while you are looking
+at it, fresh when you come back.
 
 **Neither strip is labelled.** They used to open with the word `chats` or `workspaces`, and
 that cost 9 and 14 columns of the row the names are competing for. What tells them apart is
