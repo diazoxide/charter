@@ -285,6 +285,17 @@ class APlaneThatGoesColdDecidesAgain(_Plane, unittest.TestCase):
         self.assertTrue(config.WORKSPACE_TAB_ORDER_FILE.is_file(),
                         "a plane with a chat being claimed was read as cold")
 
+    def test_a_stray_file_in_the_frame_root_is_not_a_frame(self):
+        """The count is of DIRECTORIES, and a file there is neither a frame that was
+        reaped nor a frame that is still up. Left in the count it would be a directory
+        `reap` can never take — every keep-rule abstains on a file — so the plane would
+        read as warm for good and the order would never be decided again."""
+        self.strip("default.1")
+        (state._root() / "stray").write_text("not a frame\n")
+        self._reap()
+        self.assertFalse(config.WORKSPACE_TAB_ORDER_FILE.exists(),
+                         "a file in the frame root kept the plane warm for ever")
+
     def test_forgetting_an_order_that_was_never_recorded_is_not_an_error(self):
         """A plane that has never drawn a strip reaps like any other, and a reap runs on a
         launch path where a raise costs the launch."""
