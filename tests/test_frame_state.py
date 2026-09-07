@@ -260,6 +260,30 @@ class TheDotIsTheVersionDiscriminator(PersonaIso, unittest.TestCase):
         self.assertEqual(state.reap({chat}, server="charter"), [])
         self.assertTrue(state.frame_dir(chat).exists())
 
+    def test_reap_answers_in_NAME_order_however_the_directories_were_made(self):
+        """`reap` says what it removed, and the list is sorted rather than whatever
+        `os.scandir` hands back.
+
+        **`tools/sweep.py` reported the `sorted` as a survivor** and it was right to:
+        every case in this repository that spells an expected list removes exactly one
+        directory, so the order was never asked about. It is not decoration — the walk is
+        over a directory listing, whose order is the filesystem's (ext4 answers in hash
+        order, APFS in its own) and is neither name order nor creation order on any of
+        them. An answer a caller cannot predict is one no case can spell.
+
+        **Made in reverse name order, and asserted against the forward one**, which is what
+        makes the sort observable rather than exercised: a fixture whose creation order and
+        name order agree passes with `sorted` gone on any filesystem that happens to answer
+        in creation order. Eight names, so an unsorted answer would have to land on the one
+        arrangement in 40,320 to pass by luck.
+        """
+        names = [f"ws-{i}" for i in range(8)]
+        for name in reversed(names):
+            chat = _claimed_by_a_departed_launcher(name)
+            state.bump(chat)
+        self.assertEqual(state.reap(set(), server="charter"),
+                         [f"{n}.1" for n in names])
+
     def test_a_chat_whose_window_is_gone_is_removed_with_no_launcher_process_alive(self):
         """The other half, and the one the dash would have broken: nothing in the name
         can keep this directory, so an absent chat id really does reap.

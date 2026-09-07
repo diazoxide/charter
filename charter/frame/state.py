@@ -1446,82 +1446,6 @@ def asserted_bars(fid: str) -> AssertedBars:
         {s: n for s, n in rows.items() if isinstance(s, str) and isinstance(n, int)})
 
 
-def record_tab_order(fid: str, names: list[str]) -> None:
-    """Write down the order THIS RUNNING FRAME draws its workspace tabs in (#903).
-
-    :func:`record_bar_rows`' shape and every word of its argument about where this lives —
-    machine-written, per frame, deleted whole by :func:`reap` when the frame ends. What is
-    different is who writes it and when: this is written ONCE, by whichever process first
-    asks `switch.workspaces` about this frame, and never again while the frame runs.
-
-    **Holding the order still is the whole feature, and it is why an order computed from
-    mtimes has to be written down at all.** #903 asks the strip to lead with the working
-    set — *"active last used tabs should be in first order, then olds"* — against two
-    measured refusals of LIVE reordering: `slots._cuts` (*"a window CENTRED on the marked
-    tab moves every column each time the operator switches… six of the nine drawn tabs
-    answer a second press at the identical column with a SECOND, different workspace"*) and
-    `chats.of_workspace` (*"`api.1` stays leftmost, where an operator learned to look for
-    it"*). Both are right about a row that re-sorts while you look at it. Neither argues
-    against an order that is fixed for as long as the frame is open — so the recency is
-    read once and this is where it stops moving.
-
-    **A file rather than a variable in the panel's process**, and the difference is
-    load-bearing rather than defensive. `panel.run` draws one component for the life of a
-    process, but those processes are torn down and re-split on every re-layout — which a
-    workspace switch performs (`commands_frame._switch_client`). A module-level cache would
-    therefore be recomputed by exactly the gesture that must not move a column. The
-    launcher, the `frame-resize` child and each panel all read this one file instead, which
-    is also what keeps `slots.bar_rows_wanted` measuring the strip the panel will draw.
-
-    **`workspace.list_workspaces` still decides WHICH names there are**, so this is an
-    order and never a roster: a name recorded here that has since been deleted is dropped
-    and a workspace created after this was written is appended, both by `switch.workspaces`
-    and neither by re-writing this file. That is what stops a stale line resurrecting a
-    workspace on a strip, and it is why there is no re-record on change.
-
-    One name per line, read back through :func:`tab_order`. Same must-not-raise,
-    atomic-write shape as :func:`record_bar_rows`.
-    """
-    d = frame_dir(fid, create=True)
-    if d is None:
-        return
-    try:
-        config.replace_for(d / "tab_order", "".join(f"{n}\n" for n in names))
-    except OSError:
-        return
-
-
-def tab_order(fid: str) -> list[str]:
-    """The order this frame draws its workspace tabs in, or ``[]`` for a frame that has
-    not been asked yet.
-
-    ``[]`` is the ordinary case exactly once per frame — the first call, before
-    :func:`record_tab_order` has run — and it is also what an unreadable or truncated file
-    answers, for :func:`bar_rows`' reason: this is read on a panel's render path and on the
-    sizing path inside the `frame-resize` child, and a half-written file must degrade to
-    "no order recorded" rather than take the repaint down. The caller's degrade for that is
-    to compute the order again, which is the same answer this file was written from.
-
-    **Name-checked on the way out**, like every other name charter reads off disk and
-    joins onto a path (`workspace.declared_default`, :func:`frame_workspace`). These names
-    go on to a `workspace_dir()` join and onto a tab a click switches to, and #442 is what
-    an unchecked one in that position already cost.
-
-    An empty line is dropped by the name check on its own terms — `workspace.valid_name("")`
-    is already False — so there is no `if line` in front of it for no input to make
-    observable.
-    """
-    d = frame_dir(fid)
-    if d is None:
-        return []
-    try:
-        lines = (d / "tab_order").read_text().splitlines()
-    except (OSError, ValueError):
-        return []
-    from .. import workspace as ws_mod
-    return [n for n in (line.strip() for line in lines) if ws_mod.valid_name(n)]
-
-
 def record_chrome(fid: str, level: str) -> None:
     """Write down the pane surface THIS RUNNING FRAME is on, overriding `[frame] chrome`.
 
@@ -2510,13 +2434,25 @@ def reap(live: set[str], *, server: str) -> list[str]:
     the new frame is about to adopt — stale ``exit`` file included. Deciding that here
     would mean guessing which of two frames a directory belongs to; the launcher knows,
     because it is the one claiming the id, so it clears the file as it starts.
+
+    **One thing outside this directory is decided here, and it is decided on what is LEFT
+    rather than on what went** — see the closing paragraph of the body. A reap that took
+    every directory there was is the moment charter learns the plane has gone cold, and the
+    workspaces strip's plane-wide order (#923) expires exactly then. It is the shape
+    `_forget_session` already has one line up: a frame's state is not all inside its own
+    directory, and neither is a plane's.
     """
     root = _root()
     if not root.is_dir():
         return []
+    # Held as a list rather than walked straight out of `iterdir`, because the LENGTH is
+    # read again at the bottom — see the plane-order paragraph below. One listing, so
+    # "what was here" and "what is left" cannot be two different readings of a directory
+    # that moved in between.
+    entries = [d for d in sorted(root.iterdir()) if d.is_dir()]
     removed = []
-    for d in sorted(root.iterdir()):
-        if not d.is_dir() or d.name in live:
+    for d in entries:
+        if d.name in live:
             continue
         # Four independent reasons to keep a directory, and ALL must be absent before
         # anything is deleted. They answer different questions and none implies another:
@@ -2567,4 +2503,28 @@ def reap(live: set[str], *, server: str) -> list[str]:
         # name one directory over, and the ordinal is about to be handed out again (#731).
         _forget_session(d.name)
         removed.append(d.name)
+    # **A reap that took every directory there was is this plane going COLD, and that is
+    # where "once per plane launch" is decided** (#923). The order the workspaces strip
+    # draws is plane-wide (`workspace.record_tab_order`) and is decided by whichever
+    # process first asks for it; something has to say when that decision has expired, and
+    # both of the other candidates were refused. Re-deciding on a repaint is the live
+    # reordering `slots._cuts` measured — "six of the nine drawn tabs answer a second press
+    # at the identical column with a SECOND, different workspace". Never re-deciding
+    # ossifies: a workspace made next month sorts last for good. What is left is the
+    # launch, and a launch is exactly a plane that had no frames acquiring one.
+    #
+    # **Counted against every entry rather than against this server's**, which is what
+    # keeps the rule wider than the reap around it. This function is scoped to one server
+    # for reasons that do not apply here: a frame in the operator's own tmux is kept by the
+    # `owner != server` rule above and is an operator looking at a strip whose columns may
+    # not move under them (#767). A directory kept for ANY of the four reasons leaves the
+    # plane warm.
+    #
+    # Counted as what is LEFT rather than compared as two lengths: `removed` is built out
+    # of `entries`, so `>=` and `==` would be the same predicate and one of them would be a
+    # mutation no input could show. Zero is also the ordinary state of a plane whose frames
+    # a previous reap already took, which is a cold plane too.
+    if not len(entries) - len(removed):
+        from .. import workspace as ws_mod
+        ws_mod.forget_tab_order()
     return removed

@@ -202,17 +202,22 @@ def names_of(noun: str, fid: str = "") -> list[str]:
     `workspace.valid_name` / `persona.valid_name` / `instance.change_name_ok` on the way
     out, which is #442's rule applied where a directory name becomes a row.
 
-    *fid* is required in practice for :data:`CHANGE` and for :data:`WORKSPACE`, and ignored
-    by :data:`PERSONA`. Changes are per WORKSPACE and which workspace is a question about
-    the frame, not about this process (#512); workspaces are ORDERED per frame since #903,
-    so that the palette and the strip beside it draw one roster in one order. It defaults
-    to `""` rather than being made positional-required so that the two callers that predate
-    it read unchanged; `switch.changes("")` resolves the same "no frame, resolve locally"
-    path every other frame surface takes for an empty id, and `switch.workspaces("")`
-    answers alphabetically rather than inventing an order it has nowhere to record.
+    *fid* is required in practice for :data:`CHANGE` and for :data:`CHAT`, and ignored by
+    :data:`PERSONA` and by :data:`WORKSPACE`. Changes are per WORKSPACE and which workspace
+    is a question about the frame, not about this process (#512). It defaults to `""`
+    rather than being made positional-required so that the two callers that predate it read
+    unchanged; `switch.changes("")` resolves the same "no frame, resolve locally" path
+    every other frame surface takes for an empty id.
+
+    **Workspaces stopped taking it in #923**, and that is worth saying here because this is
+    where it looked like a per-frame question. #903 ordered the workspaces strip per frame;
+    a switch switches chats, so each chat froze an order of its own and the palette and the
+    strip agreed only inside one chat. The order is the plane's now, so every frame's
+    palette and every frame's strip draw one roster in one order — which is what this
+    function existed to guarantee in the first place.
     """
     if noun == WORKSPACE:
-        return switch.workspaces(fid)
+        return switch.workspaces()
     if noun == PERSONA:
         return switch.personas()
     if noun == CHAT:

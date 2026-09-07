@@ -4565,9 +4565,15 @@ def _workspaces_strip(fid: str):
     :func:`_workspace_counts` for the one grouped read and for why it does not put this
     strip on a clock, and :data:`TAB_COUNT_W` for why the field is there on every tab even
     when the number is not.
+
+    **The NAMES take no *fid* and the mark does** (#923), which is the one asymmetry on
+    this strip and the point of the fix behind it. Which workspace is marked is a fact
+    about this frame; the ORDER the names are drawn in is a fact about the plane, and
+    asking it per frame is what made every switch redraw a different strip — a switch
+    switches chats, and each chat held a frozen order of its own.
     """
     from . import switch as switch_mod
-    return (switch_mod.workspaces(fid), switch_mod.current_workspace(fid), "", "",
+    return (switch_mod.workspaces(), switch_mod.current_workspace(fid), "", "",
             _workspace_counts())
 
 
