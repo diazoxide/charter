@@ -3105,15 +3105,56 @@ SHARD_FIXED_COSTS = {
 #: hits is a budget that fails on exactly the runs nobody is watching.
 SHARD_FIXED = 12 * 60
 
-#: What one mutation costs a shard. Read off the runs that ran out of time rather than off
-#: a workstation: #626 reached about 53 of its 78 inside the hour, and the fixed cost of a
-#: run with no map cache was about 515 s, which leaves **58 s** each. A workstation
-#: measures 24 s at `--jobs 3`; CI is slower and the gate must be sized against CI.
+#: What one mutation costs a shard when nothing is known about it. Read off the runs that
+#: ran out of time rather than off a workstation: #626 reached about 53 of its 78 inside
+#: the hour, and the fixed cost of a run with no map cache was about 515 s, which leaves
+#: **58 s** each. A workstation measures 24 s at `--jobs 3`; CI is slower and the gate must
+#: be sized against CI.
 #:
-#: Together: 78 mutations over the three shards this sizing asks for is 26 each, so
-#: 515 + 26×58 ≈ 34 min with no cache and under 30 with one — inside the budget, and well
-#: inside `sweep.yml`'s hour.
+#: **It is an average, and #915 is what an average costs.** #626's 78 mutations were all in
+#: one new file whose selection map is 13 of 450 test modules, so 58 s is what a *cheap*
+#: mutation costs; #914's `charter/config.py` mutations select 323 of 450 and cost more than
+#: ten times that. Sizing a plan by this number times a count deals those two as equals.
+#: It is still the right answer for a plan whose map has not been measured — see
+#: :func:`seconds_for` — and the wrong one for a plan whose map is in hand.
 SECONDS_A_MUTATION = 60
+
+#: What one mutation costs a shard however small its subset is: restoring the sandbox,
+#: starting an interpreter, and `unittest discover`'s own walk of `tests/`.
+#:
+#: **The count-shaped half of the cost, and the only half a count could ever see.** With
+#: :data:`SECONDS_A_SUITE_RUN` it is solved from the two runs that ran out of time, whose
+#: selection maps are known and very different — #626 measured about 53 mutations of
+#: `charter/gitconfig.py` (13 of 450 modules) in ~2880 s of mutation time, and #914 measured
+#: 5 (one of `charter/cli.py` at 6 of 450, four of `charter/config.py` at 323 of 450) in
+#: ~3000 s. Two runs, two unknowns:
+#:
+#:     53×F + 53×(13/450)×S  = 2880
+#:      5×F + (6 + 4×323)/450×S = 3000
+#:
+#: which gives F ≈ 25 s and S ≈ 996 s.
+SECONDS_A_MUTATION_FIXED = 25
+
+#: What a mutation whose subset **is** the whole suite costs a shard, in seconds.
+#:
+#: The map-shaped half, and the one #915 is about. Corroborated twice, which is why the
+#: round number is 960 and not the 996 the arithmetic above lands on:
+#:
+#: * ``SHARD_FIXED_COSTS["the unmutated baseline"]`` is 240 s — the whole suite once, alone
+#:   on `ubuntu-latest`. A shard runs `--jobs 4` and `unittest` is single-threaded, so four
+#:   concurrent whole-suite runs queue on a four-vCPU runner rather than overlapping:
+#:   4 × 240 = 960 s of shard budget for four of them, one whole-suite run each.
+#: * :data:`SUBSET_TIMEOUT` is the same number seen from the other side. A subset that is
+#:   the whole suite is the run that reaches it, and on #914 every `charter/config.py`
+#:   mutation did: `{'green': False, 'ran': 0, 'detail': 'timed out after 900s'}`.
+#:
+#: What it deliberately does **not** cover is the second and third runs :func:`decide` makes
+#: — the full suite that has the last word, and a survivor's confirmation. Those depend on
+#: the verdict and not on the diff, so no prediction can see them, and they are what the
+#: twenty minutes between :data:`SHARD_BUDGET` and :data:`SHARD_REPORT_AT` are for. That gap
+#: is headroom for the unpredictable half of the cost and must not be spent closing the
+#: predictable half.
+SECONDS_A_SUITE_RUN = 960
 
 #: The most jobs one pull request may fan out to. Not a limit on what gets swept — every
 #: mutation is still dealt to a shard past this point, they just get more each — but a
@@ -3121,9 +3162,81 @@ SECONDS_A_MUTATION = 60
 MAX_SHARDS = 8
 
 
+def per_shard_seconds() -> int:
+    """How long one shard has for mutations, once its fixed costs are paid.
+
+    Clamped at 1, and :func:`per_shard` is where that clamp was found unpinned: raise the
+    fixed cost past the budget — a slower runner, a longer suite, a map that stops being
+    cached — and the subtraction goes to zero or below, which makes :func:`shards_for` a
+    division by zero and the plan job an exception. No plan, no shards, no numbers, which
+    is #617's failure arriving out of the arithmetic written to prevent it.
+    """
+    return max(1, SHARD_BUDGET - SHARD_FIXED)
+
+
 def per_shard() -> int:
-    """How many mutations one shard can measure inside :data:`SHARD_BUDGET`."""
-    return max(1, (SHARD_BUDGET - SHARD_FIXED) // SECONDS_A_MUTATION)
+    """How many *average* mutations one shard can measure inside :data:`SHARD_BUDGET`.
+
+    Only ever the answer when the selection map has not been measured — see
+    :func:`seconds_for`. Kept as a function rather than inlined because the count is what
+    the plan says out loud on that path, and a number a reader is shown is a number
+    something should be able to assert.
+    """
+    return max(1, per_shard_seconds() // SECONDS_A_MUTATION)
+
+
+def suite_size(selection: dict[str, list[str]]) -> int:
+    """How many test modules the map ever names — the denominator a share is taken over.
+
+    Read off the map and not off `tests/` on disk, so that a share is a fraction of the
+    suite **as measured**: a module that would not load is absent from the map, and
+    counting it in the denominator would make every share smaller than the run it predicts.
+    """
+    return len({module for modules in selection.values() for module in modules})
+
+
+def seconds_for(selection: dict[str, list[str]], mutation: Mutation) -> float:
+    """What one mutation is predicted to cost a shard, in seconds.
+
+    **The whole of #915 is that this is not a constant.** A mutation costs one run of the
+    modules :func:`select_for` picks for it, and that selection spans two orders of
+    magnitude in the same diff: on #914, `charter/cli.py::_plane_refusal` selects 6 of 450
+    modules and `charter/config.py::derive` selects 323 — `config` being the module every
+    other module imports. Sizing a plan by ``count × SECONDS_A_MUTATION`` deals those two as
+    equals, gives 22 mutations one shard, and spends the runner's hour reaching five of
+    them.
+
+    Two terms, because the cost has two halves: a fixed one that a count could already see
+    (:data:`SECONDS_A_MUTATION_FIXED`) and a measured one that only the map can
+    (:data:`SECONDS_A_SUITE_RUN` times the share of the suite this mutation selects).
+
+    **An unmeasured map falls back toward MORE, never less**, which is :func:`select_for`'s
+    own rule applied to the clock rather than to the tests:
+
+    * no map at all — nothing has been measured, so the honest answer is the average this
+      tool used before there was anything better, and the plan says which it used;
+    * a map that covers nothing for this mutation — :func:`decide` reads that silence as
+      "go straight to the full suite", so the prediction is a whole-suite run and not a
+      cheap one.
+
+    A share cannot exceed 1: every module in a map entry is counted in :func:`suite_size`.
+    """
+    suite = suite_size(selection)
+    if not suite:
+        return float(SECONDS_A_MUTATION)
+    modules = select_for(selection, mutation)
+    share = len(modules) / suite if modules else 1.0
+    return SECONDS_A_MUTATION_FIXED + SECONDS_A_SUITE_RUN * share
+
+
+def costs_for(selection: dict[str, list[str]], plan: list[Mutation]) -> list[float]:
+    """:func:`seconds_for` over a whole plan, in plan order.
+
+    Order is load-bearing: :func:`shards_for` deals these with the same :func:`shard_of`
+    the shards deal mutations with, so entry *i* here has to be the cost of mutation *i*
+    there or the sizing is about a different plan than the one that runs.
+    """
+    return [seconds_for(selection, mutation) for mutation in plan]
 
 
 def budget_for(sharded: bool, override: float | None = None) -> float:
@@ -3147,17 +3260,54 @@ def budget_for(sharded: bool, override: float | None = None) -> float:
     return float(SHARD_REPORT_AT) if sharded else 0.0
 
 
-def shards_for(mutations: int) -> int:
-    """How many jobs *mutations* of them need, so that none of them runs out of time.
+def heaviest_hand(costs: list[float], count: int) -> float:
+    """What the most expensive of *count* shards is predicted to carry, in seconds.
+
+    **Through :func:`shard_of` and not through arithmetic beside it**, which is the whole
+    reason this is a function. The plan is dealt round-robin, so a candidate shard count's
+    real worst hand depends on where the expensive mutations land in that deal — and a
+    sizing rule that re-derived the deal here would be a second copy of it, free to drift
+    from the one the shards use. #670's defect is a measurement written down twice; this
+    would be a *rule* written down twice, on the one number that says whether the plan fits.
+    """
+    return max(sum(shard_of(costs, index, count)) for index in range(1, count + 1))
+
+
+def shards_for(costs: list[float]) -> int:
+    """The fewest shards whose heaviest hand fits inside one shard's budget.
+
+    *costs* is :func:`costs_for` over the plan — seconds, in plan order — and the unit is
+    the point. This function used to take a **count** and divide it by :func:`per_shard`,
+    which is #915: cost is not a function of how many mutations there are, and on #914 a
+    22-mutation diff whose eight `charter/config.py` mutations each select 323 of 450 test
+    modules was sized at one shard because 22 < 28. The shard spent the runner's hour
+    reaching five of them, and `charter/instance.py` — where that branch's refusal lives —
+    was never measured at all.
+
+    Sized against the heaviest **hand** rather than against the total, because the two are
+    not the same question. A plan may total two shards' worth of seconds and still hold one
+    file whose mutations all land on one shard; dividing the total would call that a fit.
+    Asking the deal directly cannot be wrong about it.
 
     At least one, always: a branch with nothing to sweep still gets a job, because "the
     sweep ran and found nothing to do" and "the sweep did not run" are the two answers
     #617 is about and they must not arrive as the same silence.
+
+    **And never more than :data:`MAX_SHARDS`, which is the trade this function does not get
+    to make.** Past the ceiling the plan is still dealt whole and every mutation still goes
+    to a shard — the shards simply carry more than the budget, stop at
+    :data:`SHARD_REPORT_AT`, and report what they measured. Nothing is dropped to make a
+    plan fit: a dropped mutation would make the verdict's own name — `no survivors` — a
+    claim about a sweep that never ran. :func:`over_budget` is where that gets said out
+    loud, before a runner is spent rather than after.
     """
-    return max(1, min(MAX_SHARDS, -(-mutations // per_shard())))
+    for count in range(1, MAX_SHARDS + 1):
+        if heaviest_hand(costs, count) <= per_shard_seconds():
+            return count
+    return MAX_SHARDS
 
 
-def over_budget(mutations: int) -> str:
+def over_budget(costs: list[float]) -> str:
     """Why this diff will be slow, said out loud, or ``""`` when it will not be.
 
     :data:`MAX_SHARDS` is a ceiling on machines and never on questions, so a diff past it
@@ -3174,16 +3324,23 @@ def over_budget(mutations: int) -> str:
     published as `success`. A shard now stops at its own budget and reports what it
     measured, so the honest warning is that the ANSWER will be short — which is a thing
     a reader can act on, where "there may be no answer" was only a thing to dread.
+
+    **What it says the ceiling IS changed with #915.** It used to be a count — 224
+    mutations, eight shards of twenty-eight — and a count is exactly the thing that could
+    not see #914 coming: 22 mutations, comfortably inside 224, and five of them measured.
+    The ceiling is now the eight heaviest hands this plan would produce, in minutes, which
+    is the number that actually decides whether the answer arrives.
     """
-    ceiling = MAX_SHARDS * per_shard()
-    if mutations <= ceiling:
+    heaviest = heaviest_hand(costs, MAX_SHARDS)
+    if heaviest <= per_shard_seconds():
         return ""
-    return (f"{mutations} mutations is past the {ceiling} that {MAX_SHARDS} shards can "
-            f"measure inside {SHARD_BUDGET // 60} minutes each. Nothing here is dropped "
-            f"and every one of them is dealt to a shard — but a shard stops at its "
-            f"budget and reports what it measured, so this branch gets a PARTIAL answer "
-            f"with the unmeasured mutations named. Split the branch, or read the count "
-            f"as a floor.")
+    return (f"{len(costs)} mutations is {round(sum(costs) / 60)} minutes of predicted test "
+            f"time, and the heaviest of {MAX_SHARDS} shards would carry "
+            f"{round(heaviest)} s against the {per_shard_seconds()} s a shard is sized "
+            f"for. Nothing here is dropped and every one of them is dealt to a shard — but "
+            f"a shard stops at its budget and reports what it measured, so this branch gets "
+            f"a PARTIAL answer with the unmeasured mutations named. Split the branch, or "
+            f"read the count as a floor.")
 
 
 def shard_of(plan: list[Mutation], index: int, count: int) -> list[Mutation]:
@@ -4131,24 +4288,52 @@ def _plan_step(args, root: Path, ref: str, base: str, scope: dict[str, set[int]]
                log) -> int:
     """Size the sweep, and optionally leave the selection map where the shards will find it.
 
-    This is the job that decides how many jobs the gate needs, and it is cheap on purpose:
-    the mutation count is an `ast` pass over the diff, so the decision costs a second and
-    is made from the real number rather than from a guess about how big branches get. The
-    guess is exactly what ran out — the job was sized against Phase 2's 30–52 mutations
-    and met 78.
+    This is the job that decides how many jobs the gate needs. The plan itself is an `ast`
+    pass over the diff, so the *list* costs a second and is made from the real number
+    rather than from a guess about how big branches get — the guess is exactly what ran out,
+    the job having been sized against Phase 2's 30–52 mutations and met 78.
+
+    **What that list costs is a second question, and #915 is the job answering the first
+    one and calling it the second.** The map that says what a mutation costs is measured
+    right here, by `--warm-map`, for the shards to restore — so the sizing is done with the
+    measurement already in hand and already paid for, and the only change is the order:
+    warm first, then size against what the warming measured.
+
+    Without `--warm-map` there is no map and nothing better than the average, so this falls
+    back to the count and says which of the two it used. That path is a person at a terminal
+    asking how big a branch is; `sweep.yml`'s plan job always warms.
     """
     plan, _ = plan_for(root, ref, scope, dirty)
-    shards = shards_for(len(plan))
-    log(f"  {len(plan)} mutations → {shards} shard(s) of at most {per_shard()} each")
+    selection = _warm_map(args, root, ref, dirty, workdir, cache_dir, log)
+    costs = costs_for(selection, plan)
+    shards = shards_for(costs)
+    if selection:
+        log(f"  {len(plan)} mutations → {shards} shard(s); "
+            f"{round(sum(costs) / 60)} min of predicted test time over "
+            f"{suite_size(selection)} test modules, "
+            f"{round(heaviest_hand(costs, shards))} s on the heaviest shard "
+            f"(a shard is sized for {per_shard_seconds()} s)")
+    else:
+        log(f"  {len(plan)} mutations → {shards} shard(s) of at most {per_shard()} each "
+            f"— no selection map here, so sized by count and not by cost (#915)")
     # Named, so a foreign path is visible on the one job that runs before anything is
     # spent (#776). A branch charged for another branch's file used to be invisible until
     # a survivor arrived in it, and by then the reader is being asked to judge a line
     # they have never seen. Capped, because `--all` puts the whole tree through here.
+    #
+    # With a map in hand each one carries what it is predicted to cost, because "which file
+    # is making this sweep slow" is the question #914 could not answer from anything the
+    # plan printed. Alphabetical still, and not sorted by cost: this list exists so a
+    # foreign path is *findable*, and a reader looking for one wants it where it belongs.
+    per_file: dict[str, float] = {}
+    for mutation, cost in zip(plan, costs):
+        per_file[mutation.path] = per_file.get(mutation.path, 0.0) + cost
     for rel in sorted(scope)[:20]:
-        log(f"    charged: {rel}")
+        spent = f" — {round(per_file[rel] / 60)} min predicted" if rel in per_file else ""
+        log(f"    charged: {rel}{spent}")
     if len(scope) > 20:
         log(f"    charged: … and {len(scope) - 20} more file(s)")
-    loud = over_budget(len(plan))
+    loud = over_budget(costs)
     if loud:
         # An annotation and not a log line. A cap nobody can see is the failure the spec
         # names about silent truncation, and a warning in a fold nobody opens is a cap
@@ -4163,17 +4348,30 @@ def _plan_step(args, root: Path, ref: str, base: str, scope: dict[str, set[int]]
     # mutations were read against.
     _write_output(args.github_output, mutations=str(len(plan)), shards=str(shards),
                   matrix=json.dumps(list(range(1, shards + 1))), base=base)
-    if args.warm_map:
-        # From a sandbox, for the reason `main` builds it from one: the map is measured on
-        # a clean checkout of the ref so that a mutation is the only thing that ever
-        # differs from what was traced. The cache is keyed on the tree's own hash, so the
-        # shards find this one only if they are asking about the very same tree.
-        log("  warming the selection map for the shards…")
-        box = Sandbox(root, run_dir(workdir) / "map", ref, dirty)
-        load_map(box.path, tuple(args.paths or DEFAULT_PATHS), cache_dir, args.jobs,
-                 args.refresh_map, log)
-        shutil.rmtree(run_dir(workdir), ignore_errors=True)
     return 0
+
+
+def _warm_map(args, root: Path, ref: str, dirty: dict[str, bytes], workdir: Path,
+              cache_dir: Path, log) -> dict[str, list[str]]:
+    """The map the shards will restore, measured here — and now sized against here too.
+
+    Returned rather than only left on disk, which is the whole of #915's plumbing: the plan
+    job pays for this measurement so the shards do not have to, and then used to throw the
+    only copy of it away and size the fan-out off a count. ``{}`` when `--warm-map` was not
+    asked for, and :func:`seconds_for` reads that as "nothing measured, use the average".
+    """
+    if not args.warm_map:
+        return {}
+    # From a sandbox, for the reason `main` builds it from one: the map is measured on
+    # a clean checkout of the ref so that a mutation is the only thing that ever
+    # differs from what was traced. The cache is keyed on the tree's own hash, so the
+    # shards find this one only if they are asking about the very same tree.
+    log("  warming the selection map for the shards…")
+    box = Sandbox(root, run_dir(workdir) / "map", ref, dirty)
+    selection = load_map(box.path, tuple(args.paths or DEFAULT_PATHS), cache_dir,
+                         args.jobs, args.refresh_map, log)
+    shutil.rmtree(run_dir(workdir), ignore_errors=True)
+    return selection
 
 
 def _merge_step(args) -> int:
