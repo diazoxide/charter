@@ -6659,5 +6659,271 @@ class ThePlanSizesItselfFromTheMapItWarmed(unittest.TestCase):
         self.assertEqual(got, {})
 
 
+class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
+    """#920. Three outcomes share one shape — an empty result set — and only two of them
+    had a name.
+
+    The 0.59.0 release is the measurement. `charter/__init__.py` was charged for a
+    one-line version bump, the plan held **0 mutations**, and the shard published
+    `no verdict: 1 of 1 shard did not report` on a green check. It did not fail and it did
+    not vanish: it ran a nine-minute unmutated baseline it had no mutation to interpret,
+    that baseline came back red on one flaky test, and the red-baseline exit returned 0
+    without writing its `--json`. Silence is how a dead shard reports, so the merge step
+    read a deliberate refusal as a runner that disappeared.
+
+    `no verdict` is the one name whose whole job is to say *do not read this green as
+    safety*. A release commit's only Python change is the version string, by construction,
+    so every release would have worn it — and a signal that fires when nothing is wrong is
+    a signal nobody finishes reading.
+    """
+
+    def _repo(self, added: str):
+        """A repository whose branch adds *added* to a charged file, and its base sha."""
+        tmp = Path(tempfile.mkdtemp(prefix="sweep-920-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(tmp, ignore_errors=True))
+        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                   GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0")
+
+        def run(*a):
+            subprocess.run(("git", "-c", "core.hooksPath=", "-c", "commit.gpgsign=false")
+                           + a, cwd=tmp, check=True, env=env, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "sweep@example.invalid")
+        run("config", "user.name", "sweep")
+        (tmp / "charter").mkdir()
+        (tmp / "charter" / "__init__.py").write_text('__version__ = "0.58.0"\n')
+        run("add", "-A")
+        run("commit", "-qm", "one")
+        base = sweep.git("rev-parse", "HEAD", cwd=tmp).strip()
+        (tmp / "charter" / "__init__.py").write_text(added)
+        run("add", "-A")
+        run("commit", "-qm", "two")
+        return tmp, base
+
+    def _cli(self, where, *args):
+        said = io.StringIO()
+        cwd = os.getcwd()
+        os.chdir(where)
+        try:
+            with contextlib.redirect_stdout(said):
+                code = sweep.main(list(args))
+        finally:
+            os.chdir(cwd)
+        return code, said.getvalue()
+
+    # ----------------------------------------------------------------------------------
+    # The release diff itself, charged and swept.
+    # ----------------------------------------------------------------------------------
+
+    def test_the_release_diff_is_nothing_to_sweep_and_never_reaches_a_baseline(self):
+        """The 0.59.0 case, reconstructed: one charged file, one added line, no mutation.
+
+        `--no-baseline` is deliberately NOT passed, because the baseline is the defect. A
+        run that spends a full unmutated suite on a plan of nothing has bought itself
+        nothing to interpret and one more way to fail, and that way is the way this
+        release failed. The assertion is on the sentence the baseline prints, so the only
+        way to satisfy it is not to run one.
+        """
+        tmp, base = self._repo('__version__ = "0.59.0"\n')
+        out = tmp / "r.json"
+        outputs = tmp / "outputs.txt"
+        summary = tmp / "summary.md"
+        code, said = self._cli(tmp, "--gate", "--base", base, "--jobs", "1",
+                               "--shard", "1/1", "--workdir", str(tmp / "wd"),
+                               "--json", str(out), "--summary", str(summary),
+                               "--github-output", str(outputs))
+        self.assertEqual(code, 0, said)
+        self.assertIn("1 file(s), 1 added line(s)", said)
+        self.assertIn("0 mutations across 1 file(s)", said)
+        self.assertNotIn("baseline: full suite", said)
+        self.assertNotIn("preparing the reference sandbox", said)
+        # And the shard leaves an answer behind rather than an absence.
+        self.assertEqual(out.read_text(), "[]")
+        got = dict(line.split("=", 1) for line in outputs.read_text().splitlines() if line)
+        self.assertEqual(got, {"conclusion": "nothing", "headline": "nothing to sweep"})
+
+    def test_the_aggregator_on_that_release_says_nothing_to_sweep_and_not_no_verdict(self):
+        """The other end of the same run: the merge step, on the file the shard now
+        writes. Before this, the directory was empty and the pull request read
+        `no verdict: 1 of 1 shard did not report`."""
+        tmp, base = self._repo('__version__ = "0.59.0"\n')
+        shards = tmp / "shards"
+        shards.mkdir()
+        code, said = self._cli(tmp, "--gate", "--base", base, "--jobs", "1",
+                               "--shard", "1/1", "--workdir", str(tmp / "wd"),
+                               "--json", str(shards / "sweep-results-1.json"))
+        self.assertEqual(code, 0, said)
+        outputs = tmp / "outputs.txt"
+        code, said = self._cli(tmp, "--verdict", str(shards), "--shards", "1",
+                               "--ref", "HEAD", "--github-output", str(outputs))
+        self.assertEqual(code, 0, said)
+        got = dict(line.split("=", 1) for line in outputs.read_text().splitlines() if line)
+        self.assertEqual(got, {"conclusion": "nothing", "headline": "nothing to sweep"})
+        # The sentence the release actually published, and the one that must not come back.
+        self.assertNotIn("did not report", said)
+
+    def test_a_charged_file_with_no_mutation_gets_the_same_banner_as_an_unchanged_tree(self):
+        """Two ways to sweep nothing, one answer, and one page. They used to print
+        different things — a charged file with no mutation got the full report, an
+        unchanged tree got a single line — so a reader who has seen one cannot tell what
+        the other is saying."""
+        tmp, base = self._repo('__version__ = "0.59.0"\n')
+        _, charged = self._cli(tmp, "--gate", "--base", base, "--jobs", "1",
+                               "--workdir", str(tmp / "wd"))
+        _, unchanged = self._cli(tmp, "--gate", "--base", "HEAD", "--jobs", "1",
+                                 "--workdir", str(tmp / "wd"))
+        self.assertIn("1 charged file(s), and no operator finds a mutation", charged)
+        self.assertIn("nothing under the swept paths changed", unchanged)
+        for said in (charged, unchanged):
+            self.assertIn("NOTHING TO SWEEP", said)
+            self.assertIn("nothing to sweep", said)
+
+    # ----------------------------------------------------------------------------------
+    # A shard's zero, a shard's refusal and a shard's silence are three values.
+    # ----------------------------------------------------------------------------------
+
+    def test_a_zero_a_refusal_and_a_silence_are_three_different_answers(self):
+        """The question #920 asks first, answered on the aggregator's own input.
+
+        A shard that swept an empty plan writes `[]`; a shard that refused writes an
+        object; a shard that died writes nothing. All three carry no results, and the
+        whole of this issue is that the middle one used to be spelled as the last.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "zero.json").write_text(sweep.as_json([]))
+            nothing, _, none_refused = sweep.merge(Path(tmp), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "refused.json").write_text(
+                sweep.as_refusal(sweep.RED_BASELINE, "tests.test_x.T.test_y"))
+            _, refused_missing, refused = sweep.merge(Path(tmp), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            _, silent_missing, silent_refused = sweep.merge(Path(tmp), 1)
+        self.assertEqual((nothing, none_refused), ([], []))
+        # A refusal is a report: it does not count against `missing`, and it arrives.
+        self.assertEqual(refused_missing, 0)
+        self.assertEqual(refused, [sweep.Refusal(sweep.RED_BASELINE,
+                                                 "tests.test_x.T.test_y")])
+        self.assertEqual((silent_missing, silent_refused), (1, []))
+        # And the three conclusions are three sentences.
+        self.assertEqual(sweep.headline(sweep.classify([])), "nothing to sweep")
+        self.assertEqual(sweep.headline(sweep.classify([], refused)),
+                         "no verdict: 1 shard refused: the baseline is red")
+        self.assertEqual(sweep.headline(sweep.classify([]), 1, 1),
+                         "no verdict: 1 of 1 shard did not report")
+
+    def test_a_refusal_is_no_verdict_and_not_nothing_to_sweep(self):
+        """The inversion, guarded in the other direction. A refusing shard's file holds no
+        results at all, so a `gate_conclusion` that did not rank it would let a red tree
+        fall through to `nothing to sweep` — the benign name on the alarming state, which
+        is worse than the mistake this issue started from."""
+        refused = [sweep.Refusal(sweep.RED_BASELINE, "tests.test_x.T.test_y")]
+        gate = sweep.classify([], refused)
+        self.assertEqual(sweep.gate_conclusion(gate), sweep.NO_VERDICT)
+        self.assertEqual(sweep.gate_conclusion(sweep.classify([])), sweep.NOTHING)
+        # And it blocks like every other thing that could not be measured, once enforced.
+        self.assertEqual(sweep.gate_exit_code(gate, True), 3)
+        self.assertEqual(sweep.gate_exit_code(gate, False), 0)
+
+    def test_the_page_names_the_test_that_went_red_and_not_a_missing_runner(self):
+        """`detail` travels with the refusal for the reason `as_json` already carries it
+        for a mutation: which test went red is the first thing anyone asks of a run that
+        went red, and the shard's own log is on another machine."""
+        gate = sweep.classify([], [sweep.Refusal(sweep.RED_BASELINE,
+                                                 "tests.test_x.T.test_y")])
+        page = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False, 0, 1)
+        self.assertIn("Refused — a shard swept nothing", page)
+        self.assertIn("`tests.test_x.T.test_y`", page)
+        self.assertIn("This is not a shard that died", page)
+        # The alarming paragraph about a vanished runner belongs to the other state.
+        self.assertNotIn("Did not report", page)
+
+    def test_five_shards_on_one_red_tree_say_it_once(self):
+        """A check's name is read at a glance or not at all, so the reason is said per
+        distinct reason and not per shard."""
+        gate = sweep.classify([], [sweep.Refusal(sweep.RED_BASELINE, f"t{n}")
+                                   for n in range(5)])
+        self.assertEqual(sweep.headline(gate, 0, 5),
+                         "no verdict: 5 shards refused: the baseline is red")
+
+    # ----------------------------------------------------------------------------------
+    # The file the shard writes, and what a reader that cannot name it does.
+    # ----------------------------------------------------------------------------------
+
+    def test_a_refusal_and_a_result_set_are_told_apart_by_shape(self):
+        """An array is results, an object is a refusal. A reader that guessed would
+        report a refusal as a complete sweep of an empty plan."""
+        rows, why = sweep.shard_report(sweep.as_json([_result("pinned")]))
+        self.assertEqual((len(rows), why), (1, None))
+        rows, why = sweep.shard_report(sweep.as_json([]))
+        self.assertEqual((rows, why), ([], None))
+        rows, why = sweep.shard_report(sweep.as_refusal("the baseline is red", "t"))
+        self.assertEqual((rows, why), ([], sweep.Refusal("the baseline is red", "t")))
+
+    def test_an_object_this_reader_cannot_name_is_a_shard_that_did_not_report(self):
+        """#914's rule, applied to this file. A reader that cannot name the shape in front
+        of it has nothing to say about that shard, and the honest way to say nothing is to
+        count it among the ones that did not answer — never to read around the key."""
+        with self.assertRaises(KeyError):
+            sweep.shard_report('{"skipped": "why not"}')
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "a.json").write_text('{"skipped": "why not"}')
+            results, missing, refused = sweep.merge(Path(tmp), 1)
+        self.assertEqual((results, missing, refused), ([], 1, []))
+
+    def test_the_shard_writes_its_refusal_where_it_used_to_write_nothing(self):
+        """End to end, through the exit that produced the 0.59.0 name. The baseline is
+        forced red rather than waited for: what is under test is what the shard leaves on
+        disk when it decides not to sweep, not how long a suite takes to fail."""
+        tmp, base = self._repo(textwrap.dedent("""
+            def close(arm, pane):
+                if arm is None:
+                    return []
+                return [arm, pane]
+        """).lstrip())
+        for name, stub in (("load_map", lambda *a, **k: {}),
+                           ("Sandbox", _RedBaseline)):
+            real = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, real)
+        shards = tmp / "shards"
+        shards.mkdir()
+        code, said = self._cli(tmp, "--gate", "--base", base, "--jobs", "1",
+                               "--shard", "1/1", "--workdir", str(tmp / "wd"),
+                               "--json", str(shards / "sweep-results-1.json"))
+        self.assertEqual(code, 0, said)
+        self.assertIn("the tree is RED before any mutation", said)
+        self.assertEqual(
+            json.loads((shards / "sweep-results-1.json").read_text()),
+            {"refused": "the baseline is red", "detail": "tests.test_x.T.test_y"})
+        outputs = tmp / "outputs.txt"
+        summary = tmp / "summary.md"
+        code, said = self._cli(tmp, "--verdict", str(shards), "--shards", "1",
+                               "--ref", "HEAD", "--summary", str(summary),
+                               "--github-output", str(outputs))
+        self.assertEqual(code, 0, said)
+        got = dict(line.split("=", 1) for line in outputs.read_text().splitlines() if line)
+        self.assertEqual(got["conclusion"], "no-verdict")
+        self.assertEqual(got["headline"],
+                         "no verdict: 1 shard refused: the baseline is red")
+        self.assertNotIn("did not report", got["headline"])
+        self.assertIn("`tests.test_x.T.test_y`", summary.read_text())
+
+
+class _RedBaseline:
+    """A sandbox whose unmutated full run fails, and which is never asked for more."""
+
+    memory_cap = 0
+    full_timeout = 0.0
+
+    def __init__(self, root, path, ref, dirty):
+        self.path = Path(path)
+        self.path.mkdir(parents=True, exist_ok=True)
+
+    def full(self):
+        return sweep.Outcome(False, 11721, "tests.test_x.T.test_y")
+
+
 if __name__ == "__main__":      # pragma: no cover
     unittest.main()
