@@ -8184,6 +8184,34 @@ def _close_open_overlays(socket: str, *, harness: str) -> None:
         tmuxctl.run("closing the palette already open", argv)
 
 
+def _palette_catalogue(fid: str, reg, *, snapshot) -> tuple:
+    """Every row `F2` opens on, in the order it draws them.
+
+    **A function rather than an expression inside :func:`_draw_palette`, because the
+    catalogue is DATA and #921's rule is stated over it.** *Every row that makes a kind of
+    thing has a counterpart row that unmakes that same kind, in the same surface* — and
+    the report that produced the rule is an operator who read a strip drawing `+` and no
+    `−` and concluded, correctly from what was on screen, that closing a chat was
+    impossible. `tests/test_the_palette_advertises_unmaking_what_it_makes.py` asks that
+    question of what this returns, so the invariant is asked of the rows the palette is
+    actually built from rather than of a second list a test composed to look like them.
+
+    **`leave.open_rows` LAST, and that ordering is the guard** §4i's "warns and proceeds"
+    needs: the cursor starts on the first row that can run, so a destructive row at the
+    top of the list would be one `F2 Enter` from stopping the plane. Every harmless row
+    charter has keeps the top — `chat: new` (`builtin_actions._register_new_chat`)
+    included, which is why it is registered among the actions and not appended here.
+
+    Nothing is resolved here that the caller did not already resolve: *reg* is the
+    registry `_draw_palette` built against the moment the palette opened, and *snapshot* is
+    the gather it read once. A second `builtin_actions.build` inside this would be a second
+    reading of a plane that moves, which is the staleness `_draw_palette` records.
+    """
+    return (choose.open_rows(fid)
+            + palette.rows(reg.offers(fid=fid, snapshot=snapshot))
+            + leave.open_rows(fid))
+
+
 def _draw_palette(args) -> int:
     """Be the palette: draw the rows, take a choice, act on it, hand the pane back.
 
@@ -8233,13 +8261,7 @@ def _draw_palette(args) -> int:
     opened: list[choose.Roster] = []
     try:
         surface = palette.Palette(
-            # `leave.open_rows` LAST, and that ordering is the guard §4i's "warns and
-            # proceeds" needs: the cursor starts on the first row that can run, so a
-            # destructive row at the top of the list would be one `F2 Enter` from stopping
-            # the plane. Every harmless row charter has keeps the top.
-            catalogue=(choose.open_rows(fid)
-                       + palette.rows(reg.offers(fid=fid, snapshot=snapshot))
-                       + leave.open_rows(fid)),
+            catalogue=_palette_catalogue(fid, reg, snapshot=snapshot),
             query_only=lambda: _name_rows(fid, opened),
             mouse=True)
         def _then(row):
