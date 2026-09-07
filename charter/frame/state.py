@@ -2520,9 +2520,11 @@ def reap(live: set[str], *, server: str) -> list[str]:
     # not move under them (#767). A directory kept for ANY of the four reasons leaves the
     # plane warm.
     #
-    # The equality and not `not removed`: an empty frame root is a cold plane too, and it
-    # is the ordinary state of one whose frames a previous reap already took.
-    if len(removed) == len(entries):
+    # Counted as what is LEFT rather than compared as two lengths: `removed` is built out
+    # of `entries`, so `>=` and `==` would be the same predicate and one of them would be a
+    # mutation no input could show. Zero is also the ordinary state of a plane whose frames
+    # a previous reap already took, which is a cold plane too.
+    if not len(entries) - len(removed):
         from .. import workspace as ws_mod
         ws_mod.forget_tab_order()
     return removed

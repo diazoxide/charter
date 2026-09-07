@@ -829,7 +829,11 @@ def record_tab_order(names: list[str]) -> None:
     next paint, and never a traceback out of a strip.
     """
     try:
-        config.mkdir_for(config.WORKSPACE_TAB_ORDER_FILE.parent)
+        # `private_mkdir` and not `mkdir_for`: this writer names its own state path rather
+        # than being handed one, which is the split `config.mkdir_for` documents. On a
+        # plane whose `.charter/` does not exist yet — a first launch — the write below
+        # would otherwise answer `ENOENT` and the order would be recomputed on every paint.
+        config.private_mkdir(config.WORKSPACE_TAB_ORDER_FILE.parent)
         config.replace_for(config.WORKSPACE_TAB_ORDER_FILE,
                            "".join(f"{n}\n" for n in names))
     except OSError:
@@ -853,6 +857,12 @@ def tab_order() -> list[str]:
 
     Stripped both ends, for `frame.state.chrome`'s reason: the file is one name per line,
     and a line is what lies between two newlines rather than what a hand left beside one.
+
+    **`ValueError` beside `OSError`, and it is `UnicodeDecodeError` by its base class.**
+    This file is charter's own UTF-8, but it is a file on a disk: a write torn by a full
+    filesystem, or a hand that saved it in another encoding, reaches here as bytes
+    `read_text` cannot decode. That is a `ValueError`, not an `OSError`, and it would come
+    out of a panel's render path.
     """
     try:
         lines = config.WORKSPACE_TAB_ORDER_FILE.read_text().splitlines()

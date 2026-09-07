@@ -306,6 +306,16 @@ class TheOrderIsHeldWhileThePlaneIsUp(PersonaIso, unittest.TestCase):
         config.WORKSPACE_TAB_ORDER_FILE.write_text("  beta  \n\talpha\t\n")
         self.assertEqual(workspace.tab_order(), ["beta", "alpha"])
 
+    def test_a_record_that_is_not_text_recomputes_rather_than_raising(self):
+        """`UnicodeDecodeError` is a `ValueError` and not an `OSError`, and it is what a
+        write torn by a full filesystem or a hand that saved the file in another encoding
+        reaches this reader as. A panel's render path answers "no order recorded" — which
+        is what the file was written from — rather than a traceback out of a strip."""
+        config.WORKSPACE_TAB_ORDER_FILE.write_bytes(b"beta\n\xff\xfe not utf-8\n")
+        self.assertEqual(workspace.tab_order(), [])
+        self.assertEqual(switch.workspaces()[0], "alpha",
+                         "an undecodable order did not fall back to the recency")
+
     def test_a_write_that_cannot_complete_leaves_the_plane_recomputing(self):
         """The order is written on a panel's render path. A full filesystem costs the
         plane its held order — it recomputes on the next paint, which is the answer this
