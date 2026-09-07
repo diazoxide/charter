@@ -1042,7 +1042,8 @@ ZOOMED_FLAG = "#{window_zoomed_flag}"
 
 
 def unzoom_argv(server: str, *, overlay_pane: str) -> list[str] | None:
-    """Give *overlay_pane* its five rows back — a confirmation is a **drawer**, #921.
+    """Give *overlay_pane* its five rows back — a one-chat confirmation is a **drawer**,
+    #921.
 
     *"no any modal/drawer for confirmation"*, reported about a surface that has had one
     since it was written. :func:`modal_argvs` ends in `resize-pane -Z`, so a two-row
@@ -1066,10 +1067,14 @@ def unzoom_argv(server: str, *, overlay_pane: str) -> list[str] | None:
     ``\\x1b[?1006h\\x1b[?1000h`` from this pane. The zoom was never what made the pointer
     work — `select-pane` is, and :func:`modal_argvs` keeps it.
 
-    **The PALETTE keeps the whole window and only the confirmation gives it up.** The
-    palette lists every action, every doorway and every name an operator types towards; it
-    scrolls, has no row cap by design, and earns the rows. A confirmation is one question,
-    with the answer at the top and the consequences under it.
+    **What gets sent this at all is decided one caller up, and the rule is that the size of
+    the surface matches the size of the consequence** — `commands_frame._as_a_drawer`, and
+    #927 for why it is not every confirmation. The palette lists every action, every
+    doorway and every name an operator types towards; it scrolls, has no row cap by design,
+    and earns the rows. `chat: close` is one question about one chat, with the answer at the
+    top and the two lines of consequence under it, and it fits here whole. `charter: quit`
+    lists every chat on the plane and keeps the window, because five rows would mean
+    scrolling a destructive list — which is how an operator answers one without reading it.
 
     `if-shell -F` and not a bare toggle — see :data:`ZOOMED_FLAG`. ``None`` for a pane id
     that is not tmux's own word for one, following every other builder here: charter would
