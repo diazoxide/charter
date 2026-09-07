@@ -3425,13 +3425,14 @@ class _Tabs:
     reports and this repository deletes.
     """
 
-    __slots__ = ("_cols", "_here", "_more", "_add")
+    __slots__ = ("_cols", "_here", "_more", "_add", "_close")
 
     def __init__(self) -> None:
         self._cols: dict[tuple[int, int], str] = {}
         self._here = ""
         self._more: frozenset[tuple[int, int]] = frozenset()
         self._add: frozenset[tuple[int, int]] = frozenset()
+        self._close: frozenset[tuple[int, int]] = frozenset()
 
     def forget(self) -> None:
         """Back to a bar nobody has drawn — for a test, and only a test.
@@ -3442,7 +3443,7 @@ class _Tabs:
         """
         self.publish({}, "")
 
-    def publish(self, columns: dict, here: str, more=(), add=()) -> None:
+    def publish(self, columns: dict, here: str, more=(), add=(), close=()) -> None:
         """Record what the paint that just happened put in each cell, and where you are.
 
         *columns* maps a ``(row, column)`` of the component's OWN canvas — the rectangle
@@ -3481,6 +3482,12 @@ class _Tabs:
         *make a new one* — and a caller told "this cell is special" would have to ask a
         second question anyway to know which.
 
+        *close* is the same for :data:`CLOSE_CHAT`, the `-` drawn beside it (#921). A
+        fifth thing for the fourth's reason exactly, and the pair is why the reason is
+        worth restating: `+` and `-` sit one cell apart and mean opposite things, so a
+        caller handed "this cell is one of the affordances" would have to ask which — and
+        the one it must never guess at is the one that opens a teardown.
+
         A `frozenset` and not a range, because the two counts are two disjoint runs and
         the narrow rung's is a third — and because :meth:`more_at` asks about ONE cell,
         which is the same question `_cols` answers and should be the same kind of lookup.
@@ -3489,6 +3496,7 @@ class _Tabs:
         self._here = here
         self._more = frozenset(more)
         self._add = frozenset(add)
+        self._close = frozenset(close)
 
     def switch_to(self, row: int, col: int):
         """The tab a click at canvas cell (*row*, *col*) should switch to, or ``None``.
@@ -3590,6 +3598,32 @@ class _Tabs:
         screen together to be confused with each other.
         """
         return (row, col) in self._add
+
+    def close_at(self, row: int, col: int) -> bool:
+        """Whether cell (*row*, *col*) is the affordance that asks about CLOSING a chat.
+
+        *"we have plus button - that adding new session tab, but no any option to
+        delete/stop, no any modal/drawer for confirmation."* Closing a chat had been
+        possible the whole time — `F2 → chat: close`, or a right press on a tab — and
+        neither is written anywhere on the frame. The strip drew `+` and nothing else, so
+        the operator concluded that making was offered and unmaking was not, which is the
+        only conclusion the row supported (#921).
+
+        **A fourth question and a fourth method**, for :meth:`add_at`'s reason and one
+        sharper one. This cell is not a tab (there is nothing to switch to), not a `+N`
+        (it stands for no name at all) and above all not :meth:`add_at` — it is drawn one
+        cell away from it and means the opposite. A single "is this an affordance" answer
+        would put the decision about WHICH one at the call site, where a mistake spawns a
+        teardown surface for a press that meant *new*.
+
+        **And what it opens is a question, never an answer.** `frame/builtins._bar_events`
+        spawns the same `charter frame-palette --tab` a right press on this chat's own tab
+        spawns, so the route is new and the authority is not: the menu's `chat: close` row
+        is a doorway onto `leave.confirm_rows`, and the keypress that commits is the one
+        that module mints. §4i in one line — *a pointer opens the question; the keyboard
+        answers it*.
+        """
+        return (row, col) in self._close
 
 
 #: The one tab strip this process's bar draws into. See :class:`_Tabs` for why there is
@@ -3813,8 +3847,42 @@ def _cuts(fields: list[str], room: int, gap: int) -> list[int]:
     return cuts
 
 
+#: The one cell between the two affordances a strip draws at its end — `+` and `-`.
+#:
+#: **One blank and not a :func:`_bar_gap`, because they are a PAIR and the gap is a seam
+#: between two tabs.** Every other space on this row separates two things that are about
+#: different chats; these two are about the same strip and read as one control, which is
+#: the whole of what #921 asks the row to say — a strip drawing `+` alone says making is
+#: offered and unmaking is not. On a plane at ``rules = "visible"`` a `_bar_gap` would draw
+#: `+ | -`, putting a seam through the pair that the pair exists to deny.
+#:
+#: It also costs the names one column instead of two, and the names are the readout
+#: (:data:`ADD_CHAT`). The cell itself belongs to neither affordance — `_tab_columns`' rule
+#: for the gap between two tabs, kept here: a press on a separator has nothing to be about,
+#: and picking the nearer neighbour for it would mean a press aimed between `+` and `-`
+#: guessing which of *make* and *unmake* was meant.
+_NOTE_GAP = " "
+
+
+def _affordances(note: str, close: str) -> str:
+    """The trailing affordances composed into the one field the ladder measures.
+
+    :func:`_compose` needs this twice — once for the rung that draws every name on a
+    single row and once for the run that draws them over several — and the two must
+    compose the identical string, because :func:`_span` measures where the second
+    affordance starts by subtracting its width from this one's.
+
+    An absent field contributes nothing, separator included: a bar handed no *close* draws
+    exactly the `+` it drew before #921, at exactly the width it drew it at, which is what
+    keeps `slots.workspaces_bar` and every existing measurement of the chat strip's `+`
+    unchanged.
+    """
+    return _NOTE_GAP.join(f for f in (note, close) if f)
+
+
 def _bar(names: list[str], here: str, width: int, *,
-         note: str = "", rows: int = 1, busy=(), counts=None) -> list[str]:
+         note: str = "", close: str = "", rows: int = 1, busy=(),
+         counts=None) -> list[str]:
     """One bar: *names* with *here* marked, in *rows* x *width* cells.
 
     :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
@@ -3827,19 +3895,19 @@ def _bar(names: list[str], here: str, width: int, *,
 
     *busy* and *counts* are :func:`_compose`'s and are passed straight through — see there.
     """
-    lines, cols, more, add = _compose(names, here, width, note=note, rows=rows,
-                                      busy=busy, counts=counts)
-    TABS.publish(cols, here, more, add)
+    lines, cols, more, add, close_cells = _compose(
+        names, here, width, note=note, close=close, rows=rows, busy=busy, counts=counts)
+    TABS.publish(cols, here, more, add, close_cells)
     return lines
 
 
 def _compose(names: list[str], here: str, width: int, *,
-             note: str = "", rows: int = 1, busy=(), counts=None):
+             note: str = "", close: str = "", rows: int = 1, busy=(), counts=None):
     """The strip *names*/*here* composes to, and the cells its tabs landed in.
 
-    Answers ``(lines, columns, more, add)`` — the rows to draw, the ``(row, col)`` map
-    :meth:`_Tabs.publish` takes, and the two cell sets that are not tabs. :func:`_bar` is
-    the caller that publishes; nothing here writes anything down.
+    Answers ``(lines, columns, more, add, close)`` — the rows to draw, the ``(row, col)``
+    map :meth:`_Tabs.publish` takes, and the three cell sets that are not tabs.
+    :func:`_bar` is the caller that publishes; nothing here writes anything down.
 
     *rows* is how many rows the PANE has, which the strip grows into only as far as its
     names need (#829). One is the shipped shape and every rung below is unchanged at it.
@@ -3913,8 +3981,15 @@ def _compose(names: list[str], here: str, width: int, *,
     columns from a raw name and one separator made the row wider than the pane.
 
     *note* is an extra field drawn after the names when there is room for it whole — the
-    "add chat" affordance, and nothing else today. Dropped first, before any name, because
-    it is a reminder and the names are the readout.
+    "add chat" affordance (:data:`ADD_CHAT`). Dropped first, before any name, because it is
+    a reminder and the names are the readout.
+
+    *close* is the "close chat" affordance (:data:`CLOSE_CHAT`) drawn one cell after it,
+    and the two are one field as far as the ladder is concerned (:func:`_affordances`):
+    they are measured together, dropped together, and there is no width at which a strip
+    offers to make a chat and not to unmake one. That is #921's rule said in arithmetic
+    rather than in a comment — the report is an operator who read a row drawing `+` alone
+    and concluded, correctly from the evidence, that closing was not offered.
 
     *counts* is how many chats each name holds, or ``None`` for a strip with no count field
     at all (:func:`_chats_strip`). Where it is a map, EVERY tab reserves
@@ -3982,7 +4057,7 @@ def _compose(names: list[str], here: str, width: int, *,
     gap = _bar_gap()
     gapw = tui.width(gap)
 
-    def rung(drawn_rows=(), more=(), add=()):
+    def rung(drawn_rows=(), more=(), add=(), close_cells=()):
         """This rung's rows, and the cell map for the tabs they actually drew.
 
         **Every way out of the ladder goes through here**, which is what keeps "the map
@@ -4008,16 +4083,20 @@ def _compose(names: list[str], here: str, width: int, *,
         strip is the only thing that knows where it put them, and a second walk of the
         ladder to find them again is a second answer to what is on screen.
 
-        *add* is the same for :data:`ADD_CHAT`, on the one rung that draws it.
+        *add* is the same for :data:`ADD_CHAT`, on the one rung that draws it, and
+        *close_cells* the same for :data:`CLOSE_CHAT` beside it. Named `close_cells` rather
+        than `close` because what it holds is CELLS and the enclosing function's `close` is
+        the glyph — two names for one word on a strip whose whole subject is which cell a
+        field is in is the reading error `bottom` is spelled out to refuse, one rung down.
         """
         cols: dict = {}
         lines: list[str] = []
         for r, (before, body, drawn) in enumerate(drawn_rows):
             cols.update(_tab_columns(r, tui.width(lead + before), drawn, gapw))
             lines.append(lead + before + body)
-        return lines, cols, more, add
+        return lines, cols, more, add, close_cells
 
-    def row(body: str = "", drawn=(), before: str = "", more=(), add=()):
+    def row(body: str = "", drawn=(), before: str = "", more=(), add=(), close_cells=()):
         """A rung that draws ONE row, said the way three of the four rungs say it.
 
         :func:`rung`'s single-row case, and a wrapper rather than a shape every rung has to
@@ -4027,7 +4106,7 @@ def _compose(names: list[str], here: str, width: int, *,
         the rung that draws nothing — rung 4, and a bar with no names — which is no rows at
         all rather than one blank one.
         """
-        return rung([(before, body, drawn)] if body else [], more, add)
+        return rung([(before, body, drawn)] if body else [], more, add, close_cells)
 
     if not names:
         return row()
@@ -4092,12 +4171,24 @@ def _compose(names: list[str], here: str, width: int, *,
     painted = [chrome.block(f) if i == at else f for i, f in enumerate(marked)]
     room = width - tui.width(lead)
     joined = gap.join(marked)
-    if note and tui.width(joined) + gapw + tui.width(note) <= room:
-        # The affordance's own cells, measured off this composition — :func:`_span`'s
-        # reason, and the same walk the counts get one rung down. It is drawn only where
-        # the whole list is on the strip, which is why a `+` and a `+9` are never on one.
-        return row(gap.join(painted) + gap + note, zip(names, marked),
-                   add=_span(0, tui.width(lead + joined + gap), note))
+    # **One field, measured once**, and that is what makes `+` and `-` inseparable rather
+    # than merely adjacent: the ladder asks whether there is room for the pair, so there is
+    # no width at which the strip offers to make a chat and not to unmake one (#921).
+    buttons = _affordances(note, close)
+    if buttons and tui.width(joined) + gapw + tui.width(buttons) <= room:
+        # The affordances' own cells, measured off this composition — :func:`_span`'s
+        # reason, and the same walk the counts get one rung down. Drawn only where the
+        # whole list is on the strip, which is why a `+` and a `+9` are never on one.
+        #
+        # **Where the second one starts is a subtraction and not a second composition.**
+        # `buttons` is what was drawn; `close` is its tail; so the offset is the width of
+        # everything in front of it, which cannot disagree with the string. Computing it
+        # from `note` and :data:`_NOTE_GAP` instead would be a second answer to what
+        # :func:`_affordances` composed, and the two would part the day a field is added.
+        at = tui.width(lead + joined + gap)
+        return row(gap.join(painted) + gap + buttons, zip(names, marked),
+                   add=_span(0, at, note),
+                   close_cells=_span(0, at + tui.width(buttons) - tui.width(close), close))
     if tui.width(joined) <= room:
         return row(gap.join(painted), zip(names, marked))
     if at >= 0:
@@ -4146,7 +4237,18 @@ def _compose(names: list[str], here: str, width: int, *,
         # second ROW is on screen with the first. `note` is already `""` where a caller
         # passed none, so the conjunct testing it again was a line no input could make
         # observable and is not written.
-        tail = note if not leading and not trailing else ""
+        #
+        # **The pair rides it together** (#921). `tail_add` and `tail_close` are the two
+        # affordances as this run drew them — both, or neither — and `tail` is what
+        # :func:`_affordances` composes them into, which is the same call the single-row
+        # rung makes. Two locals rather than one, because each is also the string
+        # :func:`_span` measures its own cells from: an affordance that is not on this run
+        # is `""` there, so both spans come out empty by arithmetic rather than by a test
+        # somebody has to keep true — the discipline the paragraph below states for the
+        # counts, kept for the affordances.
+        tail_add = note if not leading and not trailing else ""
+        tail_close = close if not leading and not trailing else ""
+        tail = _affordances(tail_add, tail_close)
         # **Which row each field that is NOT a name goes on, decided ONCE and not per
         # row.** The leading count belongs beside the first tab drawn and the trailing one
         # after the last, because that is where the names they stand for actually are; on a
@@ -4184,7 +4286,10 @@ def _compose(names: list[str], here: str, width: int, *,
         # whole subject is which row a field is on is the reading error to refuse.
         bottom = len(plain) - 1
         counts = _span(0, start, leading) + _span(bottom, ends[bottom], trailing)
-        add = _span(bottom, ends[bottom], tail)
+        add = _span(bottom, ends[bottom], tail_add)
+        close_cells = _span(bottom,
+                            ends[bottom] + tui.width(tail) - tui.width(tail_close),
+                            tail_close)
         # Measured, not assumed. :func:`_cuts` puts at least one name on a page, so a name
         # wider than the whole row composes a body that overflows — and this ladder gives a
         # rung up rather than drawing part of anything. Measured on the PLAIN rows for the
@@ -4193,7 +4298,7 @@ def _compose(names: list[str], here: str, width: int, *,
         # is measured, not just the first: a run whose second page overflows is a strip
         # drawing part of a name on a row nothing else would have looked at.
         if all(tui.width(before + body) <= room for before, body in plain):
-            return rung(painted_rows, more=counts, add=add)
+            return rung(painted_rows, more=counts, add=add, close_cells=close_cells)
     counted = f"{at + 1}/{len(names)}" if at >= 0 else str(len(names))
     if tui.width(counted) <= room:
         # **The narrow rung is a count too, and it is the one where this matters most.**
@@ -4235,6 +4340,42 @@ def _compose(names: list[str], here: str, width: int, *,
 #: confused: :func:`_bar` draws this only on the rung where every name fits, and draws a
 #: count only on the rung where they do not.
 ADD_CHAT = "+"
+
+#: The chat bar's close-chat affordance (#921) — the `-` beside the `+`, and one cell of it.
+#:
+#: *"we have plus button - that adding new session tab, but no any option to delete/stop,
+#: no any modal/drawer for confirmation."*
+#:
+#: **Closing a chat was already possible and the strip did not say so.** `F2 → chat: close`
+#: and a right press on a tab both reach it; neither is written anywhere on the frame, which
+#: advertises exactly two things — `F2 palette` on the attention row and this row's `+`. So
+#: an operator read a strip offering to MAKE a chat and nothing else, and concluded the
+#: system would not let them close one. **That conclusion was correct given the evidence**,
+#: and it is a worse failure than an unadvertised create: a create nobody finds costs a
+#: feature, a destroy nobody finds costs trust in the tool.
+#:
+#: **It does not close on the press, and that is the whole of §4i.** `frame/builtins
+#: ._bar_events` spawns `charter frame-palette --tab <this chat>` — byte for byte what a
+#: right press on this chat's own tab already spawns — so what a press opens is the menu
+#: whose `chat: close` row is a doorway onto `leave.confirm_rows`. A pointer opens the
+#: question; the keyboard answers it. Compare the `+` beside it, which acts on the press
+#: because nothing is destroyed by another chat.
+#:
+#: **The active chat, and closing any other stays a right press.** This is one glyph at the
+#: end of the row, not a `×` per tab: a per-tab affordance would cost a column on every tab
+#: and re-cut the strip, which is exactly the shape :data:`TAB_COUNT_W` reserves against and
+#: :data:`TAB_SPINNER` was refused in. The chat you are in is the one a single glyph can
+#: honestly be about, and it is also the commonest chat anyone closes.
+#:
+#: **ASCII — `-`, U+002D — and NOT `−`, U+2212**, though `tui.width` measures both as one
+#: cell and U+2212 is East-Asian *Neutral*. :data:`_BAR_RULE` states the rule as the ROW's
+#: rather than as any one constant's: a click here is resolved by COLUMN, and the glyph to
+#: put on this row is *the one whose width no terminal disagrees about*. A mathematical
+#: minus is a codepoint a terminal font may not carry, and a fallback into a CJK face draws
+#: two cells whatever the table says. What that buys is a prettier dash; what it risks is
+#: the one failure class this project refuses — *fires wrongly* rather than *never fires*.
+#: `+` and `-` are also the pair every operator already reads as make-and-unmake.
+CLOSE_CHAT = "-"
 
 
 #: The largest chat count a workspace tab draws as a number. Above it the field says
@@ -4340,8 +4481,14 @@ def working_chats() -> frozenset:
 
 
 def _chats_strip(fid: str):
-    """What the chat strip is a strip OF — its names, the one you are typing in, its note,
-    and no count field.
+    """What the chat strip is a strip OF — its names, the one you are typing in, both of
+    its affordances, and no count field.
+
+    **Both affordances or neither** (#921). :data:`ADD_CHAT` and :data:`CLOSE_CHAT` are
+    handed over as one pair because :func:`_compose` measures them as one field, so there
+    is no width and no rung at which this strip offers to make a chat and not to unmake
+    one. The report this answers is an operator reading a row that drew `+` alone and
+    concluding — correctly, from what was on it — that closing a chat was not on offer.
 
     **``None`` for the counts and not an empty map**, which are different instructions to
     :func:`_compose`: ``None`` reserves nothing, ``{}`` reserves :data:`TAB_COUNT_W` on
@@ -4359,7 +4506,7 @@ def _chats_strip(fid: str):
     spending nine columns of a row whose names are competing for them.
     """
     from . import chats as chats_mod
-    return [c.id for c in chats_mod.roster(fid)], fid, ADD_CHAT, None
+    return [c.id for c in chats_mod.roster(fid)], fid, ADD_CHAT, CLOSE_CHAT, None
 
 
 def _workspace_counts() -> dict:
@@ -4407,13 +4554,20 @@ def _workspaces_strip(fid: str):
     open something that takes a name, which is `charter workspace create` and is not a
     thing a one-row strip can be.
 
+    **And no `-` either, which is the same decision and not a second one** (#921). The rule
+    that strip earns its `-` from is *a surface that advertises making a thing must
+    advertise unmaking it*; a strip that advertises neither owes neither. There is no route
+    to removing a workspace anywhere in the frame today — `workspace: close` is specified
+    and unimplemented — and a `-` beside no `+` would be the create side's failure with the
+    signs exchanged. It is filed on its own; chats prove the pattern first.
+
     **The counts are this strip's and the chat strip has none** (#880) — see
     :func:`_workspace_counts` for the one grouped read and for why it does not put this
     strip on a clock, and :data:`TAB_COUNT_W` for why the field is there on every tab even
     when the number is not.
     """
     from . import switch as switch_mod
-    return (switch_mod.workspaces(fid), switch_mod.current_workspace(fid), "",
+    return (switch_mod.workspaces(fid), switch_mod.current_workspace(fid), "", "",
             _workspace_counts())
 
 
@@ -4495,12 +4649,13 @@ def bar_rows_wanted(fid: str, slot: str, *, pane_cols: int, cap: int) -> int:
     entry = BARS.get(slot)
     if entry is None:
         return 1
-    names, here, note, counts = entry(fid)
+    names, here, note, close, counts = entry(fid)
     width = pane_cols - 2 * pad_for(slot, pane_cols)
     filled = 1
     for rows in range(1, cap + 1):
-        lines, _cols, _more, _add = _compose(names, here, width,
-                                             note=note, rows=rows, counts=counts)
+        lines, _cols, _more, _add, _close = _compose(names, here, width, note=note,
+                                                     close=close, rows=rows,
+                                                     counts=counts)
         if len(lines) == rows:
             filled = rows
     return filled
@@ -4525,9 +4680,9 @@ def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     dispatches and this chat's notice dwell, and neither is "a sibling chat's harness
     started working".
     """
-    names, here, note, counts = _chats_strip(fid)
-    return _bar(names, here, width, note=note, rows=rows, busy=working_chats(),
-                counts=counts)
+    names, here, note, close, counts = _chats_strip(fid)
+    return _bar(names, here, width, note=note, close=close, rows=rows,
+                busy=working_chats(), counts=counts)
 
 
 def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
@@ -4536,8 +4691,8 @@ def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     :func:`chats_bar`'s rules and its ladder, one noun over — see :func:`_workspaces_strip`
     for what it draws and why it draws no `+`.
     """
-    names, here, note, counts = _workspaces_strip(fid)
-    return _bar(names, here, width, note=note, rows=rows, counts=counts)
+    names, here, note, close, counts = _workspaces_strip(fid)
+    return _bar(names, here, width, note=note, close=close, rows=rows, counts=counts)
 
 
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no

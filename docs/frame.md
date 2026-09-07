@@ -257,6 +257,13 @@ first. Close is a doorway, not a button: pressing it draws the same warning `F2 
 close` draws, naming the chat and what stopping it costs, and the keypress on *that* is what
 stops the harness. Escape leaves, `F12` always leaves, and nothing is stopped by a pointer.
 
+**A confirmation is a drawer; the palette is the whole window.** The palette and the pickers
+zoom over the frame because they are lists that scroll and have no length limit. A
+confirmation is one question with its answer at the top, so it gives the window back and
+draws in the five rows at the bottom of it, with the frame you were looking at still above.
+It is still the pane the keyboard and the pointer are in — the zoom was never what made
+those work.
+
 Right-click on the tab you *are* on works too — closing the chat you are in is the ordinary
 case of closing one. Right-click on the left inset, on the `+`, on a `+N` count or on empty
 space does nothing at all, and the `workspaces` bar has no menu: a workspace has neither a
@@ -737,11 +744,29 @@ that thinks for longer than that with no tool call blinks off and comes back on 
 one. There is no third answer available from a hook channel that reports prompts and tool
 calls: charter can be late to stop claiming, or early, and it is set to be early.
 
-**The chat bar ends in a `+`, and pressing it opens another chat.** Same workspace, same
-harness you are already in, its id allocated for you — which is why it takes nothing and
-asks nothing. It runs `charter frame-new-chat`, which is `charter <harness>` in this
-workspace with one difference: it builds the frame without becoming your terminal, because
-the process behind a click is not one.
+**The chat bar ends in a `+` and a `-`, and one of them is a button and one is a door.**
+Pressing the `+` opens another chat: same workspace, same harness you are already in, its
+id allocated for you — which is why it takes nothing and asks nothing. It runs `charter
+frame-new-chat`, which is `charter <harness>` in this workspace with one difference: it
+builds the frame without becoming your terminal, because the process behind a click is not
+one.
+
+**Pressing the `-` closes nothing.** It opens the menu about the chat you are in — the same
+one a right-click on that tab opens — whose `chat: close` row draws the warning naming the
+chat and what stopping it costs, and the keypress on *that* is what stops it. A pointer
+opens the question; the keyboard answers it, which is why making a chat may happen on a
+press and unmaking one may not.
+
+It is one glyph at the end of the row rather than a `×` on every tab, because a per-tab
+affordance would cost a column on every tab and move every one of them the moment a chat
+opened or closed — and the cell you were about to press would hold another chat's name.
+Closing a chat you are *not* in is the right-click on its own tab.
+
+The `-` is there because the frame was not saying it existed. Closing a chat has always
+been possible by `F2 → chat: close` and by right-click, and a strip that drew `+` and
+nothing else read as a tool that would let you make chats and not get rid of them. An
+unadvertised way to create something costs you a feature; an unadvertised way to destroy
+something costs you the belief that it is there.
 
 It stops, and says why on the attention row, in four cases: your frame is a window in a
 tmux you already had (charter makes no chats for you there — `charter <harness>` in the
@@ -749,9 +774,11 @@ workspace still does); charter cannot prove the workspace's tmux session is this
 rather than another project's; this chat records no harness charter can launch and your
 plane declares no `[harness] default`; or charter cannot enter the workspace's directory.
 
-**The workspace bar has no `+`, deliberately.** A new chat is nothing but a press. A new
+**The workspace bar has neither, deliberately.** A new chat is nothing but a press. A new
 workspace is a directory and a *name*, which is `charter workspace create` — and a picker
-that creates on a typo leaves litter.
+that creates on a typo leaves litter. And a strip that offers no way to make a thing owes
+no way to unmake one: there is no route to removing a workspace anywhere in the frame yet,
+so a `-` there would be the same gap with the sign reversed.
 
 **Each workspace tab says how many chats it holds** — `some-workspace 5`. A workspace with
 none draws a blank, so every count you see means something, and past nine the field says
@@ -1068,6 +1095,13 @@ cannot be resumed still comes back: its directory, its workspace and its persona
 only the conversation is gone. A chat whose *workspace* has been deleted comes back too, into
 a remade and empty one, and says the workspace was missing; charter never quietly re-homes a
 chat, and a workspace it re-makes is the chat's own.
+
+**`F2 → chat: new`** opens another chat in this workspace — the `+` on the chat strip, as a
+row you can reach with the keyboard. That matters more than it sounds: `[frame] mouse` is
+**off** by default, so on a plane that has not turned the pointer on the `+` cannot be
+pressed at all, and until this row existed the frame had no way to make a chat from inside
+itself. Every pointer affordance charter draws has a key as well, and this was the one that
+did not.
 
 **`F2 → chat: previous transcript`** opens what a chat had on screen before it was last
 stopped, in a pager, in a window of its own. tmux history dies with its session and
@@ -2437,6 +2471,7 @@ charter · 16 to choose from
   * chrome: off
     chrome: dark
     chrome: light
+    chat: new — another chat in this workspace
     chat: previous transcript          no previous transcript for this chat — one …
     refresh — gather this workspace's repos, todos and changes again
     charter: quit — stop every harness on this plane

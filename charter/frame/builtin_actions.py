@@ -698,6 +698,59 @@ def _regather(fid: str):
     _spawn(util.self_relaunch_argv("frame-gather", "--session", fid, "--workspace", ws),
            fid=fid)
     return f"gathering {ws}…"
+
+
+def _register_new_chat(reg: actions.ActionRegistry) -> None:
+    """One row that opens another chat in this workspace — **#921's create side.**
+
+    `frame/events.py`'s rule is *"a component whose only route to a piece of state is a
+    click has no route to it on most planes. Give every pointer affordance a key as
+    well."* This is the row that was missing. `slots.ADD_CHAT` — the `+` at the end of the
+    chat strip — was the frame's ONLY route to a new chat, and `[frame] mouse` ships
+    **false**, so on charter's own default plane there was no route at all and the one
+    glyph the frame advertises about making a chat could not be pressed.
+
+    That is the create half of #921, whose report is the destroy half: *"we have plus
+    button - that adding new session tab, but no any option to delete/stop"*. A surface
+    that advertises making a thing must advertise unmaking it at the same weight and in
+    the same place, and the palette is where both sentences have to be true first, because
+    the palette is the surface that works at every width and on every plane.
+
+    **Registered beside `chat: previous transcript`, not at the top.** They are the two
+    rows about the chat you are standing in, and an operator scanning left edges finds
+    them together. The placement moves no density, chrome, strip or todo row, which is
+    `_register_density`'s standing rule: *a list whose rows move is a list nobody learns*.
+
+    **Always available, and that is not this row declining to check.**
+    `commands_frame.cmd_new_chat` has four refusals and says every one of them on the
+    frame's own attention row — it runs detached with its three streams on `/dev/null` and
+    that row is the only surface it has. A second reading of those conditions here would
+    be a second answer to a question that already has one, and it would refuse a row the
+    `+` beside it still offers. `builtins._bar_events` keeps `add` as DATA for exactly
+    that reason: two routes to one command must not degrade differently.
+    """
+    reg.register(action.Action(
+        id="chat.new", title="chat: new — another chat in this workspace",
+        run=lambda ctx: _run_new_chat(ctx.fid)))
+
+
+def _run_new_chat(fid: str):
+    """Start `charter frame-new-chat` for *fid*, detached, and say so.
+
+    `--chat` named outright, as `_run_transcript` names its own target and `_regather`
+    names its `--session`. `builtins._NEW_CHAT` carries no option because :func:`_spawn`
+    sets the child's own `$CHARTER_SESSION_ID` and `commands_frame._pressers_chat` falls
+    back to it — the two spellings resolve to the same frame through that one function, so
+    this is the palette's idiom rather than a second answer.
+
+    Detached for the module docstring's measured reason: the palette closes the instant it
+    has invoked, `kill-pane` hands SIGHUP to that pane's process group, and `cmd_new_chat`
+    is a whole `new-window` launch this process would not survive to make.
+    """
+    _spawn(util.self_relaunch_argv("frame-new-chat", "--chat", fid), fid=fid)
+    return "opening another chat…"
+
+
 def _register_transcript(reg: actions.ActionRegistry) -> None:
     """One row: open what this chat had on screen before it was last stopped — §4f.
 
@@ -796,10 +849,17 @@ def build(fid: str, *, current_density: str,
     # move. `_register_regather` keeps the bottom of charter's own list, which its own
     # docstring argues for and which this does not disturb.
     #
+    # `chat: new` sits with it for the same reason and one more: they are the two rows
+    # about the chat you are standing in, and #921's whole finding is that a surface
+    # advertising one half of a pair reads as refusing the other. It is a HARMLESS row and
+    # keeps the harmless rows' half of the list — nothing is destroyed by opening a chat,
+    # which is `builtins._bar_events`' §4i argument for the `+` said one surface over.
+    #
     # The two DESTRUCTIVE rows (`charter: quit`, `chat: close`) are deliberately not here
     # at all: they are doorways onto a confirmation, they are appended after every action by
     # `commands_frame._draw_palette`, and `frame/leave.open_rows` records why that placement
     # is a guard rather than a taste.
+    _register_new_chat(reg)
     _register_transcript(reg)
     _register_regather(reg)
     for aid in reg.providers.ids():

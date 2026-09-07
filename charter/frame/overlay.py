@@ -1029,6 +1029,60 @@ def modal_argvs(server: str, *, harness: str,
             tmuxctl.server_argv(server, "resize-pane", "-Z", "-t", overlay_pane)]
 
 
+#: The format that says whether the window an overlay is in is zoomed right now.
+#:
+#: Read through `if-shell -F` rather than believed, because :func:`unzoom_argv` has exactly
+#: one command to spend and tmux's `resize-pane -Z` is a **toggle** — no version has an
+#: "unzoom" flag, and `cmd-resize-pane.c` unzooms the WINDOW when the window is zoomed and
+#: zooms the target pane when it is not. So a bare toggle sent to a pane that had already
+#: been unzoomed (an operator's own prefix key on charter's shared private server, a
+#: `frame-resize` in flight) would zoom the confirmation back over the whole window, which
+#: is exactly the state it exists to leave.
+ZOOMED_FLAG = "#{window_zoomed_flag}"
+
+
+def unzoom_argv(server: str, *, overlay_pane: str) -> list[str] | None:
+    """Give *overlay_pane* its five rows back — a confirmation is a **drawer**, #921.
+
+    *"no any modal/drawer for confirmation"*, reported about a surface that has had one
+    since it was written. :func:`modal_argvs` ends in `resize-pane -Z`, so a two-row
+    confirmation about one chat took the entire window and read as an entirely new place
+    rather than as something that had opened over the frame the operator was looking at.
+
+    **Dropping the zoom does not hide it.** :func:`open_argv` splits `-v -l` at
+    :data:`_SPLIT_ROWS`, so what the pane goes back to is five rows at the bottom of the
+    window with the frame still drawn above it. Measured on tmux 3.7c, a 100x30 window with
+    the overlay split off the harness::
+
+        after resize-pane -Z    %0 h=24 active=0 zoomed=1   %1 h=30 active=1 zoomed=1
+        after the unzoom        %0 h=24 active=0 zoomed=0   %1 h=5  active=1 zoomed=0
+
+    **#739's five-row pane is not this one, and the difference is `active`.** That defect
+    was a second overlay ORPHANED by a double `F2` — blank, unfocused, holding a live
+    Python process nothing could reach, which is why it read as empty terminal above the
+    repo table. This pane is the focused one, is where the keyboard is, and is the pane
+    whose :data:`MOUSE_ON` the terminal follows. Measured on 3.7c through a real pty: with
+    the overlay unzoomed and active, the outer terminal still received
+    ``\\x1b[?1006h\\x1b[?1000h`` from this pane. The zoom was never what made the pointer
+    work — `select-pane` is, and :func:`modal_argvs` keeps it.
+
+    **The PALETTE keeps the whole window and only the confirmation gives it up.** The
+    palette lists every action, every doorway and every name an operator types towards; it
+    scrolls, has no row cap by design, and earns the rows. A confirmation is one question,
+    with the answer at the top and the consequences under it.
+
+    `if-shell -F` and not a bare toggle — see :data:`ZOOMED_FLAG`. ``None`` for a pane id
+    that is not tmux's own word for one, following every other builder here: charter would
+    rather send nothing than aim `resize-pane -Z` at a target it cannot predict the parse
+    of, and a `-t` tmux cannot resolve is a command that acts on the CURRENT pane —
+    :func:`sweep_argv` records what that costs one function up.
+    """
+    if not tmuxctl.PANE_ID_RE.fullmatch(overlay_pane):
+        return None
+    return tmuxctl.server_argv(server, "if-shell", "-F", "-t", overlay_pane, ZOOMED_FLAG,
+                               f"resize-pane -Z -t {overlay_pane}")
+
+
 def close_argvs(server: str, *, harness: str, overlay_pane: str) -> list[list[str]]:
     """Hand the pane back: focus the harness, kill the overlay, disarm the hatch.
 
