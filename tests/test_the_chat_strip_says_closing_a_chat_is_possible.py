@@ -294,6 +294,28 @@ class APressOnTheMinusOpensTheQuestion(_ABarThatWasDrawn, unittest.TestCase):
         self.assertFalse(self.on_event(_press(self.minus)))
         self.assertEqual(len(self.spawned), 1, "the case measured nothing")
 
+    def test_the_close_answer_is_final_for_the_cell_it_is_about(self):
+        """**One press, one surface, even for a cell that claims to be two things.**
+
+        `_Tabs`' structural promise is that a strip carrying the affordances carries no
+        `+N`, so the two sets are disjoint on any row the renderer draws — which means the
+        handler's `return` after the spawn cannot be reddened by anything the RENDERER
+        produces. That is exactly the shape the deletion sweep reports as a survivor, and
+        the honest answer is not to argue equivalence but to ask the handler the question
+        the renderer cannot: a map that claims one cell for both, published by hand the way
+        `slots.TABS` exists to let a test publish one.
+
+        Without the `return`, a press here opens the tab menu AND the palette — two panes
+        carved off one harness for one press, which is the double-open `#739` is about.
+        """
+        state.frame_dir("f1", create=True)
+        slots.TABS.publish({}, "", more=[(0, 7)], close=[(0, 7)])
+        self.spawned.clear()
+        self._handler("chats", "api.1")(_press(7))
+        self.assertEqual([argv[-2:] for argv, _fid in self.spawned],
+                         [["--tab", "api.1"]],
+                         f"one press opened more than the menu: {self.spawned!r}")
+
     def test_the_workspace_bars_handler_will_not_open_one_either(self):
         """**The property the drawn row cannot reach, and why the handler is handed the
         answer as DATA.** `slots._workspaces_strip` publishes no close cell, so a handler
