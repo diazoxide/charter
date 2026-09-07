@@ -2128,15 +2128,12 @@ class AMutantThatEatsTheMachineIsARedAndNotAnOutage(unittest.TestCase):
         self.addCleanup(setattr, sweep, "Sandbox", real)
         plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
                                "", "f") for n in range(3)]
-        for name, stub in (("plan_for", lambda *a: (plan, {})),
-                           ("decide", lambda box, m, mods:
-                            ("pinned", sweep.Outcome(False, 1, "x"), None))):
-            was = getattr(sweep, name)
-            setattr(sweep, name, stub)
-            self.addCleanup(setattr, sweep, name, was)
+        was = sweep.decide
+        sweep.decide = lambda box, m, mods: ("pinned", sweep.Outcome(False, 1, "x"), None)
+        self.addCleanup(setattr, sweep, "decide", was)
         with contextlib.redirect_stdout(io.StringIO()):
-            sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {}, self.tmp, 2, {},
-                        0, print, 60.0, None, cap=7 * 1024 ** 2)
+            sweep.sweep(self.tmp, "HEAD", plan, {}, {}, self.tmp, 2, {},
+                        0, print, 60.0, cap=7 * 1024 ** 2)
         self.assertEqual(len(boxes), 2)
         self.assertEqual([b.memory_cap for b in boxes], [7 * 1024 ** 2] * 2)
 
@@ -4398,7 +4395,7 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
             for i in range(3):
                 (Path(tmp) / f"sweep-results-{i + 1}.json").write_text(
                     sweep.as_json(results[i::3]))
-            merged, missing = sweep.merge(Path(tmp), 3)
+            merged, missing, _ = sweep.merge(Path(tmp), 3)
         self.assertEqual(missing, 0)
         self.assertEqual(len(merged), len(results))
         self.assertEqual(sorted(r.mutation.path for r in merged),
@@ -4420,7 +4417,7 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for i, r in enumerate(pair, start=1):
                 (Path(tmp) / f"sweep-results-{i}.json").write_text(sweep.as_json([r]))
-            merged, missing = sweep.merge(Path(tmp), 2)
+            merged, missing, _ = sweep.merge(Path(tmp), 2)
         gate = sweep.classify(merged)
         self.assertEqual((missing, len(gate.masked), gate.unpinned), (0, 2, []))
         self.assertIn("### Masked cluster",
@@ -4429,7 +4426,7 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
     def test_a_shard_that_wrote_nothing_is_counted_as_a_shard_that_did_not_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "sweep-results-1.json").write_text(sweep.as_json([]))
-            merged, missing = sweep.merge(Path(tmp), 3)
+            merged, missing, _ = sweep.merge(Path(tmp), 3)
         self.assertEqual((len(merged), missing), (0, 2))
 
     def test_a_result_file_that_will_not_parse_is_not_a_shard_that_answered(self):
@@ -4438,7 +4435,7 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
             (Path(tmp) / "a.json").write_text(sweep.as_json([]))
             (Path(tmp) / "b.json").write_text('[{"path": "charter/a.py"')
             (Path(tmp) / "c.json").write_text('[{"path": "charter/a.py"}]')
-            merged, missing = sweep.merge(Path(tmp), 3)
+            merged, missing, _ = sweep.merge(Path(tmp), 3)
         self.assertEqual((len(merged), missing), (0, 2))
 
     def test_an_empty_sweep_that_ran_is_not_a_sweep_that_did_not(self):
@@ -4453,9 +4450,9 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "sweep-results-1.json").write_text(sweep.as_json([]))
-            ran, ran_missing = sweep.merge(Path(tmp), 1)
+            ran, ran_missing, _ = sweep.merge(Path(tmp), 1)
         with tempfile.TemporaryDirectory() as tmp:
-            gone, gone_missing = sweep.merge(Path(tmp), 1)
+            gone, gone_missing, _ = sweep.merge(Path(tmp), 1)
         self.assertEqual((ran, ran_missing), ([], 0))
         self.assertEqual(gone_missing, 1)
         self.assertEqual(sweep.gate_conclusion(sweep.classify(ran), ran_missing),
@@ -4464,7 +4461,7 @@ class TheAnswerSurvivesTheTripThroughAFile(unittest.TestCase):
                          sweep.NO_VERDICT)
 
     def test_a_directory_that_is_not_there_is_no_verdict_and_not_a_clean_one(self):
-        merged, missing = sweep.merge(Path("/nonexistent-sweep-shards"), 2)
+        merged, missing, _ = sweep.merge(Path("/nonexistent-sweep-shards"), 2)
         self.assertEqual((merged, missing), ([], 2))
 
     def test_a_plan_that_never_said_how_many_shards_is_not_no_shards(self):
@@ -4652,17 +4649,20 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         must not do is arrive as something else. A slice that is silently wrong does not
         fail — it sweeps some mutations twice and others never, and the merge then reports
         a complete sweep of an incomplete plan."""
+        plan = self._five()
         seen = []
-        for name, stub in (("sweep", lambda *a, **k: (seen.append(a[-1]), ([], []))[1]),
-                           ("load_map", lambda *a, **k: {})):
-            real = getattr(sweep, name)
-            setattr(sweep, name, stub)
-            self.addCleanup(setattr, sweep, name, real)
+        real = sweep.sweep
+        sweep.sweep = lambda *a, **k: (seen.append(a[2]), ([], []))[1]
+        self.addCleanup(setattr, sweep, "sweep", real)
         code, said = self._cli("--gate", "--jobs", "1", "--base", self.base,
                                "--shard", "2/3", "--no-baseline",
                                "--workdir", str(self.workdir))
         self.assertEqual(code, 0, said)
-        self.assertEqual(seen, [(2, 3)])
+        # The SLICE and not the pair, because since #920 the string is parsed and applied
+        # before `sweep` is called at all — so what proves `"2/3"` arrived is the two
+        # mutations of five that a shard 2 of 3 is dealt, and not a tuple on its way past.
+        self.assertEqual([[m.line for m in s] for s in seen], [[2, 5]])
+        self.assertIn("5 mutations across 1 file(s); shard 2 of 3 takes 2 of them", said)
 
     def test_the_slice_a_shard_takes_is_the_slice_it_says_it_took(self):
         """The log line a cancelled run leaves behind is the only trace of what it was
@@ -4670,15 +4670,10 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         said = io.StringIO()
         plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
                                "", "close") for n in range(1, 6)]
-        real = sweep.plan_for
-        sweep.plan_for = lambda *a: (plan, {})
-        self.addCleanup(lambda: setattr(sweep, "plan_for", real))
-        with contextlib.redirect_stdout(said):
-            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
-                                     self.workdir, 1, {}, 0, print, 60.0, (2, 3))
+        mine = sweep.dealt(plan, 1, (2, 3), said.write)
         self.assertIn("5 mutations across 1 file(s); shard 2 of 3 takes 2 of them",
                       said.getvalue())
-        self.assertEqual([r.mutation.line for r in results], [2, 5])
+        self.assertEqual([m.line for m in mine], [2, 5])
 
     def test_no_shard_at_all_still_means_the_whole_plan(self):
         """Found by the sweep, on this branch, against this file: forcing `if shard is not
@@ -4688,13 +4683,8 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         said = io.StringIO()
         plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
                                "", "close") for n in range(1, 6)]
-        real = sweep.plan_for
-        sweep.plan_for = lambda *a: (plan, {})
-        self.addCleanup(lambda: setattr(sweep, "plan_for", real))
-        with contextlib.redirect_stdout(said):
-            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
-                                     self.workdir, 1, {}, 0, print, 60.0, None)
-        self.assertEqual([r.mutation.line for r in results], [1, 2, 3, 4, 5])
+        mine = sweep.dealt(plan, 1, None, lambda line: said.write(line + "\n"))
+        self.assertEqual([m.line for m in mine], [1, 2, 3, 4, 5])
         self.assertIn("5 mutations across 1 file(s)\n", said.getvalue())
         self.assertNotIn("shard", said.getvalue())
 
@@ -4714,7 +4704,7 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
                                "--json", str(self.tmp / "r.json"))
         self.assertEqual(code, 0, said)
         self.assertEqual((self.tmp / "r.json").read_text(), "[]")
-        merged, missing = sweep.merge(self.tmp, 1)
+        merged, missing, _ = sweep.merge(self.tmp, 1)
         self.assertEqual((merged, missing), ([], 0))
         self.assertEqual(self._read_outputs(),
                          {"conclusion": "nothing", "headline": "nothing to sweep"})
@@ -4742,12 +4732,12 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
 
         The clock is scripted rather than real: `now` is called once per mutation, so
         "two of five" is a boundary and not a stopwatch reading."""
-        self._five()
+        plan = self._five()
         ticks = iter([0.0, 0.0, 99.0, 99.0, 99.0])
         said = io.StringIO()
         with contextlib.redirect_stdout(said):
-            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
-                                     self.workdir, 1, {}, 0, print, 60.0, None,
+            results, _ = sweep.sweep(self.tmp, "HEAD", plan, {}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0,
                                      deadline=50.0, now=lambda: next(ticks))
         self.assertEqual([r.verdict == sweep.OUT_OF_TIME for r in results],
                          [False, False, True, True, True])
@@ -4762,11 +4752,11 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         be killed. Found by the sweep on this branch: `shift-boundary` swapped them and
         nothing went red, because the scripted clocks elsewhere step over the boundary
         rather than landing on it."""
-        self._five()
+        plan = self._five()
         ticks = iter([49.0, 50.0, 50.0, 50.0, 50.0])
         with contextlib.redirect_stdout(io.StringIO()):
-            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
-                                     self.workdir, 1, {}, 0, print, 60.0, None,
+            results, _ = sweep.sweep(self.tmp, "HEAD", plan, {}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0,
                                      deadline=50.0, now=lambda: next(ticks))
         self.assertEqual([r.verdict == sweep.OUT_OF_TIME for r in results],
                          [False, True, True, True, True])
@@ -4784,8 +4774,8 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         plan = self._five()
         calls = []
         with contextlib.redirect_stdout(io.StringIO()):
-            sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {}, self.workdir, 1, {},
-                        0, print, 60.0, None,
+            sweep.sweep(self.tmp, "HEAD", plan, {}, {}, self.workdir, 1, {},
+                        0, print, 60.0,
                         record=lambda rows: calls.append([r.verdict for r in rows]))
         self.assertEqual(len(calls), len(plan) + 2)
         self.assertEqual(calls[0], [sweep.OUT_OF_TIME] * len(plan))
@@ -4796,10 +4786,10 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         away: an unsharded local `--gate` has no budget and must still sweep everything.
         `no_shard_at_all_still_means_the_whole_plan` is the sibling of this for slicing,
         and it exists because the sweep found the unsharded path untested."""
-        self._five()
+        plan = self._five()
         with contextlib.redirect_stdout(io.StringIO()):
-            results, _ = sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {},
-                                     self.workdir, 1, {}, 0, print, 60.0, None,
+            results, _ = sweep.sweep(self.tmp, "HEAD", plan, {}, {},
+                                     self.workdir, 1, {}, 0, print, 60.0,
                                      deadline=None, now=lambda: 10.0 ** 9)
         self.assertNotIn(sweep.OUT_OF_TIME, [r.verdict for r in results])
         self.assertEqual(len(results), 5)
@@ -4827,8 +4817,8 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         sweep.decide = spy
         self.addCleanup(setattr, sweep, "decide", real)
         with contextlib.redirect_stdout(io.StringIO()):
-            sweep.sweep(self.tmp, "HEAD", {"charter/m.py": {1}}, {}, self.workdir, 1, {},
-                        0, print, 60.0, None, record=lambda rows:
+            sweep.sweep(self.tmp, "HEAD", plan, {}, {}, self.workdir, 1, {},
+                        0, print, 60.0, record=lambda rows:
                         out.write_text(sweep.as_json(rows)))
         self.assertEqual(len(snapshots), len(plan))
         # Before the first answer, the file already names the WHOLE plan. A file holding
@@ -4872,7 +4862,7 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         """End to end and through the file, because that is how the answer travels: the
         shard writes JSON, another machine reads it, and the NAME is the deliverable
         (#630). What must never come back out of that trip is `no survivors`."""
-        self._five()
+        plan = self._five()
         ticks = iter([0.0, 99.0, 99.0, 99.0, 99.0])
         real = sweep.sweep
         # The budget below is real and switches the deadline on; the boundary is pinned
@@ -5955,14 +5945,14 @@ class TheMergeStepHoldsItsOwnEdges(unittest.TestCase):
         complete sweep complete."""
         for n in (1, 2, 3, 4):
             self._shard(f"s{n}.json", [_result("pinned")])
-        results, missing = sweep.merge(self.shards, 3)
+        results, missing, _ = sweep.merge(self.shards, 3)
         self.assertEqual((len(results), missing), (4, 0))
 
     def test_a_file_that_will_not_parse_is_a_shard_that_did_not_report(self):
         """There is no third reading of a truncated upload."""
         self._shard("good.json", [_result("pinned")])
         (self.shards / "torn.json").write_text("[{\"path\":", encoding="utf-8")
-        results, missing = sweep.merge(self.shards, 2)
+        results, missing, _ = sweep.merge(self.shards, 2)
         self.assertEqual((len(results), missing), (1, 1))
 
     def test_the_merge_step_says_how_many_of_how_many_answered(self):

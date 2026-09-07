@@ -2454,13 +2454,22 @@ def plan_for(root: Path, ref: str, scope: dict[str, set[int]], dirty: dict[str, 
     return plan, sources
 
 
-def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str, list[str]],
+def sweep(root: Path, ref: str, plan: list[Mutation], sources: dict[str, bytes],
+          selection: dict[str, list[str]],
           workdir: Path, jobs: int, dirty: dict[str, bytes], second_order: int = 0,
-          log=print, full_timeout: float = FULL_TIMEOUT,
-          shard: tuple[int, int] | None = None, cap: int = 0,
+          log=print, full_timeout: float = FULL_TIMEOUT, cap: int = 0,
           deadline: float | None = None, record=None, now=time.time
           ) -> tuple[list[Result], list["Pair"]]:
     """Every mutation, run; every survivor, re-run against the whole suite.
+
+    *plan* is this run's slice, already sharded, and *sources* the blobs it was read
+    from — both from :func:`plan_for`, and both **handed in rather than worked out here**
+    (#920). A run that discovers its own plan discovers it after it has paid for a
+    sandbox, a selection map and a full unmutated suite, so a plan of nothing spent nine
+    minutes on a baseline it had no mutation to interpret — and on the 0.59.0 release that
+    baseline came back red on a flake, took the shard's silent early exit, and published
+    `no verdict: 1 of 1 shard did not report` about a branch with nothing to sweep. The
+    caller asks first and spends afterwards.
 
     *deadline* is an absolute :func:`time.time`, past which no further mutation is dealt
     to a sandbox: the rest come back :data:`OUT_OF_TIME` and the run ends early with what
@@ -2478,14 +2487,6 @@ def sweep(root: Path, ref: str, scope: dict[str, set[int]], selection: dict[str,
     measures the machine it runs on. A scripted clock makes the boundary exact, which is
     what a boundary has to be to be worth asserting.
     """
-    plan, sources = plan_for(root, ref, scope, dirty)
-    whole = len(plan)
-    if shard is not None:
-        plan = shard_of(plan, *shard)
-        log(f"  {whole} mutations across {len(scope)} file(s); "
-            f"shard {shard[0]} of {shard[1]} takes {len(plan)} of them")
-    else:
-        log(f"  {whole} mutations across {len(scope)} file(s)")
     if not plan:
         return [], []
 
@@ -2887,6 +2888,52 @@ def as_json(results: list[Result]) -> str:
     } for r in results], indent=1)
 
 
+#: Why a shard swept nothing, when the answer is "the tree was already broken" (#920).
+#:
+#: Short enough to be part of a check's NAME, because that is where it ends up: the merge
+#: step renders it as `no verdict: 1 shard refused: the baseline is red`. The failing test
+#: travels beside it as :attr:`Refusal.detail` and is printed on the page, never in the
+#: name — one is a sentence a reader skims, the other is a test id.
+RED_BASELINE = "the baseline is red"
+
+
+@dataclasses.dataclass(frozen=True)
+class Refusal:
+    """A shard that ran, decided not to sweep, and said so on the way out (#920).
+
+    **The third state between a shard's results and a shard's silence.** A result file
+    holding `[]` says "I swept, and there was nothing to sweep"; no file at all says "I
+    died before I could tell you anything". Until this existed, a shard that refused —
+    the one case where it knows exactly what happened and why — produced the second of
+    those, because the red-baseline exit returned without writing anything. The 0.59.0
+    release is what that costs: a flaky test in an unmutated baseline, on a branch whose
+    plan was empty, published as `no verdict: 1 of 1 shard did not report`.
+
+    *reason* is a phrase for the check's name and *detail* is the evidence for the page —
+    the failing test, which `as_json` already carries for a mutation and for the same
+    stated reason: it is the first thing anyone asks of a run that went red.
+    """
+
+    reason: str
+    detail: str = ""
+
+
+def as_refusal(reason: str, detail: str = "") -> str:
+    """What a shard writes INSTEAD of results when it swept nothing on purpose (#920).
+
+    An object where :func:`as_json` writes an array, so the two are told apart by shape
+    rather than by a flag inside one of them — a reader that mistook one for the other
+    would report a refusal as a complete sweep of an empty plan, which is the benign
+    reading of the alarming state and the exact inversion this issue is about.
+
+    A reader too old to know the shape refuses it rather than guessing: `shard_report`
+    subscripts `refused`, so an object without it raises and `merge` counts that shard as
+    one that did not report. That is a worse answer than this one and a better answer than
+    a wrong one.
+    """
+    return json.dumps({"refused": reason, "detail": detail}, indent=1)
+
+
 # --------------------------------------------------------------------------------------
 # 8. The gate — stage C
 # --------------------------------------------------------------------------------------
@@ -2929,6 +2976,12 @@ class Gate:
       fails the gate, for the same reason `reach()` does not: a question not asked is not
       a finding about the branch. It is loud in the report so that it is not a finding
       about nothing either.
+    * ``refused`` — a whole shard that swept nothing and said why (#920). Not a bucket of
+      mutations, because a shard that refuses has none: it is the reason the numbers on
+      this page are short. **Its own bucket and not `missing`**, which is the shape of
+      every other fix in this family: `missing` is "no file arrived", and reading a
+      refusal as that sends a reader to look for a runner that vanished when the shard is
+      sitting there in the log saying what it did.
     """
 
     unpinned: list[Result] = dataclasses.field(default_factory=list)
@@ -2939,6 +2992,7 @@ class Gate:
     unapplied: list[Result] = dataclasses.field(default_factory=list)
     withheld: list[Result] = dataclasses.field(default_factory=list)
     pinned: int = 0
+    refused: list[Refusal] = dataclasses.field(default_factory=list)
 
     @property
     def actionable(self) -> list[Result]:
@@ -2966,9 +3020,15 @@ class Gate:
                 + len(self.unresolved) + len(self.unapplied))
 
 
-def classify(results: list[Result]) -> Gate:
-    """Sort a sweep into :class:`Gate`'s buckets."""
-    gate = Gate()
+def classify(results: list[Result], refused: list[Refusal] | None = None) -> Gate:
+    """Sort a sweep into :class:`Gate`'s buckets.
+
+    *refused* is the shards that swept nothing and said why (#920). It carries no results
+    by construction — a shard that refused measured none — so it travels beside them
+    rather than through them, and every reader of a :class:`Gate` gets it without a second
+    argument to thread through :func:`headline`, :func:`gate_summary` and the rest.
+    """
+    gate = Gate(refused=list(refused or ()))
     crowded: dict[tuple[str, str], int] = {}
     for r in results:
         if r.verdict == "survived":
@@ -3020,7 +3080,7 @@ def gate_exit_code(gate: Gate, enforce: bool) -> int:
         return 4
     if gate.actionable:
         return 1
-    return 3 if gate.unresolved or gate.out_of_time else 0
+    return 3 if gate.unresolved or gate.out_of_time or gate.refused else 0
 
 
 # --------------------------------------------------------------------------------------
@@ -3393,6 +3453,29 @@ def shard_of(plan: list[Mutation], index: int, count: int) -> list[Mutation]:
     return plan[index - 1::count]
 
 
+def dealt(plan: list[Mutation], files: int, shard: tuple[int, int] | None, log
+          ) -> list[Mutation]:
+    """The slice this run will measure, announced as it is taken.
+
+    Its own function and not two lines inside the caller, for #572's reason and because
+    #920 moved it: the slice is now taken *before* a sandbox, a selection map or a
+    baseline is paid for, so that a run with nothing to measure can say so without
+    spending nine minutes finding out. A rule that moved into `main` on the way would
+    have been a rule no test could reach — and the log line it prints is, on a cancelled
+    shard, the only trace of what that shard was doing.
+
+    *files* is how many the plan was read from, and it is a count rather than the scope
+    itself because that is all this sentence says about them.
+    """
+    if shard is None:
+        log(f"  {len(plan)} mutations across {files} file(s)")
+        return plan
+    mine = shard_of(plan, *shard)
+    log(f"  {len(plan)} mutations across {files} file(s); "
+        f"shard {shard[0]} of {shard[1]} takes {len(mine)} of them")
+    return mine
+
+
 # --------------------------------------------------------------------------------------
 # 8b. The conclusion — the three things a gate run can have found (#617)
 # --------------------------------------------------------------------------------------
@@ -3465,9 +3548,13 @@ def gate_conclusion(gate: Gate, missing: int = 0) -> str:
     :data:`NOTHING` is last and it is reached only from the bottom — every count zero AND
     every shard in. Anything unmeasured has already answered above it, so "nothing to
     sweep" can never be worn by a run that lost a shard, and `missing` is what keeps
-    `classify([])` from a cancelled sweep saying it.
+    `classify([])` from a cancelled sweep saying it. :attr:`Gate.refused` joins it at the
+    top for the same reason (#920): a refusing shard's file holds no results, so without
+    this clause a sweep that measured nothing because the tree was red would fall all the
+    way through to `nothing to sweep` — which is the benign name on the alarming state,
+    and worse than the alarming name on the benign one that issue starts from.
     """
-    if missing or gate.unapplied or gate.out_of_time:
+    if missing or gate.unapplied or gate.out_of_time or gate.refused:
         return NO_VERDICT
     if gate.actionable:
         return SURVIVORS
@@ -3511,6 +3598,14 @@ def headline(gate: Gate, missing: int = 0, shards: int = 1) -> str:
         return f"no survivors{aside}"
     found = _plural(len(gate.actionable), "survivor", "survivors")
     unsure = []
+    # First, because it is the one line that explains the others: a shard that refused
+    # measured nothing, so every count below it is short by a shard's worth and the reason
+    # is not a mystery (#920). Distinct reasons and not one per shard — five shards on a
+    # red tree are one fact said once, and a check name that repeats it five times is a
+    # check name nobody finishes reading.
+    if gate.refused:
+        unsure.append(f"{_plural(len(gate.refused), 'shard', 'shards')} refused: "
+                      + "; ".join(sorted({r.reason for r in gate.refused})))
     if missing:
         unsure.append(f"{missing} of {_plural(shards, 'shard', 'shards')} did not report"
                       if shards >= 1 else "the sweep never sized itself")
@@ -3687,6 +3782,9 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
     w("")
     w("| outcome | n | what it means |")
     w("|---|---:|---|")
+    if gate.refused:
+        w(f"| **refused** | {f'{len(gate.refused)} of {shards}' if shards >= 1 else '?'}"
+          " | a shard that swept nothing and said why — read nothing below as a count |")
     if missing:
         w(f"| **did not report** | {f'{missing} of {shards}' if shards >= 1 else '?'} | "
           "a shard that never wrote a result — read nothing below as a count |")
@@ -3727,6 +3825,21 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         for r in sorted(gate.withheld, key=lambda r: (r.mutation.path, r.mutation.line)):
             m = r.mutation
             w(f"| `{m.path}:{m.line}` | `{m.operator}` | {m.withheld} |")
+        w("")
+    if gate.refused:
+        w("### Refused — a shard swept nothing, and this is what it said")
+        w("")
+        w(f"{_plural(len(gate.refused), 'shard', 'shards')} declined to sweep at all. "
+          "**This is not a shard that died.** It ran, decided, and wrote its reason down "
+          "— and that distinction is #920: a refusal left as silence arrives here as "
+          "`did not report`, which sends a reader looking for a runner that vanished "
+          "while the shard is in the log saying exactly what it did. It is still **no "
+          "verdict**, because nothing on this page was measured.")
+        w("")
+        w("| why | what went red |")
+        w("|---|---|")
+        for r in sorted(gate.refused, key=lambda r: (r.reason, r.detail)):
+            w(f"| {r.reason} | {f'`{r.detail}`' if r.detail else '—'} |")
         w("")
     if missing:
         w("### Did not report — this page is not a count")
@@ -3842,11 +3955,21 @@ def results_from_json(payload: str) -> list[Result]:
     from the operator and the shipped source rather than trusted from the file, so a shard
     that ran on a different platform than the merge cannot smuggle its own answer in.
     """
+    return results_from_rows(json.loads(payload))
+
+
+def results_from_rows(rows: list[dict]) -> list[Result]:
+    """:func:`results_from_json`, from the rows rather than from the text.
+
+    Split out so that :func:`shard_report` can decide what a shard's file *is* from one
+    parse rather than two (#920) — an array is results, an object is a refusal, and the
+    reader that tells them apart should not have to read the file twice to do it.
+    """
     def outcome(o: dict | None) -> Outcome | None:
         return None if not o else Outcome(o["green"], o["ran"], o["detail"])
 
     out: list[Result] = []
-    for row in json.loads(payload):
+    for row in rows:
         m = Mutation(path=row["path"], line=row["line"], end_line=row["end_line"],
                      operator=row["operator"], question=row["question"],
                      before=row["before"], after=row["after"], symbol=row["symbol"],
@@ -3868,8 +3991,28 @@ def results_from_json(payload: str) -> list[Result]:
     return out
 
 
-def merge(directory: Path, shards: int) -> tuple[list[Result], int]:
-    """Every shard's results, and how many shards did not report.
+def shard_report(payload: str) -> tuple[list[Result], Refusal | None]:
+    """What one shard's file says: what it measured, or why it measured nothing (#920).
+
+    **The two are told apart by the document's SHAPE**, and exactly one of them is ever
+    non-empty. :func:`as_json` writes an array — possibly empty, which is a shard saying
+    "I swept, and the plan held nothing". :func:`as_refusal` writes an object, which is a
+    shard saying "I did not sweep, and here is why". Neither of those is the third thing,
+    which is no file at all, and which only :func:`merge` can see.
+
+    An object without `refused` in it raises rather than being read around. A reader that
+    cannot name the shape in front of it has nothing to say about that shard, and the
+    honest way to say nothing is to let `merge` count it as one that did not report —
+    which is #914's rule applied to this file rather than to a plane's.
+    """
+    body = json.loads(payload)
+    if isinstance(body, dict):
+        return [], Refusal(str(body["refused"]), str(body.get("detail", "")))
+    return results_from_rows(body), None
+
+
+def merge(directory: Path, shards: int) -> tuple[list[Result], int, list[Refusal]]:
+    """Every shard's results, how many did not report, and every refusal among them.
 
     Counted, not named: the merge asks *how many of the answers arrived*, and answering
     that by parsing shard numbers out of filenames would put the workflow's shell quoting
@@ -3877,16 +4020,26 @@ def merge(directory: Path, shards: int) -> tuple[list[Result], int]:
     complete sweep of an incomplete plan. A file is one shard's answer if it parses, and
     a file that will not parse is a shard that did not report; there is no third reading
     of a truncated upload.
+
+    **A refusal is a report** (#920), and that is the whole of the change here: a shard
+    that wrote down why it swept nothing has answered, so it does not count against
+    `missing` — it arrives in the third value instead, where :func:`classify` can put it
+    on the page under its own name. Before this, its file did not exist and it was
+    counted as a shard that vanished.
     """
     results: list[Result] = []
+    refused: list[Refusal] = []
     reported = 0
     for f in sorted(Path(directory).glob("*.json")) if Path(directory).is_dir() else []:
         try:
-            results.extend(results_from_json(f.read_text(encoding="utf-8")))
+            rows, why = shard_report(f.read_text(encoding="utf-8"))
         except (OSError, ValueError, KeyError, TypeError):
             continue
+        results.extend(rows)
+        if why is not None:
+            refused.append(why)
         reported += 1
-    return results, max(0, shards - reported)
+    return results, max(0, shards - reported), refused
 
 
 def verdict_exit_code(gate: Gate, missing: int, enforce: bool) -> int:
@@ -4157,8 +4310,32 @@ def main(argv: list[str] | None = None) -> int:
     if args.plan or args.warm_map:
         return _plan_step(args, root, ref, base, scope, dirty, workdir, cache_dir,
                           log)
-    if not scope:
-        log("  nothing under the swept paths changed. Nothing to do.")
+    # **Asked before a sandbox, a selection map or a baseline is paid for (#920).** The
+    # plan is one `ast` pass over the diff, and until this moved up here the run learned
+    # it had nothing to do only after nine minutes of unmutated suite — a baseline with no
+    # mutation to interpret, whose only remaining power was to go red and take the silent
+    # exit below with it. That is the 0.59.0 release: `charter/__init__.py` charged, zero
+    # mutations, a flaky test in the baseline, and `no verdict: 1 of 1 shard did not
+    # report` on a branch where there was nothing to report about.
+    shard = parse_shard(args.shard) if args.shard else None
+    plan, sources = plan_for(root, ref, scope, dirty)
+    plan = dealt(plan, len(scope), shard, log)
+    if not plan:
+        # Two ways to arrive and one answer, said as the two (#920). "No swept file
+        # changed" and "the swept files that changed offer no operator anything" are
+        # different facts about a branch and a reader wants the one that is true — but
+        # they license exactly the same belief, which is none, and `nothing to sweep` is
+        # the sentence for that. Before this, only the first reached it.
+        log("  nothing under the swept paths changed. Nothing to do." if not scope else
+            f"  {len(scope)} charged file(s), and no operator finds a mutation in what "
+            "they add. Nothing to do.")
+        # The same banner the long path ends on, and not a shorter line because the answer
+        # arrived sooner. The two ways to sweep nothing used to print different things —
+        # a charged file with no mutation got the full report, an unchanged tree got one
+        # sentence — and a reader who has seen one of them cannot tell what the other is
+        # saying.
+        log("")
+        log(report([], root, ref, base, None, time.time() - started, []))
         # The same page and the same sentence the merge step publishes, and not a private
         # paragraph of its own (#782). This branch used to write "there was nothing to
         # sweep" here while the check on the pull request said `no survivors` — two
@@ -4217,6 +4394,14 @@ def main(argv: list[str] | None = None) -> int:
                         "## Deletion sweep — not run\n\nThe tree is **red before any "
                         "mutation**, so every mutation would have looked pinned for a "
                         f"reason that has nothing to do with any guard: {baseline.detail}\n")
+            # **Written down and not left as silence (#920).** This return used to leave
+            # no `--json` behind at all, and a shard that writes nothing is a shard that
+            # never reported — so a refusal the log states in two exclamation marks
+            # arrived at the merge step as an absence, and the pull request read
+            # `no verdict: 1 of 1 shard did not report`. That is true of a runner that
+            # vanished and it is false here: this shard ran, decided, and can say why.
+            if args.json:
+                Path(args.json).write_text(as_refusal(RED_BASELINE, baseline.detail))
             # A reporting gate blocks nothing, and that has to include this. A red baseline
             # is a real problem and the summary above says so in the loudest terms the page
             # has — but failing a pull request over it, on a job whose numbers nobody has
@@ -4225,7 +4410,6 @@ def main(argv: list[str] | None = None) -> int:
             # else, and it decides once.
             return 2 if args.enforce or not args.gate else 0
 
-    shard = parse_shard(args.shard) if args.shard else None
     budget = budget_for(shard is not None, args.budget)
     # One fact and not two. This line used to also work out how much of the budget was
     # left after the map and the baseline, and the sweep's own sweep found every piece of
@@ -4249,8 +4433,8 @@ def main(argv: list[str] | None = None) -> int:
             part.write_text(as_json(rows))
             os.replace(part, path)
 
-    results, pairs = sweep(root, ref, scope, selection, workdir, args.jobs, dirty,
-                           args.second_order, log, full_timeout, shard, cap=cap,
+    results, pairs = sweep(root, ref, plan, sources, selection, workdir, args.jobs, dirty,
+                           args.second_order, log, full_timeout, cap=cap,
                            deadline=started + budget if budget else None, record=record)
     elapsed = time.time() - started
     text = report(results, root, ref, base, baseline, elapsed, pairs)
@@ -4285,7 +4469,8 @@ def _say(args, gate: Gate, log, missing: int = 0, shards: int = 1) -> None:
         f"{len(gate.platform)} platform-deferred, {len(gate.unresolved)} unresolved, "
         f"{len(gate.out_of_time)} out of time, "
         f"{len(gate.unapplied)} not applied, {len(gate.withheld)} withheld, "
-        f"{gate.pinned} pinned")
+        f"{gate.pinned} pinned"
+        + (f", {len(gate.refused)} shard(s) refused" if gate.refused else ""))
     log(f"gate: {headline(gate, missing, shards)}")
     if not args.enforce:
         log("gate: reporting only — nothing here blocks. Pass --enforce to make it.")
@@ -4420,14 +4605,14 @@ def _merge_step(args) -> int:
     #617 there were N step summaries and no sentence at all.
     """
     shards = expected_shards(args.shards)
-    results, missing = merge(Path(args.verdict), max(shards, 1))
+    results, missing, refused = merge(Path(args.verdict), max(shards, 1))
     # `shards` stays 0 when the plan never answered, and travels that way: everything
     # downstream renders "how many did not report" differently from "how many there were
     # supposed to be is not known", and flattening the second into `1 of 1` would report
     # a sweep that was never planned as a sweep that was planned and lost one shard.
     if not shards:
         missing = max(missing, 1)
-    gate = classify(results)
+    gate = classify(results, refused)
     if args.summary:
         # "merge-base" and not "the merge-base": the header shortens a sha to twelve
         # characters, and a fallback longer than that comes out clipped mid-word.
