@@ -262,7 +262,8 @@ class TestCharterReportsALockAndLeavesIt(LockedPlane):
     def test_and_the_check_that_makes_it_safe_comes_first(self):
         """`ps` before `rm`. A remedy that printed the removal alone would teach the habit
         of skipping the one step that makes it safe."""
-        rc, said = self.save() if self.plant_lock() else (None, "")
+        self.plant_lock()
+        rc, said = self.save()
         self.assertLess(said.index("ps -eo"), said.index("rm -f"), said)
 
 
