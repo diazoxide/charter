@@ -3167,9 +3167,11 @@ def per_shard_seconds() -> int:
 
     Clamped at 1, and :func:`per_shard` is where that clamp was found unpinned: raise the
     fixed cost past the budget — a slower runner, a longer suite, a map that stops being
-    cached — and the subtraction goes to zero or below, which makes :func:`shards_for` a
-    division by zero and the plan job an exception. No plan, no shards, no numbers, which
-    is #617's failure arriving out of the arithmetic written to prevent it.
+    cached — and the subtraction goes to zero or below. That used to be a division by zero
+    in `shards_for` and the plan job an exception: no plan, no shards, no numbers, which is
+    #617's failure arriving out of the arithmetic written to prevent it. It is a comparison
+    now rather than a division, so the clamp is what keeps a shard from being sized for
+    nothing at all while :func:`per_shard` goes on reporting a whole number of mutations.
     """
     return max(1, SHARD_BUDGET - SHARD_FIXED)
 
@@ -3199,10 +3201,10 @@ def seconds_for(selection: dict[str, list[str]], mutation: Mutation) -> float:
     """What one mutation is predicted to cost a shard, in seconds.
 
     **The whole of #915 is that this is not a constant.** A mutation costs one run of the
-    modules :func:`select_for` picks for it, and that selection spans two orders of
-    magnitude in the same diff: on #914, `charter/cli.py::_plane_refusal` selects 6 of 450
-    modules and `charter/config.py::derive` selects 323 — `config` being the module every
-    other module imports. Sizing a plan by ``count × SECONDS_A_MUTATION`` deals those two as
+    modules :func:`select_for` picks for it, and that selection spans a factor of fifty in
+    the same diff: on #914, `charter/cli.py::_plane_refusal` selects 6 of 450 modules and
+    `charter/config.py::derive` selects 323 — `config` being the module every other module
+    imports. Sizing a plan by ``count × SECONDS_A_MUTATION`` deals those two as
     equals, gives 22 mutations one shard, and spends the runner's hour reaching five of
     them.
 
@@ -3328,8 +3330,10 @@ def over_budget(costs: list[float]) -> str:
     **What it says the ceiling IS changed with #915.** It used to be a count — 224
     mutations, eight shards of twenty-eight — and a count is exactly the thing that could
     not see #914 coming: 22 mutations, comfortably inside 224, and five of them measured.
-    The ceiling is now the eight heaviest hands this plan would produce, in minutes, which
-    is the number that actually decides whether the answer arrives.
+    The ceiling is now the heaviest of the eight hands this plan would produce, in seconds
+    — the number that actually decides whether the answer arrives. Seconds and not minutes,
+    because #914 is 1707 against 1680 and rounding those to minutes prints "28 of 28",
+    which is a warning that reads like a fit.
     """
     heaviest = heaviest_hand(costs, MAX_SHARDS)
     if heaviest <= per_shard_seconds():
@@ -3770,9 +3774,13 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
           "measured died with it.")
         w("")
         w("**Read the counts above as a floor and not as a total.** A survivor in the "
-          "unmeasured slice looks exactly like this page. Re-running does not help — the "
-          f"plan is larger than {MAX_SHARDS} shards can measure — so either split the "
-          "branch, or raise the fan-out.")
+          "unmeasured slice looks exactly like this page. Re-running does not help by "
+          "itself: since #915 the fan-out is sized against what the selection map says "
+          "each mutation costs, not against how many there are, so a second run deals the "
+          "same plan to the same number of machines. Either the plan is past what "
+          f"{MAX_SHARDS} shards can measure — `Size the sweep` says so out loud, before a "
+          "runner is spent — or the prediction was under, which is worth reporting. Split "
+          "the branch, or raise the fan-out.")
         w("")
         for r in sorted(gate.out_of_time,
                         key=lambda r: (r.mutation.path, r.mutation.line))[:20]:
@@ -4058,10 +4066,12 @@ def main(argv: list[str] | None = None) -> int:
                         "log nobody opens.")
     p.add_argument("--plan", action="store_true",
                    help="Say how many mutations this branch offers and how many jobs "
-                        "they need, then stop. Costs one `ast` pass and no test runs.")
+                        "they need, then stop. Costs one `ast` pass and no test runs, "
+                        "and sizes by count — add --warm-map to size by measured cost.")
     p.add_argument("--warm-map", action="store_true", dest="warm_map",
                    help="Measure the selection map into --workdir and stop, so that the "
-                        "shards restore it instead of each measuring it again.")
+                        "shards restore it instead of each measuring it again — and so "
+                        "that --plan sizes the fan-out by what each mutation costs.")
     p.add_argument("--shard", default=None, metavar="N/M",
                    help="Sweep only slice N of M, dealt one mutation at a time across "
                         "the whole plan. Nothing is dropped: the other slices are other "

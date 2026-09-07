@@ -3776,7 +3776,12 @@ class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
         self.assertIn("Out of time — planned, and never measured", page)
         self.assertIn("1 of 4 mutation(s) on this branch were measured", page)
         self.assertIn("charter/b.py:2", page)
-        self.assertIn("Re-running does not help", page)
+        self.assertIn("Re-running does not help by itself", page)
+        # And why it does not, which changed with #915: the fan-out is sized against
+        # predicted cost, so a second run deals the same plan to the same machines. The
+        # old sentence blamed the plan being too long, which is what a count could see —
+        # and #914's plan was 22 mutations, well inside any count.
+        self.assertIn("what the selection map says each mutation costs", page)
         # The outcome table too, and not only the prose below it. A reader who skims one
         # skims the other, and the sweep found this row unpinned on this branch: deleting
         # it left a table whose rows all read zero above a section saying three quarters
