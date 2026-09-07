@@ -87,10 +87,9 @@ class Outcome(NamedTuple):
     message: str
 
 
-def workspaces(fid: str | None = None) -> list[str]:
-    """Every workspace a switcher may offer, name-checked on the way out and — asked about
-    a FRAME — **ordered by last use, once, and then held still for that frame's life**
-    (#903).
+def workspaces() -> list[str]:
+    """Every workspace a switcher may offer, name-checked on the way out and **ordered by
+    last use, once per plane launch, and then held still for every frame** (#903, #923).
 
     `workspace.list_workspaces` reads directory names off the plane, so the check is the
     same floor `state.frame_workspace` applies to its own read: these names go on to a
@@ -101,48 +100,50 @@ def workspaces(fid: str | None = None) -> list[str]:
     and a fresh plane that has never made one would otherwise offer an empty list.
 
     **The order is not this function's, and it is the same split :func:`personas` already
-    makes** (#882). `chats.touched_by_workspace` owns the recency and `state.tab_order`
-    owns the holding-still; what happens here is that the first process to ask about a
-    frame writes the answer down and every process afterwards reads it. So the strip, the
-    palette and the launcher's own sizing pass (`slots.bar_rows_wanted`) cannot draw the
-    same roster in two orders, and a switch — which tears every panel down and re-splits it
-    — redraws the identical columns.
+    makes** (#882). `chats.touched_by_workspace` owns the recency and
+    `workspace.record_tab_order` owns the holding-still; what happens here is that the
+    first process to ask writes the answer down and every process afterwards reads it. So
+    the strip, the palette and the launcher's own sizing pass (`slots.bar_rows_wanted`)
+    cannot draw the same roster in two orders, and a switch — which tears every panel down
+    and re-splits it — redraws the identical columns.
+
+    **There is no *fid*, and its removal is the fix for #923.** #903 asked this per FRAME
+    and recorded the answer under `.charter/frame/<fid>/`, which is per-chat by
+    construction. Switching workspaces switches chats, so every switch drew a strip
+    ordered by a different chat's snapshot of the recency, taken at a different moment —
+    three chats on the reporting plane held three different orders and two of them were in
+    the same workspace. The strip is a PLANE-WIDE list; a plane-wide list has one order,
+    the plane's, and asking which frame wants to know was the defect rather than a
+    parameter that had stopped being used.
+
+    So the launch picker, a refusal's "have: …" sentence, the strip and the palette all get
+    the identical list now, where the picker and the refusal used to get the alphabet
+    instead. That is #882's rule arriving rather than a widening: they were never asking a
+    different question, they were asking the same one somewhere there was nothing to record
+    an answer in.
 
     *"active last used tabs should be in first order, then olds."* A switch updates the
-    mtimes this reads for the NEXT frame; it moves nothing now. `state.record_tab_order`
-    carries the argument about why that is the whole of the feature and why live reordering
-    was refused twice before it.
+    mtimes this reads for the next plane launch; it moves nothing now.
+    `workspace.record_tab_order` carries the argument about why that is the whole of the
+    feature, why live reordering was refused twice before it, and why the decision expires
+    with the plane rather than never or on every paint.
 
     **The recorded order is an ORDER and not a roster**, which is what keeps a stale line
     from resurrecting a deleted workspace: the names on the strip are always
     `list_workspaces`' answer, and the record only says how to sort them. A workspace
     created since goes on the end, in name order, where it cannot move a column an operator
     is already aiming at; a workspace deleted since simply is not there.
-
-    **No frame is the plain alphabetical answer**, and `""` is no frame exactly as `None`
-    is — `choose.names_of` defaults its *fid* to the empty string and the launch picker
-    (`commands_frame._choose_workspace`) runs before any frame exists. Both want membership
-    and a list to read, neither is about which order a strip draws, and a falsy id would
-    otherwise reach `state.tab_order`, be answered "nothing recorded" by
-    `state.frame_dir`'s own refusal, and recompute the recency on every call — live
-    reordering, arriving through the one caller that has no frame to hold an order for.
-    One test, not two, for `if fid is None` and `if not fid` cannot both be observable.
-
-    Written as a default rather than a second function, so there is one place that decides
-    what the set of workspaces IS.
     """
     from .. import config, workspace as ws_mod
     names = [n for n in ws_mod.list_workspaces() if ws_mod.valid_name(n)]
     if config.DEFAULT_WORKSPACE not in names:
         names.append(config.DEFAULT_WORKSPACE)
-    if not fid:
-        return sorted(names)
-    return _by_use(fid, names)
+    return _by_use(names)
 
 
-def _by_use(fid: str, names: list[str]) -> list[str]:
-    """*names* in the order frame *fid* draws them — the recorded one, computed and
-    recorded here the first time it is asked for.
+def _by_use(names: list[str]) -> list[str]:
+    """*names* in the plane's own order — the recorded one, computed and recorded here the
+    first time this plane launch is asked for it.
 
     **The ORDER *names* arrives in is not read, and that is a correction the deletion sweep
     forced.** The caller used to hand this `sorted(names)` and this docstring claimed the
@@ -155,14 +156,14 @@ def _by_use(fid: str, names: list[str]) -> list[str]:
 
     Every use but ONE, and that one is why the sort moved rather than went. The names this
     record does not carry are appended, and they are appended **in name order** — a
-    workspace made while the frame is open goes on the end where it cannot move a column an
+    workspace made while the plane is up goes on the end where it cannot move a column an
     operator is already aiming at, and two of them go on in an order that is a function of
     the plane rather than of `os.scandir`. That promise is kept HERE now, where it is made.
     It used to be kept by accident: `workspace.list_workspaces` happens to answer in name
     order, so the caller's sort was doing nothing the leftovers could not have got from the
-    filesystem — until a record that omits a name (a hand-edited `tab_order`, a record
-    written before `config.DEFAULT_WORKSPACE` was folded in) makes one of them a leftover
-    and the accident stops holding.
+    filesystem — until a record that omits a name (a hand-edited file, a record written
+    before `config.DEFAULT_WORKSPACE` was folded in) makes one of them a leftover and the
+    accident stops holding.
 
     **Sorted by the timestamp DESCENDING, so the newest is leftmost**, which is where an
     operator looks first and where `slots._compose` starts its first page. Reversing the
@@ -173,15 +174,16 @@ def _by_use(fid: str, names: list[str]) -> list[str]:
 
     The record is written even when it changes nothing (a plane with one workspace, a plane
     charter has no timestamp for at all), because what is being written down is not "this
-    order is interesting" but "this frame has decided" — and a frame that re-decided on its
+    order is interesting" but "this plane has decided" — and a plane that re-decided on the
     next repaint would be the live reordering this exists to refuse.
     """
+    from .. import workspace as ws_mod
     from . import chats as chats_mod
-    recorded = state.tab_order(fid)
+    recorded = ws_mod.tab_order()
     if not recorded:
         touched = chats_mod.touched_by_workspace()
         recorded = sorted(names, key=lambda n: (-touched.get(n, 0.0), n))
-        state.record_tab_order(fid, recorded)
+        ws_mod.record_tab_order(recorded)
     known = set(names)
     kept = [n for n in recorded if n in known]
     seen = set(kept)

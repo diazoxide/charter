@@ -34,7 +34,7 @@ import os
 import unittest
 from unittest import mock
 
-from charter import commands_frame, config, tui, util
+from charter import commands_frame, config, tui, util, workspace
 from charter.frame import (builtin_actions, builtins, chats, component, events, overlay,
                            slots, state)
 
@@ -357,13 +357,15 @@ class AClickOnTheOverflowCountOpensThePalette(_ABarThatWasDrawn, unittest.TestCa
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
         state.frame_dir("f1", create=True)
         state.record_workspace("f1", self.HERE)
-        # **The order is recorded rather than left to the recency measurement** (#903).
-        # `switch.workspaces` leads with the workspace this frame is IN, which would put
-        # the marked tab on the first page and leave the row with no LEADING count — and
-        # this class is about pressing both. Writing the order down is what a frame does
-        # on its first ask anyway (`state.record_tab_order`), so this pins the case's own
-        # premise instead of depending on which directory was written last.
-        state.record_tab_order("f1", list(self.NAMES))
+        # **The order is recorded rather than left to the recency measurement** (#903,
+        # #923). `switch.workspaces` leads with the most recently used workspace, which
+        # would put the marked tab on the first page and leave the row with no LEADING
+        # count — and this class is about pressing both. Writing the order down is what
+        # the plane does on its first ask anyway (`workspace.record_tab_order`), so this
+        # pins the case's own premise instead of depending on which directory was written
+        # last. The record is the PLANE's rather than this frame's since #923: the strip
+        # draws a plane-wide list, so what orders it is not keyed on `f1`.
+        workspace.record_tab_order(list(self.NAMES))
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""},
                                           clear=False))
         self.row = tui.strip_ansi(slots.workspaces_bar("f1", self.WIDTH)[0])

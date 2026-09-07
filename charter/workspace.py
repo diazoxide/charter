@@ -793,6 +793,92 @@ def list_workspaces() -> list[str]:
     return out
 
 
+def record_tab_order(names: list[str]) -> None:
+    """Write down the order THIS PLANE draws its workspace tabs in (#923).
+
+    **The order of the roster :func:`list_workspaces` answers, kept next to it**, because
+    it is a fact about the same thing: which workspaces this plane has, and — since #903 —
+    which of them the operator has been in lately. `frame/switch._by_use` decides the
+    order and this holds it still; the split is `persona.by_use`'s (#882), one noun over.
+
+    **Plane-scoped, and that is what #923 is.** #903 wrote this under
+    `.charter/frame/<fid>/`, which is per-chat by construction — `frame.state`'s opening
+    line — so every chat had an order of its own, seeded from the recency at the moment
+    that chat first painted. Switching workspaces switches chats, so the operator met a
+    different frozen order after every switch: *"feeling that each switch is opening new
+    window."* Two chats of the SAME workspace disagreed. The strip draws a plane-wide list
+    and now reads a plane-wide order, so every frame draws the identical columns.
+
+    **Written once per plane launch, by whichever process first asks**, and
+    :func:`forget_tab_order` is the other half — `frame.state.reap` calls it when a plane
+    is left with no frame state at all, so the next launch decides afresh. Neither "once
+    ever" nor "once per repaint" is the rule, and both were considered: once-ever ossifies
+    (a workspace made next month sorts last for good), and re-deciding while a frame is
+    open is the live reordering `slots._cuts` and `chats.of_workspace` both refused with a
+    measurement. Once per launch is #903's own intent — still while you are looking at it,
+    fresh when you come back.
+
+    **An ORDER and never a roster.** `list_workspaces` decides which names exist, so a line
+    here for a workspace that has since been deleted draws nothing and a workspace created
+    since is appended by `switch._by_use`; there is no rewrite on change, which is what
+    stops a stale line resurrecting a directory that has gone.
+
+    One name per line, `config.replace_for` (#894, #893): this is read on a panel's render
+    path and inside the `frame-resize` child, so a reader must never see half of it. Never
+    raises — a full filesystem costs the plane its held order, which it recomputes on the
+    next paint, and never a traceback out of a strip.
+    """
+    try:
+        config.mkdir_for(config.WORKSPACE_TAB_ORDER_FILE.parent)
+        config.replace_for(config.WORKSPACE_TAB_ORDER_FILE,
+                           "".join(f"{n}\n" for n in names))
+    except OSError:
+        return
+
+
+def tab_order() -> list[str]:
+    """The order this plane draws its workspace tabs in, or ``[]`` when none is recorded.
+
+    ``[]`` is the ordinary answer exactly once per plane launch — the first ask, before
+    :func:`record_tab_order` has run — and it is also what an unreadable or truncated file
+    answers. The caller's degrade for both is the same and is why they are not told apart:
+    compute the order again, which is what this file was written from.
+
+    **Name-checked on the way out**, like every other name charter reads off disk and joins
+    onto a path (:func:`declared_default`, `frame.state.frame_workspace`). These names go
+    on to a `workspace_dir()` join and onto a tab a click switches to, and #442 is what an
+    unchecked one in that position already cost. An empty line is dropped by that check on
+    its own terms — `valid_name("")` is already False — so there is no `if line` in front
+    of it for no input to make observable.
+
+    Stripped both ends, for `frame.state.chrome`'s reason: the file is one name per line,
+    and a line is what lies between two newlines rather than what a hand left beside one.
+    """
+    try:
+        lines = config.WORKSPACE_TAB_ORDER_FILE.read_text().splitlines()
+    except (OSError, ValueError):
+        return []
+    return [n for n in (line.strip() for line in lines) if valid_name(n)]
+
+
+def forget_tab_order() -> None:
+    """Drop the recorded tab order, so the next ask decides it again (#923).
+
+    **The end of a plane launch, spelled where the order lives.** `frame.state.reap` is
+    charter's one observer of "this plane has no frame state left" and calls this from
+    there; it already reaches one directory over for `_forget_session`, and this is that
+    same shape for a plane-scoped file rather than a per-frame one.
+
+    Missing is the ordinary case and not an error: a plane that has never drawn a strip,
+    and a plane whose last frame already took the file. Never raises, for the same reason
+    :func:`record_tab_order` does not — this runs inside a reap on a launch path.
+    """
+    try:
+        config.WORKSPACE_TAB_ORDER_FILE.unlink()
+    except OSError:
+        pass
+
+
 def clones(name: str) -> list[Path]:
     """The repo clones inside a workspace (``memory/`` and ``refs/`` are not clones —
     they have no ``.git`` — so this naturally excludes them)."""

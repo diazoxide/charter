@@ -13,10 +13,16 @@ an operator learned to look for it, instead of jumping to the end because it hap
 be the newest."*
 
 Both are about a row that RE-SORTS WHILE YOU LOOK AT IT. Neither argues against an order
-that is fixed for as long as the frame is open. So the recency is measured once, written
-into the frame's own state directory (`state.record_tab_order`), and read by every process
-that draws or walks the strip afterwards; a switch updates the mtimes for the next frame
-and moves no column now.
+that is fixed for as long as you are looking. So the recency is measured once, written
+down (`workspace.record_tab_order`), and read by every process that draws or walks the
+strip afterwards; a switch updates the mtimes for the next plane launch and moves no
+column now.
+
+**Where "once" is scoped is #923, and it is measured next door**
+(`test_the_workspaces_strip_draws_one_order_for_the_plane.py`). #903 shipped this per
+FRAME, under `.charter/frame/<fid>/tab_order` — and switching workspaces switches chats,
+so the operator met a different frozen order after every switch. The order is the plane's
+now; what is measured HERE is the ordering rule itself, which #923 did not change.
 
 **Chats keep ordinal order and that is not an oversight** — `TheChatsStripIsUnchanged` is
 the control. A handful of numbered siblings is a stronger promise kept as `api.1`,
@@ -24,9 +30,7 @@ the control. A handful of numbered siblings is a stronger promise kept as `api.1
 
 **No new kind of state and no tally.** The recency is `chats.touched_by_workspace`, which
 is the mtime of each chat's own directory under `.charter/frame/` — a number charter
-already moves every time it writes anything about that chat. The per-frame ORDER is a file
-beside the density a palette row chose and the height `F3` recorded, so `state.reap`
-deletes it with the frame and there is nothing for `doctor` to explain.
+already moves every time it writes anything about that chat.
 """
 
 from __future__ import annotations
@@ -35,7 +39,7 @@ import os
 import unittest
 from unittest import mock
 
-from charter import config
+from charter import config, workspace
 from charter.frame import chats, choose, slots, state, switch
 
 from tests._isolation import PersonaIso
@@ -136,9 +140,7 @@ class TheRecencyIsMeasuredAndNotTallied(PersonaIso, unittest.TestCase):
 
 
 class TheStripLeadsWithTheWorkingSet(PersonaIso, unittest.TestCase):
-    """`switch.workspaces(fid)` — the order, asked of the function the strip asks."""
-
-    FID = "alpha.1"
+    """`switch.workspaces()` — the order, asked of the function the strip asks."""
 
     def setUp(self):
         super().setUp()
@@ -153,7 +155,7 @@ class TheStripLeadsWithTheWorkingSet(PersonaIso, unittest.TestCase):
 
     def test_the_most_recently_used_workspace_is_leftmost(self):
         self._plane(alpha=DAY, beta=DAY * 3, gamma=DAY * 2)
-        self.assertEqual(switch.workspaces(self.FID)[:3], ["beta", "gamma", "alpha"])
+        self.assertEqual(switch.workspaces()[:3], ["beta", "gamma", "alpha"])
 
     def test_the_opposite_recency_gives_the_opposite_order(self):
         """**Two opposite inputs and the two orders they must produce**, which is what
@@ -162,7 +164,7 @@ class TheStripLeadsWithTheWorkingSet(PersonaIso, unittest.TestCase):
         plane and fails here on every one.
         """
         self._plane(alpha=DAY * 3, beta=DAY, gamma=DAY * 2)
-        self.assertEqual(switch.workspaces(self.FID)[:3], ["alpha", "gamma", "beta"])
+        self.assertEqual(switch.workspaces()[:3], ["alpha", "gamma", "beta"])
 
     def test_two_workspaces_touched_in_the_same_tick_fall_back_to_name_order(self):
         """**A deterministic tie-break and not `os.scandir`'s order.** Mtimes have a
@@ -172,52 +174,40 @@ class TheStripLeadsWithTheWorkingSet(PersonaIso, unittest.TestCase):
         two backwards while agreeing with every case above.
         """
         self._plane(alpha=DAY, beta=DAY, gamma=DAY * 5)
-        self.assertEqual(switch.workspaces(self.FID)[:3], ["gamma", "alpha", "beta"])
+        self.assertEqual(switch.workspaces()[:3], ["gamma", "alpha", "beta"])
 
     def test_a_workspace_charter_has_never_seen_used_sorts_after_every_one_it_has(self):
         """`default` is folded in whether or not it has a directory and no chat has ever
         been in it; it is at the end rather than at the front, where an unmeasured name
         would be if the missing timestamp read as "now"."""
         self._plane(alpha=DAY)
-        got = switch.workspaces(self.FID)
+        got = switch.workspaces()
         self.assertEqual(got[0], "alpha")
         self.assertEqual(sorted(got[1:]), got[1:])
         self.assertIn(config.DEFAULT_WORKSPACE, got)
 
-    def test_a_caller_with_no_frame_gets_the_alphabet(self):
-        """`to_workspace` wants membership and a "have: …" sentence, and the launch picker
-        runs before any frame exists. Neither is about which order a strip draws, and
-        neither has a frame to record one in.
+    def test_a_plane_with_no_recency_at_all_is_the_alphabet(self):
+        """A plane nobody has opened a chat in has nothing to lead with, so the order is
+        the names — the answer that shipped before #903, and the one every frameless
+        caller used to be given whatever the plane had been doing.
 
         **Spelled out rather than compared against `sorted` of itself**, which is the shape
         `tools/sweep.py` reported: `sorted(names)` against `list(names)` passed the whole
         suite, because a test that asks whether a list equals its own sorting cannot tell
-        the two apart. The names below are what makes the `sorted` observable —
+        the two apart. The names below are what makes the ordering observable —
         `list_workspaces` answers in name order and `config.DEFAULT_WORKSPACE` is APPENDED
-        after it (it has no directory here), so the unsorted answer ends with `default`
-        where the sorted one puts it second.
+        after it (it has no directory here), so an unordered answer ends with `default`
+        where this one puts it second.
         """
-        self._plane(alpha=DAY, beta=DAY * 3, gamma=DAY * 2)
         self.assertNotIn(config.DEFAULT_WORKSPACE, ("alpha", "beta", "gamma"),
                          "this case needs a default that is not one of its own names")
         self.assertEqual(switch.workspaces(),
                          ["alpha", "beta", config.DEFAULT_WORKSPACE, "gamma"])
-        self.assertEqual(switch.workspaces(""), switch.workspaces())
-
-    def test_asking_without_a_frame_records_nothing_for_any_frame(self):
-        """The empty id must not reach `state.tab_order` and be answered "nothing
-        recorded" on every call — that is live reordering arriving through the one caller
-        with no frame to hold an order for."""
-        self._plane(alpha=DAY)
-        switch.workspaces("")
-        self.assertEqual(state.tab_order(""), [])
 
 
-class TheOrderIsHeldForTheFramesLife(PersonaIso, unittest.TestCase):
+class TheOrderIsHeldWhileThePlaneIsUp(PersonaIso, unittest.TestCase):
     """The half the two prior refusals are about: a column an operator aimed at is still
     that name a moment later."""
-
-    FID = "alpha.1"
 
     def setUp(self):
         super().setUp()
@@ -233,32 +223,32 @@ class TheOrderIsHeldForTheFramesLife(PersonaIso, unittest.TestCase):
         re-lays the frame out, which bumps it — so the recency measurement really does
         change under the running frame. What the strip draws does not.
         """
-        first = switch.workspaces(self.FID)
+        first = switch.workspaces()
         _touched("gamma.1", DAY * 99)
-        self.assertEqual(switch.workspaces(self.FID), first)
+        self.assertEqual(switch.workspaces(), first)
         self.assertEqual(chats.touched_by_workspace()["gamma"], DAY * 99,
                          "the case did not actually move the thing it is about")
 
     def test_a_second_process_asking_draws_the_identical_order(self):
         """A panel is torn down and re-split by every re-layout, so "compute it once" has
-        to mean once per FRAME and not once per process. The record is what makes the
-        launcher, the `frame-resize` child and each panel agree."""
-        first = switch.workspaces(self.FID)
+        to mean once per PLANE LAUNCH and not once per process. The record is what makes
+        the launcher, the `frame-resize` child and each panel agree."""
+        first = switch.workspaces()
         _touched("gamma.1", DAY * 99)
         # The file, read the way another process reads it — no `switch.workspaces` in
         # front of it, so this is what a launcher and a `frame-resize` child see and not
         # a second call into the function that might recompute.
-        self.assertEqual(state.tab_order(self.FID), first,
+        self.assertEqual(workspace.tab_order(), first,
                          "the order a second process reads is not the one that was drawn")
 
     def test_a_workspace_made_since_goes_on_the_end_and_moves_nothing(self):
         """A name created mid-session is appended, in name order, where it cannot move a
         column an operator is already aiming at. Re-recording the whole order to fit it in
         by recency is exactly the live reordering this refuses."""
-        first = switch.workspaces(self.FID)
+        first = switch.workspaces()
         (config.WORKSPACES_DIR / "aaa-new").mkdir(parents=True, exist_ok=True)
         (config.WORKSPACES_DIR / "zzz-new").mkdir(parents=True, exist_ok=True)
-        got = switch.workspaces(self.FID)
+        got = switch.workspaces()
         self.assertEqual(got[:len(first)], first)
         self.assertEqual(got[len(first):], ["aaa-new", "zzz-new"])
 
@@ -273,18 +263,18 @@ class TheOrderIsHeldForTheFramesLife(PersonaIso, unittest.TestCase):
         an accident at the call site rather than a promise kept where it is made.
 
         A record that does not carry every name is what makes the accident stop holding, and
-        it is reachable two ways: a hand-edited `tab_order`, and a record written before
+        it is reachable two ways: a hand-edited file, and a record written before
         `config.DEFAULT_WORKSPACE` was folded into the roster. `default` sorts between the
         two names below, so an unsorted append would put it after `zzz` — where
         `list_workspaces`' own order left it.
         """
         for name in ("aaa", "zzz"):
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
-        state.record_tab_order(self.FID, ["alpha"])
+        workspace.record_tab_order(["alpha"])
         self.assertFalse((config.WORKSPACES_DIR / config.DEFAULT_WORKSPACE).is_dir(),
                          "this case needs a `default` with no directory, so that the "
                          "roster appends it after every name it read off the plane")
-        got = switch.workspaces(self.FID)
+        got = switch.workspaces()
         self.assertEqual(got[0], "alpha", "the recorded name did not lead")
         self.assertEqual(got[1:], ["aaa", "beta", config.DEFAULT_WORKSPACE, "gamma",
                                    "zzz"],
@@ -293,59 +283,47 @@ class TheOrderIsHeldForTheFramesLife(PersonaIso, unittest.TestCase):
     def test_a_workspace_deleted_since_is_simply_not_drawn(self):
         """The record is an ORDER and never a roster: `workspace.list_workspaces` decides
         which names exist, so a stale line cannot resurrect a directory that has gone."""
-        switch.workspaces(self.FID)
+        switch.workspaces()
         (config.WORKSPACES_DIR / "beta").rmdir()
-        self.assertNotIn("beta", switch.workspaces(self.FID))
-        self.assertIn("beta", state.tab_order(self.FID),
+        self.assertNotIn("beta", switch.workspaces())
+        self.assertIn("beta", workspace.tab_order(),
                       "the record was rewritten, so nothing was being tested")
 
     def test_a_recorded_name_that_is_not_a_name_is_dropped_on_the_way_out(self):
-        """`state.tab_order` holds every line to `workspace.valid_name`, like every other
-        name charter reads off disk and joins onto a path (#442). The file is charter's
-        own, so this is a floor rather than the whole guard."""
-        state.record_tab_order(self.FID, ["../../etc", "", "beta", "alpha"])
-        self.assertEqual(state.tab_order(self.FID), ["beta", "alpha"])
-        self.assertEqual(switch.workspaces(self.FID)[:2], ["beta", "alpha"])
+        """`workspace.tab_order` holds every line to `workspace.valid_name`, like every
+        other name charter reads off disk and joins onto a path (#442). The file is
+        charter's own, so this is a floor rather than the whole guard."""
+        workspace.record_tab_order(["../../etc", "", "beta", "alpha"])
+        self.assertEqual(workspace.tab_order(), ["beta", "alpha"])
+        self.assertEqual(switch.workspaces()[:2], ["beta", "alpha"])
 
     def test_whitespace_a_hand_left_around_a_name_is_taken_off_it(self):
-        """`density`'s read strips and this one does too, for the same reason: the file is
-        one name per line and a line is what is between two newlines, not what a hand left
-        beside one. `lstrip` would keep a trailing space and then hand `valid_name` a name
-        it correctly refuses — a workspace silently dropped off the strip because somebody
-        opened the file in an editor."""
-        (state.frame_dir(self.FID) / "tab_order").write_text("  beta  \n\talpha\t\n")
-        self.assertEqual(state.tab_order(self.FID), ["beta", "alpha"])
+        """`frame.state.chrome`'s read strips and this one does too, for the same reason:
+        the file is one name per line and a line is what is between two newlines, not what
+        a hand left beside one. `lstrip` would keep a trailing space and then hand
+        `valid_name` a name it correctly refuses — a workspace silently dropped off the
+        strip because somebody opened the file in an editor."""
+        config.WORKSPACE_TAB_ORDER_FILE.write_text("  beta  \n\talpha\t\n")
+        self.assertEqual(workspace.tab_order(), ["beta", "alpha"])
 
-    def test_an_id_that_cannot_name_a_directory_writes_nothing_and_does_not_raise(self):
-        """`fid` reaches `switch.workspaces` off a panel's argv and out of
-        `$CHARTER_SESSION_ID`, so it is untrusted the way every other id charter joins onto
-        a path is (#442). `frame_dir` refuses it, this writes nothing, and the strip
-        redraws — rather than a `TypeError` out of a render path.
-
-        Found as a survivor by `tools/sweep.py`: `record_asserted_bars` had this case and
-        its twin here did not, so the guard was correct and unasked-about.
-        """
-        state.record_tab_order("../evil", ["alpha"])
-        self.assertEqual(state.tab_order("../evil"), [])
-
-    def test_a_write_that_cannot_complete_leaves_the_frame_recomputing(self):
+    def test_a_write_that_cannot_complete_leaves_the_plane_recomputing(self):
         """The order is written on a panel's render path. A full filesystem costs the
-        frame its held order — it recomputes on the next paint, which is the answer this
+        plane its held order — it recomputes on the next paint, which is the answer this
         file was going to hold — and never a raise out of a strip."""
-        with mock.patch.object(state.config, "replace_for",
+        with mock.patch.object(workspace.config, "replace_for",
                                side_effect=OSError("no space")):
-            state.record_tab_order(self.FID, ["beta"])
-        self.assertEqual(state.tab_order(self.FID), [])
+            workspace.record_tab_order(["beta"])
+        self.assertEqual(workspace.tab_order(), [])
 
     def test_an_unreadable_record_recomputes_rather_than_raising(self):
         """This is read on a panel's render path and inside the `frame-resize` child. A
         truncated write degrades to "no order recorded", which is the same answer the file
         was written from a moment ago."""
-        state.record_tab_order(self.FID, ["beta"])
-        with mock.patch.object(state.Path, "read_text", side_effect=OSError("gone")):
-            self.assertEqual(state.tab_order(self.FID), [])
-            self.assertEqual(switch.workspaces(self.FID)[0], "alpha",
-                             "an unreadable order did not fall back to the recency")
+        workspace.record_tab_order(["beta"])
+        with mock.patch.object(workspace.Path, "read_text", side_effect=OSError("gone")):
+            self.assertEqual(workspace.tab_order(), [])
+        self.assertEqual(switch.workspaces()[0], "beta",
+                         "the readable record stopped being read")
 
 
 class EverySurfaceDrawsTheOneOrder(PersonaIso, unittest.TestCase):
@@ -367,22 +345,32 @@ class EverySurfaceDrawsTheOneOrder(PersonaIso, unittest.TestCase):
         slots.TABS.forget()
         self.addCleanup(slots.TABS.forget)
 
-    def test_the_strip_draws_the_names_in_the_frames_own_order(self):
+    def test_the_strip_draws_the_names_in_the_planes_own_order(self):
         with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""}, clear=False):
             row = slots.workspaces_bar(self.FID, 200)[0]
-        drawn = sorted((row.index(n), n) for n in switch.workspaces(self.FID)
-                       if n in row)
+        drawn = sorted((row.index(n), n) for n in switch.workspaces() if n in row)
         self.assertEqual([n for _at, n in drawn],
-                         [n for n in switch.workspaces(self.FID) if n in row],
+                         [n for n in switch.workspaces() if n in row],
                          f"the strip drew the names in another order: {row!r}")
         self.assertLess(row.index("beta"), row.index("gamma"))
         self.assertLess(row.index("gamma"), row.index("alpha"))
 
     def test_the_palette_offers_them_in_the_same_order(self):
-        """`choose.names_of` takes the frame's id and hands it on. A palette listing the
-        alphabet beside a strip listing the working set is two answers to one question."""
+        """`choose.names_of` stopped handing a frame id on for this noun in #923. A palette
+        listing one order beside a strip listing another is two answers to one question."""
         self.assertEqual(choose.names_of(choose.WORKSPACE, self.FID),
-                         switch.workspaces(self.FID))
+                         switch.workspaces())
+
+    def test_a_refusals_have_list_leads_with_the_working_set_too(self):
+        """`switch.to_workspace` names the workspaces this plane has when it refuses one it
+        does not have. That sentence used to take the alphabetical branch, because it asks
+        with no frame — so a refusal and the strip behind it listed the same names in two
+        different orders."""
+        outcome = switch.to_workspace(self.FID, "nope")
+        listed = [n for n in outcome.message.split() if n.strip(",") in switch.workspaces()]
+        self.assertEqual([n.strip(",") for n in listed][:3], ["beta", "gamma", "alpha"],
+                         f"the refusal did not lead with the working set: "
+                         f"{outcome.message!r}")
 
 
 class TheChatsStripIsUnchanged(PersonaIso, unittest.TestCase):
