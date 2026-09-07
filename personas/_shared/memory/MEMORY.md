@@ -108,3 +108,4 @@ Written by the persona as it learns; committed and shared.
 - [CATCHING A REFUSAL AND CARRYING ON CONVERTS IT INTO A SILENT PERMIT. cha](catching-a-refusal-and-carrying-on-converts-it-i.md)
 - [TMUX IS DOING FOUR JOBS FOR CHARTER, NOT TWO — I ASSERTED TWO AND A PROT](tmux-is-doing-four-jobs-for-charter-not-two-i-as.md)
 - [A UI CANNOT POLL CHARTER THE WAY CHARTER POLLS ITSELF — 90 ms SUBPROCESS](a-ui-cannot-poll-charter-the-way-charter-polls-i.md)
+- [A BOOLEAN CANNOT CARRY "I COULD NOT LOOK", SO EVERY CALLER GUESSES. char](a-boolean-cannot-carry-i-could-not-look-so-every.md)
