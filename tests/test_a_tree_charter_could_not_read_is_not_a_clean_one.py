@@ -394,6 +394,22 @@ class TestDoctorNoticesAStaleLockBeforeASaveRunsIntoIt(PersonaIso):
         r = doctor.check_index_lock()
         self.assertEqual(r.status, doctor.OK)
 
+    def test_no_plane_is_green_and_says_so(self):
+        """`check_control_plane_config` already says this loudly; a second row repeating it
+        would be noise, and a row asking git about a plane that does not exist would be a
+        subprocess spent on nothing."""
+        with mock.patch.object(config, "HAS_CONTROL_PLANE", False):
+            r = doctor.check_index_lock()
+        self.assertEqual(r.status, doctor.OK)
+        self.assertIn("no control plane", r.detail)
+
+    def test_a_git_that_will_not_answer_is_not_checked(self):
+        with mock.patch.object(doctor.gitstate, "for_repo",
+                               side_effect=OSError("no git on PATH")):
+            r = doctor.check_index_lock()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertIn("not checked", r.detail)
+
     def test_a_stale_lock_warns_and_names_it(self):
         lock = self.plant(size=0, age=23 * 3600)
         r = doctor.check_index_lock()
@@ -437,6 +453,19 @@ class TestTheSweepWillNotMeasureATreeNobodyIsLookingAt(unittest.TestCase):
         said = str(caught.exception)
         self.assertIn("could not be read", said)
         self.assertIn("not a verdict about any mutation", said)
+        self.assertIn("fatal", said)      # git's own words, kept
+
+    def test_a_git_that_failed_silently_still_raises(self):
+        """An exit status with no words is still an exit status — the phrase `_must` uses
+        for the same case, so the two readings of "the machine stopped us" read alike."""
+        import tempfile
+        from tools import sweep
+        done = subprocess.CompletedProcess(("git",), 9, "", "")
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.object(sweep.subprocess, "run", return_value=done):
+                with self.assertRaises(sweep.NoSandbox) as caught:
+                    sweep.dirty_files(Path(d), ("charter",))
+        self.assertIn("without saying why", str(caught.exception))
 
     def test_a_clean_tree_still_returns_an_empty_dict(self):
         """The other side, and it is not decoration: a guard that raises on everything is

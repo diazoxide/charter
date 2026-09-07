@@ -318,6 +318,39 @@ class TestAnUnreadableIndexIsRefusedWithoutALock(LockedPlane):
         self.assertNotIn("Nothing to save", said)
         self.assertIn("bad index file", said)
 
+    def test_with_no_lock_to_name_charter_says_it_has_none(self):
+        """The other half of the refusal, and it is not filler. Charter has no remedy to
+        offer here, and inventing one — or printing the lock lines with nothing in them —
+        is how a message stops being read. It names where the reason is instead."""
+        real = planegit._git
+
+        def fake(args, cwd=None):
+            if args[:2] == ["diff", "--cached"] and "--quiet" in args:
+                return subprocess.CompletedProcess(args, 128, "", "fatal: bad index file")
+            return real(args, cwd=cwd)
+
+        with mock.patch.object(planegit, "_git", fake):
+            rc, said = self.save()
+        self.assertIn("Nothing charter can name is holding this index", said)
+        self.assertNotIn("rm -f", said)
+
+    def test_a_git_that_failed_silently_is_still_refused(self):
+        """git writing nothing to stderr is not git having no complaint. `sweep`'s
+        `_must` says "without saying why" for the same case and for the same reason: an
+        exit status with no words is still an exit status."""
+        real = planegit._git
+
+        def fake(args, cwd=None):
+            if args and args[0] == "add":
+                return subprocess.CompletedProcess(args, 9, "", "")
+            return real(args, cwd=cwd)
+
+        with mock.patch.object(planegit, "_git", fake):
+            rc, said = self.save()
+        self.assertEqual(rc, 1, said)
+        self.assertIn("without saying why", said)
+        self.assertNotIn("Nothing to save", said)
+
 
 class TestALockIsDescribedByThreeFacts(unittest.TestCase):
     """`gitstate` on its own: the record, not the command that prints it."""
@@ -333,6 +366,14 @@ class TestALockIsDescribedByThreeFacts(unittest.TestCase):
     def test_zero_bytes_and_young_is_not(self):
         lock = gitstate.IndexLock(Path("/x/index.lock"), 0, 1)
         self.assertFalse(lock.crashed)
+
+    def test_the_threshold_itself_counts_as_stale(self):
+        """`>=`, not `>`, and the boundary is asserted from both sides. The number is a
+        judgement call; which way it rounds should not also be one."""
+        self.assertTrue(
+            gitstate.IndexLock(Path("/x/index.lock"), 0, gitstate.STALE_AFTER).crashed)
+        self.assertFalse(
+            gitstate.IndexLock(Path("/x/index.lock"), 0, gitstate.STALE_AFTER - 1).crashed)
 
     def test_a_lock_with_an_index_in_it_is_not_a_crash_however_old(self):
         """git writes the new index INTO the lock before it opens an editor, so the
@@ -382,6 +423,39 @@ class TestALockedWorktreeIsItsOwnIndex(LockedPlane):
         plain.mkdir()
         self.assertIsNone(gitstate.git_dir_of(plain))
         self.assertIsNone(gitstate.for_repo(plain))
+
+    def test_a_subdirectory_of_a_repo_finds_the_repos_git_dir(self):
+        """The fallback, and it is load-bearing. `util.git_dir` reads the FILESYSTEM — no
+        subprocess, which is why `doctor` can ask this on every preflight — and a directory
+        inside a working tree has no ``.git`` of its own. `check_plane_root` supports
+        exactly that layout (a `charter.toml` in a subdirectory of some larger repo), so
+        stopping at the filesystem answer would report no git directory for a tree that has
+        one."""
+        deep = self.plane / "personas"
+        self.assertIsNone(__import__("charter").util.git_dir(deep))
+        self.assertEqual(gitstate.git_dir_of(deep), (self.plane / ".git").resolve())
+
+
+class TestAGitThatCouldNotBeRunIsNotAnAnswer(LockedPlane):
+    """`read` catches what `util.run` raises, and reports it as the third state rather
+    than letting it reach a hook. Every caller here runs from a Stop or SessionStart hook
+    at some point, and a traceback there is a broken turn."""
+
+    def test_a_timeout_is_not_a_clean_tree(self):
+        from charter import util
+        boom = util.ProcTimeout(["git", "status", "--porcelain"], 3)
+        with mock.patch.object(gitstate.util, "run", side_effect=boom):
+            state = gitstate.read(self.plane)
+        self.assertFalse(state.known)
+        self.assertEqual(state.rows, ())
+        self.assertIn("timed out after 3s", state.said)
+
+    def test_a_git_that_will_not_start_is_not_a_clean_tree(self):
+        with mock.patch.object(gitstate.util, "run",
+                               side_effect=FileNotFoundError("no git on PATH")):
+            state = gitstate.read(self.plane)
+        self.assertFalse(state.known)
+        self.assertIn("no git on PATH", state.said)
 
 
 if __name__ == "__main__":
