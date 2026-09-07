@@ -281,49 +281,108 @@ class ARealTmuxUnzoomsTheDrawer(unittest.TestCase):
         self.assertEqual(self._panes()[self.overlay],
                          (str(overlay._SPLIT_ROWS), "1", "0"))
 
-    def test_the_unzoomed_drawer_still_owns_the_terminals_mouse_mode(self):
-        """**The half of #739 that mattered and the half that does not.** The zoom was
-        never what made the pointer work — `select-pane` is, because the outer terminal's
-        mouse mode follows the ACTIVE pane (§4i) — and `modal_argvs` keeps it. Measured
-        through a real client on a real pty: with the overlay unzoomed and active, the
-        bytes `overlay.MOUSE_ON` writes reach the terminal outside tmux.
+    #: What `TERM` the measuring client attaches under. A tmux client refuses to start on
+    #: a terminal it cannot look up — `open terminal failed` — and a CI runner's `TERM` is
+    #: often `dumb` or absent, which is what turned this measurement into an empty read on
+    #: the first CI run. The operator's own comes first where it is usable;
+    #: `tests/test_a_real_click_on_a_real_tab_bar_switches` keeps the identical ladder for
+    #: the identical reason.
+    TERMS = tuple(dict.fromkeys(
+        ([os.environ["TERM"]] if os.environ.get("TERM", "dumb") != "dumb" else [])
+        + ["xterm-256color", "screen", "vt100"]))
+
+    def _attached(self):
+        """A real client on a real pty, and the master end to read it from.
+
+        ``None`` when no `TERM` this machine has lets a client start at all — which is not
+        a failure of the property below, it is the absence of anything to measure it with.
         """
-        master, slave = os.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ,
-                    struct.pack("HHHH", self.ROWS, self.COLS, 0, 0))
-        client = subprocess.Popen(["tmux", "-L", SOCKET_NAME, "attach", "-t", "t"],
-                                  stdin=slave, stdout=slave, stderr=slave,
-                                  start_new_session=True)
-        def _stop():
+        for term in self.TERMS:
+            master, slave = os.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ,
+                        struct.pack("HHHH", self.ROWS, self.COLS, 0, 0))
+            client = subprocess.Popen(
+                ["tmux", "-L", SOCKET_NAME, "attach", "-t", "t"],
+                stdin=slave, stdout=slave, stderr=slave, start_new_session=True,
+                env=dict(os.environ, TERM=term))
+            os.close(slave)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if self._tmux("list-clients", "-t", "t").stdout.strip():
+                    def _stop():
+                        client.terminate()
+                        client.wait(timeout=10)
+                    self.addCleanup(_stop)
+                    self.addCleanup(os.close, master)
+                    os.set_blocking(master, False)
+                    return master
+                time.sleep(0.05)
             client.terminate()
             client.wait(timeout=10)
-        self.addCleanup(_stop)
-        os.close(slave)
-        self.addCleanup(os.close, master)
-        os.set_blocking(master, False)
+            os.close(master)
+        return None
 
-        def drain(seconds: float = 0.8) -> bytes:
-            out, end = b"", time.monotonic() + seconds
-            while time.monotonic() < end:
-                try:
-                    out += os.read(master, 65536)
-                except BlockingIOError:
-                    time.sleep(0.02)
-                except OSError:
-                    break
-            return out
+    @staticmethod
+    def _drain(master: int, seconds: float = 0.8) -> bytes:
+        out, end = b"", time.monotonic() + seconds
+        while time.monotonic() < end:
+            try:
+                out += os.read(master, 65536)
+            except BlockingIOError:
+                time.sleep(0.02)
+            except OSError:
+                break
+        return out
 
-        drain(1.0)
-        for cmd in overlay.modal_argvs(SOCKET_NAME, harness=self.harness,
-                                       overlay_pane=self.overlay):
-            self._run(cmd)
-        self._run(overlay.unzoom_argv(SOCKET_NAME, overlay_pane=self.overlay))
-        drain()
+    def _ask_for_mouse(self, master: int) -> bytes:
+        """Make the overlay pane withdraw and re-request mouse reporting, and answer with
+        whatever the client's terminal received.
+
+        The withdrawal first because a mode tmux is already in produces no new bytes: what
+        travels to the outer terminal is the CHANGE, so a measurement that only ever asked
+        would be reading the transition it happened to catch.
+        """
         tty = self._tmux("display-message", "-p", "-t", self.overlay,
                          "#{pane_tty}").stdout.strip()
         with open(tty, "wb", buffering=0) as f:
+            f.write(overlay.MOUSE_OFF.encode())
+            self._drain(master, 0.4)
             f.write(overlay.MOUSE_ON.encode())
-        saw = drain()
+        return self._drain(master)
+
+    def test_the_unzoomed_drawer_still_owns_the_terminals_mouse_mode(self):
+        """**The half of #739 that mattered and the half that does not.**
+
+        The zoom was never what made the pointer work — `select-pane` is, because the outer
+        terminal's mouse mode follows the ACTIVE pane (§4i) — and `modal_argvs` keeps it.
+        Measured through a real client on a real pty rather than argued.
+
+        **With its own positive control**, which is this repo's rule for a measurement that
+        depends on the machine (`test_the_hotkey_injection_this_guards_against_is_live_on
+        _this_tmux`): the ZOOMED overlay is the state charter ships, so if its request does
+        not reach the client either, this environment cannot show the property at all and
+        there is nothing here for the unzoom to break. That case skips and says so, rather
+        than reporting a defect in charter for a `TERM` a runner did not have.
+        """
+        master = self._attached()
+        if master is None:
+            self.skipTest("no client would attach on any of "
+                          f"{self.TERMS!r} — nothing to measure the request against")
+        self._drain(master, 1.0)
+        for cmd in overlay.modal_argvs(SOCKET_NAME, harness=self.harness,
+                                       overlay_pane=self.overlay):
+            self._run(cmd)
+        control = self._ask_for_mouse(master)
+        if b"1006h" not in control or b"1000h" not in control:
+            self.skipTest(
+                "this tmux/terminal does not propagate a pane's mouse request to the "
+                f"client even ZOOMED ({control!r}), so the unzoom cannot be measured "
+                "against it")
+
+        self._run(overlay.unzoom_argv(SOCKET_NAME, overlay_pane=self.overlay))
+        self.assertEqual(self._panes()[self.overlay],
+                         (str(overlay._SPLIT_ROWS), "1", "0"))
+        saw = self._ask_for_mouse(master)
         self.assertIn(b"1006h", saw, "the drawer's SGR request never left tmux")
         self.assertIn(b"1000h", saw, "the drawer's mouse request never left tmux")
 
