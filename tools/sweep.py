@@ -4325,9 +4325,14 @@ def _plan_step(args, root: Path, ref: str, base: str, scope: dict[str, set[int]]
     # is making this sweep slow" is the question #914 could not answer from anything the
     # plan printed. Alphabetical still, and not sorted by cost: this list exists so a
     # foreign path is *findable*, and a reader looking for one wants it where it belongs.
+    #
+    # Only with a map, because on the other path the number would be the mutation count
+    # times a constant — the very figure that could not see #914 coming, restated in
+    # minutes so that it reads like a measurement.
     per_file: dict[str, float] = {}
-    for mutation, cost in zip(plan, costs):
-        per_file[mutation.path] = per_file.get(mutation.path, 0.0) + cost
+    if selection:
+        for mutation, cost in zip(plan, costs):
+            per_file[mutation.path] = per_file.get(mutation.path, 0.0) + cost
     for rel in sorted(scope)[:20]:
         spent = f" — {round(per_file[rel] / 60)} min predicted" if rel in per_file else ""
         log(f"    charged: {rel}{spent}")
