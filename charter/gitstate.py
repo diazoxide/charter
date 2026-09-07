@@ -173,9 +173,21 @@ def git_dir_of(root: Path | str, timeout: float | None = None) -> Path | None:
     day. Guessing ``.git`` there would look at a file belonging to a different index and
     report the wrong tree healthy.
 
+    Asked of the FILESYSTEM first, via `util.git_dir`, which already knows both spellings
+    and costs no process: a clone's ``.git`` is a directory, a linked worktree's is a file
+    holding ``gitdir: <path>``. `doctor` runs this on every SessionStart preflight, where a
+    subprocess it does not need is a subprocess against the hook's whole budget.
+
+    git is asked only when the filesystem cannot answer — a plane that is a SUBDIRECTORY of
+    some larger repository has no ``.git`` of its own and a real git directory above it,
+    and that is a layout `check_plane_root` explicitly supports.
+
     ``rev-parse --git-dir`` answers relative to the cwd when the cwd is inside the working
     tree, so the result is resolved against *root* before it is returned.
     """
+    quick = util.git_dir(Path(root))
+    if quick is not None:
+        return quick.resolve()
     try:
         r = util.run(["git", "-C", str(root), "rev-parse", "--git-dir"],
                      check=False, timeout=timeout)
@@ -234,6 +246,18 @@ class TreeState(NamedTuple):
     #: the failure path, so a healthy `git status` still costs one process.
     lock: IndexLock | None
 
+    #: There is no git repository here at all — a **definite** answer, not an unreadable
+    #: one, and the two must not be run together.
+    #:
+    #: `charter init` in a fresh directory does not run `git init`, and that is the
+    #: README's own 60-second path: a plane with no repository is a supported resting
+    #: state, not a fault. Callers for which that state means "nothing to commit" — the two
+    #: memory paths — check this and stay quiet, rather than telling every such plane at
+    #: every session start that charter cannot read it. Callers guarding a deletion do
+    #: **not** consult it: a directory git will not stand in is one charter cannot clear
+    #: for removal, whatever the reason.
+    no_repo: bool = False
+
     @property
     def known(self) -> bool:
         return self.said is None
@@ -256,8 +280,7 @@ class TreeState(NamedTuple):
         return ([extra] if extra else []) + (self.lock.remedy() if self.lock else [])
 
 
-def read(where: Path | str, *pathspec: str, flags: tuple[str, ...] = (),
-         timeout: float | None = None) -> TreeState:
+def read(where: Path | str, *pathspec: str, timeout: float | None = None) -> TreeState:
     """``git status --porcelain`` on *where*, as a :class:`TreeState`.
 
     One choke point on purpose. The survey behind #917 found eleven independent readings of
@@ -266,8 +289,13 @@ def read(where: Path | str, *pathspec: str, flags: tuple[str, ...] = (),
     `rmtree` a clone. A fix that leaves the next caller free to write ``if
     _git(["status"…]).stdout.strip():`` has not fixed the class, so the shape a caller
     reaches for is the one that cannot express the bug.
+
+    No flag pass-through, deliberately: every caller here wants the same question, and
+    `doctor.check_plane_root` — the one site that asks it with ``--untracked-files=no`` —
+    keeps its own `_git_in` call, because every other git question in that function is
+    asked and rc-checked the same way and a lone import would make it the odd one out.
     """
-    argv = ["git", "-C", str(where), "status", "--porcelain", *flags]
+    argv = ["git", "-C", str(where), "status", "--porcelain"]
     if pathspec:
         argv += ["--", *pathspec]
     try:
@@ -278,7 +306,8 @@ def read(where: Path | str, *pathspec: str, flags: tuple[str, ...] = (),
         # be reported.
         return TreeState(Path(where), (), f"{type(e).__name__}: {e}", None)
     if r.returncode != 0:
+        git_dir = git_dir_of(where, timeout=timeout)
         return TreeState(Path(where), (), said(r) or f"git status exited {r.returncode}",
-                         for_repo(where, timeout=timeout))
+                         None if git_dir is None else find(git_dir), git_dir is None)
     return TreeState(Path(where), tuple(ln for ln in r.stdout.splitlines() if ln.strip()),
                      None, None)

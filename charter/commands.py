@@ -7,8 +7,8 @@ import json
 import re
 from pathlib import Path
 
-from . import (config, contain, docsrc, doctor, instance, inventory, render, tui, util,
-               workspace, worktree)
+from . import (config, contain, docsrc, doctor, gitstate, instance, inventory, render,
+               tui, util, workspace, worktree)
 # One committer for the control plane, in charter/planegit.py. Re-exported rather
 # than moved-and-updated so every existing caller and test keeps working — the point
 # of the extraction is that there is ONE implementation, not that callers churn.
@@ -765,7 +765,18 @@ def cmd_sync(args) -> int:
 
 def _sync_one(d: Path, ws: str) -> None:
     label = f"{ws}/{d.name}"
-    if _git(["status", "--porcelain"], cwd=d).stdout.strip():
+    dirt = gitstate.read(d)
+    if not dirt.known:
+        # #917, with the polarity that makes it worse than the usual reading. Everywhere
+        # else an unread `git status` costs a warning nobody sees; here the empty answer is
+        # what AUTHORISES the `git merge --ff-only` below. Skipping is what charter does
+        # for a tree it has been told holds work, and a tree it could not read has at least
+        # as strong a claim on being left alone.
+        util.warn(f"{label}: skipping — {dirt.why()}")
+        for line in dirt.remedy():
+            util.info(f"  {line}")
+        return
+    if dirt.rows:
         util.warn(f"{label}: uncommitted changes — skipping (your work is left untouched).")
         # …and this is the one case where "your work" may be nobody's work. A submodule
         # left behind the commit the branch records IS an unstaged change to the gitlink,
@@ -900,7 +911,11 @@ def _clone_note(d: Path) -> str:
     It costs a `git submodule status` only for a clone that has a `.gitmodules` at all
     (see `submodule_drift`), so the common row is still the two calls it always was."""
     branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=d).stdout.strip()
-    dirty = "dirty" if _git(["status", "--porcelain"], cwd=d).stdout.strip() else "clean"
+    # A display site, kept honest for one line's worth of change. This row already has a
+    # written record of printing `clean` over a tree that was not (the submodule case
+    # above); a `git status` that failed printed the same word for a tree nobody read.
+    state = gitstate.read(d)
+    dirty = "unknown" if not state.known else "dirty" if state.rows else "clean"
     note = f"{branch} · {dirty}"
     absent, moved = submodule_drift(d)
     if absent:

@@ -4867,12 +4867,24 @@ def _uncommitted_memory_nudge() -> str:
         from . import instance as _instance
         if _instance.clamp_share(config.MEMORY_SHARE) == "local":
             return ""
-        import subprocess
-        r = subprocess.run(["git", "-C", str(config.ROOT), "status", "--porcelain", "--",
-                            "personas", "workspaces"],
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3)
-        rows = [ln for ln in r.stdout.splitlines()
-                if ln.strip() and ("/memory/" in ln or "/refs/" in ln)]
+        from . import gitstate
+        state = gitstate.read(config.ROOT, "personas", "workspaces", timeout=3)
+        if not state.known and not state.no_repo:
+            # #917: silence used to be this function's answer to "nothing is uncommitted"
+            # AND to "charter could not look" — while its twin,
+            # `commands_persona._pending_memory`, printed a green tick on the same failure.
+            # Both halves of "is memory unsynced" answered no, for the same reason, at the
+            # same moment. This nudge is the only thing that tells an agent durable
+            # knowledge is unshared, so the honest line is worth more than the quiet one.
+            #
+            # `no_repo` is exempt above and is not a hedge: `charter init` in a fresh
+            # directory does not run `git init` — the README's own 60-second path — so a
+            # plane with no repository is a supported resting state, and a session-start
+            # line saying charter cannot read it would fire on every one of them forever.
+            return (f"⬤ charter could not read the control plane's working tree, so it "
+                    f"cannot say whether memory is unshared — {state.said}. That is not "
+                    f"the same as nothing being pending.")
+        rows = [ln for ln in state.rows if "/memory/" in ln or "/refs/" in ln]
         if not rows:
             return ""
         ws = sum(1 for ln in rows if "workspaces/" in ln)

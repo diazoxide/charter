@@ -134,10 +134,24 @@ class TestGitState(WorktreeIso):
         self.assertTrue(detached)
         self.assertTrue(sha.startswith(label))
 
-    def test_is_dirty(self):
-        self.assertFalse(worktree.is_dirty(self.clone))
+    def test_dirt(self):
+        self.assertEqual(worktree.dirt(self.clone).rows, ())
         (self.clone / "README.md").write_text("changed\n")
-        self.assertTrue(worktree.is_dirty(self.clone))
+        self.assertTrue(worktree.dirt(self.clone).rows)
+
+    def test_dirt_knows_when_it_could_not_look(self):
+        """The third state, and why `is_dirty` could not survive as a `bool` (#917).
+
+        `git -C <missing> status --porcelain` exits 128 with EMPTY stdout — the same
+        emptiness a clean tree produces — and every caller that gated a removal on it read
+        that as "nothing to lose". `test_a_pruned_worktree_is_shown_as_missing_not_clean`
+        below found one instance of this and fixed it at the call site; the return type is
+        what fixes the rest."""
+        gone = self.clone.parent / "never-existed"
+        state = worktree.dirt(gone)
+        self.assertFalse(state.known)
+        self.assertEqual(state.rows, ())
+        self.assertIn(str(gone), state.why())
 
     def test_unpushed_is_none_without_upstream(self):
         """No upstream means the commits exist nowhere else — the conservative case."""
@@ -347,7 +361,7 @@ class TestList(WorktreeIso):
         `git -C <missing-path> status --porcelain` — which exits 128 with EMPTY
         stdout (the error goes to stderr) — so `bool("")` is False and the row
         printed as "clean". It must print a distinct "missing" state instead, and
-        must not silently call is_dirty() on the missing path."""
+        must not silently ask `dirt()` about the missing path."""
         p = self.add_worktree("spi-schema")
         self.assertTrue(p.exists())
         shutil.rmtree(p)  # delete the worktree dir WITHOUT `git worktree prune`

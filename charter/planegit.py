@@ -106,8 +106,12 @@ def commit_memory_reactive(paths: list[str], title: str) -> int:
     - ``push``   — committed locally and pushed in the BACKGROUND — so a memory reaches the
       shared repo the moment it's recorded, without blocking the turn. Best-effort.
 
-    Returns commit_push's rc (0 = committed / nothing to do / posture is local,
-    1 = a secret-shaped value was refused)."""
+    Returns commit_push's rc (0 = committed / nothing to do / posture is local, 1 = the
+    save was refused — a secret-shaped value, or a tree charter could not read (#917)).
+    Every caller ignores it: this fires reactively, from a hook, after a memory file has
+    already been written to disk, so there is nothing for it to abort. The refusal is
+    heard because `commit_push` says it out loud, not because anything here branches on
+    it."""
     from . import instance as _instance
     # Re-clamp defensively — see `instance.clamp_share`: `config.MEMORY_SHARE` is always
     # pre-clamped at import time, but this reactive path must not itself rely on that.

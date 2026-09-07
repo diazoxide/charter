@@ -7,7 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import config, hooks, workspace
+from charter import config, gitstate, hooks, workspace
 from charter import commands_workspace as cw
 from tests._isolation import PersonaIso, PlaneIso, run_hook
 
@@ -80,8 +80,14 @@ class TestAutosaveGating(unittest.TestCase):
 
     def _run(self, pending: bool, live: bool = True, share: str = "push"):
         config.MEMORY_SHARE = share
-        status = SimpleNamespace(stdout=(" M workspaces/default/memory/notes.md\n" if pending else ""))
-        with mock.patch.object(cw, "_git", return_value=status), \
+        # A KNOWN state, empty or not. `cmd_workspace_autosave` reads `gitstate.read` since
+        # #917 — "nothing pending" and "charter could not ask" used to be the same empty
+        # string, on the path most likely to meet a real lock (it fires at the end of every
+        # turn, in the plane root, beside two other committers). An unknown state falls
+        # through to `commit_push` deliberately, so it must not be what these cases stub.
+        rows = ((" M workspaces/default/memory/notes.md",) if pending else ())
+        status = gitstate.TreeState(config.ROOT, rows, None, None)
+        with mock.patch.object(cw.gitstate, "read", return_value=status), \
              mock.patch.object(cw, "commit_push", return_value=0) as cp, \
              mock.patch.object(cw.subprocess, "Popen") as popen, \
              mock.patch.object(cw.workspace, "is_live", return_value=live), \

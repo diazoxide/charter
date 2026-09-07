@@ -42,7 +42,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import (commands, commands_secrets, commands_worktree, commands_workspace,
-                     config, doctor, persona, pieces, tui, workspace)
+                     config, doctor, gitstate, persona, pieces, tui, workspace)
 from charter.secrets import registry as vault_registry
 from tests._isolation import PersonaIso
 
@@ -648,9 +648,9 @@ class WorktreeListCase(TableCase):
     """`worktree list` starts from GIT and joins the record onto what git found (ADR
     0011), so the rows are stubbed and the record is real.
 
-    `list_for` shells out to `git worktree list --porcelain` and `is_dirty` to `git
-    status` per row; what is under test is the arithmetic between them, and a real
-    worktree per fixture name would be a `git init` per case for values git never sees.
+    `list_for` shells out to `git worktree list --porcelain` and `dirt` to `git status`
+    per row; what is under test is the arithmetic between them, and a real worktree per
+    fixture name would be a `git init` per case for values git never sees.
     `tests/test_worktree.py` drives the real thing.
     """
 
@@ -672,8 +672,13 @@ class WorktreeListCase(TableCase):
         self.enterContext(mock.patch.object(
             commands_worktree.worktree, "list_for",
             side_effect=lambda clone, ws: list(self.rows)))
+        # A KNOWN clean tree, stated as one. `dirt` answers in three states now (#917), and
+        # a stub that returned an unknown state would put `unknown` in the column this case
+        # measures — which is the honest word for a tree charter could not read, and the
+        # wrong fixture for arithmetic about a tree it could.
         self.enterContext(mock.patch.object(
-            commands_worktree.worktree, "is_dirty", return_value=False))
+            commands_worktree.worktree, "dirt",
+            side_effect=lambda p: gitstate.TreeState(Path(p), (), None, None)))
         # An age, not a verdict — and a FIXED one, so `said` is the same string on every
         # row. A real `silence()` returns the age of the claim, which differs per row by
         # however long the fixture took to build and would make the tail unusable as a

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import config, util, workspace
+from . import config, gitstate, util, workspace
 
 #: Directory under a workspace holding every clone's worktrees (the in-plane layout).
 DIR_NAME = ".worktrees"
@@ -148,8 +148,27 @@ def head_of(clone: Path) -> tuple[str, bool]:
     return _git(clone, "rev-parse", "--short", "HEAD").stdout.strip(), True
 
 
-def is_dirty(path: Path) -> bool:
-    return bool(_git(path, "status", "--porcelain").stdout.strip())
+def dirt(path: Path) -> gitstate.TreeState:
+    """Whether *path* holds uncommitted changes — in three states, not two.
+
+    This replaced ``is_dirty(path) -> bool``, and the return type is the whole change. A
+    `git status` that failed writes nothing to stdout, ``bool("")`` is False, and so every
+    way this call can fail — a directory deleted under it, a corrupt index, a held
+    ``.git/index.lock`` — reached the two callers that gate a `shutil.rmtree` as *clean,
+    nothing to lose* (#917). A `bool` cannot carry the difference, which is why fixing the
+    call sites was not enough on its own.
+
+    Its siblings in this module have always answered this way: `unique_commits` returns
+    ``None`` when git could not answer, and `commands_worktree.cmd_worktree_remove` prints
+    "could not determine … refusing to remove" for it, four lines below where it used to
+    treat an unreadable tree as clean. `is_dirty` was the odd one out in its own module.
+
+    `tests/test_worktree.py` had already found one of these readings — a pruned worktree,
+    whose directory is gone, printed as ``clean`` — and fixed it at the one call site with
+    a `prunable` check. That check stays (it is cheaper than a subprocess and more precise
+    about the cause), but it only ever covered the one failure anybody had measured.
+    """
+    return gitstate.read(path)
 
 
 def unpushed(path: Path) -> int | None:
