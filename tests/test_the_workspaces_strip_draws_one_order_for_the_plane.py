@@ -41,6 +41,7 @@ from __future__ import annotations
 import os
 import stat
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from charter import config, tui, workspace
@@ -203,14 +204,25 @@ class TheOrderIsPlaneStateAndNotFrameState(_Plane, unittest.TestCase):
     def test_the_record_is_charters_own_and_no_other_accounts(self):
         """#894's rule, where this write lands: everything under `STATE_DIR` goes out
         through `config.write_for`/`replace_for`, so the mode is charter's decision and not
-        the umask's. A bare `write_text` here would come out 0644 under an ordinary umask
-        and 0666 under `umask 000`."""
-        with mock.patch.object(os, "umask", return_value=0):
-            os.umask(0)
-            self.addCleanup(os.umask, 0o022)
-            workspace.record_tab_order(["default"])
+        the umask's.
+
+        **Under a real `umask 000`**, which is what makes the claim measurable — the mode
+        `write_for` names and the mode an ordinary `write_text` produces are the same 0600
+        under nobody's umask, and differ by every bit under this one. A bare `write_text`
+        here comes out 0666.
+
+        The directory is asked about too: `record_tab_order` may be the writer that creates
+        `.charter/` itself on a first launch, and a state directory any account can list is
+        exactly the exposure #470 was filed for.
+        """
+        old = os.umask(0o000)
+        self.addCleanup(os.umask, old)
+        workspace.record_tab_order(["default"])
         mode = stat.S_IMODE(config.WORKSPACE_TAB_ORDER_FILE.stat().st_mode)
-        self.assertEqual(mode, config.STATE_FILE_MODE, f"written at {mode:04o}")
+        self.assertEqual(mode & 0o077, 0, f"the record came out {mode:04o}")
+        self.assertEqual(mode, config.STATE_FILE_MODE, f"the record came out {mode:04o}")
+        d = stat.S_IMODE(Path(config.STATE_DIR).stat().st_mode)
+        self.assertEqual(d & 0o077, 0, f"the state directory came out {d:04o}")
 
     def test_the_frame_id_is_no_longer_part_of_the_question(self):
         """`switch.workspaces` takes no frame, which is the fix stated in the signature:
