@@ -364,11 +364,15 @@ class TheThreeReadingsOfTheStripAgree(_Plane, unittest.TestCase):
         docstring says so and `test_frame_bars` pins the count — but no step may cost more
         than a single name, and a plane-wide order must not have made it worse."""
         self.strip("default.1")
+        # Every name the plane has and not only `NAMES`, because a count over a subset can
+        # read two names leaving at once as a drop of two when one of them was replaced by
+        # a name the subset does not hold. The property is about the ROW.
+        names = switch.workspaces()
         drops, previous = [], None
         with mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": ""}, clear=False):
             for width in range(60, 281):
                 row = tui.strip_ansi(slots.workspaces_bar("default.1", width)[0])
-                count = len([n for n in self.NAMES if n in row])
+                count = len([n for n in names if n in row])
                 if previous is not None and count < previous:
                     drops.append((width, previous - count))
                 previous = count
