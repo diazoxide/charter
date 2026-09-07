@@ -98,11 +98,23 @@ class AResizeGivesTheStripTheRowsItsNamesNeed(_TmuxServerFixture, PersonaIso):
     def _window(self, session, cols, rows):
         """A real window with a harness pane and the four panels split off it, in the
         arrangement's own order — every strip one row, which is what a launch that had
-        never measured its names would produce."""
+        never measured its names would produce.
+
+        **The frame's state directory is made here, because a launch makes one** (#923).
+        `state.record_asserted_bars` deliberately takes no `create` — "a frame with no
+        directory records nothing" — and `cmd_resize` reads `state.panes(fid)` out of that
+        same directory before it ever reaches `_reassert_sizes`, so in production the
+        directory is there by construction. It was there in this fixture only by accident:
+        `switch.workspaces(fid)` used to write a per-chat `tab_order` on the sizing path
+        and minted the directory on the way past. The order is the plane's now, so nothing
+        on that path touches the frame's tree, and the fixture states what a launch does
+        instead of leaning on a side effect of something else.
+        """
         r = _tmux("new-session", "-d", "-s", session, "-x", str(cols), "-y", str(rows),
                   "-P", "-F", "#{pane_id}")
         self.assertEqual(r.returncode, 0, r.stderr)
         harness = r.stdout.strip()
+        state.frame_dir(state.frame_id(session, os.getpid()), create=True)
         panes = {}
         for slot, args in (("top", ("-v", "-b", "-l", "1")),
                            ("workspaces", ("-v", "-b", "-l", "1")),
