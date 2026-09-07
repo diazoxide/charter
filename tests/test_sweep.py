@@ -9,6 +9,7 @@ still passes has kept the property those rounds actually measured.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import contextlib
 import dataclasses
@@ -23,6 +24,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import types
 import unittest
 from pathlib import Path
 
@@ -3774,7 +3776,12 @@ class AShardThatWillNotFitReportsWhatItMeasured(unittest.TestCase):
         self.assertIn("Out of time — planned, and never measured", page)
         self.assertIn("1 of 4 mutation(s) on this branch were measured", page)
         self.assertIn("charter/b.py:2", page)
-        self.assertIn("Re-running does not help", page)
+        self.assertIn("Re-running does not help by itself", page)
+        # And why it does not, which changed with #915: the fan-out is sized against
+        # predicted cost, so a second run deals the same plan to the same machines. The
+        # old sentence blamed the plan being too long, which is what a count could see —
+        # and #914's plan was 22 mutations, well inside any count.
+        self.assertIn("what the selection map says each mutation costs", page)
         # The outcome table too, and not only the prose below it. A reader who skims one
         # skims the other, and the sweep found this row unpinned on this branch: deleting
         # it left a table whose rows all read zero above a section saying three quarters
@@ -3972,6 +3979,15 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
         return [sweep.Mutation(f"charter/f{i // 7}.py", i, i, "drop-if", "q?",
                                f"if x{i}: pass", "", "f") for i in range(n)]
 
+    def _costs(self, n):
+        """*n* mutations nothing has been measured about, priced through the real fallback.
+
+        Not ``[60.0] * n`` written out here: that would be a second copy of what
+        :func:`sweep.costs_for` does with no map, and the assertions below would go on
+        agreeing with a constant after the function had stopped using it.
+        """
+        return sweep.costs_for({}, self._plan(n))
+
     def test_the_shards_partition_the_plan(self):
         for total in (0, 1, 7, 62, 78, 82, 225):
             plan = self._plan(total)
@@ -4009,6 +4025,7 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
         checkout, the sandbox clone, the selection map and the unmutated baseline. The
         literal is here rather than the arithmetic on purpose: a test that recomputed it
         from the constants would pass whatever the constants became."""
+        self.assertEqual(sweep.per_shard_seconds(), 1680)
         self.assertEqual(sweep.per_shard(), 28)
 
     def test_a_budget_smaller_than_its_own_fixed_cost_still_measures_something(self):
@@ -4016,49 +4033,56 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
 
         Raise the fixed cost past the budget — a slower runner, a longer suite, a map that
         stops being cached — and the subtraction goes to zero or below. Without the clamp
-        the division in :func:`shards_for` is by zero, the plan job raises, and the
-        workflow gets an empty shard count: no plan, no shards, no numbers. Which is the
-        #617 failure exactly, arriving out of the arithmetic written to prevent it.
+        every candidate hand is "too big", the plan asks for the ceiling, and with the old
+        division it was a division by zero: no plan, no shards, no numbers, which is the
+        #617 failure arriving out of the arithmetic written to prevent it.
         """
         real = sweep.SHARD_FIXED
         self.addCleanup(lambda: setattr(sweep, "SHARD_FIXED", real))
         for fixed in (sweep.SHARD_BUDGET, sweep.SHARD_BUDGET + 3600):
             sweep.SHARD_FIXED = fixed
+            self.assertEqual(sweep.per_shard_seconds(), 1, fixed)
             self.assertEqual(sweep.per_shard(), 1, fixed)
-            self.assertEqual(sweep.shards_for(50), 8, fixed)   # capped, and not a crash
+            self.assertEqual(sweep.shards_for(self._costs(50)), 8, fixed)  # not a crash
 
     def test_the_two_diffs_that_ran_out_of_time_now_fit(self):
         """#608's 62 mutations were cancelled twice and #626's 78 three times, at
         `timeout-minutes: 60`, each run reaching about two thirds of its plan."""
-        self.assertEqual(sweep.shards_for(62), 3)
-        self.assertEqual(sweep.shards_for(78), 3)
+        self.assertEqual(sweep.shards_for(self._costs(62)), 3)
+        self.assertEqual(sweep.shards_for(self._costs(78)), 3)
         for total in (62, 78):
             biggest = max(len(sweep.shard_of(self._plan(total), i, 3))
                           for i in (1, 2, 3))
             self.assertLessEqual(biggest, sweep.per_shard())
 
     def test_a_branch_phase_two_would_have_produced_still_gets_one_job(self):
-        self.assertEqual(sweep.shards_for(1), 1)
-        self.assertEqual(sweep.shards_for(28), 1)
-        self.assertEqual(sweep.shards_for(29), 2)
+        self.assertEqual(sweep.shards_for(self._costs(1)), 1)
+        self.assertEqual(sweep.shards_for(self._costs(28)), 1)
+        self.assertEqual(sweep.shards_for(self._costs(29)), 2)
 
     def test_a_branch_with_nothing_to_sweep_still_gets_a_job(self):
         """"The sweep ran and found nothing to do" and "the sweep did not run" are the two
         answers this whole change is about. A plan of zero shards would make them one."""
-        self.assertEqual(sweep.shards_for(0), 1)
+        self.assertEqual(sweep.shards_for([]), 1)
 
     def test_the_fan_out_is_capped_and_the_sweep_is_not(self):
         """`MAX_SHARDS` limits how much of the runner pool one branch may hold. It does
         not limit what gets asked: past the ceiling the shards simply carry more."""
-        self.assertEqual(sweep.shards_for(10_000), 8)
+        self.assertEqual(sweep.shards_for(self._costs(10_000)), 8)
         plan = self._plan(400)
         dealt = [m for i in range(1, 9) for m in sweep.shard_of(plan, i, 8)]
         self.assertEqual(len(dealt), 400)
 
     def test_a_diff_past_the_ceiling_says_so_out_loud(self):
-        """The spec is explicit that a cap the reader cannot see is worse than the cap."""
-        self.assertEqual(sweep.over_budget(224), "")
-        loud = sweep.over_budget(225)
+        """The spec is explicit that a cap the reader cannot see is worse than the cap.
+
+        224 and 225 are the same boundary this test held before #915 — eight shards of
+        twenty-eight *average* mutations — and it survives the change of unit intact,
+        because an unmeasured mutation is still priced at :data:`sweep.SECONDS_A_MUTATION`
+        and eight hands of 28 × 60 s are exactly the 1680 s a shard is sized for.
+        """
+        self.assertEqual(sweep.over_budget(self._costs(224)), "")
+        loud = sweep.over_budget(self._costs(225))
         self.assertIn("225 mutations", loud)
         self.assertIn("nothing here is dropped", loud.lower())
 
@@ -4074,7 +4098,7 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
         warning has to tell a reader what they will actually get. The word to look for
         is the promise of a partial answer; the words that must be GONE are the ones
         that told them to expect none."""
-        loud = sweep.over_budget(sweep.MAX_SHARDS * sweep.per_shard() + 1)
+        loud = sweep.over_budget(self._costs(sweep.MAX_SHARDS * sweep.per_shard() + 1))
         self.assertIn("PARTIAL answer", loud)
         self.assertNotIn("cancelled", loud)
         self.assertNotIn("no verdict", loud)
@@ -4563,6 +4587,41 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
                                "--github-output", str(self.outputs))
         self.assertEqual(code, 0, said)
         self.assertNotIn("::warning", said)
+
+    def test_the_plan_job_sizes_the_fan_out_off_the_map_it_warmed(self):
+        """#915's plumbing, through the CLI the workflow actually runs.
+
+        `sweep.yml` runs `--plan --warm-map`, which traces the selection map here so the
+        shards can restore it — and the job then sized the fan-out off a count with that
+        measurement sitting in the same process. Same plan, same tree, two answers: one
+        shard from the count, more than one once the map is read.
+        """
+        # `charter/m.py` is the file this fixture's branch touches, standing in for
+        # `charter/config.py`: 323 of 450 test modules, which is what `config` measures.
+        plan = [_mutation("charter/m.py", n, "close") for n in range(9)]
+        widely_imported = {"charter/m.py": _SUITE[:323], "charter/__init__.py": _SUITE}
+        real_plan_for, real_warm = sweep.plan_for, sweep._warm_map
+        self.addCleanup(lambda: setattr(sweep, "plan_for", real_plan_for))
+        self.addCleanup(lambda: setattr(sweep, "_warm_map", real_warm))
+        sweep.plan_for = lambda *a: (plan, {})
+
+        seen = {}
+        for label, selection in (("count", {}), ("cost", widely_imported)):
+            sweep._warm_map = lambda *a, _s=selection, **k: _s
+            self.outputs.unlink(missing_ok=True)
+            code, said = self._cli("--plan", "--warm-map", "--base", self.base,
+                                   "--workdir", str(self.workdir),
+                                   "--github-output", str(self.outputs))
+            self.assertEqual(code, 0, said)
+            seen[label] = (int(self._read_outputs()["shards"]), said)
+        self.assertEqual(seen["count"][0], 1)
+        self.assertEqual(seen["cost"][0], 5)
+        self.assertIn("sized by count and not by cost", seen["count"][1])
+        self.assertIn("9 mutations → 5 shard(s); 107 min of predicted test time over 450 "
+                      "test modules", seen["cost"][1])
+        # And the file the cost came from is named where a reader is already looking.
+        self.assertIn("charged: charter/m.py — 107 min predicted", seen["cost"][1])
+        self.assertIn("charged: charter/m.py\n", seen["count"][1])
 
     def test_the_matrix_names_every_shard_the_plan_asked_for(self):
         """The workflow fans out over exactly this list, so a plan of three shards that
@@ -6293,6 +6352,321 @@ class ASandboxThatCannotBeBuiltSaysWhatTheMachineSaid(unittest.TestCase):
         seen = sweep.run_dir(Path("/w"))
         self.assertEqual(seen, Path("/w") / f"run-{os.getpid()}")
         self.assertNotEqual(seen, sweep.run_dir(Path("/w")).parent / "run-0")
+
+
+#: A selection map shaped like charter's own, at the sizes #914 measured.
+#:
+#: 450 test modules, and the shares are the real ones read off the map this repository's
+#: own suite traces: `charter/config.py::derive` executes under 323 of them because `config`
+#: is the module every other module imports, `charter/instance.py::load` under 337,
+#: `charter/frame/state.py` under 105, and `charter/cli.py::_plane_refusal` under 6.
+#:
+#: A synthetic map rather than a traced one because tracing is four hundred subprocesses and
+#: two minutes; the numbers in it are not synthetic, which is the half that matters.
+_SUITE = [f"tests.test_{n:03d}" for n in range(450)]
+_MAP_914 = {
+    # Something is executed by every test module — that is what makes 450 the denominator.
+    "charter/__init__.py": list(_SUITE),
+    "charter/instance.py::load": _SUITE[:337],
+    "charter/instance.py::<module>": _SUITE[:348],
+    "charter/instance.py::plane_version": _SUITE[:123],
+    "charter/instance.py": _SUITE[:348],
+    "charter/config.py::derive": _SUITE[:323],
+    "charter/config.py": _SUITE[:332],
+    "charter/frame/state.py": _SUITE[:105],
+    "charter/doctor.py::check_control_plane_config": _SUITE[:25],
+    "charter/doctor.py": _SUITE[:159],
+    "charter/cli.py::_plane_refusal": _SUITE[:6],
+    "charter/cli.py": _SUITE[:60],
+    # #626's diff, for the other end of the range: one new file, 13 of 450.
+    "charter/gitconfig.py": _SUITE[:13],
+}
+
+
+def _mutation(path, line=1, symbol="f"):
+    return sweep.Mutation(path, line, line, "drop-if", "q?", "if x: pass", "", symbol)
+
+
+class AShardIsSizedByWhatItsMutationsCostAndNotByHowManyThereAre(unittest.TestCase):
+    """#915. `plan` divided a count by `MUTATIONS_PER_SHARD`, and cost is not a count.
+
+    The two ends of one 22-mutation diff, measured on this repository's own selection map:
+    `charter/cli.py::_plane_refusal` selects 6 test modules of 450 and
+    `charter/config.py::derive` selects 323. `plan` dealt them as equals, gave #914 one
+    shard because 22 < 28, and the runner spent its hour on five of the twenty-two —
+    `no verdict: 5 of 22 measured, 17 out of time`, on a branch whose refusal logic lives in
+    a file the shard never reached.
+
+    The cost is two terms and only one of them is count-shaped, which is why a count could
+    not see this coming: a fixed part every mutation pays, and the share of the suite its
+    subset selects.
+    """
+
+    def test_the_two_ends_of_one_diff_differ_by_more_than_an_order_of_magnitude(self):
+        """The claim the issue makes, held to the numbers rather than to the adjective —
+        and the adjective is the part the numbers correct. The *subsets* differ by 54x, but
+        the priced costs differ by 19, because :data:`sweep.SECONDS_A_MUTATION_FIXED` is a
+        floor the cheap one pays too. Nineteen is still the whole defect: dealing those two
+        as equals is what put 22 mutations on one shard."""
+        cheap = sweep.seconds_for(_MAP_914, _mutation("charter/cli.py", 1993,
+                                                      "_plane_refusal"))
+        dear = sweep.seconds_for(_MAP_914, _mutation("charter/config.py", 688, "derive"))
+        self.assertAlmostEqual(cheap, 25 + 960 * 6 / 450, places=6)
+        self.assertAlmostEqual(dear, 25 + 960 * 323 / 450, places=6)
+        self.assertEqual(len(_MAP_914["charter/config.py::derive"])
+                         // len(_MAP_914["charter/cli.py::_plane_refusal"]), 53)
+        self.assertGreater(dear / cheap, 18)
+        self.assertLess(dear / cheap, 20)
+
+    def test_the_subset_that_is_the_whole_suite_costs_a_whole_suite_run(self):
+        one = sweep.seconds_for(_MAP_914, _mutation("charter/__init__.py"))
+        self.assertAlmostEqual(
+            one, sweep.SECONDS_A_MUTATION_FIXED + sweep.SECONDS_A_SUITE_RUN, places=6)
+
+    def test_a_file_no_module_covers_is_priced_at_the_full_suite_and_not_at_nothing(self):
+        """:func:`sweep.decide` reads "no covering module" as *go straight to the full
+        suite*, so the mutation that looks cheapest in the map is the most expensive one
+        there is. Pricing an absent entry at zero — or at the average — is the same defect
+        as #915 with the sign flipped, and it is the one a `share = len(modules) / suite`
+        written without the fallback would introduce."""
+        stranger = sweep.seconds_for(_MAP_914, _mutation("charter/brand-new.py"))
+        self.assertAlmostEqual(
+            stranger, sweep.SECONDS_A_MUTATION_FIXED + sweep.SECONDS_A_SUITE_RUN, places=6)
+        self.assertGreater(stranger, sweep.seconds_for(
+            _MAP_914, _mutation("charter/config.py", 688, "derive")))
+
+    def test_the_price_is_the_subset_the_sweep_will_actually_run(self):
+        """`select_for` prefers the entry at the mutated *symbol* and falls back to the
+        file, and the price has to follow it there or the plan is sizing a different run
+        from the one the shard makes. On #914 the gap is the whole finding:
+        `charter/cli.py` is 60 modules and `_plane_refusal` inside it is 6."""
+        whole_file = sweep.seconds_for(_MAP_914, _mutation("charter/cli.py", 1, "absent"))
+        symbol = sweep.seconds_for(_MAP_914,
+                                   _mutation("charter/cli.py", 1993, "_plane_refusal"))
+        self.assertAlmostEqual(whole_file, 25 + 960 * 60 / 450, places=6)
+        self.assertAlmostEqual(symbol, 25 + 960 * 6 / 450, places=6)
+
+    def test_the_denominator_is_the_map_and_not_the_tests_directory(self):
+        """A module that would not load is absent from the map — `build_map` says so out
+        loud and falls its files back to the full suite. Counting it in the denominator
+        would make every share smaller than the run it predicts, which is #915's direction
+        of error exactly."""
+        self.assertEqual(sweep.suite_size(_MAP_914), 450)
+        self.assertEqual(sweep.suite_size({"charter/a.py": ["tests.test_a"],
+                                           "charter/b.py": ["tests.test_a", "tests.b"]}),
+                         2)
+        self.assertEqual(sweep.suite_size({}), 0)
+
+    def test_with_nothing_measured_a_mutation_is_priced_at_the_old_average(self):
+        """The fallback path, and it has to be exactly what it was: a person running
+        `--plan` at a terminal has no map, and `sweep.yml`'s plan job always warms one. A
+        different answer here would be a second sizing rule nobody asked for."""
+        self.assertEqual(sweep.costs_for({}, [_mutation("charter/config.py")] * 3),
+                         [float(sweep.SECONDS_A_MUTATION)] * 3)
+
+    def test_the_costs_arrive_in_the_order_the_shards_deal_them(self):
+        """`shards_for` deals these with the same `shard_of` the shards deal mutations
+        with, so entry *i* here has to be the cost of mutation *i* there. A sorted or
+        regrouped list would size a plan nobody runs."""
+        plan = [_mutation("charter/cli.py", 1993, "_plane_refusal"),
+                _mutation("charter/__init__.py"),
+                _mutation("charter/gitconfig.py")]
+        costs = sweep.costs_for(_MAP_914, plan)
+        self.assertEqual(costs, [sweep.seconds_for(_MAP_914, m) for m in plan])
+        self.assertLess(costs[0], costs[1])
+        self.assertLess(costs[2], costs[1])
+
+
+class TheFanOutIsSizedAgainstTheHeaviestHandAndNotTheTotal(unittest.TestCase):
+    """A plan's total says whether the work fits; only the deal says whether a *shard* does.
+
+    Round-robin spreads a file's mutations, so a plan totalling two shards' worth can still
+    put both of its expensive mutations on one shard when the count is unlucky. Dividing
+    the total would call that a fit and the shard would then run out of time — which is
+    #915 again, one level down, arriving out of the arithmetic written to fix it.
+    """
+
+    def test_the_heaviest_hand_is_the_deal_the_shards_make(self):
+        """Through `shard_of` rather than beside it: a sizing rule with its own copy of the
+        dealing is free to drift from the one that runs."""
+        costs = [7.0, 1.0, 1.0, 5.0, 1.0, 2.0]
+        self.assertEqual(sweep.heaviest_hand(costs, 3),
+                         max(sum(sweep.shard_of(costs, i, 3)) for i in (1, 2, 3)))
+        self.assertEqual(sweep.heaviest_hand(costs, 3), 12.0)  # 7+5, dealt to shard 1
+        self.assertEqual(sweep.heaviest_hand(costs, 1), 17.0)
+        self.assertEqual(sweep.heaviest_hand([], 4), 0)
+        # And the LAST shard counts. A range that stops one short reports the same answer
+        # whenever the worst hand is not the final one, which is most of the time — so the
+        # case that catches it has to put the expensive mutation on the last shard.
+        self.assertEqual(sweep.heaviest_hand([1.0, 1.0, 7.0], 3), 7.0)
+
+    def test_a_hand_of_exactly_the_budget_fits_and_one_second_more_does_not(self):
+        """The boundary, pinned on both sides. `<` where `<=` belongs here costs a shard
+        for every plan that lands exactly on its sizing target — and `<=` where `<` belongs
+        deals a shard one second past what it was sized for, which is the direction #914
+        went wrong in."""
+        budget = float(sweep.per_shard_seconds())
+        self.assertEqual(sweep.shards_for([budget]), 1)
+        self.assertEqual(sweep.shards_for([budget / 2, budget / 2]), 1)
+        self.assertEqual(sweep.shards_for([budget / 2, budget / 2 + 1]), 2)
+
+    def test_one_mutation_bigger_than_a_shard_asks_for_every_machine_and_says_so(self):
+        """No deal splits a single mutation, so a plan holding one costlier than a shard's
+        budget fits no count at all. It gets the ceiling and the warning rather than a
+        quietly rounded-down promise — which is `charter/config.py` on a slower runner, and
+        the case where the honest answer really is "expect a partial answer"."""
+        budget = float(sweep.per_shard_seconds())
+        self.assertEqual(sweep.shards_for([budget + 1]), sweep.MAX_SHARDS)
+        self.assertIn("PARTIAL answer", sweep.over_budget([budget + 1]))
+
+    def test_a_plan_that_fits_on_total_but_not_on_one_hand_gets_another_shard(self):
+        """Two mutations, each two thirds of a budget. The total is 1.33 shards' worth, so
+        dividing the total gives two — and the *deal* is what proves two is enough, since
+        round-robin puts one on each. Make it three such mutations and the total says two
+        while the deal says three: with two shards, shard 1 takes the first and the third.
+        """
+        heavy = sweep.per_shard_seconds() * 2 / 3
+        self.assertEqual(sweep.shards_for([heavy, heavy]), 2)
+        self.assertEqual(sweep.shards_for([heavy, heavy, heavy]), 3)
+        self.assertLessEqual(sweep.heaviest_hand([heavy] * 3, 3),
+                             sweep.per_shard_seconds())
+
+    def test_nothing_is_dropped_when_the_cost_wants_more_than_eight_shards(self):
+        """The trade `MAX_SHARDS` forces, and the answer this file chose: **exceed the
+        budget, loudly, and never drop.** A plan capped by dropping mutations would make
+        the verdict's own name — `no survivors` — a claim about a sweep that never ran, and
+        the check name IS the deliverable. So the cap is on machines: every mutation is
+        still dealt, the shards carry more than they were sized for, they stop at
+        `SHARD_REPORT_AT` and report what they measured, and `no verdict: N out of time`
+        stays reachable and honest.
+        """
+        costs = [float(sweep.per_shard_seconds())] * 40
+        self.assertEqual(sweep.shards_for(costs), sweep.MAX_SHARDS)
+        # Nine mutations of exactly one budget each is the case that catches a fan-out
+        # allowed one machine past the cap: NINE shards would fit it perfectly, eight
+        # cannot fit it at all, and the answer has to be eight. `MAX_SHARDS` is a limit on
+        # how much of the runner pool one branch may hold, and a plan that wants more
+        # machines is exactly the plan that must not be given them.
+        self.assertEqual(sweep.shards_for([float(sweep.per_shard_seconds())] * 9),
+                         sweep.MAX_SHARDS)
+        plan = [_mutation("charter/m.py", n) for n in range(40)]
+        dealt = [m for i in range(1, sweep.MAX_SHARDS + 1)
+                 for m in sweep.shard_of(plan, i, sweep.MAX_SHARDS)]
+        self.assertEqual(len(dealt), 40)
+        self.assertEqual(sorted(m.line for m in dealt), sorted(m.line for m in plan))
+
+    def test_the_warning_fires_on_the_heaviest_hand_and_not_on_a_count(self):
+        """The boundary again, on the other function that reads it. 224 average mutations
+        are eight hands of exactly 1680 s and say nothing; one more is 1740 s on the
+        heaviest hand and says so."""
+        budget = float(sweep.per_shard_seconds())
+        self.assertEqual(sweep.over_budget([budget / 8] * 8), "")
+        loud = sweep.over_budget([budget] * 9)
+        self.assertIn("PARTIAL answer", loud)
+        self.assertIn(f"{sweep.per_shard_seconds()} s a shard is sized for", loud)
+
+    def test_the_deliberate_headroom_between_sizing_and_the_deadline_is_not_spent(self):
+        """`SHARD_BUDGET` sizes the plan from the predictable half of the cost; the twenty
+        minutes up to `SHARD_REPORT_AT` are for the half no prediction can see — the full
+        suite `decide` runs when a subset does not kill, and a survivor's confirmation.
+        Sizing against the deadline instead would spend that headroom on arithmetic and
+        hand the partial answers back to the branches that have something to report."""
+        self.assertEqual(sweep.per_shard_seconds(), sweep.SHARD_BUDGET - sweep.SHARD_FIXED)
+        self.assertGreaterEqual(sweep.SHARD_REPORT_AT - sweep.SHARD_BUDGET, 10 * 60)
+
+
+class TheCostConstantsAreReadOffTheRunsThatRanOutOfTime(unittest.TestCase):
+    """Two runs with very different maps, two unknowns, and the numbers that solve them.
+
+    #626: about 53 mutations of `charter/gitconfig.py` (13 of 450 modules) in ~2880 s of
+    mutation time. #914: 5 mutations — one of `charter/cli.py` at 6 of 450 and four of
+    `charter/config.py` at 323 — in ~3000 s. A cost model that reproduces one of those and
+    not the other is fitted to a run rather than measured from two.
+    """
+
+    def _cost(self, modules, n=1):
+        return n * (sweep.SECONDS_A_MUTATION_FIXED
+                    + sweep.SECONDS_A_SUITE_RUN * modules / 450)
+
+    def test_the_model_reproduces_what_626_measured(self):
+        self.assertAlmostEqual(self._cost(13, 53) / 2880, 1.0, delta=0.05)
+
+    def test_the_model_reproduces_what_914_measured(self):
+        self.assertAlmostEqual((self._cost(6) + self._cost(323, 4)) / 3000, 1.0, delta=0.05)
+
+    def test_a_whole_suite_run_costs_a_shard_what_four_concurrent_ones_cost(self):
+        """`SHARD_FIXED_COSTS` states the unmutated baseline — the whole suite once, alone
+        on the runner. A shard runs `--jobs 4` and `unittest` is single-threaded, so four
+        concurrent whole-suite runs queue on a four-vCPU runner rather than overlapping.
+        The second corroboration is `SUBSET_TIMEOUT`: a subset that is the whole suite is
+        the run that reaches it, and on #914 every `charter/config.py` mutation did."""
+        self.assertEqual(sweep.SECONDS_A_SUITE_RUN,
+                         4 * sweep.SHARD_FIXED_COSTS["the unmutated baseline"])
+        self.assertGreater(sweep.SECONDS_A_SUITE_RUN, sweep.SUBSET_TIMEOUT)
+
+    def test_the_average_sits_between_the_two_halves_it_was_an_average_of(self):
+        """`SECONDS_A_MUTATION` is still the right answer for a mutation nothing has been
+        measured about, and it has to stay between the fixed floor and a whole-suite run or
+        it is not an average of anything."""
+        self.assertLess(sweep.SECONDS_A_MUTATION_FIXED, sweep.SECONDS_A_MUTATION)
+        self.assertLess(sweep.SECONDS_A_MUTATION, sweep.SECONDS_A_SUITE_RUN)
+
+
+class ThePlanSizesItselfFromTheMapItWarmed(unittest.TestCase):
+    """The plumbing half of #915: `plan` measured the map and then sized off a count.
+
+    `--warm-map` traces the selection map in the plan job so the shards can restore it
+    instead of paying for it again. The measurement was therefore already in hand and
+    already paid for, and the job threw the only copy of it away before deciding how many
+    machines the branch needed.
+    """
+
+    def setUp(self):
+        self.plan = [_mutation("charter/config.py", n, "derive") for n in range(8)]
+        self.plan += [_mutation("charter/cli.py", 1993, "_plane_refusal")]
+
+    def _sized(self, selection):
+        costs = sweep.costs_for(selection, self.plan)
+        return sweep.shards_for(costs), costs
+
+    def test_the_same_plan_is_sized_differently_once_the_map_is_read(self):
+        """The regression this whole issue is, in one assertion: nine mutations is one
+        shard by count and more than one by cost, and the difference is a file every other
+        module imports."""
+        by_count, _ = self._sized({})
+        by_cost, _ = self._sized(_MAP_914)
+        self.assertEqual(by_count, 1)
+        self.assertGreater(by_cost, by_count)
+
+    def _warmed(self, warm_map):
+        """`_warm_map` with the sandbox and the trace stubbed out — what it RETURNS is the
+        whole question, and building a real one is a `git clone` and four hundred traces."""
+        measured = {"charter/config.py": ["tests.test_a", "tests.test_b"]}
+        for name, stub in (("load_map", lambda *a, **k: measured),
+                           ("Sandbox", lambda *a, **k: types.SimpleNamespace(
+                               path=Path("/nowhere"))),
+                           ("run_dir", lambda workdir: Path("/nowhere"))):
+            real = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, real)
+        args = argparse.Namespace(warm_map=warm_map, paths=None, jobs=1,
+                                  refresh_map=False)
+        return measured, sweep._warm_map(args, Path("/nowhere"), "HEAD", {},
+                                         Path("/nowhere"), Path("/nowhere"),
+                                         lambda *a: None)
+
+    def test_the_warm_map_hands_back_what_it_measured(self):
+        """Returned and not only written to the cache directory. `_warm_map` returning
+        `{}` on the path that warms is #915 unfixed with the plumbing in place — the plan
+        would size by count with the map sitting on disk beside it."""
+        measured, got = self._warmed(warm_map=True)
+        self.assertEqual(got, measured)
+
+    def test_no_warm_map_means_no_map_and_not_a_traced_one(self):
+        """The other half of the branch. `--plan` on its own promises to cost a second, so
+        it must not reach `load_map` — which traces the whole suite when the cache misses."""
+        _, got = self._warmed(warm_map=False)
+        self.assertEqual(got, {})
 
 
 if __name__ == "__main__":      # pragma: no cover
