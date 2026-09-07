@@ -863,6 +863,13 @@ def tab_order() -> list[str]:
     filesystem, or a hand that saved it in another encoding, reaches here as bytes
     `read_text` cannot decode. That is a `ValueError`, not an `OSError`, and it would come
     out of a panel's render path.
+
+    **No `contain.file_refusal` in front of it**, where :func:`declared_default` has
+    one, and the difference is whose file it is. `workspaces/.default` is ordinarily
+    committable, so the thing at that path may be a teammate's — or a FIFO, which would
+    hang the status line's every paint rather than cost it a value. This lives under
+    `STATE_DIR`, which is 0700, per developer and never committed: what is there is what
+    this process's own charter put there, and the name check is the floor that remains.
     """
     try:
         lines = config.WORKSPACE_TAB_ORDER_FILE.read_text().splitlines()
