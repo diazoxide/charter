@@ -8256,11 +8256,11 @@ def _draw_palette(args) -> int:
     socket = state.frame_server(fid) or SOCKET
     harness = state.harness_pane(fid) or ""
     # **This process's own rectangle, read ONCE and used twice** — by :func:`_picker`, to
-    # unzoom a confirmation into the drawer it is (#921), and by `_close_palette` in the
-    # `finally`. tmux sets `$TMUX_PANE` in every process it starts and `frame/tabmenu
-    # .handback` reads the same variable for the same pane; a second read here would be a
-    # second answer to "which pane am I", on the one path where being wrong means resizing
-    # or killing the operator's harness.
+    # unzoom a one-chat confirmation into the drawer it is (#921, #927), and by
+    # `_close_palette` in the `finally`. tmux sets `$TMUX_PANE` in every process it starts
+    # and `frame/tabmenu.handback` reads the same variable for the same pane; a second read
+    # here would be a second answer to "which pane am I", on the one path where being wrong
+    # means resizing or killing the operator's harness.
     here = os.environ.get("TMUX_PANE", "")
     reg = builtin_actions.build(fid, current_density=_current_density(fid),
                                 current_chrome=_current_chrome(fid))
@@ -8403,31 +8403,49 @@ def _start_workspace_switch(fid: str, ws: str) -> None:
 
 
 def _as_a_drawer(surface, *, socket: str, pane: str):
-    """Hand *surface* back, having given its pane the frame above it — #921.
+    """Hand *surface* back, having given its pane the frame above it when the question is
+    small enough to fit in one — #921, narrowed by #927.
 
-    **A confirmation is a drawer, and the palette is not.** `overlay.modal_argvs` ends in
-    `resize-pane -Z`, so every surface this pane holds takes the whole window; that is
-    right for the palette, which lists every action, every doorway and every name an
-    operator types towards, scrolls, and has no row cap by design. It is wrong for a
-    two-row question about one chat, which read as *"an entirely new window"* rather than
-    as something that had opened over the frame the operator was looking at.
+    **The size of the surface matches the size of the consequence.** `overlay.modal_argvs`
+    ends in `resize-pane -Z`, so every surface this pane holds takes the whole window
+    unless something here gives it back. That is right for the palette, which lists every
+    action, every doorway and every name an operator types towards, scrolls, and has no row
+    cap by design. It is wrong for a two-row question about one chat, which read as *"an
+    entirely new window"* rather than as something that had opened over the frame the
+    operator was looking at. And it is right again for `charter: quit`.
 
-    **Both verbs, and the cost is stated rather than hidden.** `chat: close` is the
-    confirmation this was reported about and it is always two rows — the confirming row and
-    the one chat `leave.plan(only=…)` names — so it fits the drawer whole. `charter: quit`
-    lists every chat on the plane, and in five rows it draws two of them at a time under a
-    heading that says how many there are, scrolled with the same up/down as everything else
-    on this surface. §4f asks that the warning be drawn *at the moment the operator is
-    deciding*, which it is; what a full-window quit bought on top of that was seeing a long
-    blast radius without scrolling. One surface with one rule was chosen over two that read
-    differently depending on which doorway reached them, and if that trade turns out wrong
-    the place to change it is here, in one expression.
+    **So `chat: close` is a drawer and `charter: quit` is not, because their blast radii
+    are not the same size.** Close is always two rows — the confirming row and the one chat
+    `leave.plan(only=…)` names — so it fits the drawer whole and the operator reads all of
+    it without moving. Quit stops EVERY harness on the plane, and its confirmation is the
+    one place an operator sees that: every chat, in every workspace, and which of them can
+    resume the conversation. In five rows that is two at a time under a heading saying how
+    many there are, scrolled — and **scrolling a destructive list is how an operator
+    answers it without reading it.** §4f asks that the warning be drawn *at the moment the
+    operator is deciding*; that it can be read whole before the keypress that commits is
+    the other half of the same requirement. #921 chose one-surface-one-rule over two that
+    read differently by doorway, stated the cost here rather than burying it, and said the
+    place to change it was this expression if the trade turned out wrong. #927 is the owner
+    changing it.
 
-    **``None`` passes straight through, and that is what makes this one call rather than
-    an `if` at two call sites.** :func:`_picker` and `frame/tabmenu.opens` both answer
-    ``None`` for every row that opens nothing, so the surface arriving here IS the
-    condition — and a route that opened a confirmation without unzooming would be a
-    confirmation that behaved differently depending on which pointer press reached it.
+    **This is `leave.open_rows`' placement guard at a second scale.** That one keeps the
+    destructive rows LAST *"because the palette's cursor starts on the first row that can
+    run, and a destructive row at the top would be one `F2 Enter` away"*. Placement and
+    presentation are one rule at two scales: charter puts distance between the operator and
+    a destructive answer in proportion to what the answer costs, and never asks them to
+    scroll past the thing they are agreeing to.
+
+    **The verb is read off the surface's own label**, which is what both call sites already
+    spell it with (`leave.QUIT`/`leave.CLOSE`) — so the condition arrives WITH the surface
+    and this stays one expression, rather than an `if` at two call sites that could come to
+    disagree. `frame/tabmenu.opens` only ever opens close, so the tab strip only ever gets
+    a drawer, and it gets one through this call rather than by a rule of its own.
+
+    **``None`` passes straight through, and that is the same economy.** :func:`_picker` and
+    `frame/tabmenu.opens` both answer ``None`` for every row that opens nothing, so the
+    surface arriving here IS the condition — and a route that opened a confirmation without
+    unzooming would be a confirmation that behaved differently depending on which pointer
+    press reached it.
 
     A tmux round trip on a keypress the operator has just made, on the one path where a
     scan of the frame root is already being paid for (`leave.plan`). `tmuxctl.run` is what
@@ -8435,8 +8453,8 @@ def _as_a_drawer(surface, *, socket: str, pane: str):
     id charter could not spell, and a surface that stays zoomed is the surface this shipped
     as — never a refusal, and never a `resize-pane` aimed at a target charter cannot parse.
     """
-    if surface is None:
-        return None
+    if surface is None or surface.label != leave.CLOSE:
+        return surface
     argv = overlay.unzoom_argv(socket, overlay_pane=pane)
     if argv is not None:
         tmuxctl.run("making the confirmation a drawer", argv)

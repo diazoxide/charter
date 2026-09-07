@@ -405,6 +405,12 @@ def draw(args) -> int:
             # row is untouched and the close doorway gives the window up — two routes to
             # `leave.confirm_rows` that must not look different, which is the whole reason
             # `opens` builds the identical surface `_picker` does.
+            #
+            # Which is also why the drawer is not asked for here (#927). This menu opens
+            # `chat: close` and nothing else, so it would ALWAYS want one — and a menu that
+            # said so itself would be a second place holding the rule that decides how big
+            # a confirmation is. That rule reads the surface's own label one call down, so
+            # this route inherits the answer instead of restating it.
             return commands_frame._as_a_drawer(
                 opens(row, target,
                       live=commands_frame._plane_live(

@@ -1,10 +1,23 @@
-"""**A confirmation gives the window back; the palette keeps it — #921.**
+"""**A one-chat confirmation gives the window back; the palette and the whole-plane one
+keep it — #921, narrowed by #927.**
 
 *"no any modal/drawer for confirmation"*, reported about a surface that has had one since
 it was written. `overlay.modal_argvs` ends in `resize-pane -Z`, so every surface the
 overlay pane holds takes the entire window — and a two-row question about one chat arriving
 full-screen does not read as something that opened over the frame you were looking at. It
 reads as somewhere else.
+
+**The size of the surface matches the size of the consequence, and that rule has two
+directions to hold — so this module pins both.** `chat: close` is a drawer
+(:meth:`TheConfirmationGivesTheWindowBack.test_the_close_doorway_unzooms_the_pane_it_is
+_drawn_in`). `charter: quit` is not
+(:meth:`TheConfirmationGivesTheWindowBack.test_the_quit_doorway_keeps_the_whole_pane`),
+because it stops EVERY harness on the plane and its confirmation is the one place an
+operator sees that — every chat, in every workspace, and which of them can resume. In five
+rows that is two at a time, scrolled, and scrolling a destructive list is how you answer it
+without reading it. A module asserting only one direction would leave the other free to
+drift into it silently, which is the whole shape of #927: #921 pinned quit as a drawer, and
+that assertion was the thing to change.
 
 **Dropping the zoom does not hide it.** `overlay.open_argv` splits `-v -l 5`, so the pane
 goes back to five rows at the bottom of the window with the frame drawn above it, still the
@@ -17,14 +30,17 @@ measures both halves on a real server rather than arguing them: the pane keeps i
 rows and its focus, and the outer terminal still receives this pane's own
 ``\\x1b[?1006h\\x1b[?1000h``.
 
-**Only the confirmation.** The palette lists every action, every doorway and every name an
-operator types towards; it scrolls, has no row cap by design, and earns the rows. So does a
-picker, which is a list of names of unbounded length. What gives the window up is the one
-surface that is a single question with the answer at the top.
+**Only the one-chat confirmation.** The palette lists every action, every doorway and every
+name an operator types towards; it scrolls, has no row cap by design, and earns the rows.
+So does a picker, which is a list of names of unbounded length. So does quit's warning.
+What gives the window up is the one surface that is a single question about a single chat,
+with the answer at the top and two lines under it.
 
-**And both routes to it, through one call.** `F2 → chat: close` and a right press on a tab
-open the same `leave.confirm_rows` over the same plan; a route that unzoomed and a route
-that did not would be two confirmations wearing one name.
+**And both routes to THAT, through one call.** `F2 → chat: close` and a right press on a
+tab open the same `leave.confirm_rows` over the same plan; a route that unzoomed and a
+route that did not would be two confirmations wearing one name. The tab strip only ever
+opens close, so it only ever gets a drawer — and it gets one by inheriting the rule rather
+than by holding a copy of it.
 """
 
 from __future__ import annotations
@@ -134,17 +150,44 @@ class TheConfirmationGivesTheWindowBack(_AFrameWithChatsToClose, unittest.TestCa
         return commands_frame._picker(row, self.FID, [], socket=self.SERVER, pane="%7")
 
     def test_the_close_doorway_unzooms_the_pane_it_is_drawn_in(self):
+        """**Half of #927's rule, and the half #921 was reported for.** `chat: close` is
+        two rows about one chat — the confirming row and the chat `leave.plan(only=…)`
+        names — so the whole consequence is on screen in five rows, and taking the window
+        for it read as somewhere else."""
         surface = self._open(leave.open_rows(self.FID)[1])
         self.assertIsNotNone(surface, "the close doorway opened nothing")
         self.assertEqual(self._resizes(),
                          [overlay.unzoom_argv(self.SERVER, overlay_pane="%7")])
 
-    def test_the_quit_doorway_does_too(self):
-        """**One surface, one rule.** Quit and close are the same `leave.confirm_rows`
-        over a wider plan, and a confirmation that behaved differently depending on which
-        doorway reached it would be two surfaces wearing one name."""
-        self._open(leave.open_rows(self.FID)[0])
-        self.assertEqual(len(self._resizes()), 1, self.ran)
+    def test_the_quit_doorway_keeps_the_whole_pane(self):
+        """**The other half, and the one that has to be asserted separately — #927.**
+
+        The size of the surface matches the size of the consequence. `charter: quit` stops
+        every harness on the plane, and this surface is the one place an operator sees the
+        whole blast radius: every chat, in every workspace, and which of them can resume.
+        Five rows draws two of them at a time under a heading saying how many there are —
+        and scrolling a destructive list is how an operator answers it without reading it.
+
+        Pinned facing the opposite way from
+        :meth:`test_the_close_doorway_unzooms_the_pane_it_is_drawn_in` on purpose. #921
+        asserted quit was a drawer too and the assertion was what made that a decision
+        rather than an accident; with only one direction pinned, the other is free to drift
+        into it and no test says so.
+        """
+        surface = self._open(leave.open_rows(self.FID)[0])
+        self.assertIsNotNone(surface, "the quit doorway opened nothing")
+        self.assertEqual(self._resizes(), [], self.ran)
+
+    def test_the_two_doorways_are_told_apart_by_the_verb_and_not_by_the_row_count(self):
+        """**A plane with one chat on it does not make quit a drawer.** The rule is what
+        the verb CAN reach, not what it happens to reach on this plane at this moment: an
+        operator who learns that quit takes the pane has learned something that is true
+        every time, and a surface that changed shape with the plane's size would teach them
+        nothing they could rely on. `_as_a_drawer` reads the verb off the surface's label,
+        which is why."""
+        self.live[0].discard("alpha.2")
+        self.assertIsNotNone(self._open(leave.open_rows(self.FID)[0]))
+        self.assertEqual(self._resizes(), [], self.ran)
 
     def test_a_name_picker_keeps_the_whole_pane(self):
         """A picker is a list of names of unbounded length — forty workspaces on this

@@ -56,11 +56,13 @@ Neutral; a click on this row is resolved by column, and the glyph to draw is the
 width no terminal disagrees about. A mathematical minus is a codepoint a terminal font may
 not carry, and a fallback into a wide face moves every field after it.
 
-**The confirmation is a drawer.** It used to take the whole window — the overlay pane is
-zoomed, so a two-row question about one chat arrived full-screen and read as somewhere else
-entirely. It now gives the window back and draws in the five rows at the bottom, with the
-frame you were looking at still above it. The palette and the pickers keep the whole pane:
-they are lists that scroll and have no length limit, and they earn it.
+**The `chat: close` confirmation is a drawer.** It used to take the whole window — the
+overlay pane is zoomed, so a two-row question about one chat arrived full-screen and read as
+somewhere else entirely. It now gives the window back and draws in the five rows at the
+bottom, with the frame you were looking at still above it. The palette and the pickers keep
+the whole pane: they are lists that scroll and have no length limit, and they earn it. So
+does `charter: quit`, whose confirmation lists every chat on the plane — see *The quit
+confirmation takes the pane again*, in this release.
 
 The pane is still the active one, which is the only thing the zoom was ever load-bearing
 for. Measured on tmux 3.7c through a real pty: unzoomed and focused, it is `h=5 active=1`
