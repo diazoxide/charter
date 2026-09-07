@@ -103,3 +103,8 @@ Written by the persona as it learns; committed and shared.
 - [A SHARED TEMP FILENAME LOSES THE ATOMICITY THE RENAME GIVES YOU. os.repl](a-shared-temp-filename-loses-the-atomicity-the-r.md)
 - [A SWEEP SURVIVORS DESCRIPTION NAMES AN OPERATOR, NOT A SITE — ADDRESS IT](a-sweep-survivors-description-names-an-operator-.md)
 - [subprocess.run(check=True, stderr=PIPE) THROWS AWAY THE DIAGNOSIS IT LOO](subprocess-run-check-true-stderr-pipe-throws-awa.md)
+- [LSP IS NOT THE ONE-BACKEND-MANY-FRONTENDS PRECEDENT, AND GIT DOES NOT SA](lsp-is-not-the-one-backend-many-frontends-preced.md)
+- [A NOTIFIER MUST NEVER BLOCK ON A LISTENER — AND THE MATURE ANSWER IS RES](a-notifier-must-never-block-on-a-listener-and-th.md)
+- [CATCHING A REFUSAL AND CARRYING ON CONVERTS IT INTO A SILENT PERMIT. cha](catching-a-refusal-and-carrying-on-converts-it-i.md)
+- [TMUX IS DOING FOUR JOBS FOR CHARTER, NOT TWO — I ASSERTED TWO AND A PROT](tmux-is-doing-four-jobs-for-charter-not-two-i-as.md)
+- [A UI CANNOT POLL CHARTER THE WAY CHARTER POLLS ITSELF — 90 ms SUBPROCESS](a-ui-cannot-poll-charter-the-way-charter-polls-i.md)

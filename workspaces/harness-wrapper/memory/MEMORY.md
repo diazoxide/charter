@@ -82,3 +82,5 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [tmux 'server exited unexpectedly' rc 1 in a test fixture is always #713'](20260903-084351-tmux-server-exited-unexpectedly-rc-1-in-a-test-f.md)
 - [tmux's default MouseDown3Pane forwarding branch is '{ select-pane -t = ;](20260903-124147-tmux-s-default-mousedown3pane-forwarding-branch-.md)
 - [state.workspace_for(fid) reads $CHARTER_WORKSPACE out of the CALLING pro](20260904-123341-state-workspace-for-fid-reads-charter-workspace-.md)
+- [cli.main: args.command is NOT reliably the subcommand — charter secret e](20260905-235739-cli-main-args-command-is-not-reliably-the-subcom.md)
+- [charter's CI deletion sweep only sweeps DEFAULT_PATHS = ('charter',), so](20260907-110817-charter-s-ci-deletion-sweep-only-sweeps-default-.md)
