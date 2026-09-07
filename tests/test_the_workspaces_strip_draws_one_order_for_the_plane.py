@@ -19,7 +19,7 @@ columns — and it fails on #903's code in the way the report describes.
 
 **Three decisions this file pins beyond the fix itself.**
 
-* *Where it lives.* `config.WORKSPACE_TAB_ORDER_FILE`, beside `active-workspace` and
+* *Where it lives.* `workspace._tab_order_file()`, beside `active-workspace` and
   `sessions/` — plane-scoped, per developer, gitignored, private-mode, and not inside a
   tree `state.reap` deletes per frame. `TheOrderIsPlaneStateAndNotFrameState`.
 * *When it is re-decided.* Once per plane launch: `state.reap` drops it when the reap
@@ -176,10 +176,21 @@ class TheOrderIsPlaneStateAndNotFrameState(_Plane, unittest.TestCase):
 
     def test_it_is_written_to_the_planes_own_state_file(self):
         self.strip("default.1")
-        self.assertTrue(config.WORKSPACE_TAB_ORDER_FILE.is_file(),
+        self.assertTrue(workspace._tab_order_file().is_file(),
                         "the plane recorded no order")
-        self.assertEqual(config.WORKSPACE_TAB_ORDER_FILE.parent, config.STATE_DIR,
+        self.assertEqual(workspace._tab_order_file().parent, config.STATE_DIR,
                          "the plane's order is not beside the plane's other pointers")
+
+    def test_the_path_is_the_one_charter_tells_operators_it_is(self):
+        """**Spelled out, because the spelling is published.** `docs/news` shows an
+        operator `.charter/workspace-tab-order` in the before-and-after this issue is
+        about, and `docs/frame.md` describes what lives there. A path in a release note is
+        a promise like any other name charter prints, and one the reader and the writer
+        would go on agreeing about after a rename — both go through the same function, so
+        nothing else in this file could tell.
+        """
+        self.assertEqual(workspace._tab_order_file(),
+                         Path(config.STATE_DIR) / "workspace-tab-order")
 
     def test_no_frame_directory_grows_a_tab_order_file(self):
         """**The per-chat file is removed rather than left beside the plane-wide one.**
@@ -218,7 +229,7 @@ class TheOrderIsPlaneStateAndNotFrameState(_Plane, unittest.TestCase):
         old = os.umask(0o000)
         self.addCleanup(os.umask, old)
         workspace.record_tab_order(["default"])
-        mode = stat.S_IMODE(config.WORKSPACE_TAB_ORDER_FILE.stat().st_mode)
+        mode = stat.S_IMODE(workspace._tab_order_file().stat().st_mode)
         self.assertEqual(mode & 0o077, 0, f"the record came out {mode:04o}")
         self.assertEqual(mode, config.STATE_FILE_MODE, f"the record came out {mode:04o}")
         d = stat.S_IMODE(Path(config.STATE_DIR).stat().st_mode)
@@ -244,11 +255,11 @@ class APlaneThatGoesColdDecidesAgain(_Plane, unittest.TestCase):
 
     def test_a_reap_that_leaves_no_frame_forgets_the_order(self):
         self.strip("default.1")
-        self.assertTrue(config.WORKSPACE_TAB_ORDER_FILE.is_file())
+        self.assertTrue(workspace._tab_order_file().is_file())
         self._reap()
         self.assertEqual(state.reap(set(), server="charter"), [],
                          "the plane still holds frame state, so it never went cold")
-        self.assertFalse(config.WORKSPACE_TAB_ORDER_FILE.exists(),
+        self.assertFalse(workspace._tab_order_file().exists(),
                          "the order outlived every frame that could be drawing it")
 
     def test_the_next_launch_then_leads_with_what_the_plane_did_last(self):
@@ -270,7 +281,7 @@ class APlaneThatGoesColdDecidesAgain(_Plane, unittest.TestCase):
         first = self.strip("default.1")
         self.arrive("harness-wrapper.1")
         self._reap(live={"default.1"})
-        self.assertTrue(config.WORKSPACE_TAB_ORDER_FILE.is_file(),
+        self.assertTrue(workspace._tab_order_file().is_file(),
                         "a live frame's order was forgotten under it")
         self.assertEqual(self.strip("default.1"), first)
 
@@ -283,7 +294,7 @@ class APlaneThatGoesColdDecidesAgain(_Plane, unittest.TestCase):
         for fid in PLANE:
             state.record_server(fid, "other-socket")
         self._reap(server="charter")
-        self.assertTrue(config.WORKSPACE_TAB_ORDER_FILE.is_file(),
+        self.assertTrue(workspace._tab_order_file().is_file(),
                         "the other server's frames were treated as gone")
 
     def test_a_claim_that_is_not_a_frame_yet_leaves_the_plane_warm(self):
@@ -294,7 +305,7 @@ class APlaneThatGoesColdDecidesAgain(_Plane, unittest.TestCase):
         self.strip("default.1")
         (state._root() / "later.1").mkdir()
         self._reap()
-        self.assertTrue(config.WORKSPACE_TAB_ORDER_FILE.is_file(),
+        self.assertTrue(workspace._tab_order_file().is_file(),
                         "a plane with a chat being claimed was read as cold")
 
     def test_a_stray_file_in_the_frame_root_is_not_a_frame(self):
@@ -305,13 +316,13 @@ class APlaneThatGoesColdDecidesAgain(_Plane, unittest.TestCase):
         self.strip("default.1")
         (state._root() / "stray").write_text("not a frame\n")
         self._reap()
-        self.assertFalse(config.WORKSPACE_TAB_ORDER_FILE.exists(),
+        self.assertFalse(workspace._tab_order_file().exists(),
                          "a file in the frame root kept the plane warm for ever")
 
     def test_forgetting_an_order_that_was_never_recorded_is_not_an_error(self):
         """A plane that has never drawn a strip reaps like any other, and a reap runs on a
         launch path where a raise costs the launch."""
-        self.assertFalse(config.WORKSPACE_TAB_ORDER_FILE.exists())
+        self.assertFalse(workspace._tab_order_file().exists())
         workspace.forget_tab_order()
         self._reap()
 

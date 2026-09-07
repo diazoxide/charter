@@ -793,6 +793,37 @@ def list_workspaces() -> list[str]:
     return out
 
 
+def _tab_order_file() -> Path:
+    """Where this plane records the order its workspaces tab strip draws (#923).
+
+    **Directly under `STATE_DIR`, beside `active-workspace`, `sessions/` and
+    `terminals/`** — plane-scoped, per developer, gitignored, machine-written, and
+    outliving any one chat.
+
+    **NOT under `.charter/frame/<fid>/`, and that placement IS the fix.** #903 put it
+    there, where `frame.state`'s opening line says everything is per frame and never
+    global, and where `frame.state.reap` deletes it with the chat that wrote it. So every
+    chat had an order of its own — and switching workspaces switches chats, which is how
+    the operator met a different frozen order after every switch. The strip draws a
+    plane-wide list, so its order is a plane-wide fact and lives at plane scope.
+    `frame.state.NO_FORMAT_PROMISE` says the same thing from the other end: that tree is
+    scratch charter may reshape in a patch release, which is no place for the one record
+    every frame on the plane reads.
+
+    **A function rather than a `config.derive` entry**, which is `frame.state._root`'s
+    shape and `frame.gather._cache_file`'s: a state path spelled by the one module that
+    reads and writes it. `config.derive` holds what several modules share — the roster
+    directories, the session and terminal pointers — and this is read here and nowhere
+    else. It stays isolated in tests for the same reason `_root()` does: `config.STATE_DIR`
+    is read at CALL time, so `config.use()` repointing it moves this with it, and it is
+    never bound at import.
+
+    Neither committed nor `charter.toml`: a machine's reading of which workspaces were in
+    use, rewritten whole at the next launch, and nothing a hand maintains.
+    """
+    return Path(config.STATE_DIR) / "workspace-tab-order"
+
+
 def record_tab_order(names: list[str]) -> None:
     """Write down the order THIS PLANE draws its workspace tabs in (#923).
 
@@ -833,9 +864,9 @@ def record_tab_order(names: list[str]) -> None:
         # than being handed one, which is the split `config.mkdir_for` documents. On a
         # plane whose `.charter/` does not exist yet — a first launch — the write below
         # would otherwise answer `ENOENT` and the order would be recomputed on every paint.
-        config.private_mkdir(config.WORKSPACE_TAB_ORDER_FILE.parent)
-        config.replace_for(config.WORKSPACE_TAB_ORDER_FILE,
-                           "".join(f"{n}\n" for n in names))
+        f = _tab_order_file()
+        config.private_mkdir(f.parent)
+        config.replace_for(f, "".join(f"{n}\n" for n in names))
     except OSError:
         return
 
@@ -872,7 +903,7 @@ def tab_order() -> list[str]:
     this process's own charter put there, and the name check is the floor that remains.
     """
     try:
-        lines = config.WORKSPACE_TAB_ORDER_FILE.read_text().splitlines()
+        lines = _tab_order_file().read_text().splitlines()
     except (OSError, ValueError):
         return []
     return [n for n in (line.strip() for line in lines) if valid_name(n)]
@@ -891,7 +922,7 @@ def forget_tab_order() -> None:
     :func:`record_tab_order` does not — this runs inside a reap on a launch path.
     """
     try:
-        config.WORKSPACE_TAB_ORDER_FILE.unlink()
+        _tab_order_file().unlink()
     except OSError:
         pass
 

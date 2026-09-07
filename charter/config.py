@@ -774,23 +774,6 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: keeps its own workspace across restarts — without leaking into other panes.
     d["TERMINALS_DIR"] = state / "terminals"
 
-    #: The order the **workspaces tab strip** draws its names in — one name per line,
-    #: decided once per plane launch and read by every frame (#923). See
-    #: `charter.workspace.tab_order`.
-    #:
-    #: **Here rather than under `.charter/frame/<fid>/`, and that placement IS the fix.**
-    #: #903 put it there, where `frame.state.reap` deletes it with the chat that wrote it
-    #: and where every chat therefore has one of its own — and switching workspaces
-    #: switches chats, so the strip drew a different chat's snapshot after every switch.
-    #: The strip is a plane-wide list, so its order is a plane-wide fact, and it belongs
-    #: beside the other plane-wide, per-developer, machine-written pointers here rather
-    #: than inside a tree whose every path is scoped to one frame by construction and which
-    #: says so in `frame.state.NO_FORMAT_PROMISE`.
-    #:
-    #: Neither committed nor `charter.toml`: it is a machine's reading of which workspaces
-    #: were in use, rewritten whole at the next launch, and nothing a hand maintains.
-    d["WORKSPACE_TAB_ORDER_FILE"] = state / "workspace-tab-order"
-
     #: Persona definitions — **committed** and shared with the team (unlike vaults). A
     #: persona is a directory ``personas/<name>/`` holding ``persona.md`` (the definition),
     #: ``memory/`` and ``refs/`` (persistent, committed knowledge). The legacy flat
