@@ -2487,9 +2487,12 @@ def sweep(root: Path, ref: str, plan: list[Mutation], sources: dict[str, bytes],
     measures the machine it runs on. A scripted clock makes the boundary exact, which is
     what a boundary has to be to be worth asserting.
     """
-    if not plan:
-        return [], []
-
+    # No `if not plan: return` here any more, and its absence is the point (#920). The
+    # caller decides that now — before a sandbox, a map or a baseline — so a guard here
+    # could never be the one that fires, and this file's own rule (see `shard_of`) is that
+    # a line the suite would not miss gets deleted rather than kept for shape. Two places
+    # holding one rule is #670 in miniature: the day they disagree, one of them is wrong
+    # and nothing can say which.
     log(f"  building {jobs} sandbox(es)…")
     boxes = [Sandbox(root, run_dir(workdir) / f"w{i}", ref, dirty) for i in range(jobs)]
     for box in boxes:
