@@ -6763,6 +6763,7 @@ class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
         self.assertEqual(got, {"conclusion": "nothing", "headline": "nothing to sweep"})
         # The sentence the release actually published, and the one that must not come back.
         self.assertNotIn("did not report", said)
+        self.assertIn("0 shard(s) refused", said)
 
     def test_a_charged_file_with_no_mutation_gets_the_same_banner_as_an_unchanged_tree(self):
         """Two ways to sweep nothing, one answer, and one page. They used to print
@@ -6836,8 +6837,25 @@ class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
         self.assertIn("Refused — a shard swept nothing", page)
         self.assertIn("`tests.test_x.T.test_y`", page)
         self.assertIn("This is not a shard that died", page)
+        # And it is a row in the outcome table too, not only a section further down: the
+        # table is what a reader counts, and a bucket missing from it is a bucket they
+        # conclude was zero. A bare count and no `N of M` — see the row's own note.
+        self.assertIn("| **refused** | 1 | a shard that swept nothing", page)
         # The alarming paragraph about a vanished runner belongs to the other state.
         self.assertNotIn("Did not report", page)
+        self.assertNotIn("**did not report**", page)
+        # A gate with nothing refused carries neither, and that is what makes the row
+        # above evidence rather than decoration.
+        clean = sweep.gate_summary(sweep.classify([]), "a" * 40, "b" * 40, None, False)
+        self.assertNotIn("refused", clean)
+
+    def test_a_refusal_with_no_test_to_name_still_gets_a_row(self):
+        """`detail` defaults to empty, and a table cell that renders `None` or nothing at
+        all reads as a page that lost a column rather than as a refusal with no test to
+        name."""
+        gate = sweep.classify([], [sweep.Refusal(sweep.RED_BASELINE)])
+        page = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False, 0, 1)
+        self.assertIn("| the baseline is red | — |", page)
 
     def test_five_shards_on_one_red_tree_say_it_once(self):
         """A check's name is read at a glance or not at all, so the reason is said per
@@ -6846,6 +6864,20 @@ class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
                                    for n in range(5)])
         self.assertEqual(sweep.headline(gate, 0, 5),
                          "no verdict: 5 shards refused: the baseline is red")
+
+    def test_two_reasons_arrive_in_the_order_the_shards_did(self):
+        """A check NAME that reorders itself between two runs of one branch is a check
+        nobody can compare to yesterday's, and `sorted(set(...))` was the wrong way to get
+        that: the `set` is what makes the order a `PYTHONHASHSEED` question, and no test
+        can pin the `sorted` that hides it — `list(set(...))` agrees on most seeds. So the
+        reasons keep the order they arrived in, which is `merge`'s filename order, and this
+        case is that order said out loud rather than a sort nothing could hold."""
+        gate = sweep.classify([], [sweep.Refusal("the sandbox would not build", "b"),
+                                   sweep.Refusal("the baseline is red", "a")])
+        self.assertEqual(
+            sweep.headline(gate, 0, 2),
+            "no verdict: 2 shards refused: the sandbox would not build; "
+            "the baseline is red")
 
     # ----------------------------------------------------------------------------------
     # The file the shard writes, and what a reader that cannot name it does.
@@ -6860,6 +6892,12 @@ class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
         self.assertEqual((rows, why), ([], None))
         rows, why = sweep.shard_report(sweep.as_refusal("the baseline is red", "t"))
         self.assertEqual((rows, why), ([], sweep.Refusal("the baseline is red", "t")))
+        # `detail` is read with a fallback and `refused` is not, and the asymmetry is the
+        # point: the reason is what makes the file a refusal at all, and the evidence is
+        # something a writer may not have. A `KeyError` on the second would turn a shard
+        # that answered into one that did not report, over a missing test name.
+        rows, why = sweep.shard_report('{"refused": "the baseline is red"}')
+        self.assertEqual((rows, why), ([], sweep.Refusal("the baseline is red", "")))
 
     def test_an_object_this_reader_cannot_name_is_a_shard_that_did_not_report(self):
         """#914's rule, applied to this file. A reader that cannot name the shape in front
@@ -6909,6 +6947,9 @@ class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
                          "no verdict: 1 shard refused: the baseline is red")
         self.assertNotIn("did not report", got["headline"])
         self.assertIn("`tests.test_x.T.test_y`", summary.read_text())
+        # The log's inventory names the bucket, and names it whether or not it fired: a
+        # term that only appears when something goes wrong teaches nobody it exists.
+        self.assertIn("1 shard(s) refused", said)
 
 
 class _RedBaseline:

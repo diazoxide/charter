@@ -3606,9 +3606,18 @@ def headline(gate: Gate, missing: int = 0, shards: int = 1) -> str:
     # is not a mystery (#920). Distinct reasons and not one per shard — five shards on a
     # red tree are one fact said once, and a check name that repeats it five times is a
     # check name nobody finishes reading.
+    #
+    # `dict.fromkeys` and not `sorted(set(...))`, and the hand sweep on this branch is why.
+    # A `set` of strings iterates in an order `PYTHONHASHSEED` decides, so the `sorted`
+    # around it was the only thing keeping this NAME the same between two runs of one
+    # branch — and nothing could pin it there: `list(set(...))` agrees with `sorted` on
+    # most seeds and disagrees on the rest, so a test either passes for the wrong reason or
+    # flakes. A guard no test can hold is a guard this harness cannot hold itself to, and
+    # the answer is not to need one. `dict.fromkeys` dedupes in the order the reasons
+    # arrived, and they arrive in `merge`'s filename order, which does not move.
     if gate.refused:
         unsure.append(f"{_plural(len(gate.refused), 'shard', 'shards')} refused: "
-                      + "; ".join(sorted({r.reason for r in gate.refused})))
+                      + "; ".join(dict.fromkeys(r.reason for r in gate.refused)))
     if missing:
         unsure.append(f"{missing} of {_plural(shards, 'shard', 'shards')} did not report"
                       if shards >= 1 else "the sweep never sized itself")
@@ -3785,9 +3794,14 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
     w("")
     w("| outcome | n | what it means |")
     w("|---|---:|---|")
+    # A bare count and not the row below's `N of M`. A denominator is what makes "did not
+    # report" mean anything — six of eight is a different page from one of eight — and it
+    # is exactly what a refusal does not need: "2 refused" is complete on its own. The
+    # denominator this row started with brought a `shards >= 1` branch with it that nothing
+    # could reach, which is what the hand sweep on this branch found.
     if gate.refused:
-        w(f"| **refused** | {f'{len(gate.refused)} of {shards}' if shards >= 1 else '?'}"
-          " | a shard that swept nothing and said why — read nothing below as a count |")
+        w(f"| **refused** | {len(gate.refused)} | a shard that swept nothing and said "
+          "why — read nothing below as a count |")
     if missing:
         w(f"| **did not report** | {f'{missing} of {shards}' if shards >= 1 else '?'} | "
           "a shard that never wrote a result — read nothing below as a count |")
@@ -4472,8 +4486,11 @@ def _say(args, gate: Gate, log, missing: int = 0, shards: int = 1) -> None:
         f"{len(gate.platform)} platform-deferred, {len(gate.unresolved)} unresolved, "
         f"{len(gate.out_of_time)} out of time, "
         f"{len(gate.unapplied)} not applied, {len(gate.withheld)} withheld, "
-        f"{gate.pinned} pinned"
-        + (f", {len(gate.refused)} shard(s) refused" if gate.refused else ""))
+        # Always, like every other bucket on this line, and not only when it is non-zero.
+        # This line is an inventory: a reader counts it once and knows what the vocabulary
+        # is. A term that appears only when it fires teaches nobody it exists, and the
+        # conditional it took to hide it was a survivor on this branch's own sweep.
+        f"{gate.pinned} pinned, {len(gate.refused)} shard(s) refused")
     log(f"gate: {headline(gate, missing, shards)}")
     if not args.enforce:
         log("gate: reporting only — nothing here blocks. Pass --enforce to make it.")
@@ -4608,7 +4625,11 @@ def _merge_step(args) -> int:
     #617 there were N step summaries and no sentence at all.
     """
     shards = expected_shards(args.shards)
-    results, missing, refused = merge(Path(args.verdict), max(shards, 1))
+    # `shards` and not `max(shards, 1)`: the floor was dead, and the sweep on this branch
+    # is what said so. `shards` is 0 exactly when the plan never sized itself, and the two
+    # lines below force `missing` to at least 1 in that case — so a floor here only ever
+    # computed the same answer twice, in the place where the answer is less legible.
+    results, missing, refused = merge(Path(args.verdict), shards)
     # `shards` stays 0 when the plan never answered, and travels that way: everything
     # downstream renders "how many did not report" differently from "how many there were
     # supposed to be is not known", and flattening the second into `1 of 1` would report
