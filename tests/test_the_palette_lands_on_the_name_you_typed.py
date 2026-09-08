@@ -114,8 +114,15 @@ class TypingAWholeNameLandsOnIt(unittest.TestCase):
 
     def test_the_row_the_cursor_starts_on_is_one_that_can_run(self):
         """The second half of the report, said about the palette rather than about
-        `narrow`: a `Palette` puts its cursor at 0, so "first" and "under the cursor" are
-        the same row and the surface is where that is worth pinning."""
+        `narrow`: the surface is where "which row is first" becomes "which row Enter is
+        aimed at", so it is the place worth pinning it.
+
+        **Two rules make this the answer and #931 separated them.** `narrow` sorts an exact
+        match that can run ahead of one that cannot; `palette.aim` then puts the cursor on
+        the first row that can run at all. Here they agree. A two-row surface whose first
+        row is refused with nothing typed is where they would not, and
+        `tests/test_the_palette_aims_enter_at_a_row_that_can_run.py` is that half.
+        """
         p = palette.Palette(catalogue=_DOORWAYS + _ACTIONS,
                             query_only=lambda: _NAMES)
         for ch in "alpha":
