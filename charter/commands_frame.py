@@ -9413,6 +9413,13 @@ def cmd_close(args) -> int:
                 "not come back")
         return 0
     _warn_about(p, on=fid if fid != target else "", verb=leave.CLOSE)
+    # **Move the operator off the chat that is about to stop, while it still HAS a window**
+    # (#933, and see the function). This sits in front of the mark rather than after the
+    # kill because it is a switch and not a teardown: `cmd_chat` establishes where the
+    # asking chat is standing before it aims anything, and refuses outright when that
+    # window is gone — so the same call one line later would be a refusal, and the same
+    # call after the kill would be the refusal it was written to be.
+    _hand_the_client_a_frame(target, fid=fid)
     # The mark FIRST, for `cmd_quit`'s ordering reason turned around: this is the record,
     # and a record written after the kill it describes is one a crash in between loses.
     # Losing it here is not merely untidy — it is the chat coming back after the operator
@@ -9425,7 +9432,6 @@ def cmd_close(args) -> int:
         util.err(f"charter frame-close: tmux would not stop chat {target} — it is marked "
                  "closed and will not be reopened, but its harness may still be running")
         return 1
-    _hand_the_client_a_frame(target, fid=fid)
     util.ok(f"charter: closed {target} — it will not be reopened")
     return 0
 
@@ -9461,29 +9467,44 @@ def _hand_the_client_a_frame(closed: str, *, fid: str) -> None:
     so a switch would drag them off the chat they were reading to answer a question they did
     not ask. *fid* is the presser's chat (`_pressers_chat`) and *closed* is the target; they
     differ on exactly that path, which is the same distinction `_warn_about`'s ``on=`` makes
-    two lines up.
+    one line up.
+
+    **Before the kill, in this process, and both halves are the design rather than taste.**
+    `cmd_chat` step 0 asks tmux where the ASKING chat is standing before it aims anything,
+    and refuses when that window cannot be found — *"a switch that cannot establish where it
+    is standing must not tear anything down"*. After a `kill-window` that is exactly the
+    state, so a switch started afterwards is a switch written to refuse; and a switch started
+    DETACHED would race the kill for the same reading. Going first also means the operator
+    never sees the bare window at all: they are moved off the doomed chat while it still has
+    a frame, and its window dies behind them. This function is only ever reached from a
+    `frame-close` that is itself a detached child (`_start_leaving`) or an operator's own
+    foreground command, so the switch's ~20 round trips are nobody's paint loop —
+    `_start_chat_switch` detaches because the PALETTE cannot wait, and that is not this.
+
+    **`cmd_chat` and not a layout of its own**, which is the same front door a tab click, a
+    palette row and a typed switch all use. A second in-process layout here would be a
+    second answer to "how does a chat get its frame", and the day either moved they would
+    part. Its refusals go to `_say_on_screen` on the closing chat, which is a row about to
+    stop existing — deliberately: there is nothing an operator can do about a switch that
+    could not happen, and the close itself is still going to succeed.
 
     **The first surviving chat of the closed chat's workspace, which is the first TAB.**
-    `chats.of_workspace` is the strip's own order and already drops the chat just marked
-    closed (#930), so what the operator lands on is the leftmost tab they can see. tmux has
-    by then put them on whichever window it chose, which is not necessarily that one — a
-    second move is one `select-window`, and landing somewhere the strip explains is worth
-    it. No survivor means the session's last window has gone with the chat, so the client is
-    already detached and there is nothing to hand it: **not a refusal, and nothing is said
-    about it**, because the operator asked to close a chat and that is what happened.
-
-    `builtin_actions._spawn` and never in-process, for `_start_chat_switch`'s measured
-    reason: this process is about to have its own pane killed by `_close_palette`, and
-    `kill-pane` hands SIGHUP to the group.
+    `chats.of_workspace` is the strip's own order, and the closed chat is dropped here by
+    name rather than by its marker: the mark is written AFTER this call, so #930's scan
+    still lists it. No survivor means this was the workspace's last chat, and killing a
+    session's last window ends the session (measured, `_stop_chats`) — the client is going
+    to be handed back its terminal, which is the right outcome and not one to switch away
+    from. **Not a refusal, and nothing is said about it**, because the operator asked to
+    close a chat and that is what happened.
     """
+    from types import SimpleNamespace
     if fid != closed:
         return
     ws = state.own_workspace(closed) or ""
-    survivors = chats.of_workspace(ws) if ws else []
+    survivors = [c for c in chats.of_workspace(ws) if c != closed] if ws else []
     if not survivors:
         return
-    builtin_actions._spawn(util.self_relaunch_argv("frame-chat", survivors[0]),
-                           fid=closed)
+    cmd_chat(SimpleNamespace(chat_id=survivors[0], chat=closed))
 
 
 def _repaint_the_other_strips(closed: str) -> None:
