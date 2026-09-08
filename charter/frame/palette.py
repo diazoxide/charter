@@ -47,6 +47,11 @@ that does not have it.
 position the catalogue gave it — see :func:`narrow`, which states the whole ordering rule
 and why the two things it does not do (score, cap) are still not done.
 
+*Enter is aimed at a row that CAN run* (#931). :func:`aim` is one line, and it is the line
+six docstrings and `docs/frame.md` had already promised was there — see it for what the
+promise said, what the code did instead, and why the ordering guard built on top of the
+promise is unharmed by the promise coming true.
+
 **The query never reaches a parser.** It is built one keypress at a time out of
 `overlay.decode`'s printable single-character events, so no newline and no escape
 sequence can enter it; it is nevertheless contained before it is measured or drawn, for
@@ -235,15 +240,74 @@ def narrow(catalogue: Iterable[overlay.Row], query: str) -> tuple[overlay.Row, .
 
     **The "no ranking" this replaces defended itself with a property this class does not
     have.** It argued that reordering "would move the row under the cursor out from under
-    it between keystrokes" — but `Palette._refilter` sets the selection back to the top on
-    every single edit, deliberately and with its own docstring saying so. There was no row
-    under the cursor to move. The real cost of reordering is that the LIST reads
-    differently, which is why the sort is two buckets rather than a score: with nothing
-    typed, no row is an exact match for `""`, so `F2` draws exactly the list it drew
-    before this function learned to sort.
+    it between keystrokes" — but `Palette._refilter` re-aims the cursor on every single
+    edit, deliberately and with its own docstring saying so. There was no row under the
+    cursor to move. The real cost of reordering is that the LIST reads differently, which
+    is why the sort is two buckets rather than a score: with nothing typed, no row is an
+    exact match for `""`, so `F2` draws exactly the list it drew before this function
+    learned to sort.
+
+    **This decides the ORDER and :func:`aim` decides the CURSOR, and #931 is what happens
+    when one function is asked to be both.** The second bucket key here (`r.refused`) is
+    this function's whole opinion about refusals, and it applies only to rows the operator
+    typed the whole name of — a two-row menu where the first row is refused and nothing has
+    been typed sorts unchanged, correctly, and used to open with Enter bound to nothing all
+    the same.
     """
     kept = [r for r in catalogue if matches(query, r)]
     return tuple(sorted(kept, key=lambda r: (0, r.refused) if exact(query, r) else (1, 0)))
+
+
+def aim(rows: Iterable[overlay.Row]) -> int:
+    """Where the cursor opens: **the first row that can run**, and 0 when none can.
+
+    **This sentence was already charter's rule; it was simply not charter's code** (#931).
+    `leave.open_rows`, `commands_frame._catalogue`, `commands_frame._as_a_drawer`,
+    `tabmenu.catalogue`, `docs/frame.md` and a shipped release note all say *the cursor
+    starts on the first row that can run*, and each of them puts a destructive row at the
+    bottom of a list on the strength of it. What `Palette._refilter` actually did was
+    ``self._sel = 0`` — the first row, refused or not — so every one of those six was
+    reasoning from a premise the implementation did not keep.
+
+    **The report is what a two-row surface does to that gap.** `frame/tabmenu.catalogue`
+    lists the transcript row and then close; a chat that has never been quit has no capture,
+    which is the ordinary state of a chat running normally, so the menu the chat strip's `-`
+    opens arrived with the cursor on a row that cannot run. Press `-`, press Enter, and the
+    surface closes having started nothing — one keystroke from the report #929 came from,
+    reached by a different route and on the commonest state a chat is in.
+
+    **The two rules were never actually in conflict, and that is the resolution.** *Do not
+    open on a row that does nothing* and *do not open on a destructive row* look opposed on
+    a two-row menu where one row is usually refused, but the second rule is enforced by
+    ORDER — the destructive row is last — and the first is enforced HERE, by which of the
+    listed rows the cursor is put on. Making this true is what lets the ordering guard
+    finally mean what it says: every row above `chat: close` in `F2`'s catalogue can run,
+    so `F2 Enter` still cannot reach it, and it reaches it no more easily than before
+    because nothing here moves a row.
+
+    **What was rejected, because each is a worse answer to the same report:**
+
+    * *Opening with NO row selected, and saying so.* `overlay.Surface.selected` answers
+      ``None`` for one thing today — *there are no rows* — and a second meaning would be
+      indistinguishable at every call site: `tabmenu.act` and `commands_frame._draw_palette`
+      both read ``None`` as a CANCEL, so Enter on an unaimed surface would tear the pane
+      down silently and change nothing. That is the reported defect reintroduced by its own
+      fix.
+    * *Reordering the tab menu so close comes first.* `leave.open_rows`' guard, at the one
+      surface that opens under a pointer instead of a keypress.
+    * *Dropping a refused row from the list.* #512, and `narrow` says it again: an option
+      you cannot see is one you cannot ask about.
+    * *Skipping refused rows under the arrow keys too.* An operator pressing `down` is
+      aiming for themselves, and a list that will not stop on a row is a list whose reason
+      column cannot be read. Only the OPENING position is charter's to choose.
+
+    **Zero, and not −1, when nothing can run.** A surface where every row is refused is not
+    a surface whose cursor lies — `leave.confirm_rows`' nothing-left-to-stop plan is exactly
+    one such row, and it says so in its title. The cursor sits on it, Enter answers with its
+    note, and there is no second index state for the window arithmetic in
+    `overlay.Surface._window` to be handed.
+    """
+    return next((i for i, r in enumerate(rows) if not r.refused), 0)
 
 
 @dataclass
@@ -329,14 +393,21 @@ class Palette(overlay.Surface):
     def _refilter(self) -> None:
         """Recompute the visible rows, the header, and where the cursor sits.
 
-        The selection goes back to the top on every edit, deliberately: after a keystroke
-        the operator is looking at a different list, and keeping an index into the old one
+        The selection is re-aimed on every edit, deliberately: after a keystroke the
+        operator is looking at a different list, and keeping an index into the old one
         would leave the cursor on whichever row happened to land in that position.
         `_top` follows it because `Surface._window` recomputes from the selection, so
         there is no second scroll state to keep in step.
+
+        **Where it is re-aimed TO is :func:`aim`, and it was ``0`` until #931** — the
+        first row rather than the first row that can run, which is not what a single
+        docstring in this repository claimed and is what a `-` on a chat with no
+        transcript pressed Enter into. This is the one call site, so there is one answer
+        to *where does the cursor open*: the opening position and every re-aim after a
+        keystroke are the same rule rather than two that can drift.
         """
         self.rows = narrow(self._reachable(), self.query)
-        self._sel = 0
+        self._sel = aim(self.rows)
         self._top = 0
         self.said = ""
         self._headline()

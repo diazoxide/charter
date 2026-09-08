@@ -184,6 +184,46 @@ def catalogue(target: str) -> tuple[overlay.Row, ...]:
     that has never been quit has no transcript, which is the ordinary state of a chat
     running normally, and an operator cannot ask about an option they cannot see.
 
+    **And that sentence is FRONT-LOADED, which is the half #931 asked about.** The note is
+    the right-hand column and `overlay._title_width` splits the pane between the two, so on
+    a two-row menu it is truncated on any real terminal: `no previous transcript for…` at 60
+    columns, `…for this chat — one is captured when…` at 120. What survives every one of
+    those cuts is the answer to *why can this not run*, because that clause is first; the
+    clause about how a transcript comes to exist is the one that goes. A rewording that led
+    with `one is captured when a plane is quit` would read better whole and would leave an
+    operator who has just pressed `-` looking at a row with no reason on it at all.
+
+    **Which is the state that broke this surface, and the fix is not here** (#931). The two
+    facts above are each correct and together they made a two-row menu whose first row is
+    usually refused — so `-` then Enter started nothing at all, on the commonest state a
+    chat is in, one keystroke from the report #929 came from. The cursor is what was wrong,
+    not the order: `palette.aim` now opens it on the first row that CAN run, which is what
+    the paragraph above always claimed happened.
+
+    **So on a chat with no capture the cursor opens on `chat: close`, and that is the
+    answer rather than a cost accepted quietly.** It is defensible on this surface and on
+    no other, for a reason this menu can state and `F2` cannot:
+
+    * the row is a **doorway** — :func:`chose` refuses it by id and :func:`opens` replaces
+      the surface with `leave.confirm_rows` — so the Enter under the cursor draws the
+      warning that names the chat, and a second, deliberate Enter on a row that says *stop
+      it and do not bring it back* is what stops anything. `leave.open_rows`' guard is about
+      the number of keypresses between an operator and an irreversible answer, and there
+      are still two, with the whole warning drawn between them;
+    * `F2` is opened without a target and carries every row charter has, so a destructive
+      row under its cursor would be a trap for an operator who came for something else.
+      This menu has no something else: it is opened AT one chat, by `slots.CLOSE_CHAT` — a
+      `-` whose own docstring says *a pointer opens the question; the keyboard answers it*
+      — or by a right press on that chat's tab, and both of its rows are about that chat;
+    * and the alternative is the defect. A cursor on the refused row spends the operator's
+      Enter on nothing, and a cursor on no row at all cannot be told from a cancel
+      (`palette.aim` lists what that costs at every call site).
+
+    Nothing is added to make the cursor somewhere harmless to sit. A third row — `chat:
+    switch to <target>`, say — would be a row that exists for the cursor rather than for
+    the operator, and this module's scope argument above is what refuses it: switching is
+    about the FRAME, and the menu's two rows are the ones a TAB has.
+
     No plan is built here and nothing is scanned. `frame/leave.open_rows` makes the same
     promise for the same reason: the operator is not deciding while a menu is merely open,
     and the warning belongs at the moment they are (§4f).

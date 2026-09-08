@@ -257,6 +257,11 @@ first. Close is a doorway, not a button: pressing it draws the same warning `F2 
 close` draws, naming the chat and what stopping it costs, and the keypress on *that* is what
 stops the harness. Escape leaves, `F12` always leaves, and nothing is stopped by a pointer.
 
+A chat that has never been quit has no transcript, so on most chats the first row is refused
+— it stays on the menu with its reason beside it, and the cursor opens on `chat: close`
+underneath, because that is the row `Enter` can actually answer. Two keypresses still stand
+between the menu and a stopped harness, and the warning is drawn between them.
+
 **A confirmation is a drawer; the palette is the whole window.** The palette and the pickers
 zoom over the frame because they are lists that scroll and have no length limit. A
 confirmation is one question with its answer at the top, so it gives the window back and
@@ -763,6 +768,11 @@ one a right-click on that tab opens — whose `chat: close` row draws the warnin
 chat and what stopping it costs, and the keypress on *that* is what stops it. A pointer
 opens the question; the keyboard answers it, which is why making a chat may happen on a
 press and unmaking one may not.
+
+`-` then `Enter` reaches that warning on a chat with no transcript, because the cursor opens
+on the row that can run. It did not until 0.60.0: the menu opened on the refused transcript
+row, `Enter` started nothing, and a `-` that did nothing twice reads as a `-` that does not
+work.
 
 It is one glyph at the end of the row rather than a `×` on every tab, because a per-tab
 affordance would cost a column on every tab and move every one of them the moment a chat
@@ -2471,8 +2481,8 @@ chats was last in front of you.
 
 ```
 charter · 16 to choose from
->   workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
-    persona: steward — pick another
+    workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
+>   persona: steward — pick another
     detach — leave the harness running
     repo: select the next row
     repo: select the previous row
@@ -2507,6 +2517,14 @@ list; see *Leaving* below for what those two do.
 An option you cannot see is one you cannot ask about, so a row that is refused stays and
 says what would make it available. The reason is the right-hand column. A refused row is
 listed lower than a row you typed the whole name of, and never dropped.
+
+**The cursor opens on the first row that can run, and it skips a refused row to get
+there** — which is why the `>` above is on the second row and not the first. A refused row
+stays exactly where it is in the list, so this moves the cursor and not the rows: what you
+can see does not change, and `Enter` is never aimed at a row that would answer it with
+nothing. `up`/`down` still stop on every row, refused or not, because that is how you read
+the reason beside one. Where nothing in a list can run, the cursor sits on the first row
+and `Enter` says why.
 
 **Every row reserves the `*` column, whether or not it has a mark to put in it** — the
 frame's one-inset rule, applied here. Four cells stand in front of every row's text: two
