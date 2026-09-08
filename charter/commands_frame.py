@@ -1865,6 +1865,16 @@ def _live_chats(socket: str) -> set[str] | None:
     strings, so no test can tell the guard from its own mutation. Stripping into a name
     and asking whether the NAME is empty says the same thing once, and both halves are
     then pinnable — `tests/test_frame_launcher.TheChatListIsParsedLineByLine` pins them.
+
+    **This is NOT filtered by plane, and its sibling :func:`_chat_seats` is** (#933). They
+    read one option off one server and they are used in opposite directions, which is the
+    whole of the difference. That one names the window a `kill-window` is aimed at, so
+    another plane's row in it is a destructive act on a target nobody chose. This one is a
+    KEEP list: `state.reap` deletes the state of every chat that is not in it, so an answer
+    polluted by another plane's chats over-keeps a directory and can never remove one that
+    is running — the same direction the tri-state above is chosen for, arrived at from the
+    other side. Narrowing it would make `reap` delete MORE, which is the dangerous
+    direction and needs its own argument rather than this one's.
     """
     out = tmuxctl.run("listing the chats already running",
                       tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
