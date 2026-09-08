@@ -234,6 +234,22 @@ class TheTabMenuAimsEnterAtSomethingItCanDo(PersonaIso, unittest.TestCase):
         self.assertIn("no previous transcript for this chat", drawn)
         self.assertIn("chat: previous transcript", drawn)
 
+    def test_the_reason_survives_the_width_every_real_pane_truncates_it_to(self):
+        """**#931's second question, and it is about word order rather than about the
+        note.** `overlay._title_width` splits the pane between the title and the reason, so
+        on a two-row menu the reason is cut on every terminal anyone has: at 60 columns the
+        operator gets `no previous transcript for…` and at 120 `…one is captured when…`.
+
+        What has to survive the cut is the answer to *why can this not run*, and it does
+        because that clause is first. A rewording that led with how a transcript comes to
+        exist would read better whole and would leave a `-` presser looking at a row with no
+        reason on it at all — so this asserts the visible prefix, not the note.
+        """
+        for width in (60, 72, 80, 96, 120, 200):
+            drawn = "\n".join(self._menu().render(width, 8))
+            self.assertIn("no previous transcript for", drawn,
+                          f"the reason is cut past its answer at {width} columns:\n{drawn}")
+
     def test_a_chat_WITH_a_transcript_still_opens_on_its_transcript_row(self):
         """The negative control the case above needs, and the compatibility claim: nothing
         about a chat that has a capture changes. The cursor is on the first row because the

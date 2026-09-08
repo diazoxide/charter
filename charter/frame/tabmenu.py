@@ -184,6 +184,15 @@ def catalogue(target: str) -> tuple[overlay.Row, ...]:
     that has never been quit has no transcript, which is the ordinary state of a chat
     running normally, and an operator cannot ask about an option they cannot see.
 
+    **And that sentence is FRONT-LOADED, which is the half #931 asked about.** The note is
+    the right-hand column and `overlay._title_width` splits the pane between the two, so on
+    a two-row menu it is truncated on any real terminal: `no previous transcript for…` at 60
+    columns, `…for this chat — one is captured when…` at 120. What survives every one of
+    those cuts is the answer to *why can this not run*, because that clause is first; the
+    clause about how a transcript comes to exist is the one that goes. A rewording that led
+    with `one is captured when a plane is quit` would read better whole and would leave an
+    operator who has just pressed `-` looking at a row with no reason on it at all.
+
     **Which is the state that broke this surface, and the fix is not here** (#931). The two
     facts above are each correct and together they made a two-row menu whose first row is
     usually refused — so `-` then Enter started nothing at all, on the commonest state a
