@@ -72,7 +72,7 @@ def _row(rid: str, *, refused: bool = False) -> overlay.Row:
 
 
 class TheCursorOpensOnTheFirstRowThatCanRun(unittest.TestCase):
-    """`palette.aim` on its own, over the four shapes a list of rows comes in."""
+    """`palette.aim` on its own, over the five shapes a list of rows comes in."""
 
     def test_a_runnable_first_row_keeps_the_cursor_where_it_always_was(self):
         """The compatibility claim this whole change rests on: `F2`'s catalogue leads with
