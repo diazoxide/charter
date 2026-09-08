@@ -45,8 +45,9 @@ import os
 import time
 import unittest
 from types import SimpleNamespace
+from unittest import mock
 
-from charter import commands_frame, config
+from charter import commands_frame
 from charter.frame import chats, leave, slots, state
 
 from tests._isolation import PersonaIso, make_plane
@@ -394,6 +395,86 @@ class AWindowOnANOTHERPlaneIsNotThisPlanesChat(PersonaIso, unittest.TestCase):
     def _window_id(self, pane: str) -> str:
         return self._tmux("display-message", "-p", "-t", pane,
                           "#{window_id}").stdout.strip()
+
+
+class WhichChatACloseHandsYou(PersonaIso, unittest.TestCase):
+    """`_hand_the_client_a_frame`, asked directly — the three branches a real frame cannot
+    all turn red.
+
+    The tmux class above measures the outcome an operator sees, and it is the one that
+    matters; what it cannot do is distinguish "the switch was skipped" from "the switch ran
+    and happened to land where the client already was". Two of these branches are exactly
+    that shape, so they are asked here, of the function, with `cmd_chat` standing in for the
+    switch it would start.
+    """
+
+    WS = "alpha"
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+        self.enterContext(mock.patch.object(
+            commands_frame, "cmd_chat",
+            side_effect=lambda args: self.asked.append(args.chat_id)))
+
+    def _plant(self, *chats_):
+        for chat in chats_:
+            state.frame_dir(chat, create=True)
+            state.record_workspace(chat, self.WS)
+
+    def test_closing_your_own_chat_hands_you_the_first_surviving_tab(self):
+        self._plant(f"{self.WS}.1", f"{self.WS}.2")
+
+        commands_frame._hand_the_client_a_frame(f"{self.WS}.1", fid=f"{self.WS}.1")
+
+        self.assertEqual(self.asked, [f"{self.WS}.2"])
+
+    def test_the_chat_being_closed_is_never_what_you_are_handed(self):
+        """**The mark has not been written yet when this runs**, deliberately — the switch
+        has to go before the kill, and `state.record_closed` goes with the kill. So the
+        chat about to stop is still on `chats.of_workspace`'s list (#930 drops it from the
+        moment it is marked, which is later), and it is dropped here by name.
+
+        The case closes the FIRST tab, because that is the only one where the difference
+        shows: with the closed chat second, the first survivor is the right answer whether
+        or not anything filtered it out, and `chats.check` would then refuse the switch as
+        *already here* — silently, on a row nobody can read.
+        """
+        self._plant(f"{self.WS}.1", f"{self.WS}.2", f"{self.WS}.3")
+
+        commands_frame._hand_the_client_a_frame(f"{self.WS}.1", fid=f"{self.WS}.1")
+
+        self.assertEqual(self.asked, [f"{self.WS}.2"])
+
+    def test_closing_another_tab_hands_you_nothing(self):
+        """A close aimed at a chat you are not in moves nobody. Without this branch the
+        switch would fire on every close and drag the operator off the chat they were
+        reading — and on the two-chat frame above it would land them where they already
+        were, which is the shape no end-to-end case can see."""
+        self._plant(f"{self.WS}.1", f"{self.WS}.2")
+
+        commands_frame._hand_the_client_a_frame(f"{self.WS}.1", fid=f"{self.WS}.2")
+
+        self.assertEqual(self.asked, [])
+
+    def test_the_workspaces_last_chat_hands_you_nothing(self):
+        """Killing a session's last window ends the session and gives the client its
+        terminal back, which is the right outcome and not one to switch away from."""
+        self._plant(f"{self.WS}.1")
+
+        commands_frame._hand_the_client_a_frame(f"{self.WS}.1", fid=f"{self.WS}.1")
+
+        self.assertEqual(self.asked, [])
+
+    def test_a_chat_with_no_recorded_workspace_hands_you_nothing(self):
+        """`state.own_workspace` answers ``None`` for the migration case (`leave.plane_chats`
+        is the scan that exists for it), and a workspace charter cannot name has no roster to
+        pick a survivor from. Nothing is guessed at."""
+        state.frame_dir(f"{self.WS}.1", create=True)
+
+        commands_frame._hand_the_client_a_frame(f"{self.WS}.1", fid=f"{self.WS}.1")
+
+        self.assertEqual(self.asked, [])
 
 
 if __name__ == "__main__":

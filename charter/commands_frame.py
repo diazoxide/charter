@@ -9500,7 +9500,7 @@ def _hand_the_client_a_frame(closed: str, *, fid: str) -> None:
     from types import SimpleNamespace
     if fid != closed:
         return
-    ws = state.own_workspace(closed) or ""
+    ws = state.own_workspace(closed)
     survivors = [c for c in chats.of_workspace(ws) if c != closed] if ws else []
     if not survivors:
         return
