@@ -1180,6 +1180,21 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
         self.assertTrue(row.endswith(self.TAIL), repr(row))
         self.assertEqual(self._minus(), self._plus() + 2, repr(row))
 
+    def test_a_press_on_the_minus_opens_the_surface_it_promises(self):
+        """**The positive half, without which the negative below measures nothing** (#929).
+
+        Every other assertion about the `-` says what it did NOT do, and a `-` wired to
+        nothing at all passes all of them. This is the one that says the press ARRIVED: a
+        real pane, carved off the harness by a real detached `charter frame-palette --tab`,
+        which is the same observable `tests/test_a_real_click_opens_the_real_palette.py`
+        uses for the doorway on the attention row.
+        """
+        before = set(self._panes(self.WS))
+        self._click(self.bar, col=self._minus())
+        self.assertTrue(_await(lambda: set(self._panes(self.WS)) - before, timeout=15.0),
+                        "a press on the `-` opened no pane, so every case in this class "
+                        "that asserts the `-` destroyed nothing is measuring an empty room")
+
     def test_a_press_on_the_minus_stops_nothing_and_makes_nothing(self):
         """**§4i end to end for the one gesture that could destroy something.** What the
         `-` starts is `charter frame-palette --tab <this chat>` — a SURFACE — so after a

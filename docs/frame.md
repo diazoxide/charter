@@ -1127,6 +1127,15 @@ back. Closing does **not** refuse while that chat's harness is working: charter'
 tracker records no chat on any of its entries, so there is no reading to refuse on, and the
 confirmation says the chat will not come back instead of pretending to check.
 
+**And the tab goes.** A closed chat leaves every chat strip on the plane and stops being
+counted beside its workspace's tab, from the moment it is marked — the other chats are woken
+so their strips redraw rather than waiting for whatever would have repainted them next. Until
+0.60.0 they did not: the close did every other part of its job, the tab stayed, and pressing
+it answered `cannot switch: chat 'x' has no window any more` for as long as that chat's state
+directory survived. The one tab that stays is the chat you are closing *from*, for as long as
+its window is still being torn down — a strip that dropped the chat you are typing in would be
+drawing a list you are not in.
+
 **What quit stops is this plane, and nothing else on the machine.** One tmux server serves
 every frame on a machine and session names carry no plane — `default` is a name every plane
 has — so quit works from *this* plane's chat directories and kills one window at a time, never

@@ -9371,6 +9371,7 @@ def cmd_close(args) -> int:
         # "was open" and bring back uninvited.
         state.record_closed(target)
         _forget_transcript(target)
+        _repaint_the_other_strips(target)
         util.ok(f"charter: chat {target} was already stopped — marked closed, so it will "
                 "not come back")
         return 0
@@ -9381,6 +9382,7 @@ def cmd_close(args) -> int:
     # closed it.
     state.record_closed(target)
     _forget_transcript(target)
+    _repaint_the_other_strips(target)
     stopped = _stop_chats(doomed, windows=windows)
     if not stopped:
         util.err(f"charter frame-close: tmux would not stop chat {target} — it is marked "
@@ -9388,6 +9390,42 @@ def cmd_close(args) -> int:
         return 1
     util.ok(f"charter: closed {target} — it will not be reopened")
     return 0
+
+
+def _repaint_the_other_strips(closed: str) -> None:
+    """Wake every other chat's panels, so a closed chat leaves the strips the operator is
+    about to be looking at — #929, and the half of that fix that is not on disk.
+
+    **A panel repaints on a version bump and on nothing else** (`frame/panel.py`: liveness
+    is a poll of `state.version`, `TICK` apart). Closing a chat changes what EVERY other
+    chat's strip should draw — the roster loses a tab, and the workspaces strip's count
+    beside it loses one — but it moves no version except the closed chat's own, and that
+    one's window is being killed. Measured on a real frame before this call existed: the
+    surviving chat's strip still drew the closed tab seven seconds later, and corrected only
+    when a click happened to wake that panel for an unrelated reason. The plane was right and
+    the screen was wrong, which from the operator's seat is the same report as before the
+    scan was fixed at all.
+
+    **Once the mark is written, every other strip is stale** — so this is called from every
+    path in :func:`cmd_close` that writes one, including the path that could not stop the
+    window. `state.was_closed` is what `chats._by_workspace` reads, and it is true from the
+    moment the marker lands whether or not the kill after it succeeded; a repaint that waited
+    for the kill would leave the screen disagreeing with the plane on exactly the path where
+    charter has already told the operator that something went wrong.
+
+    The closed chat itself is skipped: its window is going, and `chats.roster` folds the chat
+    ASKING back into its own strip regardless, so a repaint there has nothing to change.
+
+    `leave.plane_chats` and not `chats.of_workspace`, because the workspaces strip draws a
+    count for every workspace on the plane and not only for this chat's own — and because
+    that scan is the one that still lists a closed chat, so it needs no special case to
+    reach the siblings of a chat whose own workspace record was lost. `state.bump` swallows
+    what it cannot write and is one atomic replace on the ~30 chats `state.reap` bounds a
+    plane to, paid once on a deliberate teardown rather than on any repaint path.
+    """
+    for other in leave.plane_chats():
+        if other != closed:
+            state.bump(other)
 
 
 def _forget_transcript(fid: str) -> None:
