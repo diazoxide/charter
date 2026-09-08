@@ -2481,8 +2481,8 @@ chats was last in front of you.
 
 ```
 charter · 16 to choose from
->   workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
-    persona: steward — pick another
+    workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
+>   persona: steward — pick another
     detach — leave the harness running
     repo: select the next row
     repo: select the previous row
@@ -2519,11 +2519,12 @@ says what would make it available. The reason is the right-hand column. A refuse
 listed lower than a row you typed the whole name of, and never dropped.
 
 **The cursor opens on the first row that can run, and it skips a refused row to get
-there.** A refused row stays exactly where it is in the list — this moves the cursor, not
-the rows — so what you can see does not change and `Enter` is never aimed at a row that
-would answer it with nothing. `up`/`down` still stop on every row, refused or not, because
-that is how you read the reason beside one. Where nothing in a list can run, the cursor
-sits on the first row and `Enter` says why.
+there** — which is why the `>` above is on the second row and not the first. A refused row
+stays exactly where it is in the list, so this moves the cursor and not the rows: what you
+can see does not change, and `Enter` is never aimed at a row that would answer it with
+nothing. `up`/`down` still stop on every row, refused or not, because that is how you read
+the reason beside one. Where nothing in a list can run, the cursor sits on the first row
+and `Enter` says why.
 
 **Every row reserves the `*` column, whether or not it has a mark to put in it** — the
 frame's one-inset rule, applied here. Four cells stand in front of every row's text: two
