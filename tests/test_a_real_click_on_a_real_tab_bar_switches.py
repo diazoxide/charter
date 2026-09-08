@@ -52,7 +52,7 @@ import unittest
 from pathlib import Path
 
 from charter import commands_frame, config
-from charter.frame import chats, layout, slots, state, tmuxctl
+from charter.frame import chats, layout, leave, overlay, slots, state, tmuxctl
 
 from tests import _tmuxreap
 from tests._isolation import PersonaIso, make_plane
@@ -1211,6 +1211,107 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
             before, "a press on the `-` made or removed a window")
         self.assertEqual(state.notice(self.here), "",
                          "a press on the `-` reached a command that reports")
+
+    def _menu_from_the_minus(self) -> str:
+        """Press the `-` and hand back the overlay pane it opened, once the menu is on it.
+
+        The two cases above, composed rather than repeated: what makes the keypress cases
+        below real is that the pane they type into is the one THAT press opened, on this
+        frame, carrying this chat's rows.
+        """
+        before = set(self._panes(self.WS))
+        self._click(self.bar, col=self._minus())
+        self.assertTrue(_await(lambda: set(self._panes(self.WS)) - before, timeout=15.0),
+                        "a press on the `-` opened no pane at all")
+        pane = (set(self._panes(self.WS)) - before).pop()
+        self.assertTrue(
+            _await(lambda: f"chat: close {self.here}" in self._shown(pane)),
+            f"the pane that opened never drew the menu: {self._shown(pane)!r}")
+        return pane
+
+    def _cursor_row(self, pane: str) -> str:
+        """The one row of *pane* the overlay put its cursor on.
+
+        `overlay._MARK` is two cells on EVERY row — `"> "` on the selected one and two
+        spaces on the rest — so the marked row is the only line of a captured pane that
+        starts with it. Read off the pane rather than off a `Palette` in this process: what
+        this file is for is the trip, and the cursor is drawn by a `charter frame-palette`
+        three processes away.
+        """
+        shown = self._shown(pane)
+        marked = [ln for ln in shown.split("\n") if ln.startswith(overlay._MARK[0])]
+        self.assertEqual(len(marked), 1,
+                         f"not exactly one cursor on the surface: {shown!r}")
+        return marked[0]
+
+    def test_a_press_on_the_minus_puts_the_cursor_on_the_row_enter_can_answer(self):
+        """**#931, on the surface that reported it and in the state it reported.**
+
+        This chat has never been quit, so it has no capture and the menu's first row is
+        refused — the ordinary state of a chat running normally rather than a fault. What
+        `origin/main` drew on this same fixture is the pane #931 captured::
+
+            chat alpha.1 · 2 to choose from
+            >   chat: previous transcript — alpha.1   no previous transcript for this…
+                chat: close alpha.1 — stop it and do not bring it back
+
+        so `-` then Enter started nothing at all, and the operator was left looking at the
+        chat they had just asked to close. `palette.aim` puts the cursor on the first row
+        that CAN run, which is the sentence six docstrings in this repository already
+        claimed was the code.
+
+        The rows do not move — #512's refused row is still listed, still above, still
+        carrying its reason, and asserted here because a cursor rule that fixed itself by
+        dropping the row would pass the first assertion alone.
+        """
+        pane = self._menu_from_the_minus()
+        shown = self._shown(pane)
+
+        self.assertIn(f"chat: close {self.here}", self._cursor_row(pane))
+        self.assertIn("chat: previous transcript", shown)
+        self.assertIn("no previous transcript for this chat", shown)
+
+    def test_and_that_enter_really_reaches_the_close_confirmation(self):
+        """**What the press BUYS**, and the assertion #929 found this whole surface had
+        never had: not that Enter avoided doing something, but the surface it reaches.
+
+        `tabmenu.opens` builds `leave.confirm_rows` and `commands_frame._as_a_drawer`
+        replaces the menu with it in the pane the operator is already looking at — so the
+        pane SURVIVES the keypress and stops being the menu. On `origin/main` that same
+        Enter landed on the refused row: `tabmenu.act` put its note on the attention row,
+        the `finally` killed the pane, and a `-` that did nothing twice reads as a `-` that
+        does not work.
+
+        **Enter is pressed once and only once.** The row now under the cursor is `leave`'s
+        own confirming row, and going through with it stops a harness.
+
+        **What the warning SAYS is asserted in the unit file and not here**, because this
+        fixture cannot honestly be asked. `leave.plan` counts what is live through
+        `commands_frame._chat_seats`, which reads the `@charter_chat` a real launch writes
+        on its window; this fixture's harness is a shell in a hand-made session, so the
+        plan is empty and `leave.confirm_rows` draws its nothing-left-to-stop row — with no
+        confirming row at all, which is that function's own promise that no keypress
+        quietly succeeds at nothing. The heading is what identifies the surface either way:
+        `leave.CLOSE` is the label `tabmenu.opens` gives it and `chat` is the label the menu
+        had.
+        """
+        pane = self._menu_from_the_minus()
+
+        os.write(self.fd, b"\r")
+
+        self.assertTrue(
+            _await(lambda: self._shown(pane).split("\n")[0].startswith(leave.CLOSE)),
+            f"Enter did not reach the close confirmation: {self._shown(pane)!r}")
+        shown = self._shown(pane)
+        self.assertIn(pane, self._panes(self.WS),
+                      "Enter closed the pane instead of drawing a surface in it")
+        self.assertNotIn("chat: previous transcript", shown,
+                         "the menu is still on screen, so this is not the confirmation")
+        self.assertEqual(chats.of_workspace(self.WS), [self.here],
+                         "the Enter that draws the confirmation also stopped something")
+        self.assertEqual(state.notice(self.here), "",
+                         "the Enter answered on the attention row, which is what a "
+                         "refused row does and a doorway does not")
 
     def test_the_cell_between_the_two_affordances_reaches_nothing(self):
         """The separator belongs to neither, and here the two neighbours mean opposite
