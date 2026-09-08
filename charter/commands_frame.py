@@ -9515,16 +9515,27 @@ def _hand_the_client_a_frame(closed: str, *, fid: str) -> None:
     to be handed back its terminal, which is the right outcome and not one to switch away
     from. **Not a refusal, and nothing is said about it**, because the operator asked to
     close a chat and that is what happened.
+
+    **`next(…, "")` and no guard on the workspace, and the sweep is what asked for both.**
+    An earlier draft read `[c for c in chats.of_workspace(ws) if c != closed] if ws else []`
+    and then `if not survivors: return`, and both lines came back as survivors that MASK
+    each other. Each was idle for its own reason and the pair hid it: `state.own_workspace`
+    answers ``None`` for a chat with no record and `chats.of_workspace` answers ``[]`` for
+    ``None`` and for ``""`` alike — measured, so the `if ws` was a repair for damage that
+    cannot arrive — while `survivors[0]` on an empty list raised into the ``except`` below,
+    which turned "there is nobody to hand you" into a swallowed IndexError that looked
+    exactly like the deliberate return. One expression that cannot raise leaves one guard,
+    and dropping it now sends `cmd_chat` an empty chat id, which a test can see.
     """
     from types import SimpleNamespace
     if fid != closed:
         return
     try:
-        ws = state.own_workspace(closed)
-        survivors = [c for c in chats.of_workspace(ws) if c != closed] if ws else []
-        if not survivors:
+        survivor = next((c for c in chats.of_workspace(state.own_workspace(closed))
+                         if c != closed), "")
+        if not survivor:
             return
-        cmd_chat(SimpleNamespace(chat_id=survivors[0], chat=closed))
+        cmd_chat(SimpleNamespace(chat_id=survivor, chat=closed))
     except Exception:  # noqa: BLE001 - a courtesy may never cost the close behind it
         return
 

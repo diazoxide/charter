@@ -496,7 +496,13 @@ class WhichChatACloseHandsYou(PersonaIso, unittest.TestCase):
     def test_a_chat_with_no_recorded_workspace_hands_you_nothing(self):
         """`state.own_workspace` answers ``None`` for the migration case (`leave.plane_chats`
         is the scan that exists for it), and a workspace charter cannot name has no roster to
-        pick a survivor from. Nothing is guessed at."""
+        pick a survivor from. Nothing is guessed at.
+
+        **No guard stands behind this and it is measured rather than guarded**:
+        `chats.of_workspace` answers ``[]`` for ``None`` and for ``""`` alike, so the roster
+        is empty and the one survivor guard answers. An `if ws` in front of it read as a
+        second refusal and the sweep found it idle — see `_hand_the_client_a_frame`.
+        """
         state.frame_dir(f"{self.WS}.1", create=True)
 
         commands_frame._hand_the_client_a_frame(f"{self.WS}.1", fid=f"{self.WS}.1")
