@@ -450,8 +450,17 @@ def open_rows(fid: str) -> tuple:
 
     **They are the LAST rows in the catalogue**, which `commands_frame._draw_palette`
     arranges by appending them, and that placement is a guard rather than a taste: the
-    palette's cursor starts on the first row that can run, and a destructive row at the top
-    would be one `F2 Enter` away. Charter's own harmless rows keep the top of the list.
+    palette's cursor starts on the first row that can run (`palette.aim`), and a destructive
+    row at the top would be one `F2 Enter` away. Charter's own harmless rows keep the top of
+    the list.
+
+    **That premise only became true in #931**, and this guard is what it was written for.
+    Until then the cursor opened on the first row FULL STOP, refused or not — so this
+    ordering was protecting the operator from a keypress the implementation was aiming
+    somewhere else anyway, and a surface with a refused row above these two spent that
+    keypress on nothing. Nothing here moves: every row `commands_frame._catalogue` puts
+    above these can run on an ordinary plane, so `F2 Enter` reaches them no more easily than
+    it did.
 
     No plan is built here. The confirmation is where the per-chat warning is drawn (§4f:
     *at the moment the operator is deciding*), and the operator is not deciding while the
@@ -523,19 +532,26 @@ def confirm_rows(p: Plan, *, verb: str) -> tuple:
     does nothing.
 
     **The confirming row is FIRST, and an earlier draft had it last.** Under the list it is
-    about reads better and was measured to be wrong: `frame/palette.narrow` puts the cursor
-    on the first row when nothing has been typed, refused or not, so the surface opened with
+    about reads better and was measured to be wrong: `Palette._refilter` put the cursor on
+    the first row when nothing had been typed, refused or not, so the surface opened with
     `> alpha.1 · claude-code` selected and Enter bound to nothing at all. *"A palette row
     that visibly does nothing reads as broken and costs the operator a whole `F2` to find
     out"* is `builtin_actions._register_selection`'s own finding, and it applies here more
     than anywhere: the one surface where the operator has just asked a question and is
     waiting for the keypress that answers it.
 
-    So the shape is the shape of every confirmation an operator has ever used: the thing you
-    press at the top, what it will do underneath it, and the whole list on screen before the
-    first keypress that commits anything. §4f's requirement is that the warning is drawn *at
-    the moment of deciding*, and it is — the doorway's Enter draws this surface and nothing
-    else.
+    **That measurement is now fixed at its source, and the order stays anyway** (#931).
+    `palette.aim` opens the cursor on the first row that can run, so this surface would
+    answer Enter with the confirming row wherever it sat — every other row here is
+    `refused`. What kept the row at the top was never only the cursor: it is the shape of
+    every confirmation an operator has ever used — the thing you press at the top, what it
+    will do underneath it, and the whole list on screen before the first keypress that
+    commits anything. So the placement is now a reading-order decision rather than a guard,
+    which is worth saying plainly, because a reader who moved it would find the cursor
+    followed it and would learn nothing about why it reads worse.
+
+    §4f's requirement is that the warning is drawn *at the moment of deciding*, and it is —
+    the doorway's Enter draws this surface and nothing else.
 
     A plan with nothing to stop gets one refused row saying so and **no confirming row at
     all**, so there is no keypress that quietly succeeds at nothing.
