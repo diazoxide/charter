@@ -1146,11 +1146,30 @@ directory survived. The one tab that stays is the chat you are closing *from*, f
 its window is still being torn down — a strip that dropped the chat you are typing in would be
 drawing a list you are not in.
 
+**Closing the chat you are in hands you another one first.** The frame is laid out on one
+chat at a time — switching tears the panels off the chat you leave and splits them into the
+one you enter — so every chat you are *not* on is a window holding its harness and nothing
+else. Killing the window you are looking at would drop you onto one of those, with no strips
+and no attention row, which reads as charter having exited. So a close aimed at your own chat
+switches you to the first surviving tab of its workspace before it marks or kills anything,
+through the same `charter frame-chat` a tab click uses. Closing a chat from another tab moves
+nobody. Before 0.60.0 you were left on a bare harness pane.
+
 **What quit stops is this plane, and nothing else on the machine.** One tmux server serves
 every frame on a machine and session names carry no plane — `default` is a name every plane
 has — so quit works from *this* plane's chat directories and kills one window at a time, never
 `kill-server` and never a session by name. Two planes with a workspace of the same name can
 share one tmux session, and quitting one leaves the other's chats running.
+
+That last sentence is now true of the *window listing* too, and until 0.60.0 it was not.
+Both quit and close ask the server which windows carry a chat marker, and aim their
+`kill-window` by the answer; the listing was filtered by nothing, so it answered with every
+plane's chats — and chat ids collide by construction, since `default.1` is the id every
+plane's first chat gets. One entry per id, last one wins. A close on one plane could kill
+another plane's window, and a chat could read as live because a chat of that *name* was live
+somewhere else on the machine. Charter marks every session with the plane that made it, and
+the listing now honours it: a marker naming a different plane is a veto, an absent one — a
+session an older charter created — still counts as yours.
 
 ## Exit codes
 
