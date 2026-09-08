@@ -8999,7 +8999,17 @@ def _capture_transcript(socket: str, pane_id: str, dest) -> bool:
 #: kill is aimed at — never a session name, which in another plane is another plane's
 #: session (§3.3: `default` is a name every plane has), and never the chat's own recorded
 #: pane id, which is a value from before the server may have restarted.
-_CHAT_WINDOW_FORMAT = f"#{{{_CHAT_OPTION}}}\t#{{window_id}}\t#{{window_active}}"
+#:
+#: **The fourth field is :data:`_PLANE_OPTION`, and it is the whole of #933.** The three
+#: fields above say which chats a SERVER has; one shared server carries every plane on the
+#: machine (§3.3), so without a plane the answer to "which chats does this PLANE have open"
+#: was every plane's — and chat ids collide by construction, because `default.1` is the id
+#: every plane's first chat gets (`DEFAULT_WORKSPACE_FALLBACK`). Measured on the reporting
+#: operator's own socket: three planes, each with a `default.1` on disk. A session option
+#: resolves in a `list-windows` format exactly as it does in `list-panes`' — see
+#: :data:`_PANE_SEAT_FORMAT`, which asks the same marker the same way for the same reason.
+_CHAT_WINDOW_FORMAT = (f"#{{{_CHAT_OPTION}}}\t#{{window_id}}\t#{{window_active}}"
+                       f"\t#{{{_PLANE_OPTION}}}")
 
 
 def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
@@ -9021,6 +9031,30 @@ def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
     :data:`_FRAME_ID_RE` and the window id to :data:`_WINDOW_ID_RE` on the way out — these
     values came off a tmux option and are about to be a `-t` target and a state directory's
     name, which is #475's boundary exactly.
+
+    ---
+
+    **A window whose marker names ANOTHER plane is not this plane's chat, however well its
+    id matches — #933.** This function's own docstring said "every chat *socket* reports"
+    and meant it: one tmux server carries every plane on the machine (§3.3), so a listing
+    filtered by nothing answered with all of them, and the ids collide by construction —
+    `default` is `DEFAULT_WORKSPACE_FALLBACK` and every plane's first chat is `default.1`.
+    What that cost is two things, and the second is the one worth naming twice:
+
+    * `leave.plan` marked a chat **live** because a chat of that NAME was live somewhere on
+      the machine, so a confirmation could promise to stop something whose own window was
+      already gone;
+    * :func:`_stop_chats` aims `kill-window` at ``windows[server][chat]``, one entry per id,
+      **last row wins** — so a close on this plane could kill another plane's window. That
+      is a destructive act on a target the operator never named, which is the one failure
+      class this whole area is built to refuse.
+
+    **The rule is `_plane_session`'s, not a second one**: an ABSENT marker decides nothing
+    and the row is kept, because a session an older charter created carries none and reading
+    that as "not mine" would make every pre-marker frame read as dead — a quit that recorded
+    nothing and killed nothing while saying it had done both, which is exactly the tri-state
+    above, arrived at from the other side. A marker that names a DIFFERENT plane is a veto.
+    That asymmetry is the whole of why this is a filter and not a match.
     """
     out = tmuxctl.run("listing the chats this plane has open",
                       tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
@@ -9029,11 +9063,14 @@ def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
     if out.returncode != 0:
         return None
     seats: list[tuple[str, str, bool]] = []
+    ours = _this_plane()
     for line in out.stdout.splitlines():
         fields = line.split("\t")
-        if len(fields) != 3:
+        if len(fields) != 4:
             continue
-        chat, window, active = fields
+        chat, window, active, plane = fields
+        if plane not in ("", ours):
+            continue
         if _FRAME_ID_RE.fullmatch(chat) and _WINDOW_ID_RE.fullmatch(window):
             seats.append((chat, window, active == "1"))
     return seats
@@ -9388,8 +9425,65 @@ def cmd_close(args) -> int:
         util.err(f"charter frame-close: tmux would not stop chat {target} — it is marked "
                  "closed and will not be reopened, but its harness may still be running")
         return 1
+    _hand_the_client_a_frame(target, fid=fid)
     util.ok(f"charter: closed {target} — it will not be reopened")
     return 0
+
+
+def _hand_the_client_a_frame(closed: str, *, fid: str) -> None:
+    """Put the operator back on a chat that HAS a frame, when the close took theirs — #933.
+
+    *"after again closing it — charter seems closing fully and showing pure claude code
+    session."* Nothing closed and nothing crashed: the frame is laid out on **one** chat at
+    a time. `cmd_chat`'s step 2 is `_apply_arrangement(<chat being left>, want=[])`, so
+    every chat the operator is not on is a window holding its harness pane and nothing else
+    — measured on the reporting operator's own live server, where the chat they were not on
+    records ``panes: {}`` while its window is perfectly alive. That is the correct resting
+    state and it is invisible, because charter is what moves them between chats and
+    `cmd_chat` lays the entered one out on the way in.
+
+    **A `kill-window` moves them without going through `cmd_chat`.** tmux picks the next
+    window itself when the current one dies, and it picks a bare one — no strips, no
+    attention row, no `F2` hint, just the harness filling the screen. From the operator's
+    seat that is charter having exited, which is the report; and it is reached by pressing
+    the one row that says *stop it and do not bring it back*, so the reading that charter
+    stopped everything is the reasonable one rather than a careless one.
+
+    So the close ends by handing the client to a surviving chat **through the ordinary front
+    door** — the same `charter frame-chat <id>` a tab click, a palette row and a typed
+    switch all use (`_start_chat_switch`, `frame/builtins._CHAT_SWITCH`). A second in-process
+    layout here would be a second answer to "how does a chat get its frame", and the two
+    would drift; going through the switch also means the entered chat is gathered and its
+    strips are painted by the code that already knows how.
+
+    **Only when the closed chat was the operator's own.** Closing a chat from another tab —
+    a right press on its tab, `charter frame-close <id>` typed in a sibling — moves nobody,
+    so a switch would drag them off the chat they were reading to answer a question they did
+    not ask. *fid* is the presser's chat (`_pressers_chat`) and *closed* is the target; they
+    differ on exactly that path, which is the same distinction `_warn_about`'s ``on=`` makes
+    two lines up.
+
+    **The first surviving chat of the closed chat's workspace, which is the first TAB.**
+    `chats.of_workspace` is the strip's own order and already drops the chat just marked
+    closed (#930), so what the operator lands on is the leftmost tab they can see. tmux has
+    by then put them on whichever window it chose, which is not necessarily that one — a
+    second move is one `select-window`, and landing somewhere the strip explains is worth
+    it. No survivor means the session's last window has gone with the chat, so the client is
+    already detached and there is nothing to hand it: **not a refusal, and nothing is said
+    about it**, because the operator asked to close a chat and that is what happened.
+
+    `builtin_actions._spawn` and never in-process, for `_start_chat_switch`'s measured
+    reason: this process is about to have its own pane killed by `_close_palette`, and
+    `kill-pane` hands SIGHUP to the group.
+    """
+    if fid != closed:
+        return
+    ws = state.own_workspace(closed) or ""
+    survivors = chats.of_workspace(ws) if ws else []
+    if not survivors:
+        return
+    builtin_actions._spawn(util.self_relaunch_argv("frame-chat", survivors[0]),
+                           fid=closed)
 
 
 def _repaint_the_other_strips(closed: str) -> None:
