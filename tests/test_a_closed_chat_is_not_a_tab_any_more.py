@@ -188,6 +188,31 @@ class ClosingWakesTheStripsThatMustRedraw(PersonaIso, unittest.TestCase):
 
         self.assertEqual(state.version("alpha.2"), before)
 
+    def test_a_chat_whose_window_had_already_gone_still_wakes_them(self):
+        """`cmd_close`'s other marking path — the chat's harness ended on its own, so there
+        is nothing left to stop and the command marks it anyway rather than refusing. The
+        mark is what the strip reads, so that path leaves every other strip exactly as stale
+        as the ordinary one and has to wake them too."""
+        _plant("alpha.1", ws="alpha")
+        _plant("alpha.2", ws="alpha")
+        before = state.version("alpha.1")
+
+        with mock.patch.multiple(commands_frame,
+                                 _chat_seats=mock.DEFAULT,
+                                 _capture_transcript=mock.DEFAULT,
+                                 _stop_chats=mock.DEFAULT) as m:
+            # `alpha.2` is absent from the listing, so `leave.stopping` answers nothing and
+            # `cmd_close` takes the "was already stopped" branch.
+            m["_chat_seats"].return_value = [("alpha.1", "@0", False)]
+            m["_capture_transcript"].return_value = False
+            m["_stop_chats"].return_value = 0
+            self.assertEqual(commands_frame.cmd_close(
+                SimpleNamespace(chat="alpha.1", chat_id="alpha.2")), 0)
+
+        self.assertTrue(state.was_closed("alpha.2"), "this case took the wrong branch")
+        m["_stop_chats"].assert_not_called()
+        self.assertNotEqual(state.version("alpha.1"), before)
+
     def test_a_close_that_could_not_stop_the_window_still_wakes_them(self):
         """`state.was_closed` is true from the moment the marker lands, whether or not the
         kill after it worked — so the strips are stale on that path too, and a repaint that
