@@ -103,7 +103,13 @@ def is_chat(fid: str) -> bool:
 
 
 def of_workspace(workspace: str) -> list[str]:
-    """Every chat that says it is in *workspace*, in ordinal order.
+    """Every chat that says it is in *workspace* and is still open, in ordinal order.
+
+    **A chat the operator closed is not one of them** (#929), which is
+    :func:`_by_workspace`'s filter and argued there: `chat: close` marks the chat and
+    kills its window, so a roster that went on listing it would be offering a tab that
+    answers *no window any more* when pressed. :func:`roster` folds the chat ASKING back
+    in regardless, so this never takes the operator's own tab off their own strip.
 
     **Membership is `state.own_workspace`, which is `state.workspace_for`'s middle** — and
     the difference between those two functions is the whole of #733. `workspace_for` is
@@ -253,7 +259,8 @@ def touched_by_workspace() -> dict[str, float]:
 
 
 def _by_workspace() -> dict[str | None, list[str]]:
-    """Every chat on this plane, grouped by the workspace it says it is in.
+    """Every chat on this plane the operator has not closed, grouped by the workspace it
+    says it is in.
 
     The scan both :func:`of_workspace` and :func:`counts_by_workspace` are, written once —
     the discipline `state.own_workspace` itself is an instance of, said one level up: two
@@ -303,7 +310,28 @@ def _by_workspace() -> dict[str | None, list[str]]:
         return {}
     out: dict[str | None, list[str]] = {}
     for name in names:
-        if is_chat(name):
+        # **A chat the operator closed is not on any strip** (#929). `cmd_close` writes
+        # `state.record_closed` and then `kill-window`, so by the time anything repaints
+        # the chat has no window to switch to — but this scan reads the DIRECTORY, which
+        # `state.reap` does not collect until a later launch. So closing a chat left its
+        # tab drawn, clickable, and answering *no window any more* when pressed: the
+        # report was *"after choosing close - its not closing"*, made about a close that
+        # had in fact done every part of its job except the part that shows.
+        #
+        # **Here rather than in the strip**, because this is the one walk `of_workspace`,
+        # `counts_by_workspace` and `touched_by_workspace` all are: a filter in the
+        # renderer would leave the count beside a workspace tab promising a chat the
+        # roster no longer offers. And `leave.plane_chats` scans the frame root ITSELF
+        # rather than calling this, so a quit still enumerates every chat directory on the
+        # plane whatever it says — that function's whole reason for existing, and why the
+        # skip a quit needs stays in `leave.plan` rather than being this one moved.
+        #
+        # One `stat` per chat, on the ~30 entries `state.reap` bounds this to, beside the
+        # two file reads `state.own_workspace` already makes for each of them on the line
+        # below. The chat ASKING is folded back in by :func:`roster` whatever this
+        # answers, so the operator never watches their own tab vanish while the window
+        # they are still typing in is being torn down.
+        if is_chat(name) and not state.was_closed(name):
             out.setdefault(state.own_workspace(name), []).append(name)
     return {ws: sorted(ids, key=_order) for ws, ids in out.items()}
 
