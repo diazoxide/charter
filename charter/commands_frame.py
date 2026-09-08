@@ -9455,12 +9455,21 @@ def _hand_the_client_a_frame(closed: str, *, fid: str) -> None:
     the one row that says *stop it and do not bring it back*, so the reading that charter
     stopped everything is the reasonable one rather than a careless one.
 
-    So the close ends by handing the client to a surviving chat **through the ordinary front
-    door** — the same `charter frame-chat <id>` a tab click, a palette row and a typed
-    switch all use (`_start_chat_switch`, `frame/builtins._CHAT_SWITCH`). A second in-process
-    layout here would be a second answer to "how does a chat get its frame", and the two
-    would drift; going through the switch also means the entered chat is gathered and its
-    strips are painted by the code that already knows how.
+    So the close hands the client to a surviving chat **through the ordinary front door** —
+    the same `charter frame-chat <id>` a tab click, a palette row and a typed switch all use
+    (`_start_chat_switch`, `frame/builtins._CHAT_SWITCH`). A second in-process layout here
+    would be a second answer to "how does a chat get its frame", and the two would drift;
+    going through the switch also means the entered chat is gathered and its strips are
+    painted by the code that already knows how.
+
+    **And it cannot cost the close, which is why the whole call is caught.** Every refusal
+    `cmd_chat` has is a `return 0` with a sentence, so nothing here is catching a refusal —
+    what it catches is the switch being a courtesy in front of a teardown. This runs BEFORE
+    `state.record_closed`, so an exception escaping it would leave the chat open, unmarked
+    and un-killed while the operator watched their confirmation disappear — which is
+    *"after choosing close it's not closing"*, the report this whole area is answering,
+    reintroduced by the fix for a different half of it. The operator asked for a close; the
+    close happens, and a frame they could not be handed costs them one `F2` at worst.
 
     **Only when the closed chat was the operator's own.** Closing a chat from another tab —
     a right press on its tab, `charter frame-close <id>` typed in a sibling — moves nobody,
@@ -9500,11 +9509,14 @@ def _hand_the_client_a_frame(closed: str, *, fid: str) -> None:
     from types import SimpleNamespace
     if fid != closed:
         return
-    ws = state.own_workspace(closed)
-    survivors = [c for c in chats.of_workspace(ws) if c != closed] if ws else []
-    if not survivors:
+    try:
+        ws = state.own_workspace(closed)
+        survivors = [c for c in chats.of_workspace(ws) if c != closed] if ws else []
+        if not survivors:
+            return
+        cmd_chat(SimpleNamespace(chat_id=survivors[0], chat=closed))
+    except Exception:  # noqa: BLE001 - a courtesy may never cost the close behind it
         return
-    cmd_chat(SimpleNamespace(chat_id=survivors[0], chat=closed))
 
 
 def _repaint_the_other_strips(closed: str) -> None:

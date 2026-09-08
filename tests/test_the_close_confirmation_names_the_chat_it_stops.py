@@ -466,6 +466,33 @@ class WhichChatACloseHandsYou(PersonaIso, unittest.TestCase):
 
         self.assertEqual(self.asked, [])
 
+    def test_a_switch_that_raises_never_costs_the_close(self):
+        """**The courtesy runs in front of a teardown**, so an exception escaping it would
+        leave the chat open, unmarked and un-killed while the operator watched their
+        confirmation disappear — *"after choosing close it's not closing"*, the report this
+        area is answering, reintroduced by the fix for another half of it.
+
+        Asked of `cmd_close` rather than of the helper, because "the close still happens" is
+        a fact about the command and the helper alone cannot say it.
+        """
+        self._plant(f"{self.WS}.1", f"{self.WS}.2")
+        for chat in (f"{self.WS}.1", f"{self.WS}.2"):
+            state.record_server(chat, commands_frame.SOCKET)
+            state.record_harness_pane(chat, "%1")
+        live = ({f"{self.WS}.1", f"{self.WS}.2"},
+                {commands_frame.SOCKET: {f"{self.WS}.1": "@0", f"{self.WS}.2": "@1"}},
+                set())
+        commands_frame.cmd_chat.side_effect = RuntimeError("the switch blew up")
+
+        with mock.patch.object(commands_frame, "_plane_live", return_value=live), \
+                mock.patch.object(commands_frame, "_stop_chats", return_value=1):
+            rc = commands_frame.cmd_close(
+                SimpleNamespace(chat_id=f"{self.WS}.1", chat=f"{self.WS}.1"))
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(state.was_closed(f"{self.WS}.1"),
+                        "a switch that raised took the close's own marker with it")
+
     def test_a_chat_with_no_recorded_workspace_hands_you_nothing(self):
         """`state.own_workspace` answers ``None`` for the migration case (`leave.plane_chats`
         is the scan that exists for it), and a workspace charter cannot name has no roster to
