@@ -795,7 +795,7 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
             return commands_frame._chat_seats(SERVER)
 
     def test_a_well_formed_listing_is_read_whole(self):
-        seats = self._seats_from("alpha.1\t@0\t1\nalpha.2\t@3\t0\n")
+        seats = self._seats_from("alpha.1\t@0\t1\t\nalpha.2\t@3\t0\t\n")
 
         self.assertEqual(seats, [("alpha.1", "@0", True), ("alpha.2", "@3", False)])
 
@@ -803,24 +803,25 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
         # A window with no `@charter_chat` prints an empty first field, and a format that
         # ever changed shape would arrive here as a row of the wrong width. Neither is a
         # seat, and neither may be read as one by index.
-        seats = self._seats_from("alpha.1\t@0\t1\n"
+        seats = self._seats_from("alpha.1\t@0\t1\t\n"
                                  "only-two\t@1\n"
-                                 "a\tb\tc\td\n"
+                                 "a\tb\tc\n"
+                                 "a\tb\tc\td\te\n"
                                  "\n")
 
         self.assertEqual(seats, [("alpha.1", "@0", True)])
 
     def test_a_chat_id_outside_the_alphabet_is_dropped(self):
-        seats = self._seats_from("alpha.1;kill-server\t@0\t1\nalpha.2\t@1\t0\n")
+        seats = self._seats_from("alpha.1;kill-server\t@0\t1\t\nalpha.2\t@1\t0\t\n")
 
         self.assertEqual(seats, [("alpha.2", "@1", False)])
 
     def test_a_window_id_that_is_not_tmuxs_own_shape_is_dropped(self):
         # The window id is what `_stop_chats` aims `kill-window` at. Anything that is not
         # `@<digits>` is a target charter did not get from tmux.
-        seats = self._seats_from("alpha.1\t$0\t1\n"
-                                 "alpha.2\tnot-a-window\t1\n"
-                                 "alpha.3\t@7\t1\n")
+        seats = self._seats_from("alpha.1\t$0\t1\t\n"
+                                 "alpha.2\tnot-a-window\t1\t\n"
+                                 "alpha.3\t@7\t1\t\n")
 
         self.assertEqual(seats, [("alpha.3", "@7", True)])
 
@@ -828,9 +829,44 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
         # `#{window_active}` is `0` or `1`. Anything else is not a claim charter may read as
         # "this is the chat the operator was looking at" — that answer decides which tab a
         # reopen puts them back on.
-        seats = self._seats_from("alpha.1\t@0\t1\nalpha.2\t@1\t0\nalpha.3\t@2\ttrue\n")
+        seats = self._seats_from("alpha.1\t@0\t1\t\nalpha.2\t@1\t0\t\n"
+                                 "alpha.3\t@2\ttrue\t\n")
 
         self.assertEqual([c for c, _w, showing in seats if showing], ["alpha.1"])
+
+    # -- the plane marker, #933 --------------------------------------------- #
+
+    def test_a_window_marked_for_another_plane_is_not_a_seat(self):
+        """**The whole of #933 at the boundary it was lost at.**
+
+        One tmux server carries every plane on the machine (§3.3) and `default.1` is the id
+        every plane's first chat gets, so a listing filtered by nothing answered with all of
+        them. What that costs is `_stop_chats`, which aims `kill-window` at
+        ``windows[server][chat]`` — one entry per id, last row wins — so a close on this
+        plane could kill another plane's window.
+        """
+        seats = self._seats_from(f"default.1\t@0\t1\t/somewhere/else/.charter\n"
+                                 f"default.1\t@9\t1\t{commands_frame._this_plane()}\n")
+
+        self.assertEqual(seats, [("default.1", "@9", True)],
+                         "another plane's window is still in the map a kill is aimed by")
+
+    def test_an_unmarked_window_is_kept_and_decides_nothing(self):
+        """`_plane_session`'s rule, not a second one: a session an older charter created
+        carries no marker, and reading that as "not mine" would make every pre-marker frame
+        read as dead — a quit that recorded nothing and killed nothing while saying it had
+        done both."""
+        seats = self._seats_from("alpha.1\t@0\t1\t\n")
+
+        self.assertEqual(seats, [("alpha.1", "@0", True)])
+
+    def test_this_planes_own_marker_is_kept(self):
+        """The control the veto needs: a filter that dropped everything would pass the case
+        above and be the tri-state defect it exists to prevent."""
+        seats = self._seats_from(
+            f"alpha.1\t@0\t1\t{commands_frame._this_plane()}\n")
+
+        self.assertEqual(seats, [("alpha.1", "@0", True)])
 
     def test_a_server_that_would_not_answer_is_none_and_not_empty(self):
         run, _seen = _answers("", returncode=1)
@@ -841,7 +877,7 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
         # The opposite fact from the line above, and the whole reason the tri-state exists.
         self.assertEqual(self._seats_from(""), [])
 
-    def test_the_listing_is_one_call_asking_for_all_three_fields(self):
+    def test_the_listing_is_one_call_asking_for_every_field(self):
         run, seen = _answers("")
         with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
             commands_frame._chat_seats(SERVER)
