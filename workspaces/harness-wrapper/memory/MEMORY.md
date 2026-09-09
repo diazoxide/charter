@@ -84,3 +84,5 @@ merge-conflict on. Files are timestamp-prefixed, so this index (and the director
 - [state.workspace_for(fid) reads $CHARTER_WORKSPACE out of the CALLING pro](20260904-123341-state-workspace-for-fid-reads-charter-workspace-.md)
 - [cli.main: args.command is NOT reliably the subcommand — charter secret e](20260905-235739-cli-main-args-command-is-not-reliably-the-subcom.md)
 - [charter's CI deletion sweep only sweeps DEFAULT_PATHS = ('charter',), so](20260907-110817-charter-s-ci-deletion-sweep-only-sweeps-default-.md)
+- [charter's deletion sweep: a shard that exits green WITHOUT writing its -](20260907-182306-charter-s-deletion-sweep-a-shard-that-exits-gree.md)
+- [tmux frame integration fixtures need TWO server-env things the launcher ](20260908-112737-tmux-frame-integration-fixtures-need-two-server-.md)
