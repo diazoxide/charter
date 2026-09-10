@@ -112,13 +112,11 @@ class EveryBuilderEscapesEveryArgumentAfterTheSeparator(unittest.TestCase):
 class DataArgumentsEndingInASemicolonAreEscapedToo(unittest.TestCase):
     """The same tmux parse reads EVERY argument, not only the harness's (review round 1 on
     #959). A directory or an identity value ending in `;` does not vanish quietly: it ends
-    the command early and the flag after it is read as a command of its own. Measured on
-    3.7c and 3.2 with the identity a real launch carries: a directory gives `unknown
-    command: -P` from `new-window` and the guest `window_argv` (`-e` from `respawn-pane`),
-    and a `$CHARTER_ROOT` gives `unknown command: -e` on every launch, because another
-    identity value always follows it — `--` only when the value is a command's last `-e`.
-    So a chat opened from a directory named that way failed with a sentence that never
-    named the directory."""
+    the command early, and tmux refuses the launch. What tmux says depends on the state —
+    measured on 3.7c and 3.2 with the identity a real launch carries — and none of it names
+    the directory: `unknown command: -P` for a directory on `new-window` or the guest
+    `window_argv`; `unknown command: -e` for a `$CHARTER_ROOT` when a server is already
+    running on the socket; and `error connecting to …` when none is running yet."""
 
     WHERE = "/work/dir;"
 

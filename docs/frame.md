@@ -1203,12 +1203,12 @@ commands. Measured on tmux 3.7c and at the 3.2 floor, that cost three things:
   on charter's server: `charter claude "a;" set-option -g @x yes` set `@x` and started the
   harness on `a`. Only arguments you type yourself reach that path, so it was a latent
   surface rather than a hole. It is closed.
-- A directory or a `$CHARTER_ROOT` ending in `;` ended tmux's command at the flag after it,
-  which tmux then read as a command of its own. A second chat opened in such a directory,
-  or any chat inside a tmux you already had, failed with `unknown command: -P`; a
-  `$CHARTER_ROOT` ending in `;` failed every launch with `unknown command: -e`, because
-  charter always carries another identity value after it. Neither sentence names the
-  directory.
+- A directory or a `$CHARTER_ROOT` ending in `;` made tmux refuse the launch, because tmux
+  ended its command at the flag after it. What tmux said depended on the state, and none of
+  it named the directory: `unknown command: -P` for such a directory, on a second chat or
+  inside a tmux you already had; `unknown command: -e` for such a `$CHARTER_ROOT` when
+  charter's tmux server was already running; and `error connecting to …` when it was not
+  running yet — the first chat after a fresh install, a reboot, or the server stopping.
 
 Charter now hands tmux every such argument — the command's own, the directory it starts in,
 and each identity value — with one backslash before a trailing `;`: `\;`, tmux's own
