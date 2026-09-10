@@ -279,18 +279,35 @@ def _warn_if_stale() -> None:
     between *a release was cut* and *main moved*. That is the exact ambiguity
     `statusline._dev_chip` exists to resolve, and #457 already made it one function so a
     third surface can call it rather than re-derive `channel.is_dev()` and its try/except.
+
+    **On the dev channel it now claims no direction at all** (#937). `newer_head` answers
+    with the cached head for a build that records no commit, and for one whose commit merely
+    DIFFERS from that head. Neither is a measurement of which side is ahead, and "is out"
+    with "may already be fixed" claimed it of both: the first was said to a 0.60.0 wheel
+    that already contained `9d18d55`, and the second is reachable whenever another plane's
+    `charter update` has moved this machine's binary past this plane's cache (#127). The
+    nudge itself stays, for the reason `update.newer_head`'s docstring gives; both dev cases
+    print `update.dev_verdict`, which is the sentence `charter version` prints for the same
+    state, and `update.dev_remedy`, which is the next step it names. The remedy is shared
+    for the same reason the sentence is: this line used to say `charter update` to a reader
+    working in a charter clone, where that command refuses the tree and sends them to
+    `charter version` — the surface that had already learned to say `git` instead.
     """
     try:
-        from . import statusline, update
+        from . import channel, statusline, update
         latest = update.newer_than(__version__)
         if latest:
+            if channel.is_dev():
+                said = (f"{update.dev_verdict(latest)} — "
+                        f"`{update.dev_remedy()}` moves it")
+            else:
+                said = f"{latest} is out — this may already be fixed"
             # `util.color_enabled()`, not the chip's ANSI default: this is the one caller
             # that is not a terminal surface, and `util.warn` gates its own glyph the same
             # way. The call stays INSIDE the f-string on purpose — `test_version_shows_
             # channel`'s AST property looks for it in the same `JoinedStr` as the version.
             color = util.color_enabled()
             util.warn(f"you are on charter {__version__}{statusline._dev_chip(color)}; "
-                      f"{latest} is out — this may already be fixed. Reporting anyway is "
-                      "fine.")
+                      f"{said}. Reporting anyway is fine.")
     except Exception:  # noqa: BLE001 - a staleness check must never block a report
         pass

@@ -132,6 +132,66 @@ def _parse(v: str) -> tuple:
     return tuple(out)
 
 
+#: What the dev channel may say about a build that records no commit, and all it may say.
+#:
+#: `newer_head` nudges such a build on purpose, and its docstring says why. A nudge is not
+#: a comparison, though. A cached head of `main` and a wheel's version number are not on
+#: one axis, so charter cannot tell which is newer. `charter version` printed the cached
+#: PyPI number as "published" and newer, and `report send` said "9d18d55 is out — this may
+#: already be fixed", both to a 0.60.0 wheel that already contained `9d18d55` (#937). This
+#: sentence claims only what the install record shows. Both surfaces print it, so they
+#: cannot drift into describing one state two different ways.
+NOT_INSTALLED_FROM_MAIN = (f"this plane follows `{DEV_BRANCH}`, but this build was not "
+                           f"installed from a commit of it")
+
+
+def dev_verdict(head: str) -> str:
+    """What a dev plane may say about *head*, the short commit :func:`newer_head` returned.
+
+    One comparison, and never a direction. `charter version` and `charter report send` both
+    print this: one state described two different ways on two surfaces is how #937 started,
+    and a constant shared by only ONE of the two cases below would leave the other free to
+    drift back.
+
+    **The build that has a commit is the case that looks safe and is not.** "``<head>`` is
+    out" reads as *``main`` has moved past you*, which charter has not checked. The cache is
+    per plane (:data:`config.STATE_DIR`) while the binary is one machine-global install
+    (#127), so ``charter update`` run in plane A moves this build to a commit that plane B's
+    cache has never heard of. B's cached head is then an ANCESTOR of what is running, and
+    "is out" is exactly backwards — the same claim, in the same direction, that #937 is
+    about. Unequal is all that was measured, so unequal is all this says.
+    """
+    from . import channel
+
+    mine = channel.installed_commit()
+    if not mine:
+        return NOT_INSTALLED_FROM_MAIN
+    return (f"this plane follows `{DEV_BRANCH}`, and the head cached for it ({head}) is "
+            f"not the commit this build was installed from ({mine[:7]})")
+
+
+def dev_remedy() -> str:
+    """The command that moves THIS charter onto ``main`` — one answer for every surface.
+
+    Beside :func:`dev_verdict`, and for the same reason. Two surfaces that describe one
+    state with one sentence and then prescribe two different next steps have the same defect
+    one line further down the message — which is exactly how it shipped: `charter version`
+    learned about the checkout case and `report send` went on naming the installer.
+
+    ``charter update`` refuses to install over the tree it is running from. It answers "the
+    charter you are running IS this tree … it moves by git rather than by an installer:
+    charter version", which is `commands.cmd_version` — so a reader working in a charter
+    clone was handed a loop between two commands, each naming the other. The gate is the
+    question `commands_update` already asks, :func:`channel.running_inside`, and that answer
+    names the tree, because a bare ``git pull`` typed somewhere else moves something else.
+    """
+    from . import channel
+
+    if channel.running_inside(config.ROOT):
+        return f"git -C {channel.package_dir().parent} pull"
+    return "charter update"
+
+
 def newer_head() -> str | None:
     """The dev channel's answer to "is there anything newer?" — a short commit, or None.
 

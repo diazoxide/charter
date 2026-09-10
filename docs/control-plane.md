@@ -445,6 +445,16 @@ verifies the target *before* writing the lock, so you cannot pin colleagues to a
 have not run; `--push` commits and pushes, and everyone conforms on their next session.
 charter only ever *shows* you that command — it never bumps on its own.
 
+**With no `--to`, it pins what PyPI tells that same command.** If PyPI does not answer, it
+refuses and asks for `--to`. It does not fall back to the cached reading `charter version`
+shows, which can be days old and older than the charter you are running. Before #937 it
+did fall back, and a failed request installed that older release over the running one and
+pushed it to the team as the pin.
+
+On a plane that declares the [dev channel](install.md#4-the-dev-channel--trying-main-without-cutting-a-release),
+`charter version` never suggests this command, because a pin and the dev channel cannot
+both be declared. It names `charter update` instead.
+
 ## `[harness].default` — bare `charter`
 
 **Opt-in.** Absent, `charter` on its own prints the usage list, exactly as it always has.

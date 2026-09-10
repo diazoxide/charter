@@ -345,7 +345,8 @@ def build_parser() -> argparse.ArgumentParser:
     vbp = vsub.add_parser("bump",
                           help="Move the pin: install + verify the target, then write "
                                "charter.toml. Affects every teammate, so in that order.")
-    vbp.add_argument("--to", help="Version to pin (default: the latest published).")
+    vbp.add_argument("--to", help="Version to pin (default: the latest published, as PyPI "
+                                  "answers this command; refuses if it does not answer).")
     vbp.add_argument("--push", action="store_true",
                      help="Also commit + push the lock, so teammates conform on their "
                           "next session.")
