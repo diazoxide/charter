@@ -279,18 +279,26 @@ def _warn_if_stale() -> None:
     between *a release was cut* and *main moved*. That is the exact ambiguity
     `statusline._dev_chip` exists to resolve, and #457 already made it one function so a
     third surface can call it rather than re-derive `channel.is_dev()` and its try/except.
+
+    **A dev plane whose build records no commit is nudged without a comparison** (#937).
+    `newer_head` returns the cached head for such a build on purpose, so the nudge stays.
+    What it may not do is call that head "out" and a fix "may already" be in it. Measured:
+    `9d18d55` was named that way to a 0.60.0 wheel that already contained it.
     """
     try:
-        from . import statusline, update
+        from . import channel, statusline, update
         latest = update.newer_than(__version__)
         if latest:
+            if channel.is_dev() and not channel.installed_commit():
+                said = f"{update.NOT_INSTALLED_FROM_MAIN} — `charter update` moves it"
+            else:
+                said = f"{latest} is out — this may already be fixed"
             # `util.color_enabled()`, not the chip's ANSI default: this is the one caller
             # that is not a terminal surface, and `util.warn` gates its own glyph the same
             # way. The call stays INSIDE the f-string on purpose — `test_version_shows_
             # channel`'s AST property looks for it in the same `JoinedStr` as the version.
             color = util.color_enabled()
             util.warn(f"you are on charter {__version__}{statusline._dev_chip(color)}; "
-                      f"{latest} is out — this may already be fixed. Reporting anyway is "
-                      "fine.")
+                      f"{said}. Reporting anyway is fine.")
     except Exception:  # noqa: BLE001 - a staleness check must never block a report
         pass

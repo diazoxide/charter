@@ -222,6 +222,16 @@ remembered to stamp.
 update`. Auto-installing unreviewed merges is committed content reaching execution without
 a moment of consent, which is the one thing charter will not do to you.
 
+**`charter version` says what it compared, and on this channel that is a commit.** On a
+git build whose commit differs from the cached head of `main`, it names both commits. It
+does not say which is newer, because the cache can be older than your install. A build that
+records no commit, such as the PyPI wheel before your first `charter update`, has nothing
+to compare. For that build it says only that this plane follows `main` and this build was
+not installed from a commit of it. `charter report send` says the same about that build.
+Both name `charter update` as the next step. Neither names a published release as newer on
+this channel. Before #937 both did: a 0.60.0 wheel was told that 0.58.0 was newer, and that
+a commit it already contained might hold a fix.
+
 **A plane cannot ask for both a pin and the dev channel.** `[charter] version` names a
 published release the whole team conforms to; `main` has no such number. Declare both and
 charter installs neither, and says so at session start.

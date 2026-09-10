@@ -132,6 +132,19 @@ def _parse(v: str) -> tuple:
     return tuple(out)
 
 
+#: What the dev channel may say about a build that records no commit, and all it may say.
+#:
+#: `newer_head` nudges such a build on purpose, and its docstring says why. A nudge is not
+#: a comparison, though. A cached head of `main` and a wheel's version number are not on
+#: one axis, so charter cannot tell which is newer. `charter version` printed the cached
+#: PyPI number as "published" and newer, and `report send` said "9d18d55 is out — this may
+#: already be fixed", both to a 0.60.0 wheel that already contained `9d18d55` (#937). This
+#: sentence claims only what the install record shows. Both surfaces print it, so they
+#: cannot drift into describing one state two different ways.
+NOT_INSTALLED_FROM_MAIN = (f"this plane follows `{DEV_BRANCH}`, but this build was not "
+                           f"installed from a commit of it")
+
+
 def newer_head() -> str | None:
     """The dev channel's answer to "is there anything newer?" — a short commit, or None.
 

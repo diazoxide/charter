@@ -3129,11 +3129,10 @@ def sync_to(version: str) -> tuple[bool, str]:
 
 def cmd_version(args) -> int:
     """Show the lock, what is installed, and what to run next."""
-    from . import instance as _instance, update
+    from . import channel, instance as _instance, update
     cfg = _instance.load(config.ROOT)
     locked = _instance.locked_version(cfg)
     installed = _installed_version()
-    latest = (update.load().get("latest") or "").strip() or None
 
     print(f"  installed  {installed}")
     print(f"  locked     {locked or '— (this control plane pins no version)'}")
@@ -3144,8 +3143,26 @@ def cmd_version(args) -> int:
         util.info(f"  {update.SHARED_INSTALL_NOTE}")
         util.info(f"  conform this machine:  charter version sync")
         return 1
-    if latest and update.newer_than(installed):
-        util.info(f"A newer charter is published ({latest}).")
+    # The verdict prints the value its condition compared, and nothing else. It used to be
+    # gated on the cached PyPI `latest` and to print that number, while on the dev channel
+    # `newer_than` compares `main`'s head instead. So a dev plane on the 0.60.0 wheel read
+    # "A newer charter is published (0.58.0)" beside a `latest` row calling 0.58.0 stale. It
+    # was then sent to `version bump --push`, which writes a pin its own session start calls
+    # contradictory and, when PyPI's GET failed, installed the stale number (#937).
+    newer = update.newer_than(installed)
+    if newer and channel.is_dev():
+        mine = channel.installed_commit()
+        if mine:
+            # Unequal, and not which is ahead: a cache can predate the build it is read by.
+            util.info(f"this plane follows `{update.DEV_BRANCH}`, and the head cached for it "
+                      f"({newer}) is not the commit this build was installed from "
+                      f"({mine[:7]}).")
+        else:
+            util.info(f"{update.NOT_INSTALLED_FROM_MAIN}.")
+        util.info(f"  install `{update.DEV_BRANCH}`:  charter update")
+        return 0
+    if newer:
+        util.info(f"A newer charter is published ({newer}).")
         util.info(f"  update, commit and push the lock:  charter version bump --push")
         return 0
     util.ok("up to date." if not locked else f"in sync with the lock ({locked}).")
@@ -3233,8 +3250,12 @@ def cmd_version_bump(args) -> int:
     from . import instance as _instance, update
     target = (getattr(args, "to", None) or "").strip()
     if not target:
-        update.fetch_and_store()
-        target = (update.load().get("latest") or "").strip()
+        # What THIS call fetched, never the cache re-read after it. `fetch_and_store` leaves
+        # `latest` untouched when PyPI's GET fails, so the re-read found whatever an earlier
+        # fetch had left: the refusal below fired only on an empty cache, and a stale one
+        # was installed over the running build and pushed as the team's pin. Measured on a
+        # 0.60.0 wheel with 0.58.0 cached (#937).
+        target = (update.fetch_and_store() or "").strip()
         if not target:
             util.err("could not determine the latest version (offline?). "
                      "Pass one explicitly: charter version bump --to X.Y.Z")
