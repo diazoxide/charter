@@ -207,7 +207,8 @@ class EveryCharterCharterStartsForItselfIsDetached(PersonaIso):
     DETACHED = {
         "charter/update.py:maybe_spawn":
             "`charter _version-check` — a GET to PyPI, kicked off the status line's own "
-            "render path so a render never blocks on the network.",
+            "render path so a render never blocks on the network, and from the frame's "
+            "gather and SessionStart since #938.",
         "charter/glstate.py:maybe_spawn":
             "`charter gl-refresh` — the forge client over every clone in the workspace, "
             "same render path, same reason.",

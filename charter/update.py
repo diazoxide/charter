@@ -265,7 +265,15 @@ def latest_display(installed: str) -> str:
 
 
 def _fetch_latest() -> str | None:
-    """One unauthenticated GET of PyPI's JSON metadata endpoint."""
+    """One unauthenticated GET of PyPI's JSON metadata endpoint.
+
+    Through `urlopen`'s DEFAULT opener, which honours ``$https_proxy``, and one test fixture
+    rests on that: `tests/test_the_state_directory_is_charters_to_choose.py` sweeps `charter
+    hook sessionstart` against a plane with no ``.charter/`` yet, so it cannot plant a
+    cooldown lock to stop the check this spawns, and its `child_env` points that child at
+    `_NO_NETWORK` instead. Swapping in an explicit `build_opener(...)` with no `ProxyHandler`
+    would leave that fixture quietly GETting PyPI from CI with nothing failing.
+    """
     import urllib.request
     try:
         with urllib.request.urlopen(_URL, timeout=NET_TIMEOUT) as r:
@@ -336,9 +344,15 @@ def fetch_and_store() -> str | None:
 def maybe_spawn() -> None:
     """Kick off a detached refresh if the cache is stale. Non-blocking, best-effort.
 
-    Two independent brakes, because this is called from the status line: the cache
-    TTL, and a spawn cooldown that also covers *failed* attempts — otherwise an
-    offline machine would fork a doomed child on every single render.
+    Two independent brakes, because every caller is on a hot path: the cache TTL, and a
+    spawn cooldown that also covers *failed* attempts — otherwise an offline machine would
+    fork a doomed child on every single render.
+
+    Three callers, the same three the CI-state cache has: the status line's render
+    (`statusline._brand`), the frame's gather, which a panel with no cache runs on every
+    repaint, and the SessionStart hook. Until #938 the render was the only one, and no
+    Claude Code chat reached it any more, so the cache sat for days on the plane that
+    reported it. A new caller gets both brakes for free and needs no throttle of its own.
     """
     if not config.HAS_CONTROL_PLANE:
         return                # see `glstate.maybe_spawn` — no plane, nowhere to cache

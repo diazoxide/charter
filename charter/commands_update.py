@@ -138,9 +138,11 @@ def _installed_version() -> str:
 
 
 def _latest(live: bool = True) -> str | None:
-    """The newest published version. A live read here, unlike the status line's.
+    """The newest published version. A live read here, unlike every cached reader's.
 
-    `update.maybe_spawn` exists so rendering never blocks on the network. This is an
+    `update.maybe_spawn` exists so that nothing on a hot path blocks on the network, and
+    since #938 three callers are on one: the status line's render, the frame's gather and
+    the SessionStart hook. Each of them only ever starts the detached child. This is an
     explicit command a person typed and is waiting on, so it asks — and falls back to the
     cache, saying so, rather than refusing to work offline.
     """

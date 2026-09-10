@@ -18,7 +18,7 @@ one thing a hook is allowed to shout about.
 
 | Event | Matcher | What it does |
 | --- | --- | --- |
-| `SessionStart` | — | reconcile workspace state, GC persona scratch, inject context, run `doctor`, refresh forge state |
+| `SessionStart` | — | reconcile workspace state, GC persona scratch, inject context, run `doctor`, refresh forge state and the newer-charter check |
 | `UserPromptSubmit` | — | the commitment gate (below) |
 | `PreToolUse` | `Bash` | every guard below except the vault read |
 | `PreToolUse` | `Read\|Grep` | keeps a vault file from being read into context |

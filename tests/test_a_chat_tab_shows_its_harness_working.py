@@ -41,7 +41,7 @@ from unittest import mock
 
 from charter import config, hooks, inflight, tui
 from charter.frame import chats, gather, panel, slots, state
-from tests._isolation import PersonaIso, PlaneIso
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh
 from tests.test_frame_chat_switch import _plant
 
 
@@ -276,6 +276,9 @@ class TheThreeEdgesAreThreeHooks(PlaneIso, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
+        # `sessionstart` is one of the three edges, and it starts the newer-charter check
+        # since #938; on a fresh plane that is a real fork. These cases read the mark.
+        no_background_refresh(self)
         self.assertIn("edm-test-", str(config.STATE_DIR))
         self.payload = {"cwd": str(config.ROOT), "session_id": "s853"}
 

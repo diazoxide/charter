@@ -12,12 +12,15 @@ from __future__ import annotations
 import unittest
 
 from charter import hooks, persona
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 
 
 class MemoryInjectionBoundedCase(PlaneIso):
     def setUp(self):
         super().setUp()
+        # SessionStart starts the newer-charter check since #938; on a fresh plane that is
+        # a real fork. These cases measure the digest.
+        no_background_refresh(self)
         self.make_persona("dev", role="Dev", vault="d")
         persona.set_active("dev")
 

@@ -46,7 +46,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from charter import __version__, commands, config, hooks, instance
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 
 #: A pin below whatever is installed. Derived, never a literal: a hardcoded "0.0.1" would
 #: stop being a downgrade the day charter's own version dropped below it, which is absurd
@@ -129,6 +129,9 @@ class SessionStartConformance(PlaneIso):
 
     def setUp(self) -> None:
         super().setUp()
+        # The hook starts the newer-charter check since #938, and a fresh plane has no
+        # cache or cooldown lock to stop the fork. This class is about the pin.
+        no_background_refresh(self)
         self.root = config.ROOT
         self.installs: list[str] = []
         self._sync = commands.sync_to

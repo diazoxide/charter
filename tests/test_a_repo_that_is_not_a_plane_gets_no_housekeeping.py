@@ -82,7 +82,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import config, hooks
-from tests._isolation import PersonaIso, make_plane
+from tests._isolation import PersonaIso, make_plane, no_background_refresh
 
 
 def _run(fn, payload: dict) -> tuple[int, str]:
@@ -448,6 +448,10 @@ class InsideAPlaneNothingIsLost(StrangersRepo):
     def setUp(self) -> None:
         super().setUp()
         make_plane(self)
+        # SessionStart starts the newer-charter check since #938, and a plane made a line
+        # ago has no cache to be fresh and no cooldown lock to hold. What this class
+        # compares is what the handlers write, not a `_version-check` nobody waits for.
+        no_background_refresh(self)
         self.assertTrue(config.HAS_CONTROL_PLANE)
         self.assertIn("edm-test-", str(config.STATE_DIR))
         self.before = _tree(config.ROOT)

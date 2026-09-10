@@ -27,7 +27,7 @@ plane where nothing could ever have asked.
 
 import unittest
 
-from tests._isolation import run_hook
+from tests._isolation import no_background_refresh, run_hook
 from tests.test_hooks import InAControlPlane
 from charter import hooks, trace
 
@@ -157,6 +157,12 @@ class TestAnUnattendedRunWithNoWorkspaceFailsFast(InAControlPlane):
     """The one block that does NOT get an assume-and-continue rewrite. Every other nudge
     names a preference; this one names a missing input, and guessing it silently claims
     somebody else's job for the whole session."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # SessionStart starts the newer-charter check since #938; on a fresh plane that is
+        # a real fork. These cases read the briefing.
+        no_background_refresh(self)
 
     def context(self, mode: str | None) -> str:
         payload = {"session_id": "s", "cwd": str(self.tmp), "source": "startup"}

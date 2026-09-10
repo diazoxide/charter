@@ -23,7 +23,7 @@ import unittest
 from unittest import mock
 
 from charter import config, hooks, persona, todos, workspace
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 
 
 def _context(r) -> str:
@@ -44,6 +44,9 @@ class TodoInjectionCase(PlaneIso):
 
     def setUp(self) -> None:
         super().setUp()
+        # SessionStart starts the newer-charter check since #938; on a fresh plane that is
+        # a real fork. These cases read the todo digest.
+        no_background_refresh(self)
         workspace.ensure(self.WS)
         self.make_persona("dev", role="Dev", vault="dev")
         self.enterContext(mock.patch.dict(
@@ -189,6 +192,7 @@ class TestItDoesNotDisplaceTheWorkspaceGate(PlaneIso):
 
     def setUp(self) -> None:
         super().setUp()
+        no_background_refresh(self)            # SessionStart forks the #938 check otherwise
         self.ws = config.DEFAULT_WORKSPACE     # what an unconfirmed session resolves to
         workspace.ensure(self.ws)
         todos.add(self.ws, "TODO IN THE DEFAULT WORKSPACE")

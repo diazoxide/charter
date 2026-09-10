@@ -42,7 +42,7 @@ import unittest
 from unittest import mock
 
 from charter import config, persona, toolgate
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 
 #: A backslash, built rather than written: this file is read by a guard that scans for
 #: escaped state-directory paths, and the point of the tests below is to spell them.
@@ -410,6 +410,12 @@ class TestTheHookIsActuallyWired(GateCase):
     are asserted through the real handlers rather than by calling `toolgate` directly —
     the gap `TestItIsActuallyWired` in `test_vault_read_guard.py` exists to catch, one
     hook over."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # SessionStart starts the newer-charter check since #938; on a fresh plane that is
+        # a real fork. These cases are about the roster it freezes.
+        no_background_refresh(self)
 
     def payload(self, command: str, sid: str | None = SID) -> dict:
         return {"hook_event_name": "PreToolUse", "tool_name": "Bash",

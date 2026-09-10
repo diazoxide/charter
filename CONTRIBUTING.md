@@ -73,7 +73,11 @@ command.
   (a PyPI request) and `charter gl-refresh` (the forge client) went off 63 times in one
   green run. If your case renders a status line and does not care, call
   `tests._isolation.no_background_refresh(self)`; if it is *about* the child, call
-  `tests._planeguard.allow_background_children(self)`. A test that starts a real tmux
+  `tests._planeguard.allow_background_children(self)`. That guard only sees this process,
+  so a case that hands a plane to a real child charter that gathers or runs SessionStart —
+  a panel, `frame-gather`, `charter hook sessionstart` — gives that plane the cooldown lock
+  a real machine already has, with `tests._isolation.no_update_check_in(plane)` (#938).
+  A test that starts a real tmux
   server names its socket with `tests._tmuxreap.name("<slug>")`, so the next run can reap
   it when this one is killed before its cleanup runs — **every** socket it starts, including
   a second one, and never by decorating a name that helper already produced (#770). The slug

@@ -208,6 +208,41 @@ def no_background_refresh(case) -> None:
         case.addCleanup(patcher.stop)
 
 
+def no_update_check_in(plane: Path | None = None) -> Path:
+    """Stop anything standing in *plane* from forking the newer-charter check, by giving the
+    plane the cooldown lock a real machine already has.
+
+    For a case that hands a plane to a CHILD charter — a panel in a tmux pane, a detached
+    `charter frame-gather`, `charter hook sessionstart` run through the real entry point — or
+    that lets its own process fork with `tests._planeguard.allow_background_children`.
+    :func:`no_background_refresh` stubs the spawner in this process and reaches neither. Since
+    #938 the frame's gather and SessionStart both start `charter _version-check`, a GET to
+    PyPI, and a plane made a moment ago has no lock to stop them: one full run forked 18 of
+    them from children, and `tests._planeguard` saw none, because it only watches this
+    process.
+
+    The lock is the one `update.maybe_spawn` touches before it forks, and its path is asked of
+    production under `config.use(plane)` rather than spelled here. The child's own throttle
+    then answers "attempted within the hour" and forks nothing. That is the throttle doing
+    what it does in the field, not a stub standing in for it, so the gather and the hook still
+    run every line they ran before.
+
+    Not for a case whose subject is a plane with no state directory yet: planting a lock
+    creates one. `test_the_state_directory_is_charters_to_choose` keeps its child off the
+    network instead.
+    """
+    from charter import update
+
+    snapshot = config.use(config.ROOT if plane is None else Path(plane))
+    try:
+        lock = update._lock_file()
+        config.private_mkdir(lock.parent)
+        config.touch_for(lock)
+    finally:
+        config.restore(snapshot)
+    return lock
+
+
 def shipped_frame(case) -> None:
     """Pin this case's ``config.FRAME`` to the frame charter SHIPS.
 

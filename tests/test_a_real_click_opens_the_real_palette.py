@@ -54,7 +54,7 @@ from charter import commands_frame, config
 from charter.frame import layout, state, tmuxctl
 
 from tests import _tmuxreap
-from tests._isolation import PersonaIso, make_plane
+from tests._isolation import PersonaIso, make_plane, no_update_check_in
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -130,6 +130,11 @@ class _ARealFrameWithStrips(PersonaIso):
                                         f"tmux-{os.getuid()}", self.socket)
         self.addCleanup(self._teardown_socket)
         self.plane = make_plane(self, "schema = 1\n")
+        # The sidebar is a real `charter panel right`, and a panel with no gather cache
+        # gathers for itself, which starts the newer-charter check since #938: a
+        # `_version-check`, a GET to PyPI, from a child no guard in this process can see.
+        # One full run forked one per case here. The lock a real machine holds stops it.
+        no_update_check_in(self.plane)
         for name in (self.HERE, self.THERE):
             self.make_persona(name)
         # **One persona with a real badge on it, because #753's half of this file needs a
