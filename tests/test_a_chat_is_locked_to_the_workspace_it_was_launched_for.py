@@ -51,7 +51,7 @@ from unittest import mock
 from charter import commands_frame, commands_workspace, config, hooks, todos, workspace
 from charter.frame import state
 
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 from tests.test_a_chat_records_where_it_was_started import _DrivesTheLauncher
 
 #: The chat, as the launcher names it, and what `$CHARTER_SESSION_ID` holds inside it.
@@ -350,6 +350,11 @@ class SessionStartBriefsTheChatForItsOwnWorkspace(PlaneIso):
         # A hook inside a chat refreshes that frame's gather in the background. Nothing
         # here is about the gather, and the suite spends no child it was not asked to.
         self.enterContext(mock.patch("charter.frame.notify.plane_changed"))
+        # And SessionStart forks `charter _version-check` since #938 (`update.maybe_spawn`),
+        # which a test plane's fresh STATE_DIR always looks stale enough to fire. Nothing
+        # here is about the version check. Without this the suite's guard refuses the fork:
+        # green on this branch alone, seven errors on the PR's merge with that `main`.
+        no_background_refresh(self)
         for n in (config.DEFAULT_WORKSPACE, "north", "gamma"):
             workspace.ensure(n)
         todos.add(config.DEFAULT_WORKSPACE, "A TODO IN THE DEFAULT WORKSPACE")
@@ -392,6 +397,7 @@ class OutsideAFrameThePayloadIdStillDecides(PlaneIso):
 
     def setUp(self) -> None:
         super().setUp()
+        no_background_refresh(self)   # SessionStart's version-check fork; see the class above
         for n in (config.DEFAULT_WORKSPACE, "gamma"):
             workspace.ensure(n)
         todos.add(config.DEFAULT_WORKSPACE, "A TODO IN THE DEFAULT WORKSPACE")
@@ -440,6 +446,7 @@ class AChatOpenedInANamedWorkspaceIsBornLockedToIt(_DrivesTheLauncher, PlaneIso)
 
     def setUp(self) -> None:
         super().setUp()
+        no_background_refresh(self)   # its briefing case runs SessionStart; see above
         workspace.ensure("gamma")
         calls = self._launch()
         self.assertEqual(calls["rc"], 0)
