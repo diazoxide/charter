@@ -224,7 +224,11 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         the first one was the wrong one: `--force` moves this session's commands and never
         the chat, so the lock is still the workspace the chat was launched in."""
         _rc, err = self._use("gamma", force=True)
-        self.assertIn("north", err, "the lock that actually stands was not named")
+        # The PHRASE, not just the name: `'{locked}'` is interpolated, so asserting only
+        # `north` passes against any sentence at all — measured, a re-spelling of this line
+        # survived the whole module.
+        self.assertIn("still locked to 'north'", err,
+                      "the lock that actually stands was not named")
         self.assertNotIn("re-locked", err)
 
     def test_workspace_current_names_the_lock_it_is_not_resolving_to(self):
