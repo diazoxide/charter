@@ -74,9 +74,13 @@ into it. Charter writes the clone's `.git/info/exclude` entry *before* the file,
 no local file at all where the exclude cannot be written: a machine-local rule it cannot hide
 would be committable, and `guard ask`, `workspace reinit` and `clone` each say so in a
 sentence of its own. Once Claude Code has added its own approvals, charter keeps the file
-hidden for as long as it exists, never rewrites it and never merges into it. `doctor` only
-mentions it once the plane has moved on since — the plane's newer rules are then not in
-that file — and never suggests deleting a file that holds your approvals.
+hidden for as long as it exists, never rewrites it and never merges into it — and "hidden"
+holds across the repository: a clone and its linked worktrees read one `.git/info/exclude`,
+so charter's block there lists what every one of them needs, and the local file's line stays
+while that file exists in any of them, whatever charter's own records say. Once the file is
+gone and the plane no longer declares it, its line goes. `doctor` only mentions it once the
+plane has moved on since — the plane's newer rules are then not in that file — and never
+suggests deleting a file that holds your approvals, nor one it cannot read.
 
 `charter guard ask` refreshes every workspace's layer as it writes, so the rule is in force
 before the command returns rather than at the next launch. It runs both ways: drop a rule
@@ -110,7 +114,8 @@ clone's `.gitignore`, hides only the exact paths it wrote (never a `.claude/` gl
 would take your own untracked files with it), never touches a file it did not generate, and
 removes its files and its exclude block when the workspace goes. `git status` in your repo
 is unaffected. Linked worktrees included — their `info/exclude` is the main repo's, which is
-also why removal is not just a `rm -rf`. **`CLAUDE.md` is deliberately left behind**: a guest
+also why removal is not just a `rm -rf`, and why removing a workspace takes away only the
+lines no other checkout of that repository still needs. **`CLAUDE.md` is deliberately left behind**: a guest
 hides its own files, it does not narrate the host's.
 
 **And it is every harness's layer, not Claude Code's.** What a clone cuts off is spelled by

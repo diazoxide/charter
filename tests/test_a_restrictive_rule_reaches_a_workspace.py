@@ -576,7 +576,7 @@ class AHarnessEditedLocalFileStaysHidden(PlaneWithRestrictions):
         r = doctor.check_workspace_harness()
         self.assertEqual(r.status, doctor.WARN)
         self.assertIn(f"{self.ws}/api/{LOCAL} (harness-behind)", r.detail)
-        self.assertIn("the harness has added its own approvals", r.hint)
+        self.assertIn("the harness saves its approvals into that file", r.hint)
         self.assertNotIn("Remove", r.hint)
 
     def test_guard_ask_says_the_harness_keeps_it_rather_than_that_charter_did_not_write_it(self):
@@ -584,7 +584,7 @@ class AHarnessEditedLocalFileStaysHidden(PlaneWithRestrictions):
         self.at_the_plane()
         _, said = self.invoke(commands.cmd_guard_ask, pattern="kubectl *", local=True)
         self.assertIn(f"{self.ws}/api/{LOCAL}", said)
-        self.assertIn("the harness has added its own approvals", said)
+        self.assertIn("the harness saves its approvals into that file", said)
         self.assertNotIn("charter did not write", said)
         self.assertNotIn("Remove", said)
 
@@ -593,7 +593,7 @@ class AHarnessEditedLocalFileStaysHidden(PlaneWithRestrictions):
         self.plane_moves()
         said = " ".join(self.reinit_said())
         self.assertIn(f"api/{LOCAL}", said)
-        self.assertIn("the harness has added its own approvals", said)
+        self.assertIn("the harness saves its approvals into that file", said)
         self.assertNotIn("Remove", said)
 
     def test_removing_the_workspace_keeps_it_hidden(self):
@@ -1209,6 +1209,280 @@ class TheBucketsAreNamedAndAllowIsNotAmongThem(PlaneWithRestrictions):
             if not h.workspace_files() and not h.checkout_files():
                 self.assertEqual(h.restrictive_rules(), {},
                                  f"{h.name} claims rules ride in files it does not write")
+
+
+class TheSharedExcludeHoldsWhatEveryTreeNeeds(PlaneWithRestrictions):
+    """Review round 2's critical finding: ONE `info/exclude` serves a clone and every linked
+    worktree of it — the common git directory's — and each tree rewrote charter's block there
+    from its own marker alone.
+
+    So a worktree `api-wt`, wired after `api` because it sorts after it, withdrew its own
+    untouched local file and wrote the block without the local line, and the clone's
+    harness-edited copy — the plane's private rules plus the operator's grants — showed in
+    `git status` after every launch. Removing a workspace that held a worktree of another
+    workspace's clone emptied that clone's block outright. Real git throughout, with the
+    machine's global ignore taken out of every answer (`_status`).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        self.local = self.clone / LOCAL
+
+    def worktree(self, name: str, ws: str | None = None) -> Path:
+        path = workspace.workspace_dir(ws or self.ws) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _git(self.clone, "worktree", "add", "-q", "-b", f"wt-{name}-{ws or self.ws}", str(path))
+        return path
+
+    def git_asked(self) -> list[list[str]]:
+        """Every `util.run` argv for the rest of the case, each still run for real."""
+        calls: list[list[str]] = []
+        real = workspace.util.run
+
+        def _record(cmd, *args, **kwargs):
+            calls.append(list(cmd))
+            return real(cmd, *args, **kwargs)
+
+        self.enterContext(mock.patch.object(workspace.util, "run", _record))
+        return calls
+
+    def edited_clone_and_a_withdrawn_worktree(self) -> Path:
+        """The W1 shape: the clone's local file holds an approval, the plane then drops its
+        local rules, and the worktree's untouched copy is withdrawn by the next wire."""
+        wt = self.worktree("api-wt")
+        self.assertEqual([t.name for t in workspace.guest_trees(self.ws)], ["api", "api-wt"],
+                         "fixture: the worktree must be wired AFTER the clone")
+        workspace.wire_harnesses(self.ws)
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        return wt
+
+    def test_a_worktree_wired_after_its_clone_does_not_unhide_the_clones_local_file(self):
+        wt = self.edited_clone_and_a_withdrawn_worktree()
+        workspace.wire_harnesses(self.ws)
+        self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
+        self.assertEqual(_status(self.clone), "")
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(_status(self.clone), "")
+
+    def test_a_line_stays_while_any_tree_of_the_repository_still_holds_the_file(self):
+        """Keep-on-existence across trees, not only in the tree being wired. After
+        `unwire_guest` the clone has no marker to speak for its harness-edited file, so only
+        the file's existence keeps its line when the worktree next settles the block."""
+        wt = self.edited_clone_and_a_withdrawn_worktree()
+        workspace.unwire_guest(self.clone)
+        self.assertTrue(self.local.is_file(), "fixture: the harness-edited file must stay")
+        workspace.wire_guest(wt)
+        self.assertNotIn(LOCAL, _status(self.clone))
+
+    def test_removing_a_workspace_holding_a_worktree_of_this_clone_leaves_the_clone_hidden(self):
+        workspace.ensure("other")
+        self.worktree("api", ws="other")
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        self.assertEqual(_status(self.clone), "", "fixture: the clone was not hidden to begin with")
+        rc, said = self.invoke(commands_workspace.cmd_workspace_remove, name="other", force=True)
+        self.assertEqual(rc, 0, said)
+        self.assertEqual(_status(self.clone), "")
+
+    def test_doctor_reads_every_tree_sharing_the_block_as_current(self):
+        """`guest_layer` asks the same question the write answers. Compared against one tree's
+        own list, a block that correctly holds its sibling's line reads `stale` for ever."""
+        wt = self.edited_clone_and_a_withdrawn_worktree()
+        workspace.wire_harnesses(self.ws)
+        for tree in (self.clone, wt):
+            self.assertEqual(dict(workspace.guest_layer(tree))[".git/info/exclude"], "ok",
+                             tree.name)
+
+    def test_a_clone_without_a_linked_worktree_asks_git_nothing(self):
+        """A launch wires every checkout in the workspace, and a git spawn costs ~7 ms
+        (measured). A common directory with no `worktrees/` has no tree but its own."""
+        calls = self.git_asked()
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual([c for c in calls if "worktree" in c], [])
+        self.worktree("api-wt")
+        workspace.wire_harnesses(self.ws)
+        self.assertTrue([c for c in calls if "worktree" in c],
+                        "fixture: git was never asked, so the first half proves nothing")
+
+    def wire_the_worktree_while_git(self, answer) -> None:
+        wt = self.edited_clone_and_a_withdrawn_worktree()
+        real = workspace.util.run
+
+        def _git_says(cmd, *args, **kwargs):
+            if "worktree" in cmd:
+                return answer()
+            return real(cmd, *args, **kwargs)
+
+        with mock.patch.object(workspace.util, "run", _git_says):
+            workspace.wire_guest(wt)
+        self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
+
+    def test_git_that_refuses_to_list_the_worktrees_takes_no_line_away(self):
+        """Nobody can say what the other trees need, so nothing leaves the block."""
+        self.wire_the_worktree_while_git(
+            lambda: subprocess.CompletedProcess([], 128, stdout="", stderr="fatal"))
+        self.assertIn(f"/{LOCAL}", self.excludes(self.clone))
+
+    def test_git_that_cannot_be_run_takes_no_line_away(self):
+        def _missing():
+            raise FileNotFoundError("git")
+
+        self.wire_the_worktree_while_git(_missing)
+        self.assertIn(f"/{LOCAL}", self.excludes(self.clone))
+
+
+class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
+    """Review round 2: with no marker the harness-edited local file reads `harness-behind`,
+    the first pass does not name it, `_charter_owned` returns nothing — and the next wire
+    dropped its line. Measured three ways: `unwire_guest` then a launch, the marker deleted by
+    hand, an empty marker. The marker write also truncated in place, so a concurrent reader
+    could take a half-written marker for an empty one."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.local = self.clone / LOCAL
+        self.marker = self.clone / workspace.GENERATED_MARKER
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+
+    def launch(self) -> None:
+        """What a framed chat's launch runs for its workspace (`_launch_root` → `ensure`)."""
+        workspace.ensure(self.ws)
+
+    def assert_still_hidden(self) -> None:
+        self.assertNotIn(LOCAL, _status(self.clone))
+        self.assertIn(f"/{LOCAL}", self.excludes(self.clone))
+
+    def test_unwiring_and_then_launching_keeps_it_hidden(self):
+        workspace.unwire_guest(self.clone)
+        self.launch()
+        self.assertEqual(_status(self.clone), "")
+
+    def test_a_marker_deleted_by_hand_does_not_unhide_it(self):
+        self.marker.unlink()
+        self.launch()
+        self.assert_still_hidden()
+
+    def test_an_empty_marker_does_not_unhide_it(self):
+        self.marker.write_text("")
+        self.launch()
+        self.assert_still_hidden()
+
+    def test_a_reader_never_sees_a_half_written_marker(self):
+        """Published whole, by rename. A reader that opened the marker before a wire reads
+        the whole marker it opened; truncated in place, the same reader read whatever the
+        writer had got to."""
+        before = self.marker.read_text()
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        with self.marker.open() as reader:
+            workspace.wire_harnesses(self.ws)
+            self.assertEqual(reader.read(), before)
+        self.assertIn(".claude/agents/steward.md", json.loads(self.marker.read_text()),
+                      "fixture: the wire did not rewrite the marker")
+
+
+class AnUnreadableLocalFileIsNotCalledForeign(PlaneWithRestrictions):
+    """Review round 2: a co-written file charter cannot read was folded into `foreign`, and
+    `guard ask` and `reinit` then advised removing it — a file that holds the harness's
+    approvals. It is said to be unreadable, left exactly as it is, and kept hidden."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.local = self.clone / LOCAL
+        self.theirs = _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.local.chmod(0o000)
+        self.addCleanup(self.local.chmod, 0o600)
+        with self.assertRaises(PermissionError, msg="fixture: this user can read a 000 file"):
+            self.local.read_text()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)", "Bash(kubectl *)"])
+
+    def test_the_row_says_it_cannot_be_read(self):
+        self.assertEqual(dict(workspace.wire_guest(self.clone))[LOCAL], "unreadable")
+
+    def test_guard_ask_says_it_cannot_be_read_and_never_advises_removal(self):
+        self.at_the_plane()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="helm uninstall *", local=True)
+        self.assertIn(f"{self.ws}/api/{LOCAL} cannot be read", said)
+        self.assertNotIn("Remove", said)
+        self.assertNotIn("charter did not write", said)
+
+    def test_reinit_says_it_cannot_be_read_and_leaves_it_as_it_is(self):
+        said = " ".join(self.reinit_said())
+        self.assertIn(f"api/{LOCAL} cannot be read", said)
+        self.assertNotIn("Remove", said)
+        self.assertNotIn("not written by charter", said)
+        self.local.chmod(0o600)
+        self.assertEqual(self.local.read_text(), self.theirs)
+        self.assertEqual(_status(self.clone), "")
+
+
+class AGoneLocalFileLetsItsLineGo(PlaneWithRestrictions):
+    """Review round 2: a co-written file that was gone and no longer wanted kept its marker
+    entry and its exclude line for ever — a line hiding nothing, naming a path charter no
+    longer has. Once it is gone from every tree and unwanted, both go."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        _as_the_harness_would(self.clone / LOCAL, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        workspace.wire_harnesses(self.ws)
+        self.assertIn(f"/{LOCAL}", self.excludes(self.clone),
+                      "fixture: the harness-edited file should still be hidden")
+
+    def test_once_it_is_gone_its_marker_entry_and_its_line_go(self):
+        (self.clone / LOCAL).unlink()
+        workspace.wire_harnesses(self.ws)
+        self.assertNotIn(LOCAL, json.loads(
+            (self.clone / workspace.GENERATED_MARKER).read_text()))
+        self.assertNotIn(f"/{LOCAL}", self.excludes(self.clone))
+        self.assertEqual(_status(self.clone), "")
+
+
+class HarnessBehindIsTrueOfAFileCharterNeverWrote(PlaneWithRestrictions):
+    """Review round 2: every `harness-behind` sentence said charter "no longer rewrites" the
+    file. For a local file that was there before charter wired the clone, charter never
+    rewrote it at all — the sentence has to be true of both."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.fresh = _repo(workspace.workspace_dir(self.ws) / "fresh")
+        (self.fresh / ".claude").mkdir()
+        (self.fresh / LOCAL).write_text(
+            json.dumps({"permissions": {"allow": ["Bash(make *)"]}}, indent=2) + "\n")
+
+    def test_doctor(self):
+        workspace.wire_harnesses(self.ws)
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/fresh/{LOCAL} (harness-behind)", r.detail)
+        self.assertIn("the harness saves its approvals into that file", r.hint)
+        self.assertNotIn("no longer", r.hint)
+
+    def test_guard_ask(self):
+        self.at_the_plane()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="kubectl *", local=True)
+        self.assertIn(f"{self.ws}/fresh/{LOCAL}", said)
+        self.assertIn("the harness saves its approvals into that file", said)
+        self.assertNotIn("no longer", said)
+
+    def test_reinit(self):
+        said = " ".join(self.reinit_said())
+        self.assertIn(f"fresh/{LOCAL}", said)
+        self.assertIn("the harness saves its approvals into that file", said)
+        self.assertNotIn("no longer", said)
 
 
 if __name__ == "__main__":  # pragma: no cover

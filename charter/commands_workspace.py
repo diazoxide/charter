@@ -1518,9 +1518,16 @@ def cmd_workspace_reinit(args) -> int:
             elif did == "harness-behind":
                 # Not "foreign" and never "remove it": the approvals in that file are the
                 # harness's own, and deleting it to get charter's copy back destroys them.
-                util.warn(f"'{n}': {rel} — the harness has added its own approvals to it, so "
-                          f"charter no longer rewrites it: the plane's machine-local rules "
-                          f"added since are not in force there.")
+                # True of a file charter never wrote as well: "no longer rewrites" was not.
+                util.warn(f"'{n}': {rel} holds settings charter did not put there, and the "
+                          f"harness saves its approvals into that file, so charter does not "
+                          f"rewrite it: the plane's machine-local rules it lacks are not in "
+                          f"force there.")
+            elif did == "unreadable":
+                # A co-written file charter cannot read (#942, review round 2). Not `foreign`'s
+                # "remove it": it may hold the harness's approvals, and charter cannot look.
+                util.warn(f"'{n}': {rel} cannot be read — left exactly as it is, so the "
+                          f"plane's machine-local rules are not in force there until it can be.")
             else:
                 repairs += 1
                 repaired.add(n)

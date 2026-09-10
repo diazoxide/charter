@@ -1769,7 +1769,7 @@ def _mirror_into_workspaces() -> None:
         # The rule IS written. The mirror is the follow-up, and a plane whose `workspaces/`
         # cannot be listed must not turn a successful `guard ask` into a failure.
         return
-    changed, unreached, behind, withheld, unhidden = [], [], [], [], []
+    changed, unreached, behind, unreadable, withheld, unhidden = [], [], [], [], [], []
     for ws in names:
         try:
             rows = workspace.wire_harnesses(ws)
@@ -1792,6 +1792,8 @@ def _mirror_into_workspaces() -> None:
                 changed.append(where)
             elif status == "harness-behind":
                 behind.append(where)
+            elif status == "unreadable":
+                unreadable.append(where)
             elif status == "withheld":
                 withheld.append(where)
             elif status in ("foreign", "blocked"):
@@ -1806,9 +1808,18 @@ def _mirror_into_workspaces() -> None:
     if behind:
         # Never "remove it": the approvals in that file are the harness's, and the advice
         # that suits a file somebody else wrote would destroy them.
-        util.warn(f"  {', '.join(behind)}: the harness has added its own approvals, so "
-                  f"charter no longer rewrites it and did not add this rule there — add the "
-                  f"rule to that file by hand if a chat rooted there needs it.")
+        # True of a file charter wrote and the harness has since added to, and of one that was
+        # there before charter ever was — "no longer rewrites" was false of the second.
+        util.warn(f"  {', '.join(behind)}: holds settings charter did not put there, and the "
+                  f"harness saves its approvals into that file, so charter does not rewrite it "
+                  f"and did not add this rule there — add the rule to that file by hand if a "
+                  f"chat rooted there needs it.")
+    if unreadable:
+        # Never "remove it" either (#942, review round 2): charter cannot see what is in the
+        # file, and a file the harness writes into may hold its approvals.
+        util.warn(f"  {', '.join(unreadable)} cannot be read, so charter left it exactly as it "
+                  f"is and did not add this rule there — a chat rooted there does not have it "
+                  f"until that file can be read.")
     if withheld:
         util.warn(f"  {', '.join(withheld)} was not written: charter could not hide it in "
                   f"that checkout's .git/info/exclude, and a machine-local rule it cannot "
