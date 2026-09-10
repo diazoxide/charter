@@ -230,7 +230,50 @@ class TestCommandLayer(WorkspaceLockBase):
         rc, err = self._said(commands.cmd_workspace_create,
                              name="beta", use=True, force=False, repos=[])
         self.assertEqual(rc, 2)
-        self.assertIn("start a new session to use it, or re-run with --force", err)
+        self.assertIn("Workspace 'beta' was created; start a new session to use it, "
+                      "or re-run with --force", err)
+
+    def test_workspace_current_says_whether_this_session_is_locked(self):
+        """`ws current` exists to explain the resolution, and the lock note is half that
+        answer. #936 split it three ways — unlocked, locked to what resolved, locked to
+        something else — and the first two had no test at all: re-spelling either left the
+        suite green."""
+        rc, err = self._said(commands.cmd_workspace_current)
+        self.assertEqual(rc, 0, err)
+        self.assertIn(", unlocked", err)
+
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_current)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("🔒 locked for this session", err)
+
+    def test_the_first_use_of_a_session_says_it_set_and_locked_the_workspace(self):
+        """The ordinary path, whose sentence nothing asserted. Both guards on that line
+        were survivors: with the `locked and` conjunct dropped, a session that had never
+        been locked was told "🔒 still locked to 'None'"; with the verb conditional
+        collapsed, its first selection was announced as "re-locked to"."""
+        rc, err = self._said(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'alpha'", err)
+        self.assertIn("🔒 locked for this session", err)
+        self.assertNotIn("re-locked", err)
+        self.assertNotIn("still locked", err)
+
+    def test_a_session_with_no_id_is_told_of_no_lock_because_none_was_written(self):
+        """`set_active` writes the lock under a session id, so a shell with no harness id
+        gets a terminal pointer and no lock at all. Announcing "🔒 locked for this session"
+        there named a lock nothing holds — the same false claim as the chat case, one branch
+        over. It is also what pins the `locked and` conjunct above: without it, `None !=
+        'alpha'` is true and the announcement became "🔒 still locked to 'None'"."""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            rc, err = self._said(commands.cmd_workspace_use,
+                                 name="alpha", force=False, create=True)
+            self.assertIsNone(workspace.is_locked(), "the fixture wrote a lock after all")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'alpha'", err)
+        self.assertNotIn("🔒", err)
+        self.assertNotIn("still locked", err)
 
     def test_outside_a_chat_a_forced_switch_still_says_it_re_locked(self):
         """The other side of the sentence #936 changed. Outside a chat `--force` really does
@@ -239,7 +282,7 @@ class TestCommandLayer(WorkspaceLockBase):
         self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
         rc, err = self._said(commands.cmd_workspace_use, name="beta", force=True, create=True)
         self.assertEqual(rc, 0, err)
-        self.assertIn("re-locked to 'beta'", err)
+        self.assertIn("Active workspace re-locked to 'beta'", err)
         self.assertIn("🔒 locked for this session", err)
         self.assertEqual(workspace.is_locked(), "beta")
 

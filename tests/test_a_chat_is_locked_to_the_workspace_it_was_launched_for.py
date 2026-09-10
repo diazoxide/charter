@@ -232,6 +232,7 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         # The PHRASE, not just the name: `'{locked}'` is interpolated, so asserting only
         # `north` passes against any sentence at all — measured, a re-spelling of this line
         # survived the whole module.
+        self.assertIn("Active workspace set to 'gamma'", err)
         self.assertIn("this session's commands only", err)
         self.assertIn("still locked to 'north'", err,
                       "the lock that actually stands was not named")

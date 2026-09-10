@@ -231,9 +231,15 @@ def cmd_workspace_use(args) -> int:
         # before the next refusal named the real one — ADR 0013's divergence rule.
         util.ok(f"Active workspace set to '{args.name}'{_scope_note(scope)} — this session's "
                 f"commands only; 🔒 still locked to '{locked}'.")
-    else:
+    elif locked:
         verb = "re-locked to" if getattr(args, "force", False) else "set to"
         util.ok(f"Active workspace {verb} '{args.name}'{_scope_note(scope)} — 🔒 locked for this session.")
+    else:
+        # No session to key a lock on — a plain shell with no harness id. `set_active`
+        # wrote a terminal pointer and no lock, so nothing here may announce one: this
+        # said "🔒 locked for this session" to a session that was not locked at all, which
+        # is the same false claim, one branch over (ADR 0013).
+        util.ok(f"Active workspace set to '{args.name}'{_scope_note(scope)}.")
     _warn_env_override(args.name)
     return 0
 
