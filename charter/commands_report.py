@@ -280,17 +280,22 @@ def _warn_if_stale() -> None:
     `statusline._dev_chip` exists to resolve, and #457 already made it one function so a
     third surface can call it rather than re-derive `channel.is_dev()` and its try/except.
 
-    **A dev plane whose build records no commit is nudged without a comparison** (#937).
-    `newer_head` returns the cached head for such a build on purpose, so the nudge stays.
-    What it may not do is call that head "out" and a fix "may already" be in it. Measured:
-    `9d18d55` was named that way to a 0.60.0 wheel that already contained it.
+    **On the dev channel it now claims no direction at all** (#937). `newer_head` answers
+    with the cached head for a build that records no commit, and for one whose commit merely
+    DIFFERS from that head. Neither is a measurement of which side is ahead, and "is out"
+    with "may already be fixed" claimed it of both: the first was said to a 0.60.0 wheel
+    that already contained `9d18d55`, and the second is reachable whenever another plane's
+    `charter update` has moved this machine's binary past this plane's cache (#127). The
+    nudge itself stays, for the reason `update.newer_head`'s docstring gives; both dev cases
+    print `update.dev_verdict`, which is the sentence `charter version` prints for the same
+    state.
     """
     try:
         from . import channel, statusline, update
         latest = update.newer_than(__version__)
         if latest:
-            if channel.is_dev() and not channel.installed_commit():
-                said = f"{update.NOT_INSTALLED_FROM_MAIN} — `charter update` moves it"
+            if channel.is_dev():
+                said = f"{update.dev_verdict(latest)} — `charter update` moves it"
             else:
                 said = f"{latest} is out — this may already be fixed"
             # `util.color_enabled()`, not the chip's ANSI default: this is the one caller

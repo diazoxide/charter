@@ -3151,15 +3151,18 @@ def cmd_version(args) -> int:
     # contradictory and, when PyPI's GET failed, installed the stale number (#937).
     newer = update.newer_than(installed)
     if newer and channel.is_dev():
-        mine = channel.installed_commit()
-        if mine:
-            # Unequal, and not which is ahead: a cache can predate the build it is read by.
-            util.info(f"this plane follows `{update.DEV_BRANCH}`, and the head cached for it "
-                      f"({newer}) is not the commit this build was installed from "
-                      f"({mine[:7]}).")
+        util.info(f"{update.dev_verdict(newer)}.")
+        if channel.running_inside(config.ROOT):
+            # `charter update` is an INSTALLER's remedy, and it refuses to install over the
+            # tree it is running from: it answers "the charter you are running IS this tree
+            # … it moves by git rather than by an installer: charter version", which is this
+            # command. Naming it here sent a reader working in a charter clone around that
+            # circle, so this branch names what actually moves that tree. Same question,
+            # same function, as `commands_update._update_dev_on_a_checkout`'s own gate.
+            util.info(f"  this tree IS the charter you are running; it moves by git:  "
+                      f"git -C {channel.package_dir().parent} pull")
         else:
-            util.info(f"{update.NOT_INSTALLED_FROM_MAIN}.")
-        util.info(f"  install `{update.DEV_BRANCH}`:  charter update")
+            util.info(f"  install `{update.DEV_BRANCH}`:  charter update")
         return 0
     if newer:
         util.info(f"A newer charter is published ({newer}).")
@@ -3257,7 +3260,12 @@ def cmd_version_bump(args) -> int:
         # 0.60.0 wheel with 0.58.0 cached (#937).
         target = (update.fetch_and_store() or "").strip()
         if not target:
-            util.err("could not determine the latest version (offline?). "
+            # NOT "(offline?)". `fetch_and_store` also answers None when PyPI DID reply and
+            # the cache write failed, so naming the network is a cause charter has not
+            # verified — ADR 0009, whose whole point is that a confident wrong diagnosis
+            # tells the reader to stop looking. Both candidates are offered as candidates.
+            util.err("no version came back from PyPI to pin: either it did not answer, "
+                     "or its answer could not be cached. "
                      "Pass one explicitly: charter version bump --to X.Y.Z")
             return 1
     if target != _installed_version():

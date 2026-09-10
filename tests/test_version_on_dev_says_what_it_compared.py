@@ -16,17 +16,20 @@ each class below pins one of them:
 * **The headline printed a value its condition did not test.** On dev the verdict now
   names what was compared: the cached head against this build's commit, or, where there is
   no commit, the fact that this build did not come from `main`. It never prints a PyPI
-  number, and its remedy is `charter update`. That is the dev channel's command. `version
-  bump --push` writes a pin that this plane's own session start calls contradictory.
-* **`report send` claimed the same comparison.** ``9d18d55 is out — this may already be
-  fixed`` was said to a build that `9d18d55` predates. The nudge is kept, because
-  `newer_head`'s docstring explains why it is deliberate. Only what it claims changed.
+  number, and its remedy is `charter update` — or `git`, where the charter running the
+  command IS the tree, because `charter update` sends that reader back to `charter
+  version`. `version bump --push` writes a pin that this plane's own session start calls
+  contradictory.
+* **`report send` claimed a direction nobody measured.** ``9d18d55 is out — this may
+  already be fixed`` was said to a build that `9d18d55` predates. The nudge is kept,
+  because `newer_head`'s docstring explains why it is deliberate, and both dev cases now
+  print `update.dev_verdict`, the same sentence `charter version` prints.
 * **`version bump` pinned a version it had not fetched.** It called `fetch_and_store` and
-  then re-read the cache, which a failed GET leaves untouched. So the "offline?" refusal
-  fired only on an empty cache, and a stale one was installed over the running build and
-  pushed to the team.
+  then re-read the cache, which a failed GET leaves untouched. So the refusal fired only
+  on an empty cache, and a stale one was installed over the running build and pushed.
 
-ADR 0013: do not present as checked what was not checked.
+ADR 0013: do not present as checked what was not checked. ADR 0009: an error may not
+assert a cause it did not verify, which is why that refusal no longer says "offline?".
 
 Nothing here reaches the network or installs anything: `NoNetwork` refuses every route
 out, the two GETs are stubbed where a test needs an answer, and `sync_to`,
@@ -142,6 +145,19 @@ class VersionOnDevSaysWhatItCompared(NoNetwork, PersonaIso):
         self.assertNotIn("up to date", verdict)
         self.assertIn(update.NOT_INSTALLED_FROM_MAIN, verdict)
 
+    def test_a_charter_run_out_of_this_tree_is_sent_to_git_not_the_installer(self):
+        """`charter update` refuses to install over the tree it is running from, and points
+        at `charter version` instead ("it moves by git rather than by an installer"). So
+        this command naming `charter update` there is a loop between two commands, each
+        naming the other. A checkout records no commit, so it lands in this branch.
+        """
+        _cache(latest=_STALE, head=_HEAD, ts=1.0)
+        with mock.patch("charter.channel.running_inside", return_value=True):
+            _, printed = self._version(commit=None)
+        verdict = _verdict(printed)
+        self.assertIn("pull", verdict)
+        self.assertNotIn("charter update", verdict)
+
     def test_a_build_on_the_cached_head_is_up_to_date(self):
         _cache(latest=_STALE, head=_MINE, ts=1.0)
         rc, printed = self._version(commit=_MINE)
@@ -200,11 +216,37 @@ class TheReportNudgeOnDevClaimsNoComparison(NoNetwork, PersonaIso):
         self.assertIn(update.NOT_INSTALLED_FROM_MAIN, said)
         self.assertIn("charter update", said)
 
-    def test_a_build_with_a_commit_keeps_the_nudge_it_had(self):
-        """#937 changes what the no-commit case claims and nothing else."""
+    def test_a_build_with_a_commit_is_not_told_the_head_is_out_either(self):
+        """The case the first fix left behind, and it is reachable rather than theoretical.
+
+        The cache is per plane (`config.STATE_DIR`) and the binary is one machine-global
+        install (#127). So `charter update` in plane A moves this build to H2 while plane
+        B's cache still holds H1, an ancestor of it. `newer_head` returns H1 because H1 is
+        not H2, and "H1 is out — this may already be fixed" then tells a build that
+        already contains H1 to go and get it. Unequal is the whole measurement.
+        """
         said = self._nudge(commit=_MINE)
-        self.assertIn(f"{_HEAD[:7]} is out", said)
-        self.assertNotIn(update.NOT_INSTALLED_FROM_MAIN, said)
+        self.assertIn(f"charter {__version__} dev", said)
+        self.assertNotIn("is out", said)
+        self.assertNotIn("may already be fixed", said)
+        # Both commits, as `charter version` names them.
+        self.assertIn(_HEAD[:7], said)
+        self.assertIn(_MINE[:7], said)
+        self.assertIn("charter update", said)
+
+    def test_both_surfaces_describe_a_build_with_a_commit_the_same_way(self):
+        """`update.dev_verdict` is one function for the reason #457 made `_dev_chip` one:
+        two surfaces describing a single state in two wordings is how #937 began, and a
+        constant shared by only one of the two cases would leave the other free to drift."""
+        _cache(latest=_STALE, head=_HEAD, ts=1.0)
+        with mock.patch("charter.channel.installed_commit", return_value=_MINE):
+            sentence = update.dev_verdict(_HEAD[:7])
+            _, printed = _run(commands.cmd_version, SimpleNamespace())
+            buf = io.StringIO()
+            with mock.patch.object(util, "_USE_COLOR", False), redirect_stderr(buf):
+                commands_report._warn_if_stale()
+        self.assertIn(sentence, _verdict(printed))
+        self.assertIn(sentence, buf.getvalue())
 
     def test_a_build_on_the_cached_head_is_not_nudged(self):
         self.assertEqual(self._nudge(commit=_MINE, head=_MINE), "")
@@ -266,7 +308,11 @@ class VersionBumpPinsOnlyWhatItFetched(NoNetwork, PersonaIso):
             rc, printed = self._bump()
         self.assertEqual(rc, 1)
         self.assertEqual(self.calls, [], "bump acted on a version it did not fetch")
-        self.assertIn("offline", printed)
+        self.assertIn("charter version bump --to", printed)
+        self.assertNotIn("offline", printed,
+                         "the refusal names a cause it did not check (ADR 0009): "
+                         "`fetch_and_store` also answers None when PyPI replied and the "
+                         "cache write failed")
 
     def test_a_dev_plane_whose_head_fetch_succeeds_refuses_the_same_way(self):
         """The measured shape: on dev the branch GET can succeed while PyPI's fails, and a

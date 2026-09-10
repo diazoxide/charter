@@ -145,6 +145,31 @@ NOT_INSTALLED_FROM_MAIN = (f"this plane follows `{DEV_BRANCH}`, but this build w
                            f"installed from a commit of it")
 
 
+def dev_verdict(head: str) -> str:
+    """What a dev plane may say about *head*, the short commit :func:`newer_head` returned.
+
+    One comparison, and never a direction. `charter version` and `charter report send` both
+    print this: one state described two different ways on two surfaces is how #937 started,
+    and a constant shared by only ONE of the two cases below would leave the other free to
+    drift back.
+
+    **The build that has a commit is the case that looks safe and is not.** "``<head>`` is
+    out" reads as *``main`` has moved past you*, which charter has not checked. The cache is
+    per plane (:data:`config.STATE_DIR`) while the binary is one machine-global install
+    (#127), so ``charter update`` run in plane A moves this build to a commit that plane B's
+    cache has never heard of. B's cached head is then an ANCESTOR of what is running, and
+    "is out" is exactly backwards — the same claim, in the same direction, that #937 is
+    about. Unequal is all that was measured, so unequal is all this says.
+    """
+    from . import channel
+
+    mine = channel.installed_commit()
+    if not mine:
+        return NOT_INSTALLED_FROM_MAIN
+    return (f"this plane follows `{DEV_BRANCH}`, and the head cached for it ({head}) is "
+            f"not the commit this build was installed from ({mine[:7]})")
+
+
 def newer_head() -> str | None:
     """The dev channel's answer to "is there anything newer?" — a short commit, or None.
 

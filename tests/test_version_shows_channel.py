@@ -117,9 +117,15 @@ class TheStalenessNudgeHonoursTheTerminal(unittest.TestCase):
 
     def _nudge(self, *, color: bool) -> str:
         buf = io.StringIO()
+        # `installed_commit` is pinned, not inherited: since #937 the sentence beside the
+        # chip depends on whether this build records a commit, so without this the branch
+        # exercised here would be decided by how the charter running the suite happened to
+        # be installed (CONTRIBUTING: a test pins what it depends on). `None` is the wheel,
+        # which is what a runner has.
         with mock.patch.object(config, "UPDATE", {"channel": "dev"}), \
              mock.patch.object(util, "_USE_COLOR", color), \
              mock.patch("charter.update.newer_than", lambda v: "9.9.9"), \
+             mock.patch("charter.channel.installed_commit", return_value=None), \
              contextlib.redirect_stderr(buf):
             commands_report._warn_if_stale()
         return buf.getvalue()

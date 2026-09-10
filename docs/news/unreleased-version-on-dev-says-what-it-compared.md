@@ -19,11 +19,14 @@ not suit a dev plane either: it writes a pin that the plane's own session start 
 contradictory.
 
 Now the verdict names only what was compared. On a git build it names the cached head and
-your commit when they differ, and does not say which is newer. On a build that records no
-commit it says that this plane follows `main` and this build was not installed from a commit
-of it. Either way it names `charter update`. `charter report send` stops telling that same
-build that a commit it already contains "may already" hold a fix. The stable channel's
-output is unchanged.
+your commit when they differ, and does not say which is newer: this cache is this plane's,
+the binary is the machine's, so another plane's `charter update` can leave the head cached
+here behind the build you are running. On a build that records no commit it says that this
+plane follows `main` and this build was not installed from a commit of it. Either way it
+names `charter update`, or a `git pull` when the charter you run is a clone you are working
+in. `charter report send` prints the same sentence, so neither surface tells a dev build
+that a commit it may already contain holds the fix. The stable channel's output is
+unchanged.
 
 `charter version bump` with no `--to` now pins only the version PyPI returned to that same
 command. Before, it re-read the cache after fetching, and a failed request leaves the cache
