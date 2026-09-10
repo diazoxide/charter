@@ -1499,6 +1499,15 @@ def cmd_workspace_reinit(args) -> int:
             elif did == "blocked":
                 util.err(f"'{n}': {rel} could not be written — something is in the way at "
                          f"that path. charter never deletes or renames existing content.")
+            elif did == "removed":
+                # Its own sentence rather than the ternary below, which would call a
+                # deletion "refreshed". A removal is the one repair here whose CAUSE the
+                # operator cannot see in the workspace — the plane stopped declaring it —
+                # so the row has to carry it (#942).
+                repairs += 1
+                repaired.add(n)
+                util.ok(f"Reinitialized '{n}' → removed {rel} — the plane no longer "
+                        f"declares it (charter's harness layer).")
             else:
                 repairs += 1
                 repaired.add(n)

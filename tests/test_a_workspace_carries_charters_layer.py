@@ -80,9 +80,25 @@ class WhatIsWritten(WorkspaceLayer):
             (config.ROOT / ".claude" / "settings.json").read_text()),
             "fixture no longer carries the key this test is about")
 
-    def test_the_planes_other_keys_stay_in_the_plane(self):
-        """A `permissions` block is the plane's decision about the plane's own root."""
+    def test_a_grant_alone_leaves_the_permissions_key_out_entirely(self):
+        """An `allow` is the plane's decision about the plane's own root, and copying one
+        sideways puts a permission in force where nobody clicked for it."""
         self.assertNotIn("permissions", json.loads(self.settings().read_text()))
+
+    def test_only_the_restrictive_half_of_permissions_travels(self):
+        """#942, and the blind spot the case above had on its own: this fixture declared
+        nothing but a grant, so *"the whole key stays in the plane"* and *"only grants stay
+        in the plane"* were indistinguishable. `ask` and `deny` are the opposite of a grant
+        — they add a prompt and a refusal — so they travel, and the sentence above survives
+        untouched. `test_a_restrictive_rule_reaches_a_workspace` is the whole of it."""
+        _plane_settings(config.ROOT, permissions={
+            "allow": ["Bash(ls:*)"],
+            "ask": ["Bash(terraform apply *)"],
+            "deny": ["Bash(rm -rf /)"]})
+        workspace.wire_harnesses(self.ws)
+        perms = json.loads(self.settings().read_text())["permissions"]
+        self.assertEqual(perms, {"ask": ["Bash(terraform apply *)"],
+                                 "deny": ["Bash(rm -rf /)"]})
 
     def test_nothing_else_is_materialised_into_the_workspace(self):
         """Skills arrive with the plugin; agents walk up from here because this directory
@@ -632,8 +648,11 @@ class TheRowsQuietStates(WorkspaceLayer):
                         "no workspace at all — the count below would be zero either way")
         r = doctor.check_workspace_harness()
         self.assertEqual(r.status, doctor.OK)
-        self.assertIn("nothing to mirror — the plane declares no plugin or env of its "
-                      "own", r.detail)
+        # "or ask/deny rule" since #942: a plane whose only `permissions` are grants
+        # declares nothing this row mirrors, and naming only the two keys would let a plane
+        # that DOES declare an ask rule read as having nothing to mirror.
+        self.assertIn("nothing to mirror — the plane declares no plugin, env or ask/deny "
+                      "rule of its own", r.detail)
         self.assertNotIn("generated file(s)", r.detail)
 
 

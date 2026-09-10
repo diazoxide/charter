@@ -1901,6 +1901,30 @@ def check_workspace_clones() -> Result:
                         "— never a live query, this runs at SessionStart."))
 
 
+def _mirrored_restrictions() -> int:
+    """How many of the plane's `ask`/`deny` rules ride in the generated workspace layer.
+
+    Asked of every registered harness (`Harness.restrictive_rules`) rather than read out of
+    `.claude/settings.json` here: which of the plane's policy travels is a fact about a
+    harness's own config format, and a literal in this file is the
+    hardcoded-literal-per-harness failure `harness/registry.py` exists to end.
+
+    A harness that cannot answer costs the SENTENCE and never the row. The findings are what
+    the operator acts on; this only decides whether one more clause is printed beside them,
+    so degrading to "say nothing extra" is the direction that cannot mislead. Narrow, per
+    `check_memory_indexes` — a broad catch here once swallowed a `NameError` and reported OK.
+    """
+    from .harness import registry as _registry
+
+    total = 0
+    for h in _registry.all():
+        try:
+            total += len(h.restrictive_rules() or ())
+        except (OSError, ValueError):
+            continue
+    return total
+
+
 def check_workspace_harness() -> Result:
     """Does every workspace still carry charter's layer, and is it the current one? (#850)
 
@@ -1909,6 +1933,12 @@ def check_workspace_harness() -> Result:
     `.claude/settings.json` there is the whole of whether that chat has a plugin and a
     `$CHARTER_HARNESS`. It is generated from the plane's own settings, so it
     goes stale the moment the plane's do, and nothing else notices.
+
+    **Since #942 it is also the whole of whether the plane's `ask` and `deny` rules are in
+    force there**, which is why the hint names that consequence rather than leaving the
+    reader to infer it from a filename. A stale plugin list is a poorer chat; a stale
+    restriction is a force-prompt rule that does not prompt, and the operator was told it
+    applied to everyone on the repo.
 
     **Regenerate and compare** (`workspace.harness_layer`), which is
     `persona lint --only stale`'s test rather than a second notion of staleness — see that
@@ -1970,8 +2000,8 @@ def check_workspace_harness() -> Result:
     if not findings:
         if not total:
             return Result(name, OK,
-                          detail=f"nothing to mirror — the plane declares no plugin "
-                                 f"or env of its own{aside}")
+                          detail=f"nothing to mirror — the plane declares no plugin, env "
+                                 f"or ask/deny rule of its own{aside}")
         return Result(name, OK,
                       detail=f"{total} generated file(s) across all workspaces, "
                              f"all current{aside}")
@@ -1983,6 +2013,23 @@ def check_workspace_harness() -> Result:
         hint += ("   A 'foreign' file is one charter did not write: it is left completely "
                  "untouched and never repaired. Remove it to have charter generate its "
                  "own again.")
+    behind = _mirrored_restrictions()
+    if behind:
+        # The consequence, not the file. `charter guard ask` says a rule "applies to
+        # everyone on this repo", and a chat at `workspaces/<ws>/` reads its own settings
+        # file and nothing above it — so a generated file that is stale, missing or foreign
+        # is a force-prompt rule that is not in force where the guarded command gets typed
+        # (#942). Named only when the plane HAS such rules: a row that talks about them
+        # where there are none sends the reader looking for something that is not there,
+        # which is the cry-wolf failure `check_harness` records.
+        #
+        # "MAY not", because this counts the plane's rules and not the ones a given file is
+        # short of. A workspace can be stale over `enabledPlugins` alone with every rule
+        # already in place, and a row that flatly declared the guard down there would be
+        # wrong in the direction that costs a reader their trust in it.
+        hint += (f"   The plane's {behind} ask/deny rule(s) ride in these generated files, "
+                 f"so where one is not current a chat in that directory may not be "
+                 f"prompted or refused by them.")
     return Result(name, WARN,
                   detail=", ".join(findings[:4]) + (", …" if len(findings) > 4 else ""),
                   hint=hint)

@@ -28,6 +28,13 @@ failure #168, #177, #261 and #851 are each an instance of.
 checkout, so an operator on opencode or Codex got a workspace with none of the plane's
 agents or skills (#868). Reporting a harness under another's rules and *writing* another
 harness's files are the same mistake; only the second one lands on disk.
+
+:meth:`Harness.restrictive_rules` is the ninth, and it is the same argument for the same
+reason a third time: since #942 a generated workspace file carries the plane's `ask` and
+`deny` rules, so *"this file is stale"* now sometimes means *"a safety rule is not in force
+in that chat"* — and which of the plane's policy rides in a generated file is a fact about
+that harness's config format, not one `doctor` may read out of Claude Code's settings for
+everybody.
 """
 
 from __future__ import annotations
@@ -378,6 +385,33 @@ class Harness:
         this whole mechanism exists to draw.
         """
         return {}
+
+    def restrictive_rules(self) -> tuple[str, ...]:
+        """The plane's own rules that only ever REFUSE or PROMPT and that ride in
+        :meth:`workspace_files` — ``()`` when this harness carries none.
+
+        The ninth member, and the argument for it is `doctor`'s. `workspace layer` warns
+        when a generated file has gone stale, and since #942 one of the things such a file
+        is holding up is the plane's `ask`/`deny` rules — a *safety* rule that is not in
+        force in that chat, which is a different order of consequence from a plugin that
+        has not been enabled there yet. The row has to be able to say so, and *which of the
+        plane's policy travels* is a fact about a harness's own config format: Claude Code
+        keeps rules in the same settings file charter already mirrors, opencode keeps them
+        in a file charter deliberately does not, Codex has no command-pattern permissions at
+        all. Read out of `.claude/settings.json` inside `doctor` it would be the
+        hardcoded-literal-per-harness failure `registry.py` exists to end, and the day a
+        fourth harness is registered the row would be reporting Claude Code's file over it.
+
+        **Not derivable from :meth:`workspace_files`.** That answers with finished TEXT, so
+        a caller wanting this would have to parse each harness's own format back out — a
+        second reader of a document the harness already understands, and one that is wrong
+        the first time a harness writes something that is not JSON.
+
+        ``()`` is the honest default and covers both harnesses that carry no workspace files
+        at all: nothing of theirs is riding on a generated file, so a stale one holds up
+        none of their rules.
+        """
+        return ()
 
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Move THIS harness's installed charter artifact to the running CLI's version.

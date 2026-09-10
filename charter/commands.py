@@ -1724,6 +1724,63 @@ def cmd_guard_allow(args) -> int:
     return rc
 
 
+def _mirror_into_workspaces() -> None:
+    """Bring every workspace's generated layer up to date with the rule just written (#942).
+
+    `charter guard ask` writes the plane's settings and says the rule "applies to everyone
+    on this repo". A chat at `workspaces/<ws>/` reads its OWN settings file and nothing
+    above it, so that sentence is true of the file and was false of the chats where the
+    guarded command actually runs. The restrictive buckets travel in the generated layer
+    now; this is what closes the window between writing the rule and the next launch, which
+    is the only other thing that regenerates one (`ensure` → `scaffold` → `wire_harnesses`).
+
+    The same loop `charter workspace reinit --all` runs, deliberately: a second way to
+    regenerate a workspace is a second answer to "what is current", and this file has paid
+    for that shape before.
+
+    **Not called from `cmd_guard_allow`.** A grant is never mirrored, so a refresh there
+    could only carry UNRELATED drift into every workspace as a side effect of a command that
+    did not ask for it — `Harness.provision` keeps the same restraint one module over, and
+    #857 is the surprise both are avoiding.
+
+    A COUNT rather than a row per file, because `guard` already prints a line per harness
+    and a plane with a dozen workspaces would bury it. What it must not do is stay silent
+    about a file that did NOT take the rule: charter never repairs a generated file somebody
+    has since edited, so the rule is honestly not in force in that chat, and a tick over
+    that is what stops you checking.
+    """
+    from . import workspace
+
+    try:
+        names = workspace.list_workspaces()
+    except OSError:
+        # The rule IS written. The mirror is the follow-up, and a plane whose `workspaces/`
+        # cannot be listed must not turn a successful `guard ask` into a failure.
+        return
+    changed, unreached = [], []
+    for ws in names:
+        try:
+            rows = workspace.wire_harnesses(ws)
+        except (OSError, ValueError):
+            # One workspace that cannot be wired costs its own rows and not the rest —
+            # `_layer_files`' rule about a misbehaving harness, one level up.
+            continue
+        for rel, status in rows:
+            # `removed` counts too: this call brings the layer into step with the plane in
+            # both directions, and a run that only withdrew something still did work.
+            if status in ("created", "refreshed", "removed"):
+                changed.append(f"{ws}/{rel}")
+            elif status in ("foreign", "blocked"):
+                unreached.append(f"{ws}/{rel}")
+    if changed:
+        util.info(f"  {len(changed)} generated file(s) under workspaces/ brought into step "
+                  f"— a chat there reads its own settings file, never the plane's.")
+    if unreached:
+        util.warn(f"  NOT in force in {', '.join(unreached)} — charter did not write those "
+                  f"files and never repairs them. Remove one to have charter generate its "
+                  f"own again.")
+
+
 def cmd_guard_ask(args) -> int:
     """Add a force-prompt rule to `permissions.ask` in the plane's `.claude/settings.json`.
 
@@ -1783,6 +1840,7 @@ def cmd_guard_ask(args) -> int:
         else:
             util.info("  These files are committed, so the rule applies to everyone on this "
                       "repo — no sync step, and nothing that can drift (ADR 0014).")
+        _mirror_into_workspaces()
         _warn_if_shadowing(registry.get(registry.CLAUDE_CODE).ask_rule(pattern))
     _say_where_it_cannot_reach(results)
     _say_if_uneven(wrote, rc == 1)

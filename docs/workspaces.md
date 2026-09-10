@@ -31,14 +31,45 @@ workspace tab put it — would therefore get no plugin and no `$CHARTER_HARNESS`
 agents and skills arrived anyway, because those *do* walk up and this directory is not a
 git boundary.
 
-So charter generates one file here, at launch: `.claude/settings.json`, holding the plane's
-own `enabledPlugins` and `env` and nothing else. Skills come with the plugin and agents
-already walk up; a second copy of either would shadow the plugin's.
+So charter generates `.claude/settings.json` here, at launch: the plane's own
+`enabledPlugins` and `env`, plus the **restrictive half** of its `permissions`. Skills come
+with the plugin and agents already walk up; a second copy of either would shadow the
+plugin's.
 
-`statusLine` was the third key mirrored here until 0.57.0. Charter no longer writes one
+`statusLine` was a third key mirrored here until 0.57.0. Charter no longer writes one
 into any settings file, so there is nothing of charter's under that key to carry sideways
-— and a `statusLine` an operator wired themselves stays where they put it, the way
-`permissions` always has.
+— and a `statusLine` an operator wired themselves stays where they put it.
+
+### Your `guard ask` rules come with it
+
+`permissions.ask` and `permissions.deny` travel. **`permissions.allow` never does.** A grant
+copied sideways puts a permission in force in a directory nobody clicked for it in; a
+restriction is the opposite — it adds a prompt or a refusal and can make nothing run — so
+leaving it behind was what made `charter guard ask 'terraform apply *'` *not* prompt in the
+workspace chat that would run `terraform apply`, while the command said the rule applied to
+everyone on the repo.
+
+A `--local` rule stays local. `charter guard ask --local` writes the plane's gitignored
+`.claude/settings.local.json`, and its rules are mirrored into a generated
+`.claude/settings.local.json` of their own rather than folded into the committed sibling —
+so a decision that is yours on this machine does not arrive looking like the team's. Both
+generated files sit under `workspaces/*/*`, which the plane's `.gitignore` covers (a LIVE
+workspace un-ignores `workspace.json`, `workspace.md`, `memory/`, `todos/` and `changes/`,
+never `.claude/`), and in a clone both are registered in that checkout's `info/exclude`.
+
+`charter guard ask` refreshes every workspace's layer as it writes, so the rule is in force
+before the command returns rather than at the next launch. It runs both ways: drop a rule
+from the plane's settings and the mirror of it is withdrawn — a file charter generated and
+no longer generates is removed, but only while its content still matches what charter wrote.
+
+Codex has no command-pattern permissions at all, so there is nothing to carry there and
+`guard ask` already says so. **opencode has one gap that stands**: it resolves `opencode.json`
+at the repository root, so a workspace *directory* already resolves to the plane's own copy
+and the rule is in force — but a clone at `workspaces/<name>/<repo>/` is a repository root of
+its own, and charter generates no `opencode.json` there. An opencode session rooted inside a
+clone does not have the plane's rules. Charter does not mirror the plane's file into a repo
+it does not own, because that file also holds grants; a *generated* checkout `opencode.json`
+carrying only the restrictive half is the honest way to close it and is not built.
 
 It is **charter's file, and only while it stays charter's**. A `.charter-generated` sidecar
 records a hash of what charter wrote. A file that still matches is refreshed when the
@@ -66,7 +97,11 @@ each harness, measured against the installed binary: `.claude/agents/` and `.cla
 travels is **capability**, never a grant: `opencode.json` is read at a repository root and is
 carried by nothing, because `charter guard` keeps this plane's permission rules in it and
 copying those sideways would put an `allow` in force in a repo nobody granted it in — the
-same reason `.claude/settings.json`'s mirror is three keys and not the file.
+same reason `.claude/settings.json`'s mirror is a list of keys and not the file. A mirror
+cannot drop a key, which is the whole difference between the two mechanisms: charter
+*generates* the Claude Code settings and can therefore carry the restrictive half of
+`permissions` and leave the grants behind, and it *copies* `.opencode/agent/`, which it
+cannot.
 
 That is about a **clone**. A workspace **directory** is a different question, and there the
 ceiling stands: only Claude Code binds config to the directory a session starts in.

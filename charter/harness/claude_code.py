@@ -39,10 +39,49 @@ NAME = "claude-code"
 #: Nothing else. `permissions` is the plane's decision about the plane's own root, and
 #: copying a grant sideways into a directory nobody granted it in puts a permission in
 #: force where no one clicked for it.
+#:
+#: **That argument is about a GRANT, and `permissions` is not only grants (#942).** The key
+#: was excluded whole, so `ask` and `deny` — which cannot put anything in force, only take
+#: away — went with it, and `charter guard ask 'terraform apply *'` did not prompt in the
+#: workspace chat that would run `terraform apply` while telling the operator it "applies to
+#: everyone on this repo". The restrictive half travels now, and it travels beside these
+#: keys rather than among them: see :data:`RESTRICTIVE_BUCKETS`, which is a filter INSIDE
+#: `permissions` and not a fourth top-level key, because a top-level `permissions` entry
+#: here would carry `allow` the day somebody widened the list without reading this.
 WORKSPACE_KEYS = ("enabledPlugins", "env")
+
+#: The `permissions` buckets a plane's own rules travel into a workspace in — never `allow`.
+#:
+#: A restrictive rule is the OPPOSITE of a grant: `ask` adds a prompt, `deny` adds a
+#: refusal, and neither can make anything run that would not have run anyway. So the
+#: sentence above — *"puts a permission in force where no one clicked for it"* — is
+#: untouched by carrying these, and leaving them behind was what put a safety rule out of
+#: force in the one directory where the guarded command actually gets typed.
+#:
+#: `deny` is here even though **charter never writes one** (`commands.py`: every `deny` is
+#: an operator's own deliberate choice). That is the reason to carry it, not a reason to
+#: skip it: a rule charter cannot re-derive is a rule that exists nowhere else, and it was
+#: being dropped by the same key filter with nothing saying so.
+RESTRICTIVE_BUCKETS = ("ask", "deny")
 
 #: Where the mirrored document goes, relative to the workspace directory.
 WORKSPACE_SETTINGS = ".claude/settings.json"
+
+#: Where the mirrored MACHINE-LOCAL document goes, relative to the workspace directory.
+#:
+#: **Two generated files and not one, because the plane keeps two and they differ in blast
+#: radius rather than in content.** `charter guard ask --local` writes the plane's
+#: `.claude/settings.local.json`, which `charter init` gitignores, so that rule is one
+#: person's on one machine. Folding it into the generated `.claude/settings.json` would
+#: publish it to every reader of that file — and in a guest checkout that file sits inside
+#: somebody else's repository. Mirroring a machine-local decision into a shared-looking
+#: file is the same category of mistake as mirroring a grant.
+#:
+#: `doctor.LANDING_PROMPT` is exactly such a rule — charter recommends
+#: `charter guard ask --local 'charter change land *'` and does not run it — which is why
+#: this is not a hypothetical second file: without it the one guard rule charter names is
+#: the one guard rule that reaches no workspace chat at all.
+WORKSPACE_LOCAL_SETTINGS = ".claude/settings.local.json"
 
 #: The settings files Claude Code resolves **from the session's own directory**, in the
 #: order it reads them. ``~/.claude/settings.json`` is deliberately not among them: it is
@@ -100,6 +139,26 @@ LAYER = (
 #: plane and there is no gap here for a mirror to close. What a mirror would add is the
 #: plane's instructions inside somebody else's repository, read there as that repository's.
 WALKUP_DIRS = (".claude/agents", ".claude/skills")
+
+
+def _restrictive(doc) -> dict[str, list[str]]:
+    """*doc*'s :data:`RESTRICTIVE_BUCKETS`, empty ones dropped. ``{}`` for anything else.
+
+    Read through `commands._rules_in` rather than by hand. That reader already tolerates
+    every shape a hand-edited `permissions` can take — a block that is not an object, a
+    bucket that is not a list, an entry that is not a string — and charter must not grow a
+    second opinion about one file: the writer (`add_permission_rule`) and this mirror would
+    then disagree about what is in the plane's settings, and only one of them prints.
+
+    Empty buckets are dropped so that a plane whose `permissions` holds nothing but grants
+    contributes no `permissions` key at all. An empty block in the generated file would read
+    as policy — `workspace_files`' own *"writing an empty `{}` would look like a layer"*, one
+    level in.
+    """
+    from .. import commands
+
+    found = {b: commands._rules_in(doc, b) for b in RESTRICTIVE_BUCKETS}
+    return {b: rules for b, rules in found.items() if rules}
 
 
 class ClaudeCodeHarness(Harness):
@@ -207,6 +266,35 @@ class ClaudeCodeHarness(Harness):
                  f"`claude plugin install {plugincache.PLUGIN_ID} --scope "
                  f"{plugincache.INSTALL_SCOPE}`.")]
 
+    def _plane_documents(self) -> tuple[dict | None, dict | None]:
+        """The plane's two settings documents — ``(committed, machine-local)``.
+
+        ``None`` for either one that exists and cannot be parsed, which both readers already
+        answer that way and which every caller here treats as *nothing to mirror*: the
+        operator's content is in that file and charter does not guess over a file somebody
+        is holding.
+
+        One function because two callers need the same pair and asking twice is how a
+        generator and a reporter come to disagree about what the plane says — the
+        one-source-of-truth rule this repository keeps re-learning.
+        """
+        from .. import commands, config
+
+        root = Path(config.ROOT)
+        return (commands._load_settings(root)[0],
+                commands._load_json_settings(root / commands.LOCAL_SETTINGS)[0])
+
+    def restrictive_rules(self) -> tuple[str, ...]:
+        """Every plane rule that rides in :meth:`workspace_files` — both files, both
+        buckets.
+
+        Flat, because the caller counts rather than renders: `doctor` says how many of the
+        plane's restrictions a stale generated file is holding up, and which bucket each
+        came from would put the host's evaluation order in a row that is not about it.
+        """
+        return tuple(rule for doc in self._plane_documents()
+                     for rules in _restrictive(doc).values() for rule in rules)
+
     def workspace_files(self) -> dict[str, str]:
         """The plane's own settings keys, as one document for a workspace to hold.
 
@@ -229,16 +317,29 @@ class ClaudeCodeHarness(Harness):
         does not guess over a file somebody is holding. Empty here means the workspace
         gets no file and no marker at all, which is the honest rendering of "there is
         nothing to mirror" — writing an empty `{}` would look like a layer.
-        """
-        from .. import commands, config
 
-        settings, _p = commands._load_settings(config.ROOT)
-        if not settings:
-            return {}
-        doc = {k: settings[k] for k in WORKSPACE_KEYS if k in settings}
-        if not doc:
-            return {}
-        return {WORKSPACE_SETTINGS: json.dumps(doc, indent=2) + "\n"}
+        **Two documents since #942**, one per plane settings file, because a machine-local
+        rule has to land somewhere machine-local — see :data:`WORKSPACE_LOCAL_SETTINGS`.
+        Each is independent: a plane with a `--local` ask rule and no committed settings at
+        all gets the local file and only that, which is an ordinary plane rather than an
+        edge case.
+        """
+        settings, local = self._plane_documents()
+
+        out: dict[str, str] = {}
+        doc = {k: settings[k] for k in WORKSPACE_KEYS if k in settings} if settings else {}
+        restrictions = _restrictive(settings)
+        if restrictions:
+            # Last, so the two mirrored keys keep the order they have always had in this
+            # file and an existing workspace goes `stale` only where the plane really moved.
+            doc["permissions"] = restrictions
+        if doc:
+            out[WORKSPACE_SETTINGS] = json.dumps(doc, indent=2) + "\n"
+        local_restrictions = _restrictive(local)
+        if local_restrictions:
+            out[WORKSPACE_LOCAL_SETTINGS] = json.dumps(
+                {"permissions": local_restrictions}, indent=2) + "\n"
+        return out
 
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Named, never run — the restraint `cmd_version_sync` already keeps.
