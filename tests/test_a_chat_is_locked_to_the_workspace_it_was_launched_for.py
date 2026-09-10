@@ -283,22 +283,58 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         self.assertNotIn(f"'{config.DEFAULT_WORKSPACE}'", err)
         self.assertNotIn("reports no pane id", err)
 
-    def test_a_pane_pointer_written_in_a_chat_is_not_promised_to_the_next_session(self):
-        """The same sentence with a pane id, which is the ordinary case: tmux sets `$TMUX_PANE`
-        in every process it starts, a chat's harness included. The note said "kept across
-        closing/reopening Claude" beside a forced `gamma`, and the next chat in `north` does
-        not resolve to it: its launch record answers before the pane pointer is read."""
-        with mock.patch.object(workspace, "_terminal_id", return_value="pane-f"):
+    #: What a harness inherits when `charter claude` is typed in Terminal.app or iTerm2 without
+    #: tmux. `commands_frame._frame_env` strips `TMUX`, `TMUX_PANE` and the size variables and
+    #: nothing else of this kind, and `session.terminal` ranks this variable first.
+    LAUNCHER = "w0t0p0:0A1B2C3D-0936"
+
+    def _launcher_chose(self) -> str | None:
+        """What the shell `charter claude` was typed in answers: the same terminal id, and no
+        chat id. `commands_frame._choose_workspace` asks exactly this, and opens the picker
+        only when it answers `None`."""
+        with mock.patch.dict(os.environ, {"TERM_SESSION_ID": self.LAUNCHER}):
+            os.environ.pop("CHARTER_SESSION_ID", None)
+            return workspace.chosen(cwd=config.ROOT)
+
+    def test_use_in_a_chat_writes_no_pointer_for_the_terminal_that_launched_it(self):
+        """Review round 4, measured: with `$TERM_SESSION_ID` inherited, `use gamma --force`
+        here wrote `terminals/<launcher>.workspace` = `gamma` and printed "(this chat only …)".
+        The launching shell's `workspace.chosen()` then answered `gamma` through the terminal
+        rung, and the next `charter claude` from that terminal opened in `gamma` with no picker.
+
+        Nothing is mocked. Round 3's case patched `_terminal_id`, the seam this state goes
+        through, and asserted the pane pointer WAS written, which is the defect itself."""
+        before = self._launcher_chose()
+        with mock.patch.dict(os.environ, {"TERM_SESSION_ID": self.LAUNCHER}):
+            self.assertTrue(workspace._terminal_id(),
+                            "the chat reports no terminal id, so this measures nothing")
             rc, err = self._use("gamma", force=True)
-            _plant("north.2", ws="north")
-            nxt = workspace.resolve(session_id="north.2", cwd=config.ROOT)
+            here = workspace.resolve(cwd=config.ROOT)
         self.assertEqual(rc, 0, err)
-        self.assertTrue(workspace._terminal_file("pane-f").exists(),
-                        "no pane pointer was written, so this measures nothing")
-        self.assertEqual(nxt, "north", "the pane pointer did reach the next session")
-        self.assertNotIn("kept across closing/reopening Claude", err)
+        self.assertEqual(here, "gamma", "the chat's own commands stopped following the switch")
+        written = (sorted(p.name for p in config.TERMINALS_DIR.iterdir())
+                   if config.TERMINALS_DIR.is_dir() else [])
+        self.assertEqual(written, [], "a chat wrote a terminal pointer")
+        self.assertEqual(self._launcher_chose(), before,
+                         "the launching terminal's resolution moved")
         self.assertIn("(this chat only — a new chat starts at the workspace it is opened in)",
                       err)
+
+    def test_even_an_unforced_use_in_a_chat_leaves_the_launching_terminal_alone(self):
+        """The same write with no `--force`. `use north` is this chat's own workspace, which the
+        lock allows, and it rewrote the pointer of the terminal that launched the chat. That
+        terminal had chosen `delta` for itself, the pointer `_pin_workspace` leaves a launcher."""
+        workspace.ensure("delta")
+        with mock.patch.dict(os.environ, {"TERM_SESSION_ID": self.LAUNCHER}):
+            os.environ.pop("CHARTER_SESSION_ID", None)
+            self.assertEqual(workspace.set_active("delta"), "terminal",
+                             "the launcher's own pointer was not planted")
+        self.assertEqual(self._launcher_chose(), "delta")
+        with mock.patch.dict(os.environ, {"TERM_SESSION_ID": self.LAUNCHER}):
+            rc, err = self._use("north")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self._launcher_chose(), "delta",
+                         "a chat moved the choice of the terminal that launched it")
 
     def test_workspace_current_names_the_lock_it_is_not_resolving_to(self):
         """The same divergence on the command that exists to explain the resolution, and

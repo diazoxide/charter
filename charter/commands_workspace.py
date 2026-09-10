@@ -153,7 +153,8 @@ def cmd_workspace_create(args) -> int:
 
     if args.use:
         before = workspace.is_locked()
-        scope = workspace.set_active(args.name, force=getattr(args, "force", False))
+        scope = workspace.set_active(args.name, force=getattr(args, "force", False),
+                                     terminal_id=_terminal_for_selection())
         if scope == "locked":
             util.err(_locked_msg(args.name))
             # Inside a chat the refusal has already named how to work there. "Start a new
@@ -214,7 +215,8 @@ def cmd_workspace_use(args) -> int:
 
     workspace.ensure(args.name)
     before = workspace.is_locked()
-    scope = workspace.set_active(args.name, force=getattr(args, "force", False))
+    scope = workspace.set_active(args.name, force=getattr(args, "force", False),
+                                 terminal_id=_terminal_for_selection())
     if scope == "locked":
         util.err(_locked_msg(args.name))
         return 2
@@ -957,12 +959,14 @@ def _scope_note(scope: str) -> str:
     review round 3). The note named the built-in `default` in two places the ladder does not
     reach it:
 
-    * **Inside a chat, at either scope.** A new chat resolves by its own launch record
-      (`workspace.for_frame`), which outranks the terminal pointer and the declared default,
-      and a closed chat's session pointer is reaped with it (`frame/state._forget_session`),
-      so a reopened one starts clean. "A new session starts at 'default'" and "kept across
-      closing/reopening Claude" were both false there: no new chat resolves by what `use`
-      wrote in this one.
+    * **Inside a chat.** What `use` writes there is the session pointer and the lock under
+      the chat's id, and no terminal pointer (:func:`_terminal_for_selection`). A new chat
+      resolves by its own launch record (`workspace.for_frame`), which outranks the terminal
+      pointer and the declared default, and a closed chat's session files are reaped with it
+      (`frame/state._forget_session`), so a reopened one starts clean. "A new session starts at
+      'default'" and "kept across closing/reopening Claude" were both false there. So, until
+      review round 4, was "this chat only": a harness that inherited the launching terminal's
+      `$TERM_SESSION_ID` wrote that terminal's pointer, and the next launch from it read that.
     * **On a plane with a nominated default** (`charter workspace default`). A new session
       with no pointer and no pane id lands on it, and the note named `default` regardless.
       `commands_persona._scope_note` already reads its plane's default for the same sentence.
@@ -994,13 +998,14 @@ def _lock_words(name: str, locked: str | None, *, after_switch: bool = False) ->
     **Who asks this, exactly.** Every sentence that reports how the lock stands once a
     workspace command has succeeded: `use` and `create --use` (through
     :func:`_announce_selection`), `current`, and `rename`'s session line. Those four cannot
-    answer differently. Three other places name a lock in their own words and are not this
+    answer differently. Four other places name a lock in their own words and are not this
     function's to decide: a refusal names the lock that refused it (:func:`_locked_msg`, and
     `unlock` inside a chat, both read from `workspace.launch_lock` or `workspace.is_locked`);
-    `unlock` outside a chat reports the file it just deleted or found absent; and
-    `commands_frame._pin_workspace` names the lock its own picked launch takes. `cli.py`'s
-    help and the SessionStart nudge say what confirming a workspace does, not what a command
-    just did.
+    `unlock` outside a chat reports the file it just deleted or found absent;
+    `commands_frame._pin_workspace` names the lock its own picked launch takes; and
+    `harness/codex.py`'s `session-lock` deficit says what the lock falls back to in a Codex
+    shell, which no per-session id reaches. `cli.py`'s help and the SessionStart nudge say
+    what confirming a workspace does, not what a command just did.
 
     *after_switch* is for the sentence after a selection that did NOT move the lock (a
     forced pointer inside a chat): there the elsewhere case says what the switch did and did
@@ -1013,6 +1018,29 @@ def _lock_words(name: str, locked: str | None, *, after_switch: bool = False) ->
     if after_switch:
         return f"this session's commands only; 🔒 still locked to '{locked}'"
     return f"🔒 locked to '{locked}'"
+
+
+def _terminal_for_selection() -> str | None:
+    """The `terminal_id` that `use` and `create --use` hand `workspace.set_active`: ``""``
+    inside a chat, and ``None`` (this process's own terminal) everywhere else (#936, review
+    round 4).
+
+    **A chat speaks for no terminal.** `set_active` keys its terminal pointer on
+    `session.terminal()`, which ranks `$TERM_SESSION_ID` first, and `commands_frame._frame_env`
+    strips `TMUX`, `TMUX_PANE` and the size variables and nothing else of that kind. So a
+    harness started from Terminal.app or iTerm2 without tmux carries the LAUNCHING terminal's
+    id, and a `use` in the chat wrote that terminal's pointer. Measured: after `use gamma
+    --force` in a chat, the launching shell's `workspace.chosen()` answered `gamma`, which is
+    what `commands_frame._choose_workspace` reads, so the next `charter claude` there opened in
+    `gamma` with no picker. An unforced `use` of the chat's own workspace moved it as well.
+
+    Writing none costs the chat nothing: whatever resolves by the chat's id meets its session
+    pointer and its launch record before the terminal rung. It is also what makes
+    :func:`_scope_note`'s "this chat only" true. `frame/switch.py` hands `persona.set_active`
+    the same empty string, for #411's reason: a process inside a frame cannot trust the
+    terminal id it inherited.
+    """
+    return "" if workspace.launch_lock() else None
 
 
 def _announce_selection(name: str, scope: str, locked: str | None, *,
