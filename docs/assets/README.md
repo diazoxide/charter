@@ -36,7 +36,9 @@ python3 docs/assets/social-card.py
 ```
 
 GitHub recommends 1280×640 and caps uploads at 1MB; rendering at 2× keeps it sharp on
-retina and still lands around 120KB.
+retina and still lands under 200KB. Measured on macOS, headless Chrome writes the PNG and
+then does not exit: start it in the background, wait for the file, and end the process by
+the PID you started (`$!`), never by name.
 
 ## Staying current
 
