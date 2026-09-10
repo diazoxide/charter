@@ -210,6 +210,26 @@ class TheReportNudgeOnDevClaimsNoComparison(NoNetwork, PersonaIso):
         self.assertEqual(self._nudge(commit=_MINE, head=_MINE), "")
 
 
+class TheReportNudgeOnStableIsUnchanged(NoNetwork, PersonaIso):
+    """A stable plane on the PyPI wheel also records no commit. So the no-commit sentence
+    has to be gated on the channel, or a real newer release stops being named. Every
+    dev-pinned test above passes with that gate deleted."""
+
+    def setUp(self):
+        super().setUp()
+        pin_update_channel(self, "stable")
+
+    def test_a_wheel_on_stable_is_still_told_the_release_is_out(self):
+        _cache(latest="99.0.0", ts=1.0)
+        buf = io.StringIO()
+        with mock.patch("charter.channel.installed_commit", return_value=None), \
+             mock.patch.object(util, "_USE_COLOR", False), redirect_stderr(buf):
+            commands_report._warn_if_stale()
+        said = buf.getvalue()
+        self.assertIn("99.0.0 is out — this may already be fixed", said)
+        self.assertNotIn(update.NOT_INSTALLED_FROM_MAIN, said)
+
+
 class VersionBumpPinsOnlyWhatItFetched(NoNetwork, PersonaIso):
     """`version bump` with no `--to` pins the version its own GET returned, or refuses."""
 
@@ -269,6 +289,16 @@ class VersionBumpPinsOnlyWhatItFetched(NoNetwork, PersonaIso):
         self.assertEqual(self.calls, [("sync_to", "99.0.0"),
                                       ("set_locked_version", "99.0.0"),
                                       ("commit_push", "charter: pin to 99.0.0")])
+
+    def test_a_padded_answer_is_trimmed_before_it_becomes_a_pin(self):
+        """The fetched value is trimmed the way `--to` is, and the cache read it replaced
+        was. It ends up on the right-hand side of `charter-cp==` and in a committed
+        `charter.toml`, and a trailing newline there is a pin nothing can install."""
+        pin_update_channel(self, "stable")
+        with mock.patch.object(update, "_fetch_latest", return_value=" 99.0.0\n"):
+            rc, _ = self._bump()
+        self.assertEqual(rc, 0)
+        self.assertEqual([v for _, v in self.calls[:2]], ["99.0.0", "99.0.0"])
 
 
 if __name__ == "__main__":
