@@ -11,14 +11,15 @@ so they inherit the capture's freshness and are regenerated the same way.
 | File | Kind | What it is | How to update |
 | --- | --- | --- | --- |
 | `frame.svg` | capture | The frame — charter's panels around a harness pane, borders and all | `capture-frame.sh` → `ansi2svg.py` |
-| `statusline.svg` | capture | The plane render, taken against the demo plane below | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
+| `frame-full.svg` | capture | The same frame on a plane in use — four workspaces, three chats in the one on screen, one of them working. The README's first picture | `capture-frame.sh --full` → `ansi2svg.py` |
+| `statusline.svg` | capture | The plane render, taken against the demo plane below. No page shows it since the README opened on `frame-full.svg`; it is kept for the reason under its recipe | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
 | `demo.svg` | capture | The quickstart, animated | `capture-demo.sh` → `ansi2svg.py --animate` |
 | `personas.svg` | capture | The persona roster, rendered against the demo plane below | `demo-plane.sh` → `charter persona list` → `ansi2svg.py` |
 | `model.svg` | drawing | The on-disk model | Edit by hand |
 | `social-card.svg` | composed | GitHub's social preview — the image link previews show | `social-card.py` (re-reads `frame.svg`) |
 | `social-card.png` | rendered | `social-card.svg` at 2560×1280 (2:1), for upload | See below; do not edit the PNG |
 
-`social-card.png` is the only asset here that is not used by the repo itself: GitHub stores
+`social-card.png` is not used by the repo itself: GitHub stores
 the social preview separately, uploaded through **Settings → General → Social preview**,
 which has no CLI. The PNG is committed so the upload is reproducible rather than a one-off
 that exists only inside a settings page. Regenerate both in order — the SVG re-reads
@@ -194,6 +195,36 @@ themselves out for:
 `COLUMNS` and `LINES` size the window (150×30 by default). 150 for the persona column's
 own reason above — below 134 inner columns the sidebar stacks — and 30 because the repo
 table is sized to its content and a taller window buys empty harness rows and nothing else.
+
+**`--full`** takes the same frame on a plane in use, and that capture is the README's first
+picture, because one chat alone on its strip shows nothing about what the strip is for:
+
+```bash
+./docs/assets/capture-frame.sh /tmp/frame-full-capture --full \
+  | python3 docs/assets/ansi2svg.py --title "charter frame" -o docs/assets/frame-full.svg
+```
+
+It adds two workspaces to the plane and opens three chats before the one it captures — one
+in `checkout-redesign`, two in `billing-migration` — so two workspace tabs carry a count and
+the chat strip holds three names. The first `billing-migration` chat is marked working, and
+that mark is live state of exactly the kind above: the `UserPromptSubmit` hook writes it
+only for a chat whose `$CHARTER_HARNESS` is Claude Code, and a capture runs `charter status`
+rather than an agent, so the script makes the call the hook makes (`inflight.turn_begin`).
+It then waits for the spinner's `✢` frame. The chat on screen is marked `*`, and at the width
+GitHub shows the README (an `<img>` 830 px wide, headless Chrome at 1x and 2x) the spinner's
+`✻` and `✶` frames both read as that `*`: a capture taken on either showed a strip with two
+current chats. `✢` reads as a `+`. All three are one cell wide, so the choice moves no column.
+
+**Both of the script's tmux servers are private, with or without `--full`.** Charter's frame
+server is `-L charter`, a module constant every frame on a machine shares, and the capture
+used to launch onto it — the operator's live server — then pick its own session back out of
+theirs to kill it. It now points `$TMUX_TMPDIR`, which tmux and `frame/tmuxctl.socket_path`
+both honour, at a directory it makes under `/tmp`, so `-L charter` inside the capture is a
+server of its own, killed whole on exit. Under `/tmp` and not `<scratch-dir>` because a
+socket path has to fit a `sockaddr_un`, 104 bytes on macOS: a scratch directory under Claude
+Code's per-session temp path put the socket at 146, and tmux refused it. The same run plants
+the newer-charter check's cooldown lock in the plane, so no panel's gather forks a request to
+PyPI.
 
 ## Checking a change
 
