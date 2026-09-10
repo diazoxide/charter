@@ -473,7 +473,12 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         """
         state.record_workspace("f-1", self.OTHER)
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
-            self.assertNotEqual(workspace.set_active("chosen-later", force=True), "locked")
+            workspace.set_active("chosen-later", force=True)
+        # The pointer, not `set_active`'s return: forced, it cannot answer "locked", so
+        # asserting that it did not was a guard nothing could turn red. What must be true
+        # for this case to mean anything is that the switch really wrote the pointer the
+        # panels are then shown to ignore.
+        self.assertEqual(workspace.for_session("f-1"), "chosen-later")
         out = self._render("top")
         self.assertIn(self.OTHER, out)
         self.assertNotIn("chosen-later", out,

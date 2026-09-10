@@ -1461,6 +1461,14 @@ chat's own: an agent that succeeded would move the chat it is working for. An ag
 goes by the directory it stands in, which outranks every pointer, or by `--workspace` on
 each command, and neither writes anything to refuse.
 
+**Two limits, both deliberate and both worth knowing.** A chat launched from a shell with
+`$CHARTER_WORKSPACE` set is locked to that **pin** rather than to the workspace the launch
+resolved — the pin outranks the launch record here exactly as it outranks every pointer
+elsewhere. And **opencode chats are not covered at all**: its plugin replaces
+`$CHARTER_SESSION_ID` with opencode's own session id in every shell and hook it spawns, so
+inside a frame charter cannot tell which chat it is in. Such a chat holds no lock and is
+still asked to confirm a workspace (#946).
+
 **Renaming a workspace does not orphan its chats, and that is not an exception to §4j.**
 For one release it did: a chat's workspace is fixed at launch, so `charter workspace rename
 alpha alpha2` left every chat in it still recording `alpha` — invisible to `alpha2`, and
@@ -1479,7 +1487,10 @@ next chat in that workspace very often gets the same *name* — and a pointer, a
 persona selection or a tool-gate marker left under it would be inherited by a conversation
 that never chose any of them. What that cost, before it was fixed, was a chat launched with
 `--workspace alpha` whose every command acted on `gamma` and which refused
-`charter workspace use alpha` as **locked** (#731). So reaping a chat removes
+`charter workspace use alpha` as **locked** (#731). The refusal half can no longer happen —
+since #936 a chat's lock is the workspace it was launched in, and that outranks any lock
+file left under its id — so what reaping still prevents is the first half: a stale pointer
+moving the new chat's commands to its predecessor's workspace. So reaping a chat removes
 `.charter/sessions/<chat id>.*` along with `.charter/frame/<chat id>/`. Sessions that are
 not chats — a bare harness outside a frame, keyed by its own id — are untouched, and so is
 every live chat.

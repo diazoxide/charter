@@ -127,17 +127,23 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
         """`charter claude --workspace alpha`, then `charter workspace use alpha` — the
         exact sequence #731 reports, and the one that answered `locked`.
 
-        Since #936 this holds even with the predecessor's lock file left behind, because
-        a chat's launch record outranks it. The reap itself is measured by
-        `test_the_lock_does_not_outlive_the_frame`, which asserts the file."""
+        **The select itself can no longer fail**, because a chat's launch record outranks a
+        stale lock file (#936) — so the case asserts the state the relaunch starts FROM,
+        which the reap decides and which nothing else here asserts in this order: the
+        predecessor's pointer is gone before the new chat runs a command. The lock file's
+        own reap is `test_the_lock_does_not_outlive_the_frame`."""
         fid = self.open_chat()
         self.choose(fid, "gamma")
 
         self.reap_all()
         again = self.open_chat()
 
+        self.assertEqual(again, fid, "the ordinal must be recycled or this measures nothing")
+        self.assertIsNone(workspace.for_session(again),
+                          "the relaunch started from its predecessor's pointer")
         self.assertEqual(
             workspace.set_active("alpha", session_id=again, terminal_id=""), "session")
+        self.assertEqual(workspace.resolve(session_id=again, cwd=config.ROOT), "alpha")
 
     def test_resolution_in_the_new_chats_shell_is_not_the_old_chats_choice(self):
         """`workspace.resolve` is what every `charter` command in the frame's own shell

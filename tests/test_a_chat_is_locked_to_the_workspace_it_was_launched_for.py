@@ -40,7 +40,9 @@ drives the launcher itself rather than planting the record.
 from __future__ import annotations
 
 import io
+import json
 import os
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
@@ -195,16 +197,46 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         self.assertEqual(workspace.is_locked(), "north")
         self.assertEqual(self._use("north")[0], 0)
 
-    def test_the_routes_a_subagent_works_by_are_untouched(self):
-        """What #794 feared the refusal would break, asked after a refusal. Green before the
-        fix, deliberately: a sub-agent in `workspaces/gamma/…` acts on `gamma` because it
-        stands there, and `--workspace gamma` names it outright. Neither writes a pointer, so
-        neither is refused."""
-        self._use("gamma")
+    def test_the_routes_a_subagent_works_by_outrank_the_pointer(self):
+        """What #794 feared the refusal would break. A sub-agent in `workspaces/delta/…`
+        acts on `delta` because it stands there, and `--workspace delta` names it outright.
+
+        **A pointer to a THIRD workspace is written first, and that is the whole case.**
+        Asked after a refusal alone, this asserted only that the cwd rung answers — there
+        was no pointer for it to outrank, because the refused command wrote none. So the
+        forced switch to `gamma` puts one there, and `delta` still wins from both routes."""
+        workspace.ensure("delta")
+        self._use("gamma", force=True)
+        self.assertEqual(workspace.for_session(CHAT), "gamma",
+                         "the pointer this case is about was never written")
+        tree = config.WORKSPACES_DIR / "delta" / "api"
+        tree.mkdir(parents=True, exist_ok=True)
+        self.assertEqual(workspace.resolve(cwd=tree), "delta")
+        self.assertEqual(workspace.resolve("delta"), "delta")
+
+    def test_a_forced_switch_does_not_claim_a_lock_charter_does_not_hold(self):
+        """ADR 0013: charter names a divergence between its own records rather than
+        printing the happier one.
+
+        Measured before: `workspace use gamma --force` answered *"Active workspace
+        re-locked to 'gamma' … 🔒 locked for this session"*, and the very next
+        `workspace use delta` answered *"locked to 'north'"*. Two commands, two answers, and
+        the first one was the wrong one: `--force` moves this session's commands and never
+        the chat, so the lock is still the workspace the chat was launched in."""
+        _rc, err = self._use("gamma", force=True)
+        self.assertIn("north", err, "the lock that actually stands was not named")
+        self.assertNotIn("re-locked", err)
+
+    def test_workspace_current_names_the_lock_it_is_not_resolving_to(self):
+        """The same divergence on the command that exists to explain the resolution, and
+        the flow #794 protected: a sub-agent standing in another workspace's tree resolves
+        by its cwd, which is right, while the lock is still the chat's own."""
         tree = config.WORKSPACES_DIR / "gamma" / "api"
         tree.mkdir(parents=True, exist_ok=True)
-        self.assertEqual(workspace.resolve(cwd=tree), "gamma")
-        self.assertEqual(workspace.resolve("gamma"), "gamma")
+        with mock.patch("os.getcwd", return_value=str(tree)):
+            rc, err = self._run(commands_workspace.cmd_workspace_current)
+        self.assertEqual(rc, 0)
+        self.assertIn("locked to 'north'", err)
 
     def test_create_with_use_makes_the_workspace_and_names_the_same_fix(self):
         """`create --use` goes through the same `set_active`, so it meets the same lock. The
@@ -235,6 +267,64 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         self.assertEqual(len(said), 1, said)
         self.assertNotIn("workspace unlock", said[0])
         self.assertIn("open a chat", said[0])
+
+
+class TheSessionStartReconcileAsksTheChatToo(PersonaIso, unittest.TestCase):
+    """`charter workspace _reconcile`, the FOURTH SessionStart workspace question.
+
+    It is a real hook (`charter/cli.py`, asserted shipped by `tests/test_plugin.py`), and it
+    read `$CLAUDE_CODE_SESSION_ID` or the payload's `session_id` and seeded a pointer under
+    it. Inside a frame that is the HARNESS's id, and nothing on this plane reads it:
+    `workspace.chosen` resolves by `session.current()`, which is the CHAT's id there, and
+    `frame/state._forget_session` reaps `<chat id>.*`. So the write was unread and unreaped —
+    the same miskey as #936's other three, in the one hook that WRITES.
+
+    Seeding under the chat id instead is not the fix either, and this class pins that too. A
+    chat's workspace is its launch record; a pointer seeded from the pane charter itself
+    created for the harness would outrank that record in `chosen` and move the chat's
+    commands off it, silently, which is the failure #936 is about.
+    """
+
+    PANE = "%7"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(mock.patch.dict(
+            os.environ, {"CHARTER_SESSION_ID": CHAT, "TMUX_PANE": self.PANE}))
+        for n in ("north", "gamma"):
+            workspace.ensure(n)
+        _plant(CHAT, ws="north")
+        # What the reconcile seeds FROM: a selection left on this pane. Written the way
+        # `tests/test_workspace_lock` writes one, through the id `session.terminal` mints.
+        tid = workspace._terminal_id(self.PANE)
+        config.TERMINALS_DIR.mkdir(parents=True, exist_ok=True)
+        (config.TERMINALS_DIR / f"{tid}.workspace").write_text("gamma\n")
+
+    def _reconcile(self) -> None:
+        old = sys.stdin
+        sys.stdin = io.StringIO(json.dumps({"session_id": HARNESS_SID}))
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                commands_workspace.cmd_workspace_reconcile(SimpleNamespace())
+        finally:
+            sys.stdin = old
+
+    def test_no_pointer_lands_under_the_harness_id(self):
+        """The file the old key wrote: `.charter/sessions/<harness uuid>.workspace`, which
+        nothing resolves by and no reap collects."""
+        self._reconcile()
+        self.assertFalse((config.SESSIONS_DIR / f"{HARNESS_SID}.workspace").exists())
+
+    def test_no_pointer_lands_under_the_chat_id_either(self):
+        """Keying it on the chat would be worse than useless: the chat's own commands would
+        move to the pane's leftover workspace, outranking the launch record."""
+        self._reconcile()
+        self.assertFalse((config.SESSIONS_DIR / f"{CHAT}.workspace").exists())
+
+    def test_the_chat_still_resolves_and_is_locked_to_its_launch(self):
+        self._reconcile()
+        self.assertEqual(workspace.resolve(cwd=config.ROOT), "north")
+        self.assertEqual(workspace.is_locked(), "north")
 
 
 class SessionStartBriefsTheChatForItsOwnWorkspace(PlaneIso):

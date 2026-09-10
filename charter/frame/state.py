@@ -2319,6 +2319,14 @@ def _forget_session(fid: str) -> None:
     the operator who had just launched with `--workspace alpha`. Minting a new id is not
     isolation; reaping the state keyed on the old one is.
 
+    **Half of that measurement is now unreachable, and the other half is why this stays.**
+    Since #936 a chat's lock is its launch record, which outranks any `.lock` left under its
+    id, so the relaunch above can no longer be refused its own workspace
+    (`tests/test_a_reaped_chat_leaves_its_session_behind` was restaged onto the FILE for
+    exactly that reason). What the reap still prevents is the first half: the stale
+    `.workspace` pointer outranks the launch record in `workspace.chosen`, so an unreaped
+    one still moves the new chat's commands to its predecessor's workspace.
+
     **The prefix, not a list of suffixes**, and that is `workspace._prune`'s lesson taken
     at its word rather than re-learned (#366): it enumerated five marker families,
     drifted three times, and was replaced by "every file in the directory". Eight

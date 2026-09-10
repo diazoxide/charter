@@ -172,7 +172,10 @@ has a consequence the comfortable version hides:
   environment, so the payload id shadows the frame's in that one direction. SessionStart
   did exactly that, and every chat was briefed for `default` and told to pick a workspace
   (#936). Workspace questions in a hook are asked by the frame's id; the payload id keeps
-  keying what it keyed before.
+  keying what it keyed before. That covers the one hook that WRITES, too: `charter workspace
+  _reconcile` seeds a session's pointer from its terminal's, and inside a chat it now seeds
+  nothing at all — a pointer under the chat's id would outrank the launch record and move
+  the chat's own commands off the workspace it was launched in.
 
 Pinned by `tests/test_frame_owns_the_surface.py`, which asserts that a panel follows a
 `ws use` made under the frame's id and does *not* follow one made under any other — on a

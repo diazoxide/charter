@@ -16,7 +16,7 @@ import sys
 import time
 from types import SimpleNamespace
 
-from . import (change, config, contain, gitpolicy, gitstate, planegit, tui, util,
+from . import (change, config, contain, gitpolicy, gitstate, planegit, session, tui, util,
                workspace, worktree)
 from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory_reactive,
                        commit_push)
@@ -112,7 +112,17 @@ def cmd_workspace_current(args) -> int:
     name = workspace.resolve()
     print(name)
     locked = workspace.is_locked()
-    lock_note = ", 🔒 locked for this session" if locked else ", unlocked"
+    if not locked:
+        lock_note = ", unlocked"
+    elif locked == name:
+        lock_note = ", 🔒 locked for this session"
+    else:
+        # Name the divergence instead of the happier half of it (ADR 0013). Since #936 a
+        # chat's lock is the workspace it was LAUNCHED in, and `resolve` can legitimately
+        # answer another: a sub-agent standing in another workspace's tree (the flow #794
+        # protects), or a `--force`d pointer. "Locked for this session" beside that name
+        # claimed a lock on the workspace charter would in fact refuse to switch to.
+        lock_note = f", 🔒 locked to '{locked}'"
     mode = "LIVE (committed + shared)" if workspace.is_live(name) else "LOCAL (private)"
     util.info(f"{mode} · resolved via {workspace.source()}{lock_note}")
     vision = workspace.read_vision(name)
@@ -213,8 +223,17 @@ def cmd_workspace_use(args) -> int:
     if scope == "locked":
         util.err(_locked_msg(args.name))
         return 2
-    verb = "re-locked to" if getattr(args, "force", False) else "set to"
-    util.ok(f"Active workspace {verb} '{args.name}'{_scope_note(scope)} — 🔒 locked for this session.")
+    locked = workspace.is_locked()
+    if locked and locked != args.name:
+        # `--force` moved this session's commands and not the lock: inside a chat the lock is
+        # the launch record, which no command moves (#936). Announcing "re-locked to 'gamma'
+        # … 🔒 locked for this session" named a lock charter does not hold, one command
+        # before the next refusal named the real one — ADR 0013's divergence rule.
+        util.ok(f"Active workspace set to '{args.name}'{_scope_note(scope)} — this session's "
+                f"commands only; 🔒 still locked to '{locked}'.")
+    else:
+        verb = "re-locked to" if getattr(args, "force", False) else "set to"
+        util.ok(f"Active workspace {verb} '{args.name}'{_scope_note(scope)} — 🔒 locked for this session.")
     _warn_env_override(args.name)
     return 0
 
@@ -953,8 +972,28 @@ def _scope_note(scope: str) -> str:
 
 def cmd_workspace_reconcile(args) -> int:
     """Internal (SessionStart hook): seed this Claude session's workspace pointer
-    from its terminal pane's selection, so a reopened session resumes its workspace."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    from its terminal pane's selection, so a reopened session resumes its workspace.
+
+    **Keyed on the session the rest of charter resolves by** (#936). This read
+    `$CLAUDE_CODE_SESSION_ID`, then the payload's `session_id`, and inside a frame both name
+    the HARNESS — while `workspace.chosen` resolves by `session.current()`, which is the
+    CHAT's id there (ADR 0019), and `frame/state._forget_session` reaps `<chat id>.*`. So
+    the pointer it wrote was read by nothing and reaped by nothing, in the one SessionStart
+    workspace question that WRITES. `session.current()` is the question every reader asks;
+    the payload stays underneath it for a harness that exports no id at all, which is the
+    only case it ever answered.
+
+    **And inside a chat it seeds nothing.** A chat's workspace is its launch record — what
+    `workspace.for_frame` resolves and what :func:`workspace.launch_lock` locks it to. The
+    pane this would seed FROM is one charter created for the harness, so on a recycled pane
+    id the seed is another frame's selection; and a pointer under the chat id outranks the
+    launch record in `chosen`, which would move the chat's own commands off the workspace it
+    was launched in. Re-keying without this would have replaced an unread write with a
+    silent one, which is the failure #936 exists to end.
+    """
+    if workspace.launch_lock():
+        return 0
+    sid = session.current()
     if not sid:
         try:
             sid = (json.load(sys.stdin) or {}).get("session_id")

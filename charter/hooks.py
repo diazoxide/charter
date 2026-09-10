@@ -5341,7 +5341,13 @@ def _workspace_session(data: dict) -> str | None:
     whatever `$CHARTER_SESSION_ID` holds is the id this session's own `charter` commands
     write under, and a hook reading a different key from the one the CLI writes IS the
     defect. Outside a frame it is unset and the payload id is the only session there is.
-    opencode's plugin sets both to its own session id, so there the two already agree.
+
+    **opencode is the exception, and it is not the benign kind.** Its plugin overwrites
+    `$CHARTER_SESSION_ID` with opencode's OWN session id in every shell and hook subprocess
+    it spawns (`charter/harness/opencode.py`), so inside a frame the two ids do agree — on a
+    value that names no chat. `frame/state.own_workspace` answers ``None`` for it, so an
+    opencode chat holds no launch lock, is still briefed for `default`, and its
+    `workspace use <other>` still succeeds. Pre-existing, untouched here, filed as #946.
     """
     return _chat_id() or data.get("session_id")
 

@@ -30,7 +30,9 @@ The chat's commands then acted on the other workspace while its tab stayed in it
 ## What is true now
 
 - **A chat is locked to the workspace it was launched in**, picked or not. Its briefing
-  shows that workspace's todos, never lists it as another one, and asks nothing.
+  shows that workspace's todos, never lists it as another one, and asks nothing. If the
+  shell that opened the chat had `$CHARTER_WORKSPACE` set, the chat is locked to that pin
+  instead, which is the precedence that variable has everywhere else in charter.
 - **`charter workspace use <other>` inside a chat is refused**, and says what to do: open a
   chat in that workspace (its tab, or `F2 → workspace`), or pass `--workspace <other>` for
   a single command. `charter workspace use <own>` still succeeds.
@@ -44,3 +46,9 @@ its `workspace use` would have written the chat's own pointer. Agents work by th
 they stand in, which outranks every pointer, or by `--workspace`, and neither is affected.
 
 Outside a frame nothing changes. A session is still locked by the workspace it confirms.
+
+**Not opencode yet.** Its plugin replaces `$CHARTER_SESSION_ID` with opencode's own session
+id in every shell and hook it spawns, so inside a frame charter cannot tell which chat it is
+in. An opencode chat holds no lock, is still told to pick a workspace, and
+`charter workspace use <other>` in it still succeeds. That is pre-existing, and it is
+tracked as #946.

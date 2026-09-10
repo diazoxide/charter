@@ -19,6 +19,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from charter import config, hooks, workspace
 from tests import _envguard
@@ -230,6 +231,53 @@ class TestCommandLayer(WorkspaceLockBase):
                              name="beta", use=True, force=False, repos=[])
         self.assertEqual(rc, 2)
         self.assertIn("start a new session to use it, or re-run with --force", err)
+
+    def test_outside_a_chat_a_forced_switch_still_says_it_re_locked(self):
+        """The other side of the sentence #936 changed. Outside a chat `--force` really does
+        move the lock, so the announcement says so and names where it moved to. Inside a
+        chat it moves the commands and not the lock, and says that instead."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_use, name="beta", force=True, create=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("re-locked to 'beta'", err)
+        self.assertIn("🔒 locked for this session", err)
+        self.assertEqual(workspace.is_locked(), "beta")
+
+    def _reconcile_with_payload(self, payload_id: str) -> None:
+        """`charter workspace _reconcile` as the SessionStart hook runs it: a JSON payload
+        on stdin, and whatever the environment says about this session."""
+        old = sys.stdin
+        sys.stdin = io.StringIO(json.dumps({"session_id": payload_id}))
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                commands.cmd_workspace_reconcile(SimpleNamespace())
+        finally:
+            sys.stdin = old
+
+    def _pane_holding(self, name: str) -> None:
+        tid = workspace._terminal_id("myterm")
+        config.TERMINALS_DIR.mkdir(parents=True, exist_ok=True)
+        (config.TERMINALS_DIR / f"{tid}.workspace").write_text(name + "\n")
+        os.environ["TERM_SESSION_ID"] = "myterm"
+        self.addCleanup(os.environ.pop, "TERM_SESSION_ID", None)
+
+    def test_reconcile_seeds_the_id_the_rest_of_charter_resolves_by(self):
+        """The pointer has to land under the id `workspace.chosen` reads back, which is
+        `session.current()` — the environment's, ahead of any payload. Keyed on the payload
+        instead, the file was written where nothing looks (#936, round 1)."""
+        self._pane_holding("gamma")
+        self._reconcile_with_payload("a-different-harness-uuid")
+        self.assertEqual(workspace.for_session(self.SID), "gamma")
+        self.assertFalse((config.SESSIONS_DIR / "a-different-harness-uuid.workspace").exists())
+
+    def test_a_harness_that_exports_no_id_still_seeds_from_its_payload(self):
+        """The fallback, and the reason the payload is still read: a harness that puts no
+        session id in the environment has nothing else to say who it is."""
+        self._pane_holding("gamma")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            self._reconcile_with_payload("payload-only-session")
+        self.assertEqual(workspace.for_session("payload-only-session"), "gamma")
 
     def test_outside_a_chat_unlock_still_releases_the_lock(self):
         """`unlock` refuses inside a chat, whose lock is its launch record. Outside one the lock

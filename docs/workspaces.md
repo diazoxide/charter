@@ -139,6 +139,17 @@ pointer its `workspace use` would write is the chat's own. It works by the direc
 stands in, which outranks every pointer, or by `--workspace` on each command. See
 `docs/frame.md` for why (#936).
 
+Two limits:
+
+- **A pinned launcher pins the chat.** If `$CHARTER_WORKSPACE` was set in the shell that
+  opened the chat, the chat is locked to that pin rather than to the workspace the launch
+  resolved — including one named with `--workspace`. That is the precedence the pin has
+  everywhere else in charter.
+- **Not opencode, yet.** Its plugin replaces `$CHARTER_SESSION_ID` with opencode's own
+  session id, so inside a frame charter cannot tell which chat it is in. An opencode chat
+  holds no lock, is still asked to confirm a workspace, and `charter workspace use <other>`
+  in it still succeeds (#946).
+
 ## workspace.md, memory, and workspace.json
 
 Three stores, three jobs. Putting a thing in the wrong one is the common mistake:
