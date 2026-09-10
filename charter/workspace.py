@@ -2276,14 +2276,20 @@ def wire_guest(tree: Path) -> list[tuple[str, str]]:
     want = _guest_files(tree)
     marker = _read_marker_at(tree)
     cowritten = _cowritten()
+    # By status, only what is MISSING: a current or stale file of charter's is already in
+    # `_charter_owned`, and a current file charter never wrote is not charter's to hide. The
+    # deletion sweep found `"ok"` and `"stale"` deciding nothing, and `"ok"` was worse than
+    # nothing — it named a file charter does not own for the length of the call.
     ours = {rel for rel, status in _layer_status(tree, want, marker)
-            if status in ("missing", "stale", "ok") or (rel in cowritten and rel in marker)}
+            if status == "missing" or (rel in cowritten and rel in marker)}
     planned = sorted(ours | (set(_charter_owned(tree, marker)) - {GENERATED_MARKER}))
     first = _register_excludes(tree, planned + [GENERATED_MARKER]) if planned else "present"
     withhold = frozenset(cowritten) if first == "blocked" else frozenset()
     rows = _materialise(tree, want, withhold)
     owned = _charter_owned(tree, _read_marker_at(tree))
-    second = "blocked" if first == "blocked" else _register_excludes(tree, owned)
+    # Asked again even after a blocked first pass: an exclude that refused one write refuses
+    # the next, so skipping it decided nothing a case could see (the sweep said so).
+    second = _register_excludes(tree, owned)
     # One row for the two passes, worst first: `blocked` whichever pass hit it, then the
     # pass that actually wrote. Two rows would report one file twice.
     status = next((s for s in ("blocked", "created", "refreshed") if s in (first, second)),
@@ -2347,7 +2353,9 @@ def unwire_guest(tree: Path) -> list[str]:
         removed.append(GENERATED_MARKER)
     except OSError:
         pass
-    kept = [rel for rel in sorted(marker)
+    # The marker's own order, unsorted: a harness declares its co-written paths one at a time
+    # and today there is one, so a sort here decided nothing — the sweep charged it.
+    kept = [rel for rel in marker
             if rel in cowritten and rel not in removed and (tree / rel).exists()]
     _register_excludes(tree, kept)
     return removed

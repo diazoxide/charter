@@ -2051,9 +2051,12 @@ def check_workspace_harness() -> Result:
         # something charter cannot read, and every workspace is keeping its last good copy
         # of it. The first version withdrew those copies and then printed exactly that
         # sentence over a workspace that had just lost `enabledPlugins`, `env` and `deny`.
-        sources = ", ".join(sorted(set(held.values())))
+        # In the harness's own order and undeduplicated: the one harness that holds files
+        # names each plane file once, shared first, so a sort or a set here decided nothing
+        # a case could see — the deletion sweep charged `sorted` for exactly that.
+        sources = ", ".join(held.values())
         return Result(name, WARN,
-                      detail=f"{sources} is not valid JSON — every workspace keeps its last "
+                      detail=f"not valid JSON: {sources} — every workspace keeps its last "
                              f"good copy of what charter mirrors from it{aside}",
                       hint="Fix that file. charter mirrors nothing new from it while it does "
                            "not parse, and never withdraws what it mirrored before over a "

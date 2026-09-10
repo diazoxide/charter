@@ -859,6 +859,102 @@ class TheGuardsOnTheCoWrittenFileEachDecideSomething(PlaneWithRestrictions):
         self.assertNotIn(f"/{LOCAL}", self.excludes(self.clone))
 
 
+class WhatTheSweepFoundUnpinned(PlaneWithRestrictions):
+    """One case per survivor the deletion sweep reported on the fix round's commit that turned
+    out to decide something. The survivors that decided nothing were deleted instead."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+
+    def announced(self) -> str:
+        err = io.StringIO()
+        with redirect_stderr(err), redirect_stdout(io.StringIO()):
+            commands._wire_clones(self.ws)
+        return err.getvalue()
+
+    def test_an_ordinary_clone_is_announced_as_hidden(self):
+        """`_wire_clones`' first branch. With the exclude written, the announcement makes both
+        of its claims; the warning that withdraws them belongs to the other case only."""
+        self.checkout("fresh", real=True)
+        said = self.announced()
+        self.assertIn("fresh: charter's layer written", said)
+        self.assertIn("nothing charter wrote can be committed", said)
+        self.assertNotIn("could not be updated", said)
+
+    def test_a_linked_worktree_reads_the_main_checkouts_local_file(self):
+        """Measured on 2.1.267: a `deny` in the main checkout's local file applies to a session
+        in its linked worktree. `--show-toplevel` answers with the worktree, so the common
+        directory's parent is the only question here that names the main checkout — and the
+        one layout where the two answers differ."""
+        main = _repo(self.tmp / "main-checkout")
+        tree = self.tmp / "linked"
+        _git(main, "worktree", "add", "-q", "-b", "probe-942", str(tree))
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(tree)
+        listed = [str(p) for p in doctor._settings_files()]
+        self.assertIn(str(main.resolve() / LOCAL), listed)
+        self.assertIn(str(tree.resolve() / LOCAL), listed)
+
+    def test_both_unreadable_plane_files_are_named_in_the_harnesss_order(self):
+        workspace.wire_harnesses(self.ws)
+        (config.ROOT / SHARED).write_text("{ not json")
+        (config.ROOT / LOCAL).write_text("{ not json")
+        r = doctor.check_workspace_harness()
+        shared, local = str(Path(config.ROOT) / SHARED), str(Path(config.ROOT) / LOCAL)
+        self.assertIn(f"not valid JSON: {shared}, {local}", r.detail)
+
+    def test_the_sentence_survives_beside_a_row_that_carries_no_rules(self):
+        """`any`, not `all`: one named row carrying rules is enough for the consequence, and a
+        missing agent file beside it must not talk the sentence away."""
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        clone = self.checkout()
+        workspace.wire_harnesses(self.ws)
+        (clone / ".claude" / "agents" / "steward.md").unlink()
+        _plane_settings(config.ROOT, permissions={"ask": ["Bash(kubectl delete *)"]})
+        r = doctor.check_workspace_harness()
+        self.assertIn("svc/.claude/agents/steward.md (missing)", r.detail)
+        self.assertIn("prompted or refused by them", r.hint)
+
+    def test_a_wire_that_changes_nothing_leaves_the_marker_alone(self):
+        """`if not wrote: return rows`. A launch runs this every time, and a marker rewritten on
+        every one moves mtimes in every directory charter owns for a call that did nothing."""
+        workspace.wire_harnesses(self.ws)
+        marker = workspace.workspace_dir(self.ws) / workspace.GENERATED_MARKER
+        os.utime(marker, (1, 1))
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(marker.stat().st_mtime_ns, 1_000_000_000)
+
+    def test_a_plane_with_only_a_local_rule_withholds_it_where_it_cannot_be_hidden(self):
+        """The first pass names a MISSING co-written file itself. When the local file is the
+        only thing a checkout wants, nothing else puts a path in the block, no write would be
+        attempted, the refusal would never be seen — and the file would land unhidden."""
+        (config.ROOT / SHARED).unlink()
+        clone = self.checkout("api", real=True)
+        exclude = workspace.git_exclude_file(clone)
+        if exclude.exists():
+            exclude.unlink()
+        exclude.mkdir(parents=True)
+        rows = dict(workspace.wire_guest(clone))
+        self.assertEqual(rows[LOCAL], "withheld")
+        self.assertFalse((clone / LOCAL).exists())
+
+    def test_a_second_wire_of_a_clone_with_many_files_leaves_the_block_as_it_was(self):
+        """`sorted` in the first pass. The second pass re-sorts, so the first pass's order never
+        shows in the end state — only in whether an idempotent wire rewrote the block at all.
+        Nine files, so an unsorted set agreeing with path order by luck is a 1-in-362,880
+        accident rather than the coin toss a two-file fixture is."""
+        agents = config.ROOT / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        for name in ("zulu", "yankee", "xray", "whiskey", "victor", "uniform", "tango"):
+            (agents / f"{name}.md").write_text(f"# {name}\n")
+        clone = self.checkout("api", real=True)
+        workspace.wire_guest(clone)
+        self.assertEqual(dict(workspace.wire_guest(clone))[".git/info/exclude"], "present")
+
+
 class GuardAskKeepsTheMirrorInStep(PlaneWithRestrictions):
     """The command that writes the rule refreshes the generated files it has just made
     stale. Without it the rule reaches a workspace chat at the NEXT launch, and the operator
