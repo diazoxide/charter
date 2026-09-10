@@ -113,10 +113,12 @@ class DataArgumentsEndingInASemicolonAreEscapedToo(unittest.TestCase):
     """The same tmux parse reads EVERY argument, not only the harness's (review round 1 on
     #959). A directory or an identity value ending in `;` does not vanish quietly: it ends
     the command early and the flag after it is read as a command of its own. Measured on
-    3.7c and 3.2 — `unknown command: -P` from `new-window` and the guest `window_argv`,
-    `unknown command: -e` from `respawn-pane`, `unknown command: --` for an `-e` value — so
-    a chat opened from a directory named that way failed with a sentence that never named
-    the directory."""
+    3.7c and 3.2 with the identity a real launch carries: a directory gives `unknown
+    command: -P` from `new-window` and the guest `window_argv` (`-e` from `respawn-pane`),
+    and a `$CHARTER_ROOT` gives `unknown command: -e` on every launch, because another
+    identity value always follows it — `--` only when the value is a command's last `-e`.
+    So a chat opened from a directory named that way failed with a sentence that never
+    named the directory."""
 
     WHERE = "/work/dir;"
 
@@ -338,9 +340,11 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
                     pane = self._start(binary, socket, builder, tag=f"inj{builder[4:7]}",
                                        harness_argv=self._harness_argv(tail))
                     self.assertEqual(self._received(binary, socket, records, pane), tail)
-                    options = self._tmux(binary, ["tmux", "-L", socket, "show-options",
-                                                  "-g"]).stdout
-                    self.assertNotIn(option, options,
+                    shown = self._tmux(binary, ["tmux", "-L", socket, "show-options", "-g"])
+                    # Asked first: a `show-options` that failed prints nothing, and an
+                    # empty listing would pass the check below for the wrong reason.
+                    self.assertEqual(shown.returncode, 0, shown.stderr)
+                    self.assertNotIn(option, shown.stdout,
                                      "an argument of the harness ran as a tmux command")
 
     def _harness_argv(self, arguments: list[str]) -> list[str]:

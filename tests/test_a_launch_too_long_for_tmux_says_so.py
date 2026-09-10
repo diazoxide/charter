@@ -117,18 +117,23 @@ class ALaunchOnCharactersOwnServer(PersonaIso, unittest.TestCase):
                     self.assertIn(_CARRIED, said[0])
                     self.assertIn("in a file", said[0])
 
-    def test_an_argument_that_is_not_utf8_is_counted_as_the_bytes_exec_was_handed(self):
-        """A byte that is not UTF-8 reaches `sys.argv` as a surrogate escape. A strict
-        `str.encode` raises on it in the middle of a failure report; `os.fsencode` counts
-        the one byte `exec` was actually handed."""
+    def test_arguments_are_counted_in_the_bytes_exec_was_handed_not_in_characters(self):
+        """tmux's limit is in bytes, so the count beside it is too. Two ways to get that
+        wrong, one row each: `é` and `漢` are one character and two and three bytes, so
+        counting characters comes out short (review round 2 on #959 — with ASCII and a
+        surrogate alone, `len(a)` passed every case here); and a byte that is not UTF-8
+        reaches `sys.argv` as a surrogate escape, on which a strict `str.encode` raises in
+        the middle of a failure report, where `os.fsencode` counts the one byte `exec` was
+        handed."""
         said: list[str] = []
         with mock.patch("charter.util.err", side_effect=said.append):
             rc = _launch(_RefusedStart(stderr="command too long\n"),
-                         rest=["fix \udcff " + "x" * 20000])
+                         rest=["fix é漢 \udcff " + "x" * 20000])
         self.assertEqual(rc, 1)
         self.assertEqual(len(said), 1, said)
-        # `claude`, then `fix `, the single byte 0xff, a space, and the padding.
-        carried = len(b"claude") + len(b"fix \xff ") + 20000
+        # `claude`; then `fix `, é as C3 A9, 漢 as E6 BC A2, a space, the single byte 0xff,
+        # a space; then the padding.
+        carried = len(b"claude") + len(b"fix \xc3\xa9\xe6\xbc\xa2 \xff ") + 20000
         self.assertIn(f"{carried:,}", said[0])
 
     def test_any_other_refusal_keeps_the_report_it_always_had(self):
@@ -237,8 +242,10 @@ class TmuxStillRefusesInTheWordsCharterRecognises(PersonaIso, unittest.TestCase)
 
     @staticmethod
     def _which(binary: str) -> str:
-        """Which tmux answered, for a red that is about that tmux rather than charter."""
-        return f"{binary}; the tmux on $PATH reports {tmuxctl.version()}"
+        """Which tmux answered, by that binary's own `-V` — at the floor it is not the tmux
+        on `$PATH` — for a red that is about that tmux rather than about charter."""
+        said = subprocess.run([binary, "-V"], capture_output=True, text=True, timeout=20)
+        return f"{binary} reports {said.stdout.strip()!r}"
 
     def test_a_command_exactly_at_the_limit_is_taken(self):
         for binary, socket in self.servers:

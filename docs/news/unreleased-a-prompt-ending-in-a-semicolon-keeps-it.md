@@ -6,8 +6,9 @@ headline: `charter claude "…;"` gives the harness its trailing `;`, and a laun
 tmux reads any argument that ends in `;` as its own command separator. So
 `charter claude "run the tests;"` started the harness on `run the tests`; a `;`-ending
 argument in the middle turned the arguments after it into a tmux command run on charter's
-server; and a directory or `$CHARTER_ROOT` ending in `;` failed the launch with
-`unknown command: -P` or `--`. Charter now escapes a trailing `;` as `\;` — tmux's own
+server; a second chat, or any chat inside a tmux you already had, opened in a directory
+ending in `;` failed with `unknown command: -P`; and a `$CHARTER_ROOT` ending in `;` failed
+every launch with `unknown command: -e`. Charter now escapes a trailing `;` as `\;` — tmux's own
 spelling of a literal one — in every argument, directory and identity value it hands tmux,
 on charter's own server and inside a tmux you already had.
 
