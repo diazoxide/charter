@@ -460,7 +460,9 @@ class _RefusesToBeRead(dict):
 #: PLURAL in a second sense since #785: run from a linked worktree, the suite reads its own
 #: checkout (:func:`_pin_the_suite_to_its_own_tree`) and the plane it was redirected away
 #: from is still a real plane a spawned child would resolve — so both are in here, and the
-#: refusals below reach a child aimed at either.
+#: refusals below reach a child aimed at either. Up to THREE since #944: from a worktree of a
+#: workspace clone there are two planes behind the checkout, the clone and the outer plane,
+#: and a child resolves the outer one by walking and the clone from ``$CHARTER_ROOT``.
 _REAL_ROOT: tuple[str, ...] = ()
 
 
@@ -533,23 +535,84 @@ def _pin_the_suite_to_its_own_tree(config) -> tuple[str, ...]:
     from two directories". A worktree cut from a branch that predates the committed
     ``charter.toml`` has no committed settings to pin to, and pinning to it would hand the
     suite a plane-less root — a different wrong answer, not a fix.
+
+    **WHICH checkout, and which planes it moves away from, is
+    :func:`_the_tree_the_suite_is_in`'s question** — and it is a separate function because
+    this one can only ever be asked about the machine it is running on. #785 pinned a
+    worktree of the plane and #944 found the two arrangements one level down still open: a
+    workspace clone, which is CONTRIBUTING's first instruction, and a worktree cut from one,
+    which is what `charter wt add` builds. A pin that can only be measured by standing
+    somewhere is a pin nobody measures.
     """
     global _TREE_PIN, _PINNED_PLANE
     if _PINNED_PLANE is not None:         # idempotent; see :data:`_PINNED_PLANE`
         return _PINNED_PLANE
-    try:
-        tree = _root.tree_of(config.ROOT, Path(__file__).resolve().parents[1])
-        if tree is not None and not (tree / _root.MARKER).is_file():
-            tree = None
-    except (OSError, RuntimeError):       # never raise at suite boot; see `install`
-        tree = None
+    tree, planes = _the_tree_the_suite_is_in(config.ROOT,
+                                             Path(__file__).resolve().parents[1])
     if tree is None:
         _PINNED_PLANE = ()
         return _PINNED_PLANE
-    _PINNED_PLANE = _both_spellings(config.ROOT)
+    _PINNED_PLANE = tuple(dict.fromkeys(s for p in planes for s in _both_spellings(p)))
     _TREE_PIN = config.in_tree(tree)
     _TREE_PIN.__enter__()
     return _PINNED_PLANE
+
+
+def _the_tree_the_suite_is_in(plane, here) -> tuple[Path | None, tuple[Path, ...]]:
+    """``(the checkout *here* is, the planes that pinning to it moves away from)`` — or
+    ``(None, ())`` when there is nothing to move.
+
+    Split out of :func:`_pin_the_suite_to_its_own_tree` so the question can be asked of a
+    *fixture*: the function above can only ever be asked about the machine the suite happens
+    to be running on, which is exactly how the arrangement below went unnoticed (#944).
+
+    **Two routes, because there are two ways to be somewhere other than the plane's own
+    tree, and one detector cannot see both.**
+
+    1. `root.tree_of` — a linked WORKTREE of the plane's own repo. #785's arrangement, and
+       narrow on purpose: it matches on the worktree's main tree *being* the plane.
+    2. `root.nested_plane_in` — a CLONE under the plane's ``workspaces/``, which is a
+       different repository that happens to carry a tracked ``charter.toml``. Its ``.git``
+       is a real directory, so route 1 answers ``None`` for it and must keep doing so
+       (#809 is where that pair was drawn); asking route 2 and then route 1 *again about
+       what it found* also lands a worktree cut from that clone.
+
+    Route 2 is what CONTRIBUTING's own first instruction lands in — "work in a **workspace
+    clone**, not in the plane root" — and `charter wt add <repo> <piece> -w <ws>` puts a
+    piece one level below that again. Both were unpinned: `find_root` returns
+    ``_outermost(_plane_of(here))`` and the ``workspaces/`` hop (#200) puts ``config.ROOT``
+    one level further out than the clone, so route 1's two operands were never equal and
+    the suite read the operator's own `charter.toml` instead of the branch's (#944).
+
+    **The trigger is being cut from a nested PLANE, never a path with ``workspaces/`` in
+    it.** `nested_plane_in` walks the chain of enclosing planes, so a worktree of the clone
+    placed anywhere on disk is pinned, and a charter checkout that has nothing to do with
+    this plane is not.
+
+    Both planes come back for route 2, and that half is not optional: the clone and the
+    outer plane are each a plane a child charter can resolve — the outer from a bare walk,
+    the clone from ``$CHARTER_ROOT`` — so both are folded into :data:`_REAL_ROOT` beside
+    the tree. #527's hole is reopened by any version of this that merely *swaps* which root
+    counts as real.
+    """
+    try:
+        tree = _root.tree_of(plane, here)
+        planes: tuple[Path, ...] = (Path(plane),)
+        if tree is None:
+            nested = _root.nested_plane_in(plane, here)
+            if nested is not None:
+                # The clone itself when nothing finer is standing in it; `tree_of` asked a
+                # second time is what finds the worktree cut from it.
+                tree = _root.tree_of(nested, here) or nested
+                if tree != nested:
+                    planes += (nested,)
+        if tree is not None and not (tree / _root.MARKER).is_file():
+            tree = None
+    except (OSError, RuntimeError):       # never raise at suite boot; see `install`
+        return None, ()
+    if tree is None:
+        return None, ()
+    return tree, planes
 
 
 def _guard_reads(config, *also: str) -> None:
@@ -1675,8 +1738,9 @@ def install() -> None:
     # makes the directory a plane at all, a lost `[[frame.component]]` changes what the next
     # launch draws, and no test has any business writing the real one — the fixtures write
     # `config.ROOT / "charter.toml"` under `PersonaIso`, where `config.ROOT` is a tmp dir.
-    # Both markers, because in a worktree the two are different files and the wrong one to
-    # write is the one nobody is looking at.
+    # Every marker the pin moved past, because in a worktree they are different files and
+    # the wrong one to write is the one nobody is looking at. Two from a worktree of the
+    # plane; three from a worktree of a workspace clone (#944).
     markers = tuple(dict.fromkeys(
         m for r in (str(config.ROOT), *plane)
         for m in _both_spellings(Path(r) / _root.MARKER)))

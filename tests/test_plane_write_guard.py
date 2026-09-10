@@ -106,6 +106,110 @@ class WhatIsGuarded(unittest.TestCase):
                               f"reach the real plane unseen")
 
 
+class WhereTheSuiteIsAllowedToBeRun(unittest.TestCase):
+    """`_the_tree_the_suite_is_in`, asked of a FIXTURE rather than of this machine.
+
+    The three cases above can only ever report where the suite happens to be standing, and
+    that is precisely how #944 survived: the pin was written for a worktree of the plane
+    (#785), CONTRIBUTING's own first instruction is to work in a **workspace clone**, and
+    nobody ever asked the question one level down. On unmodified code the suite came back
+    ``FAILED (failures=2, errors=2)`` in the clone and in a worktree of it, green in the
+    plane root, and green on CI — so the four reds looked like the contributor's own
+    breakage.
+
+    Every arrangement charter can put a checkout in is built here out of directories, with
+    no git: a linked worktree is a ``.git`` FILE naming its main tree, which is all
+    `root.main_worktree_of` reads, and a plane is a directory with a ``charter.toml`` in it.
+    """
+
+    def setUp(self) -> None:
+        # `.resolve()` once, here: on macOS `/tmp` is a symlink to `/private/tmp`, and the
+        # gitdir pointer written below has to name the same spelling `main_worktree_of`
+        # resolves to or the two never compare equal.
+        self.tmp = Path(tempfile.mkdtemp(prefix="guard-nested-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.plane = self._plane(self.tmp / "plane")
+        self.clone = self._plane(self.plane / "workspaces" / "ws" / "charter", repo=True)
+        self.piece = self._worktree(self.clone, self.plane / "workspaces" / "ws"
+                                    / ".worktrees" / "charter" / "piece")
+
+    @staticmethod
+    def _plane(where: Path, repo: bool = False) -> Path:
+        """A control plane: a directory with a marker. ``repo`` gives it a real ``.git``
+        directory too, which is what makes it a CLONE rather than a worktree — and what
+        makes `root.tree_of` answer ``None`` for it, correctly and permanently."""
+        where.mkdir(parents=True)
+        (where / root.MARKER).write_text("schema = 1\n")
+        if repo:
+            (where / ".git").mkdir()
+        return where
+
+    @staticmethod
+    def _worktree(main: Path, where: Path, marker: bool = True) -> Path:
+        """A linked worktree of *main*: the ``.git`` file git writes, plus the tracked
+        marker that gets checked out with everything else."""
+        where.mkdir(parents=True)
+        (where / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / where.name}\n")
+        if marker:
+            (where / root.MARKER).write_text("schema = 1\n")
+        return where
+
+    def test_a_worktree_of_the_plane_itself_is_still_what_the_suite_pins_to(self):
+        """#785's own arrangement, kept as the control: the first route must still fire,
+        and it must not start naming a second plane that is not there."""
+        wt = self._worktree(self.plane, self.tmp / "cut-from-the-plane")
+        self.assertEqual((wt, (self.plane,)),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, wt))
+
+    def test_a_workspace_clone_is_the_checkout_the_suite_must_read(self):
+        """CONTRIBUTING's first instruction. `find_root` hops outward through
+        ``workspaces/`` (#200), so standing in a clone the suite asserted against the
+        OPERATOR's `charter.toml` — uncommitted edits and all — instead of the branch's."""
+        self.assertEqual((self.clone, (self.plane,)),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, self.clone))
+
+    def test_a_worktree_of_a_workspace_clone_is_too_and_names_both_planes(self):
+        """What `charter wt add <repo> <piece> -w <ws>` builds, and the two hops that hid
+        it: `main_worktree_of(here)` is the CLONE while `config.ROOT` is one level further
+        out, so `tree_of` — narrow on purpose — can never match and answered ``None``.
+
+        Both planes come back, because pinning moves the suite away from both and the rule
+        `_pin_the_suite_to_its_own_tree` states for one level holds for two: the guard gets
+        wider, never narrower. A child charter forked from here resolves the outer plane;
+        `$CHARTER_ROOT=<the clone>` resolves the clone."""
+        self.assertEqual((self.piece, (self.plane, self.clone)),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, self.piece))
+
+    def test_the_trigger_is_being_cut_from_a_nested_plane_not_a_path_with_workspaces_in_it(self):
+        """The control that keeps the fix off path arithmetic. `git worktree add` puts a
+        worktree wherever it is told, and one cut from the clone but placed outside the
+        plane entirely reads the clone's committed files just the same — so it is pinned
+        just the same. `root.nested_plane_in` keys on the chain of enclosing planes, which
+        this checkout is in and its directory name says nothing about."""
+        off = self._worktree(self.clone, self.tmp / "nowhere-near-the-plane")
+        self.assertEqual((off, (self.plane, self.clone)),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, off))
+
+    def test_a_checkout_with_nothing_to_do_with_this_plane_is_left_alone(self):
+        """The other control, and the reason this is not "pin to wherever you are". A
+        charter checkout somewhere else on disk is not this plane seen from a second
+        directory; pinning to it would hand the suite settings nobody asked for."""
+        other = self._plane(self.tmp / "someone-elses-charter", repo=True)
+        stranger = self._worktree(other, self.tmp / "someone-elses-piece")
+        self.assertEqual((None, ()),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, stranger))
+        self.assertEqual((None, ()),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, other))
+
+    def test_a_checkout_carrying_no_committed_marker_is_left_alone(self):
+        """`_plane_of`'s own condition read the other way round, and it has to survive the
+        second route: a branch that predates the committed `charter.toml` has no committed
+        settings to pin to, and pinning to it would hand the suite a plane-less root."""
+        bare = self._worktree(self.clone, self.tmp / "before-the-marker", marker=False)
+        self.assertEqual((None, ()),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, bare))
+
+
 class _FakePlane(unittest.TestCase):
     """A throwaway directory installed as "the real plane" for the duration of one test."""
 

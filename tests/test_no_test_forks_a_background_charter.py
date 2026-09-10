@@ -32,14 +32,21 @@ exit is a tripwire whoever hits it next deletes.
 from __future__ import annotations
 
 import ast
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import glstate, update
-from tests import _planeguard
-from tests._isolation import PersonaIso, make_plane, no_background_refresh
+from charter import config, glstate, root, statusline, update
+from tests import _envguard, _planeguard
+# The MODULE, never the class: `from … import RenderNeverCrashesCase` would bind a TestCase
+# subclass in this module's namespace, and `TestLoader` collects by namespace — the borrowed
+# fixture would then run a second time in every suite run, under this file's name.
+from tests import test_statusline_crash_guard
+from tests._isolation import (PersonaIso, isolate_state_dir, make_plane,
+                              no_background_refresh)
 
 
 class WhatIsRefused(unittest.TestCase):
@@ -157,6 +164,87 @@ class StoppingTheSpawnerIsTheOtherWayOut(PersonaIso):
         make_plane(self)
         with self.assertRaises(_planeguard.BackgroundCharterChild):
             glstate.maybe_spawn([self.tmp], "default")
+
+
+class _ARenderThatOnlyRedirectsTheStateDir(unittest.TestCase):
+    """The positive control: the fixture `RenderNeverCrashesCase` had at #944, kept so the
+    probe below is known to SEE a fork rather than merely to report none.
+
+    Its probe method is deliberately not named ``test_*``. Discovery collects this class (a
+    leading underscore does not hide it from `TestLoader`) and would otherwise fork for
+    real, out of whatever plane the suite resolved, every single run.
+    """
+
+    def setUp(self) -> None:
+        _envguard.unset_all()
+        isolate_state_dir(self)
+
+    def runProbe(self) -> None:
+        statusline.render({"session_id": "t"})
+
+
+class ARenderAgainstTheRealPlaneForksNothing(unittest.TestCase):
+    """#944 half two: `no_background_refresh` exists, and a case still has to CALL it.
+
+    `test_statusline_crash_guard.RenderNeverCrashesCase` renders against the real plane on
+    purpose — its own comment says so — and redirected only `config.STATE_DIR`. **That
+    redirect is what arms the fork.** `glstate.maybe_spawn` reads its cooldown lock and its
+    cache out of `STATE_DIR`, so in a fresh tempdir there is never a lock, never a cache
+    entry, and every directory it is handed looks stale. All that was left deciding the
+    outcome was ``dirs`` — the active workspace's clones. Recorded on unmodified code:
+    ``n_dirs=0`` at the plane root and on a CI checkout, which has no ``workspaces/<ws>/``
+    holding clones, so ``any([])`` is False and nothing forks; ``n_dirs=7`` in a workspace
+    clone and in a worktree of one, so it forked and the guard refused it.
+
+    So the case was green where CONTRIBUTING says not to work and red where it says to, and
+    what decided which was **whether the person running it had ever cloned a repo**. It is
+    asked here of a plane that HAS one, so the answer is the same on every machine.
+    """
+
+    def _run_against_a_plane_holding_a_clone(self, case_class, method) -> unittest.TestResult:
+        """Run one real test method with the ambient plane pointed at a sentinel that has a
+        workspace with a clone in it, and hand back what the run recorded.
+
+        A sentinel plane, never the real one: a RED run of this module must not commit the
+        very fork it exists to forbid. `charter.toml` is present so `HAS_CONTROL_PLANE` is
+        what it is on a developer's machine — both spawners refuse outright without a plane
+        — and the clone is a bare ``.git`` DIRECTORY, which is the whole of
+        `workspace.is_clone`'s test.
+        """
+        sentinel = Path(tempfile.mkdtemp(prefix="charter-944-sentinel-")).resolve()
+        self.addCleanup(shutil.rmtree, sentinel, True)
+        (sentinel / root.MARKER).write_text("schema = 1\n")
+        (sentinel / "workspaces" / "default" / "charter" / ".git").mkdir(parents=True)
+        outer = config.use(sentinel)
+        try:
+            result = unittest.TestResult()
+            case_class(method).run(result)
+            return result
+        finally:
+            config.restore(outer)
+
+    @staticmethod
+    def _what_it_said(result: unittest.TestResult) -> str:
+        return "\n".join(text for _, text in (*result.errors, *result.failures))
+
+    def test_the_probe_can_see_a_render_fork(self):
+        """Without this, the case below would pass just as well if the probe were blind —
+        and blind is the failure mode that already happened once here, since the whole
+        defect was a spawn nobody's machine attempted."""
+        said = self._what_it_said(
+            self._run_against_a_plane_holding_a_clone(
+                _ARenderThatOnlyRedirectsTheStateDir, "runProbe"))
+        self.assertIn("BackgroundCharterChild", said)
+
+    def test_the_render_crash_guard_forks_nothing(self):
+        """The case itself, run against a plane with a clone in it. It is about `render()`
+        not propagating an exception, so nothing in it ever wanted a child."""
+        for method in ("test_a_broken_repo_row_does_not_crash_render",
+                       "test_a_broken_persona_chips_call_does_not_crash_render"):
+            with self.subTest(method=method):
+                result = self._run_against_a_plane_holding_a_clone(
+                    test_statusline_crash_guard.RenderNeverCrashesCase, method)
+                self.assertTrue(result.wasSuccessful(), self._what_it_said(result))
 
 
 class EveryCharterCharterStartsForItselfIsDetached(PersonaIso):

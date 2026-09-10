@@ -19,6 +19,7 @@ from unittest import mock
 
 from charter import statusline
 from tests import _envguard
+from tests._isolation import no_background_refresh
 
 
 class RenderNeverCrashesCase(unittest.TestCase):
@@ -28,14 +29,25 @@ class RenderNeverCrashesCase(unittest.TestCase):
         # (#519, #521, #528).
         _envguard.unset_all()
 
+        # These render against the REAL plane on purpose, so the plane they get is
+        # whoever's is running the suite — and #944 is what that cost. `render()` calls
+        # both background spawners on its own path, and the STATE_DIR redirect below is
+        # what arms them: the cooldown lock and the forge cache live there, and a fresh
+        # tempdir has neither, so every clone in the active workspace looks stale. On a
+        # plane with clones the render forked `charter gl-refresh` at the operator's own
+        # plane and `tests._planeguard` refused it — two errors for every contributor
+        # following CONTRIBUTING's "work in a workspace clone", and green at the plane
+        # root and on CI only because there were no clones to be stale. This case is
+        # about `render()` not propagating an exception; it never wanted a child.
+        no_background_refresh(self)
+
         from charter import config
         self.tmp = Path(tempfile.mkdtemp(prefix="edm-renderguard-"))
         self._orig = config.SESSIONS_DIR
         config.SESSIONS_DIR = self.tmp / "sessions"
-        # Also redirect STATE_DIR: these render against the REAL plane on purpose,
-        # and the render path now writes a vault-health cache under it. A test that
-        # writes into the developer's own `.charter/` is the bug this suite fixed
-        # once already (see `EveryRootDerivedPathIsIsolated`).
+        # Also redirect STATE_DIR: the render path writes a vault-health cache under it,
+        # and a test that writes into the developer's own `.charter/` is the bug this
+        # suite fixed once already (see `EveryRootDerivedPathIsIsolated`).
         _state = config.STATE_DIR
         config.STATE_DIR = self.tmp / ".charter"
         self.addCleanup(lambda: setattr(config, "STATE_DIR", _state))
