@@ -171,12 +171,33 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
     def _harness(self, text: str) -> list[str]:
         return [sys.executable, str(self.recorder), text]
 
-    def _received(self, records: Path, pane: str) -> list[str]:
+    def _received(self, binary: str, socket: str, records: Path, pane: str) -> list[str]:
+        """What the harness in *pane* was handed, read back off its own `sys.argv`.
+
+        **Failing fast is the half that matters when this goes red.** A harness that could
+        not start leaves no record and no pane, and waiting out the deadline on every row
+        turned one broken argv into a twelve-minute module — which the deletion sweep could
+        only report as a timeout with no verdict, not as the failure it was. So the wait
+        ends the moment tmux no longer knows the pane, after one last look for a record the
+        harness may have written on its way out.
+        """
         record = records / (pane.lstrip("%") + ".json")
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if record.is_file():
                 return json.loads(record.read_text())
+            # `list-panes -a`, and never `display-message -t <pane>`: measured on 3.7c and
+            # at the 3.2 floor, asked about a pane whose harness failed to exec,
+            # `display-message` answers rc 0 with an empty line instead of refusing, so it
+            # cannot say "gone" at all — and this wait ran to its deadline on every row.
+            panes = subprocess.run([binary, "-L", socket, "list-panes", "-a", "-F",
+                                    "#{pane_id}"],
+                                   capture_output=True, text=True, timeout=20)
+            if pane not in panes.stdout.split():
+                if record.is_file():
+                    return json.loads(record.read_text())
+                self.fail(f"the harness in {pane} ended without recording what it was "
+                          f"handed — it never started")
             time.sleep(0.02)
         self.fail(f"the harness in {pane} never started")
 
@@ -188,7 +209,8 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
                         session=f"s{i}", conf="/dev/null", socket=socket, cols=80,
                         rows=24, harness_argv=self._harness(text), chat=f"s{i}.1"))
                     self.assertEqual(started.returncode, 0, started.stderr)
-                    self.assertEqual(self._received(records, started.stdout.strip()),
+                    self.assertEqual(self._received(binary, socket, records,
+                                                    started.stdout.strip()),
                                      [text])
 
     def test_a_second_chat_gets_every_byte(self):
@@ -199,7 +221,8 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
                         socket=socket, session="base", chat=f"base.{i + 1}",
                         cwd=str(self.tmp), harness_argv=self._harness(text)))
                     self.assertEqual(started.returncode, 0, started.stderr)
-                    self.assertEqual(self._received(records, started.stdout.strip()),
+                    self.assertEqual(self._received(binary, socket, records,
+                                                    started.stdout.strip()),
                                      [text])
 
     def test_a_chat_respawned_into_a_placeholder_gets_every_byte(self):
@@ -215,7 +238,7 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
                         socket=socket, harness_pane=pane, env={}, cwd=str(self.tmp),
                         harness_argv=self._harness(text)))
                     self.assertEqual(started.returncode, 0, started.stderr)
-                    self.assertEqual(self._received(records, pane), [text])
+                    self.assertEqual(self._received(binary, socket, records, pane), [text])
 
 
 if __name__ == "__main__":
