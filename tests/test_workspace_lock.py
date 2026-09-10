@@ -196,6 +196,49 @@ class TestCommandLayer(WorkspaceLockBase):
         self.assertTrue((config.WORKSPACES_DIR / "beta").exists())
         self.assertEqual(workspace.is_locked(), "alpha")
 
+    # #936 gave a CHAT its own answers in three places, each behind `workspace.launch_lock()`:
+    # the refusal, the line `create --use` adds after one, and `unlock`. The deletion sweep
+    # forced each of those branches on and nothing went red, because no test said what a
+    # session that is NOT a chat hears. These three do. This fixture's session has no frame
+    # directory under its id, so `launch_lock` answers `None` here.
+
+    def _said(self, fn, **kw):
+        """Every refusal and hint these handlers print goes to stderr, so capture that."""
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            rc = fn(SimpleNamespace(**kw))
+        return rc, err.getvalue()
+
+    def test_outside_a_chat_the_refusal_is_still_the_sessions_sentence(self):
+        """A chat is told it was launched in its workspace and to open a chat elsewhere. A
+        session that is not a chat has real ways out that a chat does not (`unlock`,
+        `--force`, a new session), so it keeps the sentence that names them. With the chat
+        branch forced on, it would be told it is locked to `'None'`, the workspace a chat
+        it is not was launched in."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_use, name="beta", force=False, create=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("locked to 'alpha' for this session", err)
+        self.assertNotIn("launched in", err)
+
+    def test_outside_a_chat_create_use_still_names_a_new_session(self):
+        """Inside a chat the "start a new session, or --force" line is dropped, because the
+        refusal above it has already named opening a chat. Outside one it is the only place
+        the two real routes are named."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_create,
+                             name="beta", use=True, force=False, repos=[])
+        self.assertEqual(rc, 2)
+        self.assertIn("start a new session to use it, or re-run with --force", err)
+
+    def test_outside_a_chat_unlock_still_releases_the_lock(self):
+        """`unlock` refuses inside a chat, whose lock is its launch record. Outside one the lock
+        is a file and releasing it is this command's whole job."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_unlock)
+        self.assertEqual(rc, 0, err)
+        self.assertIsNone(workspace.is_locked())
+
 
 # imported late so the module-under-test picks up the patched config at call time
 from charter import commands_workspace as commands  # noqa: E402
