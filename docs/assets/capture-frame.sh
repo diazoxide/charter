@@ -34,13 +34,14 @@
 # for — so the README's first picture is `--full`, and `frame.svg` stays the plain one.
 set -uo pipefail
 
-DIR="${1:?usage: capture-frame.sh <scratch-dir> [--full]}"
+DIR="${1:-}"
 # The scratch directory comes first, and this script `rm -rf`s it. `capture-frame.sh --full`
 # with the directory left out would otherwise hand `--full` to `rm` and `mkdir` as a flag
-# and carry on with no directory at all.
+# and carry on with no directory at all. No argument at all gets the same refusal and the
+# same status: `${1:?}` exits with the shell's status for a failed expansion, not 2.
 case "$DIR" in
-  -*) echo "usage: capture-frame.sh <scratch-dir> [--full] — the scratch directory comes first" >&2
-      exit 2 ;;
+  ""|-*) echo "usage: capture-frame.sh <scratch-dir> [--full] — the scratch directory comes first, and is emptied" >&2
+         exit 2 ;;
 esac
 FULL=0
 case "${2:-}" in

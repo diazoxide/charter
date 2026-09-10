@@ -280,9 +280,10 @@ org/user whose repos this control plane tracks. Run inside an existing git repo,
 also *offers* to clone that repo into your first workspace — accept with `charter init
 --clone-this-repo`, because work happens in a workspace, never in the plane root.
 
-`discover` and `clone` go through the forge's own CLI — `gh` for GitHub, `glab` for GitLab —
-which nothing above installs and which must be authenticated; `charter doctor` names either
-one missing.
+`discover` and `clone` go through the forge's own CLI — `gh` for GitHub, `glab` for
+GitLab — which nothing above installs and which must be authenticated. `charter doctor`
+checks the CLI and its login for each forge `charter.toml` declares, and GitLab's when the
+file declares none.
 
 `charter claude` needs two more things nothing above installs. `claude` itself has to be on
 your `PATH`: without it no frame is drawn, and charter says the binary is not installed and

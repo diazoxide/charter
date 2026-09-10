@@ -11,7 +11,7 @@ so they inherit the capture's freshness and are regenerated the same way.
 | File | Kind | What it is | How to update |
 | --- | --- | --- | --- |
 | `frame.svg` | capture | The frame — charter's panels around a harness pane, borders and all | `capture-frame.sh` → `ansi2svg.py` |
-| `frame-full.svg` | capture | The same frame on a plane in use — four workspaces, three chats in the one on screen, one of them working. The README's first picture | `capture-frame.sh --full` → `ansi2svg.py` |
+| `frame-full.svg` | capture | The same frame on a plane in use — four workspaces, three chats in the one on screen, one of them working. The README's first picture | `capture-frame.sh <scratch-dir> --full` → `ansi2svg.py` |
 | `statusline.svg` | capture | The plane render, taken against the demo plane below. No page shows it since the README opened on `frame-full.svg`; it is kept for the reason under its recipe | `demo-plane.sh` → `charter statusline` → `ansi2svg.py` |
 | `demo.svg` | capture | The quickstart, animated | `capture-demo.sh` → `ansi2svg.py --animate` |
 | `personas.svg` | capture | The persona roster, rendered against the demo plane below | `demo-plane.sh` → `charter persona list` → `ansi2svg.py` |
@@ -102,6 +102,22 @@ line charter no longer wires anywhere was the wrong first impression to hand a l
 bottom fade is load-bearing: the footer sits on it, and a shallower one leaves the URL
 unreadable on live terminal rows.
 
+**`isolated-init.sh`** is sourced by both scripts here that run `charter init`,
+`demo-plane.sh` and `capture-demo.sh`, and `isolated_charter_init` is how each of them runs
+it: with every `PATH` directory that holds a `claude` left out, and `$XDG_CONFIG_HOME` on a
+directory of its own. Run bare with `claude` on PATH, init installs Claude Code's charter
+plugin for the plane it creates — `claude plugin marketplace add` and `claude plugin install
+--scope project`, a fetch from GitHub and an entry naming a throwaway directory in the
+operator's own `~/.claude/plugins/installed_plugins.json` — and it writes opencode's plugin
+into the operator's `~/.config`. One helper rather than a line in each script, because the
+first fix went into `demo-plane.sh` alone and `capture-demo.sh` went on leaking.
+
+It changes what one capture shows: `demo.svg`, the only one whose transcript is init's own
+output. Isolated, init prints no plugin row, and opencode's three files read as written
+rather than already present. `demo.svg` has not been re-taken since, so it still shows the
+recording made with the operator's Claude Code and opencode config, plugin row included; its
+next re-take shows a machine with neither.
+
 **`demo-plane.sh`** builds a throwaway control plane worth screenshotting: real `charter`
 commands, real git repos, real branches and real dirty/unpushed state. Only the *org* is
 invented, so a render can show a plausible multi-repo day without exposing anyone's actual
@@ -110,13 +126,6 @@ forge-state cache, the `pieces/seen/` heartbeats and an in-flight dispatch recor
 the files `charter discover`, `charter gl-refresh`, the every-turn hook and
 `inflight.start` would have written, in exactly their shape; the demo has no forge to
 query and no live session to dispatch anything.
-
-It runs `charter init` with no `claude` on PATH and with `$XDG_CONFIG_HOME` on a directory
-it removes on exit. With `claude` on PATH, init installs Claude Code's charter plugin for the
-plane it creates: a fetch from GitHub and an entry naming a throwaway directory in the
-operator's own `~/.claude/plugins/installed_plugins.json`, which the frame captures for #958
-left behind before this. And init writes opencode's plugin under `$XDG_CONFIG_HOME`, the
-operator's `~/.config` unless something says otherwise.
 
 That last one is the trap to remember when adding a status-line surface. Anything drawn
 from **live** state renders as nothing in a capture unless this script fabricates the
@@ -133,14 +142,15 @@ a workspace strip with one tab on it, which shows nothing about what a strip is 
 there is a second workspace with a clone of its own.
 
 ```bash
-./docs/assets/demo-plane.sh /tmp/demo-plane
-cd /tmp/demo-plane
-cat > /tmp/payload.json <<EOF
+REPO="$PWD" PLANE="$(mktemp -d)" PAYLOAD="$(mktemp)"
+./docs/assets/demo-plane.sh "$PLANE"
+cd "$PLANE"
+cat > "$PAYLOAD" <<EOF
 {"workspace":{"current_dir":"$PWD"},"model":{"display_name":"Opus 5"},"session_id":"demo","context_window":{"used_percentage":38,"current_usage":{"cache_read_input_tokens":74000,"cache_creation_input_tokens":6000}}}
 EOF
-COLUMNS=150 python3 docs/assets/ptyrun.py sh -c 'charter statusline < /tmp/payload.json' \
-  | python3 docs/assets/ansi2svg.py --title "charter statusline" \
-      -o docs/assets/statusline.svg
+COLUMNS=150 python3 "$REPO/docs/assets/ptyrun.py" sh -c "charter statusline < '$PAYLOAD'" \
+  | python3 "$REPO/docs/assets/ansi2svg.py" --title "charter statusline" \
+      -o "$REPO/docs/assets/statusline.svg"
 ```
 
 Three things in that command are load-bearing, and the capture this recipe replaced had
@@ -177,11 +187,11 @@ supplies the active persona, so the caller's session lock and active persona are
 first or the render shows *your* roster rather than the demo's:
 
 ```bash
-cd /tmp/demo-plane
+cd "$PLANE"    # the plane the statusline recipe above built
 env -u CHARTER_WORKSPACE -u CHARTER_PERSONA COLUMNS=96 \
-  python3 docs/assets/ptyrun.py charter persona list \
-  | python3 docs/assets/ansi2svg.py --title "charter persona list" \
-      -o docs/assets/personas.svg
+  python3 "$REPO/docs/assets/ptyrun.py" charter persona list \
+  | python3 "$REPO/docs/assets/ansi2svg.py" --title "charter persona list" \
+      -o "$REPO/docs/assets/personas.svg"
 ```
 
 The vault rows are the reason `demo-plane.sh` writes three secrets. Without them every row

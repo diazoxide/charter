@@ -7,6 +7,10 @@
 set -euo pipefail
 
 PLANE="${1:?usage: demo-plane.sh <dir>}"
+# Resolved BEFORE the `cd` below, for `capture-demo.sh`'s reason: `BASH_SOURCE[0]` is usually
+# relative, and a directory computed after moving finds none of its siblings.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/isolated-init.sh"
 rm -rf "$PLANE"
 mkdir -p "$PLANE"
 cd "$PLANE"
@@ -15,26 +19,10 @@ cd "$PLANE"
 # demo plane resolves purely from its own state directory.
 unset $(env | grep -o '^CHARTER_[A-Z_]*' || true) 2>/dev/null || true
 
-# `charter init` installs two things outside the plane it creates. With `claude` on PATH it
-# runs `claude plugin marketplace add` and `claude plugin install charter@charter --scope
-# project` — a fetch from GitHub and an entry in the operator's own
-# `~/.claude/plugins/installed_plugins.json` naming this throwaway directory (measured: the
-# frame captures for #958 left exactly that entry behind). And it writes opencode's plugin
-# under `$XDG_CONFIG_HOME`, which is the operator's `~/.config`. A demo plane wants neither.
-# So init runs with every PATH directory that holds a `claude` left out —
-# `plugincache.available` is `shutil.which("claude")`, and a plane with no `claude` is an
-# ordinary opencode or Codex plane that gets no plugin row — and with `$XDG_CONFIG_HOME` on
-# a directory of its own, removed when this script exits. `charter` is resolved to a full
-# path first, because it may share a directory with `claude`.
-CHARTER_BIN="$(command -v charter)"
-INIT_PATH="$(python3 -c '
-import os
-print(os.pathsep.join(d for d in os.environ.get("PATH", "").split(os.pathsep)
-                      if d and not os.access(os.path.join(d, "claude"), os.X_OK)))
-')"
-INIT_XDG="$(mktemp -d)"
-trap 'rm -rf "$INIT_XDG"' EXIT
-env PATH="$INIT_PATH" XDG_CONFIG_HOME="$INIT_XDG" "$CHARTER_BIN" init --forge github --owner acme >/dev/null
+# Through `isolated-init.sh`, like every `charter init` in this directory: run bare with
+# `claude` on PATH, init installs Claude Code's charter plugin into the operator's own Claude
+# Code for this throwaway plane, and writes opencode's plugin into their `~/.config`.
+isolated_charter_init -- --forge github --owner acme >/dev/null
 
 # The render resolves its workspace from the *session*, and a captured render has no
 # session lock — so the plane names its own default instead.

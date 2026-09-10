@@ -19,8 +19,9 @@ That picture is **the frame**, which charter draws around your agent. `charter c
 lays out: the agent in the middle, charter's panels around it, repainted when charter's
 hooks say the plane changed. tmux draws the rectangles and does the terminal emulation;
 charter fills the edges and draws nothing in the agent's own pane (ADR 0018). It is a
-capture, not a mockup: `docs/assets/capture-frame.sh <scratch-dir> --full` builds a throwaway plane, opens
-four chats on a private tmux server and prints the screen. **No agent is running in it.**
+capture, not a mockup: `docs/assets/capture-frame.sh "$(mktemp -d)" --full` empties the
+directory it is given, builds a throwaway plane in it, opens four chats on a private tmux
+server and prints the screen. **No agent is running in it.**
 Every chat runs `charter status`, which is what fills the middle pane, and the CI results,
 the dispatch badge and the working mark are files the capture scripts write in the shape
 charter's own writers leave them.
@@ -85,8 +86,8 @@ its requirements against, the frame still starts. `charter opencode` and `charte
 need their own binaries the same way, and `charter claude --probe` says whether a frame can
 run here without starting one.
 
-`init` names no harness, because charter does not pick one for you. Add this to
-`charter.toml` and the command is `charter` on its own:
+`init` writes no `[harness] default`, because charter does not pick a harness for you. Add
+this to `charter.toml` and the command is `charter` on its own:
 
 ```toml
 [harness]
@@ -120,8 +121,9 @@ Piped anywhere, bare `charter` prints its usage instead of starting an agent.
 - Your agent touches **no credential** you'd mind seeing in a transcript.
 - Nothing it works out in a session is worth having **next week**.
 
-Any one of those and charter is setup with nothing to show for it. If two or three of them made you wince, keep
-reading — each section below is a failure that happened often enough to get built around.
+Any one of those and charter is setup with nothing to show for it. If two or three of them
+made you wince, keep reading — each section below is a failure that happened often enough
+to get built around.
 
 ---
 
@@ -330,8 +332,10 @@ scrollback, so a quit copies the last 2,000 lines of each chat into
 
 The wheel has **zero Python dependencies** (`dependencies = []`). What charter does need is
 what you already have: Python ≥3.11, `git`, and `gh` or `glab` authenticated for the forge
-you use. The frame additionally needs `tmux`, and the browser lane shells out to `npx`.
-That is the whole list — `charter doctor` checks every item of it and names what's missing.
+you use. The frame additionally needs `tmux` and the harness it starts — `claude`,
+`opencode` or `codex` on your `PATH` — and the browser lane shells out to `npx`. That is the
+whole list. `charter doctor` checks Python, git, the forge CLI and its login, and tmux;
+`charter claude` says itself when the harness is missing.
 
 ---
 
