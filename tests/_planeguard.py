@@ -598,14 +598,20 @@ def _the_tree_the_suite_is_in(plane, here) -> tuple[Path | None, tuple[Path, ...
     try:
         tree = _root.tree_of(plane, here)
         planes: tuple[Path, ...] = (Path(plane),)
-        if tree is None:
-            nested = _root.nested_plane_in(plane, here)
-            if nested is not None:
-                # The clone itself when nothing finer is standing in it; `tree_of` asked a
-                # second time is what finds the worktree cut from it.
-                tree = _root.tree_of(nested, here) or nested
-                if tree != nested:
-                    planes += (nested,)
+        # Asked whether or not route 1 answered, and allowed to overrule it. Route 2 starts
+        # at the nearest marker, which is the checkout's OWN, so when it answers at all it
+        # names the checkout the suite was loaded from; route 1 walks up for any ancestor
+        # whose main tree is the plane, and for a clone sitting inside a worktree of the
+        # plane that names the worktree around it. Gating this on `tree is None` was
+        # indistinguishable in every arrangement charter builds and wrong in that one —
+        # `test_the_answer_is_the_checkout_itself_not_a_worktree_around_it`.
+        nested = _root.nested_plane_in(plane, here)
+        if nested is not None:
+            # The clone itself when nothing finer is standing in it; `tree_of` asked a
+            # second time is what finds the worktree cut from it.
+            tree = _root.tree_of(nested, here) or nested
+            if tree != nested:
+                planes += (nested,)
         if tree is not None and not (tree / _root.MARKER).is_file():
             tree = None
     except (OSError, RuntimeError):       # never raise at suite boot; see `install`

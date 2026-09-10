@@ -202,12 +202,42 @@ class WhereTheSuiteIsAllowedToBeRun(unittest.TestCase):
                          _planeguard._the_tree_the_suite_is_in(self.plane, other))
 
     def test_a_checkout_carrying_no_committed_marker_is_left_alone(self):
-        """`_plane_of`'s own condition read the other way round, and it has to survive the
-        second route: a branch that predates the committed `charter.toml` has no committed
-        settings to pin to, and pinning to it would hand the suite a plane-less root."""
-        bare = self._worktree(self.clone, self.tmp / "before-the-marker", marker=False)
-        self.assertEqual((None, ()),
-                         _planeguard._the_tree_the_suite_is_in(self.plane, bare))
+        """`_plane_of`'s own condition read the other way round: a branch that predates the
+        committed `charter.toml` has no committed settings to pin to, and pinning to it
+        would hand the suite a plane-less root.
+
+        Asked on the two arrangements where each route actually FINDS the markerless tree,
+        because those are the only ones that reach the check. A markerless worktree of the
+        clone placed beside the plane is declined earlier by both routes on their own —
+        `nested_plane_in` walks up for a marker and finds none — so a case built on that
+        alone stayed green with the check deleted, measured by removing it."""
+        for route, bare in (
+                ("tree_of — a worktree of the plane itself",
+                 self._worktree(self.plane, self.tmp / "before-the-marker", marker=False)),
+                ("nested_plane_in — a worktree of the clone, inside the clone",
+                 self._worktree(self.clone, self.clone / "sub" / "before-the-marker",
+                                marker=False))):
+            with self.subTest(route=route):
+                self.assertEqual((None, ()),
+                                 _planeguard._the_tree_the_suite_is_in(self.plane, bare))
+
+    def test_the_answer_is_the_checkout_itself_not_a_worktree_around_it(self):
+        """What the pin promises is *the checkout these modules were loaded from*, and the
+        two routes can disagree about that. `tree_of` walks up for ANY ancestor whose main
+        tree is the plane, so a clone sitting inside a worktree of the plane gets that
+        worktree named — a directory the suite was not loaded from. `nested_plane_in` starts
+        at the nearest marker, which is the checkout's own, and names the clone.
+
+        Hand-built — charter's own `clone` resolves the outermost plane and never puts a
+        clone there — which is why nothing noticed: in every arrangement charter builds, the
+        two routes never both answer. Asking the second route only when the first came back
+        empty was indistinguishable from asking it always, until this."""
+        around = self._worktree(self.plane, self.plane / "workspaces" / "ws"
+                                / ".worktrees" / "plane" / "piece")
+        inside = self._plane(around / "workspaces" / "ws2" / "charter", repo=True)
+        tree, planes = _planeguard._the_tree_the_suite_is_in(self.plane, inside)
+        self.assertEqual(inside, tree)
+        self.assertIn(self.plane, planes)
 
 
 class _FakePlane(unittest.TestCase):
