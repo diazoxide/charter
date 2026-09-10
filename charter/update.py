@@ -205,7 +205,15 @@ def latest_display(installed: str) -> str:
 
 
 def _fetch_latest() -> str | None:
-    """One unauthenticated GET of PyPI's JSON metadata endpoint."""
+    """One unauthenticated GET of PyPI's JSON metadata endpoint.
+
+    Through `urlopen`'s DEFAULT opener, which honours ``$https_proxy``, and one test fixture
+    rests on that: `tests/test_the_state_directory_is_charters_to_choose.py` sweeps `charter
+    hook sessionstart` against a plane with no ``.charter/`` yet, so it cannot plant a
+    cooldown lock to stop the check this spawns, and its `child_env` points that child at
+    `_NO_NETWORK` instead. Swapping in an explicit `build_opener(...)` with no `ProxyHandler`
+    would leave that fixture quietly GETting PyPI from CI with nothing failing.
+    """
     import urllib.request
     try:
         with urllib.request.urlopen(_URL, timeout=NET_TIMEOUT) as r:

@@ -283,10 +283,19 @@ def scan(workspace: str | None = None, cwd: str | None = None) -> dict:
     # caller was the status line's `_brand`, and a framed chat never reaches that render:
     # the footer command returns before it (#412). So nothing in a frame refreshed
     # `.charter/cache/update.json`, and `charter version` told a plane two releases behind
-    # that it was up to date. A panel with no gather cache runs this scan on EVERY repaint,
-    # which is what `update.maybe_spawn`'s two brakes are for: `REFRESH_TTL`, and a
-    # cooldown lock touched before the fork. Every tick after the first costs a `stat` and
-    # a small read, never a child.
+    # that it was up to date.
+    #
+    # This is a busy line, and every caller of it matters to the cost: a panel with no
+    # gather cache runs this scan on EVERY repaint, `notify.plane_changed` runs it through
+    # `refresh` on every hook that reports the plane moved — `sessionstart`,
+    # `userpromptsubmit`, every `posttooluse*`, `stop` and `subagentstop` inside a frame —
+    # and `notify.plane_changed_everywhere` runs it for a CLI command that wrote plane
+    # state. `notify.DEBOUNCE` does not bound that across hooks: it is a module global in a
+    # hook PROCESS and every hook is a new process, so each starts at zero. What bounds it
+    # is `update.maybe_spawn`'s own two brakes — `REFRESH_TTL`, and a cooldown lock touched
+    # before the fork — which is exactly what `glstate.maybe_spawn` on the line above has
+    # always relied on here. Every call after the first costs a `stat` and a small read,
+    # never a child.
     try:
         update.maybe_spawn()
     except Exception:

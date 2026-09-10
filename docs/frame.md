@@ -1361,9 +1361,14 @@ newer-charter check (`_version-check`) that `charter version` and `charter repor
 read. A render that returns early starts neither. The frame's gather has always started the
 first. Until #938 nothing started the second, and on the plane that reported it the answer
 was five days old and two releases behind. The gather starts both now, and SessionStart
-starts the check for a chat outside a frame. Both are throttled by what is in
-`.charter/cache/`: at most one check a day, and at most one attempt an hour. A panel
-repainting with no cache to read still forks one check, not one per tick.
+starts the check as well, which is what covers a chat outside a frame.
+
+That gather is not a rare event: a panel with no cache runs it on every repaint, and every
+hook that reports the plane moved runs it too — the session start, each prompt, each tool
+call, each stop — as does a `charter` command that wrote plane state. Both refreshes are
+therefore left to the brakes they have always had, which live in `.charter/cache/`: at most
+one check a day, and at most one attempt an hour. A frame repainting with no cache to read
+still starts one check, not one per tick.
 
 **Only Claude Code's footer goes quiet, because it is the only one being duplicated.**
 opencode has no status bar, so charter wires the plane in as an on-demand `/charter`

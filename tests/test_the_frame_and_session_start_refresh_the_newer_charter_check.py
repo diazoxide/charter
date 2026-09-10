@@ -186,9 +186,17 @@ class SessionStartIsATrigger(PlaneIso):
         self.assertIsNotNone(out, "the session got no briefing at all")
         self.assertIn("dev", out["hookSpecificOutput"]["additionalContext"])
 
-    def test_sessions_starting_together_fork_one_check(self):
-        """The real throttles again. Several chats opened at once, which `charter claude`
-        with a restored layout does, cost one check between them."""
+    def test_repeated_session_starts_in_one_process_fork_one_check(self):
+        """The real throttles again: four starts, one after another, in ONE process. The
+        lock the first one touches is what the next three read, so they cost a `stat`.
+
+        **Four processes starting at the same instant is not what this measures**, and the
+        name used to say it did. `maybe_spawn` reads `lock.exists()` and then touches the
+        lock, and a touch is not an exclusive create, so hooks that genuinely race can each
+        see no lock and each fork. That is bounded — one check a day per plane, and an
+        hour's cooldown once the first lands — and it is `glstate.maybe_spawn`'s shape too,
+        unchanged by #938. A test that runs one process measures one process.
+        """
         spawned = _record_version_checks(self)
         for n in range(4):
             run_hook(hooks.sessionstart, {"session_id": f"t{n}"})
