@@ -238,6 +238,20 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
                       "the lock that actually stands was not named")
         self.assertNotIn("re-locked", err)
 
+    def test_create_use_force_in_a_chat_does_not_claim_the_lock_either(self):
+        """Review round 2, measured: `create delta --use --force` in this chat printed
+        "Active workspace set to 'delta' … locked for this session" while `is_locked()` was
+        `north`, and `use gamma --force` one line later said "still locked to 'north'". The
+        two success paths now say one thing, because one helper says it for both."""
+        rc, err = self._run(commands_workspace.cmd_workspace_create,
+                            name="delta", use=True, force=True, repos=[])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "north")
+        self.assertIn("Active workspace set to 'delta'", err)
+        self.assertIn("this session's commands only", err)
+        self.assertIn("still locked to 'north'", err)
+        self.assertNotIn("locked for this session", err)
+
     def test_workspace_current_names_the_lock_it_is_not_resolving_to(self):
         """The same divergence on the command that exists to explain the resolution, and
         the flow #794 protected: a sub-agent standing in another workspace's tree resolves
@@ -248,6 +262,8 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
             rc, err = self._run(commands_workspace.cmd_workspace_current)
         self.assertEqual(rc, 0)
         self.assertIn("locked to 'north'", err)
+        # `current` switched nothing, so it names the lock and does not narrate a switch.
+        self.assertNotIn("still", err)
 
     def test_create_with_use_makes_the_workspace_and_names_the_same_fix(self):
         """`create --use` goes through the same `set_active`, so it meets the same lock. The

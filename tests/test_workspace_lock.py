@@ -265,15 +265,52 @@ class TestCommandLayer(WorkspaceLockBase):
         there named a lock nothing holds — the same false claim as the chat case, one branch
         over. It is also what pins the `locked and` conjunct above: without it, `None !=
         'alpha'` is true and the announcement became "🔒 still locked to 'None'"."""
-        with mock.patch.dict(os.environ, {}, clear=False):
+        # The pane is STATED: with none, `set_active` writes nothing at all, which is a
+        # different sentence (the case below). A runner has no pane id and a laptop shell
+        # usually does, so leaving it to the environment made this two tests.
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(workspace, "_terminal_id", return_value="pane-a"):
             os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
             rc, err = self._said(commands.cmd_workspace_use,
                                  name="alpha", force=False, create=True)
             self.assertIsNone(workspace.is_locked(), "the fixture wrote a lock after all")
         self.assertEqual(rc, 0, err)
         self.assertIn("Active workspace set to 'alpha'", err)
+        self.assertIn("unlocked", err)
         self.assertNotIn("🔒", err)
         self.assertNotIn("still locked", err)
+
+    def test_create_use_in_a_shell_with_no_session_id_claims_no_lock_either(self):
+        """The third success path, and review round 2's finding: `create --use` announced
+        "🔒 locked for this session" unconditionally while `use` had stopped. Codex's shells
+        are this case (`harness/codex.py`: no per-session id reaches them)."""
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(workspace, "_terminal_id", return_value="pane-e"):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            rc, err = self._said(commands.cmd_workspace_create,
+                                 name="epsilon", use=True, force=False, repos=[])
+            self.assertIsNone(workspace.is_locked(), "the fixture wrote a lock after all")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'epsilon'", err)
+        self.assertIn("unlocked", err)
+        self.assertNotIn("locked for this session", err)
+
+    def test_a_process_with_no_session_and_no_pane_is_told_nothing_was_persisted(self):
+        """`set_active` keys its pointers on a session id and a pane id; with neither it
+        writes nothing and reports scope `none`. This answered "Active workspace set to
+        'gamma'." — and the next command still resolved to `default`."""
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(workspace, "_terminal_id", return_value=None):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            rc, err = self._said(commands.cmd_workspace_use,
+                                 name="gamma", force=False, create=True)
+            resolved = workspace.resolve(cwd=config.ROOT)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(resolved, config.DEFAULT_WORKSPACE, "something was persisted after all")
+        self.assertIn("Nothing was persisted", err)
+        self.assertIn("no session id and no pane id", err)
+        self.assertIn("--workspace gamma", err)
+        self.assertNotIn("Active workspace set to", err)
 
     def test_outside_a_chat_a_forced_switch_still_says_it_re_locked(self):
         """The other side of the sentence #936 changed. Outside a chat `--force` really does
@@ -304,14 +341,28 @@ class TestCommandLayer(WorkspaceLockBase):
         os.environ["TERM_SESSION_ID"] = "myterm"
         self.addCleanup(os.environ.pop, "TERM_SESSION_ID", None)
 
-    def test_reconcile_seeds_the_id_the_rest_of_charter_resolves_by(self):
-        """The pointer has to land under the id `workspace.chosen` reads back, which is
-        `session.current()` — the environment's, ahead of any payload. Keyed on the payload
-        instead, the file was written where nothing looks (#936, round 1)."""
+    def test_reconcile_seeds_the_environments_id_ahead_of_the_payload(self):
+        """An id in the environment outranks the payload's. This holds under the old key
+        and the new one alike — `$CLAUDE_CODE_SESSION_ID` came first in both — so it pins the
+        ordering and NOT the round-1 miskey; the case below is the one that measures that."""
         self._pane_holding("gamma")
         self._reconcile_with_payload("a-different-harness-uuid")
         self.assertEqual(workspace.for_session(self.SID), "gamma")
         self.assertFalse((config.SESSIONS_DIR / "a-different-harness-uuid.workspace").exists())
+
+    def test_reconcile_keys_on_the_chat_id_when_the_chat_has_no_launch_record(self):
+        """The round-1 miskey, measured on its own. Inside a chat WITH a launch record the
+        early return decides first, so it never reaches the key; a frame with no record (the
+        migration case) does. There `$CHARTER_SESSION_ID` is the session every other reader
+        resolves by, and the old key — `$CLAUDE_CODE_SESSION_ID` first — seeded the harness's
+        id instead, where nothing looks and nothing reaps."""
+        self._pane_holding("gamma")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "nolaunch.1"}):
+            self.assertIsNone(workspace.launch_lock(), "the fixture has a launch record")
+            self._reconcile_with_payload("payload-uuid")
+        self.assertEqual(workspace.for_session("nolaunch.1"), "gamma")
+        self.assertFalse((config.SESSIONS_DIR / f"{self.SID}.workspace").exists())
+        self.assertFalse((config.SESSIONS_DIR / "payload-uuid.workspace").exists())
 
     def test_a_harness_that_exports_no_id_still_seeds_from_its_payload(self):
         """The fallback, and the reason the payload is still read: a harness that puts no

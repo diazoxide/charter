@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: A chat is briefed for the workspace it was opened in, and is never told to pick one
+headline: A Claude Code chat is briefed for the workspace it was opened in, instead of being told to pick one
 ---
 
 Every new chat in a charter frame started its session with the wrong picture of where it

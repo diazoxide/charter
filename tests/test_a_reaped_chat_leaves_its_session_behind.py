@@ -9,10 +9,16 @@ name mean a new chat is reaping the state keyed on the old one.
 `reap` removed `.charter/frame/<fid>/` and nothing else. Everything charter keys on the
 charter session id lives one directory over, in `.charter/sessions/<fid>.*` — and inside
 a frame the frame **is** the charter session (ADR 0019), so `<fid>` is that key. The
-measured result, reproduced below without tmux: a relaunched `alpha.1` whose predecessor
-had selected `gamma` comes up `is_locked: gamma`, `workspace.resolve: gamma`, and
-`charter workspace use alpha` — typed by the operator who just launched with
-`--workspace alpha` — is **refused as locked**.
+measured result, as #731 reported it: a relaunched `alpha.1` whose predecessor had selected
+`gamma` came up `is_locked: gamma`, `workspace.resolve: gamma`, and `charter workspace use
+alpha` — typed by the operator who had just launched with `--workspace alpha` — was
+**refused as locked**.
+
+**Only the pointer half of that is still reachable, and it is what these cases measure.**
+Since #936 a chat's lock is its launch record, which outranks any `.lock` file left under
+its id, so the relaunch can no longer be refused its own workspace. The cases below assert
+the pointer (`workspace.resolve`, `for_session`) and the files themselves; none of them
+reproduces the refusal, because nothing can.
 
 #794 closed the visible half: the panels draw `alpha` and the chat belongs to `alpha`,
 because `state.own_workspace` no longer reads that pointer. What that leaves is worse to
@@ -122,28 +128,6 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
         self.assertEqual(again, fid, "the ordinal must be recycled or this measures nothing")
         self.assertFalse(lock.exists())
         self.assertEqual(workspace.is_locked(again), "alpha")
-
-    def test_the_new_chat_can_select_the_workspace_it_was_launched_with(self):
-        """`charter claude --workspace alpha`, then `charter workspace use alpha` — the
-        exact sequence #731 reports, and the one that answered `locked`.
-
-        **The select itself can no longer fail**, because a chat's launch record outranks a
-        stale lock file (#936) — so the case asserts the state the relaunch starts FROM,
-        which the reap decides and which nothing else here asserts in this order: the
-        predecessor's pointer is gone before the new chat runs a command. The lock file's
-        own reap is `test_the_lock_does_not_outlive_the_frame`."""
-        fid = self.open_chat()
-        self.choose(fid, "gamma")
-
-        self.reap_all()
-        again = self.open_chat()
-
-        self.assertEqual(again, fid, "the ordinal must be recycled or this measures nothing")
-        self.assertIsNone(workspace.for_session(again),
-                          "the relaunch started from its predecessor's pointer")
-        self.assertEqual(
-            workspace.set_active("alpha", session_id=again, terminal_id=""), "session")
-        self.assertEqual(workspace.resolve(session_id=again, cwd=config.ROOT), "alpha")
 
     def test_resolution_in_the_new_chats_shell_is_not_the_old_chats_choice(self):
         """`workspace.resolve` is what every `charter` command in the frame's own shell
