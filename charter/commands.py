@@ -481,10 +481,22 @@ def _wire_clones(ws: str) -> None:
     for tree in workspace.guest_trees(ws):
         rows = workspace.wire_guest(tree)
         made = [rel for rel, status in rows if status in ("created", "refreshed")]
-        if made:
+        if made and (".git/info/exclude", "blocked") not in rows:
             util.info(f"{tree.name}: charter's layer written ({len(made)} file(s)) and "
                       f"hidden in that repo's .git/info/exclude — `git status` there is "
                       f"unaffected, and nothing charter wrote can be committed.")
+        elif made:
+            # That sentence is two claims, and with the exclude unwritable neither holds.
+            util.warn(f"{tree.name}: charter's layer written ({len(made)} file(s)), but that "
+                      f"repo's .git/info/exclude could not be updated — those files show in "
+                      f"its `git status`.")
+        for rel, status in rows:
+            if status == "withheld":
+                # A sentence of its own (#942): the one file charter refused to write, and
+                # why — a machine-local rule it cannot hide would be committable there.
+                util.warn(f"{tree.name}/{rel} was not written: charter could not hide it in "
+                          f"that checkout's .git/info/exclude, and a machine-local rule it "
+                          f"cannot hide would be committable there.")
 
 
 #: Concurrent clones. The same number `_build_batch` uses for its API probes, so there is
@@ -1757,7 +1769,7 @@ def _mirror_into_workspaces() -> None:
         # The rule IS written. The mirror is the follow-up, and a plane whose `workspaces/`
         # cannot be listed must not turn a successful `guard ask` into a failure.
         return
-    changed, unreached = [], []
+    changed, unreached, behind, withheld, unhidden = [], [], [], [], []
     for ws in names:
         try:
             rows = workspace.wire_harnesses(ws)
@@ -1766,12 +1778,24 @@ def _mirror_into_workspaces() -> None:
             # `_layer_files`' rule about a misbehaving harness, one level up.
             continue
         for rel, status in rows:
-            # `removed` counts too: this call brings the layer into step with the plane in
-            # both directions, and a run that only withdrew something still did work.
-            if status in ("created", "refreshed", "removed"):
-                changed.append(f"{ws}/{rel}")
+            where = f"{ws}/{rel}"
+            if rel.endswith(".git/info/exclude"):
+                # Not a generated file, and never a rule out of force. The first version
+                # counted this row as a file and, when it was blocked, reported the rule
+                # "NOT in force" there — backwards on both counts: the rule was in force,
+                # and what was wrong is that charter's files showed in that repo's status.
+                if status == "blocked":
+                    unhidden.append(where)
+            elif status in ("created", "refreshed", "removed"):
+                # `removed` counts: the layer comes into step in both directions, and a run
+                # that only withdrew something still did work.
+                changed.append(where)
+            elif status == "harness-behind":
+                behind.append(where)
+            elif status == "withheld":
+                withheld.append(where)
             elif status in ("foreign", "blocked"):
-                unreached.append(f"{ws}/{rel}")
+                unreached.append(where)
     if changed:
         util.info(f"  {len(changed)} generated file(s) under workspaces/ brought into step "
                   f"— a chat there reads its own settings file, never the plane's.")
@@ -1779,6 +1803,20 @@ def _mirror_into_workspaces() -> None:
         util.warn(f"  NOT in force in {', '.join(unreached)} — charter did not write those "
                   f"files and never repairs them. Remove one to have charter generate its "
                   f"own again.")
+    if behind:
+        # Never "remove it": the approvals in that file are the harness's, and the advice
+        # that suits a file somebody else wrote would destroy them.
+        util.warn(f"  {', '.join(behind)}: the harness has added its own approvals, so "
+                  f"charter no longer rewrites it and did not add this rule there — add the "
+                  f"rule to that file by hand if a chat rooted there needs it.")
+    if withheld:
+        util.warn(f"  {', '.join(withheld)} was not written: charter could not hide it in "
+                  f"that checkout's .git/info/exclude, and a machine-local rule it cannot "
+                  f"hide would be committable there. The plane's --local rules are not in "
+                  f"force in a chat rooted there.")
+    if unhidden:
+        util.warn(f"  Could not update {', '.join(unhidden)} — charter's generated files in "
+                  f"that checkout show in its own git status until it can.")
 
 
 def cmd_guard_ask(args) -> int:

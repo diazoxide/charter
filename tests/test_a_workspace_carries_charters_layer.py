@@ -644,6 +644,11 @@ class TheRowsQuietStates(WorkspaceLayer):
         """
         (config.ROOT / ".claude" / "settings.json").write_text(json.dumps(
             {"permissions": {"allow": ["Bash(ls:*)"]}}))
+        # Wired once more, so the file charter generated at setUp is withdrawn: the plane no
+        # longer declares anything it mirrored. Without this the workspace still holds a
+        # generated file nothing wants, and since #942 the row names it `unwanted` — a true
+        # finding, about a different plane from the one this case describes.
+        workspace.wire_harnesses(self.ws)
         self.assertTrue(workspace.list_workspaces(),
                         "no workspace at all — the count below would be zero either way")
         r = doctor.check_workspace_harness()
@@ -814,7 +819,12 @@ class TheRowsComeBackInOneOrder(WorkspaceLayer):
         early = SimpleNamespace(workspace_files=lambda: {"a-early.json": "{}\n"})
         with mock.patch.object(registry, "all", return_value=[late, early]):
             rows = workspace.harness_layer(self.ws)
-        self.assertEqual([rel for rel, _ in rows], ["a-early.json", "z-late.json"],
+        # `unwanted` rows set aside: the workspace still holds the `.claude/settings.json` the
+        # real registry generated at setUp, and under a registry of two stand-ins nothing
+        # generates it any more — which `harness_layer` reports since #942, after the rows
+        # this case is about.
+        self.assertEqual([rel for rel, status in rows if status != "unwanted"],
+                         ["a-early.json", "z-late.json"],
                          "the rows came back in the order the harnesses were registered")
 
 

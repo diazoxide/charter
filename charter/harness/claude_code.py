@@ -67,28 +67,54 @@ RESTRICTIVE_BUCKETS = ("ask", "deny")
 #: Where the mirrored document goes, relative to the workspace directory.
 WORKSPACE_SETTINGS = ".claude/settings.json"
 
-#: Where the mirrored MACHINE-LOCAL document goes, relative to the workspace directory.
+#: Where a CHECKOUT's mirrored machine-local document goes — never a workspace directory.
 #:
-#: **Two generated files and not one, because the plane keeps two and they differ in blast
-#: radius rather than in content.** `charter guard ask --local` writes the plane's
-#: `.claude/settings.local.json`, which `charter init` gitignores, so that rule is one
-#: person's on one machine. Folding it into the generated `.claude/settings.json` would
-#: publish it to every reader of that file — and in a guest checkout that file sits inside
-#: somebody else's repository. Mirroring a machine-local decision into a shared-looking
-#: file is the same category of mistake as mirroring a grant.
+#: **Measured, not assumed; the first version of #942 assumed.** Claude Code 2.1.267, git
+#: 2.50.1, `claude -p` against a `deny` on `mkdir` in throwaway repositories: a
+#: `.claude/settings.local.json` at the GIT ROOT applies to a session started in a
+#: subdirectory; one in that subdirectory applies too; in a linked worktree the MAIN
+#: checkout's applies; and a session in a nested clone ignores the outer repository's and
+#: reads its own. The docs date the git-root rule to v2.1.211.
 #:
-#: `doctor.LANDING_PROMPT` is exactly such a rule — charter recommends
-#: `charter guard ask --local 'charter change land *'` and does not run it — which is why
-#: this is not a hypothetical second file: without it the one guard rule charter names is
-#: the one guard rule that reaches no workspace chat at all.
-WORKSPACE_LOCAL_SETTINGS = ".claude/settings.local.json"
+#: So `workspaces/<ws>/`, a directory inside the plane's repository, already reads the
+#: plane's own local file, and a generated copy there is a leftover at best. A clone at
+#: `workspaces/<ws>/<repo>/` is a git root of its own and reads nothing of the plane's —
+#: the one place this is generated (:meth:`ClaudeCodeHarness.checkout_files`).
+#:
+#: **A separate file from the shared one, because the plane keeps two and they differ in
+#: blast radius.** `charter guard ask --local` writes the plane's gitignored local file, so
+#: that rule is one person's on one machine; folding it into the generated shared file would
+#: publish it to every reader of a file that sits inside somebody else's repository.
+#: `doctor.LANDING_PROMPT` is such a rule.
+#:
+#: **And it is not only charter's file** (:attr:`ClaudeCodeHarness.cowritten`): a clone's
+#: git root is the clone, so this is exactly where "Yes, and don't ask again" saves a
+#: standing approval for a session rooted there.
+CHECKOUT_LOCAL_SETTINGS = ".claude/settings.local.json"
 
-#: The settings files Claude Code resolves **from the session's own directory**, in the
-#: order it reads them. ``~/.claude/settings.json`` is deliberately not among them: it is
-#: machine-global state charter never writes, and this list answers what the REPO carries.
+#: The settings files Claude Code resolves for a session, in the order it reads them.
+#: ``~/.claude/settings.json`` is deliberately not among them: it is machine-global state
+#: charter never writes, and this list answers what the REPO carries.
+#:
+#: **Two rules, not the one this used to state** ("from the session's own directory"). The
+#: shared file is read from the session's directory and nowhere above it — measured on
+#: 2.1.259 and again on 2.1.267. The local file is read from the session's directory AND
+#: from the git root, the main checkout for a linked worktree — documented from 2.1.211,
+#: measured on 2.1.267. The older reading predates #942: `doctor._settings_files` carried
+#: it, so a hook or plugin declared only in the plane's local file went uncounted in a
+#: workspace chat where the host runs it.
 _PROJECT_SETTINGS = (".claude/settings.json", ".claude/settings.local.json")
 
-#: Charter's layer, one part per discovery rule — every rule measured on binary 2.1.259.
+#: Charter's layer, one part per discovery rule — measured on binary 2.1.259, the settings
+#: rule re-measured on 2.1.267 for #942.
+#:
+#: **The `settings` part under-claims the local file, on purpose.** It looks for both files
+#: in the session's own directory, which is true of both. What it cannot say is the second
+#: place the local file is read — the git root — because `LayerPart` has two measured rules
+#: and "this directory or the root" is neither; walking up would claim every directory in
+#: between, which the host does not read. So a key only in the root's local file reads ✗
+#: here while in force. That is the one direction `part_reaches` allows this row to be
+#: wrong in, and charter never puts its own layer keys in that file.
 #:
 #: **Two parts and not one, because two rules.** `settings` is cwd-only; `skills+agents`
 #: walk up and stop at the git boundary. `CLAUDE.md` is the third rule and is deliberately
@@ -266,17 +292,19 @@ class ClaudeCodeHarness(Harness):
                  f"`claude plugin install {plugincache.PLUGIN_ID} --scope "
                  f"{plugincache.INSTALL_SCOPE}`.")]
 
+    #: The generated file Claude Code also writes into itself — a checkout's local settings,
+    #: where "Yes, and don't ask again" lands. See :attr:`Harness.cowritten`.
+    cowritten = (CHECKOUT_LOCAL_SETTINGS,)
+
     def _plane_documents(self) -> tuple[dict | None, dict | None]:
-        """The plane's two settings documents — ``(committed, machine-local)``.
+        """The plane's two settings documents — ``(shared, machine-local)``.
 
-        ``None`` for either one that exists and cannot be parsed, which both readers already
-        answer that way and which every caller here treats as *nothing to mirror*: the
-        operator's content is in that file and charter does not guess over a file somebody
-        is holding.
+        ``None`` for either one that exists and cannot be parsed. That is NOT "nothing to
+        mirror": :meth:`held_files` names it, and charter keeps the last good generated copy
+        rather than withdrawing it over a file somebody is holding.
 
-        One function because two callers need the same pair and asking twice is how a
-        generator and a reporter come to disagree about what the plane says — the
-        one-source-of-truth rule this repository keeps re-learning.
+        One function because every caller needs the same pair, and asking twice is how a
+        generator and a reporter come to disagree about what the plane says.
         """
         from .. import commands, config
 
@@ -284,16 +312,38 @@ class ClaudeCodeHarness(Harness):
         return (commands._load_settings(root)[0],
                 commands._load_json_settings(root / commands.LOCAL_SETTINGS)[0])
 
-    def restrictive_rules(self) -> tuple[str, ...]:
-        """Every plane rule that rides in :meth:`workspace_files` — both files, both
-        buckets.
+    def held_files(self) -> dict[str, str]:
+        """The generated file each unreadable plane file feeds, and that plane file's path.
 
-        Flat, because the caller counts rather than renders: `doctor` says how many of the
-        plane's restrictions a stale generated file is holding up, and which bucket each
-        came from would put the host's evaluation order in a row that is not about it.
+        The shared file feeds `.claude/settings.json` in a workspace and a checkout alike; the
+        local file feeds only a checkout's `.claude/settings.local.json`.
         """
-        return tuple(rule for doc in self._plane_documents()
-                     for rules in _restrictive(doc).values() for rule in rules)
+        from .. import commands, config
+
+        root = Path(config.ROOT)
+        shared, local = self._plane_documents()
+        held: dict[str, str] = {}
+        if shared is None:
+            held[WORKSPACE_SETTINGS] = str(commands._settings_path(root))
+        if local is None:
+            held[CHECKOUT_LOCAL_SETTINGS] = str(root / commands.LOCAL_SETTINGS)
+        return held
+
+    def restrictive_rules(self) -> dict[str, tuple[str, ...]]:
+        """The plane's ask/deny rules, keyed by the generated file each rides in.
+
+        Flat within a file, because the caller counts rather than renders. The shared file's
+        rules ride in `.claude/settings.json` wherever it is generated; the local file's ride
+        only in a checkout's `.claude/settings.local.json`. A file declaring none is absent
+        rather than present and empty — a zero is not a count worth a sentence.
+        """
+        out: dict[str, tuple[str, ...]] = {}
+        for rel, doc in zip((WORKSPACE_SETTINGS, CHECKOUT_LOCAL_SETTINGS),
+                            self._plane_documents()):
+            rules = tuple(rule for bucket in _restrictive(doc).values() for rule in bucket)
+            if rules:
+                out[rel] = rules
+        return out
 
     def workspace_files(self) -> dict[str, str]:
         """The plane's own settings keys, as one document for a workspace to hold.
@@ -316,30 +366,38 @@ class ClaudeCodeHarness(Harness):
         are not parseable: `_load_settings` returns ``None`` for the second, and charter
         does not guess over a file somebody is holding. Empty here means the workspace
         gets no file and no marker at all, which is the honest rendering of "there is
-        nothing to mirror" — writing an empty `{}` would look like a layer.
+        nothing to mirror" — writing an empty `{}` would look like a layer. An unparseable
+        file is also HELD (:meth:`held_files`), so a workspace that already has a copy keeps
+        it.
 
-        **Two documents since #942**, one per plane settings file, because a machine-local
-        rule has to land somewhere machine-local — see :data:`WORKSPACE_LOCAL_SETTINGS`.
-        Each is independent: a plane with a `--local` ask rule and no committed settings at
-        all gets the local file and only that, which is an ordinary plane rather than an
-        edge case.
+        **The shared file only.** Its restrictive half travels since #942; the plane's local
+        file does not travel here at all, because Claude Code reads that file at the git root
+        and a workspace directory is inside the plane's repository — see
+        :data:`CHECKOUT_LOCAL_SETTINGS` for the measurement and :meth:`checkout_files` for
+        the one place it is generated.
         """
-        settings, local = self._plane_documents()
-
-        out: dict[str, str] = {}
+        settings, _local = self._plane_documents()
         doc = {k: settings[k] for k in WORKSPACE_KEYS if k in settings} if settings else {}
         restrictions = _restrictive(settings)
         if restrictions:
             # Last, so the two mirrored keys keep the order they have always had in this
             # file and an existing workspace goes `stale` only where the plane really moved.
             doc["permissions"] = restrictions
-        if doc:
-            out[WORKSPACE_SETTINGS] = json.dumps(doc, indent=2) + "\n"
-        local_restrictions = _restrictive(local)
-        if local_restrictions:
-            out[WORKSPACE_LOCAL_SETTINGS] = json.dumps(
-                {"permissions": local_restrictions}, indent=2) + "\n"
-        return out
+        return {WORKSPACE_SETTINGS: json.dumps(doc, indent=2) + "\n"} if doc else {}
+
+    def checkout_files(self) -> dict[str, str]:
+        """A checkout's `.claude/settings.local.json`: the plane's local ask/deny rules.
+
+        Only in a checkout, because only there has the plane's own local file stopped
+        reaching the session — measured on 2.1.267. Only the restrictive half, for
+        `WORKSPACE_KEYS`' reason. ``{}`` when the plane's local file declares none.
+        """
+        _settings, local = self._plane_documents()
+        restrictions = _restrictive(local)
+        if not restrictions:
+            return {}
+        return {CHECKOUT_LOCAL_SETTINGS:
+                json.dumps({"permissions": restrictions}, indent=2) + "\n"}
 
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Named, never run — the restraint `cmd_version_sync` already keeps.

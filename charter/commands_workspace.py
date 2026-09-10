@@ -1508,6 +1508,19 @@ def cmd_workspace_reinit(args) -> int:
                 repaired.add(n)
                 util.ok(f"Reinitialized '{n}' → removed {rel} — the plane no longer "
                         f"declares it (charter's harness layer).")
+            elif did == "withheld":
+                # A sentence of its own: nothing is in the way at that path, so `blocked`'s
+                # wording would send the operator looking for an obstruction that is not
+                # there. What stopped the write is that the file could not be hidden.
+                util.err(f"'{n}': {rel} was not written — charter could not hide it in that "
+                         f"checkout's .git/info/exclude, and a machine-local file it cannot "
+                         f"hide would be committable there.")
+            elif did == "harness-behind":
+                # Not "foreign" and never "remove it": the approvals in that file are the
+                # harness's own, and deleting it to get charter's copy back destroys them.
+                util.warn(f"'{n}': {rel} — the harness has added its own approvals to it, so "
+                          f"charter no longer rewrites it: the plane's machine-local rules "
+                          f"added since are not in force there.")
             else:
                 repairs += 1
                 repaired.add(n)

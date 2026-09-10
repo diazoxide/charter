@@ -49,18 +49,41 @@ leaving it behind was what made `charter guard ask 'terraform apply *'` *not* pr
 workspace chat that would run `terraform apply`, while the command said the rule applied to
 everyone on the repo.
 
-A `--local` rule stays local. `charter guard ask --local` writes the plane's gitignored
-`.claude/settings.local.json`, and its rules are mirrored into a generated
-`.claude/settings.local.json` of their own rather than folded into the committed sibling —
-so a decision that is yours on this machine does not arrive looking like the team's. Both
-generated files sit under `workspaces/*/*`, which the plane's `.gitignore` covers (a LIVE
-workspace un-ignores `workspace.json`, `workspace.md`, `memory/`, `todos/` and `changes/`,
-never `.claude/`), and in a clone both are registered in that checkout's `info/exclude`.
+A `--local` rule reaches a workspace directory without being copied. Measured on Claude Code
+2.1.267 (git 2.50.1), with `claude -p` against a `deny` in throwaway repositories:
+
+| the rule is in | the session starts in | result |
+|---|---|---|
+| the git root's `.claude/settings.local.json` | a subdirectory | blocked |
+| the subdirectory's own `.claude/settings.local.json` | that subdirectory | blocked |
+| the git root's `.claude/settings.json` | a subdirectory | ran |
+| the outer repo's `.claude/settings.local.json` | a clone nested inside it | ran |
+| the clone's own `.claude/settings.local.json` | that clone | blocked |
+| the main checkout's `.claude/settings.local.json` | a linked worktree of it | blocked |
+
+So the local file is read at the git root as well as in the starting directory — the docs
+date that to 2.1.211 — and the shared file is not. `workspaces/<name>/` sits inside the
+plane's own repository, so the plane's `.claude/settings.local.json` is already in force
+there and charter generates no copy. A clone is a git root of its own, so it gets a
+generated `.claude/settings.local.json` holding the plane's local `ask` and `deny` — separate
+from the shared file, so a decision that is yours on this machine does not arrive looking
+like the team's.
+
+**In a clone that file is shared with Claude Code**, which saves "Yes, and don't ask again"
+into it. Charter writes the clone's `.git/info/exclude` entry *before* the file, and writes
+no local file at all where the exclude cannot be written: a machine-local rule it cannot hide
+would be committable, and `guard ask`, `workspace reinit` and `clone` each say so in a
+sentence of its own. Once Claude Code has added its own approvals, charter keeps the file
+hidden for as long as it exists, never rewrites it and never merges into it. `doctor` only
+mentions it once the plane has moved on since — the plane's newer rules are then not in
+that file — and never suggests deleting a file that holds your approvals.
 
 `charter guard ask` refreshes every workspace's layer as it writes, so the rule is in force
 before the command returns rather than at the next launch. It runs both ways: drop a rule
 from the plane's settings and the mirror of it is withdrawn — a file charter generated and
 no longer generates is removed, but only while its content still matches what charter wrote.
+A plane settings file that does not parse is not a plane that declares nothing: every
+workspace keeps its last good copy, and `doctor`'s `workspace layer` row names the file.
 
 Codex has no command-pattern permissions at all, so there is nothing to carry there and
 `guard ask` already says so. **opencode has one gap that stands**: it resolves `opencode.json`

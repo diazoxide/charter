@@ -1681,19 +1681,53 @@ def harness_deficits() -> list[tuple[str, object]]:
     return out
 
 
-def _harness_files(base: Path) -> dict[str, str]:
+def _cowritten() -> frozenset[str]:
+    """Every registered harness's :attr:`Harness.cowritten` — generated paths the harness
+    also writes into itself, which charter keeps hidden and never rewrites once edited.
+
+    ``getattr`` rather than the attribute: a stand-in harness that declares none must mean
+    none, not an `AttributeError` out of every guest wire.
+    """
+    from .harness import registry as _registry
+
+    return frozenset(p for h in _registry.all() for p in getattr(h, "cowritten", ()))
+
+
+def _held_files() -> dict[str, str]:
+    """``{generated relpath: source}`` for every source a registered harness cannot read now.
+
+    See :meth:`Harness.held_files`: charter keeps what is on disk at those paths, neither
+    writing nor withdrawing it. A harness that does not answer holds nothing.
+    """
+    from .harness import registry as _registry
+
+    out: dict[str, str] = {}
+    for h in _registry.all():
+        member = getattr(h, "held_files", None)
+        out.update((member() if member else None) or {})
+    return out
+
+
+def _harness_files(base: Path, which: str = "workspace_files") -> dict[str, str]:
     """:func:`_layer_files`' body, asked of any directory charter is about to write into.
 
     Takes a path rather than a workspace name because a guest checkout has no name in
     `WORKSPACES_DIR` — and the containment check below is the reason this is one function
     and not two: it is what keeps a harness's ``..`` out of the tree it is joined onto,
     and a copy of it per target is a copy that can drift out of step.
+
+    *which* names the member that answers: :meth:`Harness.workspace_files` for every
+    directory charter writes into, :meth:`Harness.checkout_files` as well for a checkout
+    with a git root of its own (#942) — so the second question gets this containment rather
+    than a copy of it. A harness without the member answers nothing, the way `or {}`
+    already treats one answering ``None``.
     """
     from .harness import registry as _registry
 
     out: dict[str, str] = {}
     for h in _registry.all():
-        for rel, text in (h.workspace_files() or {}).items():
+        member = getattr(h, which, None)
+        for rel, text in ((member() if member else None) or {}).items():
             target = (base / rel).resolve()
             # ONE clause, not two. `target == base.resolve()` was here to drop a `rel`
             # naming the target directory itself, and it can never be the clause
@@ -1788,8 +1822,10 @@ def _inherited_files() -> dict[str, str]:
 def _guest_files(tree: Path) -> dict[str, str]:
     """Everything charter generates inside the guest checkout *tree*.
 
-    The harness layer the workspace directory gets, PLUS the in-repo paths that directory
-    did not need — see :func:`_inherited_files`.
+    The harness layer the workspace directory gets, PLUS what that directory did not need:
+    the in-repo paths a git boundary cuts off (:func:`_inherited_files`), and the files a
+    harness resolves at the git root (:meth:`Harness.checkout_files`), which the plane's own
+    copy already answers for a workspace directory and nothing answers for a clone (#942).
 
     Two questions, deliberately kept apart. `_harness_files` asks each harness what it
     needs in a directory charter OWNS, and the answer is generated content. This asks which
@@ -1798,6 +1834,7 @@ def _guest_files(tree: Path) -> dict[str, str]:
     cannot generate a plane's personas, and it must not mirror a file it generated.
     """
     out = _harness_files(tree)
+    out.update(_harness_files(tree, "checkout_files"))
     out.update(_inherited_files())
     return out
 
@@ -1817,7 +1854,8 @@ def _read_marker(name: str) -> dict:
 def harness_layer(name: str) -> list[tuple[str, str]]:
     """``(relative path, status)`` for every file the harness layer wants — READ ONLY.
 
-    ``"ok"`` · ``"missing"`` · ``"stale"`` · ``"foreign"`` · ``"unreadable"``.
+    ``"ok"`` · ``"missing"`` · ``"stale"`` · ``"foreign"`` · ``"unreadable"`` ·
+    ``"harness-edited"`` · ``"harness-behind"`` · ``"unwanted"`` — see :func:`_layer_status`.
 
     **Regenerate and compare**, which is `persona lint --only stale`'s test verbatim
     (`commands_persona._agent_sync_issues`) rather than a second notion of staleness. A
@@ -1842,7 +1880,24 @@ def harness_layer(name: str) -> list[tuple[str, str]]:
 
 def _layer_status(base: Path, want_all: dict[str, str],
                   marker: dict) -> list[tuple[str, str]]:
-    """:func:`harness_layer`'s comparison, for one directory. READ ONLY."""
+    """:func:`harness_layer`'s comparison, for one directory. READ ONLY.
+
+    **Two statuses for a path the harness also writes into** (:func:`_cowritten`), because
+    the marker's test answers wrong there. Content that matches neither what charter wants
+    nor the digest it recorded is not "the operator's file" when the harness appends its own
+    approvals to it — and calling it foreign is what dropped a clone's local settings out of
+    its exclude block (#942). So: ``harness-edited`` while charter's last write is still what
+    the plane wants — the harness only added to it, every rule charter mirrored is still in
+    it, and nothing is wrong; ``harness-behind`` once the plane has moved on since (or when
+    charter never wrote it) — charter will not merge into a file the harness keeps, so the
+    plane's newer rules are not in it.
+
+    ``unwanted`` for a file charter generated, still exactly as written, that nothing
+    generates any more (:func:`_unwanted`). The next wire withdraws it; until then a withdrawn
+    restriction is still prompting in that directory, and a row that said nothing would say
+    the directory is current.
+    """
+    cowritten = _cowritten()
     rows: list[tuple[str, str]] = []
     for rel, want in sorted(want_all.items()):
         p = base / rel
@@ -1858,16 +1913,49 @@ def _layer_status(base: Path, want_all: dict[str, str],
             rows.append((rel, "ok"))
         elif marker.get(rel) == content_digest(have):
             rows.append((rel, "stale"))
+        elif rel in cowritten:
+            rows.append((rel, "harness-edited" if marker.get(rel) == content_digest(want)
+                         else "harness-behind"))
         else:
             rows.append((rel, "foreign"))
+    rows.extend((rel, "unwanted") for rel in _unwanted(base, want_all, marker))
     return rows
+
+
+def _unwanted(base: Path, want_all: dict[str, str], marker: dict) -> list[str]:
+    """Files charter generated here, still exactly as written, that nothing generates now.
+
+    READ ONLY — :func:`_withdraw` removes them and :func:`_layer_status` reports them, and
+    both ask here so the two cannot disagree about which files those are.
+
+    **Only while the file still matches the digest charter recorded**, :func:`unwire_guest`'s
+    rule verbatim: a file the operator or the harness has since edited is not charter's to
+    delete, and unreadable counts as not charter's for the same reason. **Never a held path**
+    (:func:`_held_files`): a plane file charter cannot read is not a plane that stopped
+    declaring something, and withdrawing over it took every workspace's `enabledPlugins`,
+    `env` and `deny` away over a typo.
+    """
+    held = _held_files()
+    out: list[str] = []
+    # Sorted over the MARKER's own order, never over a set. A set iterates in hash order,
+    # which for two short paths can happen to be path order, so no test could tell `sorted`
+    # from its absence — CI's sweep charged exactly that. The marker's order is whatever
+    # the file on disk says (an older charter or a hand edit can write any), and that is
+    # the order `cmd_workspace_reinit`'s report must not inherit.
+    for rel in sorted(r for r in marker if r not in want_all and r not in held):
+        try:
+            if marker[rel] == content_digest((base / rel).read_text()):
+                out.append(rel)
+        except (OSError, UnicodeDecodeError):
+            continue
+    return out
 
 
 def wire_harnesses(name: str) -> list[tuple[str, str]]:
     """Materialise the harness layer into workspace *name*. ``(relative path, status)``.
 
     ``"created"`` · ``"refreshed"`` · ``"present"`` · ``"removed"`` · ``"foreign"`` ·
-    ``"blocked"``.
+    ``"blocked"`` · ``"withheld"`` · ``"harness-behind"``.
 
     **Refresh, not create-once.** `ensure_shim`'s restraint was right about the operator's
     files and wrong about charter's own: a plugin generated by 0.40.0 survived every
@@ -1901,24 +1989,20 @@ def _withdraw(base: Path, want_all: dict[str, str], marker: dict) -> list[tuple[
     remove verb; hand-editing the plane's settings is how a rule goes, and a mirror that is
     one-way turns that edit into a lie.
 
-    **Only while the file still matches the digest charter recorded**, which is
-    :func:`unwire_guest`'s rule verbatim rather than a second one: a file the operator has
-    since edited is theirs, and the wrong answer here deletes somebody's work. Unreadable
-    counts as theirs for the same reason.
+    **Which files** is :func:`_unwanted`'s answer, asked rather than re-derived: content still
+    matching the recorded digest, and never a held path. The first version carried its own
+    copy of that test and withdrew every workspace's settings over an unparseable plane
+    file, which is how two readers of one question come to disagree.
     """
     rows: list[tuple[str, str]] = []
-    # Sorted over the MARKER's own order, never over a set. A set iterates in hash order,
-    # which for two short paths can happen to be path order, so no test could tell `sorted`
-    # from its absence — CI's sweep charged exactly that. The marker's order is whatever
-    # the file on disk says (an older charter or a hand edit can write any), and that is
-    # the order `cmd_workspace_reinit`'s report must not inherit.
-    for rel in sorted(r for r in marker if r not in want_all):
+    for rel in _unwanted(base, want_all, marker):
         p = base / rel
         try:
-            if marker[rel] != content_digest(p.read_text()):
-                continue
             p.unlink()
-        except (OSError, UnicodeDecodeError):
+        except OSError:
+            # Gone since it was read, or held by a directory that will not let go. It stays
+            # in the marker and stays reported `unwanted`, and the next wire tries again —
+            # this one runs on a launch path and must not raise out of it.
             continue
         del marker[rel]
         # A `.claude/` left standing with nothing of charter's in it is charter still
@@ -1929,8 +2013,16 @@ def _withdraw(base: Path, want_all: dict[str, str], marker: dict) -> list[tuple[
     return rows
 
 
-def _materialise(base: Path, want_all: dict[str, str]) -> list[tuple[str, str]]:
-    """:func:`wire_harnesses`' write loop, for one directory — see it for the contract."""
+def _materialise(base: Path, want_all: dict[str, str],
+                 withhold: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
+    """:func:`wire_harnesses`' write loop, for one directory — see it for the contract.
+
+    *withhold* names wanted paths that must not be written this time. :func:`wire_guest`
+    passes a checkout's co-written local file when its exclude could not be written: a
+    machine-local rule charter cannot hide is one `git add -A` from somebody else's
+    repository. Reported ``withheld`` and never ``blocked`` — nothing is in the way at that
+    path, and `blocked`'s wording would send the operator looking for an obstruction.
+    """
     marker = _read_marker_at(base)
     rows = _withdraw(base, want_all, marker)
     wrote = bool(rows)
@@ -1940,8 +2032,21 @@ def _materialise(base: Path, want_all: dict[str, str]) -> list[tuple[str, str]]:
             # charter has not written this path, so it has nothing new to vouch for.
             rows.append((rel, "foreign"))
             continue
-        if status == "ok":
+        if status in ("ok", "harness-edited"):
+            # `harness-edited` is current: every rule charter mirrored is still in the file,
+            # and writing charter's text over it would throw away the approvals the harness
+            # saved there.
             rows.append((rel, "present"))
+            continue
+        if status == "harness-behind":
+            # Never rewritten and never merged into: the harness keeps that file now.
+            rows.append((rel, status))
+            continue
+        if status == "unwanted":
+            # `_withdraw`'s, and already tried above; there is nothing here to write.
+            continue
+        if rel in withhold:
+            rows.append((rel, "withheld"))
             continue
         want = want_all[rel]
         p = base / rel
@@ -1954,14 +2059,22 @@ def _materialise(base: Path, want_all: dict[str, str]) -> list[tuple[str, str]]:
         marker[rel] = content_digest(want)
         wrote = True
         rows.append((rel, "created" if status == "missing" else "refreshed"))
-    if wrote:
+    if not wrote:
         # Only when something was actually generated. Rewriting the marker on every
         # `ensure` would make a workspace's mtimes move for a call that changed nothing,
         # which is the noise `_ensure_guard_hook` avoids one file over.
-        try:
-            (base / GENERATED_MARKER).write_text(json.dumps(marker, indent=2) + "\n")
-        except OSError:
-            pass
+        return rows
+    marker_path = base / GENERATED_MARKER
+    try:
+        if marker:
+            marker_path.write_text(json.dumps(marker, indent=2) + "\n")
+        else:
+            # Nothing left to vouch for: a withdrawal took the last generated file. An empty
+            # marker is charter still standing in the directory — and in a checkout it is a
+            # file no exclude block names any more, sitting in somebody's `git status`.
+            marker_path.unlink()
+    except OSError:
+        pass
     return rows
 
 
@@ -2021,17 +2134,26 @@ def _charter_owned(base: Path, marker: dict) -> list[str]:
     it is the operator's file now (`harness_layer` calls it ``foreign``), and charter
     neither rewrites it nor hides it. Empty when charter has generated nothing here, so
     a checkout with an all-foreign layer gets no block at all.
+
+    **Except a path the harness also writes into** (:func:`_cowritten`), which keeps its line
+    for as long as the marker names it, whatever its digest (#942). The harness saving an
+    approval moves the digest without making the file anybody else's — and dropping the line
+    was exactly how a clone's local settings, the plane's private rules plus the operator's
+    grants, landed in that repository's `git status`: Claude Code adds its own global exclude
+    only where the file is not already ignored, and charter's line was the ignore.
     """
     if not marker:
         return []
+    cowritten = _cowritten()
     out: list[str] = []
     for rel in sorted(marker):
         p = base / rel
-        try:
-            if p.exists() and marker[rel] != content_digest(p.read_text()):
+        if rel not in cowritten:
+            try:
+                if p.exists() and marker[rel] != content_digest(p.read_text()):
+                    continue
+            except (OSError, UnicodeDecodeError):
                 continue
-        except (OSError, UnicodeDecodeError):
-            continue
         out.append(rel)
     return out + [GENERATED_MARKER]
 
@@ -2136,14 +2258,38 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
 def wire_guest(tree: Path) -> list[tuple[str, str]]:
     """Materialise the layer into guest checkout *tree* and hide it there.
 
-    Files first, then the exclude block: the block lists what the marker says charter
-    owns, so it can only be written once the writing is done. Both halves are idempotent
-    and neither touches a path charter did not generate.
+    **The block first, then the files, then the block again** (#942). The first version
+    wrote the files and only then the block, so where the block could not be written a
+    clone's `.claude/settings.local.json` was on disk and unhidden anyway — a machine-local
+    rule one `git add -A` from somebody else's repository. Now every path charter is about to
+    own is named before anything is written, and a path the harness co-writes is WITHHELD
+    when that fails. The second pass settles the block on what the marker says afterwards: a
+    withdrawal takes its line with it, and a checkout left with nothing of charter's loses
+    the block altogether — which the first version skipped, because an empty marker read as
+    nothing to do.
+
+    The first pass names only paths that are missing, charter's own, or co-written paths
+    charter has written before. A wanted path holding somebody's own file is never named,
+    even for the length of one call: hiding their untracked work from their own `git status`
+    is the failure :func:`_charter_owned` exists to prevent.
     """
-    rows = _materialise(tree, _guest_files(tree))
+    want = _guest_files(tree)
+    marker = _read_marker_at(tree)
+    cowritten = _cowritten()
+    ours = {rel for rel, status in _layer_status(tree, want, marker)
+            if status in ("missing", "stale", "ok") or (rel in cowritten and rel in marker)}
+    planned = sorted(ours | (set(_charter_owned(tree, marker)) - {GENERATED_MARKER}))
+    first = _register_excludes(tree, planned + [GENERATED_MARKER]) if planned else "present"
+    withhold = frozenset(cowritten) if first == "blocked" else frozenset()
+    rows = _materialise(tree, want, withhold)
     owned = _charter_owned(tree, _read_marker_at(tree))
-    if owned:
-        rows.append((".git/info/exclude", _register_excludes(tree, owned)))
+    second = "blocked" if first == "blocked" else _register_excludes(tree, owned)
+    # One row for the two passes, worst first: `blocked` whichever pass hit it, then the
+    # pass that actually wrote. Two rows would report one file twice.
+    status = next((s for s in ("blocked", "created", "refreshed") if s in (first, second)),
+                  "present")
+    if owned or status != "present":
+        rows.append((".git/info/exclude", status))
     return rows
 
 
@@ -2174,8 +2320,14 @@ def unwire_guest(tree: Path) -> list[str]:
     Only files whose current content still matches the marker: a path the operator has
     since rewritten is theirs, and deleting it would be the same overwrite this design
     refuses, one verb further on.
+
+    **A co-written file that stays keeps its line** (#942). Once the harness has saved its
+    own approvals into it the file is not charter's to delete — and taking the block away
+    over a file that stays is the same leak as dropping its line: Claude Code adds no global
+    exclude for a file that was already ignored when it first wrote there.
     """
     marker = _read_marker_at(tree)
+    cowritten = _cowritten()
     removed: list[str] = []
     for rel in sorted(marker):
         p = tree / rel
@@ -2195,7 +2347,9 @@ def unwire_guest(tree: Path) -> list[str]:
         removed.append(GENERATED_MARKER)
     except OSError:
         pass
-    _register_excludes(tree, [])
+    kept = [rel for rel in sorted(marker)
+            if rel in cowritten and rel not in removed and (tree / rel).exists()]
+    _register_excludes(tree, kept)
     return removed
 
 

@@ -839,11 +839,52 @@ def _settings_files(root: Path | None = None) -> list[Path]:
     this session names its own root: `commands._ensure_guard_hook` is about to write the
     PLANE's `settings.json` and must read the plane's `enabledPlugins`, whatever directory
     the operator happened to be standing in when they typed `charter reinit`.
+
+    **The local file is read in two places, and this listed one** (Claude Code 2.1.267,
+    measured for #942; documented from 2.1.211): the session's own directory, and the git
+    root — the main checkout, for a linked worktree. A workspace directory sits inside the
+    plane's repository, so a hook or a plugin declared only in the plane's
+    `settings.local.json` IS in force in a workspace chat, and every row built on this list
+    said it was not. Appended after the session's own copy so the order the rows already
+    print in is unchanged, and not at all where the root is the directory itself — the
+    guard row counts declarations, and one file listed twice would read as declared twice.
     """
     here = Path(root) if root is not None else session_root()
-    return [here / ".claude" / "settings.json",
-            here / ".claude" / "settings.local.json",
-            Path.home() / ".claude" / "settings.json"]
+    files = [here / ".claude" / "settings.json", here / ".claude" / "settings.local.json"]
+    top = _local_settings_root(here)
+    if top is not None and top != _canonical(here):
+        files.append(top / ".claude" / "settings.local.json")
+    files.append(Path.home() / ".claude" / "settings.json")
+    return files
+
+
+def _local_settings_root(here: Path) -> Path | None:
+    """Where Claude Code keeps `.claude/settings.local.json` for a session at *here*.
+
+    The git common directory's parent when that directory is a `.git` — the repository root
+    for a clone and the MAIN checkout for a linked worktree, which is measured: a `deny` in
+    the main checkout's local file applies to a session in the worktree. `--show-toplevel`
+    for a repository whose git directory lives elsewhere (`--separate-git-dir`), where the
+    common directory's parent is not the checkout at all.
+
+    ``None`` outside a repository, and where the root is the home directory — the docs'
+    own case for the file staying beside the shared one. Never raises: this is read from
+    the SessionStart hook, and a git that cannot answer costs only the extra entry.
+    """
+    try:
+        res = _git_in(here, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        if res.returncode != 0:
+            return None
+        common = Path(res.stdout.strip())
+        if common.name == ".git":
+            top = common.parent
+        else:
+            res = _git_in(here, "rev-parse", "--show-toplevel")
+            top = Path(res.stdout.strip())
+    except (util.ProcTimeout, OSError):
+        return None
+    top = _canonical(top)
+    return None if top == _canonical(Path.home()) else top
 
 
 def _settings_docs(root: Path | None = None) -> list[dict]:
@@ -1901,13 +1942,18 @@ def check_workspace_clones() -> Result:
                         "— never a live query, this runs at SessionStart."))
 
 
-def _mirrored_restrictions() -> int:
-    """How many of the plane's `ask`/`deny` rules ride in the generated workspace layer.
+def _mirrored_restrictions() -> dict[str, int]:
+    """How many of the plane's `ask`/`deny` rules ride in each generated file, by path.
 
     Asked of every registered harness (`Harness.restrictive_rules`) rather than read out of
     `.claude/settings.json` here: which of the plane's policy travels is a fact about a
     harness's own config format, and a literal in this file is the
     hardcoded-literal-per-harness failure `harness/registry.py` exists to end.
+
+    **Keyed by generated path**, so `check_workspace_harness` counts only what rides in the
+    rows it names: a checkout's local file holds up only the plane's local rules, and a
+    missing agent file holds up none. The first version counted every rule the plane had and
+    printed the sentence beside any finding at all.
 
     A harness that cannot answer costs the SENTENCE and never the row. The findings are what
     the operator acts on; this only decides whether one more clause is printed beside them,
@@ -1916,13 +1962,15 @@ def _mirrored_restrictions() -> int:
     """
     from .harness import registry as _registry
 
-    total = 0
+    counts: dict[str, int] = {}
     for h in _registry.all():
         try:
-            total += len(h.restrictive_rules() or ())
+            rules = h.restrictive_rules() or {}
         except (OSError, ValueError):
             continue
-    return total
+        for rel, found in rules.items():
+            counts[rel] = counts.get(rel, 0) + len(found)
+    return counts
 
 
 def check_workspace_harness() -> Result:
@@ -1978,25 +2026,38 @@ def check_workspace_harness() -> Result:
     aside = (f"  ({gaps}: a workspace directory is not a config scope for them, so it "
              f"cannot diverge — charter harness list)" if gaps else "")
 
-    findings: list[str] = []
-    foreign = False
+    findings: list[tuple[str, str, str]] = []
     total = 0
     try:
         for ws in _workspace.list_workspaces():
             rows = _workspace.harness_layer(ws)
             total += len(rows)
             for rel, status in rows:
-                if status == "ok":
+                # `harness-edited` is current: the harness added its own approvals to a
+                # file charter mirrored, and every rule charter put there is still in it.
+                # Warning on it would fire in every clone anybody ever approved anything in.
+                if status in ("ok", "harness-edited"):
                     continue
-                if status == "foreign":
-                    foreign = True
-                findings.append(f"{ws}/{rel} ({status})")
+                findings.append((ws, rel, status))
+        held = _workspace._held_files()
     except (OSError, ValueError) as e:
         # Narrow, per `check_memory_indexes`: a broad catch here once swallowed a
         # NameError and reported OK, and a check that silently does nothing is worse than
         # no check.
         return Result(name, WARN, detail=f"not checked ({e})", hint=_NOT_CHECKED_HINT)
 
+    if held:
+        # Ahead of "nothing to mirror", which would be false here: the plane declares
+        # something charter cannot read, and every workspace is keeping its last good copy
+        # of it. The first version withdrew those copies and then printed exactly that
+        # sentence over a workspace that had just lost `enabledPlugins`, `env` and `deny`.
+        sources = ", ".join(sorted(set(held.values())))
+        return Result(name, WARN,
+                      detail=f"{sources} is not valid JSON — every workspace keeps its last "
+                             f"good copy of what charter mirrors from it{aside}",
+                      hint="Fix that file. charter mirrors nothing new from it while it does "
+                           "not parse, and never withdraws what it mirrored before over a "
+                           "file it cannot read.")
     if not findings:
         if not total:
             return Result(name, OK,
@@ -2009,29 +2070,42 @@ def check_workspace_harness() -> Result:
     # own and therefore prints two; that is a wart rather than the convention (76 of the
     # 77 hints in this file start with the command), and not one to copy.
     hint = f"charter workspace reinit --all{aside}"
-    if foreign:
+    statuses = {status for _ws, _rel, status in findings}
+    if "foreign" in statuses:
         hint += ("   A 'foreign' file is one charter did not write: it is left completely "
                  "untouched and never repaired. Remove it to have charter generate its "
                  "own again.")
-    behind = _mirrored_restrictions()
+    if "harness-behind" in statuses:
+        # Its own sentence, and never "remove it": the approvals in that file are the
+        # harness's, and the advice that suits a file somebody else wrote destroys them.
+        hint += ("   A 'harness-behind' file is a checkout's local settings that the "
+                 "harness has added its own approvals to: charter no longer rewrites it "
+                 "and will not merge into it, so the plane's machine-local rules added "
+                 "since are not in force there. Keep it, and add the rule to it by hand if "
+                 "that checkout needs it.")
+    counts = _mirrored_restrictions()
+    behind = sum(n for key, n in counts.items()
+                 if any(rel == key or rel.endswith(f"/{key}")
+                        for _ws, rel, _status in findings))
     if behind:
         # The consequence, not the file. `charter guard ask` says a rule "applies to
         # everyone on this repo", and a chat at `workspaces/<ws>/` reads its own settings
         # file and nothing above it — so a generated file that is stale, missing or foreign
         # is a force-prompt rule that is not in force where the guarded command gets typed
-        # (#942). Named only when the plane HAS such rules: a row that talks about them
-        # where there are none sends the reader looking for something that is not there,
-        # which is the cry-wolf failure `check_harness` records.
+        # (#942). Named only when a row it names carries such rules: a sentence about rules
+        # beside a missing agent file sends the reader looking for something that is not
+        # there, which is the cry-wolf failure `check_harness` records.
         #
-        # "MAY not", because this counts the plane's rules and not the ones a given file is
-        # short of. A workspace can be stale over `enabledPlugins` alone with every rule
-        # already in place, and a row that flatly declared the guard down there would be
-        # wrong in the direction that costs a reader their trust in it.
+        # "MAY not", because this counts the rules riding in those files and not the ones a
+        # given file is short of. A workspace can be stale over `enabledPlugins` alone with
+        # every rule already in place, and a row that flatly declared the guard down there
+        # would be wrong in the direction that costs a reader their trust in it.
         hint += (f"   The plane's {behind} ask/deny rule(s) ride in these generated files, "
                  f"so where one is not current a chat in that directory may not be "
                  f"prompted or refused by them.")
+    detail = [f"{ws}/{rel} ({status})" for ws, rel, status in findings]
     return Result(name, WARN,
-                  detail=", ".join(findings[:4]) + (", …" if len(findings) > 4 else ""),
+                  detail=", ".join(detail[:4]) + (", …" if len(detail) > 4 else ""),
                   hint=hint)
 
 
