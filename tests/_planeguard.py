@@ -593,25 +593,40 @@ def _the_tree_the_suite_is_in(plane, here) -> tuple[Path | None, tuple[Path, ...
     outer plane are each a plane a child charter can resolve — the outer from a bare walk,
     the clone from ``$CHARTER_ROOT`` — so both are folded into :data:`_REAL_ROOT` beside
     the tree. #527's hole is reopened by any version of this that merely *swaps* which root
-    counts as real.
+    counts as real. For the same reason a tree route 1 named and route 2 overruled comes
+    back too: `main` pinned the suite there, so it was inside the refusal, and naming the
+    checkout instead must not quietly take it out (#949 review).
+
+    **Route 2 overrules only with the checkout itself, carrying its committed marker.** Its
+    walk starts at the nearest marker ABOVE *here*, and for a markerless checkout that
+    marker is somebody else's — the clone a worktree of the plane was placed in, or a
+    worktree of the clone — so what it finds is a checkout the suite was not loaded from,
+    and the marker check would read THAT `charter.toml` and pass. A markerless checkout has
+    nothing committed to pin to, so it leaves route 1's answer standing exactly as it stood
+    before #944 — including where route 1's own ancestor walk names a worktree around it —
+    rather than replacing it with an answer the marker check then discards along with the
+    tree it displaced.
     """
     try:
+        here = Path(here).resolve()       # both routes answer in resolved spellings
         tree = _root.tree_of(plane, here)
         planes: tuple[Path, ...] = (Path(plane),)
-        # Asked whether or not route 1 answered, and allowed to overrule it. Route 2 starts
-        # at the nearest marker, which is the checkout's OWN, so when it answers at all it
-        # names the checkout the suite was loaded from; route 1 walks up for any ancestor
-        # whose main tree is the plane, and for a clone sitting inside a worktree of the
-        # plane that names the worktree around it. Gating this on `tree is None` was
-        # indistinguishable in every arrangement charter builds and wrong in that one —
-        # `test_the_answer_is_the_checkout_itself_not_a_worktree_around_it`.
+        # Asked whether or not route 1 answered, and allowed to overrule it: route 1 walks up
+        # for any ancestor whose main tree is the plane, and for a clone sitting inside a
+        # worktree of the plane that names the worktree around it. Gating this on `tree is
+        # None` was indistinguishable in every arrangement charter builds and wrong in that
+        # one — `test_the_answer_is_the_checkout_itself_not_a_worktree_around_it`.
         nested = _root.nested_plane_in(plane, here)
         if nested is not None:
             # The clone itself when nothing finer is standing in it; `tree_of` asked a
             # second time is what finds the worktree cut from it.
-            tree = _root.tree_of(nested, here) or nested
-            if tree != nested:
-                planes += (nested,)
+            found = _root.tree_of(nested, here) or nested
+            if found == here and (found / _root.MARKER).is_file():
+                if tree is not None:
+                    planes += (tree,)
+                if found != nested:
+                    planes += (nested,)
+                tree = found
         if tree is not None and not (tree / _root.MARKER).is_file():
             tree = None
     except (OSError, RuntimeError):       # never raise at suite boot; see `install`

@@ -31,15 +31,15 @@ command.
   a checkout inside a control plane resolves to *that* plane, so `tests/_planeguard.py`
   refuses any write into the real `.charter/` — and into the real `charter.toml`, the one
   file outside that directory whose loss changes what your next launch draws (#726) — and
-  fails the test that tried. Anywhere but the plane root — a **workspace clone**, a **linked
-  worktree**, or a worktree cut from a clone, which is what `charter wt add` builds — the
-  same file pins the suite to the checkout it was loaded from. It has to: `root._plane_of`
-  sends a worktree's plane back to the tree it was cut from and `root.find_root` hops outward
-  through `workspaces/`, so in all three `config.ROOT` is the operator's plane, and a suite
-  reading it asserts against their uncommitted `charter.toml` instead of the branch's
-  committed one (#785, #944). A case that wants this repository's own committed config reads the file off
-  disk from the repository root, as `test_frame_config._COMMITTED` does, never through
-  `config`. The same file
+  fails the test that tried. Anywhere inside or cut from a plane, on a branch that carries the
+  committed `charter.toml` — a **workspace clone**, a **linked worktree**, or a worktree cut
+  from a clone, which is what `charter wt add` builds — the same file pins the suite to the
+  checkout it was loaded from. It has to: `root._plane_of` sends a worktree's plane back to
+  the tree it was cut from and `root.find_root` hops outward through `workspaces/`, so in all
+  three `config.ROOT` is the operator's plane, and a suite reading it asserts against their
+  uncommitted `charter.toml` instead of the branch's committed one (#785, #944). A case that
+  wants this repository's own committed config reads the file off disk from the repository
+  root, as `test_frame_config._COMMITTED` does, never through `config`. The same file
   refuses one kind of *read*: a setting your own `charter.toml` declares — today
   `[update] channel` — because a test that reads it is asserting against a fixture written
   by whoever happens to run the suite. `tests/_envguard.py` is the third of the same

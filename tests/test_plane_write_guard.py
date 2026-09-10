@@ -206,16 +206,29 @@ class WhereTheSuiteIsAllowedToBeRun(unittest.TestCase):
         committed `charter.toml` has no committed settings to pin to, and pinning to it
         would hand the suite a plane-less root.
 
-        Asked on the two arrangements where each route actually FINDS the markerless tree,
-        because those are the only ones that reach the check. A markerless worktree of the
-        clone placed beside the plane is declined earlier by both routes on their own —
+        Asked on the arrangements where a route actually FINDS the markerless tree, because
+        those are the only ones that reach the check. A markerless worktree of the clone
+        placed beside the plane is declined earlier by both routes on their own —
         `nested_plane_in` walks up for a marker and finds none — so a case built on that
-        alone stayed green with the check deleted, measured by removing it."""
+        alone stayed green with the check deleted, measured by removing it.
+
+        The last two are the ones the check could not see at all, found in review (#949): a
+        markerless worktree of the PLANE placed inside the clone's own `.worktrees/`, and one
+        placed inside a worktree of the clone. Route 2 walks up to the nearest marker — the
+        clone's, or its worktree's — and names THAT, a checkout the suite was not loaded from,
+        so the check read the wrong `charter.toml`, passed, and pinned. `main` had left both
+        unpinned."""
         for route, bare in (
                 ("tree_of — a worktree of the plane itself",
                  self._worktree(self.plane, self.tmp / "before-the-marker", marker=False)),
                 ("nested_plane_in — a worktree of the clone, inside the clone",
                  self._worktree(self.clone, self.clone / "sub" / "before-the-marker",
+                                marker=False)),
+                ("both — a worktree of the plane, inside the clone's .worktrees/",
+                 self._worktree(self.plane, self.clone / ".worktrees" / "old-of-plane",
+                                marker=False)),
+                ("both — a worktree of the plane, inside a worktree of the clone",
+                 self._worktree(self.plane, self.piece / "sub" / "old-of-plane-in-a-piece",
                                 marker=False))):
             with self.subTest(route=route):
                 self.assertEqual((None, ()),
@@ -231,13 +244,46 @@ class WhereTheSuiteIsAllowedToBeRun(unittest.TestCase):
         Hand-built — charter's own `clone` resolves the outermost plane and never puts a
         clone there — which is why nothing noticed: in every arrangement charter builds, the
         two routes never both answer. Asking the second route only when the first came back
-        empty was indistinguishable from asking it always, until this."""
+        empty was indistinguishable from asking it always, until this.
+
+        The worktree it overrules stays guarded (#949 review). `main` pinned the suite THERE,
+        so that worktree and its `charter.toml` were inside the refusal, and a child handed
+        `$CHARTER_ROOT=<that worktree>` still resolves it. Naming the clone instead must not
+        quietly drop them: the rule `_pin_the_suite_to_its_own_tree` states is that the guard
+        gets wider, never narrower."""
         around = self._worktree(self.plane, self.plane / "workspaces" / "ws"
                                 / ".worktrees" / "plane" / "piece")
         inside = self._plane(around / "workspaces" / "ws2" / "charter", repo=True)
         tree, planes = _planeguard._the_tree_the_suite_is_in(self.plane, inside)
         self.assertEqual(inside, tree)
         self.assertIn(self.plane, planes)
+        self.assertIn(around, planes, "the worktree `main` pinned to fell out of the guard")
+
+    def test_a_worktree_the_pin_does_not_overrule_is_still_guarded(self):
+        """The arrangement above with a MARKERLESS checkout in it: a worktree of that inner
+        clone, cut from a branch that predates `charter.toml`. There is nothing committed to
+        pin the suite to, so there is nothing to overrule `main`'s answer with — and whatever
+        this answers, the worktree `main` guarded must still be guarded. Overruling first
+        and letting the marker check discard the result afterwards loses both: the pin, which
+        is right, and the worktree's place in the refusal, which is not."""
+        around = self._worktree(self.plane, self.plane / "workspaces" / "ws"
+                                / ".worktrees" / "plane" / "piece")
+        inner = self._plane(around / "workspaces" / "ws2" / "charter", repo=True)
+        bare = self._worktree(inner, inner / "sub" / "before-the-marker", marker=False)
+        tree, planes = _planeguard._the_tree_the_suite_is_in(self.plane, bare)
+        self.assertIn(around, {tree, *planes},
+                      "a worktree `main` refused writes and spawns for fell out of the guard")
+
+    def test_a_checkout_named_through_a_symlink_is_the_same_checkout(self):
+        """`tree_of` and `nested_plane_in` resolve what they are handed, so what they answer
+        is always the resolved spelling, and the overrule compares that answer with the
+        checkout. Compared with the spelling as given instead, a clone reached through a
+        symlink — macOS's `/tmp`, a symlinked home — never equals it, route 2 never overrules,
+        and the suite is left unpinned exactly where #944 found it."""
+        link = self.tmp / "a-symlink-to-the-clone"
+        link.symlink_to(self.clone, target_is_directory=True)
+        self.assertEqual((self.clone, (self.plane,)),
+                         _planeguard._the_tree_the_suite_is_in(self.plane, link))
 
 
 class _FakePlane(unittest.TestCase):
