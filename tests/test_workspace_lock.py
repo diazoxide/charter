@@ -280,6 +280,20 @@ class TestCommandLayer(WorkspaceLockBase):
         self.assertNotIn("🔒", err)
         self.assertNotIn("still locked", err)
 
+    def test_outside_a_chat_create_use_force_says_it_re_locked(self):
+        """`create --use --force` hands the helper its own `forced`, and nothing read it: the
+        chat case cannot tell the verbs apart (the lock stays the launch record either way),
+        so the deletion sweep re-spelt the `"force"` literal on that call and the whole suite
+        stayed green. Outside a chat the forced switch really moves the lock, and the
+        sentence has to say so."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_create,
+                             name="beta", use=True, force=True, repos=[])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "beta")
+        self.assertIn("Active workspace re-locked to 'beta'", err)
+        self.assertIn("🔒 locked for this session", err)
+
     def test_create_use_in_a_shell_with_no_session_id_claims_no_lock_either(self):
         """The third success path, and review round 2's finding: `create --use` announced
         "🔒 locked for this session" unconditionally while `use` had stopped. Codex's shells
