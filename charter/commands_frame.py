@@ -4683,24 +4683,24 @@ def _pin_workspace(ws: str, fid: str, picked: bool) -> None:
     again, and being refused by a dead frame's lock on a name the operator just typed is
     not a refusal worth having.
 
-    **Picking IS the confirmation that locks, and #518 asks that this be decided and
-    SAID.** `set_active`'s contract is that confirming a workspace locks the session to it,
-    and the picker is a confirmation — the alternative would be a launch that writes the
-    pointer and leaves the lock off, which is a third behaviour for `charter workspace use`
-    to disagree with. What makes it liveable is that the lock has its own way out, named in
-    the sentence that announces it: `charter workspace unlock`, typed in the frame's own
-    shell, so the operator is not stuck with a choice they just made at a prompt. Printed
+    **Picking IS the confirmation, and #518 asks that this be decided and SAID.** Printed
     here rather than in the picker, because it describes what the LAUNCH did with the
     answer, not what the answer was.
 
-    **That sentence used to lead with `F2 → workspace` and no longer can** (§4j/§4b). The
-    escape it named was `switch.to_workspace` overriding the lock — and that switch no
-    longer touches the lock at all, because what it moves is the tmux client rather than
-    the chat: after it the operator is looking at another workspace and this session is
-    still locked to the one its commands act on. The argument above is unchanged because
-    the OTHER escape was always the one that does the work: `unlock` releases the lock
-    without moving the chat, which is exactly what a lock the operator wants gone needs
-    and all it needs.
+    **The lock it announces is no longer this write's to take, and #936 is why.** A chat
+    used to be locked only here, so a silent launch (`--workspace`, a pointer, a reopen)
+    left a chat with no lock at all. Charter's own SessionStart then told that chat to run
+    `charter workspace use`, and in that chat the command SUCCEEDED, moving its commands to
+    another workspace while its tab stayed in this one. A chat's lock is now its launch
+    record (`workspace.launch_lock`), so a picked launch and a silent one hold the same lock,
+    and the lock file written below restates a value the record already holds.
+
+    **So the sentence no longer names `charter workspace unlock`.** It named it as the way
+    out, and it cannot be one: `unlock` deletes a file, and a lock read off the launch record
+    is not a file. §4j says what the way out is instead: a conversation wanted elsewhere is
+    a new chat. The sentence says that. It had already stopped naming `F2 → workspace` as a
+    release, because a workspace switch moves the tmux client and leaves every chat locked
+    where it is. That same property is what makes it the way to open a chat elsewhere.
 
     **This write is a lock, not a membership move, which is why §4j leaves it standing.**
     The pointer lands under a chat whose workspace is *ws* already — this launch is what
@@ -4712,8 +4712,8 @@ def _pin_workspace(ws: str, fid: str, picked: bool) -> None:
     if not picked:
         return
     workspace.set_active(ws, session_id=fid, force=True)
-    util.info(f"Workspace '{contain.one_line(ws)}' — 🔒 locked for this frame's "
-              f"session. `charter workspace unlock` releases it.")
+    util.info(f"Workspace '{contain.one_line(ws)}' — 🔒 this chat is locked to it for life. "
+              f"To work in another workspace, open a chat there (its tab, or F2 → workspace).")
 
 
 def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> int:

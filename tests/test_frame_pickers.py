@@ -434,9 +434,14 @@ class ARefusedSwitchSaysSoOnScreen(_Frame, unittest.TestCase):
         taking the lock at launch was that the frame has a way out, and it named `F2 →
         workspace` first — so the property asserted here is the one that argument now
         rests on: the lock a launch or an agent took is still standing after the keypress,
-        untouched, and `charter workspace unlock` is what releases it. Silently moving it
-        would be worse than either: the agent's next command would act on a workspace
-        nobody was told about."""
+        untouched. Silently moving it would be worse than either: the agent's next command
+        would act on a workspace nobody was told about.
+
+        **Since #936 `is_locked` cannot see a keypress that rewrote the lock file.** A
+        chat's lock is its launch record, which outranks the file, and `charter workspace
+        unlock` no longer releases it either. So the pointer is asserted as well: a switch
+        that wrote `beta` under this chat would move what its commands act on, which is the
+        silent move this case is about."""
         workspace.set_active("alpha", session_id=self.FID)
         roster = choose.roster(choose.WORKSPACE, self.FID)
         row = next(r for r in roster.rows if roster.name_of(r) == "beta")
@@ -444,6 +449,7 @@ class ARefusedSwitchSaysSoOnScreen(_Frame, unittest.TestCase):
         self.assertTrue(out.ok, out.message)
         self.assertEqual(state.workspace_for(self.FID), "alpha")
         self.assertEqual(workspace.is_locked(self.FID), "alpha")
+        self.assertEqual(workspace.for_session(self.FID), "alpha")
 
 
 class APinnedFrameIsToldBeforeItPressesAnything(_Frame, unittest.TestCase):

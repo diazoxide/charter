@@ -63,6 +63,16 @@ class _ReapedChat(PersonaIso):
         state.record_workspace(fid, ws)
         return fid
 
+    def choose(self, fid: str, ws: str) -> None:
+        """A selection made inside the chat that disagrees with its launch, as the
+        predecessor on a recycled ordinal made it.
+
+        **Forced, since #936.** A chat's lock is its launch record, so an unforced switch
+        out of its own workspace is refused and writes nothing, and every case below would
+        reap markers that were never there. `--force` is the one way a chat still writes a
+        pointer and a lock naming another workspace, so it is the state #731 is about."""
+        workspace.set_active(ws, session_id=fid, terminal_id="", force=True)
+
     def reap_all(self) -> list[str]:
         # `config.STATE_DIR` is asserted, not assumed: this test's whole subject is a
         # recursive delete under the state directory, and `PersonaIso` repointing it is
@@ -83,7 +93,7 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
 
     def test_the_workspace_pointer_does_not_outlive_the_frame(self):
         fid = self.open_chat()
-        workspace.set_active("gamma", session_id=fid, terminal_id="")
+        self.choose(fid, "gamma")
         self.assertEqual(workspace.for_session(fid), "gamma")
 
         self.reap_all()
@@ -93,21 +103,35 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
         self.assertIsNone(workspace.for_session(again))
 
     def test_the_lock_does_not_outlive_the_frame(self):
-        """The half that survived #794, and the one the operator meets as a refusal."""
+        """The half that survived #794, and the one the operator meets as a refusal.
+
+        **Restaged by #936.** This asserted `is_locked` → `gamma` before the reap and
+        `None` after it. A chat's lock is now its launch record, which outranks the file, so
+        `is_locked` answers `alpha` on both sides of the reap and can no longer see the file
+        go. The file is what #731 is about, so the file is what is asserted, and `is_locked`
+        is asserted for what the operator meets: the relaunch is locked to the workspace it
+        was launched with."""
         fid = self.open_chat()
-        workspace.set_active("gamma", session_id=fid, terminal_id="")
-        self.assertEqual(workspace.is_locked(fid), "gamma")
+        self.choose(fid, "gamma")
+        lock = config.SESSIONS_DIR / f"{fid}.lock"
+        self.assertTrue(lock.exists(), "the fixture wrote no lock, so this measures nothing")
 
         self.reap_all()
         again = self.open_chat()
 
-        self.assertIsNone(workspace.is_locked(again))
+        self.assertEqual(again, fid, "the ordinal must be recycled or this measures nothing")
+        self.assertFalse(lock.exists())
+        self.assertEqual(workspace.is_locked(again), "alpha")
 
     def test_the_new_chat_can_select_the_workspace_it_was_launched_with(self):
         """`charter claude --workspace alpha`, then `charter workspace use alpha` — the
-        exact sequence #731 reports, and the one that answered `locked`."""
+        exact sequence #731 reports, and the one that answered `locked`.
+
+        Since #936 this holds even with the predecessor's lock file left behind, because
+        a chat's launch record outranks it. The reap itself is measured by
+        `test_the_lock_does_not_outlive_the_frame`, which asserts the file."""
         fid = self.open_chat()
-        workspace.set_active("gamma", session_id=fid, terminal_id="")
+        self.choose(fid, "gamma")
 
         self.reap_all()
         again = self.open_chat()
@@ -119,7 +143,7 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
         """`workspace.resolve` is what every `charter` command in the frame's own shell
         acts on — `charter clone`, `charter repos`, `charter ws current`."""
         fid = self.open_chat()
-        workspace.set_active("gamma", session_id=fid, terminal_id="")
+        self.choose(fid, "gamma")
         self.assertEqual(workspace.resolve(session_id=fid), "gamma")
 
         self.reap_all()
@@ -215,20 +239,22 @@ class TheWholeFamilyGoesNotTwoSuffixes(_ReapedChat):
         """The direction that would cost the operator their working state: reaping is
         keyed on the directory that was actually removed, never on the sweep running."""
         kept = self.open_chat()
-        workspace.set_active("gamma", session_id=kept, terminal_id="")
+        self.choose(kept, "gamma")
 
         self.assertIn("edm-test-", str(config.STATE_DIR))
         with mock.patch.object(state, "_launcher_is_alive", return_value=False):
             self.assertEqual(state.reap({kept}, server=SERVER), [])
 
         self.assertEqual(workspace.for_session(kept), "gamma")
-        self.assertEqual(workspace.is_locked(kept), "gamma")
+        # The lock FILE, not `is_locked`: since #936 a chat's lock is its launch record,
+        # which outranks this file and answers `alpha` whether or not the file survived.
+        self.assertTrue((config.SESSIONS_DIR / f"{kept}.lock").exists())
 
     def test_a_frame_on_another_server_keeps_its_selection(self):
         """`reap` is scoped to one server (#381); the marker sweep inherits that scope
         because it happens only where the directory was removed."""
         fid = self.open_chat()
-        workspace.set_active("gamma", session_id=fid, terminal_id="")
+        self.choose(fid, "gamma")
 
         self.assertIn("edm-test-", str(config.STATE_DIR))
         with mock.patch.object(state, "_launcher_is_alive", return_value=False):
@@ -248,7 +274,7 @@ class AFilesystemThatRefuses(_ReapedChat):
 
     def test_a_sessions_directory_that_cannot_be_listed_costs_nothing_else(self):
         fid = self.open_chat()
-        workspace.set_active("gamma", session_id=fid, terminal_id="")
+        self.choose(fid, "gamma")
 
         self.assertIn("edm-test-", str(config.STATE_DIR))
         real = state.Path.iterdir
@@ -269,7 +295,7 @@ class AFilesystemThatRefuses(_ReapedChat):
 
     def test_one_marker_that_cannot_be_unlinked_does_not_strand_the_rest(self):
         fid = self.open_chat()
-        workspace.set_active("gamma", session_id=fid, terminal_id="")
+        self.choose(fid, "gamma")
         stuck = config.SESSIONS_DIR / f"{fid}.lock"
         real = state.Path.unlink
 

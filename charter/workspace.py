@@ -77,11 +77,16 @@ def for_session(sid: str) -> str | None:
     two has to give: a chat belongs to its workspace for life, so what a pointer moves is
     the session's work and never the chat's identity.
 
-    **Refusing the command inside a frame was the alternative and it was rejected on
+    **Refusing the command inside a frame was the alternative, and #791 rejected it on
     evidence**: the only test for "inside a frame" is `session.current()`, and every agent
     spawned from a frame inherits `$CHARTER_SESSION_ID` — so the refusal would fire on
     agents doing ordinary CLI work in isolated worktrees. Nothing here changed; the reader
-    that stopped asking was `own_workspace`.
+    that stopped asking was `own_workspace`. **#936 then refused it after all, by another
+    route and with no frame test**: a chat's lock is its launch record (:func:`launch_lock`),
+    so `set_active` refuses an unforced switch out of it. That is right for an inherited id
+    too. The pointer a sub-agent's `workspace use` writes is this file under its PARENT
+    chat's id, and the sub-agent's own work goes by the tree it stands in or by
+    `--workspace`, neither of which writes here.
 
     Still public, still read by :func:`chosen` and :func:`source`, and still keyed on an id
     handed in rather than resolved — the caller is not always the session being described.
@@ -124,13 +129,16 @@ def for_frame(sid: str | None) -> str | None:
     * **Below the per-session pointer.** `charter workspace use <name>` typed inside the
       frame writes that pointer under the frame's id, so an operator's explicit choice
       still wins **for this session's own commands** — the direction #517 asks for. The
-      launcher's answer is a SEED, never a pin; nothing here takes `ws use` away from a
-      framed session, which is exactly what handing the harness `$CHARTER_WORKSPACE` would
-      have done. What the pointer no longer moves is the frame's PANELS (#791): that read
+      launcher's answer is a SEED, never a pin: handing the harness `$CHARTER_WORKSPACE`
+      would have ranked the launch above every pointer and above the tree a sub-agent
+      stands in. What the pointer no longer moves is the frame's PANELS (#791): that read
       goes through `frame/state.own_workspace`, which is also what decides a chat's
       membership of a workspace, and a command deciding a chat's identity is what §4j
       forbids. This rung's position is unaffected — the two readers were always different
-      functions, and only one of them stopped asking.
+      functions, and only one of them stopped asking. Since #936 an unforced `ws use
+      <other>` in a chat is refused by the chat's lock (:func:`launch_lock`), so inside a
+      chat this pointer outranks the rung below only when somebody passed `--force`. That
+      is still an explicit choice for this session's commands, and they still act on it.
     * **Above the per-terminal pointer.** That rung is not merely absent inside a frame,
       it is *wrong*: it is keyed on `$TMUX_PANE`, and the harness's pane is one charter
       created — not the operator's terminal, whose pointer it would otherwise read or
@@ -647,22 +655,70 @@ def _lock_file(sid: str) -> Path:
     return config.SESSIONS_DIR / f"{sid}.lock"
 
 
+def launch_lock(session_id: str | None = None) -> str | None:
+    """The workspace this session's CHAT was launched for, which is its lock, or ``None``
+    when this session is not a chat (#936).
+
+    **A chat's lock is its launch record, not a file anybody writes.** Until #936 a chat was
+    locked only when the operator PICKED at launch: `commands_frame._pin_workspace` writes
+    the lock and returns early otherwise (#518). So a chat launched with `--workspace`, from
+    a pointer, or by a reopen had no lock at all. Charter's own SessionStart told every such
+    chat to run `charter workspace use <name>`, and there it SUCCEEDED: the chat's commands
+    moved to the other workspace, the frame kept drawing it in its own, and `workspace use
+    <own>` to undo that was refused as locked to the new one. A picked chat was refused the
+    same advice. Two launch paths, two outcomes, one sentence recommending both.
+
+    `frame/state.own_workspace` is the answer because it already is the one ladder for
+    "which workspace does this chat belong to": the pin it was launched under, then what the
+    launch resolved (#733, #791). §4j settles that a chat belongs to its workspace for life.
+    Read and never written, so #518's "a launch that resolved silently … must keep writing
+    none" holds to the letter, and a picked chat and a silent one hold the same lock.
+
+    **Keyed on the id `session.current` answers, which every sub-agent inherits.** That is
+    why #794 rejected refusing `workspace use` inside a frame, and it is why refusing is
+    right. The pointer a sub-agent's `workspace use` writes lands under that same id, its
+    PARENT chat's, so a sub-agent that succeeded would move the chat it serves. The routes a
+    sub-agent does its work by write no pointer and are untouched: the tree it stands in
+    (the cwd rung outranks every pointer) and `--workspace` per command.
+
+    ``None`` for a session that is not a chat, because no frame directory exists under its
+    id and both rungs of `own_workspace` answer nothing. ``None`` for no session at all
+    too, answered by `contain.segment_ok` refusing the empty name; a second guard here would
+    be one no test can turn red.
+    """
+    from .frame import state as _state
+    return _state.own_workspace(_session_id(session_id))
+
+
 def is_locked(session_id: str | None = None) -> str | None:
-    """The workspace this session is **locked** to (i.e. confirmed via ``workspace
-    use``/``create --use``), or ``None`` if the session hasn't confirmed one yet.
+    """The workspace this session is **locked** to, or ``None`` if it has no lock yet.
 
     A lock is what forbids switching *mid-session*: once set, ``set_active`` refuses
-    to move to a different workspace unless ``force=True``. It's keyed by the Claude
-    session id, so every new session starts unlocked and gets to choose afresh."""
+    to move to a different workspace unless ``force=True``.
+
+    **Two sources, and a chat's launch outranks the file** (#936). Inside a frame the lock
+    is the workspace the chat was launched for (:func:`launch_lock`), whether or not anyone
+    picked it. Outside one it is the file ``workspace use``/``create --use`` wrote, keyed by
+    the session id, so every new session starts unlocked and gets to choose afresh.
+
+    The launch comes first because the file under a chat's id can disagree with it only
+    after a forced switch. If the file won, that chat could not go home: `workspace use
+    <own>` would be refused as locked to the workspace it was forced into, which is the undo
+    #936 measured failing. With the launch first, leaving the chat's workspace takes
+    `--force` every time and returning to it takes nothing."""
     sid = _session_id(session_id)
     if not sid:
         return None
-    return _read(_lock_file(sid))
+    return launch_lock(sid) or _read(_lock_file(sid))
 
 
 def unlock(session_id: str | None = None) -> bool:
-    """Drop this session's lock (an explicit escape hatch). Returns True if one was
-    cleared. Used by ``workspace unlock``; ``set_active(..., force=True)`` re-locks."""
+    """Drop this session's lock FILE (an explicit escape hatch). Returns True if one was
+    cleared. Used by ``workspace unlock``; ``set_active(..., force=True)`` re-locks.
+
+    A chat's lock is not that file, so this cannot release it. :func:`is_locked` answers a
+    chat's launch record first (:func:`launch_lock`, #936), and ``workspace unlock``
+    refuses inside a chat rather than report a release that did not happen."""
     sid = _session_id(session_id)
     if not sid:
         return False

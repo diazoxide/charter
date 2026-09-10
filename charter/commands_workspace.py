@@ -152,8 +152,14 @@ def cmd_workspace_create(args) -> int:
         scope = workspace.set_active(args.name, force=getattr(args, "force", False))
         if scope == "locked":
             util.err(_locked_msg(args.name))
-            util.info(f"Workspace '{args.name}' was created; start a new session to use it, "
-                      f"or re-run with --force.")
+            # Inside a chat the refusal has already named how to work there. "Start a new
+            # session, or --force" would contradict it with exactly the two routes a chat's
+            # launch lock exists to replace (#936).
+            if workspace.launch_lock():
+                util.info(f"Workspace '{args.name}' was created.")
+            else:
+                util.info(f"Workspace '{args.name}' was created; start a new session to use it, "
+                          f"or re-run with --force.")
             return 2
         util.ok(f"Active workspace set to '{args.name}'{_scope_note(scope)} — 🔒 locked for this session.")
         _warn_env_override(args.name)
@@ -216,7 +222,19 @@ def cmd_workspace_use(args) -> int:
 def cmd_workspace_unlock(args) -> int:
     """Release this session's workspace lock so a different one can be selected.
     The escape hatch for the mid-session switch guard — use sparingly; a fresh
-    session is the clean way to pick another workspace."""
+    session is the clean way to pick another workspace.
+
+    **Not inside a chat** (#936). A chat's lock is the workspace it was launched in
+    (`workspace.launch_lock`), which is a record and not the file `workspace.unlock` deletes.
+    Left to run, this answered "unlocked" in a picked chat and "nothing to unlock" in a silent
+    one, beside a lock that refused the very next switch in both. So it refuses, deletes
+    nothing, and names the way a chat works elsewhere."""
+    held = workspace.launch_lock()
+    if held:
+        util.err(f"This chat is 🔒 locked to '{held}', the workspace it was launched in, and "
+                 f"nothing unlocks that: a chat belongs to its workspace for life. "
+                 + _open_a_chat_there())
+        return 2
     if workspace.unlock():
         util.ok("Workspace unlocked for this session — `charter workspace use <name>` can switch now.")
     else:
@@ -224,7 +242,29 @@ def cmd_workspace_unlock(args) -> int:
     return 0
 
 
+def _open_a_chat_there(target: str = "<name>") -> str:
+    """How to work in another workspace from inside a chat, said once for every refusal (#936).
+
+    §4j's "a conversation wanted elsewhere is a new chat", made concrete. A workspace's tab
+    and `F2 → workspace` both open that workspace, or focus the chat already open there; the
+    `+` then opens another chat in it. The last clause is for the caller that can press
+    neither, which is a sub-agent: `--workspace` names one workspace for one command and
+    writes no pointer, so it moves no chat.
+    """
+    return ("To work in another workspace, open a chat there: its tab on the workspace strip, "
+            f"or F2 → workspace. For one command, pass `--workspace {target}`.")
+
+
 def _locked_msg(target: str) -> str:
+    held = workspace.launch_lock()
+    if held:
+        # A chat. `unlock` releases nothing here and "start a new session" is not how a chat
+        # moves, so neither is offered (#936). `--force` still works and is deliberately not
+        # offered either: the split it makes, commands in one workspace and the chat drawn in
+        # another, is what charter's own SessionStart used to recommend to every chat.
+        return (f"Workspace is 🔒 locked to '{held}', the workspace this chat was launched in. "
+                f"Switching its commands to '{target}' would leave the chat itself in '{held}' "
+                f"(a chat belongs to its workspace for life). " + _open_a_chat_there(target))
     locked = workspace.is_locked() or "?"
     return (f"Workspace is 🔒 locked to '{locked}' for this session — switching to '{target}' "
             f"mid-session is disabled (never mix workspaces). Start a new session to pick another, "

@@ -87,8 +87,9 @@ they share a checkout you spend the day stashing.
 ![A control plane holds an inventory of every repo in the org, personas each with their own memory and vault, and one workspace directory per task. Each workspace holds repo clones on their own branches, and a clone can be split into git worktrees so parallel sub-agents each get a branch of the same repo.](docs/assets/model.svg)
 
 A **workspace** is one directory of clones per task (`workspaces/<task>/<repo>`), each repo
-on its own branch. Moving between tasks is `charter workspace use <name>` and nothing
-follows you across — no stash, no context bleed, no half-applied branch from yesterday.
+on its own branch. Moving between tasks is `charter workspace use <name>` in a terminal, or
+a chat opened in that workspace inside the frame, and nothing follows you across — no stash,
+no context bleed, no half-applied branch from yesterday.
 
 **Two sub-agents that need the same repo** is the case that breaks everything else.
 Cloning it twice wastes the disk and they still collide. A **worktree** splits one clone

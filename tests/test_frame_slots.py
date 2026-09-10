@@ -467,10 +467,13 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         writer as before — the real `workspace.set_active` with the frame's id in the
         environment, because that is exactly what `charter workspace use` does — and the
         assertion is the one that is now true.
+
+        **Forced since #936.** A chat's lock is its launch record, so an unforced switch
+        out of its own workspace is refused and writes nothing for the panels to ignore.
         """
         state.record_workspace("f-1", self.OTHER)
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
-            self.assertNotEqual(workspace.set_active("chosen-later"), "locked")
+            self.assertNotEqual(workspace.set_active("chosen-later", force=True), "locked")
         out = self._render("top")
         self.assertIn(self.OTHER, out)
         self.assertNotIn("chosen-later", out,
@@ -483,15 +486,15 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         `charter clone`, `charter repos` and `charter ws current` in the agent's own shell
         then acts on.
 
-        Refusing the command inside a frame was the alternative and it is rejected on
-        evidence: the only test for "inside a frame" is `session.current()`, and every
-        agent spawned from a frame inherits `$CHARTER_SESSION_ID` — so the refusal would
-        fire on agents doing ordinary CLI work in isolated worktrees. The pointer is
-        written, the panels ignore it, and those are two different questions rather than
-        one broken answer."""
+        **Forced since #936.** #791 rejected refusing the command inside a frame; #936
+        refused the unforced switch after all, through the chat's lock rather than a frame
+        test (`workspace.launch_lock`, measured in
+        `tests/test_a_chat_is_locked_to_the_workspace_it_was_launched_for.py`). What
+        survives is this: when the switch is made, the pointer is written, the panels
+        ignore it, and those are two different questions rather than one broken answer."""
         state.record_workspace("f-1", self.OTHER)
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
-            workspace.set_active("chosen-later")
+            workspace.set_active("chosen-later", force=True)
             self.assertEqual(workspace.resolve(cwd=config.ROOT), "chosen-later")
         self.assertEqual(workspace.for_session("f-1"), "chosen-later")
 
@@ -502,8 +505,11 @@ class EveryPanelDrawsTheFramesOwnWorkspace(PersonaIso, unittest.TestCase):
         clone = config.WORKSPACES_DIR / "chosen-later" / "arepo"
         (clone / ".git").mkdir(parents=True)
         state.record_workspace("f-1", self.OTHER)
+        # Forced, and the pointer asserted: since #936 an unforced switch is refused by the
+        # chat's lock, and a table that did not follow a choice nobody made measures nothing.
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
-            workspace.set_active("chosen-later")
+            workspace.set_active("chosen-later", force=True)
+        self.assertEqual(workspace.for_session("f-1"), "chosen-later")
         self.assertEqual(slots.repos_rows_wanted("f-1", pane_cols=200), 0)
 
     def test_the_pane_is_sized_from_the_frames_workspace_too(self):

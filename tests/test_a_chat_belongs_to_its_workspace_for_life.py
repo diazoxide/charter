@@ -54,6 +54,12 @@ worktrees, none of which is in a frame in any meaningful sense. So the pointer i
 written and `workspace use` still works everywhere; what changed is that
 `state.own_workspace` no longer reads it, and membership is the launch records alone.
 
+**#936 later refused the unforced switch in a chat after all**, through the chat's lock
+(`workspace.launch_lock`) rather than a frame test. Every case below that writes the
+pointer already forces it, as `charter workspace use --force` does, so none of them moved.
+Why that refusal survives #794's evidence is in
+`tests/test_a_chat_is_locked_to_the_workspace_it_was_launched_for.py`.
+
 **No tmux here, deliberately** — the strand is a state defect and reproduces on two
 directories. `tests/test_frame_chat_switch.TheSwitchEstablishesTheWindowItIsMovingTo`
 keeps the tmux half: a plane that arrived in the split state by some other route (a

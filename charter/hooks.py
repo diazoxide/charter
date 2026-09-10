@@ -5317,6 +5317,35 @@ def _autosync_version_lock() -> str | None:
         return None
 
 
+def _workspace_session(data: dict) -> str | None:
+    """The id a hook asks WORKSPACE questions by: the chat's inside a frame, else the payload's.
+
+    **Two ids reach a hook inside a frame, and they key different things.** The payload's
+    `session_id` is the harness's own, and it still keys everything it keyed here before:
+    the tool-gate snapshot, the trace, the memory-cadence counter, and the chat → harness
+    mapping `_record_harness_session` writes out of both. The workspace pointer, the lock
+    and the launch record are keyed on the CHARTER session instead, which inside a frame is
+    the chat (ADR 0019). `charter workspace use` typed in the chat's shell writes under
+    `session.current()`, and there `$CHARTER_SESSION_ID` is the rung that answers.
+
+    **Handing the payload id to `workspace` was #936.** `session.current` ranks an explicit
+    id above the environment, so the payload id shadowed the chat's and every rung keyed on
+    the chat missed: the pointer, the lock, and `workspace.for_frame`, the rung #597 added
+    for #524. That fixed #524 for every caller except SessionStart, the one #524 named, because
+    it is the one caller that passes a different id explicitly. Measured: a chat launched in
+    `north` was briefed with `default`'s todos, shown `north` as "another workspace", and
+    told to confirm a workspace the frame had already recorded. `_record_harness_session`
+    reads the chat id in the same handler, before this block resolved by the other one.
+
+    `_chat_id` with no frame-record check, for `_record_harness_session`'s reason:
+    whatever `$CHARTER_SESSION_ID` holds is the id this session's own `charter` commands
+    write under, and a hook reading a different key from the one the CLI writes IS the
+    defect. Outside a frame it is unset and the payload id is the only session there is.
+    opencode's plugin sets both to its own session id, so there the two already agree.
+    """
+    return _chat_id() or data.get("session_id")
+
+
 def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
     """The blocks a session needs to know who and where it is.
 
@@ -5331,7 +5360,10 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
     binary because it regenerated some context is not something anybody asked for.
     """
     from . import persona
-    sid = data.get("session_id")
+    # Every call below that takes an id asks a WORKSPACE question, so it takes the chat's id
+    # inside a frame and the payload's outside one. See `_workspace_session`, and #936 for
+    # what the payload id alone cost: a chat briefed for `default`.
+    ws_sid = _workspace_session(data)
     parts: list[str] = []
     if live:
         # Conform this machine to the control plane's version lock, if it declares one.
@@ -5339,7 +5371,7 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
         sync = _autosync_version_lock()
         if sync:
             parts.append(sync)
-    ws = _workspace_confirm_nudge(sid, _unattended(data))
+    ws = _workspace_confirm_nudge(ws_sid, _unattended(data))
     if ws:
         parts.append(ws)  # first: the start-of-session action gate
 
@@ -5396,7 +5428,7 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
     # additive by construction: it cannot shorten, reorder or truncate the role, the
     # memory digest or the workspace gate above it, whatever it contains. Last because
     # it is a reminder, not a gate — nothing here should push the confirm nudge down.
-    todo = _todo_digest(sid)
+    todo = _todo_digest(ws_sid)
     if todo:
         parts.append(todo)
 
@@ -5404,7 +5436,7 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
     # only block here that is about somewhere else, so it reads last among the standing
     # signals — and like the todo digest it is appended as its own part, which cannot
     # shorten or reorder anything above it whatever it contains.
-    neighbours = _other_workspaces_digest(sid)
+    neighbours = _other_workspaces_digest(ws_sid)
     if neighbours:
         parts.append(neighbours)
 
@@ -5702,9 +5734,12 @@ def posttooluse() -> int:
         # not the first clone edit (or LOCAL) → fall through to the recurring cadence nudge
 
     # (C) cadence: substantial work without a recorded memory → re-surface the habit.
+    # The counter stays keyed on the payload id above; the store the nudge suggests is a
+    # WORKSPACE question, so it asks by the chat's id inside a frame (#936).
     if count and count % _MEM_NUDGE_EVERY == 0:
         _emit({"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                      "additionalContext": _mem_cadence_nudge(sid, count)}})
+                                      "additionalContext": _mem_cadence_nudge(
+                                          _workspace_session(data), count)}})
     return 0
 
 
