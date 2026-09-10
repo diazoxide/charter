@@ -21,9 +21,11 @@ the pointer (`workspace.resolve`, `for_session`) and the files themselves; none 
 reproduces the refusal, because nothing can.
 
 #794 closed the visible half: the panels draw `alpha` and the chat belongs to `alpha`,
-because `state.own_workspace` no longer reads that pointer. What that leaves is worse to
-read than a wrong label — the panels and the commands now disagree, and the operator is
-told `locked` by a lock nobody in this chat set.
+because `state.own_workspace` no longer reads that pointer. What that left was worse to
+read than a wrong label: the panels and the commands disagreed, and the operator was told
+`locked` by a lock nobody in that chat had set. #936 took the refusal away. What an unreaped
+id still costs is the first half, the new chat's commands following its predecessor's
+pointer.
 
 **The sweep is the directory prefix, not a list of two suffixes**, and that is
 `workspace._prune`'s lesson taken at its word rather than re-learned (#366): its allowlist
@@ -109,7 +111,7 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
         self.assertIsNone(workspace.for_session(again))
 
     def test_the_lock_does_not_outlive_the_frame(self):
-        """The half that survived #794, and the one the operator meets as a refusal.
+        """The half that survived #794, and the one the operator met as a refusal until #936.
 
         **Restaged by #936.** This asserted `is_locked` → `gamma` before the reap and
         `None` after it. A chat's lock is now its launch record, which outranks the file, so
