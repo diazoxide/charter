@@ -270,9 +270,25 @@ charter init --forge github --owner my-org
 charter doctor
 charter discover
 charter clone some-repo
+charter claude            # or charter opencode, or charter codex
 ```
 
 `--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
 org/user whose repos this control plane tracks. Run inside an existing git repo, `init`
 also *offers* to clone that repo into your first workspace — accept with `charter init
 --clone-this-repo`, because work happens in a workspace, never in the plane root.
+
+`charter claude` starts the harness inside charter's frame, and the frame is a tmux screen:
+**tmux is the one thing it needs that nothing above installed**, and only tmux being missing
+stops a launch. `charter claude --probe` says whether a frame can run here without starting
+one; [frame.md](frame.md) is the rest. If you ran `charter init` from inside a Claude Code
+session, restart that session first — the plugin loads at the next one.
+
+`init` writes no `[harness] default`, so bare `charter` prints its usage until the plane
+names a harness — one key in `charter.toml`
+([control-plane.md](control-plane.md#harnessdefault--bare-charter)):
+
+```toml
+[harness]
+default = "claude"
+```

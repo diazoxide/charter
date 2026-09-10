@@ -7,26 +7,43 @@
 
 **Your agent forgets everything, holds every credential, and works in one checkout.**
 
-![The charter plane render: the active workspace and its open todos, four cloned repos with their branches, dirty and unpushed markers, CI status and open pull requests, then the personas with their vault and memory state.](docs/assets/statusline.svg)
+![charter's frame on a demo plane: an identity row naming the workspace billing-migration, the persona devops and its vault; a strip of four workspace tabs, two of them with a chat count; a strip of three chats, the current one highlighted and another carrying one frame of its working spinner, ending in a plus and a minus; the middle pane, where the harness runs, showing the output of charter status rather than an agent; beside it a persona column with a running-dispatch badge and the workspace's two todos; the repo table underneath with each repo's branch, dirty and unpushed markers, CI result and pull request number; and a bottom row counting todos and running work.](docs/assets/frame-full.svg)
 
 charter is a control plane for coding agents working across many repos on GitHub or
 GitLab: durable **personas**, isolated per-task **workspaces**, and a credential **vault**
 the model never reads from. It runs inside **Claude Code, opencode and Codex**, enforcing
 the same rules in each.
 
-That image is `charter statusline` — the whole plane read off disk in one block: the task
-you're on, the repos it owns and what branch each is sitting on, which are dirty or
-unpushed, CI and open PRs, and the roles you can hand work to. No network on the render
-path. It is generated, not mocked: `docs/assets/` holds the script that produced it.
+That picture is **the frame**, the one surface charter puts on your screen. `charter claude`
+— or `charter opencode`, or `charter codex` — starts the harness inside a tmux window charter
+lays out: the agent in the middle, charter's panels around it, repainted when charter's
+hooks say the plane changed. tmux draws the rectangles and does the terminal emulation;
+charter fills the edges and draws nothing in the agent's own pane (ADR 0018). It is a
+capture, not a mockup: `docs/assets/capture-frame.sh --full` builds a throwaway plane, opens
+four chats on a private tmux server and prints the screen. **No agent is running in it.**
+Every chat runs `charter status`, which is what fills the middle pane, and the CI results,
+the dispatch badge and the working mark are files the capture scripts write in the shape
+charter's own writers leave them.
 
-**Charter does not put it in Claude Code's footer.** It used to — `charter init` wrote a
-`statusLine` key into `.claude/settings.json` — and as of 0.57.0 it does not touch that
-key at all (#895). This render reaches you three other ways: `charter statusline --watch`
-paints it in any spare terminal on a harness with no status bar, opencode's `/charter`
-puts it in the agent's own context, and inside `charter claude` the **frame** draws the
-same content on the edges around the agent. If you want it in Claude Code's footer, that
-is a `statusLine` key you write yourself, and charter will neither add it nor take it
-away.
+**What the picture shows that your frame may not.** Neither tab strip is drawn until the
+plane places it with a `[[frame.component]]` table: on a plane with one chat, a strip is a
+row taken off your harness to show a name `F2` reaches in two keystrokes
+([docs/frame.md](docs/frame.md#the-two-bars-and-why-they-are-off-unless-you-ask)). The `✢` in
+front of `billing-migration.1` is one frame of a working chat's spinner, not a second current
+chat; the current chat is the highlighted one, marked `*`. That spinner comes from Claude
+Code's `UserPromptSubmit` and `Stop` hooks, so a chat running opencode or Codex never shows
+one, and a turn you interrupt with Esc keeps spinning until ten minutes pass with no tool
+call.
+
+**Charter no longer writes a status line into Claude Code** (#895). Until 0.57.0 `charter
+init` put a `statusLine` key in `.claude/settings.json`; it leaves that key alone now, and a
+plane that already had one keeps it. The command that key ran stays, for two jobs the frame
+does not do: `charter statusline --watch` repaints the plane in any spare terminal — beside a
+harness run with `--no-frame`, or on a machine with no tmux — and opencode's `/charter` pipes
+the same render into the agent's own context, which a panel cannot, because the model never
+reads a panel's pane. What went with the key is the context gauge: Claude Code hands its
+token usage to a `statusLine` command and to no hook, so the frame draws no `ctx`/`cache`
+figure unless you wire that key back yourself.
 
 ## 60 seconds
 
@@ -40,32 +57,50 @@ charter init --forge github --owner my-org
 charter doctor
 charter discover
 charter clone some-repo
+charter claude            # or charter opencode, or charter codex
 ```
 
-**One command, and Claude Code's plugin comes with it.** `uv tool install charter-cp` puts
-the `charter` CLI on your `PATH` — a single machine-global install, what you type in your
-own terminal and what CI or a cron job runs. `charter init` then installs charter's Claude
-Code plugin **for that plane**, out of a cache Claude Code keeps holding every version at
-once, which is why a *plane's* pinned version is the plugin's and not the binary's: two
-planes on one laptop can sit on different charters without fighting. The plugin ships no
-Python of its own — every hook it declares shells out to the CLI, which is why the CLI is
-the thing you install and the plugin is the thing it installs for you. It loads on the
-**next** session, so restart after `charter init`. Already have a plane? `charter doctor`
-says whether its plugin is there and `charter doctor --fix` puts it there.
+**One command installs charter, and `charter init` installs Claude Code's half.** `uv tool
+install charter-cp` puts the `charter` CLI on your `PATH` — a single machine-global install,
+what you type in your own terminal and what CI or a cron job runs. `charter init` then
+installs charter's Claude Code plugin **for that plane**, at project scope, out of a cache
+Claude Code keeps holding every version at once, which is why a *plane's* pinned version is
+the plugin's and not the binary's: two planes on one laptop can sit on different charters
+without fighting. The plugin ships no Python of its own — every hook it declares shells out
+to the CLI, which is why the CLI is the thing you install and the plugin is the thing it
+installs for you. With no `claude` on your `PATH`, `init` installs no plugin and prints no
+row for one: an opencode or Codex plane has none to be missing.
 → **[docs/install.md](docs/install.md)**
+
+**Already have a plane?** `charter doctor` names a missing plugin on its `plugin install`
+row, and `charter doctor --fix` installs it. The plugin loads at the **next** Claude Code
+session, after `init` and `--fix` alike, so restart any session that was already open.
+
+**The recording stops before `charter claude`**, because the frame is a full-screen tmux
+client and `capture-demo.sh` records a line transcript; the picture at the top of this page
+is what that step opens. The frame needs tmux, and only tmux being missing stops a launch —
+3.2 is the version charter checks its requirements against, and `charter claude --probe`
+says whether a frame can run here without starting one. Write `[harness] default = "claude"`
+into `charter.toml` and the command is `charter` on its own; `init` does not write that key,
+because charter does not pick a harness for you. Piped anywhere, bare `charter` prints its
+usage instead of starting an agent.
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,
   `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and Claude Code's
   charter plugin for this plane. Additive and idempotent — re-running it
   is always safe. It converts *the directory it runs in* into a control plane, so run it
   somewhere you mean to.
-- **`charter doctor`** preflights python, git, git identity, the forge CLI and its auth,
-  and names what's missing before anything else trips over it. `--fix` installs the pieces
-  charter can install; nothing is ever installed without it.
+- **`charter doctor`** preflights python, git, git identity, the forge CLI and its auth, and
+  whether a frame can run, and names what's missing before anything else trips over it.
+  `--fix` installs the pieces charter can install; without it `doctor` installs nothing.
 - **`charter discover`** queries the forge and writes `inventory/repos.json` — the tracked
   map of every repo in the org, complete even when nothing is cloned yet.
 - **`charter clone <repo>`** clones on demand into the active workspace, already carrying
   the one-credential git policy below.
+- **`charter claude`** opens a chat in the frame. Closing the terminal detaches and leaves
+  the harness running; `F2` → `charter: quit` stops every chat on the plane and records
+  them first, and `charter reopen` — or bare `charter`, when nothing is running — puts them
+  back, resuming the conversation wherever Claude Code recorded one.
 
 ## You don't need charter if
 
@@ -88,8 +123,9 @@ they share a checkout you spend the day stashing.
 
 A **workspace** is one directory of clones per task (`workspaces/<task>/<repo>`), each repo
 on its own branch. Moving between tasks is `charter workspace use <name>` in a terminal, or
-a chat opened in that workspace inside the frame, and nothing follows you across — no stash,
-no context bleed, no half-applied branch from yesterday.
+`F2` → `workspace` inside the frame, which moves your terminal to that workspace and leaves
+every chat in the one you left running. Nothing follows you across — no stash, no context
+bleed, no half-applied branch from yesterday.
 
 **Two sub-agents that need the same repo** is the case that breaks everything else.
 Cloning it twice wastes the disk and they still collide. A **worktree** splits one clone
@@ -112,8 +148,8 @@ nothing committed — until you say otherwise.
 can be a dedicated repo — a monorepo *for* your polyrepo — or `charter init` inside the
 monorepo you already have, which offers to clone that repo into `workspaces/default/`.
 Either way work happens in the workspace clones, **never in the plane root**: two sessions
-sharing one working tree thrash each other's branches, so the status line and `doctor` warn
-when the plane root is dirty or off its default branch.
+sharing one working tree thrash each other's branches, so `charter doctor` and `charter
+statusline` warn when the plane root is dirty or off its default branch.
 → [docs/workspaces.md](docs/workspaces.md)
 
 ---
@@ -237,16 +273,25 @@ N agents are logged in as N different users at once).
 
 ## Seeing what every agent is actually doing
 
-The render at the top of this page is the whole point: the whole plane, from disk, in one
-block. The active task and its open todos, every cloned repo with its branch, dirty and
-unpushed markers, CI status and open PRs pulled from each clone's own forge, and the
-personas with their vault and memory state — as a frame's panels, as `charter statusline
---watch`, or as `/charter` in the agent's context.
+The frame is the whole point: the plane, read off disk, drawn around the agent you are
+talking to — in the picture at the top of this page, around `charter status`, because a
+capture runs no agent. The top row names the workspace, the persona and its vault. The
+strips under it are every workspace on the plane with how many chats each holds, and every
+chat in this workspace, with a spinner in front of each one whose Claude Code turn is still
+running — several harnesses working at once, one of them on screen, and `F2` → `chat` moves
+you to another without stopping any. The persona column says which roles have a dispatch out
+and for how long (`⚡2 4m`). The repo table carries each clone's branch, dirty and unpushed
+markers, CI result and open pull request, read from a cache `charter gl-refresh` fills in
+the background, so a repaint waits on no forge. The bottom row counts todos and running
+work.
 
-**Who is in which tree.** A repo or worktree row says which persona was last seen working
-in it and how long ago — `▸steward now`, `▸forge 7m +1`. An observation with an age, never
-a claim that anyone is still there. A piece that has said nothing for a while shows as
-exactly that: **silence, with an age**, because a worker that dies declares nothing.
+**Who is in which tree is `charter statusline`'s, not the frame's.** Its repo and worktree
+rows say which persona was last seen working in each and how long ago — `▸steward now`,
+`▸forge 7m +1`. An observation with an age, never a claim that anyone is still there. A
+piece that has said nothing for a while shows as exactly that: **silence, with an age**,
+because a worker that dies declares nothing. The frame's repo table has no such column: it
+is the one panel that repaints on every tick while work is in flight, and that column costs
+a directory walk per row.
 
 **Whether your roster is real.** `charter persona stats` reports each role's memory count,
 recency, a quality proxy, and how many times it was actually **dispatched** as a sub-agent
@@ -259,17 +304,22 @@ warnings and memory writes for the session. `charter doctor` preflights the lot.
 
 ---
 
-## No database, no server, no daemon
+## A state store to deploy, migrate and back up
 
 Git is the state. Personas, memories, todos, manifests, inventory and config are ordinary
 committed files in ordinary git repos — which is why a teammate's agent can start where
 yours left off, why `git log` is the audit trail, and why there is nothing to deploy,
 migrate or back up separately.
 
+The frame is the one process that outlives the command you typed: its tmux server keeps
+your chats running after you close the terminal. What lives only in that server is
+scrollback, so a quit copies the last 2,000 lines of each chat into
+`.charter/frame/<chat>.transcript`, and `charter reopen` starts the recorded chats again.
+
 The wheel has **zero Python dependencies** (`dependencies = []`). What charter does need is
 what you already have: Python ≥3.11, `git`, and `gh` or `glab` authenticated for the forge
-you use. The browser lane additionally shells out to `npx`. That is the whole list —
-`charter doctor` checks every item of it and names what's missing.
+you use. The frame additionally needs `tmux`, and the browser lane shells out to `npx`.
+That is the whole list — `charter doctor` checks every item of it and names what's missing.
 
 ---
 
@@ -316,15 +366,10 @@ you use. The browser lane additionally shells out to `npx`. That is the whole li
   (`charter harness install codex`) because nothing in a plugin can tell a shell which
   harness it is.
   → [docs/harnesses.md](docs/harnesses.md)
-- **The plane on screen, on every harness.** `charter claude` (or `codex`,
-  or `opencode`) runs the harness inside a frame charter composes: the agent in the middle,
-  charter's own panels on the edges — the active workspace, open todos, what wants
-  attention — repainting when charter's hooks say the plane changed. tmux composes and
-  owns the rectangles; charter fills the edges and never draws in the agent's own pane.
-  `charter frame -- <cmd>` does it for a command charter has never met, and `--no-frame`
-  (or piping the output anywhere) skips the frame entirely and carries the real exit code.
-  Name the one you use — `[harness] default = "claude"` — and the command is just
-  `charter`.
+- **A command charter has no launcher for.** `charter frame -- <cmd>` puts any command in the
+  frame's middle pane, and `--no-frame` (or piping the output anywhere) runs the harness
+  bare and carries its real exit code. Started inside a tmux you already have, the frame
+  opens as one window in your server rather than nesting a second tmux.
   → [docs/frame.md](docs/frame.md)
 - **An unattended run that stops to ask a question.** Every git operation authenticates
   with that repo's own forge CLI token over HTTPS — never an SSH key, never signing —
@@ -383,8 +428,9 @@ copy wins, is compared to nothing, and drifts unwatched in both directions.
 - [docs/harnesses.md](docs/harnesses.md) — Claude Code, opencode and Codex: how each is
   wired, what each cannot carry, and the one command Codex needs.
 - [docs/frame.md](docs/frame.md) — `charter claude` and the frame: what tmux it needs,
-  what changes inside it (scrollback, mouse, the hotkey palette), how exit codes get out,
-  what happens when the terminal is too small, and every `[frame]` setting.
+  what changes inside it (scrollback, mouse, the hotkey palette), the two tab strips, quit
+  and `charter reopen`, how exit codes get out, what happens when the terminal is too
+  small, and every `[frame]` setting.
 - [docs/git-policy.md](docs/git-policy.md) — the one-credential rule, and why a denial from
   the plugin's guard is the rule working rather than a bug.
 - [docs/hooks.md](docs/hooks.md) — everything the plugin does without being asked: what
