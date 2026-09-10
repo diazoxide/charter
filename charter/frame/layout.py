@@ -1216,8 +1216,11 @@ def window_argv(*, socket: str, session: str, window: str, cwd: str) -> list[str
 
     *cwd* is `-c`, for the same reason `respawn_argv` takes one — see its docstring.
     """
+    # The directory through `tmuxctl.verbatim`, for :func:`respawn_argv`'s reason: one that
+    # ends in `;` otherwise ends this command at `-P` (#957).
     return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", window,
-                 "-c", cwd, "-P", "-F", "#{window_id} #{pane_id}", "--", *PLACEHOLDER)
+                 "-c", tmuxctl.verbatim(cwd), "-P", "-F", "#{window_id} #{pane_id}", "--",
+                 *PLACEHOLDER)
 
 
 def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
@@ -1284,9 +1287,12 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     claude` has to run the harness where it was typed, and the panels split off this
     pane inherit its directory in turn, which is what `workspace.resolve()` reads.
     """
-    # Each harness argument through `tmuxctl.verbatim`: tmux reads one that ends in `;` as
-    # its own command separator and drops the `;` without a word (#957).
-    return _tmux(socket, "respawn-pane", "-k", "-t", harness_pane, "-c", cwd,
+    # Every data argument through `tmuxctl.verbatim` — the directory, each `-e` value (in
+    # `_env_argv`) and each harness argument. tmux reads ANY argument ending in `;` as its
+    # own command separator: a harness argument loses the `;`, and a directory or a value
+    # ends the command at the next flag (#957).
+    return _tmux(socket, "respawn-pane", "-k", "-t", harness_pane,
+                 "-c", tmuxctl.verbatim(cwd),
                  *_env_argv(env), "--", *map(tmuxctl.verbatim, harness_argv))
 
 
@@ -1397,8 +1403,10 @@ def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
     otherwise be the SESSION's, which is wherever the launcher that created the workspace
     happened to be — and the panels split off this pane inherit its directory in turn.
     """
-    # `tmuxctl.verbatim` per harness argument, for :func:`respawn_argv`'s reason (#957).
-    return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", chat, "-c", cwd,
+    # `tmuxctl.verbatim` for the directory and each harness argument, for
+    # :func:`respawn_argv`'s reason (#957).
+    return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", chat,
+                 "-c", tmuxctl.verbatim(cwd),
                  "-P", "-F", "#{pane_id}", *_env_argv(env), "--",
                  *map(tmuxctl.verbatim, harness_argv))
 
@@ -1446,7 +1454,10 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
             f"tmux `-e` may only carry {sorted(CARRIABLE)} — refusing "
             f"{len(unlisted)} other name(s): {unlisted}. A `-e` is argv, and argv is "
             "world-readable; see frame/layout.CARRIABLE")
-    return [x for name in sorted(env or {}) for x in ("-e", f"{name}={env[name]}")]
+    # Each `NAME=VALUE` through `tmuxctl.verbatim`: a value ending in `;` — a plane root, a
+    # `$PATH` — otherwise ends the command at the next flag, `unknown command: --` (#957).
+    return [x for name in sorted(env or {})
+            for x in ("-e", tmuxctl.verbatim(f"{name}={env[name]}"))]
 
 
 def panel_command(*, slot: str, session: str) -> list[str]:

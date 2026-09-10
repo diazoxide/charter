@@ -65,7 +65,8 @@ class TmuxsLengthRefusalIsRecognisedByItsExactWords(unittest.TestCase):
         """A near miss is a different sentence, and a different sentence is a different
         failure: reading it as this one would put a byte count beside a refusal it does
         not explain."""
-        for said in ("", f"no server running on {_tmuxsocket.socket_path('charter')}",
+        for said in (None, "",
+                     f"no server running on {_tmuxsocket.socket_path('charter')}",
                      "no space for a new pane", "create window failed: index 0 in use",
                      "command too long: new-session", "Command too long",
                      "failed to send command to server"):
@@ -115,6 +116,20 @@ class ALaunchOnCharactersOwnServer(PersonaIso, unittest.TestCase):
                     self.assertIn(_LIMIT_ON_SCREEN, said[0])
                     self.assertIn(_CARRIED, said[0])
                     self.assertIn("in a file", said[0])
+
+    def test_an_argument_that_is_not_utf8_is_counted_as_the_bytes_exec_was_handed(self):
+        """A byte that is not UTF-8 reaches `sys.argv` as a surrogate escape. A strict
+        `str.encode` raises on it in the middle of a failure report; `os.fsencode` counts
+        the one byte `exec` was actually handed."""
+        said: list[str] = []
+        with mock.patch("charter.util.err", side_effect=said.append):
+            rc = _launch(_RefusedStart(stderr="command too long\n"),
+                         rest=["fix \udcff " + "x" * 20000])
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(said), 1, said)
+        # `claude`, then `fix `, the single byte 0xff, a space, and the padding.
+        carried = len(b"claude") + len(b"fix \xff ") + 20000
+        self.assertIn(f"{carried:,}", said[0])
 
     def test_any_other_refusal_keeps_the_report_it_always_had(self):
         rc, said = self._launched(_RefusedStart(stderr="no space for a new pane\n"))
@@ -220,25 +235,44 @@ class TmuxStillRefusesInTheWordsCharterRecognises(PersonaIso, unittest.TestCase)
         return subprocess.run([binary, *argv[1:]], capture_output=True, text=True,
                               timeout=20)
 
+    @staticmethod
+    def _which(binary: str) -> str:
+        """Which tmux answered, for a red that is about that tmux rather than charter."""
+        return f"{binary}; the tmux on $PATH reports {tmuxctl.version()}"
+
     def test_a_command_exactly_at_the_limit_is_taken(self):
         for binary, socket in self.servers:
             with self.subTest(tmux=binary):
                 got = self._tmux(binary, self._window(socket, tmuxctl.MESSAGE_LIMIT))
-                self.assertEqual(got.returncode, 0, got.stderr)
+                self.assertEqual(got.returncode, 0, f"{got.stderr} — {self._which(binary)}")
 
     def test_one_byte_past_it_is_refused_in_words_charter_recognises(self):
         for binary, socket in self.servers:
             with self.subTest(tmux=binary):
                 got = self._tmux(binary, self._window(socket, tmuxctl.MESSAGE_LIMIT + 1))
-                self.assertNotEqual(got.returncode, 0)
-                self.assertTrue(tmuxctl.refused_as_too_long(got.stderr), got.stderr)
+                self.assertNotEqual(got.returncode, 0, self._which(binary))
+                self.assertTrue(tmuxctl.refused_as_too_long(got.stderr),
+                                f"{got.stderr!r} — {self._which(binary)}")
 
     def test_far_past_it_is_refused_in_words_charter_recognises(self):
         for binary, socket in self.servers:
             with self.subTest(tmux=binary):
                 got = self._tmux(binary, self._window(socket, 2 * tmuxctl.MESSAGE_LIMIT))
-                self.assertNotEqual(got.returncode, 0)
-                self.assertTrue(tmuxctl.refused_as_too_long(got.stderr), got.stderr)
+                self.assertNotEqual(got.returncode, 0, self._which(binary))
+                self.assertTrue(tmuxctl.refused_as_too_long(got.stderr),
+                                f"{got.stderr!r} — {self._which(binary)}")
+
+    def test_the_sentence_changes_at_the_byte_the_docs_name(self):
+        """`docs/frame.md` and `tmuxctl._TOO_LONG` both say where tmux's sentence changes —
+        16,380 bytes is still `failed to send command`, 16,381 is `command too long` — so
+        that byte is asked of a real tmux rather than left standing as a claim."""
+        for binary, socket in self.servers:
+            for size, sentence in ((16380, "failed to send command"),
+                                   (16381, "command too long")):
+                with self.subTest(tmux=binary, size=size):
+                    got = self._tmux(binary, self._window(socket, size))
+                    self.assertEqual(got.stderr.strip(), sentence,
+                                     f"at {size:,} bytes — {self._which(binary)}")
 
 
 if __name__ == "__main__":

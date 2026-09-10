@@ -463,9 +463,19 @@ def verbatim(arg: str) -> str:
     approximately right: `\;` arrives as `\;`, `;;` as `;;`, ` ;` as ` ;`. Measured on both
     versions and all three commands.
 
-    For DATA only — the harness's own arguments after `--`, which `frame/layout.py`'s
-    builders pass through here — and never for :data:`SEPARATOR` itself, which :func:`chain`
-    inserts precisely so tmux will read it as one.
+    **Every argument is read this way, not only the harness's** (review round 1 on #959). A
+    `-c` directory or an `-e NAME=VALUE` ending in `;` ends the command early instead, and
+    the flag after it is read as a command of its own — `unknown command: -P`, `-e` or `--`,
+    rc 1, measured on both versions. And a MIDDLE harness argument ending in `;` made the
+    arguments after it a tmux command run on charter's server: `["a;", "set-option", "-g",
+    "@injected", "yes"]` set `@injected` and handed the harness `["a"]`, rc 0. Only an
+    operator's own typed arguments reach a harness argv today, so that was a latent surface
+    rather than a hole; it is closed all the same.
+
+    For every DATA argument — the harness's arguments after `--`, the `-c` directory and
+    each `-e` value, which `frame/layout.py`'s builders pass through here — and never for
+    :data:`SEPARATOR` itself, which :func:`chain` inserts precisely so tmux will read it as
+    one.
     """
     return arg[:-1] + "\\;" if arg.endswith(";") else arg
 
@@ -751,7 +761,7 @@ MESSAGE_LIMIT = 16364
 _TOO_LONG = frozenset({"failed to send command", "command too long"})
 
 
-def refused_as_too_long(stderr: str) -> bool:
+def refused_as_too_long(stderr: str | None) -> bool:
     """Did tmux refuse a command for being longer than :data:`MESSAGE_LIMIT`?
 
     **A classification, never a prediction (ADR 0009).** Charter does not count a command's
@@ -761,7 +771,9 @@ def refused_as_too_long(stderr: str) -> bool:
     nothing near it, because a stderr that merely resembles one is a different failure, and
     naming this cause for it would be the guess ADR 0009 forbids.
     """
-    return stderr.strip() in _TOO_LONG
+    # `or ""`, the way :func:`report_failure` reads it: a `CompletedProcess` made without
+    # capturing carries `None` there, and a failure report must not raise on one.
+    return (stderr or "").strip() in _TOO_LONG
 
 
 def run(action: str, argv: list[str], *, env: dict | None = None,

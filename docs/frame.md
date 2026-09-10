@@ -1194,13 +1194,25 @@ while two or more are looked up as a program and its arguments, with nothing in 
 expand or resolve them.
 
 **An argument that ends in `;` reaches the command with its `;`**, which tmux on its own
-would not do. tmux reads a trailing `;` as the separator between two of its own commands and
-drops it without a word: measured on tmux 3.7c and at the 3.2 floor, `charter claude "run
-the tests;"` used to start the harness on `run the tests`, and a lone `;` arrived as no
-argument at all. Charter now hands tmux every argument of the command with one backslash
-before a trailing `;` — `\;`, tmux's own spelling of a literal one — so the command gets what
-you typed, `\;`, `;;` and ` ;` included. A `;` anywhere else was never touched and still is
-not. This holds in a frame on charter's own server and inside a tmux you already had.
+would not do. tmux reads ANY argument ending in `;` as the separator between two of its own
+commands. Measured on tmux 3.7c and at the 3.2 floor, that cost three things:
+
+- `charter claude "run the tests;"` started the harness on `run the tests`, without a word,
+  and a lone `;` arrived as no argument at all.
+- A `;`-ending argument in the middle turned the arguments after it into a tmux command run
+  on charter's server: `charter claude "a;" set-option -g @x yes` set `@x` and started the
+  harness on `a`. Only arguments you type yourself reach that path, so it was a latent
+  surface rather than a hole. It is closed.
+- A directory or a `$CHARTER_ROOT` ending in `;` ended tmux's command early, so a chat
+  opened there failed with `unknown command: -P` or `unknown command: --` — sentences that
+  never name the directory.
+
+Charter now hands tmux every such argument — the command's own, the directory it starts in,
+and each identity value — with one backslash before a trailing `;`: `\;`, tmux's own
+spelling of a literal one. The command gets exactly what you typed, `;;` and ` ;` included.
+**If you had been typing `\;` to get a `;` through, you now get the backslash too** — drop
+it. A `;` anywhere but last was never touched and still is not. This holds in a frame on
+charter's own server and inside a tmux you already had.
 
 **tmux takes one command of at most 16,364 bytes, arguments and all.** Past that — a whole
 spec pasted as `charter claude "<prompt>"` is the usual way there — tmux refuses the command,

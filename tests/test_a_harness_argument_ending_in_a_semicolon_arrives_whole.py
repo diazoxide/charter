@@ -109,6 +109,50 @@ class EveryBuilderEscapesEveryArgumentAfterTheSeparator(unittest.TestCase):
         self.assertEqual(_after_separator(argv), _SENT)
 
 
+class DataArgumentsEndingInASemicolonAreEscapedToo(unittest.TestCase):
+    """The same tmux parse reads EVERY argument, not only the harness's (review round 1 on
+    #959). A directory or an identity value ending in `;` does not vanish quietly: it ends
+    the command early and the flag after it is read as a command of its own. Measured on
+    3.7c and 3.2 — `unknown command: -P` from `new-window` and the guest `window_argv`,
+    `unknown command: -e` from `respawn-pane`, `unknown command: --` for an `-e` value — so
+    a chat opened from a directory named that way failed with a sentence that never named
+    the directory."""
+
+    WHERE = "/work/dir;"
+
+    @staticmethod
+    def _after(argv: list[str], flag: str) -> str:
+        return argv[argv.index(flag) + 1]
+
+    def test_a_directory_ending_in_a_semicolon_is_escaped(self):
+        for name, argv in (
+                ("window_argv", layout.window_argv(
+                    socket="charter", session="$1", window="w.1", cwd=self.WHERE)),
+                ("chat_window_argv", layout.chat_window_argv(
+                    socket="charter", session="w", chat="w.2", cwd=self.WHERE,
+                    harness_argv=["prog"])),
+                ("respawn_argv", layout.respawn_argv(
+                    socket=_tmuxsocket.OPERATOR_SOCKET, harness_pane="%7", env={},
+                    cwd=self.WHERE, harness_argv=["prog"]))):
+            with self.subTest(builder=name):
+                self.assertEqual(self._after(argv, "-c"), "/work/dir\\;")
+
+    def test_an_identity_value_ending_in_a_semicolon_is_escaped(self):
+        env = {"CHARTER_ROOT": "/plane;"}
+        for name, argv in (
+                ("session_argv", layout.session_argv(
+                    session="w", conf="/dev/null", socket="charter", cols=80, rows=24,
+                    harness_argv=["prog"], chat="w.1", env=env)),
+                ("chat_window_argv", layout.chat_window_argv(
+                    socket="charter", session="w", chat="w.2", cwd="/work",
+                    harness_argv=["prog"], env=env)),
+                ("respawn_argv", layout.respawn_argv(
+                    socket=_tmuxsocket.OPERATOR_SOCKET, harness_pane="%7", env=env,
+                    cwd="/work", harness_argv=["prog"]))):
+            with self.subTest(builder=name):
+                self.assertEqual(self._after(argv, "-e"), "CHARTER_ROOT=/plane\\;")
+
+
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
 class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
     """What the harness's own process receives, read back from its `sys.argv`.
@@ -138,7 +182,8 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
             "p = os.path.join(os.environ['RECORD_DIR'],\n"
             "                 os.environ['TMUX_PANE'].lstrip('%') + '.json')\n"
             "with open(p + '.tmp', 'w') as f:\n"
-            "    json.dump(sys.argv[1:], f)\n"
+            "    json.dump({'argv': sys.argv[1:], 'cwd': os.getcwd(),\n"
+            "               'root': os.environ.get('CHARTER_ROOT')}, f)\n"
             "os.replace(p + '.tmp', p)\n")
         #: ``(binary, socket, where its panes record)`` for every tmux this machine has.
         #: One records directory per server, because pane ids restart at `%0` on each.
@@ -172,7 +217,12 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
         return [sys.executable, str(self.recorder), text]
 
     def _received(self, binary: str, socket: str, records: Path, pane: str) -> list[str]:
-        """What the harness in *pane* was handed, read back off its own `sys.argv`.
+        """What the harness in *pane* was handed, read back off its own `sys.argv`."""
+        return self._record(binary, socket, records, pane)["argv"]
+
+    def _record(self, binary: str, socket: str, records: Path, pane: str) -> dict:
+        """What the harness in *pane* recorded: its `sys.argv`, the directory it started in,
+        and the `$CHARTER_ROOT` it was handed.
 
         **Failing fast is the half that matters when this goes red.** A harness that could
         not start leaves no record and no pane, and waiting out the deadline on every row
@@ -239,6 +289,97 @@ class ARealTmuxHandsTheHarnessEveryByte(PersonaIso, unittest.TestCase):
                         harness_argv=self._harness(text)))
                     self.assertEqual(started.returncode, 0, started.stderr)
                     self.assertEqual(self._received(binary, socket, records, pane), [text])
+
+    #: The three ways charter starts a harness, each asked on its own below.
+    BUILDERS = ("new-session", "new-window", "respawn-pane")
+
+    def _placeholder(self, binary: str, socket: str) -> str:
+        """A window running `sleep` for a respawn to replace — the guest path's own order."""
+        made = self._tmux(binary, ["tmux", "-L", socket, "new-window", "-d", "-a", "-t",
+                                   "base", "-P", "-F", "#{pane_id}", "--", "sleep", "600"])
+        self.assertEqual(made.returncode, 0, made.stderr)
+        return made.stdout.strip()
+
+    def _start(self, binary: str, socket: str, builder: str, *, tag: str,
+               harness_argv: list[str], cwd: str | None = None,
+               env: dict[str, str] | None = None) -> str:
+        """Start *harness_argv* through *builder* on this server; answer its pane."""
+        cwd = cwd or str(self.tmp)
+        pane = None
+        if builder == "new-session":
+            argv = layout.session_argv(session=tag, conf="/dev/null", socket=socket,
+                                       cols=80, rows=24, harness_argv=harness_argv,
+                                       chat=f"{tag}.1", env=env)
+        elif builder == "new-window":
+            argv = layout.chat_window_argv(socket=socket, session="base",
+                                           chat=f"base.{tag}", cwd=cwd,
+                                           harness_argv=harness_argv, env=env)
+        else:
+            pane = self._placeholder(binary, socket)
+            argv = layout.respawn_argv(socket=socket, harness_pane=pane, env=env or {},
+                                       cwd=cwd, harness_argv=harness_argv)
+        started = self._tmux(binary, argv)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        return pane or started.stdout.strip()
+
+    def test_arguments_after_one_ending_in_a_semicolon_never_run_as_tmux_commands(self):
+        """**The dangerous shape the escape closes.** Before it, the arguments after a
+        harness argument ending in `;` were a tmux command of their own, run on charter's
+        server: measured on 3.7c and 3.2, `["a;", "set-option", "-g", "@injected", "yes"]`
+        set `@injected`, the harness was handed `["a"]`, and the start returned 0 with an
+        empty stderr. Only an operator's own typed arguments reach a harness argv today,
+        which makes it a latent surface rather than a hole — and that is exactly why it is
+        pinned against a real server and not only at the builder."""
+        for binary, socket, records in self.servers:
+            for builder in self.BUILDERS:
+                option = f"@injected{builder.replace('-', '')}"
+                tail = ["a;", "set-option", "-g", option, "yes"]
+                with self.subTest(tmux=binary, builder=builder):
+                    pane = self._start(binary, socket, builder, tag=f"inj{builder[4:7]}",
+                                       harness_argv=self._harness_argv(tail))
+                    self.assertEqual(self._received(binary, socket, records, pane), tail)
+                    options = self._tmux(binary, ["tmux", "-L", socket, "show-options",
+                                                  "-g"]).stdout
+                    self.assertNotIn(option, options,
+                                     "an argument of the harness ran as a tmux command")
+
+    def _harness_argv(self, arguments: list[str]) -> list[str]:
+        return [sys.executable, str(self.recorder), *arguments]
+
+    def test_a_chat_started_in_a_directory_ending_in_a_semicolon_starts_in_it(self):
+        work = self.tmp / "work;"
+        work.mkdir()
+        where = os.path.realpath(work)
+        for binary, socket, records in self.servers:
+            for builder in ("new-window", "respawn-pane"):
+                with self.subTest(tmux=binary, builder=builder):
+                    pane = self._start(binary, socket, builder, tag="cwd", cwd=str(work),
+                                       harness_argv=self._harness_argv(["x y"]))
+                    self.assertEqual(
+                        self._record(binary, socket, records, pane)["cwd"], where)
+            with self.subTest(tmux=binary, builder="the guest window_argv"):
+                started = self._tmux(binary, layout.window_argv(
+                    socket=socket, session="base", window="guest", cwd=str(work)))
+                self.assertEqual(started.returncode, 0, started.stderr)
+                pane = started.stdout.split()[1]
+                deadline, path = time.monotonic() + 5, ""
+                while time.monotonic() < deadline and path != where:
+                    path = self._tmux(binary, ["tmux", "-L", socket, "display-message",
+                                               "-p", "-t", pane,
+                                               "#{pane_current_path}"]).stdout.strip()
+                    time.sleep(0.05)
+                self.assertEqual(path, where)
+
+    def test_a_plane_root_ending_in_a_semicolon_reaches_the_harness_exactly(self):
+        root = str(self.tmp / "plane;")
+        for binary, socket, records in self.servers:
+            for builder in self.BUILDERS:
+                with self.subTest(tmux=binary, builder=builder):
+                    pane = self._start(binary, socket, builder, tag=f"root{builder[4:7]}",
+                                       env={"CHARTER_ROOT": root},
+                                       harness_argv=self._harness_argv(["x y"]))
+                    self.assertEqual(
+                        self._record(binary, socket, records, pane)["root"], root)
 
 
 if __name__ == "__main__":
