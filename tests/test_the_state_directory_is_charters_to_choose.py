@@ -63,7 +63,9 @@ guard is `config`.
 `charter statusline` is deliberately NOT one of the commands swept: it forks a detached
 ``charter _version-check``, and no test in this suite makes a network call, directly or by
 proxy. It reaches the state directory through `update.maybe_spawn`'s lock file, which the
-scan covers.
+scan covers. `charter hook sessionstart` forks the same child since #938 and IS swept,
+because a fresh clone's first session is the case this file exists for. What keeps that
+child off the network is `child_env`: its HTTPS goes to a local port nothing serves.
 
 **And the same sentence about the files (#505).** Everything above is about directories,
 and the files inside them were written at ``0o777 & ~umask`` the whole time — harmless for
@@ -104,6 +106,11 @@ from tests import _statedirscan as scan
 from tests._isolation import PersonaIso
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: A proxy nothing answers, for `APlaneTheCliCanRunIn.child_env`. Port 9 is `discard`, which
+#: neither a developer's machine nor a CI runner serves, so a connection to it is refused at
+#: once rather than timed out.
+_NO_NETWORK = "http://127.0.0.1:9"
 
 #: ``000`` makes a bare mkdir 0777, ``022`` is the default that shipped the defect, ``077``
 #: is the one under which the old code was accidentally right. A fix has to produce the
@@ -188,6 +195,17 @@ class APlaneTheCliCanRunIn(unittest.TestCase):
         env["PYTHONPATH"] = str(REPO_ROOT)
         for var in ("CHARTER_ROOT", "CHARTER_HOME", "CHARTER_PERSONA", "CHARTER_WORKSPACE",
                     "CHARTER_WORKTREES", "CHARTER_CONFIG_HOME"):
+            env.pop(var, None)
+        # `charter hook sessionstart` forks `charter _version-check` since #938. The usual
+        # way to stop that, `tests._isolation.no_update_check_in`, plants a lock inside
+        # `.charter/`, and a plane with no `.charter/` yet is this sweep's whole premise. So
+        # the grandchild keeps its fork and loses the network: its one GET goes through a
+        # proxy that refuses the connection, and `update.fetch_and_store` stores nothing it
+        # did not fetch. Measured with a listener in the proxy's place: the request is a
+        # `CONNECT pypi.org:443` to the proxy and nothing else, and it returns None in 0.04s.
+        for var in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
+            env[var] = _NO_NETWORK
+        for var in ("no_proxy", "NO_PROXY"):
             env.pop(var, None)
         return env
 

@@ -5471,6 +5471,17 @@ def sessionstart() -> int:
         return 0
     from .frame import notify
     notify.plane_changed()
+    # The newer-charter check (#938). `update.maybe_spawn` had one caller, the status line,
+    # and no Claude Code chat reaches that render through anything charter sets up: a
+    # frame suppresses the footer (#412) and `charter init` writes none (#895). The cache
+    # `charter version` and `report send` read went days without moving. Called in-process
+    # rather than added to `hooks.json`, so its TTL and cooldown lock apply and the plugin
+    # gains no command.
+    try:
+        from . import update
+        update.maybe_spawn()
+    except Exception:
+        pass
     data = _read_stdin()
     # Read the piece's existing state BEFORE recording this session as alive — the write
     # below would otherwise replace the holder's mark with ours and hide the collision.

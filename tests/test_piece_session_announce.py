@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 from charter import hooks, pieces, workspace, worktree
 from charter import commands_worktree as cwt
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 
 _GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
@@ -37,6 +37,9 @@ class AnnounceCase(PlaneIso):
 
     def setUp(self) -> None:
         super().setUp()
+        # SessionStart starts the newer-charter check since #938; on a fresh plane that is
+        # a real fork. These cases read the piece announcement.
+        no_background_refresh(self)
         self.enterContext(redirect_stdout(io.StringIO()))
         os.environ["CHARTER_WORKSPACE"] = "alpha"
         self.addCleanup(os.environ.pop, "CHARTER_WORKSPACE", None)

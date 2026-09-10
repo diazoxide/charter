@@ -22,7 +22,7 @@ import unittest
 from unittest import mock
 
 from charter import config, hooks, todos, workspace
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 
 
 def _context(r) -> str:
@@ -32,6 +32,9 @@ def _context(r) -> str:
 class NeighbourCase(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
+        # SessionStart starts the newer-charter check since #938; on a fresh plane that is
+        # a real fork. These cases read the digest.
+        no_background_refresh(self)
         # Pin the active workspace so the confirm nudge (several hundred words about a
         # different subject) stays out of what these assertions read.
         self.enterContext(mock.patch.dict(os.environ, {"CHARTER_WORKSPACE": "mine"}))

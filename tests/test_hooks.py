@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest import mock
 
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 from charter import hooks, config, persona
 
 
@@ -144,6 +144,12 @@ class TestGateFallthrough(PlaneIso):
 
 
 class TestSessionStart(PlaneIso):  # C
+    def setUp(self) -> None:
+        super().setUp()
+        # SessionStart starts the newer-charter check since #938; on a fresh plane that is
+        # a real fork. These cases read the briefing.
+        no_background_refresh(self)
+
     def test_injects_active_persona_memory(self):
         self.make_persona("dev", role="Dev", vault="dev")
         persona.remember("dev", "fact one", title="one")

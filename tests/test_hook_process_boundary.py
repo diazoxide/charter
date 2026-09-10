@@ -23,6 +23,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests._isolation import no_update_check_in
+
 _REPO = Path(__file__).resolve().parent.parent
 
 
@@ -39,6 +41,9 @@ def _hook(name: str, payload: dict | None = None) -> subprocess.CompletedProcess
     """
     root = tempfile.mkdtemp(prefix="charter-hookproc-")
     (Path(root) / "charter.toml").write_text("schema = 1\n")
+    # `sessionstart` starts the newer-charter check since #938, so without the lock this
+    # child would fork a `_version-check`, a GET to PyPI, that nothing here waits for.
+    no_update_check_in(Path(root))
     return subprocess.run(
         [sys.executable, "-m", "charter", "hook", name],
         input=json.dumps(payload if payload is not None else {}),
@@ -147,6 +152,7 @@ class GuardAcrossTheProcessBoundary(unittest.TestCase):
             with self.subTest(hook=name):
                 root = tempfile.mkdtemp(prefix="charter-hookproc-")
                 (Path(root) / "charter.toml").write_text("schema = 1\n")
+                no_update_check_in(Path(root))      # see `_hook`
                 p = subprocess.run([sys.executable, "-m", "charter", "hook", name],
                                    input="not json at all", capture_output=True,
                                    text=True, cwd=_REPO,

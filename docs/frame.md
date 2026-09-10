@@ -1355,6 +1355,16 @@ Two things the suppressed command does anyway, and they are deliberate:
   invocation goes blank, and only while a frame with this session's id is actually
   running.
 
+**What the render used to start, the frame starts itself.** The status line's render is
+where charter kicked off its two background refreshes: forge state (`gl-refresh`) and the
+newer-charter check (`_version-check`) that `charter version` and `charter report send`
+read. A render that returns early starts neither. The frame's gather has always started the
+first. Until #938 nothing started the second, and on the plane that reported it the answer
+was five days old and two releases behind. The gather starts both now, and SessionStart
+starts the check for a chat outside a frame. Both are throttled by what is in
+`.charter/cache/`: at most one check a day, and at most one attempt an hour. A panel
+repainting with no cache to read still forks one check, not one per tick.
+
 **Only Claude Code's footer goes quiet, because it is the only one being duplicated.**
 opencode has no status bar, so charter wires the plane in as an on-demand `/charter`
 command instead — and that renders in full inside a frame, as it does everywhere else.

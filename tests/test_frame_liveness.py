@@ -14,10 +14,17 @@ from unittest import mock
 from charter import hooks, workspace
 from charter.frame import gather, notify, state
 
-from tests._isolation import PersonaIso, PlaneIso, run_hook
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
 
 
 class Notify(PlaneIso, unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # `plane_changed` gathers, and the gather starts the newer-charter check since
+        # #938. On a plane with no cache and no cooldown lock that is a real fork, and
+        # these cases are about the bump.
+        no_background_refresh(self)
+
     def test_a_change_bumps_the_running_frame(self):
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "f-1"}):
             before = state.version("f-1")
@@ -166,6 +173,12 @@ class EveryLivenessTriggerBumps(PlaneIso, unittest.TestCase):
     today's names, so a future handler in any of the three families that forgets the
     call fails HERE, the same way it would have caught the gap this class exists to
     close."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # `sessionstart` is one of the handlers driven below, and it starts the
+        # newer-charter check since #938. What is asserted here is the bump.
+        no_background_refresh(self)
 
     def test_every_liveness_trigger_calls_plane_changed(self):
         names = [n for n in hooks._HANDLERS if n.startswith(_TRIGGERS)]

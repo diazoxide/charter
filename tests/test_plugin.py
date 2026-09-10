@@ -12,6 +12,7 @@ from pathlib import Path
 
 from charter import __version__, hooks
 from tests import _envguard
+from tests._isolation import no_background_refresh
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -305,6 +306,10 @@ class TestSkewReachesTheUser(unittest.TestCase):
         self._tmp = tempfile.mkdtemp(prefix="charter-skew-")
         (Path(self._tmp) / "charter.toml").write_text("schema = 1\n")
         self._orig = _config.use(Path(self._tmp))
+        # `dispatch("sessionstart", …)` runs the real handler, which starts the
+        # newer-charter check since #938; this plane has no cache or cooldown lock to stop
+        # the fork. These cases are about the skew message.
+        no_background_refresh(self)
 
     def tearDown(self) -> None:
         import shutil

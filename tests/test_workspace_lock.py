@@ -22,6 +22,7 @@ from types import SimpleNamespace
 
 from charter import config, hooks, workspace
 from tests import _envguard
+from tests._isolation import no_background_refresh
 
 
 class WorkspaceLockBase(unittest.TestCase):
@@ -127,6 +128,13 @@ class TestSessionLock(WorkspaceLockBase):
 
 
 class TestConfirmNudge(WorkspaceLockBase):
+    def setUp(self) -> None:
+        super().setUp()
+        # `test_sessionstart_emits_the_nudge` runs the real hook, which starts the
+        # newer-charter check since #938; this plane has no cache or cooldown lock to stop
+        # the fork. These cases read the nudge.
+        no_background_refresh(self)
+
     def test_nudge_fires_when_unconfirmed(self):
         msg = hooks._workspace_confirm_nudge(self.SID)
         self.assertIn("Confirm the workspace", msg)

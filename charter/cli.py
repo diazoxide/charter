@@ -256,7 +256,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "skips async hooks outright.")
     gl.set_defaults(func=commands.cmd_gl_refresh)
 
-    # Internal: the detached child `statusline` spawns to refresh the update cache.
+    # Internal: the detached child `update.maybe_spawn` starts to refresh the update cache,
+    # from the status line's render, the frame's gather and SessionStart (#938).
     # Hidden from help — nobody needs to run it, and it is not part of the UX.
     vc = sub.add_parser("_version-check")
     vc.set_defaults(func=commands.cmd_version_check)

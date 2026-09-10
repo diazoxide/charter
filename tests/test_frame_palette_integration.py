@@ -41,7 +41,7 @@ from charter import commands_frame, config, persona, util
 from charter.frame import overlay, state, tmuxctl
 
 from tests import _tmuxreap
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, no_update_check_in
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -121,6 +121,10 @@ class _ThePalette(PersonaIso):
         # test forks onto a pty must be reaped before the server it is attached to goes.
         self.addCleanup(self._teardown_socket)
         (self.tmp / "charter.toml").write_text("")
+        # The frame below starts a real `charter frame-gather`, and the gather starts the
+        # newer-charter check since #938: a `_version-check`, a GET to PyPI, from a child no
+        # guard in this process can see. The lock a real machine already holds stops it.
+        no_update_check_in(self.tmp)
         for name in ("alpha", "zebra"):
             (config.WORKSPACES_DIR / name).mkdir(parents=True, exist_ok=True)
         # Two personas, because the persona is the noun a frame can still be MOVED to

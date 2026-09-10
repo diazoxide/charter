@@ -34,12 +34,15 @@ import unittest
 from unittest import mock
 
 from charter import config, contain, hooks, persona
-from tests._isolation import PersonaIso, PlaneIso
+from tests._isolation import PersonaIso, PlaneIso, no_background_refresh
 
 
 class TheIndexIsPlaneDataToo(PlaneIso):
     def setUp(self) -> None:
         super().setUp()
+        # One case here runs SessionStart, which starts the newer-charter check since #938;
+        # on a fresh plane that is a real fork. These cases read the index.
+        no_background_refresh(self)
         self.make_persona("helper")
         persona.remember("helper", "a fact about the release guard")
         persona.remember("helper", "a second fact, distinctly worded")

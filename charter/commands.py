@@ -2844,8 +2844,10 @@ def cmd_git_policy(args) -> int:
 def cmd_version_check(args) -> int:
     """Internal: refresh the cached "is a newer charter published?" answer.
 
-    Spawned detached by the status line; prints nothing and always exits 0 — a
-    failed check must be indistinguishable from a successful one to any caller.
+    Spawned detached by `update.maybe_spawn`, which the status line's render, the frame's
+    gather and the SessionStart hook each call (#938 — for a while the render was the only
+    one, and nothing reached it). Prints nothing and always exits 0 — a failed check must
+    be indistinguishable from a successful one to any caller.
     """
     from . import update
     update.fetch_and_store()
