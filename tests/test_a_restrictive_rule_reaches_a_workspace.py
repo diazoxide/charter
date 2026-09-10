@@ -942,8 +942,10 @@ class WhatTheSweepFoundUnpinned(PlaneWithRestrictions):
         self.assertFalse((clone / LOCAL).exists())
 
     def test_a_second_wire_of_a_clone_with_many_files_leaves_the_block_as_it_was(self):
-        """`sorted` in the first pass. The second pass re-sorts, so the first pass's order never
-        shows in the end state — only in whether an idempotent wire rewrote the block at all.
+        """The block's order, settled in ONE place since review round 2 — `_shared_rels`' `sorted`;
+        the first pass carried its own until the sweep showed it deciding nothing after that.
+        The order never shows in the end state, only in whether an idempotent wire rewrote the
+        block at all.
         Nine files, so an unsorted set agreeing with path order by luck is a 1-in-362,880
         accident rather than the coin toss a two-file fixture is."""
         agents = config.ROOT / ".claude" / "agents"
@@ -1307,8 +1309,17 @@ class TheSharedExcludeHoldsWhatEveryTreeNeeds(PlaneWithRestrictions):
         self.assertTrue([c for c in calls if "worktree" in c],
                         "fixture: git was never asked, so the first half proves nothing")
 
-    def wire_the_worktree_while_git(self, answer) -> None:
+    def wire_the_worktree_while_git(self, answer) -> str:
+        """Wire the worktree while git answers *answer*; return the exclude file before it.
+
+        **Byte for byte, not only "the local line is still there."** Nothing leaves the block
+        and nothing new arrives, so the file must come back exactly as it was. The looser
+        assertion let the block's own comment lines and its end marker be read back as paths:
+        `/ <<< charter <<<` written into somebody's exclude file, one more on every wire —
+        which is what the deletion sweep showed the `startswith("/")` filter deciding."""
         wt = self.edited_clone_and_a_withdrawn_worktree()
+        before = self.excludes(self.clone)
+        self.assertIn(f"/{LOCAL}", before, "fixture: the local line was not in the block")
         real = workspace.util.run
 
         def _git_says(cmd, *args, **kwargs):
@@ -1319,19 +1330,20 @@ class TheSharedExcludeHoldsWhatEveryTreeNeeds(PlaneWithRestrictions):
         with mock.patch.object(workspace.util, "run", _git_says):
             workspace.wire_guest(wt)
         self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
+        return before
 
     def test_git_that_refuses_to_list_the_worktrees_takes_no_line_away(self):
         """Nobody can say what the other trees need, so nothing leaves the block."""
-        self.wire_the_worktree_while_git(
+        before = self.wire_the_worktree_while_git(
             lambda: subprocess.CompletedProcess([], 128, stdout="", stderr="fatal"))
-        self.assertIn(f"/{LOCAL}", self.excludes(self.clone))
+        self.assertEqual(self.excludes(self.clone), before)
 
     def test_git_that_cannot_be_run_takes_no_line_away(self):
         def _missing():
             raise FileNotFoundError("git")
 
-        self.wire_the_worktree_while_git(_missing)
-        self.assertIn(f"/{LOCAL}", self.excludes(self.clone))
+        before = self.wire_the_worktree_while_git(_missing)
+        self.assertEqual(self.excludes(self.clone), before)
 
 
 class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):

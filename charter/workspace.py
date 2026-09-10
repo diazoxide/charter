@@ -2401,7 +2401,9 @@ def wire_guest(tree: Path) -> list[tuple[str, str]]:
     # nothing — it named a file charter does not own for the length of the call.
     ours = {rel for rel, status in _layer_status(tree, want, marker)
             if status == "missing" or (rel in cowritten and rel in marker)}
-    planned = sorted(ours | (set(_charter_owned(tree, marker)) - {GENERATED_MARKER}))
+    # Unordered on purpose: `_shared_rels` sorts every block it writes, so an order here would
+    # decide nothing — review round 2's sweep charged the `sorted` this line carried.
+    planned = list(ours | (set(_charter_owned(tree, marker)) - {GENERATED_MARKER}))
     first = _register_excludes(tree, planned + [GENERATED_MARKER]) if planned else "present"
     withhold = frozenset(cowritten) if first == "blocked" else frozenset()
     rows = _materialise(tree, want, withhold)
