@@ -1907,7 +1907,12 @@ def _withdraw(base: Path, want_all: dict[str, str], marker: dict) -> list[tuple[
     counts as theirs for the same reason.
     """
     rows: list[tuple[str, str]] = []
-    for rel in sorted(set(marker) - set(want_all)):
+    # Sorted over the MARKER's own order, never over a set. A set iterates in hash order,
+    # which for two short paths can happen to be path order, so no test could tell `sorted`
+    # from its absence — CI's sweep charged exactly that. The marker's order is whatever
+    # the file on disk says (an older charter or a hand edit can write any), and that is
+    # the order `cmd_workspace_reinit`'s report must not inherit.
+    for rel in sorted(r for r in marker if r not in want_all):
         p = base / rel
         try:
             if marker[rel] != content_digest(p.read_text()):

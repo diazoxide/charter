@@ -239,9 +239,20 @@ class ARuleTheePlaneDropsIsWithdrawn(PlaneWithRestrictions):
         """Path order, not whatever a set happens to iterate in. `cmd_workspace_reinit`
         prints one line per row, and a repair whose report reshuffles between runs cannot
         be diffed against the last one — `TheRowsComeBackInOneOrder`'s argument, on the
-        rows this adds."""
+        rows this adds.
+
+        **The marker is written in REVERSE path order, and that is the whole test.** The
+        first version of this case left it as charter writes it — already sorted — so
+        dropping `sorted` changed nothing it could see, and CI's sweep reported the line
+        unpinned. Reversed, the order without `sorted` is the marker's, which is wrong."""
         (config.ROOT / ".claude" / "settings.json").unlink()
         (config.ROOT / ".claude" / "settings.local.json").unlink()
+        marker_path = workspace.workspace_dir(self.ws) / workspace.GENERATED_MARKER
+        marker = json.loads(marker_path.read_text())
+        marker_path.write_text(json.dumps(dict(reversed(list(marker.items())))))
+        self.assertEqual(list(json.loads(marker_path.read_text())),
+                         sorted(marker, reverse=True),
+                         "fixture did not reverse the marker — this case would pin nothing")
         rows = workspace.wire_harnesses(self.ws)
         self.assertEqual(rows, [(".claude/settings.json", "removed"),
                                 (".claude/settings.local.json", "removed")])
@@ -389,6 +400,45 @@ class GuardAskKeepsTheMirrorInStep(PlaneWithRestrictions):
         _, said = self.invoke(commands.cmd_guard_ask, pattern="kubectl delete *",
                               local=False)
         self.assertNotIn("NOT in force", said)
+
+    def test_a_run_that_only_creates_a_file_is_counted(self):
+        """`"created"`, alone in a run. CI's sweep read the three status literals in
+        `_mirror_into_workspaces` as one masked cluster: every earlier case had a
+        `refreshed` row beside whatever else happened, so the count line printed whatever
+        spelling the other two took. Here the ONLY row is a creation."""
+        self.generated().unlink()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="kubectl delete *",
+                              local=False)
+        self.assertIn("1 generated file(s) under workspaces/ brought into step", said)
+        self.assertIn("Bash(kubectl delete *)", self.doc()["permissions"]["ask"])
+
+    def test_a_run_that_only_withdraws_a_file_is_counted(self):
+        """`"removed"`, alone in a run: the rule the command names is already in the
+        plane, so the committed mirror is untouched and the only work is withdrawing a
+        local rule the plane has since dropped. That is still work, and saying nothing
+        over it would hide the one change an operator cannot see from the plane."""
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        workspace.wire_harnesses(self.ws)
+        (config.ROOT / ".claude" / "settings.local.json").unlink()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="terraform apply *",
+                              local=False)
+        self.assertIn("1 generated file(s) under workspaces/ brought into step", said)
+        self.assertFalse(self.generated("settings.local.json").exists())
+
+    def test_a_path_charter_cannot_write_is_named_as_out_of_reach(self):
+        """`"blocked"`, alone in a run. A `.claude` that is a FILE cannot be made into a
+        directory, and charter never deletes or renames what is in its way — so the rule is
+        not in force in that chat, and the warning is the only place that says so. A file
+        rather than a `chmod`, because permission bits do not refuse root."""
+        import shutil
+
+        shutil.rmtree(workspace.workspace_dir(self.ws) / ".claude")
+        (workspace.workspace_dir(self.ws) / ".claude").write_text("not a directory\n")
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="kubectl delete *",
+                              local=False)
+        self.assertIn(f"NOT in force in {self.ws}/.claude/settings.json", said)
+        self.assertEqual((workspace.workspace_dir(self.ws) / ".claude").read_text(),
+                         "not a directory\n")
 
     def test_an_allow_rule_does_not_refresh_anything_sideways(self):
         """`cmd_guard_allow` deliberately does not mirror. A grant is never carried, so a
