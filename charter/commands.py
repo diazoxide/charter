@@ -3151,18 +3151,12 @@ def cmd_version(args) -> int:
     # contradictory and, when PyPI's GET failed, installed the stale number (#937).
     newer = update.newer_than(installed)
     if newer and channel.is_dev():
+        # One sentence and one next step, both from `update`, because `report send` prints
+        # the same two for the same state (#937). The label is deliberately one line rather
+        # than a branch: which command moves this charter is `dev_remedy`'s question, and
+        # asking it a second time here is how the two surfaces drifted apart the first time.
         util.info(f"{update.dev_verdict(newer)}.")
-        if channel.running_inside(config.ROOT):
-            # `charter update` is an INSTALLER's remedy, and it refuses to install over the
-            # tree it is running from: it answers "the charter you are running IS this tree
-            # … it moves by git rather than by an installer: charter version", which is this
-            # command. Naming it here sent a reader working in a charter clone around that
-            # circle, so this branch names what actually moves that tree. Same question,
-            # same function, as `commands_update._update_dev_on_a_checkout`'s own gate.
-            util.info(f"  this tree IS the charter you are running; it moves by git:  "
-                      f"git -C {channel.package_dir().parent} pull")
-        else:
-            util.info(f"  install `{update.DEV_BRANCH}`:  charter update")
+        util.info(f"  move this charter onto `{update.DEV_BRANCH}`:  {update.dev_remedy()}")
         return 0
     if newer:
         util.info(f"A newer charter is published ({newer}).")

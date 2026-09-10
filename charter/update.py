@@ -170,6 +170,28 @@ def dev_verdict(head: str) -> str:
             f"not the commit this build was installed from ({mine[:7]})")
 
 
+def dev_remedy() -> str:
+    """The command that moves THIS charter onto ``main`` — one answer for every surface.
+
+    Beside :func:`dev_verdict`, and for the same reason. Two surfaces that describe one
+    state with one sentence and then prescribe two different next steps have the same defect
+    one line further down the message — which is exactly how it shipped: `charter version`
+    learned about the checkout case and `report send` went on naming the installer.
+
+    ``charter update`` refuses to install over the tree it is running from. It answers "the
+    charter you are running IS this tree … it moves by git rather than by an installer:
+    charter version", which is `commands.cmd_version` — so a reader working in a charter
+    clone was handed a loop between two commands, each naming the other. The gate is the
+    question `commands_update` already asks, :func:`channel.running_inside`, and that answer
+    names the tree, because a bare ``git pull`` typed somewhere else moves something else.
+    """
+    from . import channel
+
+    if channel.running_inside(config.ROOT):
+        return f"git -C {channel.package_dir().parent} pull"
+    return "charter update"
+
+
 def newer_head() -> str | None:
     """The dev channel's answer to "is there anything newer?" — a short commit, or None.
 

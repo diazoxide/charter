@@ -248,6 +248,31 @@ class TheReportNudgeOnDevClaimsNoComparison(NoNetwork, PersonaIso):
         self.assertIn(sentence, _verdict(printed))
         self.assertIn(sentence, buf.getvalue())
 
+    def test_both_surfaces_name_the_same_next_step(self):
+        """One state, one sentence — and one remedy, for the same reason.
+
+        `charter update` refuses to install over the tree it is running from and points at
+        `charter version`, so a checkout has to be told about git instead. Fixing that on
+        the verdict alone left `report send` handing a clone user the command that answers
+        "the charter you are running IS this tree", which is the divergence
+        `update.dev_verdict` exists to prevent, one line further down the same message.
+        """
+        _cache(latest=_STALE, head=_HEAD, ts=1.0)
+        for inside in (True, False):
+            with self.subTest(running_inside=inside):
+                with mock.patch("charter.channel.installed_commit", return_value=None), \
+                     mock.patch("charter.channel.running_inside", return_value=inside):
+                    remedy = update.dev_remedy()
+                    _, printed = _run(commands.cmd_version, SimpleNamespace())
+                    buf = io.StringIO()
+                    with mock.patch.object(util, "_USE_COLOR", False), redirect_stderr(buf):
+                        commands_report._warn_if_stale()
+                self.assertIn(remedy, _verdict(printed))
+                self.assertIn(remedy, buf.getvalue())
+                # Not vacuous: the gate has to be what decides the answer, or both surfaces
+                # would agree on `charter update` everywhere and this would still pass.
+                self.assertEqual(inside, "pull" in remedy)
+
     def test_a_build_on_the_cached_head_is_not_nudged(self):
         self.assertEqual(self._nudge(commit=_MINE, head=_MINE), "")
 

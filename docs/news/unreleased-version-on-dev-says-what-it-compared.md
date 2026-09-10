@@ -24,9 +24,10 @@ the binary is the machine's, so another plane's `charter update` can leave the h
 here behind the build you are running. On a build that records no commit it says that this
 plane follows `main` and this build was not installed from a commit of it. Either way it
 names `charter update`, or a `git pull` when the charter you run is a clone you are working
-in. `charter report send` prints the same sentence, so neither surface tells a dev build
-that a commit it may already contain holds the fix. The stable channel's output is
-unchanged.
+in — `charter update` will not install over that tree. `charter report send` prints the same
+sentence and names the same next step, so neither surface tells a dev build that a commit it
+may already contain holds the fix, and neither hands a clone a command that refuses it. The
+stable channel's output is unchanged.
 
 `charter version bump` with no `--to` now pins only the version PyPI returned to that same
 command. Before, it re-read the cache after fetching, and a failed request leaves the cache

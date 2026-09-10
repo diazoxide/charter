@@ -288,14 +288,18 @@ def _warn_if_stale() -> None:
     `charter update` has moved this machine's binary past this plane's cache (#127). The
     nudge itself stays, for the reason `update.newer_head`'s docstring gives; both dev cases
     print `update.dev_verdict`, which is the sentence `charter version` prints for the same
-    state.
+    state, and `update.dev_remedy`, which is the next step it names. The remedy is shared
+    for the same reason the sentence is: this line used to say `charter update` to a reader
+    working in a charter clone, where that command refuses the tree and sends them to
+    `charter version` — the surface that had already learned to say `git` instead.
     """
     try:
         from . import channel, statusline, update
         latest = update.newer_than(__version__)
         if latest:
             if channel.is_dev():
-                said = f"{update.dev_verdict(latest)} — `charter update` moves it"
+                said = (f"{update.dev_verdict(latest)} — "
+                        f"`{update.dev_remedy()}` moves it")
             else:
                 said = f"{latest} is out — this may already be fixed"
             # `util.color_enabled()`, not the chip's ANSI default: this is the one caller
