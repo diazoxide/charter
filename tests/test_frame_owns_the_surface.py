@@ -395,8 +395,11 @@ class PanelFollowsWorkspaceUseOnAFrameWithNoRecord(PersonaIso, unittest.TestCase
         workspace.ensure("alpha")
         workspace.ensure("beta")
         state.record_workspace(fid, "alpha")
+        # Forced: with a launch record this frame is a chat, and since #936 a chat's lock
+        # refuses an unforced switch out of its own workspace, which would leave no pointer
+        # for this case to show the panel ignoring.
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": fid}, clear=True):
-            workspace.set_active("beta")
+            workspace.set_active("beta", force=True)
             self.assertEqual(workspace.for_session(fid), "beta",
                              "the pointer this case is about was not written")
         self.assertIn("alpha", self._top(fid))

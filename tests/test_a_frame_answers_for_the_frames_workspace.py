@@ -123,9 +123,15 @@ class TheHarnessAnswersForTheFrameItRunsIn(FramedCase):
         """The direction #517 asks for, and the promise `charter ws use` already makes.
         The launcher's answer is a SEED, never a pin: pinning the session to the frame is
         the option #524 weighs and rejects, because it would take `ws use` away from every
-        framed session."""
+        framed session.
+
+        **Forced since #936.** A chat's lock is now its launch record, so an unforced switch
+        out of it is refused. That is a lock and not a pin, and this case is the
+        difference: `--force` still moves this session's commands, where a pinned
+        `$CHARTER_WORKSPACE` would outrank the pointer and make even a forced switch not
+        stick."""
         with self.inside_the_frame():
-            workspace.set_active(OTHER, terminal_id="")
+            workspace.set_active(OTHER, terminal_id="", force=True)
             self.assertEqual(workspace.resolve(), OTHER)
             self.assertEqual(workspace.source(), "session")
 

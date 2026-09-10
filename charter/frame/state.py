@@ -1029,6 +1029,15 @@ def own_workspace(fid: str) -> str | None:
     ``{workspace}-{hash}`` is identity, not a property, and a pointer written by whoever
     last typed a command is the definition of a property.
 
+    **#936 added the refusal on top, and this function is what it reads.** Dropping the
+    rung stopped `ws use` moving the chat and left it moving the chat's COMMANDS, and
+    charter's own SessionStart advised the command to every chat launched without the
+    picker. So a chat's lock is now the answer here (`workspace.launch_lock`), and
+    `set_active` refuses an unforced switch out of it. No frame test is involved, which was
+    #794's objection. A sub-agent inheriting the chat's id is refused because the pointer it
+    would write is its parent chat's, and the work it does by cwd or by `--workspace` writes
+    no pointer at all.
+
     Two consequences, both deliberate. `docs/frame.md` no longer promises that `ws use`
     "moves the panels too", because it no longer does. And a chat with a pointer used to
     follow a workspace RENAME while a chat without one was orphaned; dropping the rung made
@@ -1188,11 +1197,12 @@ def workspace_for(fid: str) -> str:
     **`charter workspace use <name>` typed at the agent no longer moves the panels, and
     that is #791 rather than an oversight.** It wrote the per-session pointer under the
     CHAT's id, so the rung it moved was a membership rung and the command re-homed the
-    chat — #733 and #788 line for line, through a door neither issue named. The pointer is
-    still written and every `charter` command in that session still acts on the new name;
-    the panels draw the chat's own workspace, which is the one thing about a chat that does
-    not move. `docs/frame.md` is corrected to say so. See :func:`own_workspace` for why a
-    refusal was rejected instead.
+    chat — #733 and #788 line for line, through a door neither issue named. Where the switch
+    is allowed the pointer is still written and every `charter` command in that session acts
+    on the new name; the panels draw the chat's own workspace, which is the one thing about a
+    chat that does not move. `docs/frame.md` is corrected to say so. See :func:`own_workspace`
+    for why #791 dropped the rung rather than refuse, and for the refusal #936 added on top:
+    inside a chat, a switch out of its own workspace now needs `--force`.
 
     Rung 0 and the pin inside :func:`own_workspace` hold the same value on an ordinary
     launch — `_frame_identity_env` puts the launcher's `$CHARTER_WORKSPACE` on the pane's
@@ -2308,6 +2318,14 @@ def _forget_session(fid: str) -> None:
     `is_locked` → `gamma`, and refuses `charter workspace use alpha` as **locked** — to
     the operator who had just launched with `--workspace alpha`. Minting a new id is not
     isolation; reaping the state keyed on the old one is.
+
+    **Half of that measurement is now unreachable, and the other half is why this stays.**
+    Since #936 a chat's lock is its launch record, which outranks any `.lock` left under its
+    id, so the relaunch above can no longer be refused its own workspace
+    (`tests/test_a_reaped_chat_leaves_its_session_behind` was restaged onto the FILE for
+    exactly that reason). What the reap still prevents is the first half: the stale
+    `.workspace` pointer outranks the launch record in `workspace.chosen`, so an unreaped
+    one still moves the new chat's commands to its predecessor's workspace.
 
     **The prefix, not a list of suffixes**, and that is `workspace._prune`'s lesson taken
     at its word rather than re-learned (#366): it enumerated five marker families,

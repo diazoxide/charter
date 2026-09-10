@@ -19,6 +19,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from charter import config, hooks, workspace
 from tests import _envguard
@@ -195,6 +196,263 @@ class TestCommandLayer(WorkspaceLockBase):
         # the workspace is still created even though the switch was refused
         self.assertTrue((config.WORKSPACES_DIR / "beta").exists())
         self.assertEqual(workspace.is_locked(), "alpha")
+
+    # #936 gave a CHAT its own answers in three places, each behind `workspace.launch_lock()`:
+    # the refusal, the line `create --use` adds after one, and `unlock`. The deletion sweep
+    # forced each of those branches on and nothing went red, because no test said what a
+    # session that is NOT a chat hears. These three do. This fixture's session has no frame
+    # directory under its id, so `launch_lock` answers `None` here.
+
+    def _said(self, fn, **kw):
+        """Every refusal and hint these handlers print goes to stderr, so capture that."""
+        err = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(err):
+            rc = fn(SimpleNamespace(**kw))
+        return rc, err.getvalue()
+
+    def test_outside_a_chat_the_refusal_is_still_the_sessions_sentence(self):
+        """A chat is told it was launched in its workspace and to open a chat elsewhere. A
+        session that is not a chat has real ways out that a chat does not (`unlock`,
+        `--force`, a new session), so it keeps the sentence that names them. With the chat
+        branch forced on, it would be told it is locked to `'None'`, the workspace a chat
+        it is not was launched in."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_use, name="beta", force=False, create=True)
+        self.assertEqual(rc, 2)
+        self.assertIn("locked to 'alpha' for this session", err)
+        self.assertNotIn("launched in", err)
+
+    def test_outside_a_chat_create_use_still_names_a_new_session(self):
+        """Inside a chat the "start a new session, or --force" line is dropped, because the
+        refusal above it has already named opening a chat. Outside one it is the only place
+        the two real routes are named."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_create,
+                             name="beta", use=True, force=False, repos=[])
+        self.assertEqual(rc, 2)
+        self.assertIn("Workspace 'beta' was created; start a new session to use it, "
+                      "or re-run with --force", err)
+
+    def test_workspace_current_says_whether_this_session_is_locked(self):
+        """`ws current` exists to explain the resolution, and the lock note is half that
+        answer. #936 split it three ways — unlocked, locked to what resolved, locked to
+        something else — and the first two had no test at all: re-spelling either left the
+        suite green."""
+        rc, err = self._said(commands.cmd_workspace_current)
+        self.assertEqual(rc, 0, err)
+        self.assertIn(", unlocked", err)
+
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_current)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("🔒 locked for this session", err)
+
+    def test_the_first_use_of_a_session_says_it_set_and_locked_the_workspace(self):
+        """The ordinary path, whose sentence nothing asserted. It goes red when
+        `_lock_words`' `locked == name` branch is skipped (the first selection is told
+        "🔒 still locked to 'alpha'") and when the verb is collapsed to "re-locked to"."""
+        rc, err = self._said(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'alpha'", err)
+        self.assertIn("🔒 locked for this session", err)
+        self.assertNotIn("re-locked", err)
+        self.assertNotIn("still locked", err)
+
+    def test_a_session_with_no_id_is_told_of_no_lock_because_none_was_written(self):
+        """`set_active` writes the lock under a session id, so a shell with no harness id
+        gets a terminal pointer and no lock at all. Announcing "🔒 locked for this session"
+        there named a lock nothing holds — the same false claim as the chat case, one branch
+        over. It is also what pins `_lock_words`' `if not locked`: without it, `None` falls
+        through to the elsewhere case and the announcement became "🔒 still locked to
+        'None'"."""
+        # The pane is STATED: with none, `set_active` writes nothing at all, which is a
+        # different sentence (the case below). A runner has no pane id and a laptop shell
+        # usually does, so leaving it to the environment made this two tests.
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(workspace, "_terminal_id", return_value="pane-a"):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            rc, err = self._said(commands.cmd_workspace_use,
+                                 name="alpha", force=False, create=True)
+            self.assertIsNone(workspace.is_locked(), "the fixture wrote a lock after all")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'alpha'", err)
+        self.assertIn("unlocked", err)
+        self.assertNotIn("🔒", err)
+        self.assertNotIn("still locked", err)
+
+    def test_outside_a_chat_create_use_force_says_it_re_locked(self):
+        """`create --use --force` hands the helper its own `forced`, and nothing read it: the
+        chat case cannot tell the verbs apart (the lock stays the launch record either way),
+        so the deletion sweep re-spelt the `"force"` literal on that call and the whole suite
+        stayed green. Outside a chat the forced switch really moves the lock, and the
+        sentence has to say so."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_create,
+                             name="beta", use=True, force=True, repos=[])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "beta")
+        self.assertIn("Active workspace re-locked to 'beta'", err)
+        self.assertIn("🔒 locked for this session", err)
+
+    def test_create_use_in_a_shell_with_no_session_id_claims_no_lock_either(self):
+        """The third success path, and review round 2's finding: `create --use` announced
+        "🔒 locked for this session" unconditionally while `use` had stopped. Codex's shells
+        are this case (`harness/codex.py`: no per-session id reaches them)."""
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(workspace, "_terminal_id", return_value="pane-e"):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            rc, err = self._said(commands.cmd_workspace_create,
+                                 name="epsilon", use=True, force=False, repos=[])
+            self.assertIsNone(workspace.is_locked(), "the fixture wrote a lock after all")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'epsilon'", err)
+        self.assertIn("unlocked", err)
+        self.assertNotIn("locked for this session", err)
+
+    def test_a_process_with_no_session_and_no_pane_is_told_nothing_was_persisted(self):
+        """`set_active` keys its pointers on a session id and a pane id; with neither it
+        writes nothing and reports scope `none`. This answered "Active workspace set to
+        'gamma'." — and the next command still resolved to `default`."""
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(workspace, "_terminal_id", return_value=None):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            rc, err = self._said(commands.cmd_workspace_use,
+                                 name="gamma", force=False, create=True)
+            resolved = workspace.resolve(cwd=config.ROOT)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(resolved, config.DEFAULT_WORKSPACE, "something was persisted after all")
+        self.assertIn("Nothing was persisted", err)
+        self.assertIn("no session id and no pane id", err)
+        self.assertIn("--workspace gamma", err)
+        self.assertNotIn("Active workspace set to", err)
+
+    def test_outside_a_chat_a_forced_switch_still_says_it_re_locked(self):
+        """The other side of the sentence #936 changed. Outside a chat `--force` really does
+        move the lock, so the announcement says so and names where it moved to. Inside a
+        chat it moves the commands and not the lock, and says that instead."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_use, name="beta", force=True, create=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace re-locked to 'beta'", err)
+        self.assertIn("🔒 locked for this session", err)
+        self.assertEqual(workspace.is_locked(), "beta")
+
+    def _reconcile_with_payload(self, payload_id: str) -> None:
+        """`charter workspace _reconcile` as the SessionStart hook runs it: a JSON payload
+        on stdin, and whatever the environment says about this session."""
+        old = sys.stdin
+        sys.stdin = io.StringIO(json.dumps({"session_id": payload_id}))
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                commands.cmd_workspace_reconcile(SimpleNamespace())
+        finally:
+            sys.stdin = old
+
+    def _pane_holding(self, name: str) -> None:
+        tid = workspace._terminal_id("myterm")
+        config.TERMINALS_DIR.mkdir(parents=True, exist_ok=True)
+        (config.TERMINALS_DIR / f"{tid}.workspace").write_text(name + "\n")
+        os.environ["TERM_SESSION_ID"] = "myterm"
+        self.addCleanup(os.environ.pop, "TERM_SESSION_ID", None)
+
+    def test_reconcile_seeds_the_environments_id_ahead_of_the_payload(self):
+        """An id in the environment outranks the payload's. This holds under the old key
+        and the new one alike — `$CLAUDE_CODE_SESSION_ID` came first in both — so it pins the
+        ordering and NOT the round-1 miskey; the case below is the one that measures that."""
+        self._pane_holding("gamma")
+        self._reconcile_with_payload("a-different-harness-uuid")
+        self.assertEqual(workspace.for_session(self.SID), "gamma")
+        self.assertFalse((config.SESSIONS_DIR / "a-different-harness-uuid.workspace").exists())
+
+    def test_reconcile_keys_on_the_chat_id_when_the_chat_has_no_launch_record(self):
+        """The round-1 miskey, measured on its own. Inside a chat WITH a launch record the
+        early return decides first, so it never reaches the key; a frame with no record (the
+        migration case) does. There `$CHARTER_SESSION_ID` is the session every other reader
+        resolves by, and the old key — `$CLAUDE_CODE_SESSION_ID` first — seeded the harness's
+        id instead, where nothing looks and nothing reaps."""
+        self._pane_holding("gamma")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "nolaunch.1"}):
+            self.assertIsNone(workspace.launch_lock(), "the fixture has a launch record")
+            self._reconcile_with_payload("payload-uuid")
+        self.assertEqual(workspace.for_session("nolaunch.1"), "gamma")
+        self.assertFalse((config.SESSIONS_DIR / f"{self.SID}.workspace").exists())
+        self.assertFalse((config.SESSIONS_DIR / "payload-uuid.workspace").exists())
+
+    def test_a_harness_that_exports_no_id_still_seeds_from_its_payload(self):
+        """The fallback, and the reason the payload is still read: a harness that puts no
+        session id in the environment has nothing else to say who it is."""
+        self._pane_holding("gamma")
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            self._reconcile_with_payload("payload-only-session")
+        self.assertEqual(workspace.for_session("payload-only-session"), "gamma")
+
+    def test_outside_a_chat_unlock_still_releases_the_lock(self):
+        """`unlock` refuses inside a chat, whose lock is its launch record. Outside one the lock
+        is a file and releasing it is this command's whole job."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_unlock)
+        self.assertEqual(rc, 0, err)
+        self.assertIsNone(workspace.is_locked())
+
+    def test_a_forced_selection_with_no_lock_before_it_says_set_not_re_locked(self):
+        """Review round 3, minor 1: `create --use --force` in a session that had never been
+        locked answered "Active workspace re-locked to 'beta'". The verb read `--force`, which
+        is what was asked. "re-" names a lock that stood before the call, and none did. The
+        forced `create --use` case above starts from a lock, so it could not see this."""
+        rc, err = self._said(commands.cmd_workspace_create,
+                             name="beta", use=True, force=True, repos=[])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "beta")
+        self.assertIn("Active workspace set to 'beta'", err)
+        self.assertIn("🔒 locked for this session", err)
+        self.assertNotIn("re-locked", err)
+
+    def test_forcing_the_workspace_a_session_is_already_locked_to_re_locks_nothing(self):
+        """The other half of that verb. The lock named `alpha` before the call and names
+        `alpha` after it, so nothing moved, whatever flag was passed."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_use, name="alpha", force=True, create=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'alpha'", err)
+        self.assertNotIn("re-locked", err)
+
+    # `rename`'s session line, review round 3. It printed "(still 🔒 locked)" itself, asking
+    # nothing about the lock. K and L are two states it named a lock nobody held in (G is in
+    # the chat module); the first case is the one where the lock does stand.
+
+    def test_a_rename_of_the_locked_workspace_says_the_lock_followed_it(self):
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_rename,
+                             old="alpha", new="alpha2", message=None)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "alpha2")
+        self.assertIn("followed the rename → 'alpha2' (🔒 locked for this session)", err)
+
+    def test_a_rename_of_a_pointer_the_reconcile_seeded_claims_no_lock(self):
+        """State K: SessionStart's reconcile copies the pane's selection into the session
+        pointer and writes no lock, and `rename` answered "(still 🔒 locked)" there."""
+        workspace.ensure("alpha")
+        self._pane_holding("alpha")
+        self._reconcile_with_payload("payload-uuid")
+        self.assertEqual(workspace.for_session(self.SID), "alpha", "the reconcile seeded nothing")
+        self.assertIsNone(workspace.is_locked(), "the reconcile wrote a lock after all")
+        rc, err = self._said(commands.cmd_workspace_rename,
+                             old="alpha", new="alpha2", message=None)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("followed the rename → 'alpha2' (unlocked)", err)
+        self.assertNotIn("🔒", err)
+
+    def test_a_rename_after_unlock_claims_no_lock(self):
+        """State L: `use` then `unlock` leaves the pointer standing and the lock gone."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        self._said(commands.cmd_workspace_unlock)
+        self.assertIsNone(workspace.is_locked(), "unlock left the lock standing")
+        rc, err = self._said(commands.cmd_workspace_rename,
+                             old="alpha", new="alpha2", message=None)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("followed the rename → 'alpha2' (unlocked)", err)
+        self.assertNotIn("🔒", err)
 
 
 # imported late so the module-under-test picks up the patched config at call time

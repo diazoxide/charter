@@ -113,6 +113,43 @@ Three ways past it, in the order you should reach for them:
 - `charter workspace unlock` — release the lock, then select;
 - `charter workspace use <name> --force` — switch and re-lock in one step.
 
+### Inside a chat
+
+A chat in a charter frame is locked to the workspace it was launched in. It makes no
+difference whether you picked that workspace at the launch prompt or it came from
+`--workspace`, a pointer or a reopen. There is nothing to confirm, and the session briefing
+does not ask. `charter workspace use <other>` there is refused with a different message:
+
+    Workspace is 🔒 locked to 'billing', the workspace this chat was launched in.
+    Switching its commands to 'search' would leave the chat itself in 'billing'
+    (a chat belongs to its workspace for life). To work in another workspace, open
+    a chat there: its tab on the workspace strip, or F2 → workspace. For one
+    command, pass `--workspace search`.
+
+Of the three ways past the lock above, one changes and one is gone:
+
+- **start a new session** becomes **open a chat in that workspace**;
+- `charter workspace unlock` refuses, because the lock is the chat's launch record and
+  there is nothing to release;
+- `charter workspace use <name> --force` still moves the chat's **commands**. It never
+  moves the chat, and `charter workspace use <own>` takes you back with no second `--force`.
+
+An agent the chat spawns inherits the chat's session id, so the same lock holds for it: the
+pointer its `workspace use` would write is the chat's own. It works by the directory it
+stands in, which outranks every pointer, or by `--workspace` on each command. See
+`docs/frame.md` for why (#936).
+
+Two limits:
+
+- **A pinned launcher pins the chat.** If `$CHARTER_WORKSPACE` was set in the shell that
+  opened the chat, the chat is locked to that pin rather than to the workspace the launch
+  resolved — including one named with `--workspace`. That is the precedence the pin has
+  everywhere else in charter.
+- **Not opencode, yet.** Its plugin replaces `$CHARTER_SESSION_ID` with opencode's own
+  session id, so inside a frame charter cannot tell which chat it is in. An opencode chat
+  holds no lock, is still asked to confirm a workspace, and `charter workspace use <other>`
+  in it still succeeds (#946).
+
 ## workspace.md, memory, and workspace.json
 
 Three stores, three jobs. Putting a thing in the wrong one is the common mistake:

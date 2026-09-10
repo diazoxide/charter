@@ -1418,8 +1418,9 @@ answers from your cwd or your terminal's pointer, while a panel's cwd is the pan
 its terminal id is its own tmux pane, so it would fall all the way through to `default` —
 and did (#512). The launcher writes the answer into the frame's own state directory
 instead. Nothing is pinned into the environment to achieve it, deliberately: exporting
-`$CHARTER_WORKSPACE` would rank above every pointer and take `charter workspace use` away
-from every framed session.
+`$CHARTER_WORKSPACE` would rank above every pointer and above the directory an agent is
+standing in, so not even `charter workspace use --force` could move a framed session's
+commands.
 
 So the order the panels read is: `$CHARTER_WORKSPACE` if you pinned one, then what the
 launch recorded — the pin it was launched under, then the workspace it resolved — then
@@ -1427,9 +1428,10 @@ whatever the panel can resolve for itself (a frame launched by an older charter,
 running across the upgrade).
 
 **`charter workspace use <name>` typed at the agent does not move the panels, and this
-line used to say the opposite.** It writes the per-session pointer under the frame's id,
-which is what makes every `charter` command in that shell act on the new name — `charter
-clone`, `charter repos`, `charter ws current`, all of it. What it does *not* do is change
+line used to say the opposite.** Where it is allowed (the next paragraph says where), it
+writes the per-session pointer under the frame's id, which is what makes every `charter`
+command in that shell act on the new name — `charter clone`, `charter repos`, `charter ws
+current`, all of it. What it does *not* do is change
 which workspace the chat is in, and for one release it did: that pointer was a rung of the
 ladder the panels read, and the same ladder decides which chats a workspace has. So the
 command quietly re-homed the chat — the chat beside it in the same tmux session could no
@@ -1438,6 +1440,34 @@ palette then refused to open. **A chat belongs to its workspace for life** (spec
 conversation wanted elsewhere is a new chat, opened with `charter <harness>` in that
 workspace. If you want the panels on another workspace, `F2 → workspace` moves your
 terminal to it and leaves every chat where it is.
+
+**Inside a chat, `charter workspace use <other>` is refused, and the refusal says where to
+go instead.** A chat is locked to the workspace it was launched in, whether you picked that
+workspace at the prompt or the launch resolved it for you (`--workspace`, a pointer, a
+reopen). Until #936 only a picked chat was locked. Charter's own session briefing then told
+every other chat to confirm a workspace with `charter workspace use`, and there the command
+succeeded: the chat's commands moved to another workspace while its tab stayed where it
+was, and `charter workspace use <own>` to put it back was refused. The briefing now names
+the chat's own workspace and asks nothing. To work in another workspace, open a chat there
+(its tab on the workspace strip, or `F2 → workspace`, then `+` for another chat once you
+are in it). For one command, `--workspace <name>` names a workspace without moving
+anything. `charter workspace use <own>` still succeeds. `--force` still moves a chat's
+commands for anyone who means it, and never the chat, so going back needs no second
+`--force`.
+
+**The same lock holds for an agent the chat spawns, and that is on purpose.** The agent
+inherits the chat's session id, so the pointer its `workspace use` would write is the
+chat's own: an agent that succeeded would move the chat it is working for. An agent's work
+goes by the directory it stands in, which outranks every pointer, or by `--workspace` on
+each command, and neither writes anything to refuse.
+
+**Two limits, both deliberate and both worth knowing.** A chat launched from a shell with
+`$CHARTER_WORKSPACE` set is locked to that **pin** rather than to the workspace the launch
+resolved — the pin outranks the launch record here exactly as it outranks every pointer
+elsewhere. And **opencode chats are not covered at all**: its plugin replaces
+`$CHARTER_SESSION_ID` with opencode's own session id in every shell and hook it spawns, so
+inside a frame charter cannot tell which chat it is in. Such a chat holds no lock and is
+still asked to confirm a workspace (#946).
 
 **Renaming a workspace does not orphan its chats, and that is not an exception to §4j.**
 For one release it did: a chat's workspace is fixed at launch, so `charter workspace rename
@@ -1457,7 +1487,10 @@ next chat in that workspace very often gets the same *name* — and a pointer, a
 persona selection or a tool-gate marker left under it would be inherited by a conversation
 that never chose any of them. What that cost, before it was fixed, was a chat launched with
 `--workspace alpha` whose every command acted on `gamma` and which refused
-`charter workspace use alpha` as **locked** (#731). So reaping a chat removes
+`charter workspace use alpha` as **locked** (#731). The refusal half can no longer happen —
+since #936 a chat's lock is the workspace it was launched in, and that outranks any lock
+file left under its id — so what reaping still prevents is the first half: a stale pointer
+moving the new chat's commands to its predecessor's workspace. So reaping a chat removes
 `.charter/sessions/<chat id>.*` along with `.charter/frame/<chat id>/`. Sessions that are
 not chats — a bare harness outside a frame, keyed by its own id — are untouched, and so is
 every live chat.
@@ -2696,13 +2729,14 @@ before any column is measured (#472), so it is exactly one row on screen; and th
 re-checks it against the same alphabet `charter workspace use` does, so a name charter would
 not accept is refused with a message rather than acted on.
 
-**The session lock is released by `charter workspace unlock`, and by nothing on the
-palette.** `charter workspace use` locks the session to what it selected so a workspace
-cannot be swapped out from under a running task, and a launch that asked you to pick one
-takes the same lock. `F2 → workspace` used to override it — that was the frame's way out
-while a workspace switch was a thing a frame could do — and now there is nothing to
-override, so the way out is the one the launch names on the line that takes the lock:
-`charter workspace unlock`, typed in the frame's own shell.
+**A chat's workspace lock is released by nothing, on the palette or off it.** A chat is
+locked to the workspace it was launched in, so a workspace cannot be swapped out from under
+a running task. `F2 → workspace` used to override that lock, back when a workspace switch
+was a thing a frame could do, and `charter workspace unlock` used to release it. Neither
+does now (#936): the lock is the chat's launch record rather than a file either of them
+could remove, and `unlock` says so instead of reporting a release. What the palette offers
+is the way to work elsewhere: `F2 → workspace` takes your terminal to another workspace,
+where a chat of that workspace does the work.
 
 **Pressing `F2` again while the palette is open REOPENS it.** `bind -n` is tmux's root key
 table, so tmux matches the key before any byte reaches the palette's pane — the same
@@ -2824,12 +2858,11 @@ the workspace alphabet, and asks `create <name> and switch to it? [y/N]` — any
 `y` goes back to the list, and a cancelled picker creates nothing at all. `q`, Ctrl-C or a
 closed stdin end the launch having started nothing; the exit code is 130.
 
-**Picking is the confirmation that locks.** That is what selecting a workspace has always
-meant — `charter workspace use` locks the session to what it selected — and the launch
-says so on the line after your answer, naming the way out in the same sentence: `charter
-workspace unlock`, in the frame's own shell. (It used to name `F2 → workspace` first; that
-route no longer releases a lock — a workspace switch moves your terminal to another session
-and leaves this one locked to the workspace its commands act on.)
+**The chat is locked to what you picked, and would have been either way.** Every chat is
+locked to the workspace it was launched in, picked or not (#936). The launch says so on the
+line after your answer, and names the way to work anywhere else in the same sentence: open
+a chat there. (It used to name `charter workspace unlock`, and before that `F2 → workspace`,
+as ways to release the lock. A chat's lock is its launch record, and neither releases it.)
 
 **It never asks twice, and it never asks a script.** Your choice is written as the
 terminal's own pointer, so the next launch from that terminal has an answer and goes
