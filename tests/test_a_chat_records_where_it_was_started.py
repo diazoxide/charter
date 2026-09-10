@@ -101,6 +101,9 @@ class BothLaunchPathsRecordIt(PersonaIso, unittest.TestCase):
         class _Out:
             returncode = 1
             stdout = ""
+            # `tmuxctl.run` always answers with one, and a refused start now reads it to
+            # tell tmux's length refusal from any other (#957).
+            stderr = ""
 
         def _run(why, argv, **kw):
             calls.setdefault("first", why)

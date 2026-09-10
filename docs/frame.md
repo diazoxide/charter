@@ -1193,6 +1193,32 @@ So a single argument can be a whole command line — builtins, `;`, pipelines, r
 while two or more are looked up as a program and its arguments, with nothing in between to
 expand or resolve them.
 
+**An argument that ends in `;` reaches the command with its `;`**, which tmux on its own
+would not do. tmux reads a trailing `;` as the separator between two of its own commands and
+drops it without a word: measured on tmux 3.7c and at the 3.2 floor, `charter claude "run
+the tests;"` used to start the harness on `run the tests`, and a lone `;` arrived as no
+argument at all. Charter now hands tmux every argument of the command with one backslash
+before a trailing `;` — `\;`, tmux's own spelling of a literal one — so the command gets what
+you typed, `\;`, `;;` and ` ;` included. A `;` anywhere else was never touched and still is
+not. This holds in a frame on charter's own server and inside a tmux you already had.
+
+**tmux takes one command of at most 16,364 bytes, arguments and all.** Past that — a whole
+spec pasted as `charter claude "<prompt>"` is the usual way there — tmux refuses the command,
+nothing starts, and charter says so in tmux's own number instead of pasting the command back:
+
+    ✗ charter frame: tmux refused the command that starts this chat as too long — tmux takes
+      at most 16,364 bytes in one command, and this launch's harness arguments alone are
+      20,014 bytes. Nothing was started; shorten them, or put the long text in a file and
+      pass its path instead.
+
+The count is the command's own arguments. The rest of the 16,364 is the window's name,
+directory and identity, which is why a launch a few hundred bytes under the limit can still
+be refused. Charter does not predict the refusal; it recognises it. The limit is tmux's,
+measured identically on 3.7c and 3.2 through all three ways charter starts a harness —
+`failed to send command` from 16,365 bytes, `command too long` from 16,381 — and only a
+refusal in one of those two sentences is reported this way. Any other refusal is reported as
+it always was.
+
 Charter deliberately does **not** check the command against `$PATH` before starting it.
 Such a check answers the wrong question for the first form (that text is not even one
 word), and for the second it is a guess where a real answer arrives milliseconds later: a

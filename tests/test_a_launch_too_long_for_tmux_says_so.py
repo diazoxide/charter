@@ -1,0 +1,245 @@
+"""A launch tmux refuses as too long says so, with tmux's own number.
+
+**tmux takes one command message of at most 16,364 bytes, and refuses past it in one of
+two sentences.** Measured on tmux 3.7c and at the 3.2 floor, identically, through
+`new-session`, `new-window` and `respawn-pane`, counting the command's arguments from its
+name onward with a NUL after each: 16,364 bytes starts; 16,365 to 16,380 is rc 1 and
+`failed to send command`; 16,381 and up is rc 1 and `command too long`. `charter claude
+"<a pasted spec>"` reaches it.
+
+What the launcher printed for that was `tmuxctl.report_failure`'s generic line — the whole
+command, pasted text and all, then tmux's three words — so the one number that explains the
+refusal was the one thing not on screen.
+
+**Classified after the fact, never predicted.** Nothing here counts bytes before tmux is
+asked: the limit is tmux's to enforce, and a copy of its arithmetic in charter would be a
+second answer free to drift from the first. Only once tmux has refused, and only for those
+two exact sentences, does a launch say what the refusal was. Any other refusal keeps the
+report it always had.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from charter.frame import layout, tmuxctl
+
+from tests import _tmuxreap, _tmuxsocket
+from tests._isolation import PersonaIso
+from tests.test_frame_launcher import (_FakeOperatorTmux, _FakeTmux, _launch,
+                                       _launch_inside)
+
+_HAS_TMUX = shutil.which("tmux") is not None
+
+#: See `tests/test_a_harness_argument_ending_in_a_semicolon_arrives_whole.py`.
+_FLOOR_BIN = (Path.home() / ".local/share/charter-testing"
+              / f"tmux-{tmuxctl.FLOOR[0]}.{tmuxctl.FLOOR[1]}")
+
+#: tmux's two sentences for a command past its limit. Spelled by hand rather than read out
+#: of `tmuxctl`, so a reworded constant cannot follow itself into a green run.
+_TOO_LONG = ("failed to send command", "command too long")
+
+#: The limit as an operator reads it on screen, spelled by hand for the same reason.
+_LIMIT_ON_SCREEN = "16,364"
+
+#: What this launch hands the harness: long enough to be the reason, and not ending in `;`,
+#: so what tmux was sent is byte-for-byte what was typed.
+_PASTED = "fix it: " + "x" * 20000
+
+#: `_launch`'s harness is `claude`, so its arguments are that binary and the one above.
+_CARRIED = f"{len('claude') + len(_PASTED.encode()):,}"
+
+
+class TmuxsLengthRefusalIsRecognisedByItsExactWords(unittest.TestCase):
+    def test_both_of_tmuxs_sentences_are_recognised(self):
+        for said in (*_TOO_LONG, *(s + "\n" for s in _TOO_LONG)):
+            with self.subTest(stderr=said):
+                self.assertTrue(tmuxctl.refused_as_too_long(said))
+
+    def test_nothing_else_tmux_says_is_read_as_one(self):
+        """A near miss is a different sentence, and a different sentence is a different
+        failure: reading it as this one would put a byte count beside a refusal it does
+        not explain."""
+        for said in ("", f"no server running on {_tmuxsocket.socket_path('charter')}",
+                     "no space for a new pane", "create window failed: index 0 in use",
+                     "command too long: new-session", "Command too long",
+                     "failed to send command to server"):
+            with self.subTest(stderr=said):
+                self.assertFalse(tmuxctl.refused_as_too_long(said))
+
+
+class _RefusedStart(_FakeTmux):
+    """`_FakeTmux`, except that tmux refuses the command that would start the harness."""
+
+    def __init__(self, *, stderr: str, **kw):
+        super().__init__(**kw)
+        self.refusal = stderr
+
+    def _one(self, cmd, **kwargs):
+        if "new-session" in cmd or "new-window" in cmd:
+            self.calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=self.refusal)
+        return super()._one(cmd, **kwargs)
+
+
+class ALaunchOnCharactersOwnServer(PersonaIso, unittest.TestCase):
+    """Both ways a launch on charter's own server starts a harness: the workspace's first
+    chat (`new-session`) and a chat joining its live session (`new-window`)."""
+
+    SHAPES = {"new-session": {},
+              "new-window": {"pre_existing_sessions": frozenset({"demo"})}}
+
+    def _launched(self, fake: _FakeTmux) -> tuple[int, list[str]]:
+        said: list[str] = []
+        with mock.patch("charter.util.err", side_effect=said.append):
+            rc = _launch(fake, rest=[_PASTED])
+        return rc, said
+
+    def test_a_length_refusal_says_the_limit_and_what_this_launch_carried(self):
+        for verb, shape in self.SHAPES.items():
+            for refusal in _TOO_LONG:
+                with self.subTest(verb=verb, stderr=refusal):
+                    fake = _RefusedStart(stderr=refusal + "\n", **shape)
+                    rc, said = self._launched(fake)
+                    self.assertTrue(any(verb in c for c in fake.calls),
+                                    f"this case never reached `{verb}`")
+                    self.assertEqual(rc, 1)
+                    # ONE sentence: the generic report pastes the whole command — twenty
+                    # thousand bytes of it here — and would bury this one.
+                    self.assertEqual(len(said), 1, said)
+                    self.assertIn(_LIMIT_ON_SCREEN, said[0])
+                    self.assertIn(_CARRIED, said[0])
+                    self.assertIn("in a file", said[0])
+
+    def test_any_other_refusal_keeps_the_report_it_always_had(self):
+        rc, said = self._launched(_RefusedStart(stderr="no space for a new pane\n"))
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("starting the frame failed" in m
+                            and "no space for a new pane" in m for m in said), said)
+        self.assertFalse(any(_LIMIT_ON_SCREEN in m for m in said), said)
+
+
+class _RefusedRespawn(_FakeOperatorTmux):
+    """`_FakeOperatorTmux`, except that tmux refuses the respawn that starts the harness."""
+
+    def __init__(self, *, stderr: str, **kw):
+        super().__init__(**kw)
+        self.refusal = stderr
+
+    def _one(self, cmd, **kwargs):
+        if "respawn-pane" in cmd:
+            self.calls.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=self.refusal)
+        return super()._one(cmd, **kwargs)
+
+
+class ALaunchInsideATmuxYouAlreadyHad(PersonaIso, unittest.TestCase):
+    """The guest path starts its harness with `respawn-pane`, and the same limit holds."""
+
+    def _launched(self, fake: _FakeOperatorTmux) -> tuple[int, list[str]]:
+        said: list[str] = []
+        with mock.patch("charter.util.err", side_effect=said.append):
+            rc = _launch_inside(fake, rest=[_PASTED])
+        return rc, said
+
+    def test_a_length_refusal_says_the_limit_and_what_this_launch_carried(self):
+        for refusal in _TOO_LONG:
+            with self.subTest(stderr=refusal):
+                rc, said = self._launched(_RefusedRespawn(stderr=refusal + "\n"))
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(said), 1, said)
+                self.assertIn(_LIMIT_ON_SCREEN, said[0])
+                self.assertIn(_CARRIED, said[0])
+
+    def test_the_placeholder_window_is_still_taken_back(self):
+        """A refusal for length leaves the same window behind any refusal does, and it
+        goes the same way."""
+        fake = _RefusedRespawn(stderr="command too long\n")
+        self._launched(fake)
+        self.assertTrue(any("kill-window" in c for c in fake.calls), fake.calls)
+
+    def test_any_other_refusal_keeps_the_report_it_always_had(self):
+        rc, said = self._launched(_RefusedRespawn(stderr="no pane\n"))
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("starting the harness in it failed" in m and "no pane" in m
+                            for m in said), said)
+        self.assertFalse(any(_LIMIT_ON_SCREEN in m for m in said), said)
+
+
+def _message_bytes(argv: list[str], verb: str) -> int:
+    """What tmux's client packs for *argv*: each argument from the command's name on, with
+    a NUL after each. The global `-L`/`-f` before the name are the client's own and are not
+    in it — measured: `new-session` with `-f` in front and `new-window` without it stopped
+    at the same count."""
+    return sum(len(a.encode()) + 1 for a in argv[argv.index(verb):])
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class TmuxStillRefusesInTheWordsCharterRecognises(PersonaIso, unittest.TestCase):
+    """The limit and both sentences, asked of a real tmux — so a tmux that moves its limit
+    or rewords its refusal fails here, rather than every launch quietly quoting a number
+    that is no longer true or falling back to the generic report."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        v = tmuxctl.version()
+        if v is None or v < tmuxctl.FLOOR:
+            self.skipTest(f"the frame's floor is tmux {tmuxctl.FLOOR[0]}.{tmuxctl.FLOOR[1]};"
+                          f" this machine has {v}")
+        self.servers: list[tuple[str, str]] = []
+        candidates = [("tmux", "too-long")]
+        if _FLOOR_BIN.is_file():
+            candidates.append((str(_FLOOR_BIN), "too-long-floor"))
+        for binary, slug in candidates:
+            socket = _tmuxreap.name(slug)
+            self.addCleanup(subprocess.run, [binary, "-L", socket, "kill-server"],
+                            capture_output=True, timeout=20)
+            started = subprocess.run(
+                [binary, "-L", socket, "-f", "/dev/null", "new-session", "-d", "-s",
+                 "base", "-x", "80", "-y", "24", "--", "sleep", "600"],
+                capture_output=True, text=True, timeout=20)
+            self.assertEqual(started.returncode, 0, started.stderr)
+            self.servers.append((binary, socket))
+
+    def _window(self, socket: str, size: int) -> list[str]:
+        """A `new-window` whose command message is exactly *size* bytes."""
+        def build(text: str) -> list[str]:
+            return layout.chat_window_argv(socket=socket, session="base", chat="base.9",
+                                           cwd=str(self.tmp), harness_argv=["true", text])
+        argv = build("x" * (size - _message_bytes(build(""), "new-window")))
+        self.assertEqual(_message_bytes(argv, "new-window"), size)
+        return argv
+
+    @staticmethod
+    def _tmux(binary: str, argv: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run([binary, *argv[1:]], capture_output=True, text=True,
+                              timeout=20)
+
+    def test_a_command_exactly_at_the_limit_is_taken(self):
+        for binary, socket in self.servers:
+            with self.subTest(tmux=binary):
+                got = self._tmux(binary, self._window(socket, tmuxctl.MESSAGE_LIMIT))
+                self.assertEqual(got.returncode, 0, got.stderr)
+
+    def test_one_byte_past_it_is_refused_in_words_charter_recognises(self):
+        for binary, socket in self.servers:
+            with self.subTest(tmux=binary):
+                got = self._tmux(binary, self._window(socket, tmuxctl.MESSAGE_LIMIT + 1))
+                self.assertNotEqual(got.returncode, 0)
+                self.assertTrue(tmuxctl.refused_as_too_long(got.stderr), got.stderr)
+
+    def test_far_past_it_is_refused_in_words_charter_recognises(self):
+        for binary, socket in self.servers:
+            with self.subTest(tmux=binary):
+                got = self._tmux(binary, self._window(socket, 2 * tmuxctl.MESSAGE_LIMIT))
+                self.assertNotEqual(got.returncode, 0)
+                self.assertTrue(tmuxctl.refused_as_too_long(got.stderr), got.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

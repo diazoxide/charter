@@ -1284,8 +1284,10 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     claude` has to run the harness where it was typed, and the panels split off this
     pane inherit its directory in turn, which is what `workspace.resolve()` reads.
     """
+    # Each harness argument through `tmuxctl.verbatim`: tmux reads one that ends in `;` as
+    # its own command separator and drops the `;` without a word (#957).
     return _tmux(socket, "respawn-pane", "-k", "-t", harness_pane, "-c", cwd,
-                 *_env_argv(env), "--", *harness_argv)
+                 *_env_argv(env), "--", *map(tmuxctl.verbatim, harness_argv))
 
 
 def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
@@ -1337,10 +1339,11 @@ def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
     with no chat to name, which is the only reason it is optional.
     """
     named = ("-n", chat) if chat else ()
+    # `tmuxctl.verbatim` per harness argument, for :func:`respawn_argv`'s reason (#957).
     return _tmux(socket, "-f", conf, "new-session", "-d", "-s", session, *named,
                 "-x", str(cols), "-y", str(rows), "-P", "-F", "#{pane_id}",
                 *_env_argv(env),
-                "--", *harness_argv)
+                "--", *map(tmuxctl.verbatim, harness_argv))
 
 
 def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
@@ -1394,8 +1397,10 @@ def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
     otherwise be the SESSION's, which is wherever the launcher that created the workspace
     happened to be — and the panels split off this pane inherit its directory in turn.
     """
+    # `tmuxctl.verbatim` per harness argument, for :func:`respawn_argv`'s reason (#957).
     return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", chat, "-c", cwd,
-                 "-P", "-F", "#{pane_id}", *_env_argv(env), "--", *harness_argv)
+                 "-P", "-F", "#{pane_id}", *_env_argv(env), "--",
+                 *map(tmuxctl.verbatim, harness_argv))
 
 
 #: Every environment variable name charter will ever put on a tmux command line, and the

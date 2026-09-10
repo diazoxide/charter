@@ -446,6 +446,30 @@ def is_operator_socket(server: str | None, *, own: str | None = None) -> bool:
 SEPARATOR = ";"
 
 
+def verbatim(arg: str) -> str:
+    r"""*arg*, spelled so tmux's command parser hands it on exactly as it is (#957).
+
+    **tmux reads an argument that ENDS in `;` as the separator between two commands**, drops
+    the `;`, and says nothing. Measured on tmux 3.7c and at the 3.2 floor, through
+    `new-session`, `new-window` and `respawn-pane` alike, with a recorder as the harness:
+    `run the tests;` arrived as `run the tests`, `a;b c;` as `a;b c`, and a lone `;` as no
+    argument at all — every start rc 0 with an empty stderr. So `charter claude "run the
+    tests;"` started the harness on a prompt one byte shorter than the one typed.
+    :data:`SEPARATOR`'s note is not contradicted: an argument merely CONTAINING a `;` is
+    passed through whole, because the parse looks only at the end of each argument.
+
+    The same parse names its own escape — a trailing `\;` is handed on as a literal `;` —
+    and it undoes only that last pair, which is what makes one backslash exact rather than
+    approximately right: `\;` arrives as `\;`, `;;` as `;;`, ` ;` as ` ;`. Measured on both
+    versions and all three commands.
+
+    For DATA only — the harness's own arguments after `--`, which `frame/layout.py`'s
+    builders pass through here — and never for :data:`SEPARATOR` itself, which :func:`chain`
+    inserts precisely so tmux will read it as one.
+    """
+    return arg[:-1] + "\\;" if arg.endswith(";") else arg
+
+
 def chain(argvs: list[list[str]]) -> list[str] | None:
     """Several tmux commands as ONE invocation, so the SERVER runs all of them.
 
@@ -711,6 +735,33 @@ def report_failure(action: str, cmd: list[str], proc: subprocess.CompletedProces
     """
     stderr = (proc.stderr or "").strip() or "(tmux printed nothing to stderr)"
     util.err(f"charter frame: {action} failed — `{' '.join(cmd)}`: {stderr}")
+
+
+#: The most bytes tmux takes in ONE command message: the command's name and every argument
+#: after it, each followed by a NUL. The global `-L`/`-S`/`-f` in front are the client's own
+#: and are not in it. Measured on tmux 3.7c and at the 3.2 floor, identically, through
+#: `new-session`, `new-window` and `respawn-pane`: 16,364 bytes starts, one more is refused
+#: (#957). Read only to say what a refusal WAS — never to predict one, see
+#: :func:`refused_as_too_long`.
+MESSAGE_LIMIT = 16364
+
+#: tmux's two sentences for a command message past :data:`MESSAGE_LIMIT`. Two, and both are
+#: needed: measured on both versions and all three commands, 16,365 to 16,380 bytes is
+#: `failed to send command` and 16,381 up is `command too long`, each at rc 1.
+_TOO_LONG = frozenset({"failed to send command", "command too long"})
+
+
+def refused_as_too_long(stderr: str) -> bool:
+    """Did tmux refuse a command for being longer than :data:`MESSAGE_LIMIT`?
+
+    **A classification, never a prediction (ADR 0009).** Charter does not count a command's
+    bytes before sending it: the limit is tmux's to enforce, and a copy of its arithmetic
+    here would be a second answer free to drift from the first. What charter CAN do is
+    recognise tmux's own sentence once tmux has said it — so exactly that sentence and
+    nothing near it, because a stderr that merely resembles one is a different failure, and
+    naming this cause for it would be the guess ADR 0009 forbids.
+    """
+    return stderr.strip() in _TOO_LONG
 
 
 def run(action: str, argv: list[str], *, env: dict | None = None,
