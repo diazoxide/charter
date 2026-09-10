@@ -152,6 +152,7 @@ def cmd_workspace_create(args) -> int:
                   f'{args.name}/workspace.md, the living charter a fork inherits).')
 
     if args.use:
+        before = workspace.is_locked()
         scope = workspace.set_active(args.name, force=getattr(args, "force", False))
         if scope == "locked":
             util.err(_locked_msg(args.name))
@@ -164,8 +165,7 @@ def cmd_workspace_create(args) -> int:
                 util.info(f"Workspace '{args.name}' was created; start a new session to use it, "
                           f"or re-run with --force.")
             return 2
-        _announce_selection(args.name, scope, workspace.is_locked(),
-                            forced=getattr(args, "force", False))
+        _announce_selection(args.name, scope, workspace.is_locked(), before=before)
         _warn_env_override(args.name)
 
     if tree_path is not None:
@@ -213,12 +213,12 @@ def cmd_workspace_use(args) -> int:
         return 1
 
     workspace.ensure(args.name)
+    before = workspace.is_locked()
     scope = workspace.set_active(args.name, force=getattr(args, "force", False))
     if scope == "locked":
         util.err(_locked_msg(args.name))
         return 2
-    _announce_selection(args.name, scope, workspace.is_locked(),
-                        forced=getattr(args, "force", False))
+    _announce_selection(args.name, scope, workspace.is_locked(), before=before)
     _warn_env_override(args.name)
     return 0
 
@@ -359,7 +359,13 @@ def cmd_workspace_rename(args) -> int:
         # function.
         util.info(f"{len(moved)} chat(s) in '{old}' followed the rename → '{new}'.")
     if workspace.resolve() == new and workspace.source() in ("session", "active-file"):
-        util.info(f"This session's active workspace followed the rename → '{new}' (still 🔒 locked).")
+        # The lock clause is `_lock_words`', the one `current` prints (#936, review round 3).
+        # This wrote "(still 🔒 locked)" itself and asked nothing, and three reachable states
+        # made it false: `use gamma --force` in a chat launched in `north` (the lock is
+        # `north`), a pointer SessionStart's reconcile seeded (no lock), and `use` then
+        # `unlock` (no lock).
+        util.info(f"This session's active workspace followed the rename → '{new}' "
+                  f"({_lock_words(new, workspace.is_locked())}).")
 
     if not was_live:
         util.info(f"'{new}' is LOCAL (private) — nothing committed.")
@@ -946,26 +952,55 @@ def _scope_note(scope: str) -> str:
     selection is gone the moment the session is, and saying so is the whole point: the
     reader who is not told goes looking for a bug the next time the status line says
     `default`.
+
+    **Where a new session starts is `workspace.chosen`'s ladder, not a constant** (#936,
+    review round 3). The note named the built-in `default` in two places the ladder does not
+    reach it:
+
+    * **Inside a chat, at either scope.** A new chat resolves by its own launch record
+      (`workspace.for_frame`), which outranks the terminal pointer and the declared default,
+      and a closed chat's session pointer is reaped with it (`frame/state._forget_session`),
+      so a reopened one starts clean. "A new session starts at 'default'" and "kept across
+      closing/reopening Claude" were both false there: no new chat resolves by what `use`
+      wrote in this one.
+    * **On a plane with a nominated default** (`charter workspace default`). A new session
+      with no pointer and no pane id lands on it, and the note named `default` regardless.
+      `commands_persona._scope_note` already reads its plane's default for the same sentence.
     """
+    if scope not in ("terminal", "session"):
+        return ""
+    if workspace.launch_lock():
+        return " (this chat only — a new chat starts at the workspace it is opened in)"
     if scope == "terminal":
         return " (this terminal only — kept across closing/reopening Claude)"
-    if scope == "session":
-        return (f" (this session only — this terminal reports no pane id, so a new "
-                f"session starts at '{config.DEFAULT_WORKSPACE}')")
-    return ""
+    starts = workspace.declared_default() or config.DEFAULT_WORKSPACE
+    return (f" (this session only — this terminal reports no pane id, so a new "
+            f"session starts at '{starts}')")
 
 
 def _lock_words(name: str, locked: str | None, *, after_switch: bool = False) -> str:
-    """How the lock stands relative to the workspace *name* — said here and nowhere else.
+    """How the lock stands relative to the workspace *name*.
 
-    **Three sites used to decide this for themselves, and they drifted** (#936, review
-    round 2). `use` learned to name a chat's launch lock while `create --use` went on
-    announcing "🔒 locked for this session" beside a workspace that was not the lock —
-    measured, `create delta --use --force` in a chat launched in `north` said so while
-    `is_locked()` was `north` — and `workspace current` carried a third copy. A lock is one
-    of three things relative to the workspace a sentence names: absent, that workspace, or
-    another one. Every workspace sentence asks this function which, so no two of them can
-    answer differently again.
+    **Sites that decided this for themselves drifted** (#936, review rounds 2 and 3). `use`
+    learned to name a chat's launch lock while `create --use` went on announcing "🔒 locked
+    for this session" beside a workspace that was not the lock — measured, `create delta
+    --use --force` in a chat launched in `north` said so while `is_locked()` was `north` —
+    and `workspace current` carried a third copy. `rename` kept a fourth, "(still 🔒
+    locked)", which asked nothing and was measured false in three states: after `use gamma
+    --force` in a chat launched in `north`, after SessionStart's reconcile seeded the
+    pointer, and after `use` then `unlock`. A lock is one of three things relative to the
+    workspace a sentence names: absent, that workspace, or another one.
+
+    **Who asks this, exactly.** Every sentence that reports how the lock stands once a
+    workspace command has succeeded: `use` and `create --use` (through
+    :func:`_announce_selection`), `current`, and `rename`'s session line. Those four cannot
+    answer differently. Three other places name a lock in their own words and are not this
+    function's to decide: a refusal names the lock that refused it (:func:`_locked_msg`, and
+    `unlock` inside a chat, both read from `workspace.launch_lock` or `workspace.is_locked`);
+    `unlock` outside a chat reports the file it just deleted or found absent; and
+    `commands_frame._pin_workspace` names the lock its own picked launch takes. `cli.py`'s
+    help and the SessionStart nudge say what confirming a workspace does, not what a command
+    just did.
 
     *after_switch* is for the sentence after a selection that did NOT move the lock (a
     forced pointer inside a chat): there the elsewhere case says what the switch did and did
@@ -980,12 +1015,14 @@ def _lock_words(name: str, locked: str | None, *, after_switch: bool = False) ->
     return f"🔒 locked to '{locked}'"
 
 
-def _announce_selection(name: str, scope: str, locked: str | None, *, forced: bool) -> None:
+def _announce_selection(name: str, scope: str, locked: str | None, *,
+                        before: str | None) -> None:
     """Say what a selection DID — the one announcement `use` and `create --use` share.
 
-    Built from what `workspace.set_active` actually wrote (*scope*, as it reports it) and
-    the lock that stands afterwards (*locked*), never from what the command was asked to
-    do. ADR 0013's rule; each clause below is a place the sentence was measured lying:
+    Built from what `workspace.set_active` actually wrote (*scope*, as it reports it), the
+    lock that stood before the call (*before*) and the lock that stands after it (*locked*),
+    never from what the command was asked to do. ADR 0013's rule; each clause below is a
+    place the sentence was measured lying:
 
     * **`none` wrote nothing.** No session id and no pane id means no pointer and no lock,
       and this said "Active workspace set to 'gamma'." while the next command resolved to
@@ -993,16 +1030,18 @@ def _announce_selection(name: str, scope: str, locked: str | None, *, forced: bo
     * **The lock is named by :func:`_lock_words`.** A chat's lock is its launch record, so
       a forced switch moves the chat's commands and not its lock; a shell with no session
       id gets a pointer and no lock at all. Both were told "🔒 locked for this session".
-    * **"re-locked to" only where the lock now names this workspace.** Outside a chat
-      `--force` really moves the lock; inside one it cannot, and "re-locked" there was the
-      first half of review round 1's finding.
+    * **"re-locked to" only where this call moved a lock that stood before it.** The verb
+      used to read `--force`, which is what was ASKED. Inside a chat `--force` cannot move
+      the lock (review round 1). `create --use --force` in a session that had never been
+      locked answered "re-locked to 'beta'" beside a lock that did not exist a moment earlier
+      (review round 3). And forcing the workspace the lock already names moves nothing.
     """
     if scope == "none":
         util.warn(f"Nothing was persisted: this process has no session id and no pane id, so "
                   f"there is nowhere to keep '{name}' selected. Pass `--workspace {name}` "
                   f"per command, or set `$CHARTER_WORKSPACE={name}`.")
         return
-    verb = "re-locked to" if forced and locked == name else "set to"
+    verb = "re-locked to" if before and locked != before else "set to"
     util.ok(f"Active workspace {verb} '{name}'{_scope_note(scope)} — "
             f"{_lock_words(name, locked, after_switch=True)}.")
 

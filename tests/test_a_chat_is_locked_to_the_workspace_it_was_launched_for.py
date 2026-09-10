@@ -252,6 +252,54 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         self.assertIn("still locked to 'north'", err)
         self.assertNotIn("locked for this session", err)
 
+    def test_a_rename_after_a_forced_switch_names_the_lock_that_stands(self):
+        """Review round 3, state G, measured: `use gamma --force` here, then `rename gamma
+        gamma2`, printed "followed the rename → 'gamma2' (still 🔒 locked)" while `is_locked()`
+        was `north`, and `workspace current` in the same chat said "🔒 locked to 'north'".
+        `rename` wrote its own lock clause and asked nothing; it now asks what `current` asks,
+        so the two commands give one answer."""
+        self._use("gamma", force=True)
+        rc, err = self._run(commands_workspace.cmd_workspace_rename,
+                            old="gamma", new="gamma2", message=None)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "north")
+        self.assertIn("followed the rename → 'gamma2' (🔒 locked to 'north')", err)
+        self.assertNotIn("still 🔒 locked", err)
+        _rc, said = self._run(commands_workspace.cmd_workspace_current)
+        self.assertIn("🔒 locked to 'north'", said)
+
+    def test_the_scope_note_names_where_the_chats_next_session_starts(self):
+        """Review round 3, minor 2: with no pane id, `use north` here said "this terminal
+        reports no pane id, so a new session starts at 'default'". Inside a frame a new chat
+        resolves by its own launch record (`workspace.for_frame`, which outranks the terminal
+        pointer and the declared default), so it starts at the workspace it is opened in, and a
+        missing pane id is not the reason. Not "starts at 'north'": a chat opened on another
+        workspace's tab starts there."""
+        with mock.patch.object(workspace, "_terminal_id", return_value=None):
+            rc, err = self._use("north")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("(this chat only — a new chat starts at the workspace it is opened in)",
+                      err)
+        self.assertNotIn(f"'{config.DEFAULT_WORKSPACE}'", err)
+        self.assertNotIn("reports no pane id", err)
+
+    def test_a_pane_pointer_written_in_a_chat_is_not_promised_to_the_next_session(self):
+        """The same sentence with a pane id, which is the ordinary case: tmux sets `$TMUX_PANE`
+        in every process it starts, a chat's harness included. The note said "kept across
+        closing/reopening Claude" beside a forced `gamma`, and the next chat in `north` does
+        not resolve to it: its launch record answers before the pane pointer is read."""
+        with mock.patch.object(workspace, "_terminal_id", return_value="pane-f"):
+            rc, err = self._use("gamma", force=True)
+            _plant("north.2", ws="north")
+            nxt = workspace.resolve(session_id="north.2", cwd=config.ROOT)
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(workspace._terminal_file("pane-f").exists(),
+                        "no pane pointer was written, so this measures nothing")
+        self.assertEqual(nxt, "north", "the pane pointer did reach the next session")
+        self.assertNotIn("kept across closing/reopening Claude", err)
+        self.assertIn("(this chat only — a new chat starts at the workspace it is opened in)",
+                      err)
+
     def test_workspace_current_names_the_lock_it_is_not_resolving_to(self):
         """The same divergence on the command that exists to explain the resolution, and
         the flow #794 protected: a sub-agent standing in another workspace's tree resolves

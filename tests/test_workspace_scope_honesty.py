@@ -146,6 +146,19 @@ class TestTheMessageFollowsTheScope(ScopeBase):
         """A limit the reader has to discover by losing their workspace was concealed."""
         self.assertIn(config.DEFAULT_WORKSPACE, _scope_note("session"))
 
+    def test_session_scope_names_the_workspace_a_new_session_really_starts_at(self):
+        """A plane that nominated a default (`charter workspace default`) starts a new session
+        there, not at the built-in, and the note named the built-in regardless: the claim
+        about the next session this suite exists to keep true. `commands_persona._scope_note`
+        already reads its plane's declared default for the same sentence."""
+        workspace.set_declared_default("alpha")
+        with mock.patch.object(workspace, "_terminal_id", return_value=None):
+            self.assertEqual(workspace.resolve(session_id="a-different-session"), "alpha",
+                             "the declared default is not where a new session starts")
+        note = _scope_note("session")
+        self.assertIn("so a new session starts at 'alpha'", note)
+        self.assertNotIn(f"'{config.DEFAULT_WORKSPACE}'", note)
+
     def test_nothing_written_promises_nothing(self):
         self.assertEqual(_scope_note("none"), "")
 

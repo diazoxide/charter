@@ -248,10 +248,9 @@ class TestCommandLayer(WorkspaceLockBase):
         self.assertIn("🔒 locked for this session", err)
 
     def test_the_first_use_of_a_session_says_it_set_and_locked_the_workspace(self):
-        """The ordinary path, whose sentence nothing asserted. Both guards on that line
-        were survivors: with the `locked and` conjunct dropped, a session that had never
-        been locked was told "🔒 still locked to 'None'"; with the verb conditional
-        collapsed, its first selection was announced as "re-locked to"."""
+        """The ordinary path, whose sentence nothing asserted. It goes red when
+        `_lock_words`' `locked == name` branch is skipped (the first selection is told
+        "🔒 still locked to 'alpha'") and when the verb is collapsed to "re-locked to"."""
         rc, err = self._said(commands.cmd_workspace_use, name="alpha", force=False, create=True)
         self.assertEqual(rc, 0, err)
         self.assertIn("Active workspace set to 'alpha'", err)
@@ -263,8 +262,9 @@ class TestCommandLayer(WorkspaceLockBase):
         """`set_active` writes the lock under a session id, so a shell with no harness id
         gets a terminal pointer and no lock at all. Announcing "🔒 locked for this session"
         there named a lock nothing holds — the same false claim as the chat case, one branch
-        over. It is also what pins the `locked and` conjunct above: without it, `None !=
-        'alpha'` is true and the announcement became "🔒 still locked to 'None'"."""
+        over. It is also what pins `_lock_words`' `if not locked`: without it, `None` falls
+        through to the elsewhere case and the announcement became "🔒 still locked to
+        'None'"."""
         # The pane is STATED: with none, `set_active` writes nothing at all, which is a
         # different sentence (the case below). A runner has no pane id and a laptop shell
         # usually does, so leaving it to the environment made this two tests.
@@ -394,6 +394,65 @@ class TestCommandLayer(WorkspaceLockBase):
         rc, err = self._said(commands.cmd_workspace_unlock)
         self.assertEqual(rc, 0, err)
         self.assertIsNone(workspace.is_locked())
+
+    def test_a_forced_selection_with_no_lock_before_it_says_set_not_re_locked(self):
+        """Review round 3, minor 1: `create --use --force` in a session that had never been
+        locked answered "Active workspace re-locked to 'beta'". The verb read `--force`, which
+        is what was asked. "re-" names a lock that stood before the call, and none did. The
+        forced `create --use` case above starts from a lock, so it could not see this."""
+        rc, err = self._said(commands.cmd_workspace_create,
+                             name="beta", use=True, force=True, repos=[])
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "beta")
+        self.assertIn("Active workspace set to 'beta'", err)
+        self.assertIn("🔒 locked for this session", err)
+        self.assertNotIn("re-locked", err)
+
+    def test_forcing_the_workspace_a_session_is_already_locked_to_re_locks_nothing(self):
+        """The other half of that verb. The lock named `alpha` before the call and names
+        `alpha` after it, so nothing moved, whatever flag was passed."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_use, name="alpha", force=True, create=True)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active workspace set to 'alpha'", err)
+        self.assertNotIn("re-locked", err)
+
+    # `rename`'s session line, review round 3. It printed "(still 🔒 locked)" itself, asking
+    # nothing about the lock. K and L are two states it named a lock nobody held in (G is in
+    # the chat module); the first case is the one where the lock does stand.
+
+    def test_a_rename_of_the_locked_workspace_says_the_lock_followed_it(self):
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        rc, err = self._said(commands.cmd_workspace_rename,
+                             old="alpha", new="alpha2", message=None)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(workspace.is_locked(), "alpha2")
+        self.assertIn("followed the rename → 'alpha2' (🔒 locked for this session)", err)
+
+    def test_a_rename_of_a_pointer_the_reconcile_seeded_claims_no_lock(self):
+        """State K: SessionStart's reconcile copies the pane's selection into the session
+        pointer and writes no lock, and `rename` answered "(still 🔒 locked)" there."""
+        workspace.ensure("alpha")
+        self._pane_holding("alpha")
+        self._reconcile_with_payload("payload-uuid")
+        self.assertEqual(workspace.for_session(self.SID), "alpha", "the reconcile seeded nothing")
+        self.assertIsNone(workspace.is_locked(), "the reconcile wrote a lock after all")
+        rc, err = self._said(commands.cmd_workspace_rename,
+                             old="alpha", new="alpha2", message=None)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("followed the rename → 'alpha2' (unlocked)", err)
+        self.assertNotIn("🔒", err)
+
+    def test_a_rename_after_unlock_claims_no_lock(self):
+        """State L: `use` then `unlock` leaves the pointer standing and the lock gone."""
+        self._run(commands.cmd_workspace_use, name="alpha", force=False, create=True)
+        self._said(commands.cmd_workspace_unlock)
+        self.assertIsNone(workspace.is_locked(), "unlock left the lock standing")
+        rc, err = self._said(commands.cmd_workspace_rename,
+                             old="alpha", new="alpha2", message=None)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("followed the rename → 'alpha2' (unlocked)", err)
+        self.assertNotIn("🔒", err)
 
 
 # imported late so the module-under-test picks up the patched config at call time
