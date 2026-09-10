@@ -170,6 +170,11 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         """A conversation wanted elsewhere is a new chat (§4j), so the way out is a chat in
         `gamma`. `unlock` is not named because it releases nothing here."""
         _rc, err = self._use("gamma")
+        # This sentence's OWN words, not only the shared way-out clause below it: asserting
+        # the clause alone leaves the lead free to say anything at all, which is how a
+        # re-spelling of it survived the whole module when measured.
+        self.assertIn("locked to 'north', the workspace this chat was launched in", err)
+        self.assertIn("would leave the chat itself in 'north'", err)
         self.assertIn("open a chat", err)
         self.assertIn("F2 → workspace", err)
         self.assertNotIn("workspace unlock", err)
@@ -227,6 +232,7 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         # The PHRASE, not just the name: `'{locked}'` is interpolated, so asserting only
         # `north` passes against any sentence at all — measured, a re-spelling of this line
         # survived the whole module.
+        self.assertIn("this session's commands only", err)
         self.assertIn("still locked to 'north'", err,
                       "the lock that actually stands was not named")
         self.assertNotIn("re-locked", err)
@@ -249,6 +255,7 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
                             name="delta", use=True, force=False, repos=[])
         self.assertEqual(rc, 2)
         self.assertTrue((config.WORKSPACES_DIR / "delta").is_dir())
+        self.assertIn("Workspace 'delta' was created.", err)
         self.assertIn("open a chat", err)
         self.assertNotIn("start a new session", err)
 
@@ -258,6 +265,8 @@ class WorkspaceUseInsideAChat(PersonaIso, unittest.TestCase):
         that refuses the next switch is two answers to one question."""
         rc, err = self._run(commands_workspace.cmd_workspace_unlock)
         self.assertEqual(rc, 2)
+        self.assertIn("locked to 'north', the workspace it was launched in", err)
+        self.assertIn("nothing unlocks that", err)
         self.assertIn("open a chat", err)
         self.assertEqual(workspace.is_locked(), "north")
 
