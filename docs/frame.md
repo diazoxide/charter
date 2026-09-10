@@ -1364,8 +1364,8 @@ was five days old and two releases behind. The gather starts both now, and Sessi
 starts the check as well, which is what covers a chat outside a frame.
 
 That gather is not a rare event: a panel with no cache runs it on every repaint, and every
-hook that reports the plane moved runs it too — the session start, each prompt, each tool
-call, each stop — as does a `charter` command that wrote plane state. Both refreshes are
+hook that reports the plane moved runs it too — the session start, each prompt and each
+tool call — as does a `charter` command that wrote plane state. Both refreshes are
 therefore left to the brakes they have always had, which live in `.charter/cache/`: at most
 one check a day, and at most one attempt an hour. A frame repainting with no cache to read
 still starts one check, not one per tick.
