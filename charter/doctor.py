@@ -2081,13 +2081,21 @@ def check_workspace_harness() -> Result:
     if "harness-behind" in statuses:
         # Its own sentence, and never "remove it": the approvals in that file are the
         # harness's, and the advice that suits a file somebody else wrote destroys them.
-        # True of a file charter wrote and of one that was there before charter ever was —
-        # "no longer rewrites it" was false of the second (#942, review round 2).
-        hint += ("   A 'harness-behind' file is a checkout's local settings file holding "
-                 "something charter did not put there: the harness saves its approvals into "
-                 "that file, so charter never rewrites or merges into it, and the plane's "
-                 "machine-local rules it lacks are not in force there. Keep it, and add the "
-                 "rule to it by hand if that checkout needs it.")
+        # True of a file charter wrote, of one that was there before charter ever was, and of
+        # charter's own write whose record is gone (#942, review rounds 2 and 3).
+        hint += ("   A 'harness-behind' file is a checkout's local settings file charter cannot "
+                 "vouch for as its own write: the harness saves its approvals into that file, "
+                 "so charter never rewrites or merges into it, and the plane's machine-local "
+                 "rules it lacks are not in force there. Keep it, and add the rule to it by "
+                 "hand if that checkout needs it.")
+    if "unaccounted" in statuses:
+        # Ruling G (#942, review round 3): charter keeps every line it cannot prove unneeded,
+        # and says what it could not account for instead of ticking over it.
+        why = [reason for ws, rel, status in findings if status == "unaccounted"
+               for reason in _workspace.unaccounted(
+                   _workspace.workspace_dir(ws) / rel.split("/", 1)[0])]
+        hint += ("   An 'unaccounted' exclude block is still hiding a path charter cannot prove "
+                 "it no longer needs, and keeps hiding it until it can: " + "; ".join(why) + ".")
     counts = _mirrored_restrictions()
     behind = sum(n for key, n in counts.items()
                  if any(rel == key or rel.endswith(f"/{key}")

@@ -82,6 +82,13 @@ gone and the plane no longer declares it, its line goes. `doctor` only mentions 
 plane has moved on since — the plane's newer rules are then not in that file — and never
 suggests deleting a file that holds your approvals, nor one it cannot read.
 
+Charter takes a line out of that block only when it is sure nothing needs it. While git cannot
+list the worktrees in time, lists one charter cannot look into or one marked prunable, while a
+checkout's `.charter-generated` cannot be read, while a path cannot be checked, or while a file
+is there that no record of charter's accounts for, every line stays — hiding a path longer than
+needed costs nobody anything. `doctor`'s `workspace layer` row calls such a block
+`unaccounted` and says what it could not account for.
+
 `charter guard ask` refreshes every workspace's layer as it writes, so the rule is in force
 before the command returns rather than at the next launch. It runs both ways: drop a rule
 from the plane's settings and the mirror of it is withdrawn — a file charter generated and

@@ -283,8 +283,11 @@ class TheReportIsInAStableOrder(CloneLayer):
                                         ".claude/agents/alpha.md"],
                          "fixture no longer diverges — this case would assert nothing")
         listed = [ln for ln in self.excludes().splitlines() if ln.startswith("/")]
+        # The last line is the marker's temp file, spelled by hand (#942 review round 3): a
+        # process killed mid-publish leaves `.charter-generated.<pid>.<rand>.tmp` behind.
         self.assertEqual(listed, ["/.claude/agents/alpha.md", "/.claude/settings.json",
-                                  f"/{workspace.GENERATED_MARKER}"])
+                                  f"/{workspace.GENERATED_MARKER}",
+                                  "/.charter-generated.*.tmp"])
 
     def test_what_unwiring_reports_removing_is_sorted(self):
         """The persona arrives AFTER the first wire, for `test_the_block_stays_sorted_when
@@ -364,7 +367,10 @@ class TheWriteIsIdempotent(CloneLayer):
         self.wire()
         text = self.excludes()
         self.assertIn("*.tmp", text)
-        self.assertEqual(text.count("*.tmp"), 1)
+        # Whole lines, not a substring count: charter's own block now carries
+        # `/.charter-generated.*.tmp` (#942 review round 3), which contains `*.tmp` and would read
+        # as the operator's line doubled when it is exactly once, where they wrote it.
+        self.assertEqual(text.splitlines().count("*.tmp"), 1)
         self.assertIn(workspace._EXCLUDE_BEGIN, text)
 
     def test_an_unterminated_block_is_replaced_rather_than_doubled(self):
@@ -687,7 +693,9 @@ class WhatCannotBeReadOrWritten(CloneLayer):
         p.mkdir()
         rows = dict(workspace.guest_layer(self.clone))
         self.assertEqual(rows[".claude/settings.json"], "unreadable")
-        self.assertEqual(dict(self.wire())[".claude/settings.json"], "foreign")
+        # One state, one name (#942 review round 3): the write reported `foreign` here, and
+        # `foreign`'s sentences advise removing a path charter only failed to read.
+        self.assertEqual(dict(self.wire())[".claude/settings.json"], "unreadable")
 
     def test_a_workspace_that_does_not_exist_has_no_guests(self):
         self.assertEqual(workspace.guest_trees("never-made"), [])

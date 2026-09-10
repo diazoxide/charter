@@ -90,6 +90,10 @@ def parse_porcelain(text: str) -> list[dict]:
     ``prunable gitdir file points to non-existent location``). ``row["prunable"]`` carries
     that: ``False`` when absent, the reason string when given, ``True`` when bare. Callers
     MUST check it before treating ``row["path"]`` as a real, existing directory.
+
+    ``row["bare"]`` is ``True`` for a bare repository's own entry, whose ``path`` is the git
+    directory rather than a checkout — `workspace._live_trees` must pass over it rather than
+    read it as a tree with no ``.git`` (#942 review round 3).
     """
     out: list[dict] = []
     cur: dict | None = None
@@ -101,7 +105,8 @@ def parse_porcelain(text: str) -> list[dict]:
             continue
         key, _, val = line.partition(" ")
         if key == "worktree":
-            cur = {"path": val, "branch": None, "detached": False, "prunable": False}
+            cur = {"path": val, "branch": None, "detached": False, "prunable": False,
+                   "bare": False}
         elif cur is None:
             continue
         elif key == "branch":
@@ -111,6 +116,8 @@ def parse_porcelain(text: str) -> list[dict]:
             cur["branch"] = val.removeprefix("refs/heads/")
         elif key == "detached":
             cur["detached"] = True
+        elif key == "bare":
+            cur["bare"] = True
         elif key == "prunable":
             cur["prunable"] = val or True
     if cur:

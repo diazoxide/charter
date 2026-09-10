@@ -42,13 +42,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, commands_workspace, config, doctor, workspace
+from charter import commands, commands_workspace, config, doctor, util, workspace
 from charter.harness import claude_code, registry
 
 from tests import _isolation
@@ -91,6 +92,39 @@ def _status(tree: Path) -> str:
     """
     return _git(tree, "-c", "core.excludesFile=/dev/null",
                 "status", "--porcelain", "-uall").stdout
+
+
+@contextmanager
+def _refused(files=(), inside=(), calls=("lstat",)):
+    """Filesystem questions about *files*, or about anything strictly *inside* the given
+    directories, refused with EACCES — the way an unreadable directory or a flaky network
+    mount refuses them — while every other path is answered for real.
+
+    **Refused by mock, not by a permission bit** (review round 3). An unreadable directory
+    makes `Path.exists` RAISE on 3.11–3.13 and answer False on 3.14, so `chmod` reproduces a
+    different failure on every interpreter CI runs. The refused question is the same one on
+    all of them, and each of *calls* (`os.lstat`, `os.stat`, `io.open`) is one a caller can
+    make."""
+    exact = {os.fspath(f) for f in files}
+    under = [os.fspath(d) + os.sep for d in inside]
+
+    def refusing(real):
+        def call(path, *args, **kwargs):
+            try:
+                spelled = os.fspath(path)
+            except TypeError:
+                spelled = None
+            if spelled is not None and (spelled in exact
+                                        or any(spelled.startswith(u) for u in under)):
+                raise PermissionError(13, "Permission denied", spelled)
+            return real(path, *args, **kwargs)
+        return call
+
+    with ExitStack() as stack:
+        for name in calls:
+            owner = io if name == "open" else os
+            stack.enter_context(mock.patch.object(owner, name, refusing(getattr(owner, name))))
+        yield
 
 
 def _as_the_harness_would(path: Path, rule: str) -> str:
@@ -1309,8 +1343,9 @@ class TheSharedExcludeHoldsWhatEveryTreeNeeds(PlaneWithRestrictions):
         self.assertTrue([c for c in calls if "worktree" in c],
                         "fixture: git was never asked, so the first half proves nothing")
 
-    def wire_the_worktree_while_git(self, answer) -> str:
-        """Wire the worktree while git answers *answer*; return the exclude file before it.
+    def wire_the_worktree_while_git(self, answer) -> tuple[str, str]:
+        """Wire the worktree while git answers *answer*; return the exclude file before it,
+        and what `workspace.unaccounted` says about the worktree while git still answers so.
 
         **Byte for byte, not only "the local line is still there."** Nothing leaves the block
         and nothing new arrives, so the file must come back exactly as it was. The looser
@@ -1330,20 +1365,63 @@ class TheSharedExcludeHoldsWhatEveryTreeNeeds(PlaneWithRestrictions):
         with mock.patch.object(workspace.util, "run", _git_says):
             workspace.wire_guest(wt)
         self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
-        return before
+        self.assertEqual(self.excludes(self.clone), before)
+        with mock.patch.object(workspace.util, "run", _git_says):
+            said = " ".join(workspace.unaccounted(wt))
+        return before, said
 
     def test_git_that_refuses_to_list_the_worktrees_takes_no_line_away(self):
         """Nobody can say what the other trees need, so nothing leaves the block."""
-        before = self.wire_the_worktree_while_git(
+        before, said = self.wire_the_worktree_while_git(
             lambda: subprocess.CompletedProcess([], 128, stdout="", stderr="fatal"))
         self.assertEqual(self.excludes(self.clone), before)
+        self.assertIn("exited 128", said)
 
     def test_git_that_cannot_be_run_takes_no_line_away(self):
         def _missing():
             raise FileNotFoundError("git")
 
-        before = self.wire_the_worktree_while_git(_missing)
+        before, said = self.wire_the_worktree_while_git(_missing)
         self.assertEqual(self.excludes(self.clone), before)
+        self.assertIn("could not be run", said)
+
+    def test_git_that_takes_too_long_takes_no_line_away(self):
+        """Review round 3, N2: a 2 s hang made a launch take 5 s, and doctor with it, which runs
+        from SessionStart. A timeout is `util.ProcTimeout` — a `RuntimeError`, which no
+        `except OSError` catches — and it is one more way of not knowing."""
+        def _hangs():
+            raise util.ProcTimeout(["git", "worktree", "list"], doctor.CHECK_TIMEOUT)
+
+        before, said = self.wire_the_worktree_while_git(_hangs)
+        self.assertEqual(self.excludes(self.clone), before)
+        self.assertIn("timed out", said)
+
+    def test_git_is_given_doctors_check_timeout(self):
+        """`doctor.CHECK_TIMEOUT`, the budget every read-only git question here already has."""
+        wt = self.worktree("api-wt")
+        given: list = []
+        real = workspace.util.run
+
+        def _record(cmd, *args, **kwargs):
+            if "worktree" in cmd:
+                given.append(kwargs.get("timeout"))
+            return real(cmd, *args, **kwargs)
+
+        with mock.patch.object(workspace.util, "run", _record):
+            workspace.wire_guest(wt)
+        self.assertTrue(given, "fixture: git was never asked")
+        self.assertEqual(set(given), {doctor.CHECK_TIMEOUT})
+
+    def test_an_exported_git_dir_does_not_decide_which_trees_share_the_file(self):
+        """Review round 3: a launch with `GIT_DIR` exported — charter run from a git hook —
+        asked THAT repository which worktrees there are, and dropped the sibling's line."""
+        wt = self.edited_clone_and_a_withdrawn_worktree()
+        unrelated = _repo(self.tmp / "unrelated")
+        with mock.patch.dict(os.environ, {"GIT_DIR": str(unrelated / ".git"),
+                                          "GIT_WORK_TREE": str(unrelated)}):
+            workspace.wire_guest(wt)
+        self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
+        self.assertEqual(_status(self.clone), "")
 
 
 class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
@@ -1367,7 +1445,10 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
         workspace.ensure(self.ws)
 
     def assert_still_hidden(self) -> None:
-        self.assertNotIn(LOCAL, _status(self.clone))
+        """EVERYTHING, not only the local file (review round 3, concern 1): main's stale block
+        kept hiding `settings.json` after a lost marker, and round 2 dropped it — a file that
+        now carries the plane's ask and deny rules."""
+        self.assertEqual(_status(self.clone), "")
         self.assertIn(f"/{LOCAL}", self.excludes(self.clone))
 
     def test_unwiring_and_then_launching_keeps_it_hidden(self):
@@ -1384,6 +1465,58 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
         self.marker.write_text("")
         self.launch()
         self.assert_still_hidden()
+        self.assertIn(f"{workspace.GENERATED_MARKER} cannot be read",
+                      " ".join(workspace.unaccounted(self.clone)))
+
+    def test_a_lost_record_stays_hidden_after_charter_writes_a_new_one(self):
+        """The record a later wire writes names only what that wire wrote. Read as the whole
+        truth, it would unhide `settings.json` one launch later instead of at once."""
+        self.marker.unlink()
+        self.launch()
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        self.launch()
+        self.assertIn(".claude/agents/steward.md", json.loads(self.marker.read_text()),
+                      "fixture: charter wrote no new record")
+        self.assertEqual(_status(self.clone), "")
+
+    def test_doctor_names_what_it_could_not_account_for(self):
+        self.marker.unlink()
+        self.launch()
+        r = doctor.check_workspace_harness()
+        self.assertEqual(_status(self.clone), "")
+        self.assertIn(f"{self.ws}/api/.git/info/exclude (unaccounted)", r.detail)
+        self.assertIn(f"{SHARED} is there and nothing charter recorded accounts for it", r.hint)
+
+    def test_a_path_that_cannot_be_checked_keeps_its_line_and_says_so(self):
+        """Ruling G(e): absence is proved by `FileNotFoundError` or `NotADirectoryError`, and
+        a refused `lstat` proves nothing."""
+        self.marker.unlink()
+        with _refused(files=[self.clone / SHARED]):
+            workspace.wire_guest(self.clone)
+        self.assertIn(f"/{SHARED}\n", self.excludes(self.clone))
+        with _refused(files=[self.clone / SHARED]):
+            said = " ".join(workspace.unaccounted(self.clone))
+        self.assertIn(f"{SHARED} cannot be checked", said)
+
+    def test_a_marker_that_is_not_an_object_is_no_record(self):
+        self.marker.write_text("[]\n")
+        self.launch()
+        self.assert_still_hidden()
+
+    def test_a_marker_that_cannot_be_opened_is_no_record(self):
+        with _refused(files=[self.marker], calls=("open",)):
+            self.launch()
+        self.assert_still_hidden()
+
+    def test_a_temp_file_left_by_an_interrupted_marker_write_does_not_show(self):
+        """Review round 3: the marker is published through `config.replace_for`, whose temp
+        file sits beside it — and a process killed between the write and the rename leaves
+        that file in somebody's repository."""
+        config.temp_beside(self.marker).write_text("{")
+        self.launch()
+        self.assertEqual(_status(self.clone), "")
 
     def test_a_reader_never_sees_a_half_written_marker(self):
         """Published whole, by rename. A reader that opened the marker before a wire reads
@@ -1427,12 +1560,18 @@ class AnUnreadableLocalFileIsNotCalledForeign(PlaneWithRestrictions):
         self.assertIn(f"{self.ws}/api/{LOCAL} cannot be read", said)
         self.assertNotIn("Remove", said)
         self.assertNotIn("charter did not write", said)
+        # Review round 3, N3: "until that file can be read" was false of a harness-edited file,
+        # which reads `harness-behind` once it can be read and never gets the rule.
+        self.assertNotIn("until that file can be read", said)
+        self.assertIn("only if that file turns out to be exactly what charter last wrote", said)
 
     def test_reinit_says_it_cannot_be_read_and_leaves_it_as_it_is(self):
         said = " ".join(self.reinit_said())
         self.assertIn(f"api/{LOCAL} cannot be read", said)
         self.assertNotIn("Remove", said)
         self.assertNotIn("not written by charter", said)
+        self.assertNotIn("until it can be", said)
+        self.assertIn("only if that file turns out to be exactly what charter last wrote", said)
         self.local.chmod(0o600)
         self.assertEqual(self.local.read_text(), self.theirs)
         self.assertEqual(_status(self.clone), "")
@@ -1495,6 +1634,205 @@ class HarnessBehindIsTrueOfAFileCharterNeverWrote(PlaneWithRestrictions):
         self.assertIn(f"fresh/{LOCAL}", said)
         self.assertIn("the harness saves its approvals into that file", said)
         self.assertNotIn("no longer", said)
+
+
+class UtilRunCanWithholdAVariable(unittest.TestCase):
+    """`util.run(..., unset=...)` (#942 review round 3). `env` is an overlay and can only ADD to
+    what a child inherits; `GIT_DIR` exported by a git hook has to be taken away, or every git
+    the child runs answers about a different repository."""
+
+    def test_a_named_variable_does_not_reach_the_child(self):
+        code = "import os; print(os.environ.get('PROBE_942_WITHHELD', 'absent'))"
+        with mock.patch.dict(os.environ, {"PROBE_942_WITHHELD": "inherited"}):
+            kept = util.run([sys.executable, "-c", code]).stdout.strip()
+            gone = util.run([sys.executable, "-c", code],
+                            unset=["PROBE_942_WITHHELD"]).stdout.strip()
+        self.assertEqual((kept, gone), ("inherited", "absent"))
+
+
+class HarnessBehindIsTrueWhenCharterLostItsRecord(PlaneWithRestrictions):
+    """Review round 3, N4: a local file charter DID write, byte for byte, whose marker entry is
+    gone, read as holding "settings charter did not put there". The sentence has to be true
+    whether or not charter's record survives."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        marker = self.clone / workspace.GENERATED_MARKER
+        doc = json.loads(marker.read_text())
+        del doc[LOCAL]
+        marker.write_text(json.dumps(doc, indent=2) + "\n")
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)", "Bash(kubectl *)"])
+
+    def test_doctor(self):
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/api/{LOCAL} (harness-behind)", r.detail)
+        self.assertIn("charter cannot vouch for as its own write", r.hint)
+        self.assertNotIn("did not put there", r.hint)
+
+    def test_guard_ask(self):
+        self.at_the_plane()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="helm uninstall *", local=True)
+        self.assertIn(f"{self.ws}/api/{LOCAL}", said)
+        self.assertIn("charter cannot vouch for as its own write", said)
+        self.assertNotIn("did not put there", said)
+
+    def test_reinit(self):
+        said = " ".join(self.reinit_said())
+        self.assertIn(f"api/{LOCAL}", said)
+        self.assertIn("charter cannot vouch for as its own write", said)
+        self.assertNotIn("did not put there", said)
+
+
+class AFailedReadNeverUnhidesALine(PlaneWithRestrictions):
+    """Review round 3, N1 — a regression round 2 introduced. "Gone" was `os.path.lexists`,
+    which answers False for ANY lstat error: one refused `lstat` on `settings.json` during a
+    launch forgot its marker entry for good, the file showed in `git status`, and doctor said
+    "all current". An unreadable `.claude/` for one reinit forgot every entry and took the
+    whole block (and on 3.13 the same reinit crashed instead). Ruling G(e): only
+    `FileNotFoundError` or `NotADirectoryError` proves a path is gone."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.local = self.clone / LOCAL
+        self.approved = _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.marker = self.clone / workspace.GENERATED_MARKER
+        self.recorded = json.loads(self.marker.read_text())
+
+    def test_one_refused_lstat_during_a_launch_forgets_nothing(self):
+        with _refused(files=[self.clone / SHARED]):
+            workspace.ensure(self.ws)
+        self.assertEqual(json.loads(self.marker.read_text()), self.recorded)
+        self.assertEqual(_status(self.clone), "")
+
+    def test_a_claude_directory_refused_for_one_reinit_costs_nothing(self):
+        with _refused(inside=[self.clone / ".claude"], calls=("lstat", "stat", "open")):
+            said = " ".join(self.reinit_said())
+        self.assertEqual(json.loads(self.marker.read_text()), self.recorded)
+        self.assertEqual(self.local.read_text(), self.approved)
+        self.assertEqual(_status(self.clone), "")
+        self.assertIn(f"api/{SHARED} cannot be read", said)
+
+
+class AnUnreadableSharedFileIsCalledUnreadableEverywhere(PlaneWithRestrictions):
+    """Review round 3, ruling D extended: an unreadable generated `settings.json` was `foreign`
+    to `guard ask` and `reinit` — "not written by charter … Remove it" — while doctor called
+    it `unreadable`. One state, one name, and no removal advice."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.shared = self.clone / SHARED
+        self.theirs = self.shared.read_text()
+        self.shared.chmod(0o000)
+        self.addCleanup(self.shared.chmod, 0o644)
+        with self.assertRaises(PermissionError, msg="fixture: this user can read a 000 file"):
+            self.shared.read_text()
+
+    def plane_moves(self) -> None:
+        _plane_settings(config.ROOT, permissions={
+            "ask": ["Bash(terraform apply *)", "Bash(kubectl *)"], "deny": ["Bash(rm -rf /)"]})
+
+    def test_the_row_says_it_cannot_be_read(self):
+        self.plane_moves()
+        self.assertEqual(dict(workspace.wire_guest(self.clone))[SHARED], "unreadable")
+
+    def test_guard_ask_never_calls_it_foreign(self):
+        self.at_the_plane()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="kubectl delete *", local=False)
+        self.assertIn(f"{self.ws}/api/{SHARED} cannot be read", said)
+        self.assertNotIn("Remove", said)
+        self.assertNotIn("charter did not write", said)
+
+    def test_reinit_never_calls_it_foreign_and_it_stays_hidden(self):
+        self.plane_moves()
+        said = " ".join(self.reinit_said())
+        self.assertIn(f"api/{SHARED} cannot be read", said)
+        self.assertNotIn("not written by charter", said)
+        self.assertNotIn("Remove", said)
+        self.shared.chmod(0o644)
+        self.assertEqual(self.shared.read_text(), self.theirs)
+        self.assertEqual(_status(self.clone), "")
+
+
+class WhatGitListsDecidesNothingItCannotBackUp(PlaneWithRestrictions):
+    """Review round 3, ruling G (b) and (c). A line leaves only when every tree git lists is a
+    checkout charter can look into and none is marked prunable. Git 2.50.1 lists a
+    `--separate-git-dir` clone's git directory as its main worktree, so the clone never
+    entered the union; and `charter workspace rename` leaves git listing the old path as
+    prunable, so every launch of the other workspace unhid the moved worktree's local file."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+
+    def test_a_clone_with_a_separate_git_dir_keeps_its_local_line(self):
+        clone = workspace.workspace_dir(self.ws) / "api"
+        separate = self.tmp / "separate" / "api.git"
+        separate.parent.mkdir(parents=True)
+        _git(clone.parent, "init", "-q", f"--separate-git-dir={separate}", clone.name)
+        (clone / "README.md").write_text("theirs\n")
+        _git(clone, "add", "-A")
+        _git(clone, "commit", "-qm", "init")
+        wt = workspace.workspace_dir(self.ws) / "api-wt"
+        _git(clone, "worktree", "add", "-q", "-b", "wt1", str(wt))
+        self.assertIn(f"worktree {separate.resolve()}\n",
+                      _git(clone, "worktree", "list", "--porcelain").stdout,
+                      "fixture: git no longer lists the git directory as the main worktree")
+        workspace.wire_harnesses(self.ws)
+        _as_the_harness_would(clone / LOCAL, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        workspace.wire_harnesses(self.ws)
+        self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
+        self.assertEqual(_status(clone), "")
+        self.assertIn("not a checkout", " ".join(workspace.unaccounted(wt)))
+
+    def test_a_worktree_git_lists_as_prunable_takes_no_line_away(self):
+        clone = self.checkout("api", real=True)
+        workspace.ensure("other")
+        _git(clone, "worktree", "add", "-q", "-b", "wt-other",
+             str(workspace.workspace_dir("other") / "api"))
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        _as_the_harness_would(workspace.workspace_dir("other") / "api" / LOCAL,
+                              "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        rc, said = self.invoke(commands_workspace.cmd_workspace_rename, old="other", new="other2")
+        self.assertEqual(rc, 0, said)
+        moved = workspace.workspace_dir("other2") / "api"
+        self.assertIn("prunable", _git(clone, "worktree", "list", "--porcelain").stdout,
+                      "fixture: git no longer lists the old path as prunable")
+        workspace.wire_harnesses(self.ws)
+        self.assertNotIn(LOCAL, _status(moved))
+        workspace.wire_harnesses("other2")
+        workspace.wire_harnesses(self.ws)
+        self.assertNotIn(LOCAL, _status(moved))
+        self.assertIn("prunable", " ".join(workspace.unaccounted(clone)))
+
+    def test_a_bare_repositorys_worktrees_still_let_an_unneeded_line_go(self):
+        """The `bare` entry names a git directory, not a checkout, and says so — so it is
+        passed over rather than read as a tree charter cannot look into, which would keep
+        every line of every bare repository's worktrees for ever."""
+        seed = _repo(self.tmp / "seed")
+        bare = self.tmp / "bare" / "api.git"
+        bare.parent.mkdir(parents=True)
+        _git(self.tmp, "clone", "-q", "--bare", str(seed), str(bare))
+        api = workspace.workspace_dir(self.ws) / "api"
+        wt = workspace.workspace_dir(self.ws) / "api-wt"
+        _git(bare, "worktree", "add", "-q", "-b", "wmain", str(api))
+        _git(bare, "worktree", "add", "-q", "-b", "wt1", str(wt))
+        workspace.wire_harnesses(self.ws)
+        self.assertIn(f"/{LOCAL}\n", self.excludes(api), "fixture: the local line never arrived")
+        (config.ROOT / LOCAL).unlink()
+        workspace.wire_harnesses(self.ws)
+        self.assertNotIn(f"/{LOCAL}\n", self.excludes(api))
+        self.assertIn(f"/{SHARED}\n", self.excludes(api))
 
 
 if __name__ == "__main__":  # pragma: no cover

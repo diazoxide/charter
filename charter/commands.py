@@ -1808,18 +1808,20 @@ def _mirror_into_workspaces() -> None:
     if behind:
         # Never "remove it": the approvals in that file are the harness's, and the advice
         # that suits a file somebody else wrote would destroy them.
-        # True of a file charter wrote and the harness has since added to, and of one that was
-        # there before charter ever was — "no longer rewrites" was false of the second.
-        util.warn(f"  {', '.join(behind)}: holds settings charter did not put there, and the "
-                  f"harness saves its approvals into that file, so charter does not rewrite it "
-                  f"and did not add this rule there — add the rule to that file by hand if a "
+        # True of a file charter wrote and the harness has since added to, of one that was there
+        # before charter ever was, and of charter's own write whose record is gone — "no longer
+        # rewrites" was false of the second, "did not put there" of the third (#942, round 3).
+        util.warn(f"  {', '.join(behind)}: a file charter cannot vouch for as its own write, and "
+                  f"the harness saves its approvals into that file, so charter does not rewrite "
+                  f"it and did not add this rule there — add the rule to that file by hand if a "
                   f"chat rooted there needs it.")
     if unreadable:
-        # Never "remove it" either (#942, review round 2): charter cannot see what is in the
-        # file, and a file the harness writes into may hold its approvals.
+        # Never "remove it" either (#942, review rounds 2 and 3): charter cannot see what is in
+        # the file. Nor "until it can be read": a harness-edited file read again is
+        # `harness-behind` and never receives the rule, so the sentence states the condition.
         util.warn(f"  {', '.join(unreadable)} cannot be read, so charter left it exactly as it "
-                  f"is and did not add this rule there — a chat rooted there does not have it "
-                  f"until that file can be read.")
+                  f"is and did not add this rule there; it writes there again only if that file "
+                  f"turns out to be exactly what charter last wrote.")
     if withheld:
         util.warn(f"  {', '.join(withheld)} was not written: charter could not hide it in "
                   f"that checkout's .git/info/exclude, and a machine-local rule it cannot "
