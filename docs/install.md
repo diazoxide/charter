@@ -26,9 +26,10 @@ Install charter (https://github.com/diazoxide/charter) for me:
 
 1. Run `uv tool install charter-cp`. charter needs Python 3.11+, which uv can
    fetch for me; fall back to pipx or pip only if uv is missing.
-2. Run `charter doctor` and show me the output. Its `plugin install` row will say
-   Claude Code's charter plugin is missing — that is expected here, because the
-   plugin is installed per control plane and there is no plane yet.
+2. Run `charter doctor` and show me the output. Its `plugin install` row will read
+   "no control plane here — nothing to install it for" (or, with no `claude` CLI on
+   PATH, "no `claude` on PATH — no Claude Code plugin here"). Both are expected: the
+   plugin is installed per control plane, and there is no plane yet.
 3. Do NOT run `charter init` — tell me what it would create and let me pick the
    directory first. `charter init` is what installs the plugin, for the plane it
    creates.
@@ -125,7 +126,7 @@ The plugin supplies the pieces that only make sense running *inside* a Claude Co
 session: injecting the active persona's memory at session start, the `PreToolUse` guard
 that enforces the [one-credential rule](git-policy.md), the record-memory nudges, and the
 Stop-hook auto-save. **The plugin ships no Python of its own** — every hook it declares
-just shells out to the `charter` CLI you installed in step 1, which is why the CLI is the
+shells out to the `charter` CLI you installed in step 1, which is why the CLI is the
 artifact you install and the plugin is the one it installs for you.
 
 ## 3. opencode and Codex
@@ -135,7 +136,7 @@ written into the repos you work in.
 
 **Only Claude Code's artifact is one charter installs for you, and the difference is
 scope.** The Claude Code plugin is installed per project, so `charter init` installing it
-touches exactly the plane you just asked charter to create. Codex's wiring lives only in
+touches exactly the plane you asked charter to create. Codex's wiring lives only in
 `~/.codex/config.toml` — a machine-global file, in force for every repository on the
 machine — so charter writes it only when you run `charter harness install codex`, where
 running the command *is* the consent. `charter doctor` reports the gap and stops there;
@@ -203,9 +204,10 @@ every merge, multiplying exactly the exposure that workflow is already being nar
 about. CI verifies the git install on every push to `main` instead: same coverage, no
 publish, no token.
 
-**Which channel you are on is in the render.** The brand chip — on the frame's top bar,
-and in `charter statusline` wherever you run it — reads `⬢ charter 0.51.0 dev`, so
-`↑a1b2c3d` beside it can only mean one thing: main moved. `charter --version`
+**Which channel you are on is in the render.** On the dev channel the frame's top row ends
+in `charter 0.51.0 dev` — the `⬢` on that row marks the workspace name, not the version —
+and `charter statusline`, wherever you run it, reads `⬢ charter 0.51.0 dev`, so an
+`↑a1b2c3d` beside it there can only mean one thing: main moved. `charter --version`
 answers the other half, which is what you are actually running:
 
 ```
@@ -278,11 +280,17 @@ org/user whose repos this control plane tracks. Run inside an existing git repo,
 also *offers* to clone that repo into your first workspace — accept with `charter init
 --clone-this-repo`, because work happens in a workspace, never in the plane root.
 
-`charter claude` starts the harness inside charter's frame, and the frame is a tmux screen:
-**tmux is the one thing it needs that nothing above installed**, and only tmux being missing
-stops a launch. `charter claude --probe` says whether a frame can run here without starting
-one; [frame.md](frame.md) is the rest. If you ran `charter init` from inside a Claude Code
-session, restart that session first — the plugin loads at the next one.
+`discover` and `clone` go through the forge's own CLI — `gh` for GitHub, `glab` for GitLab —
+which nothing above installs and which must be authenticated; `charter doctor` names either
+one missing.
+
+`charter claude` needs two more things nothing above installs. `claude` itself has to be on
+your `PATH`: without it no frame is drawn, and charter says the binary is not installed and
+exits 127. And the frame needs tmux, because it is a tmux screen; of tmux, only its absence
+stops a launch — below 3.2 the frame still starts. `charter opencode` and `charter codex`
+need their own binaries the same way. `charter claude --probe` says whether a frame can run
+here without starting one; [frame.md](frame.md) is the rest. If you ran `charter init` from
+inside a Claude Code session, restart that session first — the plugin loads at the next one.
 
 `init` writes no `[harness] default`, so bare `charter` prints its usage until the plane
 names a harness — one key in `charter.toml`

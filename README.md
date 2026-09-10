@@ -14,12 +14,12 @@ GitLab: durable **personas**, isolated per-task **workspaces**, and a credential
 the model never reads from. It runs inside **Claude Code, opencode and Codex**, enforcing
 the same rules in each.
 
-That picture is **the frame**, the one surface charter puts on your screen. `charter claude`
+That picture is **the frame**, which charter draws around your agent. `charter claude`
 — or `charter opencode`, or `charter codex` — starts the harness inside a tmux window charter
 lays out: the agent in the middle, charter's panels around it, repainted when charter's
 hooks say the plane changed. tmux draws the rectangles and does the terminal emulation;
 charter fills the edges and draws nothing in the agent's own pane (ADR 0018). It is a
-capture, not a mockup: `docs/assets/capture-frame.sh --full` builds a throwaway plane, opens
+capture, not a mockup: `docs/assets/capture-frame.sh <scratch-dir> --full` builds a throwaway plane, opens
 four chats on a private tmux server and prints the screen. **No agent is running in it.**
 Every chat runs `charter status`, which is what fills the middle pane, and the CI results,
 the dispatch badge and the working mark are files the capture scripts write in the shape
@@ -78,12 +78,22 @@ session, after `init` and `--fix` alike, so restart any session that was already
 
 **The recording stops before `charter claude`**, because the frame is a full-screen tmux
 client and `capture-demo.sh` records a line transcript; the picture at the top of this page
-is what that step opens. The frame needs tmux, and only tmux being missing stops a launch —
-3.2 is the version charter checks its requirements against, and `charter claude --probe`
-says whether a frame can run here without starting one. Write `[harness] default = "claude"`
-into `charter.toml` and the command is `charter` on its own; `init` does not write that key,
-because charter does not pick a harness for you. Piped anywhere, bare `charter` prints its
-usage instead of starting an agent.
+is what that step opens. `charter claude` needs `claude` on your `PATH`: without it no frame
+is drawn, and charter says the binary is not installed and exits 127. The frame also needs
+tmux, and of tmux only its absence stops a launch — below 3.2, the version charter checks
+its requirements against, the frame still starts. `charter opencode` and `charter codex`
+need their own binaries the same way, and `charter claude --probe` says whether a frame can
+run here without starting one.
+
+`init` names no harness, because charter does not pick one for you. Add this to
+`charter.toml` and the command is `charter` on its own:
+
+```toml
+[harness]
+default = "claude"
+```
+
+Piped anywhere, bare `charter` prints its usage instead of starting an agent.
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,
   `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and Claude Code's
@@ -93,14 +103,16 @@ usage instead of starting an agent.
 - **`charter doctor`** preflights python, git, git identity, the forge CLI and its auth, and
   whether a frame can run, and names what's missing before anything else trips over it.
   `--fix` installs the pieces charter can install; without it `doctor` installs nothing.
-- **`charter discover`** queries the forge and writes `inventory/repos.json` — the tracked
+- **`charter discover`** queries the forge through `gh` or `glab`, which nothing above
+  installs and which must be authenticated, and writes `inventory/repos.json` — the tracked
   map of every repo in the org, complete even when nothing is cloned yet.
-- **`charter clone <repo>`** clones on demand into the active workspace, already carrying
-  the one-credential git policy below.
+- **`charter clone <repo>`** clones on demand into the active workspace with that forge
+  CLI's token over HTTPS, already carrying the one-credential git policy below.
 - **`charter claude`** opens a chat in the frame. Closing the terminal detaches and leaves
   the harness running; `F2` → `charter: quit` stops every chat on the plane and records
-  them first, and `charter reopen` — or bare `charter`, when nothing is running — puts them
-  back, resuming the conversation wherever Claude Code recorded one.
+  them first, and `charter reopen` — or, on a plane with `[harness] default`, bare `charter`
+  when nothing is running — puts them back, resuming the conversation wherever Claude Code
+  recorded one.
 
 ## You don't need charter if
 
@@ -108,7 +120,7 @@ usage instead of starting an agent.
 - Your agent touches **no credential** you'd mind seeing in a transcript.
 - Nothing it works out in a session is worth having **next week**.
 
-Any one of those and this is overhead. If two or three of them made you wince, keep
+Any one of those and charter is setup with nothing to show for it. If two or three of them made you wince, keep
 reading — each section below is a failure that happened often enough to get built around.
 
 ---
@@ -168,7 +180,7 @@ sync-agents` turns each one into a real Claude Code sub-agent, so dispatching a 
 ordinary delegation rather than a prompt trick. A persona whose `mcp.json` hands a vault
 value to a server names the destination it would reach and waits for `--approve-mcp`, which
 asks about each server after showing it. What gets recorded is a digest of the line you
-read — which names every key of the entry and the vault it would spend, not just the
+read — which names every key of the entry and the vault it would spend, not only the
 server's name — so a teammate re-pointing any of it lapses the approval rather than
 inheriting it.
 
@@ -290,8 +302,8 @@ rows say which persona was last seen working in each and how long ago — `▸st
 `▸forge 7m +1`. An observation with an age, never a claim that anyone is still there. A
 piece that has said nothing for a while shows as exactly that: **silence, with an age**,
 because a worker that dies declares nothing. The frame's repo table has no such column: it
-is the one panel that repaints on every tick while work is in flight, and that column costs
-a directory walk per row.
+repaints on every tick while work is in flight, and that column costs a directory walk per
+row.
 
 **Whether your roster is real.** `charter persona stats` reports each role's memory count,
 recency, a quality proxy, and how many times it was actually **dispatched** as a sub-agent
@@ -304,15 +316,15 @@ warnings and memory writes for the session. `charter doctor` preflights the lot.
 
 ---
 
-## A state store to deploy, migrate and back up
+## Another server to deploy, migrate and back up
 
 Git is the state. Personas, memories, todos, manifests, inventory and config are ordinary
 committed files in ordinary git repos — which is why a teammate's agent can start where
 yours left off, why `git log` is the audit trail, and why there is nothing to deploy,
 migrate or back up separately.
 
-The frame is the one process that outlives the command you typed: its tmux server keeps
-your chats running after you close the terminal. What lives only in that server is
+The frame's tmux server outlives the command you typed: it keeps your chats running after
+you close the terminal. What lives only in that server is
 scrollback, so a quit copies the last 2,000 lines of each chat into
 `.charter/frame/<chat>.transcript`, and `charter reopen` starts the recorded chats again.
 
@@ -391,7 +403,7 @@ That is the whole list — `charter doctor` checks every item of it and names wh
   the choice to the plane.
   → [ADR 0017](docs/adr/0017-charter-ignores-what-carries-credentials.md)
 - **A tool that silently stopped existing.** After a rename removed the shim they launched
-  through, MCP servers failed with ENOENT and their tools simply vanished from the session.
+  through, MCP servers failed with ENOENT and their tools vanished from the session.
   `charter doctor` now names any registered launcher whose path does not exist, and the
   one-line fix.
 - **A plane writing down charter's own rules, and getting them wrong later.** The plugin

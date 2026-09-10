@@ -111,6 +111,13 @@ the files `charter discover`, `charter gl-refresh`, the every-turn hook and
 `inflight.start` would have written, in exactly their shape; the demo has no forge to
 query and no live session to dispatch anything.
 
+It runs `charter init` with no `claude` on PATH and with `$XDG_CONFIG_HOME` on a directory
+it removes on exit. With `claude` on PATH, init installs Claude Code's charter plugin for the
+plane it creates: a fetch from GitHub and an entry naming a throwaway directory in the
+operator's own `~/.claude/plugins/installed_plugins.json`, which the frame captures for #958
+left behind before this. And init writes opencode's plugin under `$XDG_CONFIG_HOME`, the
+operator's `~/.config` unless something says otherwise.
+
 That last one is the trap to remember when adding a status-line surface. Anything drawn
 from **live** state renders as nothing in a capture unless this script fabricates the
 state first — the running badge (`⚡2 4m`) draws only while a dispatch is actually out, so
@@ -188,7 +195,7 @@ charter running the frame are one build, and the window size is the one the pane
 themselves out for:
 
 ```bash
-./docs/assets/capture-frame.sh /tmp/frame-capture \
+./docs/assets/capture-frame.sh "$(mktemp -d)" \
   | python3 docs/assets/ansi2svg.py --title "charter frame" -o docs/assets/frame.svg
 ```
 
@@ -200,7 +207,7 @@ table is sized to its content and a taller window buys empty harness rows and no
 picture, because one chat alone on its strip shows nothing about what the strip is for:
 
 ```bash
-./docs/assets/capture-frame.sh /tmp/frame-full-capture --full \
+./docs/assets/capture-frame.sh "$(mktemp -d)" --full \
   | python3 docs/assets/ansi2svg.py --title "charter frame" -o docs/assets/frame-full.svg
 ```
 

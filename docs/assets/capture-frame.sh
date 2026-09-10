@@ -35,6 +35,13 @@
 set -uo pipefail
 
 DIR="${1:?usage: capture-frame.sh <scratch-dir> [--full]}"
+# The scratch directory comes first, and this script `rm -rf`s it. `capture-frame.sh --full`
+# with the directory left out would otherwise hand `--full` to `rm` and `mkdir` as a flag
+# and carry on with no directory at all.
+case "$DIR" in
+  -*) echo "usage: capture-frame.sh <scratch-dir> [--full] — the scratch directory comes first" >&2
+      exit 2 ;;
+esac
 FULL=0
 case "${2:-}" in
   "") ;;
@@ -66,6 +73,7 @@ unset TMUX TMUX_PANE
 
 rm -rf "$DIR"; mkdir -p "$DIR"
 DIR="$(cd "$DIR" && pwd -P)"
+[ -n "$DIR" ] || { echo "capture-frame.sh: could not make the scratch directory — captured nothing." >&2; exit 2; }
 
 # ── a tmux of its own — both of them ──────────────────────────────────────────
 # charter's frame server is a module constant (`commands_frame.SOCKET` = `charter`) with no
