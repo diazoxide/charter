@@ -825,15 +825,11 @@ def _line_pipelines(line: str):
         elif t.text in ("|", "|&"):
             current.append([])
         elif t.text in _CONTROL_OPERATORS:
-            cmds = [c for c in current if c]
-            if cmds:
-                pipelines.append(cmds)
+            pipelines.append(current)
             current = [[]]
         else:
             current[-1].append(t.text)
-    cmds = [c for c in current if c]
-    if cmds:
-        pipelines.append(cmds)
+    pipelines.append(current)
     out = []
     for cmds in pipelines:
         progs = [_split_env(c)[0] for c in cmds]
@@ -971,7 +967,8 @@ def _strip_reader_heredocs(cmd: str) -> str:
     while i < n:
         # One LOGICAL command: command-text lines folded for the plan, heredoc bodies
         # buffered as chunks so their fate is decided once the whole pipeline is assembled.
-        chunks: list[tuple[str, int, str]] = []   # (kind, body_index, text); kind cmd|body
+        # (body index, text); a command line carries -1, which is never a key of `drop`.
+        chunks: list[tuple[int, str]] = []
         body_count = 0
         plan_text = ""
         join = ""                                 # separator carried from the previous stage
@@ -981,7 +978,7 @@ def _strip_reader_heredocs(cmd: str) -> str:
             folded = ""
             while i < n:
                 line = lines[i]
-                chunks.append(("cmd", -1, line))
+                chunks.append((-1, line))
                 i += 1
                 if _ends_in_line_continuation(line):
                     folded += line[:-1]
@@ -1010,21 +1007,21 @@ def _strip_reader_heredocs(cmd: str) -> str:
                         (body_line.lstrip("\t") if dash else body_line) == delim)
                     if is_terminator:
                         break
-                    chunks.append(("body", idx, body_line))
+                    chunks.append((idx,body_line))
                     spliced = expands and _ends_in_line_continuation(body_line)
                     i += 1
                 if i < n:                          # the terminator line itself
-                    chunks.append(("body", idx, lines[i]))
+                    chunks.append((idx,lines[i]))
                     i += 1
             if not _pipeline_continues(folded):
                 break
             join = " "                             # the next stage joins onto the same pipe
         plan = _heredoc_strip_plan(plan_text)
         drop = {}
-        if plan is not None and len(plan) == body_count:
+        if plan is not None:
             drop = {idx: d for idx, (_delim, d, _head) in enumerate(plan)}
-        for kind, idx, text in chunks:
-            if kind == "cmd" or not drop.get(idx, False):
+        for idx, text in chunks:
+            if not drop.get(idx, False):
                 out.append(text)
     return "\n".join(out)
 
