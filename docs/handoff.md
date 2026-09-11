@@ -168,7 +168,17 @@ does not stop a chat set on getting around it. It does not see a handoff run by 
 from a script file, or more than one string deep. It does not see a shell hidden behind a
 **name charter cannot know**: `r() { bash; }; r <<'EOF'` defines a function and calls it, so the
 opener reads as `r`, the body is treated as data, and the handoff in it runs — the same class as
-an interpreter or a script file, and evasion-shaped rather than a spelling a chat reaches for. **One apostrophe can switch the look off.** The
+an interpreter or a script file, and evasion-shaped rather than a spelling a chat reaches for.
+
+The same rule costs something in the other direction, and it is the price of the fail-safe:
+**when charter cannot name the program that opens a heredoc, it treats that body as something
+that could run**, so a brief-shaped body behind `${VAR}` or `$( … )` is refused even when the
+program is your editor or your pager. Measured examples: `( ${EDITOR} <<'EOF' )`,
+`( ${PAGER} <<'EOF' )`, `( ${GIT} commit -F - <<'EOF' )` and `( $(which tee) notes.md <<'EOF' )`,
+each with prose that names the handoff. charter cannot tell those from `( ${RUNNER} <<'EOF' )`,
+where the variable really is a shell — they are the same shape, and a fail-safe that switches
+off for a friendly-looking name is not a fail-safe. Spelling the program out (`cat`, `tee`,
+`git`, your editor by name) avoids the prompt. **One apostrophe can switch the look off.** The
 look inside `eval` and `sh -c` strings reads the call with reader heredoc bodies removed, so a
 body that is *not* a reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body — holding a
 lone `'` (as in `don't`) leaves the call unparseable, and a handoff in a later `eval '…'` or

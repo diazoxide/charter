@@ -424,7 +424,15 @@ rule while one who reads a bare refusal files an issue.
   (`{hand,}off`, `$'\x68andoff'`, `hand${x:-}off`), or more than one string deep is not seen.
   Nor is a shell behind a **name charter cannot know**: `r() { bash; }; r <<'EOF'` defines a
   function and calls it, so the opener reads as `r` and its body is treated as data — the same
-  class as an interpreter or a script file.
+  class as an interpreter or a script file. The same rule costs the other direction, which is
+  the price of the fail-safe: **when charter cannot name the program that opens a heredoc it
+  treats that body as something that could run**, so a brief-shaped body behind `${VAR}` or
+  `$( … )` is refused even when the program is an editor or a pager — measured on
+  `( ${EDITOR} <<'EOF' )`, `( ${PAGER} <<'EOF' )`, `( ${GIT} commit -F - <<'EOF' )` and
+  `( $(which tee) notes.md <<'EOF' )`. Those are the same shape as `( ${RUNNER} <<'EOF' )`,
+  where the variable really is a shell, and the only thing that would separate them is the
+  body's content — which A7 must not use, since a brief is indistinguishable from prose naming
+  the feature. Spelling the program out avoids the prompt.
   The look inside `eval` and `sh -c` strings reads the call with reader heredoc bodies removed,
   so a body that is NOT a reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body —
   holding a lone `'` (as in `don't`) leaves the call unparseable and the look is skipped, so a
