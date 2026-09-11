@@ -470,6 +470,12 @@ class TestASightingThatNamesNoHarnessIsUnknown(ConfigFolderCase):
         r = doctor.check_guard_seen()
         self.assertEqual(r.status, WARN)
         self.assertIn("cannot tell which harness", r.detail)
+        # Said as "no harness", never as a harness named `None`. The unregistered-name branch
+        # below would catch this sighting too — the registry has no entry for `None` — and its
+        # sentence reads "names None". CI's sweep on 537d0fc found this branch deletable with
+        # the suite green for exactly that reason, so what only it says is what is pinned.
+        self.assertIn("names no harness", r.detail)
+        self.assertNotIn("None", r.detail)
 
     def test_nor_under_the_default_folder(self):
         """Not a folder mismatch: nothing about the folder in use makes it count."""
