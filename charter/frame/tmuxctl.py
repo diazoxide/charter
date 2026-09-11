@@ -446,6 +446,98 @@ def is_operator_socket(server: str | None, *, own: str | None = None) -> bool:
 SEPARATOR = ";"
 
 
+def verbatim(arg: str) -> str:
+    r"""*arg*, spelled so tmux's command parser hands it on exactly as it is (#957).
+
+    **tmux reads an argument that ENDS in `;` as the separator between two commands**, drops
+    the `;`, and says nothing. Measured on tmux 3.7c and at the 3.2 floor, through
+    `new-session`, `new-window` and `respawn-pane` alike, with a recorder as the harness:
+    `run the tests;` arrived as `run the tests`, `a;b c;` as `a;b c`, and a lone `;` as no
+    argument at all — every start rc 0 with an empty stderr. So `charter claude "run the
+    tests;"` started the harness on a prompt one byte shorter than the one typed.
+    :data:`SEPARATOR`'s note is not contradicted: an argument merely CONTAINING a `;` is
+    passed through whole, because the parse looks only at the end of each argument.
+
+    The same parse names its own escape — a trailing `\;` is handed on as a literal `;` —
+    and it undoes only that last pair, which is what makes one backslash exact rather than
+    approximately right: `\;` arrives as `\;`, `;;` as `;;`, ` ;` as ` ;`. Measured on both
+    versions and all three commands.
+
+    **Every argument is read this way, not only the harness's** (review round 1 on #959). A
+    `-c` directory or an `-e NAME=VALUE` ending in `;` ends the command early instead, and
+    tmux refuses the launch, rc 1. What it says depends on the state — measured on both
+    versions with the identity a real launch carries — and none of it names the value:
+    `unknown command: -P` for a directory, which reaches tmux only with a session already up
+    (`frame/layout.session_argv` takes no directory); `unknown command: -e` for a
+    `$CHARTER_ROOT` while a server is running, because another identity value follows it;
+    and `error connecting to …` when no server is running yet.
+
+    And a MIDDLE harness argument ending in `;` made the arguments after it a tmux command
+    run on charter's server: `["a;", "set-option", "-g", "@injected", "yes"]` set
+    `@injected` and handed the harness `["a"]`, rc 0. Only an
+    operator's own typed arguments reach a harness argv today, so that was a latent surface
+    rather than a hole; it is closed all the same.
+
+    For every DATA argument — the harness's arguments after `--`, the `-c` directory and
+    each `-e` value, which `frame/layout.py`'s builders pass through here — and never for
+    :data:`SEPARATOR` itself, which :func:`chain` inserts precisely so tmux will read it as
+    one.
+    """
+    return arg[:-1] + "\\;" if arg.endswith(";") else arg
+
+
+#: A run of `#` that tmux's format expander reads as the start of a format: every run except
+#: one that `[` directly follows. See :func:`start_directory` for what was measured.
+_FORMAT_HASHES = re.compile(r"#+(?![#\[])")
+
+
+def _literal_hashes(text: str) -> str:
+    """*text* with each `#` tmux would expand spelled `##`, and a run of `#` directly before
+    `[` left as it is — :func:`start_directory`'s first half, kept apart so the suite can pin
+    that its two halves give one string in either order."""
+    return _FORMAT_HASHES.sub(lambda run: run.group(0) * 2, text)
+
+
+def start_directory(path: str) -> str:
+    r"""*path*, spelled so tmux starts a pane in exactly that directory (#961).
+
+    **tmux reads a `-c <start-directory>` as a FORMAT before it looks for the directory**,
+    and says nothing when the answer is somewhere else. Measured on tmux 3.7c and at the 3.2
+    floor through `new-window -c` and `respawn-pane -c`, every start rc 0 with an empty
+    stderr: `x#{session_name}` started in `xbase` when a directory by that name sat beside
+    it, and in `$HOME` when none did; `a#S`, `a#,b` and `a##b` went to `$HOME` too; and on
+    3.7c, not on 3.2, a trailing `#` was dropped, so a directory named `#` started in its
+    parent. `y#(touch job-ran)` went to `$HOME` as well, and its command RAN in 5 of 5
+    starts per command whose client a chained `run-shell` held connected. Sent as one
+    command, the way charter sends each of these, it ran in 0 of 30 per command.
+
+    `##` is tmux's own literal `#`, and doubling each `#` brought every one of those names
+    to the directory asked for — **except a run of `#` directly before `[`**, which tmux
+    already hands on as it is: `a#[b`, `a##[b`, `a###[b`, `a####[b` and `a#[fg=red]b` each
+    started in place unescaped and, doubled, each went to `$HOME`, on both versions. So that
+    run alone is left as it is. A `#` after the `[` is still doubled: `a#[#{session_name}`
+    goes to tmux as `a#[##{session_name}`, and lands.
+
+    Then :func:`verbatim`, because a directory ending in `;` still ends tmux's command
+    (#957). The order of the two halves cannot change the string — `verbatim` adds only a
+    `\` before a final `;`, and neither character decides whether a run of `#` is doubled —
+    and both orders were measured to start the pane in the same place for every name above.
+
+    **Not :func:`inert_format`.** That is for text tmux draws: it doubles every `#`, and
+    adds a space before a leading `-` and after a trailing `#`. In a start directory a
+    doubled `#[` sent each name above to `$HOME`, and a space is a character the
+    directory's name does not have.
+
+    For `-c` only. An `-e NAME=VALUE` is not read as a format — measured through
+    `new-session`, `new-window` and `respawn-pane` on both versions, values carrying
+    `#{session_name}`, `##`, `#S`, `#[` and `#(…)` each arrived exactly — so an identity
+    value goes through :func:`verbatim` alone. And `new-session` is handed no directory:
+    from a working directory named `x#{session_name}` it started exactly there, on both
+    versions, with a server already running and without one.
+    """
+    return verbatim(_literal_hashes(path))
+
+
 def chain(argvs: list[list[str]]) -> list[str] | None:
     """Several tmux commands as ONE invocation, so the SERVER runs all of them.
 
@@ -512,12 +604,16 @@ def inert_format(text: str) -> str:
     name by `state.workspace_prefix`'s alphabet, a hotkey by `instance._HOTKEY_RE`, a
     chrome or background value by a lookup table that answers `()` for anything it does not
     know. charter sets no `status-left`, `status-right`, `pane-border-format` or
-    `window-status-format`, and has no `display-menu` or `display-popup` at all, so there
-    is no format today whose text is not a module constant.
+    `window-status-format`, and has no `display-menu` or `display-popup` at all. This
+    paragraph used to end "so there is no format today whose text is not a module
+    constant", and #961 is why it no longer does: a `-c` start directory is a format too,
+    and its text is the name of the directory a chat was launched from. :func:`start_directory`
+    closes that one, and it is not a second spelling of this function — its docstring
+    names the run of `#` tmux reads differently there.
 
     It is kept rather than deleted because the measurements above are the reason those
-    guards are shaped the way they are, and because the next surface that hands tmux a
-    string built from a name will need exactly this. **A caller that appears must use it
+    guards are shaped the way they are, and because the next surface that hands tmux text
+    to draw, built from a name, will need exactly this. **A caller that appears must use it
     rather than re-spell it** — a second copy would be a second answer to "what may reach
     tmux's parser", which is #547's shape and which this repo has already paid for once.
     If no such surface arrives, this and its tests are a clean deletion.
@@ -711,6 +807,35 @@ def report_failure(action: str, cmd: list[str], proc: subprocess.CompletedProces
     """
     stderr = (proc.stderr or "").strip() or "(tmux printed nothing to stderr)"
     util.err(f"charter frame: {action} failed — `{' '.join(cmd)}`: {stderr}")
+
+
+#: The most bytes tmux takes in ONE command message: the command's name and every argument
+#: after it, each followed by a NUL. The global `-L`/`-S`/`-f` in front are the client's own
+#: and are not in it. Measured on tmux 3.7c and at the 3.2 floor, identically, through
+#: `new-session`, `new-window` and `respawn-pane`: 16,364 bytes starts, one more is refused
+#: (#957). Read only to say what a refusal WAS — never to predict one, see
+#: :func:`refused_as_too_long`.
+MESSAGE_LIMIT = 16364
+
+#: tmux's two sentences for a command message past :data:`MESSAGE_LIMIT`. Two, and both are
+#: needed: measured on both versions and all three commands, 16,365 to 16,380 bytes is
+#: `failed to send command` and 16,381 up is `command too long`, each at rc 1.
+_TOO_LONG = frozenset({"failed to send command", "command too long"})
+
+
+def refused_as_too_long(stderr: str | None) -> bool:
+    """Did tmux refuse a command for being longer than :data:`MESSAGE_LIMIT`?
+
+    **A classification, never a prediction (ADR 0009).** Charter does not count a command's
+    bytes before sending it: the limit is tmux's to enforce, and a copy of its arithmetic
+    here would be a second answer free to drift from the first. What charter CAN do is
+    recognise tmux's own sentence once tmux has said it — so exactly that sentence and
+    nothing near it, because a stderr that merely resembles one is a different failure, and
+    naming this cause for it would be the guess ADR 0009 forbids.
+    """
+    # `or ""`, the way :func:`report_failure` reads it: a `CompletedProcess` made without
+    # capturing carries `None` there, and a failure report must not raise on one.
+    return (stderr or "").strip() in _TOO_LONG
 
 
 def run(action: str, argv: list[str], *, env: dict | None = None,

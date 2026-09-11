@@ -208,6 +208,16 @@ class CodexHarness(Harness):
     cli_name = "codex"
     binary = "codex"
 
+    def first_message_argv(self, text: str) -> list[str] | None:
+        """`codex "<text>"`: the positional prompt starts the session on it.
+
+        Measured with `codex --help` on codex-cli 0.147.0: `Usage: codex [OPTIONS]
+        [PROMPT]`, where `[PROMPT]` is "Optional user prompt to start the session". Codex
+        also has subcommands (`codex login`), which is why a single-word first message is
+        refused before it gets here (`commands_frame.WORD_FIRST_MESSAGE`).
+        """
+        return [text]
+
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Codex's own config block never needs moving; its PLUGIN does.
 

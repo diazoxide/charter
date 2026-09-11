@@ -642,6 +642,55 @@ one — so on a machine running several frames a refusal about one could be draw
 another. A panel reads its own frame's state, and every client attached to that frame sees
 it.
 
+### A chat opened for you in the background
+
+**A chat that hands work to a new chat has to start that chat without taking your screen.**
+`charter handoff` — the next piece of the chat-handoff plan, not shipped yet — opens a chat in
+a workspace you name and starts it on a first message you approved. The opening underneath
+it exists now, and it is built so nothing you are looking at changes:
+
+- **No client moves.** The chat is a new window in the target workspace's session, created
+  detached. It is not selected, nothing attaches, and the chat you are on keeps its panels.
+  Measured with a real session on tmux 3.7c and at the 3.2 floor: the session's current
+  window is the same one before and after the open. The new window still gets its panels
+  before anyone looks at it, as every chat a reopen builds does.
+- **The first message is the harness's own first prompt**, passed as one command-line
+  argument in that harness's spelling, and never typed into its pane:
+
+      claude "<message>"              Claude Code 2.1.268: claude [options] [command] [prompt]
+      codex "<message>"               codex-cli 0.147.0:   codex [OPTIONS] [PROMPT]
+      opencode --prompt "<message>"   opencode 1.18.23:    its positional is [project]
+
+  A harness charter has not measured is refused rather than handed a guess. The message
+  arrives whole — blank lines, quotes, `$(…)`, `#{…}` and a trailing `;` included — measured
+  through a real tmux on both versions. **Because it is an argument, any process on this
+  machine that can list processes can read it while the harness starts**, so a first message
+  is never the place for a secret.
+- **At most 12,288 bytes, and that bound is charter's own, not tmux's.** tmux refuses a
+  command past 16,364 bytes, and the command that starts a chat carries the chat's names,
+  its directory and its identity beside the message. A first message exactly 12,288 bytes
+  long starts, on 3.7c and at the 3.2 floor. The cost: one between 12,288 and about 15,800
+  bytes is refused although tmux would take it — name long material by its path instead.
+  Anything tmux still refuses is reported in tmux's own words (*What `charter frame --
+  <cmd>` accepts*, below).
+- **The new chat does not inherit the pins of the chat that opened it.** `$CHARTER_WORKSPACE`
+  and `$CHARTER_PERSONA` are emptied for the length of the launch, so a pinned chat cannot
+  file the new one under its own workspace or persona. The new chat gets the persona a new
+  chat in that workspace gets when nothing is pinned, unless one is named for it.
+
+Before starting anything, it refuses a first message that is empty, starts with `-`, is a
+single word (which a harness may read as a subcommand), carries a NUL byte, or is past the
+bound. It also refuses from a chat that is a window in a tmux you already had, where
+charter's launcher stays awake for the harness's whole life; from a chat that records no
+harness charter can launch; and into a workspace whose session name is running on this
+machine but cannot be proved this plane's. Each refusal says which rule it was, and that
+nothing was opened.
+
+Whether the new chat is locked to its workspace (#936) depends on the harness keeping the
+chat id charter starts it with. Two harnesses are named as not doing that yet: opencode's
+plugin overwrites `$CHARTER_SESSION_ID` (#946), and Codex gets no session id outside a frame
+(#954).
+
 ### The two bars, and why they are off unless you ask
 
 `chats` and `workspaces` are tab strips: the chat bar names every chat in this workspace
@@ -1192,6 +1241,71 @@ tmux 3.7c):
 So a single argument can be a whole command line — builtins, `;`, pipelines, redirection —
 while two or more are looked up as a program and its arguments, with nothing in between to
 expand or resolve them.
+
+**An argument that ends in `;` reaches the command with its `;`**, which tmux on its own
+would not do. tmux reads ANY argument ending in `;` as the separator between two of its own
+commands. Measured on tmux 3.7c and at the 3.2 floor, that cost three things:
+
+- `charter claude "run the tests;"` started the harness on `run the tests`, without a word,
+  and a lone `;` arrived as no argument at all.
+- A `;`-ending argument in the middle turned the arguments after it into a tmux command run
+  on charter's server: `charter claude "a;" set-option -g @x yes` set `@x` and started the
+  harness on `a`. Only arguments you type yourself reach that path, so it was a latent
+  surface rather than a hole. It is closed.
+- A directory or a `$CHARTER_ROOT` ending in `;` made tmux refuse the launch, because tmux
+  ended its command at the flag after it. What tmux said depended on the state, and none of
+  it named the directory: `unknown command: -P` for such a directory, on a second chat or
+  inside a tmux you already had; `unknown command: -e` for such a `$CHARTER_ROOT` when
+  charter's tmux server was already running; and `error connecting to …` when it was not
+  running yet — the first chat after a fresh install, a reboot, or the server stopping.
+
+Charter now hands tmux every such argument — the command's own, the directory it starts in,
+and each identity value — with one backslash before a trailing `;`: `\;`, tmux's own
+spelling of a literal one. The command gets exactly what you typed, `;;` and ` ;` included.
+**If you had been typing `\;` to get a `;` through, you now get the backslash too** — drop
+it. A `;` anywhere but last was never touched and still is not. This holds in a frame on
+charter's own server and inside a tmux you already had.
+
+**A directory with `#` in its name is where the chat starts.** tmux reads the directory it
+starts a chat in as a *format* — the language of `#{session_name}` — before it looks for the
+directory, and says nothing when the answer is somewhere else. Measured on tmux 3.7c and at
+the 3.2 floor, for a second chat in a workspace and for a chat inside a tmux you already
+had, with tmux reporting success and printing nothing:
+
+- A chat launched from `x#{session_name}` started in `xbase` when a directory by that name
+  sat beside it, and in `$HOME` when none did. `a#S` and `a##b` went to `$HOME` too.
+- `y#(touch job-ran)` went to `$HOME`. Sent the way charter sends a launch — one tmux
+  command, after which the client disconnects — its command did not run in 30 launches per
+  command. With the tmux client held connected, it ran in 5 launches out of 5.
+- On 3.7c, and not on 3.2, a trailing `#` was dropped: a directory named `#` started the
+  chat in its parent.
+
+A workspace's first chat was not affected: tmux is handed no directory for it, and launched
+from `x#{session_name}` it started exactly there on both versions.
+
+Charter now doubles each `#` in the directory — `##` is tmux's own spelling of a literal
+one — except a run of `#` directly before `[`, which tmux already hands on as it is:
+doubled, `a#[b` went to `$HOME`. The trailing-`;` escape above still applies on top. The
+identity values charter passes beside the directory are not read as formats — measured the
+same way, values carrying `#{session_name}`, `##`, `#S`, `#[` and `#(…)` each arrived
+exactly — so they are passed as before.
+
+**tmux takes one command of at most 16,364 bytes, arguments and all.** Past that — a whole
+spec pasted as `charter claude "<prompt>"` is the usual way there — tmux refuses the command,
+nothing starts, and charter says so in tmux's own number instead of pasting the command back:
+
+    ✗ charter frame: tmux refused the command that starts this chat as too long — tmux takes
+      at most 16,364 bytes in one command, and this launch's harness arguments alone are
+      20,014 bytes. Nothing was started; shorten them, or put the long text in a file and
+      pass its path instead.
+
+The count is the command's own arguments. The rest of the 16,364 is the window's name,
+directory and identity, which is why a launch a few hundred bytes under the limit can still
+be refused. Charter does not predict the refusal; it recognises it. The limit is tmux's,
+measured identically on 3.7c and 3.2 through all three ways charter starts a harness —
+`failed to send command` from 16,365 bytes, `command too long` from 16,381 — and only a
+refusal in one of those two sentences is reported this way. Any other refusal is reported as
+it always was.
 
 Charter deliberately does **not** check the command against `$PATH` before starting it.
 Such a check answers the wrong question for the first form (that text is not even one

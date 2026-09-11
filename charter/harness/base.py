@@ -281,6 +281,25 @@ class Harness:
         """
         return [self.binary, *extra]
 
+    def first_message_argv(self, text: str) -> list[str] | None:
+        """The arguments that start this harness's own interactive session on *text*, or
+        ``None`` when charter has not measured how this harness takes a first message.
+
+        **An argument, never keystrokes.** Typing *text* into the harness pane would be
+        drawing in it (ADR 0018), and it would race the harness's own start. So the message
+        rides the argv :meth:`launch_argv` builds, as the arguments this returns.
+
+        **A member, not the launcher's pass-through.** The spelling differs by harness —
+        opencode takes `--prompt <text>` where the others take a positional — so no single
+        `extra` is right for every harness. A harness nobody has measured answers ``None``,
+        and the caller refuses rather than handing it a guess.
+
+        *text* is always ONE element and never split. tmux execs a multi-element argv
+        directly, and `frame/tmuxctl.verbatim` (#959) is what carries an element ending in
+        `;` through whole — so nothing here escapes it a second time.
+        """
+        return None
+
     def detect(self) -> bool:
         """Is this harness live, judged by its own native evidence?
 

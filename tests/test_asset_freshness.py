@@ -74,9 +74,15 @@ class TestTheStampIsUsable(unittest.TestCase):
         other side of the line and stays off the list — it is composed, it embeds
         `frame.svg` whole (`social-card.py`), so it inherits that capture's freshness and
         a stamp of its own would be a second answer to one question.
+
+        **`frame-full.svg` joined the same way**: the README's first picture, taken by
+        `capture-frame.sh --full`, stamped and listed in the change that took it. It is a
+        second capture rather than a composition of the first — a different plane state on
+        a different run — so it answers the freshness question for itself.
         """
         doc = json.loads(_STAMP.read_text())
-        captures = {"demo.svg", "frame.svg", "personas.svg", "statusline.svg"}
+        captures = {"demo.svg", "frame.svg", "frame-full.svg", "personas.svg",
+                    "statusline.svg"}
         self.assertEqual(captures - set(doc), set(),
                          "a capture exists with no recorded version")
 

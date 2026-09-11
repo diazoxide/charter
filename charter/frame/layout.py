@@ -1216,8 +1216,12 @@ def window_argv(*, socket: str, session: str, window: str, cwd: str) -> list[str
 
     *cwd* is `-c`, for the same reason `respawn_argv` takes one — see its docstring.
     """
+    # The directory through `tmuxctl.start_directory`, for :func:`respawn_argv`'s reason:
+    # tmux reads it as a format (#961), and one that ends in `;` otherwise ends this command
+    # at `-P` (#957).
     return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", window,
-                 "-c", cwd, "-P", "-F", "#{window_id} #{pane_id}", "--", *PLACEHOLDER)
+                 "-c", tmuxctl.start_directory(cwd), "-P", "-F", "#{window_id} #{pane_id}",
+                 "--", *PLACEHOLDER)
 
 
 def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
@@ -1284,8 +1288,14 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     claude` has to run the harness where it was typed, and the panels split off this
     pane inherit its directory in turn, which is what `workspace.resolve()` reads.
     """
-    return _tmux(socket, "respawn-pane", "-k", "-t", harness_pane, "-c", cwd,
-                 *_env_argv(env), "--", *harness_argv)
+    # Every data argument through `tmuxctl.verbatim` — the directory, each `-e` value (in
+    # `_env_argv`) and each harness argument. tmux reads ANY argument ending in `;` as its
+    # own command separator: a harness argument loses the `;`, and a directory or a value
+    # ends the command at the next flag (#957). The directory's is `tmuxctl.start_directory`,
+    # which also doubles each `#` tmux would read as a format (#961).
+    return _tmux(socket, "respawn-pane", "-k", "-t", harness_pane,
+                 "-c", tmuxctl.start_directory(cwd),
+                 *_env_argv(env), "--", *map(tmuxctl.verbatim, harness_argv))
 
 
 def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
@@ -1337,10 +1347,11 @@ def session_argv(*, session: str, conf: str, socket: str, cols: int, rows: int,
     with no chat to name, which is the only reason it is optional.
     """
     named = ("-n", chat) if chat else ()
+    # `tmuxctl.verbatim` per harness argument, for :func:`respawn_argv`'s reason (#957).
     return _tmux(socket, "-f", conf, "new-session", "-d", "-s", session, *named,
                 "-x", str(cols), "-y", str(rows), "-P", "-F", "#{pane_id}",
                 *_env_argv(env),
-                "--", *harness_argv)
+                "--", *map(tmuxctl.verbatim, harness_argv))
 
 
 def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
@@ -1394,8 +1405,12 @@ def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
     otherwise be the SESSION's, which is wherever the launcher that created the workspace
     happened to be — and the panels split off this pane inherit its directory in turn.
     """
-    return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", chat, "-c", cwd,
-                 "-P", "-F", "#{pane_id}", *_env_argv(env), "--", *harness_argv)
+    # `tmuxctl.start_directory` for the directory and `tmuxctl.verbatim` for each harness
+    # argument, for :func:`respawn_argv`'s reason (#957, #961).
+    return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", chat,
+                 "-c", tmuxctl.start_directory(cwd),
+                 "-P", "-F", "#{pane_id}", *_env_argv(env), "--",
+                 *map(tmuxctl.verbatim, harness_argv))
 
 
 #: Every environment variable name charter will ever put on a tmux command line, and the
@@ -1441,7 +1456,11 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
             f"tmux `-e` may only carry {sorted(CARRIABLE)} — refusing "
             f"{len(unlisted)} other name(s): {unlisted}. A `-e` is argv, and argv is "
             "world-readable; see frame/layout.CARRIABLE")
-    return [x for name in sorted(env or {}) for x in ("-e", f"{name}={env[name]}")]
+    # Each `NAME=VALUE` through `tmuxctl.verbatim`: a value ending in `;` — a plane root, a
+    # `$PATH` — otherwise ends the command early and tmux refuses the launch. What tmux says
+    # then depends on the state; `tmuxctl.verbatim` names each measured case (#957).
+    return [x for name in sorted(env or {})
+            for x in ("-e", tmuxctl.verbatim(f"{name}={env[name]}"))]
 
 
 def panel_command(*, slot: str, session: str) -> list[str]:

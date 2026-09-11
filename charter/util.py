@@ -63,8 +63,20 @@ def short_path(p) -> str:
 
     ``~`` rather than the full path because these render on one line beside other things,
     and the home prefix is the longest part carrying the least information.
+
+    **Never for a path with a segment that starts with ``~``** — ``~`` itself, or a ``~name`` a
+    shell would read as somebody's home (#969). Nothing expands a ``~`` that
+    arrives inside a value — `CLAUDE_CONFIG_DIR='~/acct2'` is read as ``<cwd>/~/acct2`` — so
+    abbreviating that path, or printing it as spelled, renders ``~/acct2/…``: the home folder,
+    which the code never read. Such a path is shown absolute instead, or with ``./`` in front
+    when there is no working directory left to make it absolute against.
     """
     p = Path(p)
+    if any(part.startswith("~") for part in p.parts):
+        try:
+            return os.path.abspath(p)
+        except OSError:
+            return f"./{p}"
     try:
         return f"~/{p.relative_to(Path.home())}"
     except (ValueError, RuntimeError, OSError):

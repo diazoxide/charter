@@ -30,6 +30,7 @@ COLS="${COLUMNS:-88}"
 # own helper. Every command then captured a traceback instead of output, the capture
 # "succeeded" with exit 0, and the assets quietly stopped being regenerable.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/isolated-init.sh"
 
 # The capture must show THIS tree's charter, not whichever version happens to be on the
 # developer's PATH. Without it the asset silently documents an older build: regenerating
@@ -90,8 +91,20 @@ run() {
   printf '\n' >> "$RAW"
 }
 
+# `charter init` goes through `isolated-init.sh`. Run as `run charter init`, it installed
+# Claude Code's charter plugin into the operator's own Claude Code for this scratch plane and
+# wrote opencode's plugin into their `~/.config` — and the transcript recorded the operator's
+# machine rather than a newcomer's. The prompt line still reads what a reader types; the
+# output under it is init on a machine with no `claude` on PATH and no opencode config, and
+# `docs/assets/README.md` says what that changes in `demo.svg`.
+run_init() {
+  printf '%s %s\n' "$PROMPT" "charter init $*" >> "$RAW"
+  ( export COLUMNS="$COLS"; isolated_charter_init python3 "$HERE/ptyrun.py" -- "$@" ) >> "$RAW" 2>&1
+  printf '\n' >> "$RAW"
+}
+
 printf '%s %s\n\n' "$PROMPT" "mkdir my-control-plane && cd my-control-plane" >> "$RAW"
-run charter init --forge github --owner "$OWNER"
+run_init --forge github --owner "$OWNER"
 run charter discover
 run charter clone "$REPO"
 run charter status

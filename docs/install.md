@@ -26,9 +26,10 @@ Install charter (https://github.com/diazoxide/charter) for me:
 
 1. Run `uv tool install charter-cp`. charter needs Python 3.11+, which uv can
    fetch for me; fall back to pipx or pip only if uv is missing.
-2. Run `charter doctor` and show me the output. Its `plugin install` row will say
-   Claude Code's charter plugin is missing — that is expected here, because the
-   plugin is installed per control plane and there is no plane yet.
+2. Run `charter doctor` and show me the output. Its `plugin install` row will read
+   "no control plane here — nothing to install it for" (or, with no `claude` CLI on
+   PATH, "no `claude` on PATH — no Claude Code plugin here"). Both are expected: the
+   plugin is installed per control plane, and there is no plane yet.
 3. Do NOT run `charter init` — tell me what it would create and let me pick the
    directory first. `charter init` is what installs the plugin, for the plane it
    creates.
@@ -100,6 +101,38 @@ plugin loads nothing until it is enabled. charter will not enable it for you —
 plugin enable charter@charter --scope project` is yours to run, since turning a plugin off
 is a choice and charter does not revert a deliberate edit.
 
+**Which Claude Code config folder these rows answer for.** `$CLAUDE_CONFIG_DIR` points Claude
+Code at another folder — the usual way to run a second account — and Claude Code then keeps
+that folder's own plugins, settings and `.claude.json`. Run `charter doctor` from the shell you
+start Claude Code from, so it sees the same variable.
+
+- **Follow `$CLAUDE_CONFIG_DIR`:** `plugin install` and `plugin files` (they ask `claude
+  plugin list`), `plane-root guard`, `guard seen`, `session root` and `mcp`. With the variable
+  unset they read `~/.claude` and `~/.claude.json`.
+- **Do not follow it:** `personas`, which still looks for a persona's skills under
+  `~/.claude/plugins` and `~/.claude/skills`. And `charter reinit`, deliberately: it writes the
+  plane's committed `.claude/settings.json`, which every folder's sessions read, so whether it
+  writes the guard hook is decided by `~/.claude` whatever your shell says.
+- **A guard sighting counts only for the folder it ran under.** `plane-root guard` and `guard
+  seen` stay yellow for a sighting from another folder, one recorded before charter kept the
+  folder, or one that names no harness charter knows (`$CHARTER_HARNESS` unset or misspelled,
+  and no plugin), and each says which case it is. A Bash command in a Claude Code session on
+  the folder you use clears the first two. For the third, set `$CHARTER_HARNESS` to
+  `claude-code`, `codex` or `opencode` — `charter reinit` writes it into
+  `.claude/settings.json` — and a session started after that names its harness.
+- **An empty or relative `$CLAUDE_CONFIG_DIR` is reported on both guard rows**, whatever the
+  sightings. Claude Code resolves it against its own working directory, which charter cannot
+  see, so nothing can be compared with it. Set it to an absolute path; running a command
+  changes nothing there.
+- **Three narrower Claude Code settings are not followed**, so with any of them set these rows
+  read the wrong file:
+  - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.
+    `plane-root guard` and `guard seen` still read `<config folder>/plugins/installed_plugins.json`.
+  - `$CLAUDE_CODE_USE_COWORK_PLUGINS` renames `plugins/` to `cowork_plugins/` and
+    `settings.json` to `cowork_settings.json`. The guard rows still read the ordinary names.
+  - `$CLAUDE_CODE_CUSTOM_OAUTH_URL` renames `.claude.json` to `.claude-custom-oauth.json`.
+    `mcp` still reads `.claude.json`.
+
 By hand, if you would rather, or if `charter doctor --fix` could not (an old `claude`, no
 network):
 
@@ -125,7 +158,7 @@ The plugin supplies the pieces that only make sense running *inside* a Claude Co
 session: injecting the active persona's memory at session start, the `PreToolUse` guard
 that enforces the [one-credential rule](git-policy.md), the record-memory nudges, and the
 Stop-hook auto-save. **The plugin ships no Python of its own** — every hook it declares
-just shells out to the `charter` CLI you installed in step 1, which is why the CLI is the
+shells out to the `charter` CLI you installed in step 1, which is why the CLI is the
 artifact you install and the plugin is the one it installs for you.
 
 ## 3. opencode and Codex
@@ -135,7 +168,7 @@ written into the repos you work in.
 
 **Only Claude Code's artifact is one charter installs for you, and the difference is
 scope.** The Claude Code plugin is installed per project, so `charter init` installing it
-touches exactly the plane you just asked charter to create. Codex's wiring lives only in
+touches exactly the plane you asked charter to create. Codex's wiring lives only in
 `~/.codex/config.toml` — a machine-global file, in force for every repository on the
 machine — so charter writes it only when you run `charter harness install codex`, where
 running the command *is* the consent. `charter doctor` reports the gap and stops there;
@@ -203,9 +236,10 @@ every merge, multiplying exactly the exposure that workflow is already being nar
 about. CI verifies the git install on every push to `main` instead: same coverage, no
 publish, no token.
 
-**Which channel you are on is in the render.** The brand chip — on the frame's top bar,
-and in `charter statusline` wherever you run it — reads `⬢ charter 0.51.0 dev`, so
-`↑a1b2c3d` beside it can only mean one thing: main moved. `charter --version`
+**Which channel you are on is in the render.** On the dev channel the frame's top row ends
+in `charter 0.51.0 dev` — the `⬢` on that row marks the workspace name, not the version —
+and `charter statusline`, wherever you run it, reads `⬢ charter 0.51.0 dev`, so an
+`↑a1b2c3d` beside it there can only mean one thing: main moved. `charter --version`
 answers the other half, which is what you are actually running:
 
 ```
@@ -270,9 +304,32 @@ charter init --forge github --owner my-org
 charter doctor
 charter discover
 charter clone some-repo
+charter claude            # or charter opencode, or charter codex
 ```
 
 `--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
 org/user whose repos this control plane tracks. Run inside an existing git repo, `init`
 also *offers* to clone that repo into your first workspace — accept with `charter init
 --clone-this-repo`, because work happens in a workspace, never in the plane root.
+
+`discover` and `clone` go through the forge's own CLI — `gh` for GitHub, `glab` for
+GitLab — which nothing above installs and which must be authenticated. `charter doctor`
+checks the CLI and its login for each forge `charter.toml` declares, and GitLab's when the
+file declares none.
+
+`charter claude` needs two more things nothing above installs. `claude` itself has to be on
+your `PATH`: without it no frame is drawn, and charter says the binary is not installed and
+exits 127. And the frame needs tmux, because it is a tmux screen; of tmux, only its absence
+stops a launch — below 3.2 the frame still starts. `charter opencode` and `charter codex`
+need their own binaries the same way. `charter claude --probe` says whether a frame can run
+here without starting one; [frame.md](frame.md) is the rest. If you ran `charter init` from
+inside a Claude Code session, restart that session first — the plugin loads at the next one.
+
+`init` writes no `[harness] default`, so bare `charter` prints its usage until the plane
+names a harness — one key in `charter.toml`
+([control-plane.md](control-plane.md#harnessdefault--bare-charter)):
+
+```toml
+[harness]
+default = "claude"
+```
