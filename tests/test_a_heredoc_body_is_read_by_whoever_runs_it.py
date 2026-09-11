@@ -275,6 +275,59 @@ class ThePlanCarriesBashsOwnDelimiter(PlaneIso):
         self.assertEqual("EOF", hooks._heredoc_header(header, header.index("<<"))[0])
 
 
+class EveryFallbackInTheAttributionGoesRedWhenDeleted(PlaneIso):
+    """The sweep's survivors in the attribution code, each pinned by the input it handles.
+
+    A guard with no test behind it is a guard nobody notices losing, and CONTRIBUTING asks
+    for a red test per fallback. The three that no input could distinguish were deleted
+    instead; these four are the ones that decide something.
+    """
+
+    def denies(self, cmd: str) -> bool:
+        return _deny(cmd, str(self.tmp))
+
+    def test_an_unlexable_command_line_is_attributed_by_nobody(self):
+        """`_line_pipelines` catches the lexer's `ValueError` and gives up on the line, which
+        strips nothing and leaves the body for the raw scan to refuse. Narrow that `except`
+        and the guard raises instead of deciding."""
+        cmd = f"cat <<'EOF' \"oops\n{READ}\nEOF"
+        try:
+            decided = self.denies(cmd)
+        except Exception as exc:                       # noqa: BLE001 — the point of the pin
+            self.fail(f"the leak guard raised instead of deciding: {exc!r}")
+        self.assertTrue(decided, cmd)
+
+    def test_a_pipeline_before_a_control_operator_is_still_attributed(self):
+        """The append at a control operator is what carries the pipeline that ENDED there.
+        Drop it and `cat <<'EOF' && echo done` loses its `cat`, the heredoc count stops
+        matching, and a documented body is refused as a read."""
+        cmd = f"cat <<'EOF' && echo done\n{READ}\nEOF"
+        self.assertFalse(self.denies(cmd), cmd)
+
+    def test_an_empty_command_slot_never_reaches_a_program_name(self):
+        """A trailing pipe with nothing after it leaves an empty command in the pipeline —
+        a syntax error in bash, zsh and dash, so nothing runs and the verdict is allowed.
+        The `if c` in the executor test is what keeps that empty slot from being asked for
+        its first word."""
+        cmd = f"cat <<'EOF' |\n{READ}\nEOF"
+        try:
+            decided = self.denies(cmd)
+        except Exception as exc:                       # noqa: BLE001
+            self.fail(f"the leak guard raised instead of deciding: {exc!r}")
+        self.assertFalse(decided, cmd)
+
+    def test_an_unterminated_body_stops_at_the_end_of_the_command(self):
+        """A heredoc whose delimiter never arrives runs to the end of the input — bash takes
+        the rest as body, so nothing after it executes. The bound on the terminator append is
+        what stops the walk reading past the last line."""
+        cmd = f"cat > notes.md <<'DOC'\n{READ}"
+        try:
+            decided = self.denies(cmd)
+        except Exception as exc:                       # noqa: BLE001
+            self.fail(f"the leak guard raised instead of deciding: {exc!r}")
+        self.assertFalse(decided, cmd)
+
+
 class TheHeaderCountBailIsLoadBearing(PlaneIso):
     """`_heredoc_strip_plan` bails when the header regex and the lexer disagree on how many
     heredocs a line opens. Deleting the bail raises `IndexError` in `_leak_reason` here, and
