@@ -73,8 +73,11 @@ class _AChatInAlpha(PersonaIso, unittest.TestCase):
         self.records_pane = True
         self.launched: list = []
         self.seen: list[dict] = []
+        #: Every tmux command the open asked, in order.
+        self.calls: list[list[str]] = []
 
     def _tmux(self, cmd, **kw):
+        self.calls.append(list(cmd))
         if "display-message" in cmd:
             if "window_width" in cmd[-1]:
                 return _completed(cmd, 0, "132:43")
@@ -146,6 +149,46 @@ class TheOpenRunsTheLauncherForTheNamedWorkspace(_AChatInAlpha):
         self._open()
         self.assertEqual(self.launched[0].size, (132, 43))
 
+    def test_a_caller_with_no_recorded_pane_is_sized_off_the_target_workspaces_live_chat(self):
+        """`cmd_new_chat`'s second reading: with the calling chat's own pane not on record,
+        the window is measured off the pane `_plane_session` proves is live in the target."""
+        (state.frame_dir(self.CALLER) / "harness").unlink()
+        self.beta_seat = "%5"
+        _a_chat("beta.2", ws="beta", pane="%5")
+        self.sessions = {"beta"}
+        self._open()
+        self.assertEqual(self.launched[0].size, (132, 43))
+        self.assertEqual([c[c.index("-t") + 1] for c in self.calls if "display-message" in c],
+                         ["%5"])
+
+    def test_with_no_pane_to_measure_it_aims_no_target_and_hands_no_size(self):
+        """Neither pane is on record, so no `-t` is aimed at all — an empty target resolves
+        to the tmux server's CURRENT window, very likely another plane's — and the launcher
+        is handed ``None``, which `_launch_size` reads as "measure your own terminal"."""
+        (state.frame_dir(self.CALLER) / "harness").unlink()
+        self._open()
+        self.assertIsNone(self.launched[0].size)
+        self.assertEqual([c for c in self.calls if "display-message" in c], [])
+
+    def test_a_directory_it_cannot_return_to_does_not_lose_the_chat_it_opened(self):
+        """The launch ran in the target's directory, and this process could not change back
+        (the directory it started in was removed meanwhile, say). The chat is open, and
+        reporting that it is not would be the one wrong answer left — `cmd_new_chat`'s own
+        arrangement."""
+        was = os.getcwd()
+        self.addCleanup(os.chdir, was)
+        real = os.chdir
+        target = os.path.realpath(workspace.workspace_dir("beta"))
+
+        def chdir(path):
+            if os.path.realpath(path) != target:
+                raise OSError("the directory it started in is gone")
+            return real(path)
+
+        with mock.patch("charter.commands_frame.os.chdir", side_effect=chdir):
+            got = self._open()
+        self.assertEqual(got, commands_frame.Opened(True, "beta.1", ""))
+
     def test_the_launch_runs_in_the_target_workspaces_own_directory(self):
         was = os.getcwd()
         self._open()
@@ -188,6 +231,16 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         self.assertIn("single word 'login'", got.message)
         self.assertEqual(self.launched, [])
 
+    def test_a_single_word_is_named_without_the_whitespace_around_it(self):
+        self.assertIn("single word 'login'", self._refusal(text="  login\n"))
+
+    def test_the_word_it_names_cannot_forge_a_line_or_a_colour(self):
+        """The word is the caller's own text, echoed into a sentence an operator reads, so
+        an escape sequence in it arrives escaped (`contain.one_line`)."""
+        said = self._refusal(text="log\x1b[31min")
+        self.assertNotIn("\x1b", said)
+        self.assertIn("log\\x1b[31min", said)
+
     def test_a_nul_byte_is_refused(self):
         got = self._open(text="fix\x00 it")
         self.assertIn("NUL byte", got.message)
@@ -208,6 +261,15 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         got = self._open(text=text)
         self.assertIs(got.ok, True, got.message)
         self.assertEqual(len(self.launched), 1)
+
+    def test_the_bound_is_the_ruled_twelve_thousand_two_hundred_and_eighty_eight_bytes(self):
+        """The ruled number, spelled by hand rather than read off the constant. Every other
+        case here reads `FIRST_MESSAGE_MAX_BYTES` and follows whatever value it holds — the
+        deletion sweep retuned it and they all stayed green — while `docs/frame.md` and the
+        refusal promise 12,288."""
+        taken = self._open(text="x" * 12286 + " y")
+        self.assertIs(taken.ok, True, taken.message)
+        self.assertIn("12289-byte", self._refusal(text="x" * 12287 + " y"))
 
     def test_a_first_message_is_measured_in_bytes_not_characters(self):
         bound = commands_frame.FIRST_MESSAGE_MAX_BYTES
@@ -280,6 +342,16 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         """The chat id is the only proof a chat exists; a 0 without one proves nothing."""
         self.gives_back = ""
         self.assertIs(self._open().ok, False)
+
+    def test_a_chat_whose_harness_died_on_start_is_not_success(self):
+        """`_launch` records the harness pane the moment tmux reports one; a harness that
+        then dies in its first moments leaves that record behind while the launcher returns
+        its exit code (the early-death path). A recorded pane proves a chat was started, not
+        that it is running, so the return code is asked as well."""
+        self.rc = 1
+        got = self._open()
+        self.assertIs(got.ok, False)
+        self.assertIn("returned 1", got.message)
 
     def test_a_chat_id_with_no_harness_pane_is_not_success(self):
         self.records_pane = False

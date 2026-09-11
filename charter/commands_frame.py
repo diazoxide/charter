@@ -10664,12 +10664,17 @@ def background_refusal(ws: str, *, caller: str, first_message: str) -> str:
        :func:`_open_workspace`'s guard and :data:`NO_SESSION_HERE` said once. A session this
        plane can prove is its own is joined, and a name no session holds is started.
     """
-    if not first_message.strip():
+    # Split once, on whitespace: no words is an empty message, and one word is a single word.
+    # `split()` and never `strip()`, which the deletion sweep settled: `not text.strip()` and
+    # `not text.lstrip()` answer alike for every string, so the strip was a line nothing
+    # could pin, and the word it named could keep a trailing newline.
+    words = first_message.split()
+    if not words:
         return EMPTY_FIRST_MESSAGE
     if first_message.startswith("-"):
         return FLAG_FIRST_MESSAGE
-    if len(first_message.split()) == 1:
-        return WORD_FIRST_MESSAGE.format(word=contain.one_line(first_message.strip()))
+    if len(words) == 1:
+        return WORD_FIRST_MESSAGE.format(word=contain.one_line(words[0]))
     if "\x00" in first_message:
         return NUL_FIRST_MESSAGE
     size = len(os.fsencode(first_message))
@@ -10756,7 +10761,11 @@ def open_in_background(ws: str, *, caller: str, first_message: str,
             os.chdir(here_dir)
         except OSError:
             pass
-    if rc == 0 and opening.fid and state.harness_pane(opening.fid) is not None:
+    # Both halves are needed, and nothing more. An id the launcher never claimed is `""`,
+    # whose harness pane is `None` (`state.frame_dir("")` refuses), so the pane record alone
+    # stands for "a chat was started". The return code is still asked: a harness that died in
+    # its first moments leaves that record behind while `_launch` returns its exit code.
+    if rc == 0 and state.harness_pane(opening.fid) is not None:
         return Opened(True, opening.fid, "")
     return Opened(False, "", f"could not open a chat in '{ws}' — the launcher returned {rc} "
                              "and no chat came back")
