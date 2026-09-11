@@ -12,6 +12,14 @@ it was started with and then stays alive — so the launch goes all the way thro
 spend a gather on whatever plane its copied environment resolves. What is asked here is what
 tmux does, not what the gather writes.
 
+**One tmux server per case, never one per class.** Both cases of a class used to share a
+socket name, and on CI (pull_request run 34559973556, tmux 3.4) the second case's first
+`new-session` came 7 ms after the first case's `kill-server` and failed with `server exited
+unexpectedly`: the old server, already told to exit, was still accepting on that socket. The
+other real-tmux modules draw a fresh name per case from a counter for the same reason. And a
+session that tmux will not start fails with tmux's own account of why (:meth:`_diagnosis`),
+so a flake on a runner nobody can log into names its cause instead of just its symptom.
+
 **What the #959 tests already hold, and what this adds.** `tests/test_a_harness_argument_ending_
 in_a_semicolon_arrives_whole.py` measures the builders byte for byte and
 `tests/test_a_launch_too_long_for_tmux_says_so.py` tmux's command limit. This file sends a
@@ -24,11 +32,15 @@ attached (:class:`ABackgroundChatWithItsPanelsMovesNoAttachedClient`).
 
 from __future__ import annotations
 
+import fcntl
+import itertools
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
+import termios
 import time
 import unittest
 from contextlib import ExitStack
@@ -38,12 +50,29 @@ from charter import commands_frame, config
 from charter.frame import layout, state, tmuxctl
 from charter.harness import claude_code
 
-from tests import _tmuxreap
+from tests import _tmuxreap, _tmuxsocket
 from tests._isolation import PersonaIso, make_plane, no_update_check_in
-from tests.test_a_real_click_on_a_real_tab_bar_switches import (_TERM_CANDIDATES, _await,
-                                                                 _fork_pty)
 
 _HAS_TMUX = shutil.which("tmux") is not None
+
+#: A fresh number for every case's socket name — see the module docstring for the CI run that
+#: showed why a name must not outlive its case.
+_SERVERS = itertools.count()
+
+#: Terminal types to hand an attached client, the list
+#: `tests/test_a_real_click_on_a_real_tab_bar_switches.py` keeps.
+_TERM_CANDIDATES = tuple(dict.fromkeys(
+    ([os.environ["TERM"]] if os.environ.get("TERM", "dumb") != "dumb" else [])
+    + ["xterm-256color", "screen", "vt100"]))
+
+
+def _await(predicate, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
 
 
 class _TwoChatsOnARealServer(PersonaIso):
@@ -53,7 +82,7 @@ class _TwoChatsOnARealServer(PersonaIso):
 
     #: The size each session starts at.
     COLS, ROWS = 80, 24
-    #: This class's `tests._tmuxreap` slug.
+    #: This class's `tests._tmuxreap` slug, numbered per case.
     SLUG = "handoff"
 
     def setUp(self):
@@ -63,10 +92,13 @@ class _TwoChatsOnARealServer(PersonaIso):
             self.skipTest(f"the frame's floor is tmux {tmuxctl.FLOOR[0]}.{tmuxctl.FLOOR[1]};"
                           f" this machine has {v}")
         make_plane(self)
-        self.socket = _tmuxreap.name(self.SLUG)
+        self.socket = _tmuxreap.name(f"{self.SLUG}-{next(_SERVERS)}")
         self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
         self.addCleanup(subprocess.run, ["tmux", "-L", self.socket, "kill-server"],
                         capture_output=True, timeout=20)
+        #: Where the server this case starts writes its `-v` log, read only on a failure.
+        self.tmux_logs = self.tmp / "tmux-logs"
+        self.tmux_logs.mkdir()
         self.records = self.tmp / "records"
         self.records.mkdir()
         self.recorder = self.tmp / "claude-recorder"
@@ -104,11 +136,35 @@ class _TwoChatsOnARealServer(PersonaIso):
                               text=True, timeout=20, env=env)
 
     def _session(self, name: str, env: dict) -> str:
-        started = self._tmux("-f", "/dev/null", "new-session", "-d", "-s", name,
-                             "-x", str(self.COLS), "-y", str(self.ROWS),
-                             "-P", "-F", "#{pane_id}", "--", "sleep", "600", env=env)
-        self.assertEqual(started.returncode, 0, started.stderr)
+        """A session running `sleep`, its first pane's id — or a failure naming tmux's cause.
+
+        `-v` so the server this starts keeps a log, run from :attr:`tmux_logs` because that
+        is where tmux writes it; read only when something went wrong."""
+        argv = ["tmux", "-v", "-L", self.socket, "-f", "/dev/null", "new-session", "-d",
+                "-s", name, "-x", str(self.COLS), "-y", str(self.ROWS),
+                "-P", "-F", "#{pane_id}", "--", "sleep", "600"]
+        existed = os.path.exists(_tmuxsocket.socket_path(self.socket))
+        started = subprocess.run(argv, capture_output=True, text=True, timeout=20, env=env,
+                                 cwd=self.tmux_logs)
+        if started.returncode != 0:
+            self.fail(self._diagnosis(started, argv, env, socket_existed=existed))
         return started.stdout.strip()
+
+    def _diagnosis(self, done: subprocess.CompletedProcess, argv: list[str], env: dict,
+                   *, socket_existed: bool) -> str:
+        """Everything a failed session start on a runner nobody can log into needs to say."""
+        named = {k: env.get(k) for k in ("TERM", "SHELL", "HOME", "TMUX_TMPDIR", "LANG",
+                                         "LC_ALL", "PATH")}
+        version = subprocess.run(["tmux", "-V"], capture_output=True, text=True).stdout.strip()
+        logs = []
+        for log in sorted(self.tmux_logs.glob("tmux-*.log")):
+            lines = log.read_text(errors="replace").splitlines()
+            logs.append(f"--- {log.name}, last 40 of {len(lines)} lines\n"
+                        + "\n".join(lines[-40:]))
+        return (f"tmux would not start a session: rc {done.returncode}, stderr "
+                f"{done.stderr.strip()!r}\n{version}\nargv: {argv}\n"
+                f"socket {_tmuxsocket.socket_path(self.socket)} existed before the call: "
+                f"{socket_existed}\nenv: {named}\n" + ("\n".join(logs) or "no tmux log"))
 
     def _stand_ins(self) -> list:
         """Everything an open runs with here beyond the real launcher and the real tmux."""
@@ -195,14 +251,18 @@ class ABackgroundChatWithItsPanelsMovesNoAttachedClient(_TwoChatsOnARealServer,
     `docs/frame.md` promises both that no client moves and that the new window gets its
     panels, and the panels are `split-window`s with no `-d` (`layout.panel_argvs`) — so a
     window too small to draw any, as above, never asked the question. This one is big
-    enough that `_draw_panels` really splits, and one client is attached to each
-    workspace's session. Every client says where it is before and after an open into a
-    workspace somebody is looking at, and an open into the caller's own.
+    enough that `_draw_panels` really splits.
+
+    Two views are compared before and after an open into a workspace somebody is looking
+    at, and an open into the caller's own. **Every session's current window and that
+    window's active pane**, which is what any client of the session is shown and which needs
+    no client to ask. **Every attached client's own view**, from a real client on each
+    workspace's session; where no client will attach on a machine, that half is a skipped
+    subtest naming the terminal types tried, and the first half has still run.
 
     `layout.panel_command` is stood in with `sleep`: the splits are real, but no pane runs
     `charter panel`, which would be a child charter this test cannot see, spending a version
-    check and a gather against whatever plane it resolves. Where no client will attach —
-    a runner with no usable terminal type — the class skips and says so.
+    check and a gather against whatever plane it resolves.
     """
 
     COLS, ROWS = 120, 40
@@ -211,8 +271,14 @@ class ABackgroundChatWithItsPanelsMovesNoAttachedClient(_TwoChatsOnARealServer,
     def setUp(self):
         super().setUp()
         no_update_check_in(config.ROOT)
-        #: The client attached to each workspace's session.
-        self.clients = {ws: self._attach(ws) for ws in ("alpha", "beta")}
+        #: The terminal types a client would not attach with, for the skip that says so.
+        self.unattached: list[str] = []
+        #: The client attached to each workspace's session, where one would attach.
+        self.clients: dict[str, str] = {}
+        for ws in ("alpha", "beta"):
+            client = self._attach(ws)
+            if client is not None:
+                self.clients[ws] = client
         size = commands_frame._window_size(self.socket, self.panes["alpha"])
         self.slots = commands_frame._drawable_slots(*size)
         self.assertTrue(self.slots, f"nothing is drawable at {size}, so no panel is split")
@@ -221,38 +287,54 @@ class ABackgroundChatWithItsPanelsMovesNoAttachedClient(_TwoChatsOnARealServer,
         return [*super()._stand_ins(),
                 mock.patch.object(layout, "panel_command", return_value=["sleep", "600"])]
 
-    def _attach(self, session: str) -> str:
-        """A real client on *session*, on a pty sized to the window, and its tmux name."""
-        refused = []
+    def _client_names(self, session: str) -> list[str]:
+        return self._tmux("list-clients", "-t", session, "-F", "#{client_name}").stdout.split()
+
+    def _attach(self, session: str) -> str | None:
+        """A real client on *session*, on a pty sized to the window, and its tmux name — or
+        ``None`` where no terminal type would attach.
+
+        Started through `subprocess.Popen` with the pty as its three streams, and not as a
+        `pty.fork` child that `os.execvp`s: `tests/test_plane_spawn_guard.py` watches `Popen`
+        and requires every exec-family call in the tree to be one it has written down. The
+        client needs no controlling terminal — tmux's server opens the client's tty by name —
+        measured attaching this way on tmux 3.7c and 3.2 on macOS and 3.4 on Linux."""
         for term in _TERM_CANDIDATES:
-            pid, fd = _fork_pty(rows=self.ROWS, cols=self.COLS)
-            if pid == 0:
-                try:
-                    os.environ["TERM"] = term
-                    os.execvp("tmux", ["tmux", "-L", self.socket, "attach", "-t", session])
-                finally:
-                    os._exit(127)
-            self.addCleanup(self._reap, pid, fd)
-
-            def names():
-                return self._tmux("list-clients", "-t", session, "-F",
-                                  "#{client_name}").stdout.split()
-
-            if _await(lambda: bool(names()), timeout=10.0):
-                return names()[0]
-            refused.append(term)
-        self.skipTest("no tmux client will attach on this machine — tried TERM="
-                      + ", ".join(refused))
+            master, slave = os.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ,
+                        struct.pack("HHHH", self.ROWS, self.COLS, 0, 0))
+            client = subprocess.Popen(["tmux", "-L", self.socket, "attach", "-t", session],
+                                      stdin=slave, stdout=slave, stderr=slave,
+                                      env=dict(os.environ, TERM=term),
+                                      start_new_session=True)
+            os.close(slave)
+            self.addCleanup(self._reap, client, master)
+            if _await(lambda: bool(self._client_names(session)), timeout=10.0):
+                return self._client_names(session)[0]
+            self.unattached.append(term)
+        return None
 
     @staticmethod
-    def _reap(pid: int, fd: int) -> None:
-        """The client this case forked, and only that pid."""
-        for step in (lambda: os.kill(pid, 9), lambda: os.waitpid(pid, 0),
-                     lambda: os.close(fd)):
+    def _reap(client: subprocess.Popen, master: int) -> None:
+        """The client this case started, by the handle that started it."""
+        for step in (client.kill, lambda: client.wait(timeout=10), lambda: os.close(master)):
             try:
                 step()
-            except OSError:
+            except (OSError, subprocess.TimeoutExpired):
                 pass
+
+    def _current(self) -> dict[str, list[str]]:
+        """Each session's ``[current window, its active pane]`` — what any client of it is
+        shown, attached or not."""
+        listed = self._tmux("list-panes", "-a", "-F",
+                            "#{session_name}\t#{window_active}\t#{pane_active}\t"
+                            "#{window_id}\t#{pane_id}")
+        current = {}
+        for row in listed.stdout.splitlines():
+            session, window_active, pane_active, window, pane = row.split("\t")
+            if window_active == "1" and pane_active == "1":
+                current[session] = [window, pane]
+        return current
 
     def _views(self) -> dict[str, list[str]]:
         """Each attached client's ``[session, current window, active pane]``, by client name.
@@ -268,12 +350,10 @@ class ABackgroundChatWithItsPanelsMovesNoAttachedClient(_TwoChatsOnARealServer,
         return {row[0]: row[1:] for row in rows}
 
     def _open_moves_no_client(self, ws: str) -> None:
-        before = self._views()
-        for name, client in self.clients.items():
-            view = before.get(client, [])
-            self.assertEqual([view[0], view[2]] if len(view) == 3 else view,
-                             [name, self.panes[name]],
-                             f"the client on {name!r} is not on its own chat: {view!r}")
+        sessions_before = self._current()
+        self.assertEqual({name: view[1] for name, view in sessions_before.items()},
+                         self.panes, f"a session is not on its own chat: {sessions_before}")
+        clients_before = self._views()
         opened = self._open("look at the widget please", ws=ws)
         self.assertTrue(opened.ok, opened.message)
         drawn = self._tmux("list-panes", "-t", state.harness_pane(opened.chat), "-F",
@@ -281,7 +361,20 @@ class ABackgroundChatWithItsPanelsMovesNoAttachedClient(_TwoChatsOnARealServer,
         self.assertEqual(len(drawn), 1 + len(self.slots),
                          f"the new chat's panels were not split, so this measured nothing "
                          f"about them: {drawn}")
-        self.assertEqual(self._views(), before, "a background open moved an attached client")
+        self.assertEqual(self._current(), sessions_before,
+                         "a background open moved a session's current window or pane")
+        with self.subTest(view="attached clients"):
+            if sorted(self.clients) != ["alpha", "beta"]:
+                self.skipTest(f"no real client would attach on this machine with TERM "
+                              f"{self.unattached}; each session's current window and pane "
+                              f"were still compared above")
+            for name, client in self.clients.items():
+                view = clients_before.get(client, [])
+                self.assertEqual([view[0], view[2]] if len(view) == 3 else view,
+                                 [name, self.panes[name]],
+                                 f"the client on {name!r} is not on its own chat: {view!r}")
+            self.assertEqual(self._views(), clients_before,
+                             "a background open moved an attached client")
 
     def test_an_open_into_a_workspace_somebody_is_looking_at_moves_no_client(self):
         self._open_moves_no_client("beta")
