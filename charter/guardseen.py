@@ -82,6 +82,19 @@ _FIRE_HERE = ("Run a Bash command in a Claude Code session on this config folder
               "a guard that fires there records the folder it ran under.")
 
 
+def _name_the_harness() -> str:
+    """The remedy for a sighting charter cannot attribute to a harness it knows. The known names
+    are asked of the registry, so the sentence cannot fall behind the day one is registered."""
+    from .harness import registry as _registry
+
+    known = ", ".join(_registry.KINDS)
+    return (f"A sighting names its harness from $CHARTER_HARNESS, exactly as spelled, or from "
+            f"charter's plugin. Set $CHARTER_HARNESS to a harness charter knows ({known}) — "
+            f"`charter reinit` writes it into .claude/settings.json — or register a new one in "
+            f"charter/harness/registry.py (KINDS). Then run a Bash command in a session started "
+            f"that way and re-check.")
+
+
 def _folder_in_use() -> tuple[str | None, str | None, str | None]:
     """The Claude Code config folder this process would use, as ``(folder, None, None)`` — or
     ``(None, why, fix)`` when there is no absolute folder to record or to compare with.
@@ -112,7 +125,7 @@ def _folder_in_use() -> tuple[str | None, str | None, str | None]:
     from .harness import claude_code
 
     if os.environ.get("CLAUDE_CONFIG_DIR") == "":
-        return None, ("$CLAUDE_CONFIG_DIR is set but empty, so Claude Code uses its own working "
+        return None, ("$CLAUDE_CONFIG_DIR is empty, which makes Claude Code use its own working "
                       "directory as the config folder, and charter cannot see that "
                       "directory"), _ABSOLUTE_FOLDER
     try:
@@ -185,7 +198,7 @@ class FolderStanding(NamedTuple):
     """Whether the latest sighting counts for the Claude Code config folder in use (#969).
 
     ``doubt`` is ``None`` when it does — or when there is nothing to be wrong about: no
-    sighting, or one from a NAMED harness other than Claude Code. Otherwise it is the clause a
+    sighting, or one from a registered harness other than Claude Code. Otherwise it is the clause a
     `doctor` row prints, and ``hint`` is the one remedy that can change that row, never a step
     that would leave it as it is. ``elsewhere`` is the other absolute folder the sighting
     provably ran under, and nothing else. ``folder_in_doubt`` says the doubt is about the folder
@@ -211,14 +224,17 @@ def folder_standing() -> FolderStanding:
     * the folder in use cannot be compared at all — empty, relative, or unresolvable — so
       nothing can vouch for it, whatever the sightings; the remedy is the folder, not a command
       (the #970 re-review: "run a Bash command" there was followed and changed nothing);
-    * the sighting names no harness and no plugin launched it — charter cannot tell whose it
-      is, or which folder it ran under. Unknown, never green (the #970 re-review: it used to
-      pass straight through as another harness's);
+    * the sighting names no harness, or a name charter has no record of (ADR 0015), and no
+      plugin launched it — charter cannot tell whose it is, or which folder it ran under.
+      Unknown, never green (the #970 re-review and its verification: both used to pass
+      straight through as another harness's);
     * the sighting predates folder recording — something fired, under a folder charter cannot
       name. Neither a pass nor "nothing fired" (ADR 0009); the next guarded call replaces it;
     * the sighting recorded no folder — the same, from a process that had none to record;
     * it ran under another folder — named, because that is the incident.
     """
+    from .harness import registry as _registry
+
     folder, why, fix = _folder_in_use()
     if folder is None:
         return FolderStanding(f"{why}, so no guard sighting can be compared with it", fix,
@@ -230,11 +246,18 @@ def folder_standing() -> FolderStanding:
     if not harness and source != PLUGIN:
         return FolderStanding(
             "that sighting names no harness, so charter cannot tell which harness recorded it "
-            "or under which Claude Code config folder",
-            "A sighting names its harness when $CHARTER_HARNESS is set in the session "
-            "(`charter reinit` writes it into .claude/settings.json) or charter's plugin "
-            "launched the guard. Run a Bash command in a session started that way, then "
-            "re-check.", None, False)
+            "or under which Claude Code config folder", _name_the_harness(), None, False)
+    if source != PLUGIN and _registry.get(harness) is None:
+        # A name charter has no record of is not a harness it can vouch for: ADR 0015 already
+        # has `check_harness` warn on an unregistered `$CHARTER_HARNESS`. The variable is
+        # recorded exactly as spelled, so one typo — `claude` for `claude-code` — read as
+        # another harness's sighting and passed straight through under any folder (the
+        # verification review of 3624287). A plugin-launched guard is Claude Code's whatever it
+        # was named, which is why the plugin source is exempt.
+        return FolderStanding(
+            f"that sighting names {harness!r}, a harness charter has no record of, so charter "
+            f"cannot tell which harness recorded it or under which Claude Code config folder",
+            _name_the_harness(), None, False)
     if not _is_claude_code(harness, source):
         return FolderStanding(None, None, None, False)
     if CLAUDE_CONFIG_DIR not in rec:

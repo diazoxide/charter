@@ -115,10 +115,11 @@ start Claude Code from, so it sees the same variable.
   writes the guard hook is decided by `~/.claude` whatever your shell says.
 - **A guard sighting counts only for the folder it ran under.** `plane-root guard` and `guard
   seen` stay yellow for a sighting from another folder, one recorded before charter kept the
-  folder, or one that names no harness (`$CHARTER_HARNESS` unset and no plugin), and each says
-  which case it is. A Bash command in a Claude Code session on the folder you use clears the
-  first two; for the third, `charter reinit` writes `$CHARTER_HARNESS` into
-  `.claude/settings.json`, and a session started after that names its harness.
+  folder, or one that names no harness charter knows (`$CHARTER_HARNESS` unset or misspelled,
+  and no plugin), and each says which case it is. A Bash command in a Claude Code session on
+  the folder you use clears the first two. For the third, set `$CHARTER_HARNESS` to
+  `claude-code`, `codex` or `opencode` — `charter reinit` writes it into
+  `.claude/settings.json` — and a session started after that names its harness.
 - **An empty or relative `$CLAUDE_CONFIG_DIR` is reported on both guard rows**, whatever the
   sightings. Claude Code resolves it against its own working directory, which charter cannot
   see, so nothing can be compared with it. Set it to an absolute path; running a command

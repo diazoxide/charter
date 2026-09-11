@@ -246,6 +246,13 @@ class TestMcpReadsTheClaudeJsonInsideTheFolderInUse(ConfigFolderCase):
         self.assertEqual(r.status, WARN)
         self.assertIn(str(self.other / ".claude.json"), r.detail)
 
+    def test_a_claude_json_that_is_not_an_object_is_named_by_its_path(self):
+        self.write(self.other / ".claude.json", "[]")
+        self.use_folder(self.other)
+        r = doctor.check_mcp_launchers()
+        self.assertEqual(r.status, WARN)
+        self.assertIn(f"{self.other / '.claude.json'} is not an object", r.detail)
+
 
 class TestTheFolderIsResolvedTheWayClaudeCodeResolvesIt(ConfigFolderCase):
     """Read off the 2.1.268 binary rather than guessed:
@@ -359,6 +366,9 @@ class TestGuardSeenComparesTheFolderToo(ConfigFolderCase):
         self.assertEqual(doctor.check_guard_seen().status, OK)
 
     def test_a_sighting_under_another_folder_is_not_green_and_names_both(self):
+        # The default folder's settings DO declare the guard, so the "still in" clause below is
+        # refused because this is a plugin sighting, not because that file is silent.
+        self.write(self.home / ".claude" / "settings.json", _PRETOOLUSE)
         self.a_sighting_under(None)
         self.use_folder(self.other)
         r = doctor.check_guard_seen()
@@ -372,6 +382,7 @@ class TestGuardSeenComparesTheFolderToo(ConfigFolderCase):
         r = doctor.check_guard_seen()
         self.assertEqual(r.status, WARN)
         self.assertIn("predates", r.detail)
+        self.assertIn("Run a Bash command in a Claude Code session on this config folder", r.hint)
 
     def test_another_harnesses_sighting_carries_no_claude_folder_and_is_unchanged(self):
         """`guardseen` is harness-neutral: a Codex or opencode sighting has no Claude Code
@@ -387,6 +398,8 @@ class TestGuardSeenComparesTheFolderToo(ConfigFolderCase):
         self.use_folder(self.other)
         guardseen.mark(harness=None, source=guardseen.PLUGIN)
         self.assertEqual(guardseen.last()[_FIELD], str(self.other))
+        self.assertEqual(doctor.check_guard_seen().status, OK,
+                         "and it counts: a sighting the plugin launched is not unknown")
 
     def test_a_settings_declaration_in_another_folder_is_named_not_called_gone(self):
         """The sighting came from a hook in `~/.claude/settings.json`; this session uses a
@@ -472,6 +485,23 @@ class TestASightingThatNamesNoHarnessIsUnknown(ConfigFolderCase):
         self.use_the_default_folder()
         self.assertEqual(doctor.check_guard_seen().status, OK)
 
+    def test_a_name_charter_has_no_record_of_is_unknown_too(self):
+        """`$CHARTER_HARNESS` is recorded exactly as spelled, so `claude` for `claude-code` — one
+        typo — read as another harness's sighting and stayed green under any folder (probe H in
+        the verification review of 3624287). ADR 0015 already has `doctor` warn on a harness it
+        has no record of; a sighting from one is unknown the same way."""
+        self.a_sighting_under(self.other, source=guardseen.SETTINGS, harness="claude")
+        self.use_the_default_folder()
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertIn("no record of", r.detail)
+        self.assertIn("CHARTER_HARNESS", r.hint)
+
+    def test_a_plugin_launched_guard_counts_whatever_it_was_named(self):
+        """The control: `$CLAUDE_PLUGIN_ROOT` makes it Claude Code's, typo or not."""
+        self.a_sighting_under(self.other, source=guardseen.PLUGIN, harness="claude")
+        self.assertEqual(doctor.check_guard_seen().status, OK)
+
 
 class TestARelativeFolderIsSaidWhateverTheSightings(ConfigFolderCase):
     """A relative `$CLAUDE_CONFIG_DIR` used to be reported only beside a plugin sighting. With
@@ -518,6 +548,12 @@ class TestARelativeFolderIsSaidWhateverTheSightings(ConfigFolderCase):
         wrong whichever harness last fired."""
         guardseen.mark(harness="codex", source=guardseen.SETTINGS)
         self.assert_it_names_the_fix(doctor.check_guard_seen())
+
+    def test_guard_seen_calls_an_unnamed_harness_unnamed(self):
+        guardseen.mark(harness=None, source=guardseen.SETTINGS)
+        r = doctor.check_guard_seen()
+        self.assert_it_names_the_fix(r)
+        self.assertIn("under an unnamed harness", r.detail)
 
 
 class TestAnEmptyFolderIsCalledEmpty(ConfigFolderCase):
@@ -620,6 +656,12 @@ class TestAPathWithALiteralTildeIsNeverAbbreviated(ConfigFolderCase):
         p = Path("~") / "acct2" / "settings.json"
         self.assertEqual(util.short_path(p),
                          os.path.join(os.getcwd(), "~", "acct2", "settings.json"))
+
+    def test_a_segment_that_only_starts_with_a_tilde_is_shown_absolute_too(self):
+        """`~acct2` is somebody's home to any shell, so it misleads the same way."""
+        p = Path("~acct2") / "settings.json"
+        self.assertEqual(util.short_path(p),
+                         os.path.join(os.getcwd(), "~acct2", "settings.json"))
 
     def test_a_tilde_segment_under_home_is_not_shortened_either(self):
         p = self.home / "~" / "acct2"

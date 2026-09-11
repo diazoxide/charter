@@ -1622,9 +1622,9 @@ def check_guard_seen() -> Result:
         # An age under another Claude Code config folder is not an age of anything in this
         # one (#969). Green here sat under the guard row's warning and told the reader the
         # guard had just run for them. `guardseen.folder_standing` decides it, for this row
-        # and for `plane-root guard` alike: a sighting from a NAMED harness other than Claude
-        # Code has no folder to be wrong about and passes through, and one that names no
-        # harness at all is unknown and says so.
+        # and for `plane-root guard` alike: a sighting from a registered harness other than
+        # Claude Code has no folder to be wrong about and passes through, and one that names no
+        # harness, or a name charter has no record of, is unknown and says so.
         if standing.doubt is not None:
             detail = f"last ran {at} ago under {where}, but {standing.doubt}"
             # A settings declaration in the folder the sighting DID run under is still there.
