@@ -101,6 +101,38 @@ plugin loads nothing until it is enabled. charter will not enable it for you —
 plugin enable charter@charter --scope project` is yours to run, since turning a plugin off
 is a choice and charter does not revert a deliberate edit.
 
+**Which Claude Code config folder these rows answer for.** `$CLAUDE_CONFIG_DIR` points Claude
+Code at another folder — the usual way to run a second account — and Claude Code then keeps
+that folder's own plugins, settings and `.claude.json`. Run `charter doctor` from the shell you
+start Claude Code from, so it sees the same variable.
+
+- **Follow `$CLAUDE_CONFIG_DIR`:** `plugin install` and `plugin files` (they ask `claude
+  plugin list`), `plane-root guard`, `guard seen`, `session root` and `mcp`. With the variable
+  unset they read `~/.claude` and `~/.claude.json`.
+- **Do not follow it:** `personas`, which still looks for a persona's skills under
+  `~/.claude/plugins` and `~/.claude/skills`. And `charter reinit`, deliberately: it writes the
+  plane's committed `.claude/settings.json`, which every folder's sessions read, so whether it
+  writes the guard hook is decided by `~/.claude` whatever your shell says.
+- **A guard sighting counts only for the folder it ran under.** `plane-root guard` and `guard
+  seen` stay yellow for a sighting from another folder, one recorded before charter kept the
+  folder, or one that names no harness charter knows (`$CHARTER_HARNESS` unset or misspelled,
+  and no plugin), and each says which case it is. A Bash command in a Claude Code session on
+  the folder you use clears the first two. For the third, set `$CHARTER_HARNESS` to
+  `claude-code`, `codex` or `opencode` — `charter reinit` writes it into
+  `.claude/settings.json` — and a session started after that names its harness.
+- **An empty or relative `$CLAUDE_CONFIG_DIR` is reported on both guard rows**, whatever the
+  sightings. Claude Code resolves it against its own working directory, which charter cannot
+  see, so nothing can be compared with it. Set it to an absolute path; running a command
+  changes nothing there.
+- **Three narrower Claude Code settings are not followed**, so with any of them set these rows
+  read the wrong file:
+  - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.
+    `plane-root guard` and `guard seen` still read `<config folder>/plugins/installed_plugins.json`.
+  - `$CLAUDE_CODE_USE_COWORK_PLUGINS` renames `plugins/` to `cowork_plugins/` and
+    `settings.json` to `cowork_settings.json`. The guard rows still read the ordinary names.
+  - `$CLAUDE_CODE_CUSTOM_OAUTH_URL` renames `.claude.json` to `.claude-custom-oauth.json`.
+    `mcp` still reads `.claude.json`.
+
 By hand, if you would rather, or if `charter doctor --fix` could not (an old `claude`, no
 network):
 
