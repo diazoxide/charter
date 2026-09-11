@@ -1217,6 +1217,30 @@ spelling of a literal one. The command gets exactly what you typed, `;;` and ` ;
 it. A `;` anywhere but last was never touched and still is not. This holds in a frame on
 charter's own server and inside a tmux you already had.
 
+**A directory with `#` in its name is where the chat starts.** tmux reads the directory it
+starts a chat in as a *format* — the language of `#{session_name}` — before it looks for the
+directory, and says nothing when the answer is somewhere else. Measured on tmux 3.7c and at
+the 3.2 floor, for a second chat in a workspace and for a chat inside a tmux you already
+had, with tmux reporting success and printing nothing:
+
+- A chat launched from `x#{session_name}` started in `xbase` when a directory by that name
+  sat beside it, and in `$HOME` when none did. `a#S` and `a##b` went to `$HOME` too.
+- `y#(touch job-ran)` went to `$HOME`. Sent the way charter sends a launch — one tmux
+  command, after which the client disconnects — its command did not run in 30 launches per
+  command. With the tmux client held connected, it ran in 5 launches out of 5.
+- On 3.7c, and not on 3.2, a trailing `#` was dropped: a directory named `#` started the
+  chat in its parent.
+
+A workspace's first chat was not affected: tmux is handed no directory for it, and launched
+from `x#{session_name}` it started exactly there on both versions.
+
+Charter now doubles each `#` in the directory — `##` is tmux's own spelling of a literal
+one — except a run of `#` directly before `[`, which tmux already hands on as it is:
+doubled, `a#[b` went to `$HOME`. The trailing-`;` escape above still applies on top. The
+identity values charter passes beside the directory are not read as formats — measured the
+same way, values carrying `#{session_name}`, `##`, `#S`, `#[` and `#(…)` each arrived
+exactly — so they are passed as before.
+
 **tmux takes one command of at most 16,364 bytes, arguments and all.** Past that — a whole
 spec pasted as `charter claude "<prompt>"` is the usual way there — tmux refuses the command,
 nothing starts, and charter says so in tmux's own number instead of pasting the command back:
