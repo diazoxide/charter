@@ -321,6 +321,19 @@ class DoctorNamesAnOverrideNotInForce(PersonaIso):
         self.assertIn("clyde", result.detail + result.hint)
         for name in instance.launchable_harnesses():
             self.assertIn(name, result.hint)
+        self.assertNotIn("…", result.hint,
+                         "one refusal, shown whole, must not claim there are more")
+
+    def test_exactly_three_refusals_are_all_shown_and_nothing_is_clipped(self):
+        """The boundary itself. The sweep found `> 3` indistinguishable from `>= 3` with
+        only one and four refusals to look at; three is the case that tells them apart,
+        and it is the case an operator with three typos actually sees."""
+        result = self._declare("".join(f'[harness.wrong{i}]\ncommand = ["x"]\n'
+                                       for i in range(3)))
+        self.assertEqual(result.status, doctor.WARN)
+        for i in range(3):
+            self.assertIn(f"wrong{i}", result.hint)
+        self.assertNotIn("…", result.hint)
 
     def test_more_than_three_refusals_are_clipped_rather_than_printed_whole(self):
         """One row is one row. The `[[forge]]` branch of the `charter.toml` row clips at
