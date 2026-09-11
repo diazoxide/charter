@@ -345,6 +345,15 @@ class ClaudeCodeHarness(Harness):
                 out[rel] = rules
         return out
 
+    def rules_held(self, text: str) -> frozenset[str]:
+        """See :meth:`Harness.rules_held`. Through `_restrictive`, the generator's own reader, so
+        what a bucket holds has one answer; text that is not JSON holds none."""
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            return frozenset()
+        return frozenset(rule for bucket in _restrictive(doc).values() for rule in bucket)
+
     def workspace_files(self) -> dict[str, str]:
         """The plane's own settings keys, as one document for a workspace to hold.
 

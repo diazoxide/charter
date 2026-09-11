@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import errno
 import fnmatch
 import hashlib
 import json
 import os
 import re
+import stat
 import threading
 import time
 from pathlib import Path
@@ -1843,31 +1845,21 @@ def _guest_files(tree: Path) -> dict[str, str]:
     return out
 
 
-def _marker_or_none(base: Path) -> dict | None:
-    """The marker at *base*: ``{}`` when there is none, ``None`` when there is one charter
-    cannot read — empty, torn, not a JSON object, or refused.
+def _read_marker_at(base: Path) -> dict:
+    """The marker at *base*: ``{}`` when there is none, or one charter cannot read — empty, torn,
+    not a JSON object, or refused.
 
-    Two answers because they are two states (ruling G(d), #942 review round 3). A marker that
-    does not exist is a record of nothing; one that exists and cannot be read is a record charter
-    has LOST, and reading it as ``{}`` is what let an emptied marker unhide every file it
-    vouched for. :func:`_read_marker_at` keeps the single answer for the callers that only ask
-    what charter may write or withdraw, where "nothing is charter's" alters nothing.
+    One answer again since #942 review round 5 (R2). `_marker_or_none` told a record charter had
+    lost from one that did not exist, for `_shared_rels`, which let a line go once a record it
+    could READ said the path was not charter's. Hiding follows the files that are there now, and
+    no record takes a line away, so every caller left asks only what charter may write, withdraw
+    or add a line for — where "nothing is charter's" alters nothing.
     """
     try:
-        text = (base / GENERATED_MARKER).read_text()
-    except FileNotFoundError:
+        doc = json.loads((base / GENERATED_MARKER).read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
-    except (OSError, UnicodeDecodeError):
-        return None
-    try:
-        doc = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return doc if isinstance(doc, dict) else None
-
-
-def _read_marker_at(base: Path) -> dict:
-    return _marker_or_none(base) or {}
+    return doc if isinstance(doc, dict) else {}
 
 
 def _read_marker(name: str) -> dict:
@@ -1915,20 +1907,25 @@ def _recorded(marker: dict, rel: str) -> tuple[str, ...]:
     return ()
 
 
-def _pending(marker: dict, rel: str) -> bool:
-    """Whether charter began a write at *rel* that no published record says it finished."""
-    return isinstance(marker.get(rel), list)
+def _temps_left(dirs) -> bool | None:
+    """Whether a file matching :data:`_TEMP_PATTERN` sits in any of *dirs* — ``None`` when one of
+    them cannot be listed and none that could be holds one.
 
-
-def _temps_left(base: Path) -> bool | None:
-    """Whether a file matching :data:`_MARKER_TEMP` sits in *base*, ``None`` when *base* cannot
-    be listed — a temp an interrupted marker publish left is charter's own, and a line for a
-    file that is there does not leave (ruling H)."""
-    try:
-        with os.scandir(base) as entries:
-            return any(fnmatch.fnmatchcase(e.name, _MARKER_TEMP) for e in entries)
-    except OSError:
-        return None
+    A temp a kill left is charter's own write, and may be a copy of the plane's machine-local
+    rules, so its line stays while one is there (review round 5, R1 and R2). A directory that is
+    certainly not there holds none (ruling G(e)).
+    """
+    unsure = False
+    for d in dirs:
+        try:
+            with os.scandir(d) as entries:
+                if any(fnmatch.fnmatchcase(e.name, _TEMP_PATTERN) for e in entries):
+                    return True
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            unsure = True
+    return None if unsure else False
 
 
 def harness_layer(name: str) -> list[tuple[str, str]]:
@@ -1996,14 +1993,17 @@ def _layer_status(base: Path, want_all: dict[str, str],
         if have == want:
             rows.append((rel, "ok"))
         elif content_digest(have) in _recorded(marker, rel):
-            rows.append((rel, "stale"))
-        elif _pending(marker, rel) and rel not in cowritten:
-            # Charter began rewriting this file and no published record says it finished
-            # (ruling H, review round 4): what is there — half a write, or all of one under a
-            # plane that has moved since — is charter's, and is written again.
+            # Only content a record LISTS is charter's to overwrite, pending or settled (review
+            # round 5, R3). Round 4 also rewrote whatever a pending entry's path held — "half a
+            # write" — and so wrote over an operator's hand edit made after a kill. Writes are
+            # whole since R1, so there is no half write left to recognise.
             rows.append((rel, "stale"))
         elif rel in cowritten:
-            rows.append((rel, "harness-edited" if content_digest(want) in _recorded(marker, rel)
+            # `harness-edited` only over a SETTLED record of exactly what the plane wants now
+            # (R3). A pending entry lists what the file may hold while a write is under way, the
+            # new text among it: read as current, an approval the harness saved over an
+            # interrupted write settled a file that never received the plane's new `deny`.
+            rows.append((rel, "harness-edited" if marker.get(rel) == content_digest(want)
                          else "harness-behind"))
         else:
             rows.append((rel, "foreign"))
@@ -2102,10 +2102,10 @@ def _withdraw(base: Path, want_all: dict[str, str], marker: dict) -> list[tuple[
         _prune_empty(p.parent, base)
         rows.append((rel, "removed"))
     # An entry whose file is already gone vouches for nothing, and is forgotten (#942, review
-    # round 2). Left in place, a co-written path kept its exclude line for ever — the marker
-    # naming it is what `_charter_owned` keeps such a line for — hiding nothing and naming a
-    # path charter no longer has. A path still wanted is written again below and recorded
-    # afresh, so forgetting it first changes nothing there.
+    # round 2). Left in place, a co-written path stayed on the list `_charter_owned` hands the
+    # block for ever, hiding nothing and naming a path charter no longer has. A path still
+    # wanted is written again below and recorded afresh, so forgetting it first changes nothing
+    # there.
     #
     # Gone means PROVED gone (ruling G(e), review round 3). `os.path.lexists` answered False
     # for a refused lstat too, and one EACCES during a launch forgot `settings.json` for good.
@@ -2151,9 +2151,12 @@ def _materialise(base: Path, want_all: dict[str, str],
         if status in ("ok", "harness-edited"):
             # `harness-edited` is current: every rule charter mirrored is still in the file,
             # and writing charter's text over it would throw away the approvals the harness
-            # saved there. A pending entry here names a write that did finish — the file holds
-            # what charter wants, or the harness has added to it since — and is settled.
-            if _pending(marker, rel):
+            # saved there. A record that does not say what an `ok` file holds is settled on it:
+            # pending over a write that finished, or settled by a launch that lost a race to
+            # another, whose record then named text the file no longer held — and the plane's
+            # next move would have called charter's own file foreign (review round 5). Only an
+            # `ok` file's: a `harness-edited` record says exactly this already (R3).
+            if rel in marker and marker[rel] != content_digest(want_all[rel]):
                 marker[rel] = content_digest(want_all[rel])
             rows.append((rel, "present"))
             continue
@@ -2178,19 +2181,19 @@ def _materialise(base: Path, want_all: dict[str, str],
         intent = dict(marker)
         for rel, _status in writes:
             intent[rel] = sorted(set(_recorded(marker, rel)) | {content_digest(want_all[rel])})
-        if not _publish_marker(base, intent) and record_first:
+        refused = _publish_marker(base, intent)
+        if refused is not None and record_first:
+            _note_unrecorded(base, refused)
             rows.extend((rel, "unrecorded") for rel, _status in writes)
             return rows
         marker = intent
     for rel, status in writes:
         want = want_all[rel]
-        p = base / rel
         try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(want)
+            _write_whole(base / rel, want)
         except OSError:
-            # The entry stays pending: the path may hold half a write, and the next wire
-            # writes it again.
+            # The entry stays pending and the file holds what it held — whole writes (review
+            # round 5, R1) — and the next wire writes it again.
             rows.append((rel, "blocked"))
             continue
         marker[rel] = content_digest(want)
@@ -2200,30 +2203,118 @@ def _materialise(base: Path, want_all: dict[str, str],
         # workspace's mtimes move for a call that changed nothing, which is the noise
         # `_ensure_guard_hook` avoids one file over.
         return rows
-    if not _publish_marker(base, marker) and record_first:
+    refused = _publish_marker(base, marker)
+    if record_first:
         # Every entry on disk is still the intent or the record before it, and each of those
-        # accounts for what is there now — so the lines stay, and the row says why.
-        rows.append((GENERATED_MARKER, "unrecorded"))
+        # accounts for what is there now — so the lines stay, and the row says why, with the
+        # errno this publish failed with (review round 5, R5). The first that succeeds forgets it.
+        _note_unrecorded(base, refused)
+        if refused is not None:
+            rows.append((GENERATED_MARKER, "unrecorded"))
     return rows
 
 
-def _publish_marker(base: Path, marker: dict) -> bool:
-    """Publish *marker* at *base* whole, or remove it when it names nothing — ``False`` when the
-    filesystem refused, which the caller must treat as no record published (ruling H).
+def _write_whole(path: Path, text: str) -> None:
+    """Replace the file at *path* with *text* whole — a temp beside it, fsynced, then one
+    ``os.replace`` — or raise and leave it exactly as it was.
 
-    By rename (#942, review round 2): truncated in place, a launch reading this marker while
-    another wire wrote it could read a prefix or nothing. An empty marker is charter still
-    standing in the directory — in a checkout, a file no block names any more.
+    **Every file charter writes in a checkout or its common git directory goes through here**
+    (#942 review round 5, R1): the generated files (:func:`_materialise`), the marker
+    (:func:`_publish_marker`) and `info/exclude` (:func:`_register_excludes`). Written in place,
+    a kill mid-write left a checkout's `settings.local.json` at 68 or 0 bytes, which read as the
+    harness's edit — the plane's new `deny` never arrived there, and `doctor` said all current —
+    and an `info/exclude` killed after its truncate lost the operator's own lines.
+
+    The temp is `.charter-generated.<pid>.<rand>.tmp`: beside the target, so the rename is a
+    rename; private to this writer, for `config.temp_beside`'s reason (#893); and, in a checkout,
+    matching :data:`_TEMP_PATTERN`, which :func:`wire_guest`'s first pass puts in charter's block
+    before the first one exists, so a temp a kill leaves stays hidden. `info/exclude`'s own temp is
+    written inside the git directory, which no working tree lists, and needs no line.
+
+    Fsynced before the rename: without it a crash just after the rename can publish a file whose
+    content never reached the disk. The mode of the file replaced is kept, since `os.replace`
+    carries the temp's; a symlink is written through, as `Path.write_text` wrote, and never
+    replaced by a copy. The temp is removed when the rename does not happen.
+    """
+    target = Path(os.path.realpath(path)) if os.path.islink(path) else Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f"{GENERATED_MARKER}.{os.getpid()}.{os.urandom(6).hex()}"
+                           f"{config.TEMP_SUFFIX}")
+    try:
+        with open(tmp, "x", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(tmp, stat.S_IMODE(os.stat(target).st_mode))
+        except FileNotFoundError:
+            pass
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _publish_marker(base: Path, marker: dict) -> OSError | None:
+    """Publish *marker* at *base* whole, or remove it when it names nothing — the `OSError` when
+    the filesystem refused, which the caller must treat as no record published (ruling H) and
+    whose errno `unrecorded` names (review round 5, R5); ``None`` when it was published.
+
+    Whole (:func:`_write_whole`; #942, review rounds 2 and 5): truncated in place, a launch
+    reading this marker while another wire wrote it could read a prefix or nothing. An empty
+    marker is charter still standing in the directory — in a checkout, a file no block names any
+    more.
     """
     path = base / GENERATED_MARKER
     try:
         if marker:
-            config.replace_for(path, json.dumps(marker, indent=2) + "\n")
+            _write_whole(path, json.dumps(marker, indent=2) + "\n")
         else:
             path.unlink(missing_ok=True)
+    except OSError as e:
+        return e
+    return None
+
+
+def _unrecorded_note(tree: Path) -> Path:
+    """Where the reason *tree*'s record could not be published is kept: charter's own state
+    directory, because the checkout is the place that refused a write."""
+    key = hashlib.sha256(os.path.realpath(tree).encode("utf-8")).hexdigest()[:32]
+    return config.STATE_DIR / "unrecorded" / f"{key}.json"
+
+
+def _note_unrecorded(tree: Path, refused: OSError | None) -> None:
+    """Keep the errno a publish into guest checkout *tree* failed with, or forget it once one
+    succeeded.
+
+    Review round 5, R5: `unrecorded` took its reason from `os.access`, which passes a read-only
+    filesystem, a full disk and a quota alike — each a publish that fails in a directory whose
+    mode bits allow it. Best effort: a note that cannot be kept costs the reason, never the launch.
+    """
+    note = _unrecorded_note(tree)
+    try:
+        if refused is None:
+            note.unlink(missing_ok=True)
+            return
+        config.mkdir_for(note.parent)
+        config.replace_for(note, json.dumps({
+            "errno": errno.errorcode.get(refused.errno or 0, "error"),
+            "says": refused.strerror or str(refused)}) + "\n")
     except OSError:
-        return False
-    return True
+        pass
+
+
+def unrecorded_reason(tree: Path) -> str:
+    """Why charter could not publish guest checkout *tree*'s record — ``"EACCES: Permission
+    denied"`` — or ``""`` when no failed publish is on record. READ ONLY."""
+    try:
+        doc = json.loads(_unrecorded_note(tree).read_text())
+        return f"{doc['errno']}: {doc['says']}"
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
 
 
 # --------------------------------------------------------------------------- #
@@ -2270,7 +2361,8 @@ def guest_trees(name: str) -> list[Path]:
 
 
 def _charter_owned(base: Path, marker: dict) -> list[str]:
-    """The paths under *base* charter generated and STILL recognises, marker included.
+    """The paths under *base* charter generated and STILL recognises, marker included — what
+    *base* needs charter's block to list, so a line missing from it is ADDED.
 
     What goes in the exclude block, and the reason it is a list of files rather than a
     `.claude/` glob: a guest repo may have its own `.claude/`, and hiding a directory
@@ -2278,64 +2370,62 @@ def _charter_owned(base: Path, marker: dict) -> list[str]:
     silently making somebody's untracked work invisible in their own repo is a worse
     failure than the untracked noise this exists to prevent.
 
-    A path whose content no longer matches the marker is dropped for the same reason:
-    it is the operator's file now (`harness_layer` calls it ``foreign``), and charter
-    neither rewrites it nor hides it. Empty when charter has generated nothing here, so
-    a checkout with an all-foreign layer gets no block at all.
+    A path whose content no record lists is left out, so charter never adds a line for a file
+    somebody else wrote. Leaving it out takes no line away, since review round 5 (R2): a line for
+    a path that is there stays (:func:`_shared_rels`), so a file charter wrote and somebody then
+    rewrote stays hidden, is never overwritten, and `harness_layer` calls it ``foreign``. Empty
+    when charter has generated nothing here, so a checkout with an all-foreign layer gets no block
+    at all.
 
-    **Except a path the harness also writes into** (:func:`_cowritten`), which keeps its line
-    for as long as the marker names it, whatever its digest (#942). The harness saving an
-    approval moves the digest without making the file anybody else's — and dropping the line
-    was exactly how a clone's local settings, the plane's private rules plus the operator's
-    grants, landed in that repository's `git status`: Claude Code adds its own global exclude
-    only where the file is not already ignored, and charter's line was the ignore.
-
-    What ONE tree owns. The block holds what every tree sharing that `info/exclude` needs,
-    and keeps a co-written line while the file exists anywhere, marker or none — that is
-    :func:`_shared_rels`, which asks this of each tree.
+    **Except a path the harness also writes into** (:func:`_cowritten`), listed for as long as the
+    marker names it, whatever its digest (#942): the harness saving an approval moves the digest
+    without making the file anybody else's, and Claude Code adds its own global exclude only where
+    the file is not already ignored.
     """
     if not marker:
         return []
     cowritten = _cowritten()
     out: list[str] = []
     for rel in sorted(marker):
-        # A pending entry is a write charter began and no record says it finished (ruling H):
-        # whatever the path holds is charter's, whatever its digest.
-        if rel not in cowritten and not _pending(marker, rel):
+        if rel not in cowritten:
             try:
                 if content_digest((base / rel).read_text()) not in _recorded(marker, rel):
                     continue
             except (OSError, UnicodeDecodeError):
                 # Gone, refused or not text: none of those proves the file is somebody else's
-                # now (ruling G, review round 3). This catch used to drop the line, so a
-                # `.claude/` unreadable for one launch unhid every file in it. A path that is
-                # certainly gone is taken out by `_shared_rels`' own lstat instead.
+                # now (ruling G, review round 3), and a path listed here adds a line at most.
                 pass
         out.append(rel)
     return out + [GENERATED_MARKER]
 
 
-#: The temp file `config.replace_for` publishes a marker through, as a pattern (review round 3).
-#: A process killed between that write and its rename leaves `.charter-generated.<pid>.<rand>.tmp`
-#: in somebody's checkout. The one glob in the block, over a name that is charter's own.
-_MARKER_TEMP = f"{GENERATED_MARKER}.*{config.TEMP_SUFFIX}"
+#: Every temp file :func:`_write_whole` writes through, as a pattern: `.charter-generated.<pid>.
+#: <rand>.tmp`, which a process killed between a write and its rename leaves behind. The one glob in
+#: charter's block, over a name that is charter's own — and since review round 5 (R1) the one line
+#: written without a leading `/`, because a temp is written beside every file charter writes, in
+#: `.claude/` and `.claude/agents/` as well as at the checkout root. An operator's own file whose
+#: name matches it, `.charter-generated.notes.tmp`, is hidden too (docs/workspaces.md says so).
+_TEMP_PATTERN = f"{GENERATED_MARKER}.*{config.TEMP_SUFFIX}"
 
 
 def _exclude_block(rels: list[str]) -> str:
     """The block listing *rels*, in the order given — :func:`_shared_rels` decides both, the
-    marker's temp-file pattern among them."""
+    temp-file pattern among them, which is written unanchored."""
     if not rels:
         return ""
-    return "\n".join([_EXCLUDE_BEGIN, _EXCLUDE_NOTE, *(f"/{r}" for r in rels),
+    return "\n".join([_EXCLUDE_BEGIN, _EXCLUDE_NOTE,
+                      *(r if r == _TEMP_PATTERN else f"/{r}" for r in rels),
                       _EXCLUDE_END]) + "\n"
 
 
 def _block_rels(text: str) -> set[str]:
-    """What charter's block in *text* lists now — its temp-file pattern among them."""
+    """What charter's block in *text* lists now — its temp-file pattern among them, in either
+    spelling: anchored, as review rounds 3 and 4 wrote it, reads as the same entry, and the block
+    holding it is rewritten unanchored (review round 5, R1)."""
     lines = text.splitlines()
     span = _block_span(lines)
-    return ({line[1:] for line in lines[span[0] + 1:span[1] + 1] if line.startswith("/")}
-            if span else set())
+    return ({line.removeprefix("/") for line in lines[span[0] + 1:span[1] + 1]
+             if line.startswith("/") or line == _TEMP_PATTERN} if span else set())
 
 
 def _replace_block(text: str, block: str) -> str:
@@ -2490,8 +2580,14 @@ def _listed_trees(tree: Path, exclude: Path, common: Path) -> tuple[list[Path] |
             # Git's own reason, not charter's guess: "moved or deleted" was said of a worktree
             # that was only unreadable.
             said = entry["prunable"] if isinstance(entry["prunable"], str) else "no reason given"
-            return None, (f"git lists {path} as prunable: {said} — `git worktree repair` from its "
-                          f"new place if it moved, `git worktree prune` if it is gone")
+            if _exists(path) is False:
+                return None, (f"git lists {path} as prunable: {said} — `git worktree repair` from "
+                              f"its new place if it moved, `git worktree prune` if it is gone")
+            # Charter's own lstat decides "gone", never git's word (review round 5, R5): git calls
+            # a worktree it cannot read prunable too, and `git worktree prune` there deletes git's
+            # record of a checkout that is still on disk.
+            return None, (f"git lists {path} as prunable: {said}, but charter does not find it "
+                          f"gone — unreadable: restore access to it")
         if _exists(path / ".git") is not True:
             if os.path.realpath(path) == os.path.realpath(common):
                 # Git 2.50.1 lists a `--separate-git-dir` clone's GIT directory as its main
@@ -2511,108 +2607,90 @@ class _Block(NamedTuple):
     unaccounted: list[str]
 
 
+def _wired(t: Path) -> bool:
+    """Whether checkout *t* is one charter wires: directly inside a workspace of this plane, or
+    holding a charter marker — another plane's included, and one that cannot be checked counted.
+
+    Review round 5 (R2): a line stays while its path is there IN A CHECKOUT CHARTER WIRES. A main
+    checkout charter never wired keeps no line by holding a `.claude/settings.local.json` of its
+    own, which keeps #870's promise that removing the workspace holding its linked worktree takes
+    charter's block out of that repository.
+    """
+    if Path(os.path.realpath(t)).parent.parent == Path(os.path.realpath(config.WORKSPACES_DIR)):
+        return True
+    return _exists(t / GENERATED_MARKER) is not False
+
+
 def _shared_rels(tree: Path, rels: list[str], text: str, exclude: Path,
-                 named: frozenset[str] = frozenset()) -> _Block:
+                 leaving: bool = False) -> _Block:
     """What charter's block in *exclude* (holding *text*) must list once *tree* needs *rels*.
 
-    *named* is what *tree*'s marker named before this call removed it: :func:`unwire_guest`
-    deletes the marker first, and a file it leaves because somebody rewrote it is still
-    accounted for by the record that said it had been charter's.
+    **One block, every tree's files** (#942, review round 2). A clone and its linked worktrees
+    read ONE `info/exclude`, the common git directory's, and each tree rewrote charter's block
+    there alone: a worktree wired after its clone wrote the block without the line for the
+    clone's harness-edited local file — the plane's private rules plus the operator's grants —
+    and removing a workspace that held a worktree of another workspace's clone emptied that
+    clone's block outright.
 
-    **One block, every tree's needs** (#942, review round 2). A clone and its linked
-    worktrees read ONE `info/exclude`, the common git directory's, and each tree rewrote
-    charter's block there from its own marker alone. A worktree wired after its clone
-    withdrew its own untouched local file and wrote the block without that line, so the
-    clone's harness-edited copy — the plane's private rules plus the operator's grants — sat
-    in `git status` after every launch; and removing a workspace that held a worktree of
-    another workspace's clone emptied that clone's block outright. So the block is the union
-    of what every live tree of the directory owns (:func:`_charter_owned`), and a tree on its
-    way out takes away only lines no remaining tree needs.
+    **A line stays while its path is there** (review round 5, R2), in *tree* or in any other
+    checkout charter wires that reads this exclude (:func:`_wired`), whatever any record says.
+    Rounds 2 to 4 let a line go once a record said the file was no longer charter's, and each
+    round found another way a record says that wrongly — a lost marker, a torn one, a kill
+    between a write and its record, and last two launches racing to settle one file, which
+    dropped the line for charter's own `.claude/settings.json`, the plane's rules and `env`, into
+    somebody else's repository. Hidden while it is there is the safe direction, and a reversible
+    one: a file somebody rewrote keeps its line too, charter never overwrites it, `doctor` names
+    it ``foreign``, and `git add -f` commits it on purpose.
 
-    **Keep on existence.** A co-written path's line (:func:`_cowritten`) never leaves the
-    block while that file exists in ANY of those trees, whatever any marker says. The harness
-    saves into a file it finds already ignored without adding an ignore of its own, so a
-    marker that is lost, emptied or withdrawn must not be what decides the file shows. This
-    only ever KEEPS a line already there: charter still never adds one for a file it never
-    wrote.
+    *rels* only ever ADDS a line: what charter is about to write, or wrote and still recognises
+    (:func:`_charter_owned`). Charter never adds one for a file it did not write.
 
-    **A line leaves only on certainty** (ruling G, review round 3). Round 2 took a line out
-    whenever charter FAILED to account for something as readily as when it knew the line was
-    unneeded: a refused `lstat` read as "gone", a marker deleted or emptied by hand read as
-    "charter wrote nothing here", a worktree list git could not back up read as the whole list.
-    So a line no tree is known to need still stays while, in any tree, the path:
+    **A line leaves only on certainty** (ruling G, review round 3): its path confirmed absent —
+    `FileNotFoundError` or `NotADirectoryError` from `os.lstat` — in every such checkout, and not
+    in *rels*. It stays while, in any of them, the path cannot be checked, and every line stays
+    while :func:`_live_trees` cannot be trusted; both say why in ``unaccounted``, which `doctor`
+    prints, and each reason names what clears it (review round 4).
 
-    - cannot be checked — `os.lstat` raised anything but `FileNotFoundError` or
-      `NotADirectoryError` (G(e));
-    - is there and co-written (:func:`_cowritten`) — the harness saves into a file it finds
-      already ignored without adding an ignore of its own;
-    - is not certainly gone and that tree's marker cannot be read (G(d));
-    - or is there and that tree's marker does not name it at all: a record lost and rewritten,
-      since the record a later wire writes names only what that wire wrote.
+    *leaving* is :func:`unwire_guest`'s: a checkout charter is leaving keeps no line for a file of
+    its own the harness does not also write into — a file somebody rewrote is theirs to see on the
+    way out. A co-written file that stays keeps its line (:func:`_cowritten`): the harness saves
+    into a file it finds already ignored without adding an ignore of its own.
 
-    And every line stays while :func:`_live_trees` cannot be trusted (G (a)–(c)).
-
-    **A marker that does not exist is a record of nothing, not an unreadable one** — the
-    reading of G(d) that keeps #870's promise. A main checkout charter never wired has no
-    marker, and removing a workspace that held its linked worktree must still take charter's
-    block out of that repository. Such a tree lets a line go only for a path confirmed absent
-    in it, so the reading can never uncover a file.
-
-    Why a line was kept, other than for a co-written file being there, is in ``unaccounted``,
-    which `doctor` prints.
+    :data:`_TEMP_PATTERN` is listed whenever *rels* are, so it is in the block before the first
+    temp exists (:func:`_write_whole`), and otherwise while a temp is left beside a listed path.
     """
     current = _block_rels(text)
     need = set(rels)
+    if need:
+        need.add(_TEMP_PATTERN)
     trees, doubt = _live_trees(tree, exclude)
     here = os.path.realpath(tree)
-    beside = [t for t in trees or () if os.path.realpath(t) != here]
-    accounts: list[tuple[Path, set[str] | None]] = []
-    for t, also in [(tree, set(named)), *((t, set()) for t in beside)]:
-        marker = _marker_or_none(t)
-        if marker is None:
-            accounts.append((t, None))
-            continue
-        need.update(_charter_owned(t, marker))
-        accounts.append((t, set(marker) | also))
-    if GENERATED_MARKER in need:
-        # The marker's temp-file pattern goes wherever the marker does, so it is in the block
-        # before any temp file exists: the first pass names the marker before anything is
-        # published (review round 4, minor 1). Without the marker it stays only while such a
-        # file is there — below.
-        need.add(_MARKER_TEMP)
+    wired = [tree, *(t for t in trees or () if os.path.realpath(t) != here and _wired(t))]
+    beside = {Path(r).parent for r in current if r != _TEMP_PATTERN}
     cowritten = _cowritten()
     why: list[str] = []
-    # Each reason names what clears it (review round 4): `reinit` clears none of these.
     for rel in sorted(current - need):
-        for t, recorded in accounts:
-            there = _temps_left(t) if rel == _MARKER_TEMP else _exists(t / rel)
+        for t in wired:
+            if rel == _TEMP_PATTERN:
+                there = _temps_left(t / d for d in beside)
+            elif leaving and t is tree and rel not in cowritten:
+                continue
+            else:
+                there = _exists(t / rel)
             if there is False:
                 continue
             if there is None:
                 why.append(f"{t / rel} cannot be checked — restoring read access clears this")
-            elif rel == _MARKER_TEMP:
-                why.append(f"{t / rel} matches a file an interrupted marker write left there — "
-                           f"deleting that file clears this")
-            elif recorded is None:
-                why.append(f"{t / GENERATED_MARKER} cannot be read, so nothing accounts for "
-                           f"{t / rel} — restoring read access clears this; a marker that is "
-                           f"empty or torn is cleared by deleting it with the files it named, "
-                           f"which the next launch writes and records again")
-            elif rel not in cowritten and rel in recorded:
-                continue
-            elif rel not in cowritten:
-                why.append(f"{t / rel} is there and nothing charter recorded accounts for it — "
-                           f"delete it and the next launch writes and records charter's own")
             need.add(rel)
             break
     if trees is None and current - need:
         why.append(doubt)
         need |= current
-    ordered = sorted(need - {GENERATED_MARKER, _MARKER_TEMP})
+    ordered = sorted(need - {GENERATED_MARKER, _TEMP_PATTERN})
     if GENERATED_MARKER in need:
         ordered.append(GENERATED_MARKER)
-    if _MARKER_TEMP in need:
-        ordered.append(_MARKER_TEMP)
+    if _TEMP_PATTERN in need:
+        ordered.append(_TEMP_PATTERN)
     return _Block(ordered, why)
 
 
@@ -2656,14 +2734,16 @@ def unaccounted(tree: Path) -> list[str]:
     return _exclude_state(tree, _charter_owned(tree, _read_marker_at(tree)))[1]
 
 
-def _register_excludes(tree: Path, rels: list[str],
-                       named: frozenset[str] = frozenset()) -> str:
+def _register_excludes(tree: Path, rels: list[str], leaving: bool = False) -> str:
     """Write charter's block into *tree*'s `info/exclude`. ``created``/``refreshed``/
     ``present``/``blocked``.
 
     *rels* is what *tree* needs; the block written is :func:`_shared_rels`' — never one
-    tree's list alone, for the sibling worktrees reading the same file. *named* is passed
-    through to it."""
+    tree's list alone, for the sibling worktrees reading the same file. *leaving* is passed
+    through to it.
+
+    Written whole (:func:`_write_whole`, review round 5, R1): killed after its truncate, an
+    in-place write lost every line of the operator's own."""
     p = git_exclude_file(tree)
     if p is None:
         return "blocked"
@@ -2673,13 +2753,12 @@ def _register_excludes(tree: Path, rels: list[str],
         text = ""
     except (OSError, UnicodeDecodeError):
         return "blocked"
-    new = _replace_block(text, _exclude_block(_shared_rels(tree, rels, text, p, named).rels))
+    new = _replace_block(text, _exclude_block(_shared_rels(tree, rels, text, p, leaving).rels))
     if new == text:
         return "present"
     had = _EXCLUDE_BEGIN in text.splitlines()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(new)
+        _write_whole(p, new)
     except OSError:
         return "blocked"
     return "refreshed" if had else "created"
@@ -2700,10 +2779,11 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
     marker = _read_marker_at(tree)
     rows = _layer_status(tree, _guest_files(tree), marker)
     if (any(s in ("missing", "stale", "unwanted") for _rel, s in rows)
-            and not os.access(tree, os.W_OK | os.X_OK)):
+            and unrecorded_reason(tree)):
         # Ruling H (review round 4): a launch cannot publish the record a write needs first, so
-        # it writes nothing and keeps every line — and says so here, where somebody looks.
-        # Read only: `os.access` asks, it does not try.
+        # it writes nothing and keeps every line — and says so here, where somebody looks. On the
+        # errno the last publish failed with (review round 5, R5), never on `os.access`, which
+        # passes a read-only filesystem and a full disk alike.
         rows.append((GENERATED_MARKER, "unrecorded"))
     owned = _charter_owned(tree, marker)
     status = _exclude_status(tree, owned)
@@ -2713,6 +2793,79 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
     if owned or status == "unaccounted":
         rows.append((".git/info/exclude", status))
     return rows
+
+
+def checkout_row(name: str, rel: str) -> tuple[Path, str] | None:
+    """``(checkout, path inside it)`` for a :func:`harness_layer` or :func:`wire_harnesses` row of
+    workspace *name* naming a file in one of its guest checkouts — ``None`` for a row of the
+    workspace directory's own.
+
+    One answer for `doctor`, `reinit` and `guard ask`, which word a checkout's file differently
+    from the workspace's (review round 5): only a checkout is somebody else's repository, where a
+    file charter did not write is committed with `git add -f`."""
+    head, _, inner = rel.partition("/")
+    tree = workspace_dir(name) / head
+    return (tree, inner) if inner and git_dir(tree) is not None else None
+
+
+def rules_not_in_force(cwd) -> str:
+    """One line for a chat rooted in *cwd*: which of the plane's ask/deny rules the harness will
+    not apply there, and the one thing that fixes it — ``""`` when every one is in force, or when
+    *cwd* is not a workspace directory or inside a checkout in one. READ ONLY.
+
+    Review round 5, R4. Every state that keeps a rule out of a chat — a record charter cannot
+    publish, a file somebody rewrote, one the harness keeps, one charter cannot read — was named
+    by `doctor` and `reinit` and by nothing the chat sees: a launch into a checkout whose root is
+    not writable ran without the plane's newest rule and said nothing where the command gets
+    typed. The rules are read out of the file the harness reads, never inferred from a status.
+    """
+    from .harness import registry as _registry
+
+    try:
+        parts = Path(os.path.realpath(cwd)).relative_to(
+            os.path.realpath(config.WORKSPACES_DIR)).parts
+    except ValueError:
+        return ""
+    if not parts or not valid_name(parts[0]):
+        return ""
+    base = workspace_dir(parts[0])
+    if len(parts) > 1 and git_dir(base / parts[1]) is not None:
+        tree, where = base / parts[1], "this checkout"
+        want, marker, refused = _guest_files(tree), _read_marker_at(tree), unrecorded_reason(tree)
+    elif len(parts) == 1:
+        tree, where = base, "this workspace"
+        want, marker, refused = _layer_files(parts[0]), _read_marker(parts[0]), ""
+    else:
+        return ""
+    riding: dict[str, tuple[str, ...]] = {}
+    for h in _registry.all():
+        riding.update(h.restrictive_rules() or {})
+    gaps: list[str] = []
+    for rel, status in _layer_status(tree, want, marker):
+        rules = riding.get(rel, ())
+        if not rules:
+            continue
+        try:
+            text = (tree / rel).read_text()
+        except (OSError, UnicodeDecodeError):
+            text = ""
+        held = {r for h in _registry.all() for r in h.rules_held(text)}
+        missing = [r for r in rules if r not in held]
+        if not missing:
+            continue
+        if status in ("missing", "stale") and refused:
+            fix = f"restore write access to {where} ({refused})"
+        elif status in ("missing", "stale"):
+            fix = f"`charter workspace reinit {parts[0]}` writes them"
+        elif status == "unreadable":
+            fix = f"restore read access to {rel}"
+        else:
+            fix = f"add them to {rel} by hand"
+        gaps.append(f"{', '.join(missing)} ({rel}, {status}) — {fix}")
+    if not gaps:
+        return ""
+    return (f"⚠ **The plane's ask/deny rules below are NOT in force in {where}** — the harness will "
+            f"not prompt for or refuse them here: " + "; ".join(gaps) + ".")
 
 
 def wire_guest(tree: Path) -> list[tuple[str, str]]:
@@ -2823,11 +2976,11 @@ def unwire_guest(tree: Path) -> list[str]:
     except OSError:
         pass
     # Nothing of this tree's own is needed any more. A co-written file that stays keeps its line
-    # by existing, and every other tree keeps what it owns — both `_shared_rels`', so the
-    # removal and the wire cannot disagree about either. What the marker NAMED goes with it,
-    # because the marker is gone by now: a file left behind for somebody else's rewrite is still
-    # one charter can account for, and without the record it would read as unexplained.
-    _register_excludes(tree, [], named=frozenset(marker))
+    # by existing, and so does every file another wired checkout still holds — both
+    # `_shared_rels`', so the removal and the wire cannot disagree about either. A file of this
+    # tree's own left behind for somebody else's rewrite keeps no line: *leaving* (review round
+    # 5, R2), which replaced the record of what the deleted marker named.
+    _register_excludes(tree, [], leaving=True)
     return removed
 
 

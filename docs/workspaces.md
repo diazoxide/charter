@@ -82,17 +82,28 @@ gone and the plane no longer declares it, its line goes. `doctor` only mentions 
 plane has moved on since — the plane's newer rules are then not in that file — and never
 suggests deleting a file that holds your approvals, nor one it cannot read.
 
-Charter takes a line out of that block only when it is sure nothing needs it. While git cannot
-list the worktrees in time, or lists one charter cannot look into or one marked prunable, every
-line stays. While a checkout's `.charter-generated` cannot be read, every line stays except one
-for a path confirmed absent in that checkout. A line also stays while its path cannot be
-checked, and while a file is there that no record of charter's accounts for. Before charter
-rewrites a generated file it records the write as pending, and it settles the record once the
-write is done: a pending record accounts for whatever the file holds, so an interrupted write
-keeps its line and is written again at the next launch. Where the record cannot be published —
-a checkout root that is not writable — charter writes nothing there and keeps the lines.
-`doctor`'s `workspace layer` row calls the first kind of block `unaccounted` and the last kind of
-marker `unrecorded`, and says what clears each.
+**A file charter wrote in a clone stays hidden while it is there**, whatever charter's own
+records say — a generated file, its `.charter-generated` record, a temp file an interrupted
+write left — in every checkout charter wires that reads the same `.git/info/exclude`. That
+includes a generated file you have since rewritten: charter never overwrites it, `doctor` names
+it `foreign`, and if it is your own file and you mean to commit it, `git add -f` it. A line goes
+only once its path is confirmed absent in all of those checkouts and the plane no longer
+declares it. While git cannot list the worktrees in time, or lists one charter cannot look into,
+every line stays, and so does a line whose path cannot be checked; a worktree git calls
+prunable is advised `git worktree prune` only when charter itself finds it gone.
+
+Charter writes each of those files whole — to a temp file beside it, flushed to disk, then
+renamed over it — so a kill leaves the old content or the new and never half of either. A temp
+file a kill leaves behind is named `.charter-generated.<pid>.<random>.tmp`, and the block hides
+that pattern anywhere in the checkout, so a file of your own whose name matches it
+(`.charter-generated.notes.tmp`) is hidden too. Before rewriting a generated file charter
+records the write as pending, and it overwrites only content one of its records lists; anything
+else is yours or the harness's. Where the record cannot be published — a checkout root that is
+not writable, a read-only or full disk — charter writes nothing there and keeps the lines.
+`doctor`'s `workspace layer` row calls the first kind of block `unaccounted` and that marker
+`unrecorded`, with the error the publish failed with, and says what clears each. A chat that
+starts in a workspace or a clone where one of the plane's ask/deny rules is not in force is
+told which rules are missing, and what fixes it.
 
 `charter guard ask` refreshes every workspace's layer as it writes, so the rule is in force
 before the command returns rather than at the next launch. It runs both ways: drop a rule

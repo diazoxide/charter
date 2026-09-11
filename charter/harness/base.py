@@ -450,6 +450,19 @@ class Harness:
         """
         return {}
 
+    def rules_held(self, text: str) -> frozenset[str]:
+        """The ask/deny rules *text* — one of this harness's generated files, as found on disk —
+        actually holds, spelled as :meth:`restrictive_rules` spells them; empty when it holds none
+        or is not in this harness's format.
+
+        The half :meth:`restrictive_rules` cannot answer (#942 review round 5, R4): which of the
+        rules riding in a file are MISSING from the copy a chat reads. A file somebody rewrote,
+        or one the harness keeps, holds whatever it holds, and a status says only that it is not
+        charter's current text. Read by the harness for that method's reason — a caller parsing
+        each harness's format back out is a second reader of a document it already understands.
+        """
+        return frozenset()
+
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Move THIS harness's installed charter artifact to the running CLI's version.
 

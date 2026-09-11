@@ -29,6 +29,9 @@ refusal.
   hides it in the clone's `.git/info/exclude` before writing it, writes nothing it cannot
   hide, and keeps it hidden and untouched once Claude Code has added its approvals, so a
   machine-local rule never becomes committable in somebody else's repository.
+- A file charter wrote in a clone now stays hidden for as long as it is there, even after you
+  rewrite it: charter never overwrites it, and `charter doctor` names it and shows the
+  `git add -f` that commits it if it is yours.
 - `charter guard ask` refreshes every workspace as it writes, so the rule is in force when
   the command returns rather than at the next launch. It runs both ways: drop a rule from
   the plane and its mirror is withdrawn, while the generated file still matches what charter

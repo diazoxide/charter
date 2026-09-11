@@ -37,10 +37,13 @@ touching a real `workspaces/` has cost before.
 
 from __future__ import annotations
 
+import errno
+import fnmatch
 import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import unittest
@@ -49,7 +52,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, commands_workspace, config, doctor, util, workspace
+from charter import commands, commands_workspace, config, doctor, hooks, util, workspace
 from charter.harness import claude_code, registry
 
 from tests import _isolation
@@ -132,6 +135,56 @@ class _Killed(BaseException):
     or cleanup that a real SIGKILL would skip gets to run either (review round 4)."""
 
 
+#: Charter's temp-file name, spelled by hand: imported, it would agree with any value it takes.
+_TEMP_GLOB = ".charter-generated.*.tmp"
+
+
+@contextmanager
+def _torn_write_of(target: Path):
+    """Every write into *target*, or into a charter temp file beside it, is killed HALFWAY: half
+    the text reaches the disk, and nothing after it runs (review round 5, R1).
+
+    Written in place, that half IS the file — 68 or 0 bytes of a `settings.local.json` that
+    parses as nothing and read as harness-edited, so the plane's new `deny` was never written
+    and doctor said all current. Written to a temp that is then renamed, the half is the temp's,
+    and the file stays whole."""
+    real_open = io.open
+    wanted = os.fspath(target)
+    beside = os.fspath(target.parent)
+
+    class _Torn:
+        def __init__(self, f):
+            self._f = f
+
+        def write(self, text):
+            self._f.write(text[: len(text) // 2])
+            self._f.flush()
+            raise _Killed()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._f.close()
+            return False
+
+        def __getattr__(self, name):
+            return getattr(self._f, name)
+
+    def opening(path, mode="r", *args, **kwargs):
+        f = real_open(path, mode, *args, **kwargs)
+        try:
+            spelled = os.fspath(path)
+        except TypeError:
+            return f
+        ours = spelled == wanted or (os.path.dirname(spelled) == beside and fnmatch.fnmatchcase(
+            os.path.basename(spelled), _TEMP_GLOB))
+        return _Torn(f) if ours and any(c in mode for c in "wxa") else f
+
+    with mock.patch("io.open", opening), mock.patch("builtins.open", opening):
+        yield
+
+
 def _as_the_harness_would(path: Path, rule: str) -> str:
     """Append an `allow` the way "Yes, and don't ask again" does; return the new text.
 
@@ -144,6 +197,14 @@ def _as_the_harness_would(path: Path, rule: str) -> str:
     text = json.dumps(doc, indent=2) + "\n"
     path.write_text(text)
     return text
+
+
+def _briefing(case, cwd: Path) -> str:
+    """What SessionStart hands a chat rooted in *cwd* — the real handler, driven with the payload
+    the harness sends, and its background refreshers held (review round 5, R4)."""
+    _isolation.no_background_refresh(case)
+    out = _isolation.run_hook(hooks.sessionstart, {"session_id": "r5", "cwd": str(cwd)})
+    return ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext", "")
 
 
 class PlaneWithRestrictions(_isolation.PersonaIso):
@@ -1534,10 +1595,11 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
         self.marker.write_text("")
         self.launch()
         self.assert_still_hidden()
-        said = " ".join(workspace.unaccounted(self.clone))
-        self.assertIn(f"{workspace.GENERATED_MARKER} cannot be read", said)
-        # What clears it, named (review round 4): `reinit` does not.
-        self.assertIn("restoring read access", said)
+        # Review round 5: hiding follows the files that are there (R2), so an unreadable marker
+        # leaves nothing unaccounted — and its old advice, "delete it with the files it named",
+        # deleted the harness's approvals when followed (R5).
+        self.assertEqual(workspace.unaccounted(self.clone), [])
+        self.assertNotIn("delet", doctor.check_workspace_harness().hint)
 
     def test_a_lost_record_stays_hidden_after_charter_writes_a_new_one(self):
         """The record a later wire writes names only what that wire wrote. Read as the whole
@@ -1552,22 +1614,16 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
                       "fixture: charter wrote no new record")
         self.assertEqual(_status(self.clone), "")
 
-    def test_doctor_names_what_it_could_not_account_for(self):
+    def test_a_lost_marker_leaves_nothing_unaccounted_and_no_advice_to_delete(self):
+        """Review round 5: a file that is there keeps its line by being there (R2), so a lost
+        record is nothing doctor has to explain — and "delete it and the next launch writes and
+        records charter's own" is advice that destroys what it names (R5)."""
         self.marker.unlink()
         self.launch()
         r = doctor.check_workspace_harness()
         self.assertEqual(_status(self.clone), "")
-        self.assertIn(f"{self.ws}/api/.git/info/exclude (unaccounted)", r.detail)
-        self.assertIn(f"{SHARED} is there and nothing charter recorded accounts for it", r.hint)
-        # Once, not once per finding in that checkout: its local file is `harness-behind` too,
-        # and asking every finding's checkout printed the same reason twice (the round-3 sweep
-        # found the `unaccounted` filter deciding exactly that).
-        self.assertEqual(
-            r.hint.count(f"{SHARED} is there and nothing charter recorded accounts for it"), 1)
-        # Review round 4: `reinit` clears none of this, so the hint does not lead with it, and
-        # it names what does.
-        self.assertFalse(r.hint.startswith("charter workspace reinit"), r.hint)
-        self.assertIn("delete it and the next launch writes and records charter's own", r.hint)
+        self.assertNotIn("(unaccounted)", r.detail)
+        self.assertNotIn("delet", r.hint)
 
     def test_what_could_not_be_accounted_for_comes_back_in_path_order(self):
         """Doctor prints these, and a report that reshuffles from run to run cannot be diffed.
@@ -1580,8 +1636,15 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
         self.launch()
         self.marker.unlink()
         self.launch()
-        said = workspace.unaccounted(self.clone)
+        kept = [self.clone / ".claude" / "agents" / f"{name}.md"
+                for name in ("zulu", "yankee", "xray", "whiskey", "victor", "uniform", "tango")]
+        kept.append(self.clone / SHARED)
+        # Refused lstats, since review round 5: a path that is there keeps its line without a
+        # reason, so the reasons left to order are the paths charter cannot check (R2).
+        with _refused(files=kept, calls=("lstat",)):
+            said = workspace.unaccounted(self.clone)
         self.assertEqual(len(said), 8, said)
+        self.assertTrue(all("cannot be checked" in reason for reason in said), said)
         self.assertEqual(said, sorted(said))
 
     def test_a_path_that_cannot_be_checked_keeps_its_line_and_says_so(self):
@@ -1761,15 +1824,17 @@ class SilenceIsNotAVerdict(PlaneWithRestrictions):
 
     def test_a_kill_after_writing_a_file_and_before_recording_it_leaves_it_hidden(self):
         new = self.plane_moves()
-        real = config.replace_for
+        real = os.replace
 
-        def _killed_after_the_write(path, data):
-            if os.fspath(path) == os.fspath(self.marker) and self.shared.read_text() == new:
-                config.temp_beside(path).write_text(data)
+        # At the rename that publishes the marker, whichever writer makes it (round 5 moved the
+        # marker onto `_write_whole`): a temp left behind, and no record published.
+        def _killed_after_the_write(src, dst, *args, **kwargs):
+            if os.fspath(dst) == os.fspath(self.marker) and self.shared.read_text() == new:
+                shutil.copyfile(src, config.temp_beside(self.marker))
                 raise _Killed()
-            return real(path, data)
+            return real(src, dst, *args, **kwargs)
 
-        with mock.patch.object(config, "replace_for", _killed_after_the_write):
+        with mock.patch("os.replace", _killed_after_the_write):
             with self.assertRaises(_Killed):
                 workspace.wire_harnesses(self.ws)
         self.assertEqual(self.shared.read_text(), new, "fixture: the kill came before the write")
@@ -1780,15 +1845,7 @@ class SilenceIsNotAVerdict(PlaneWithRestrictions):
 
     def test_a_kill_halfway_through_writing_a_file_leaves_it_hidden_and_rewrites_it(self):
         new = self.plane_moves()
-        real = Path.write_text
-
-        def _killed_mid_write(path, data, *args, **kwargs):
-            if os.fspath(path) == os.fspath(self.shared):
-                real(path, data[: len(data) // 2], *args, **kwargs)
-                raise _Killed()
-            return real(path, data, *args, **kwargs)
-
-        with mock.patch.object(Path, "write_text", _killed_mid_write):
+        with _torn_write_of(self.shared):
             with self.assertRaises(_Killed):
                 workspace.wire_harnesses(self.ws)
         workspace.ensure(self.ws)
@@ -1805,7 +1862,13 @@ class SilenceIsNotAVerdict(PlaneWithRestrictions):
         self.assertEqual(_status(self.clone), "")
         r = doctor.check_workspace_harness()
         self.assertIn(f"{self.ws}/api/{workspace.GENERATED_MARKER} (unrecorded)", r.detail)
-        self.assertIn("restoring write access", r.hint)
+        # Review round 5: the errno of the publish that failed, not a guess from a mode bit
+        # (R5), and a hint that leads with what clears it rather than with `reinit` (R4).
+        self.assertIn("EACCES", r.hint)
+        self.assertTrue(r.hint.startswith("An 'unrecorded' marker"), r.hint)
+        told = _briefing(self, self.clone)
+        self.assertIn("Bash(kubectl *)", told)
+        self.assertIn("restore write access to this checkout", told)
         self.assertIn("could not publish its record there first", " ".join(self.reinit_said()))
         self.at_the_plane()
         _, said = self.invoke(commands.cmd_guard_ask, pattern="helm uninstall *", local=False)
@@ -1832,15 +1895,15 @@ class SilenceIsNotAVerdict(PlaneWithRestrictions):
         first pass names the marker before anything is published."""
         fresh = _repo(workspace.workspace_dir(self.ws) / "fresh")
         marker = fresh / workspace.GENERATED_MARKER
-        real = config.replace_for
+        real = os.replace
 
-        def _killed_inside_the_publish(path, data):
-            if os.fspath(path) == os.fspath(marker):
-                config.temp_beside(path).write_text(data)
+        def _killed_inside_the_publish(src, dst, *args, **kwargs):
+            if os.fspath(dst) == os.fspath(marker):
+                shutil.copyfile(src, config.temp_beside(marker))
                 raise _Killed()
-            return real(path, data)
+            return real(src, dst, *args, **kwargs)
 
-        with mock.patch.object(config, "replace_for", _killed_inside_the_publish):
+        with mock.patch("os.replace", _killed_inside_the_publish):
             with self.assertRaises(_Killed):
                 workspace.wire_harnesses(self.ws)
         workspace.ensure(self.ws)
@@ -1871,6 +1934,268 @@ class ClassHitsInReinitSayWhatTheyCouldNotCheck(PlaneWithRestrictions):
             said = " ".join(self.reinit_said())
         self.assertIn("workspace.json cannot be checked", said)
         self.assertNotIn("could not be written", said)
+
+
+class RoundFiveCheckout(PlaneWithRestrictions):
+    """One real clone, wired, with the plane's local rule in it — review round 5's fixture."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.shared = self.clone / SHARED
+        self.local = self.clone / LOCAL
+        self.marker = self.clone / workspace.GENERATED_MARKER
+        self.exclude = workspace.git_exclude_file(self.clone)
+        self.assertEqual(_status(self.clone), "", "fixture: the clone was not hidden to begin with")
+
+    def plane_moves_shared(self, *ask: str) -> str:
+        _plane_settings(config.ROOT, permissions={
+            "ask": ["Bash(terraform apply *)", *(ask or ("Bash(kubectl *)",))],
+            "deny": ["Bash(rm -rf /)"]})
+        new = workspace._guest_files(self.clone)[SHARED]
+        self.assertNotEqual(self.shared.read_text(), new, "fixture: the plane did not move")
+        return new
+
+    def plane_moves_local(self) -> str:
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"],
+                     deny=["Bash(git push --force *)"])
+        return workspace._guest_files(self.clone)[LOCAL]
+
+    def killed_after_the_pending_record(self):
+        """SIGKILL right after the PENDING record is published and before the file is written."""
+        real = os.replace
+
+        def after(src, dst, *args, **kwargs):
+            result = real(src, dst, *args, **kwargs)
+            if os.fspath(dst) == os.fspath(self.marker) and any(
+                    isinstance(v, list) for v in json.loads(Path(dst).read_text()).values()):
+                raise _Killed()
+            return result
+
+        return mock.patch("os.replace", after)
+
+
+class R1AFileCharterWritesIsOldOrNewNeverTorn(RoundFiveCheckout):
+    """Review round 5, R1: every file charter writes in a checkout or its common git directory
+    is written to a temp beside it, fsynced, then renamed over it — so it only ever holds the
+    old content or the new. Written in place, a kill left `settings.local.json` at 68 or 0 bytes
+    that read as harness-edited (the plane's new `deny` never arrived, doctor said all current),
+    and an `info/exclude` killed after the truncate lost the operator's own lines."""
+
+    def assert_a_halfway_kill_leaves_it_whole(self, target: Path, old: str, new: str) -> None:
+        with _torn_write_of(target), self.assertRaises(_Killed):
+            workspace.wire_harnesses(self.ws)
+        self.assertIn(target.read_text(), (old, new))
+
+    def test_settings_json_is_old_or_new(self):
+        old = self.shared.read_text()
+        self.assert_a_halfway_kill_leaves_it_whole(self.shared, old, self.plane_moves_shared())
+
+    def test_settings_local_json_is_old_or_new(self):
+        old = self.local.read_text()
+        self.assert_a_halfway_kill_leaves_it_whole(self.local, old, self.plane_moves_local())
+
+    def test_info_exclude_keeps_the_operators_own_line_after_the_block(self):
+        self.exclude.write_text(self.exclude.read_text() + "their-own-line-after\n")
+        old = self.exclude.read_text()
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        with _torn_write_of(self.exclude), self.assertRaises(_Killed):
+            workspace.wire_harnesses(self.ws)
+        self.assertEqual(self.exclude.read_text(), old)
+
+    def test_a_file_is_fsynced_before_it_replaces_the_old_one(self):
+        new = self.plane_moves_shared()
+        events: list[tuple[str, str]] = []
+        real_fsync, real_replace = os.fsync, os.replace
+
+        def fsync(fd):
+            events.append(("fsync", ""))
+            return real_fsync(fd)
+
+        def replace(src, dst, *args, **kwargs):
+            events.append(("replace", os.fspath(dst)))
+            return real_replace(src, dst, *args, **kwargs)
+
+        with mock.patch("os.fsync", fsync), mock.patch("os.replace", replace):
+            workspace.wire_harnesses(self.ws)
+        self.assertEqual(self.shared.read_text(), new)
+        renames = [i for i, (kind, dst) in enumerate(events)
+                   if kind == "replace" and dst == os.fspath(self.shared)]
+        self.assertTrue(renames, "settings.json was not published by rename")
+        for i in renames:
+            self.assertEqual(events[i - 1][0], "fsync", events)
+
+    def test_a_temp_file_a_kill_left_beside_a_generated_file_stays_hidden(self):
+        (self.clone / ".claude" / ".charter-generated.4242.0123456789ab.tmp").write_text("{")
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(self.clone), "")
+
+    def test_an_exclude_file_keeps_its_own_mode_through_a_rewrite(self):
+        self.exclude.chmod(0o600)
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        workspace.wire_harnesses(self.ws)
+        self.assertIn("/.claude/agents/steward.md", self.excludes(self.clone),
+                      "fixture: the block did not change")
+        self.assertEqual(stat.S_IMODE(self.exclude.stat().st_mode), 0o600)
+
+    def test_an_exclude_file_that_is_a_symlink_stays_one(self):
+        """`Path.write_text` wrote through a link. A rename over one would replace somebody's
+        shared exclude file with a private copy of it."""
+        shared = self.tmp / "shared-exclude"
+        shared.write_text(self.exclude.read_text())
+        self.exclude.unlink()
+        self.exclude.symlink_to(shared)
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        workspace.wire_harnesses(self.ws)
+        self.assertTrue(self.exclude.is_symlink())
+        self.assertIn("/.claude/agents/steward.md", shared.read_text())
+
+
+class R2AFileStaysHiddenWhileItIsThere(RoundFiveCheckout):
+    """Review round 5, R2: in a checkout charter wires, a line for a charter path stays while
+    that path exists. A record — pending, settled, lost, raced — never takes one out."""
+
+    def test_two_launches_racing_to_settle_never_unhide_the_file(self):
+        """Wire A is held before its settle; wire B rewrites and settles; A settles LAST, with a
+        digest the file no longer has. The file then read as somebody else's and its line left,
+        surviving the next launch and `reinit`."""
+        first = workspace.content_digest(self.plane_moves_shared("Bash(kubectl *)"))
+        real = os.replace
+        raced: list[bool] = []
+
+        def racing(src, dst, *args, **kwargs):
+            if not raced and os.fspath(dst) == os.fspath(self.marker):
+                if json.loads(Path(src).read_text()).get(SHARED) == first:
+                    raced.append(True)
+                    self.plane_moves_shared("Bash(helm uninstall *)")
+                    with mock.patch("os.replace", real):
+                        workspace.wire_harnesses(self.ws)
+            return real(src, dst, *args, **kwargs)
+
+        with mock.patch("os.replace", racing):
+            workspace.wire_harnesses(self.ws)
+        self.assertTrue(raced, "fixture: wire A never reached its settle")
+        workspace.ensure(self.ws)
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(self.clone), "")
+        # And the file is still charter's to bring up to date: A's settle recorded text the file
+        # no longer held, and the plane's next move would have called charter's own file foreign.
+        self.plane_moves_shared("Bash(argocd app delete *)")
+        workspace.ensure(self.ws)
+        self.assertEqual(self.shared.read_text(), workspace._guest_files(self.clone)[SHARED])
+
+
+class R3OnlyContentCharterKnowsIsOverwritten(RoundFiveCheckout):
+    """Review round 5, R3: a record licenses overwriting only content whose digest it lists."""
+
+    def test_a_hand_edit_made_while_a_write_was_pending_is_never_overwritten(self):
+        self.plane_moves_shared()
+        with self.killed_after_the_pending_record(), self.assertRaises(_Killed):
+            workspace.wire_harnesses(self.ws)
+        theirs = '{"env": {"THEIRS": "1"}}\n'
+        self.shared.write_text(theirs)
+        workspace.ensure(self.ws)
+        self.assertEqual(self.shared.read_text(), theirs)
+        self.assertEqual(_status(self.clone), "")
+        self.assertIn(f"{self.ws}/api/{SHARED} (foreign)", doctor.check_workspace_harness().detail)
+
+    def test_an_approval_saved_after_an_interrupted_local_write_reads_behind(self):
+        self.plane_moves_local()
+        with self.killed_after_the_pending_record(), self.assertRaises(_Killed):
+            workspace.wire_harnesses(self.ws)
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        workspace.ensure(self.ws)
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[LOCAL], "harness-behind")
+
+
+class R4TheChatIsToldWhatIsNotInForce(RoundFiveCheckout):
+    """Review round 5, R4: where the plane's ask/deny rules are not in force in the checkout a
+    chat is rooted in, that chat's SessionStart context says which, and what fixes it — and
+    `reinit` never calls such a checkout up to date."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _isolation.no_background_refresh(self)
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.plane_moves_local()
+        workspace.ensure(self.ws)
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[LOCAL], "harness-behind",
+                         "fixture: the local file is not the harness's")
+
+    def test_the_chat_is_told_the_rule_and_the_fix(self):
+        told = _briefing(self, self.clone)
+        self.assertIn("Bash(git push --force *)", told)
+        self.assertIn(f"add them to {LOCAL} by hand", told)
+        # The rule the file already holds is not named as missing: the line reads the file.
+        self.assertNotIn("Bash(charter change land *)", told)
+
+    def test_a_chat_where_every_rule_is_in_force_is_told_nothing(self):
+        fresh = self.checkout("fresh", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.assertNotIn("NOT in force", _briefing(self, fresh))
+        self.assertNotIn("NOT in force", _briefing(self, workspace.workspace_dir(self.ws)))
+
+    def test_reinit_never_says_up_to_date_while_a_rule_is_not_in_force(self):
+        said = " ".join(self.reinit_said())
+        self.assertNotIn("Up to date", said)
+        self.assertIn("not in force", said)
+
+
+class R5TrueReasonsAndNoDestructiveAdvice(PlaneWithRestrictions):
+    """Review round 5, R5: `git worktree prune` only for a path charter itself found absent, and
+    `unrecorded` names the errno of the publish that failed."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+
+    def test_a_worktree_git_calls_prunable_that_is_still_there_is_not_advised_pruned(self):
+        clone = self.checkout("api", real=True)
+        workspace.ensure("other")
+        other = workspace.workspace_dir("other") / "api"
+        _git(clone, "worktree", "add", "-q", "-b", "wt-other", str(other))
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        _as_the_harness_would(other / LOCAL, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        other.chmod(0o000)
+        self.addCleanup(other.chmod, 0o755)
+        self.assertIn("prunable", _git(clone, "worktree", "list", "--porcelain").stdout,
+                      "fixture: git does not call an unreadable worktree prunable")
+        workspace.wire_harnesses(self.ws)
+        said = " ".join(workspace.unaccounted(clone))
+        self.assertIn("unreadable: restore access", said)
+        self.assertNotIn("prune", said)
+        other.chmod(0o755)
+        self.assertEqual(_status(other), "")
+
+    def test_a_record_that_cannot_be_published_names_its_errno(self):
+        clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        _plane_settings(config.ROOT, permissions={
+            "ask": ["Bash(terraform apply *)", "Bash(kubectl *)"], "deny": ["Bash(rm -rf /)"]})
+        marker = clone / workspace.GENERATED_MARKER
+        real = os.replace
+
+        def refusing(src, dst, *args, **kwargs):
+            if os.fspath(dst) == os.fspath(marker):
+                raise OSError(errno.EROFS, "Read-only file system", os.fspath(dst))
+            return real(src, dst, *args, **kwargs)
+
+        with mock.patch("os.replace", refusing):
+            said = " ".join(self.reinit_said())
+            r = doctor.check_workspace_harness()
+        self.assertIn("EROFS", said)
+        self.assertIn("EROFS", f"{r.detail} {r.hint}")
+        self.assertEqual(_status(clone), "")
 
 
 class UtilRunCanWithholdAVariable(unittest.TestCase):

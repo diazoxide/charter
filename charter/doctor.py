@@ -2082,25 +2082,31 @@ def _workspace_harness_result(_config, _workspace) -> Result:
     # own and therefore prints two; that is a wart rather than the convention (76 of the
     # 77 hints in this file start with the command), and not one to copy.
     statuses = {status for _ws, _rel, status in findings}
-    # Led by `reinit` only when a finding is one it clears (review round 4): an unaccounted
-    # block, an unrecorded marker, an unreadable or harness-kept file all stay after it, and a
-    # hint that leads with a command that changes nothing is the tick that stops a reader.
-    reinit_clears = bool(statuses & {"missing", "stale", "foreign", "unwanted"})
-    hint = f"charter workspace reinit --all{aside}" if reinit_clears else ""
-    if "foreign" in statuses:
-        hint += ("   A 'foreign' file is one charter did not write: it is left completely "
-                 "untouched and never repaired. Remove it to have charter generate its "
-                 "own again.")
-    if "harness-behind" in statuses:
-        # Its own sentence, and never "remove it": the approvals in that file are the
-        # harness's, and the advice that suits a file somebody else wrote destroys them.
-        # True of a file charter wrote, of one that was there before charter ever was, and of
-        # charter's own write whose record is gone (#942, review rounds 2 and 3).
-        hint += ("   A 'harness-behind' file is a checkout's local settings file charter cannot "
-                 "vouch for as its own write: the harness saves its approvals into that file, "
-                 "so charter never rewrites or merges into it, and the plane's machine-local "
-                 "rules it lacks are not in force there. Keep it, and add the rule to it by "
-                 "hand if that checkout needs it.")
+    # Every state is led by what clears it (review rounds 4 and 5, R4), and `reinit` leads only
+    # when it is what clears them all: a hint that leads with a command that changes nothing is
+    # the tick that stops a reader. It clears a missing, stale or unwanted file — but not one in a
+    # checkout whose record cannot be published, where it writes nothing either.
+    stuck = {(ws, rel.partition("/")[0]) for ws, rel, status in findings if status == "unrecorded"}
+    reinit_clears = any(status in ("missing", "stale", "unwanted")
+                        and (ws, rel.partition("/")[0]) not in stuck
+                        for ws, rel, status in findings)
+    first: list[str] = []
+    if "unrecorded" in statuses:
+        # Ruling H (review round 4): the launch works around this — it writes nothing it could
+        # not record first, and keeps every line — and only a person can clear it. The reason is
+        # the errno that publish failed with (review round 5, R5), never a guess from a mode bit.
+        refused = dict.fromkeys(
+            f"{ws}/{row[0].name}: {_workspace.unrecorded_reason(row[0]) or 'no errno on record'}"
+            for ws, rel, status in findings if status == "unrecorded"
+            for row in [_workspace.checkout_row(ws, rel)] if row)
+        first.append("An 'unrecorded' marker is one charter could not publish ("
+                     + "; ".join(refused) + "), so it writes nothing there it could not record "
+                     "first and keeps every exclude line it had; restoring write access to that "
+                     "checkout clears it.")
+    if "unreadable" in statuses:
+        # Never "remove it" (#942, review rounds 2 and 3): charter cannot see what is in the file.
+        first.append("An 'unreadable' path is one charter cannot read: it is left exactly as it "
+                     "is, and restoring read access to it clears this.")
     if "unaccounted" in statuses:
         # Ruling G (#942, review round 3): charter keeps every line it cannot prove unneeded,
         # and says what it could not account for instead of ticking over it. Asked of every
@@ -2110,15 +2116,30 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         why = dict.fromkeys(reason for ws, rel, _status in findings
                             for reason in _workspace.unaccounted(
                                 _workspace.workspace_dir(ws) / rel.split("/", 1)[0]))
-        hint += ("   An 'unaccounted' exclude block is still hiding a path charter cannot prove "
-                 "it no longer needs, and keeps hiding it until it can: " + "; ".join(why) + ".")
-    if "unrecorded" in statuses:
-        # Ruling H (review round 4): the launch works around this — it writes nothing it could
-        # not record first, and keeps every line — and only a person can clear it.
-        hint += ("   An 'unrecorded' marker is one charter cannot publish because that checkout's "
-                 "root is not writable, so it writes nothing there it could not record first and "
-                 "keeps every exclude line it had; restoring write access to that checkout "
-                 "clears it.")
+        first.append("An 'unaccounted' exclude block is still hiding a path charter cannot prove "
+                     "it no longer needs, and keeps hiding it until it can: " + "; ".join(why) + ".")
+    rest: list[str] = []
+    if "harness-behind" in statuses:
+        # Its own sentence, and never "remove it": the approvals in that file are the
+        # harness's, and the advice that suits a file somebody else wrote destroys them.
+        # True of a file charter wrote, of one that was there before charter ever was, and of
+        # charter's own write whose record is gone (#942, review rounds 2 and 3).
+        rest.append("A 'harness-behind' file is a checkout's local settings file charter cannot "
+                    "vouch for as its own write: the harness saves its approvals into that file, "
+                    "so charter never rewrites or merges into it, and the plane's machine-local "
+                    "rules it lacks are not in force there. Keep it, and add the rule to it by "
+                    "hand if that checkout needs it.")
+    if "foreign" in statuses:
+        # Never "remove it" (review round 5, R2 and R5). In a checkout the file is somebody's own
+        # work in their own repository, and it stays hidden while it is there — so the one thing
+        # to say is how to commit it on purpose, as a condition, never as advice.
+        mine = dict.fromkeys(row[1] for ws, rel, status in findings if status == "foreign"
+                             for row in [_workspace.checkout_row(ws, rel)] if row)
+        rest.append("A 'foreign' file holds content charter did not write: charter never "
+                    "overwrites it, and in a checkout it stays hidden while it is there"
+                    + "".join(f" — if this is your own file and you mean to commit it: "
+                              f"git add -f {inner}" for inner in mine)
+                    + ("" if mine else "."))
     counts = _mirrored_restrictions()
     behind = sum(n for key, n in counts.items()
                  if any(rel == key or rel.endswith(f"/{key}")
@@ -2136,11 +2157,15 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         # given file is short of. A workspace can be stale over `enabledPlugins` alone with
         # every rule already in place, and a row that flatly declared the guard down there
         # would be wrong in the direction that costs a reader their trust in it.
-        hint += (f"   The plane's {behind} ask/deny rule(s) ride in these generated files, "
-                 f"so where one is not current a chat in that directory may not be "
-                 f"prompted or refused by them.")
-    if not reinit_clears:
-        hint = (hint + aside).lstrip()
+        rest.append(f"The plane's {behind} ask/deny rule(s) ride in these generated files, "
+                    f"so where one is not current a chat in that directory may not be "
+                    f"prompted or refused by them.")
+    if reinit_clears and not first:
+        hint = "   ".join([f"charter workspace reinit --all{aside}", *rest])
+    else:
+        if reinit_clears:
+            first.append("charter workspace reinit --all clears the rest.")
+        hint = "   ".join([*first, *rest]) + aside
     detail = [f"{ws}/{rel} ({status})" for ws, rel, status in findings]
     return Result(name, WARN,
                   detail=", ".join(detail[:4]) + (", …" if len(detail) > 4 else ""),

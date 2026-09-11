@@ -1771,6 +1771,7 @@ def _mirror_into_workspaces() -> None:
         return
     changed, unreached, behind, unreadable, withheld, unhidden = [], [], [], [], [], []
     unrecorded: list[str] = []
+    refusals: dict[str, None] = {}
     wired: list[tuple[str, list]] = []
     # One worktree listing per repository across every workspace (review round 4): checkouts in
     # two workspaces can share one repository, and a hung git cost 5 s per call.
@@ -1802,6 +1803,9 @@ def _mirror_into_workspaces() -> None:
                 unreadable.append(where)
             elif status == "unrecorded":
                 unrecorded.append(where)
+                row = workspace.checkout_row(ws, rel)
+                if row and workspace.unrecorded_reason(row[0]):
+                    refusals[workspace.unrecorded_reason(row[0])] = None
             elif status == "withheld":
                 withheld.append(where)
             elif status in ("foreign", "blocked"):
@@ -1810,9 +1814,11 @@ def _mirror_into_workspaces() -> None:
         util.info(f"  {len(changed)} generated file(s) under workspaces/ brought into step "
                   f"— a chat there reads its own settings file, never the plane's.")
     if unreached:
-        util.warn(f"  NOT in force in {', '.join(unreached)} — charter did not write those "
-                  f"files and never repairs them. Remove one to have charter generate its "
-                  f"own again.")
+        # Never "remove one" (review round 5, R5): in a checkout the file is somebody's own work,
+        # stays hidden while it is there, and holds whatever they put in it.
+        util.warn(f"  NOT in force in {', '.join(unreached)} — charter could not write those "
+                  f"files, or did not write what they hold and never overwrites it; add the rule "
+                  f"to one by hand if a chat rooted there needs it.")
     if behind:
         # Never "remove it": the approvals in that file are the harness's, and the advice
         # that suits a file somebody else wrote would destroy them.
@@ -1832,9 +1838,11 @@ def _mirror_into_workspaces() -> None:
                   f"turns out to be exactly what charter last wrote.")
     if unrecorded:
         # Ruling H (#942 review round 4): a write charter could not record first is not made.
-        util.warn(f"  {', '.join(unrecorded)}: charter could not publish its record there first, "
-                  f"so it wrote nothing there and kept every exclude line it had — the rule is "
-                  f"not in force in a chat rooted there until that checkout is writable.")
+        why = "; ".join(refusals)
+        util.warn(f"  {', '.join(unrecorded)}: charter could not publish its record there first"
+                  f"{f' ({why})' if why else ''}, so it wrote nothing there and kept every exclude "
+                  f"line it had — the rule is not in force in a chat rooted there until that "
+                  f"checkout is writable.")
     if withheld:
         util.warn(f"  {', '.join(withheld)} was not written: charter could not hide it in "
                   f"that checkout's .git/info/exclude, and a machine-local rule it cannot "

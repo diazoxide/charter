@@ -283,11 +283,12 @@ class TheReportIsInAStableOrder(CloneLayer):
                                         ".claude/agents/alpha.md"],
                          "fixture no longer diverges — this case would assert nothing")
         listed = [ln for ln in self.excludes().splitlines() if ln.startswith("/")]
-        # The last line is the marker's temp file, spelled by hand (#942 review round 3): a
-        # process killed mid-publish leaves `.charter-generated.<pid>.<rand>.tmp` behind.
         self.assertEqual(listed, ["/.claude/agents/alpha.md", "/.claude/settings.json",
-                                  f"/{workspace.GENERATED_MARKER}",
-                                  "/.charter-generated.*.tmp"])
+                                  f"/{workspace.GENERATED_MARKER}"])
+        # Charter's temp-file name, UNANCHORED and spelled by hand (#942 review round 5, R1): a
+        # temp is written beside every file charter writes, so one line covers `.claude/` and
+        # `.claude/agents/` as well as the checkout root.
+        self.assertIn(".charter-generated.*.tmp", self.excludes().splitlines())
 
     def test_what_unwiring_reports_removing_is_sorted(self):
         """The persona arrives AFTER the first wire, for `test_the_block_stays_sorted_when
@@ -442,15 +443,32 @@ class AFileCharterDidNotWrite(CloneLayer):
         self.assertNotIn(".git/info/exclude", rows)
         self.assertNotIn(workspace._EXCLUDE_BEGIN, self.excludes())
 
-    def test_a_path_the_operator_takes_over_stops_being_hidden(self):
-        """charter wrote it, then they rewrote it. The marker no longer vouches for the
-        content, so the next wire drops it from the block and their edit becomes visible
-        to them again."""
+    def test_a_path_the_operator_takes_over_stays_hidden_is_never_overwritten_and_is_named(self):
+        """charter wrote it, then they rewrote it.
+
+        **Reversed in #942 review round 5 (ruling R2).** This case used to assert that the next
+        wire dropped the file from the block, so their edit showed in `git status` again. That
+        rule — a record's digest deciding a line leaves — is the rule a launch race used to drop
+        the line for charter's own generated `settings.json`, which carries the plane's rules
+        and `env`: committed by accident into a shared repository, it changes teammates'
+        settings. Hidden while it is there is the safe direction, and a reversible one: charter
+        never overwrites the file, and doctor names it and says how to commit it on purpose."""
         self.wire()
         self.assertIn("/.claude/settings.json", self.excludes())
-        (self.clone / ".claude" / "settings.json").write_text('{"env": {"X": "1"}}\n')
+        theirs = '{"env": {"X": "1"}}\n'
+        p = self.clone / ".claude" / "settings.json"
+        p.write_text(theirs)
         self.wire()
-        self.assertNotIn("/.claude/settings.json", self.excludes())
+        self.assertIn("/.claude/settings.json", self.excludes())
+        self.assertEqual(self.status(), "")
+        self.assertEqual(p.read_text(), theirs)
+        _isolation.make_plane(self)      # doctor's check answers only inside a real plane
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/svc/.claude/settings.json (foreign)", r.detail)
+        self.assertIn("if this is your own file and you mean to commit it: "
+                      "git add -f .claude/settings.json", r.hint)
+        self.assertNotIn("Remove", r.hint)
+        self.assertNotIn("delet", r.hint)
 
 
 class TheExcludeIsReported(CloneLayer):

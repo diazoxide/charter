@@ -1482,6 +1482,11 @@ def cmd_workspace_reinit(args) -> int:
     #: "the rest were current" — over an error two lines above it. A repair command that
     #: contradicts itself is one nobody trusts the next time.
     blocked: set[str] = set()
+    #: Workspaces left holding a state a row names and `reinit` cannot clear: a file charter did
+    #: not write, one the harness keeps, one it cannot read or write, a record it cannot publish
+    #: (#942 review round 5, R4). "Up to date — nothing to do" printed beside one of them told the
+    #: operator the plane's rules were in force where they were not.
+    unresolved: set[str] = set()
     for n in names:
         before = workspace.reinit(n)
         # The HARNESS LAYER, reported as its own line rather than folded into the
@@ -1500,7 +1505,18 @@ def cmd_workspace_reinit(args) -> int:
         # one guards a THIRD PARTY's answer, and a harness charter did not write can
         # return anything at all.
         for rel, did in before["layer"]:
-            if did == "foreign":
+            inside = workspace.checkout_row(n, rel)
+            if did in ("foreign", "blocked", "withheld", "harness-behind", "unreadable",
+                       "unrecorded"):
+                unresolved.add(n)
+            if did == "foreign" and inside:
+                # Never "remove it" in a checkout (review round 5, R2 and R5): the file is
+                # somebody's own in their own repository and stays hidden while it is there, so
+                # the one thing to say is how to commit it on purpose.
+                util.warn(f"'{n}': {rel} holds content charter did not write — left completely "
+                          f"untouched, and hidden in that checkout while it is there; if this is "
+                          f"your own file and you mean to commit it: git add -f {inside[1]}")
+            elif did == "foreign":
                 util.warn(f"'{n}': {rel} was not written by charter — left completely "
                           f"untouched. Remove it if you want charter's own again.")
             elif did == "blocked":
@@ -1539,10 +1555,13 @@ def cmd_workspace_reinit(args) -> int:
                           f"last wrote.")
             elif did == "unrecorded":
                 # Ruling H (#942 review round 4): a write charter could not record first is not
-                # made, and the lines stay. Not `blocked`: nothing is in the way at that path.
-                util.warn(f"'{n}': {rel} — charter could not publish its record there first, so "
-                          f"it wrote nothing and kept every exclude line it had; restoring write "
-                          f"access to that checkout clears this.")
+                # made, and the lines stay. Not `blocked`: nothing is in the way at that path. With
+                # the errno the publish failed with (review round 5, R5).
+                refused = workspace.unrecorded_reason(inside[0]) if inside else ""
+                util.warn(f"'{n}': {rel} — charter could not publish its record there first"
+                          f"{f' ({refused})' if refused else ''}, so it wrote nothing and kept "
+                          f"every exclude line it had; restoring write access to that checkout "
+                          f"clears this.")
             else:
                 repairs += 1
                 repaired.add(n)
@@ -1587,17 +1606,20 @@ def cmd_workspace_reinit(args) -> int:
         # command that prints "Nothing to save".
         if workspace.is_live(n) and set(before["missing"]) & _LIVE_SHARED_COMPONENTS:
             util.info(f"  '{n}' is LIVE — commit the restored files: charter workspace save {n}")
-    if not repaired and not blocked:
+    if not repaired and not blocked and not unresolved:
         util.ok(f"Up to date (structure v{workspace.STRUCTURE_VERSION}) — nothing to do.")
     elif len(names) > 1:
         # Two units, named as two. "Applied N repair(s)" is the number the per-workspace
         # rows above add up to; "across M of T workspace(s)" is the number an operator is
         # actually checking against the plane they know the size of. A workspace charter
         # could not repair is called out rather than swept into "the rest were current",
-        # which would contradict the error it just printed.
+        # which would contradict the error it just printed — and so is one still holding a
+        # state a row above names (review round 5, R4).
         stuck = f"{len(blocked)} could not be repaired; " if blocked else ""
+        left = unresolved - repaired - blocked
+        kept = f"{len(left)} still hold what the rows above name; " if left else ""
         util.info(f"Applied {repairs} repair(s) across {len(repaired)} of {len(names)} "
-                  f"workspace(s); {stuck}the rest were current.")
+                  f"workspace(s); {stuck}{kept}the rest were current.")
     return 0
 
 
