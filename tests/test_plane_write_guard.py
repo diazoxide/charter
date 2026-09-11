@@ -64,6 +64,27 @@ class WhatIsGuarded(unittest.TestCase):
                 self.assertIn(os.path.join(real, "charter.local.toml"), _planeguard._REAL,
                               "a test could rewrite the operator's harness profiles")
 
+    def test_the_planes_local_profiles_cannot_be_read_either(self):
+        """Ruling 43 made `profiles.current()` read `charter.local.toml` when a surface asks, so
+        no `config` setting stands between a test and the operator's own profiles any more. The
+        read itself is refused, before anything is opened — so whether the file exists on this
+        machine does not change the answer."""
+        for real in _planeguard._REAL_ROOT:
+            local = os.path.join(real, "charter.local.toml")
+            with self.subTest(plane=real, via="open"), \
+                 self.assertRaises(_planeguard.RealPlaneRead):
+                builtins.open(local)
+            with self.subTest(plane=real, via="Path.read_bytes"), \
+                 self.assertRaises(_planeguard.RealPlaneRead):
+                Path(local).read_bytes()
+
+    def test_reading_profiles_off_the_real_plane_is_refused(self):
+        """What the review of `a36194d` measured: with no isolation, `profiles.current()` read
+        whatever `charter.local.toml` sat at the real plane's root."""
+        from charter import profiles
+        with self.assertRaises(_planeguard.RealPlaneRead):
+            profiles.current()
+
     def test_the_suite_reads_the_checkout_these_modules_were_loaded_from(self):
         """#785. `root._plane_of` sends a linked worktree's plane back to the tree it was
         cut from, so without the pin in `_planeguard.install` a run in a worktree asserts

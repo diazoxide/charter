@@ -147,6 +147,11 @@ LOCAL_SECTION = (
 NOT_A_TABLE = (
     "[harness] {name} in charter.local.toml is not a table — a profile is [harness.{name}] "
     "with kind, command and optionally env.")
+NESTED_TABLE = (
+    "[harness.{parent}] holds a table {key}, which charter reads neither way — {key} is not a "
+    "key a profile has (kind, command and env), and if a profile named '{dotted}' was meant, a "
+    "profile's name is letters, digits, '_' and '-', with no dot, because a dot breaks tmux "
+    "targets. Rename the key, or give that profile a name of its own.")
 ILLEGAL_NAME = (
     "profile '{name}' is not a name charter accepts — letters, digits, '_' and '-', starting "
     "with a letter or digit, and no dot, because a dot breaks tmux targets. Rename the table.")
@@ -331,11 +336,16 @@ def derive(root: Path, cfg: dict) -> ProfileSet:
             default, default_from = table, LOCAL_FILE
             continue
         if isinstance(table, dict):
+            # A table under a key that is not a profile key. Once parsed it is either a dotted
+            # name written without quotes or a typo'd key holding an inline table — the two
+            # cannot be told apart — so the refusal names both readings. A table under `kind`,
+            # `command` or `env` is that key's value and is judged as one below.
             nested = [key for key, value in table.items()
-                      if key != _ENV and isinstance(value, dict)]
+                      if key not in _PROFILE_KEYS and isinstance(value, dict)]
             for key in nested:
                 dotted = contain.readable(f"{name}.{key}")
-                refused.append(Refused(dotted, LOCAL_FILE, ILLEGAL_NAME.format(name=dotted)))
+                refused.append(Refused(dotted, LOCAL_FILE, NESTED_TABLE.format(
+                    parent=contain.readable(name), key=contain.readable(key), dotted=dotted)))
             # A parent holding nothing but sub-tables declares nothing, and the built-in of
             # its name stays. One with keys of its own is validated WITH its nested tables:
             # once parsed, `[harness.claude.alt]` and a typo'd `enviroment = { … }` are the
@@ -379,12 +389,15 @@ def _narrowed(derived: ProfileSet, found: dict, refused: list) -> ProfileSet:
 _last: list = []
 
 
-def _bytes(path: Path) -> bytes | None:
-    """*path*'s bytes, or ``None`` when there is nothing to read — part of a memo key."""
+def _bytes(path: Path) -> bytes | tuple | None:
+    """*path*'s bytes, as part of a memo key: ``None`` when there is no such file, and a marker
+    of its own when there is one that cannot be read — so the two never share an answer."""
     try:
         return path.read_bytes()
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as e:
+        return ("unreadable", e.errno)
 
 
 def current() -> ProfileSet:

@@ -224,6 +224,27 @@ class ABrokenProfileIsRefusedAlone(_LocalFile):
                 self.assertEqual(r.profiles["claude"].source, "built-in")
                 self.assertIn("ok", r.profiles)
 
+    def test_an_inline_table_under_a_typo_names_both_readings(self):
+        """Once parsed, `enviroment = { … }` under `[harness.claude]` is the same thing as a table
+        `[harness.claude.enviroment]`, so the refusal names both readings: it is not a key charter
+        reads, and a profile named `claude.enviroment` could not carry a dot. The profile itself
+        stays refused, for the key it does not read."""
+        r = self._local(_OK + '[harness.claude]\nkind = "claude"\ncommand = ["claude"]\n'
+                              'enviroment = { CLAUDE_CONFIG_DIR = "~/.claude-work" }\n')
+        refusals = {x.name: x.reason for x in r.refused}
+        self.assertEqual(set(refusals), {"claude.enviroment", "claude"})
+        self.assertIn("not a key", refusals["claude.enviroment"])
+        self.assertIn("dot", refusals["claude.enviroment"])
+        self.assertIn("does not read", refusals["claude"])
+        self.assertNotIn("claude", r.profiles)
+
+    def test_a_table_under_a_profile_key_is_that_keys_value_not_a_dotted_name(self):
+        """`kind`, `command` and `env` are a profile's own keys, so a table under one of them is a
+        wrong value for that key and refused as one — never read as a profile named `k.kind`."""
+        r = self._local(_OK + '[harness.k]\ncommand = ["claude"]\n[harness.k.kind]\nx = 1\n')
+        self.assertEqual([x.name for x in r.refused], ["k"])
+        self.assertIn("claude, opencode, codex", r.refused[0].reason)
+
     def test_ruling_41_an_env_table_alone_declares_the_profile_and_refuses_the_name(self):
         """Pin, ruling 41. `[harness.claude.env]` is the TOML spelling of profile `claude`'s
         `env`, not a dotted name: `env` is a profile key. So it declares how `claude` runs,
@@ -520,6 +541,15 @@ class CurrentIsReadOncePerFile(_LocalFile):
         self.assertEqual(profiles.current().default, "codex")
         self._charter_toml('[harness]\ndefault = "opencode"\n')
         self.assertEqual(profiles.current().default, "opencode")
+
+    def test_an_unreadable_file_and_an_absent_one_are_different_answers(self):
+        """A file that cannot be read and no file at all must not share a memo key, or the
+        second answer is the first's. A directory stands in for the unreadable file."""
+        local = config.ROOT / "charter.local.toml"
+        local.mkdir()
+        self.assertEqual([x.name for x in profiles.current().refused], [""])
+        local.rmdir()
+        self.assertEqual(profiles.current().refused, ())
 
     def test_the_file_is_the_one_other_places_spell_out(self):
         """`commands.LOCAL_PROFILES_IGNORE` and `tests/_planeguard` spell the name rather than

@@ -265,6 +265,43 @@ from charter import root as _root        # noqa: E402
 #: exactly like safety. Computed once, at install; the per-call check is a string compare.
 _REAL: tuple[str, ...] = ()
 
+#: The real plane's own ``charter.local.toml``, in both spellings — refused for READS as well
+#: as for writes. Ruling 43 moved the read of this file out of `config` and into
+#: `profiles.current()`, which runs when a surface asks, so no derived setting stands between
+#: a test and the operator's own profiles any more. The file is that operator's accounts and
+#: commands, in no commit, and a test that read it would assert against a fixture only this
+#: machine has. Filled at install, from the same markers `_REAL` holds.
+_REAL_LOCAL_PROFILES: tuple[str, ...] = ()
+
+
+def _reads_real_profiles(path) -> bool:
+    """Is *path* the real plane's ``charter.local.toml``? The basename is compared first — a
+    string test — so the hot path of every other `open` in the suite costs no syscall."""
+    if not _REAL_LOCAL_PROFILES:
+        return False
+    try:
+        p = os.fspath(path)
+    except TypeError:
+        return False                      # an int fd, or something not a path at all
+    if isinstance(p, bytes):
+        p = os.fsdecode(p)
+    if os.path.basename(p) != "charter.local.toml":
+        return False
+    here = os.path.abspath(p)
+    return here in _REAL_LOCAL_PROFILES or os.path.realpath(here) in _REAL_LOCAL_PROFILES
+
+
+def _explain_profiles_read(path) -> str:
+    return (
+        f"REFUSED: read of {path}\n"
+        f"{_current_test()} is reading the developer's own `charter.local.toml` — this "
+        f"machine's harness profiles, which are in no commit — so what it asserts depends on "
+        f"whoever runs the suite. `profiles.current()` reads the file when a surface asks "
+        f"(ruling 43), so `charter harness list`, `charter doctor` and every launch surface "
+        f"reach it. Derive the case from `tests._isolation.PersonaIso`, whose `config.ROOT` is "
+        f"a tmp plane. `isolate_state_dir` does not move this file: it sits at the plane root, "
+        f"not in `.charter/`.")
+
 
 class RealPlaneWrite(BaseException):
     """A test tried to write into the developer's own control-plane state directory."""
@@ -1730,7 +1767,7 @@ def _guard_spawns() -> None:
 
 def install() -> None:
     """Wrap every write primitive. Idempotent; called once at `tests` package import."""
-    global _REAL
+    global _REAL, _REAL_LOCAL_PROFILES
     if _REAL:
         return
     from charter import config
@@ -1773,6 +1810,8 @@ def install() -> None:
         for name in (_root.MARKER, "charter.local.toml")
         for m in _both_spellings(Path(r) / name)))
     _REAL = ((written,) if written == resolved else (written, resolved)) + markers
+    _REAL_LOCAL_PROFILES = tuple(m for m in markers
+                                 if os.path.basename(m) == "charter.local.toml")
 
     # `os.mkdir` covers `Path.mkdir` AND `os.makedirs` (which calls the module global by
     # name, so it goes through this wrapper too) — one wrapper, both spellings.
@@ -1809,6 +1848,10 @@ def install() -> None:
     def open_(file, mode="r", *args, **kw):
         if any(c in mode for c in "wxa+") and _hits(file):
             raise RealPlaneWrite(_explain(f"open(..., {mode!r})", file))
+        # A READ of the real plane's `charter.local.toml` as well (ruling 43): see
+        # `_REAL_LOCAL_PROFILES`. A write to it is refused just above, through `_REAL`.
+        if _reads_real_profiles(file):
+            raise RealPlaneRead(_explain_profiles_read(file))
         return original_open(file, mode, *args, **kw)
 
     builtins.open = open_

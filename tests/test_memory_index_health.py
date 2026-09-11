@@ -105,14 +105,20 @@ class DoctorCheck(unittest.TestCase):
         """Runs from SessionStart — WARN at worst, never FAIL."""
         self.assertIn(doctor.check_memory_indexes().status, (doctor.OK, doctor.WARN))
 
-    def test_check_is_wired_into_run_all(self):
-        self.assertIn("memory indexes", [r.name for r in doctor.run_all()])
-
     def test_ok_result_states_how_many_bases_were_checked(self):
         """'ok' with no detail would hide a check that examined nothing."""
         r = doctor.check_memory_indexes()
         if r.status == doctor.OK and "not checked" not in (r.detail or ""):
             self.assertRegex(r.detail or "", r"\d+ base\(s\)")
+
+
+class DoctorRunsTheCheck(PersonaIso):
+    """On a throwaway plane: `run_all` reaches `charter.local.toml` through the `harness
+    profiles` row, and the real plane's file is the operator's own — `tests/_planeguard`
+    refuses the read."""
+
+    def test_check_is_wired_into_run_all(self):
+        self.assertIn("memory indexes", [r.name for r in doctor.run_all()])
 
 
 

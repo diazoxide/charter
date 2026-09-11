@@ -712,10 +712,14 @@ def check_harness_profiles() -> Result:
     from . import config as _config, profiles
 
     name = "harness profiles"
+    # Read first, whatever git says, the way `charter harness list` does: the ignore check
+    # answers from git without opening the file, and a row that skipped the read on a
+    # committable file would be the one surface that reached the operator's own profiles with
+    # no read the suite's guard could see (`tests/_planeguard`, ruling 43).
+    profile_set = profiles.current()
     check = profiles.ignore_check(_config.ROOT)
     if check.reason:
         return Result(name, WARN, detail=check.reason, hint=check.fix)
-    profile_set = profiles.current()
     names = ", ".join(profile_set.profiles)
     refused = profile_set.refused
     if refused:

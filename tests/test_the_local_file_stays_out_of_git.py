@@ -28,7 +28,7 @@ from unittest import mock
 
 from charter import commands, config, doctor, instance, profiles, util
 from charter.doctor import OK, WARN
-from tests import _gitguard
+from tests import _gitguard, _planeguard
 from tests._isolation import PersonaIso
 from tests.test_init import InitIso
 
@@ -379,6 +379,35 @@ class DoctorWarns(PersonaIso):
         names = doctor.check_names()
         self.assertEqual(names.index("harness profiles"), names.index("charter.toml") + 1)
         self.assertIn("harness profiles", [r.name for r in doctor.run_all()])
+
+
+class EverySurfaceIsRefusedTheOperatorsFile(PersonaIso):
+    """The review of `a36194d` put a sentinel `charter.local.toml` at the real plane's root and
+    ran with no isolation: `profiles.current()`, `harness list` and doctor all read it. Here a
+    throwaway plane stands in for the real one, as far as `tests/_planeguard`'s read refusal
+    is concerned. Its file is one git would commit, which is exactly when doctor's ignore
+    check could answer from git alone and never open the file for the guard to see."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        local = config.ROOT / "charter.local.toml"
+        local.write_text(_OK)
+        _git(config.ROOT, "init", "-q")
+        self.enterContext(mock.patch.object(
+            _planeguard, "_REAL_LOCAL_PROFILES", _planeguard._both_spellings(local)))
+
+    def test_reading_profiles_is_refused(self):
+        with self.assertRaises(_planeguard.RealPlaneRead):
+            profiles.current()
+
+    def test_harness_list_is_refused(self):
+        from charter import commands_harness
+        with redirect_stderr(io.StringIO()), self.assertRaises(_planeguard.RealPlaneRead):
+            commands_harness.cmd_harness_list(SimpleNamespace())
+
+    def test_doctor_is_refused_even_where_git_alone_could_answer(self):
+        with self.assertRaises(_planeguard.RealPlaneRead):
+            doctor.check_harness_profiles()
 
 
 if __name__ == "__main__":
