@@ -109,8 +109,9 @@ a key. Charter declines to hold one; it cannot prevent one.
   down. A
   declared replacement of a built-in is refused with the rest: that name refuses rather than
   falling back to the built-in, which would run a command the operator replaced. The check
-  runs at launch, in the selector, in `charter harness list` and `harness install`, and in
-  `doctor` — never on a config read, so no hook pays a git call per tool call.
+  runs at launch, in the selector, in `charter harness list` and `harness install`, and in a
+  `doctor` a person runs — one git call each time, never on a config read and never in
+  SessionStart's preflight, so no hook pays a git call for it.
 - **Profiles are added by editing the file.** There is no `charter harness add`: a chat can
   run it as easily as it can edit the file, so it could never stand for the operator's
   approval, and all it would buy is typing. `charter harness list` shows every profile charter
@@ -132,7 +133,8 @@ charter's process (*How a harness starts*).
    or one with no terminal on both stdin and stdout to ask in, refuses where it would have
    asked; a pane's launcher is unattended unless the open says otherwise, so it never waits on
    a question nobody can see. Nothing runs a declared profile's command before its
-   record matches — not a launch, not a wiring probe, not an install.
+   record matches — not a launch, not a wiring probe, not an install. After a yes, every check
+   runs again from the top before the `exec`, so a yes never walks past a refusal behind it.
 3. **The profile is wired.** Measured on claude 2.1.268, codex-cli 0.147.0 and opencode
    1.18.23, in throwaway folders with no login and no model tokens: a harness pointed at
    another config folder loads none of charter's wiring. Claude Code lists no charter plugin
@@ -154,10 +156,12 @@ charter's process (*How a harness starts*).
      cannot be asked: `codex plugin list` answers the same for an empty `CODEX_HOME` and a
      wired one, so charter reads that home's `config.toml`, and wired needs all three marks —
      the plugin enabled, the `shell_environment_policy.set` line, and trust for its hooks. It
-     is the home charter can see; one a wrapper script exports is not. Claude Code counts as
-     wired when any entry covering the chat's directory is enabled — this machine lists disabled
-     and enabled entries side by side — and opencode's answer counts only when the shim it names
-     is charter's own, byte for byte.
+     is the home charter can see; one a wrapper script exports is not. Claude Code is wired by
+     the most specific entry covering the chat's directory — local over project over user — so a
+     chat that disables charter locally is unwired whatever the user entry says. opencode's
+     answer counts only when the shim it names is charter's own, byte for byte, and nothing
+     foreign sits beside it in the plugin realm: a byte-perfect `charter.ts` beside a
+     `plugin/aaa_boot.ts` let a vault read through (ADR 0015).
    - `charter init` and `charter harness install <profile>` run each kind's wiring under that
      profile's environment, the plugin install included; `harness install` resolves a profile
      name first, then a registry name, so `charter harness install codex` still works.
@@ -208,6 +212,14 @@ state. `CHARTER_ROOT`, `CHARTER_WORKSPACE` and `CHARTER_PERSONA` are pins and st
 started from a chat's shell keeps that chat's plane and workspace, and
 `CHARTER_PERSONA=forge charter claude --no-frame` means what it says.
 
+A launcher is in a frame only when tmux says so. Before it `exec`s, its own pid must be the
+`#{pane_pid}` of a pane whose window is named for the chat it claims, on that chat's server, read
+from tmux rather than from charter's records. `$TMUX_PANE` and `$CHARTER_SESSION_ID` are never
+proof: a model's tool shell inherits both from its chat. So `charter frame-launch` run from that
+shell is a launch with no frame and rewrites no chat's record — reopen follows that record. This
+is a guard rail against a model's accidental misuse, not a boundary: a process that deliberately
+starts its own tmux pane in a window named like a chat passes it.
+
 **A chat records its profile.** `CHARTER_HARNESS` stays the kind: hooks compare it to
 `claude-code` for session ids, resume and the working spinner. The profile is a field of its
 own, `CHARTER_HARNESS_PROFILE`, set by the launcher at `exec` rather than through tmux, and
@@ -239,7 +251,8 @@ harness today, it shows the profile.
   and asks in place. The starting row is the profile of the chat `+` was pressed from, else
   `default`; a `default` naming a profile this machine lacks marks no row, the cursor goes
   where the palette's own rule puts it — the first row that can run, so Enter always does
-  something — and `doctor` warns.
+  something — and `doctor` warns. A pick the fresh check at launch refuses returns to the
+  selector the same way, with that row's state updated; only Esc closes the window.
 - **The surface** is the F2 palette's picker, type to filter, Enter to choose, Esc to cancel,
   drawn in the chat's own pane rather than in one split off it.
 - **Cancel.** Esc closes that window having started nothing; if it was the workspace's only

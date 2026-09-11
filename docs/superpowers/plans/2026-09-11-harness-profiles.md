@@ -98,6 +98,9 @@ Every task's requirements include this section.
   - run `python3 tools/sweep.py` and report what it said in the PR description;
   - for a guard added under `tests/`, which the sweep never mutates, also report the hand
     deletion check (delete the line in a scratch copy, run the covering class).
+- **Each task's first implementation step runs the whole suite against the change, in the
+  background** (re-review N4), and records what breaks. Every task's list of existing tests it
+  changes is a floor, not the whole set.
 - Run the whole suite the way CI does, `python3 -m unittest discover -s tests`, before each PR.
   `tests/test_plane_spawn_guard.py` scans the whole tree statically, so a focused run cannot see
   a new `os.exec*`.
@@ -110,8 +113,8 @@ Every task's requirements include this section.
 Task 3: detecting wiring runs the profile's own command, and only Task 3's launch record stands
 for the operator's approval of it.
 
-- **Task 0 is #969, open as PR #970**: branch `fix-969-doctor-config-folder`, commits `677faac`
-  and `95c2a49`, under review, not merged. It is a prerequisite of Task 4 only and is not planned here.
+- **Task 0 is #969, open as PR #970**: branch `fix-969-doctor-config-folder`, commits `677faac`,
+  `95c2a49` and `3624287`, under review, not merged. It is a prerequisite of Task 4 only and is not planned here.
 - Tasks 1–3 do not touch doctor's plugin rows and do not wait for #970.
 - Task 4 starts only once #970 is on `main`, and re-reads its merged diff first: review may
   rename what Task 4 consumes.
@@ -199,10 +202,11 @@ No new `docs/*.md` page. Profiles live in `docs/control-plane.md`, `docs/harness
 
 ## Task 0: #969 — `doctor` reads the config folder Claude Code uses (PR #970; prerequisite, not planned here)
 
-PR #970, branch `fix-969-doctor-config-folder`, commits `677faac` and `95c2a49`, under review.
-Task 4 starts after it is on `main`.
+PR #970, branch `fix-969-doctor-config-folder`, commits `677faac`, `95c2a49` and `3624287`,
+under review. Task 4 starts after it is on `main`.
 
-**What it adds** (read with `git show 95c2a49:<path>`; its worktree under `.worktrees/` is not
+**What it adds** (read with `git show 3624287:<path>`; `config_home` and reinit's `~/.claude` pin
+are unchanged there; its worktree under `.worktrees/` is not
 touched):
 - `charter/harness/claude_code.py`: `config_home() -> Path`
   (`CLAUDE_CONFIG_DIR ?? ~/.claude`, NFC-normalised; an empty value is kept and names the
@@ -459,14 +463,19 @@ DEFAULT_REFUSED = ("[harness] default = \"{value}\" names no profile this machin
 - `cmd_reinit` calls it.
 
 **`ignored_refusal(root)`.**
-- `util.git_path_state(root, LOCAL_FILE)` decides (review 4):
-  - `NOT_A_REPO` → `""`. Only `git rev-parse --git-dir` failing with git's own "not a git
-    repository" counts: there is nothing to commit to, so nothing to refuse.
-  - `TRACKED` (`git ls-files --error-unmatch` rc 0) → `TRACKED`, whether or not it is also
-    ignored.
-  - `IGNORED` → `""`. `COMMITTABLE` → `NOT_IGNORED`.
-  - `UNKNOWN_GIT` — git missing, any other non-zero answer, or a timeout (`util.ProcTimeout`,
-    caught) → `GIT_CANNOT_TELL`, naming the reason.
+- `util.git_path_state(root, LOCAL_FILE)` decides (review 4) with **one** git call (re-review
+  N8): `git -C <root> status --porcelain=v1 --ignored=matching --untracked-files=all -- <path>`,
+  run with `LC_ALL=C` so git's message is English whatever `LANG` says. Measured on git 2.50.1
+  in a throwaway repo:
+  - rc 0, `?? <path>` → `COMMITTABLE` → `NOT_IGNORED`.
+  - rc 0, `!! <path>` → `IGNORED` → `""`.
+  - rc 0, empty output (the file exists), or any tracked status such as ` M` → `TRACKED`,
+    whether or not it is also ignored. `--untracked-files=all` overrides an operator's
+    `status.showUntrackedFiles=no`, which would otherwise hide `??`.
+  - rc 128 with `fatal: not a git repository` → `NOT_A_REPO` → `""`: nothing to commit to, so
+    nothing to refuse.
+  - `UNKNOWN_GIT` — git missing, any other non-zero answer (rc 128 `dubious ownership`
+    included), or a timeout (`util.ProcTimeout`, caught) → `GIT_CANNOT_TELL`, naming the reason.
 - It never raises, so one slow git costs `doctor` its `harness profiles` row and nothing more:
   `doctor._checks` builds its rows in one list with no per-check guard.
 - An absent file → `""` without running git: the check is about declared profiles, and a file
@@ -603,14 +612,19 @@ Class `TheFileMustBeIgnoredToBeUsed(PersonaIso, unittest.TestCase)`:
 - `test_a_file_git_would_commit_is_refused`: no ignore line → `"charter reinit adds" in text`.
 - `test_a_tracked_file_is_refused_even_when_ignored`: `git add -f` + commit → `"git rm --cached" in text`.
 - `test_a_plane_that_is_not_a_repository_is_not_refused`: no `.git` → `""`.
-- `test_git_saying_not_a_repository_is_the_only_pass`: `util.run` patched so `rev-parse` answers
-  rc 128 with `fatal: not a git repository` → `""`; rc 128 with `fatal: detected dubious
+- `test_git_saying_not_a_repository_is_the_only_pass`: `util.run` patched so the `status` call
+  answers rc 128 with `fatal: not a git repository` → `""`; rc 128 with `fatal: detected dubious
   ownership` → `"could not say"`.
+- `test_one_git_call_answers_every_state`: a real repo in `self.tmp`, with
+  `_gitguard.environment()` in the child env — committable, ignored, tracked-clean and
+  tracked-modified each give their state, with `util.run` called once per ask (re-review N8).
+- `test_a_non_english_locale_still_reads_not_a_repository`: `LANG=de_DE.UTF-8` and
+  `LC_ALL=de_DE.UTF-8` in `os.environ` (`clear=True` plus `PATH`) → the git call's env holds
+  `LC_ALL == "C"`, and a plane that is not a repository reads `""` (re-review N8).
 - `test_git_missing_is_not_a_pass`: `util.run` raises `FileNotFoundError` → `"could not say"`.
 - `test_a_git_that_times_out_is_not_a_pass_and_does_not_raise`: `util.run` raises
   `util.ProcTimeout` → `"could not say"`, no exception.
-- `test_check_ignore_failing_is_not_a_pass`: `rev-parse` rc 0, `check-ignore` rc 128 →
-  `"could not say"`.
+- `test_an_unparseable_status_is_not_a_pass`: rc 0 with `?! <path>` → `"could not say"`.
 - `test_the_existing_callers_see_git_ignores_unchanged` (pin: passes at `a5aa860`):
   `util.git_ignores` takes no `timeout` and still answers `None` for a non-zero `rev-parse`.
 
@@ -758,6 +772,7 @@ readings go into the PR description and into `docs/frame.md` (*Docs*, below).
 | L5 | inside the exec'd recorder: `$TMUX_PANE`; then `state.is_live(fid, pane=<that>)` after `state.record_server`/`record_harness_pane`; `_live_chats(socket)` after `_chat_option_argv` | `$TMUX_PANE` equals the recorded pane; `is_live` is True; `_live_chats` contains the chat id — identically in A and B |
 | L6 | the recorder's env file; `tmux show-environment -g` and `show-environment -t <session>` | B's harness sees `CLAUDE_CONFIG_DIR=/tmp/cp-measure/alt` and `CHARTER_HARNESS_PROFILE=alt`; neither name appears in either `show-environment` output; no argv tmux was handed contains `/tmp/cp-measure/alt` |
 | L7 | the frame's existing `-e` overlay (`_frame_identity_env`) on both arms | `CHARTER_HARNESS` and `CHARTER_SESSION_ID` reach B's harness exactly as they reach A's |
+| L8 | B's `os.getpid()` before its `exec`, beside one `list-panes -a -F '#{pane_pid}\t#{pane_id}\t#{session_name}\t#{window_name}'`, on both servers — a first chat (`session_argv`), a second (`chat_window_argv`), and the operator's `respawn-pane` — plus a child B spawns | B's pid is the `#{pane_pid}` of the window named for its chat; the child's is not. The plan author pre-measured this on 3.7c and 3.2 with a Python stand-in: first command, second window and respawned pane were each equal to `#{pane_pid}`, and the child differed. Re-run with the real launcher (ruling 29, revised) |
 
 **Stop rule, written into the dispatch.** If any criterion fails on any version or server, the
 implementer:
@@ -794,6 +809,8 @@ and a failure changes the spec.
   - `_open_workspace` (`:7820-7833`), `cmd_new_chat` (`:10515-10551`), `background_refusal`
     (`:10686`), `open_in_background` (`:10730-10753`).
   - `_reopen_one` (`:10131-10145`), `_reopen_args` (`:10191`), `_record_the_plane` (`:9393`).
+- `charter/frame/tmuxctl.py` — `pane_by_pid(server, pid)` beside `operator_server`; `tmuxctl.py`
+  stays the only module that calls tmux.
 - `charter/frame/state.py:1950` — `record_profile`/`profile` after `chat_cwd`.
 - `charter/frame/reopen.py:74-120,294-309` — `Chat.profile`; `_chat` reads it.
 - `charter/frame/leave.py:51,134-188,418-422` — `Doomed.profile`; `plan` fills it; `title`
@@ -830,6 +847,16 @@ and a failure changes the spec.
     `tests/test_a_workspace_tab_opens_what_it_names.py::ARealTabOpensARealWorkspace` — now hand
     tmux an argv holding `-m charter`. `_planeguard._cmd_launches_charter` refuses that unless
     the child's plane is the tmp one, so each states `CHARTER_ROOT` for the tmux client.
+  - `tests/test_frame_launcher.py::MissingTmux` (a plain `TestCase`, `cmd_launch(harness="claude")`):
+    `_launch` now reads `profiles.current()` before `tmuxctl.version()`, which `_planeguard`
+    refuses off the real plane. It moves onto `PersonaIso` (re-review N4).
+  - `tests/test_frame_launcher.py::MissingHarnessBinary`: its launch-level cases asserted that a
+    missing binary reaches `bypass`'s 127 sentence. A profile launch now refuses before tmux
+    with `NOT_ON_PATH`, still 127, and those cases assert that sentence. The case that calls
+    `commands_frame.bypass([...])` directly is unchanged.
+  - `tests/test_frame_launcher.py::BypassRouting`: a harness launch with no frame now routes to
+    `launcher.start`, not `bypass`, and `charter frame -- <cmd>` still routes to `bypass`. Each
+    case asserts the function its launch really reaches.
 - Docs: `docs/frame.md`, `docs/control-plane.md`, `README.md:89-116`, `docs/install.md:296-305`.
 
 ### Interfaces
@@ -864,21 +891,47 @@ def environment(p: profiles.Profile, base: Mapping[str, str], *,
                 framed: bool) -> dict[str, str]: ...
     # dict(base) — minus CHARTER_SESSION_ID when not framed, and nothing else (review 8) —
     # | expanded_env(p) | {"CHARTER_HARNESS": p.harness, "CHARTER_HARNESS_PROFILE": p.name}
+KIND_IGNORED, KIND_PATH, KIND_NOT_YET, KIND_ASK, KIND_UNATTENDED, KIND_NOT_WIRED, KIND_CANNOT_TELL = (
+    "ignored", "path", "not-yet", "ask", "unattended", "not-wired", "cannot-tell")
+
+class Refusal(NamedTuple):
+    kind: str      # one of the KIND_* constants; every caller branches on this (re-review N2)
+    text: str      # the sentence printed; never compared, NEEDS_ASKING's included
+    exit: int      # what a CLI returns for it: MISSING_EXIT for KIND_PATH, else REFUSED_EXIT
+
 def refusal(p: profiles.Profile, *, root: Path, attended: bool,
-            env: Mapping[str, str]) -> str: ...
-    # "" when it may start. Task 2's order: ignored_refusal (declared profiles only), the
+            env: Mapping[str, str], cwd: Path) -> Refusal | None: ...
+    # None when it may start. Task 2's order: ignored_refusal (declared profiles only), the
     # command on PATH, then _approval_refusal. Task 3 swaps _approval_refusal's body; Task 4
-    # appends its check (see Behaviour).
-def _approval_refusal(p: profiles.Profile, *, attended: bool) -> str: ...
-    # Task 2: DECLARED_NOT_YET formatted when p.source != BUILTIN, else "" (review B1)
+    # appends its wiring check, probing from cwd (see Behaviour).
+def _approval_refusal(p: profiles.Profile, *, attended: bool) -> Refusal | None: ...
+    # Task 2: Refusal(KIND_NOT_YET, DECLARED_NOT_YET formatted, REFUSED_EXIT) when
+    #         p.source != BUILTIN, else None (review B1)
     # Task 3: profiletrust.refusal(p, attended=attended)
 def start(p: profiles.Profile, rest: list[str], *, fid: str | None,
           attended: bool) -> int: ...
-    # refusal → util.err + REFUSED_EXIT (MISSING_EXIT for PATH); else record the profile under
-    # fid, then os.execvpe(cmd[0], cmd + rest, env). Returns only when it did not exec.
+    # r = attempt(p, rest, fid=fid, attended=attended); util.err(r.text); return r.exit
+def attempt(p: profiles.Profile, rest: list[str], *, fid: str | None, attended: bool,
+            on_exec: Callable[[], None] = lambda: None) -> Refusal: ...
+    # refusal() from the top. Task 3 adds: KIND_ASK with a terminal on both ends asks, and a
+    # yes runs the whole chain again from the top (re-review N2). None → on_exec(), record the
+    # profile under fid, os.execvpe(cmd[0], cmd + rest, env). Returns the final Refusal only
+    # when it did not exec — the selector goes back to its list with it (re-review N7).
+def framed_chat() -> str | None: ...
+    # the chat this process claims ($CHARTER_SESSION_ID) only when tmux itself says os.getpid()
+    # is the #{pane_pid} of a pane whose window is named for that chat, on that chat's server
+    # (state.frame_server(chat), written before the pane exists; else commands_frame.SOCKET).
+    # Never $TMUX, never $TMUX_PANE, never charter's pane record (ruling 29, revised). None
+    # otherwise. Asked before exec, while the launcher is still the pane's first process.
+
+# charter/frame/tmuxctl.py
+def pane_by_pid(server: str, pid: int) -> tuple[str, str, str] | None: ...
+    # one list-panes -a -F '#{pane_pid}\t#{pane_id}\t#{session_name}\t#{window_name}' through
+    # server_argv(server); (pane_id, session_name, window_name) of the row whose pane_pid is
+    # pid, or None — a server that does not answer included
 def cmd_frame_launch(args) -> int: ...
     # resolves args.profile via profiles.current(); a name it cannot resolve → util.err and
-    # REFUSED_EXIT; fid = os.environ.get("CHARTER_SESSION_ID") (carried on -e by _launch)
+    # REFUSED_EXIT; fid = framed_chat(), and None makes it a launch with no frame
 
 # charter/frame/state.py
 def record_profile(fid: str, name: str) -> None: ...   # .charter/frame/<fid>/profile
@@ -948,10 +1001,13 @@ def _profile_launch(argv: list[str]) -> list[str]: ...
      its operator wants, and `CHARTER_PERSONA=forge charter claude --no-frame` means what it
      says. Dropping them would buy nothing against the pair.
 5. **Pre-tmux refusal.** The old `if h and not shutil.which(h.binary): return bypass(argv)` is
-   replaced by `why = launcher.refusal(p, root=config.ROOT, attended=attended,
-   env=launcher.environment(p, os.environ, framed=True))`; non-empty → `util.err(why)`, return
-   `launcher.MISSING_EXIT` for PATH, else 1. Nothing has been allocated yet, so this is a
-   `return`.
+   replaced by `r = launcher.refusal(p, root=config.ROOT, attended=attended,
+   env=launcher.environment(p, os.environ, framed=True), cwd=Path.cwd())`. A `Refusal` →
+   `util.err(r.text)`, return `r.exit` (`MISSING_EXIT` for `PATH`, `REFUSED_EXIT` otherwise).
+   Nothing has been allocated yet, so this is a `return`. Nothing compares `r.text`
+   (re-review N2). From Task 4, an `Opening` skips
+   the wiring probe here: `background_refusal` probed once from the target workspace's
+   directory, and the pane probes again before `exec` (re-review N8).
 6. `state.record_profile(fid, p.name)` beside `state.record_workspace(fid, ws)` on both paths.
 7. `display`, never `argv`, reaches `early_death_message` and `_say_why_the_harness_did_not_start`,
    so an early death names `claude --resume …`, not `python -P -m charter frame-launch`.
@@ -1002,13 +1058,42 @@ KIND_MISMATCH = ("charter: profile '{name}' is a {kind} profile, not a {asked} o
 
 `launcher.start`:
 1. `env = environment(p, os.environ, framed=fid is not None)`.
-2. `why = refusal(…)`; non-empty → `util.err(why)`, return the exit code.
+2. `r = refusal(…)`. A `Refusal` → `attempt` returns it, and `start` prints `r.text` and returns
+   `r.exit`. Task 3 adds the one exception: `KIND_ASK` with a terminal on both ends asks, and
+   a yes goes back to step 2 — the whole chain again, never straight to `exec` (re-review N2).
 3. `fid` set → `state.record_profile(fid, p.name)`.
 4. `cmd = expanded_command(p)`; `os.execvpe(cmd[0], cmd + rest, env)`.
 5. `FileNotFoundError` → `util.err(NOT_ON_PATH…)`, return 127. `PermissionError` → 126,
    `bypass`'s pair.
 
 `cmd_frame_launch(args)`:
+- **Frame identity is proven by pid, never by what is inherited** (ruling 29, revised).
+  - Why the environment cannot be proof: a model's own tool shell inherits the chat's `$TMUX`,
+    `$TMUX_PANE` and `$CHARTER_SESSION_ID`. Measured in a real framed Claude Code chat, its Bash
+    shell (pid 4707, ppid 53118) saw `TMUX_PANE=%3195`, whose `#{pane_pid}` was 53118. A
+    `charter frame-launch --profile claude` run from that tool would pass an environment check
+    and rewrite the chat's `profile` record, which reopen follows.
+  - `fid = framed_chat()`. The claimed chat is `$CHARTER_SESSION_ID`, and it counts only when
+    `tmuxctl.pane_by_pid(server, os.getpid())` finds a pane whose window is named for that chat.
+  - `server` is `state.frame_server(chat)`, which `_launch` writes before the pane exists, else
+    `commands_frame.SOCKET`. It is charter's own server by socket name on the private path, the
+    operator's socket on theirs, and never `$TMUX`.
+  - The answer comes from tmux, not from `state.harness_pane`, so nothing races `_launch`
+    recording the pane, and nothing waits.
+  - It runs before `exec`, while the launcher is the pane's first process. After `exec`,
+    `#{pane_pid}` is the harness, and every child of the harness has another pid.
+  - Why the pid is right on every path: every path names the window after the chat
+    (`layout.session_argv`'s `-n chat`, `layout.chat_window_argv`'s `-n chat`,
+    `layout.window_argv`'s `-n fid`). A multi-argument command is exec'd with no shell, so the
+    launcher is the pane's process. `respawn-pane` makes the process it starts the pane's new
+    `#{pane_pid}` (measurement L8).
+  - Without the proof it is a launch with no frame: `fid=None`, `framed=False` drops
+    `CHARTER_SESSION_ID` (review 8), and no chat record is written.
+  - **Limit, stated in the docs:** a process that deliberately starts its own tmux pane in a
+    window named like a chat passes this check. It is a guard rail against a model's accidental
+    misuse, not a boundary. And a window name is a readout — with `allow-rename on` a pane's own
+    output can rename a window (`commands_frame._CHAT_OPTION`'s note). The name is good proof
+    only at this moment, before the pane has printed anything.
 - `rest` loses a leading `--` the way `_launch` strips it (`:5105`).
 - Every failure prints to the pane's stdout/stderr and exits non-zero. `_launch`'s eager
   `_query_pane_dead_status` then reports it with `_pane_last_words` (L4), so the operator reads
@@ -1039,8 +1124,10 @@ Callers:
 - `_open_workspace`: `f"cannot open '{ws}': {why}"`.
 - `background_refusal`: `f"cannot open a chat in '{ws}': {why}"`. With a profile in hand it also
   asks `launcher.refusal(p, root=config.ROOT, attended=False, env=launcher.environment(p, os.environ, framed=True))`
-  and says a refusal the same way, so a handoff to a declared profile refuses before anything
-  is written (review B1). `UNMEASURED_FIRST_MESSAGE`
+  with `cwd=` the target workspace's directory — `workspace.workspace_dir(ws)` when it exists,
+  `config.ROOT` for one `--create` has not made yet, and never `_launch_root`, which creates
+  it. It says `r.text` the same way, so a handoff to a declared profile refuses before anything
+  is written (review B1, re-review N8). `UNMEASURED_FIRST_MESSAGE`
   keeps naming the kind: `first_message_argv` is a kind's.
 - `open_in_background`: passes `harness=p.kind, profile=p.name`.
 
@@ -1150,7 +1237,12 @@ for every case but the B1 one:
 | `test_the_profile_and_kind_ride_the_exec_not_tmux` | `start(p, ["--resume", "s1"], fid="beta.1", attended=True)` → execvpe args `("claude", ["claude", "--resume", "s1"], env)` with both variables; `state.profile("beta.1") == "claude-work"` |
 | `test_a_file_that_became_committable_since_tmux_is_refused_in_the_pane` | ignore line removed → `start` returns `REFUSED_EXIT`, execvpe not called, stderr contains `"charter reinit adds"` |
 | `test_a_command_removed_since_tmux_is_refused_in_the_pane` | `which` → None → returns 127, not called |
-| `test_the_pane_command_resolves_the_profile_by_name` | `cmd_frame_launch(SimpleNamespace(profile="claude-work", attended=True, rest=["--", "-p", "x"]))` with `CHARTER_SESSION_ID=beta.1` in a `clear=True` env → execvpe argv `["claude", "-p", "x"]` |
+| `test_the_pane_command_resolves_the_profile_by_name` | `cmd_frame_launch(SimpleNamespace(profile="claude-work", attended=True, rest=["--", "-p", "x"]))` with `CHARTER_SESSION_ID=beta.1` in a `clear=True` env and `tmuxctl.pane_by_pid` faked to answer `("%9", "beta", "beta.1")` for `os.getpid()` → execvpe argv `["claude", "-p", "x"]` |
+| `test_a_process_that_is_not_the_panes_first_process_is_not_framed` | `alpha.1` recorded with server `commands_frame.SOCKET` and profile `codex`; env holds the chat's own `CHARTER_SESSION_ID=alpha.1`, `TMUX_PANE=%1` and `TMUX` (`clear=True`); `tmuxctl.run` answers `list-panes` with `53118\t%1\talpha\talpha.1`; `os.getpid` → 4707 → `cmd_frame_launch(profile="claude", attended=False)` execs with no `CHARTER_SESSION_ID`, and `state.profile("alpha.1") == "codex"`. Red against the `$TMUX_PANE` version (ruling 29, revised) |
+| `test_the_panes_own_first_process_is_framed` | same, `os.getpid` → 53118 → the env keeps `CHARTER_SESSION_ID=alpha.1`, and the record becomes `claude` |
+| `test_a_forged_tmux_pane_naming_the_chats_pane_does_not_make_a_child_framed` | `TMUX_PANE=%1` and a `TMUX` naming another socket set by hand, `os.getpid` → 4707 → not framed; the recorded `list-panes` argv addresses `commands_frame.SOCKET` by name, never the socket in `$TMUX` |
+| `test_a_pane_whose_window_is_not_named_for_the_chat_is_not_framed` | `os.getpid` → 53118, but the row's window is `alpha.2` → not framed, no record written |
+| `test_a_server_that_does_not_answer_is_no_frame` | `list-panes` rc 1 → not framed, nothing raised |
 | `test_a_pane_asked_for_a_profile_that_is_gone_says_so` | `profile="gone"` → returns `REFUSED_EXIT`, `"no profile named 'gone'"` |
 | `test_a_command_that_vanished_between_which_and_exec_is_127` | execvpe raises `FileNotFoundError` → 127 |
 | `test_a_command_that_cannot_be_executed_is_126` | `PermissionError` → 126 |
@@ -1234,6 +1326,11 @@ case, which seeds a launch record. The server env carries `CHARTER_ROOT`, so
 - `test_the_exec_env_reaches_the_harness_and_not_tmux` (L6): the recorder's env holds
   `CHARTER_HARNESS_PROFILE=claude`, and neither `show-environment -g` nor
   `show-environment -t <session>` holds that name.
+- `test_only_the_panes_first_process_is_framed_on_a_real_server` (L8, ruling 29 revised): the
+  window's first command is a Python stand-in that writes `launcher.framed_chat()` to a file,
+  then spawns a child that writes its own answer with the same inherited environment. The
+  stand-in answers the chat id and the child answers `None`. This runs on both servers,
+  including the operator's `respawn-pane`.
 - `test_the_harness_is_still_a_chat_to_every_status_reader` (L5): from the recorder's env,
   `TMUX_PANE == state.harness_pane(fid)` and `fid in commands_frame._live_chats(socket)`.
 - `test_the_same_holds_in_a_tmux_you_already_had`: the operator arm. An `-S` server; `$TMUX`
@@ -1293,6 +1390,10 @@ The measurement's L3 is not a test: nothing in `charter/` reads that format. Its
       unchanged — the measured readings L1–L7, both versions, both servers;
     - that `#{pane_current_command}` names charter's interpreter until the harness starts;
     - that only the profile's name crosses tmux.
+    - that `charter frame-launch` counts itself framed only when its pid is the `#{pane_pid}`
+      of the window named for its chat on that chat's server, asked before `exec`. It is a
+      guard rail against a model running it from its tool shell, not a boundary: a process
+      that deliberately starts its own tmux pane in a window named like a chat passes.
   - `+` (`:808-813`, `:837-841`) and tabs (`:2803-2806`): "the profile this chat is running".
   - `## Leaving: detach, close, quit — and reopen` (`:1021`): a chat comes back on its own
     profile, and one whose profile is gone is skipped with its name, never given another.
@@ -1332,14 +1433,28 @@ The measurement's L3 is not a test: nothing in `charter/` reads that format. Its
   - `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py` gains
     `test_a_declared_profiles_env_reaches_the_harness_and_not_tmux`: a declared recorder profile
     with `env = { CLAUDE_CONFIG_DIR = "<tmp>/alt" }` and a seeded record. The value reaches the
-    recorder, and neither `show-environment` holds it. Without the record the pane refuses —
-    it is unattended unless told — and never hangs on a question.
+    recorder, and neither `show-environment` holds it.
+  - Correction (re-review N6): `_launch` passes `--attended`, and a real pane has a terminal on
+    both ends. So without the record that pane asks `run this? [y/N]` and waits until the
+    suite's 600 s kill. Every real-tmux test that launches a declared profile seeds its record
+    through one helper, `tests._isolation.approve_profile(case, name)`, and launches through
+    `tests._isolation.assert_approved(name)` first. That fails before tmux starts when the
+    record for the profile it launches is missing.
+- `tests/_isolation.py` — `approve_profile(case, name) -> profiles.Profile` (resolves the name,
+  calls `profiletrust.record_launched`) and `assert_approved(name)` (raises
+  `AssertionError("no launch record for '<name>' — its pane would wait at run this? [y/N]")`
+  unless `profiletrust.approval_needed` is `""`).
 - `charter/frame/launcher.py`:
   - `_approval_refusal`'s body becomes `profiletrust.refusal(p, attended=attended)`, and
     `DECLARED_NOT_YET` is deleted (review B1).
-  - `start` calls `profiletrust.ask_in_terminal` when that refusal is `NEEDS_ASKING` and
-    `profiletrust.can_ask(sys.stdin, sys.stdout)`. With a terminal missing on either side it
-    prints `NEEDS_ASKING`'s text and returns `REFUSED_EXIT` (review 3).
+  - `attempt` calls `profiletrust.ask_in_terminal` when the refusal's `kind` is `KIND_ASK` —
+    compared by kind, never by text — and `profiletrust.can_ask(sys.stdin, sys.stdout)`
+    (re-review N2).
+  - After a yes it runs the whole chain again from the top before any `exec`: the ignore check,
+    `PATH`, approval (now matching) and, from Task 4, wiring. This holds on every path,
+    `--no-frame` and the pane included.
+  - With a terminal missing on either side it returns that refusal: its text is printed and
+    `REFUSED_EXIT` returned (review 3).
 - `charter/commands_frame.py`:
   - `_launch`'s pre-tmux step 5: ask when `attended` and `profiletrust.can_ask(sys.stdin, sys.stdout)`; defer to the pane
     when attended with no terminal (`+`, a tab); refuse when unattended.
@@ -1368,9 +1483,11 @@ def fingerprint(p: profiles.Profile) -> dict: ...
 def last_launched(name: str) -> dict | None: ...
 def record_launched(p: profiles.Profile) -> None: ...    # config.replace_for, never raises
 def approval_needed(p: profiles.Profile) -> str: ...     # "" | "new" | "changed"; built-ins ""
-def refusal(p: profiles.Profile, *, attended: bool) -> str: ...
-    # "" when approved; NEEDS_ASKING formatted when attended (the caller asks if can_ask, and
-    # prints it otherwise); UNATTENDED formatted when not
+def refusal(p: profiles.Profile, *, attended: bool) -> "launcher.Refusal | None": ...
+    # None when approved; Refusal(KIND_ASK, NEEDS_ASKING formatted, REFUSED_EXIT) when
+    # attended — the caller asks if can_ask, and prints the text otherwise;
+    # Refusal(KIND_UNATTENDED, UNATTENDED formatted, REFUSED_EXIT) when not. Callers branch
+    # on kind, never on text (re-review N2)
 def ask_in_terminal(p: profiles.Profile, *, stdin, stdout) -> bool: ...
     # prints the command and env, reads one line, True only for "y"/"yes"; records on True
 NEEDS_ASKING = ("charter: profile '{name}' is {state} since it last ran, and charter asks "
@@ -1532,7 +1649,17 @@ timings.
   - ≤ 2 s added → rows for every listed profile, probed concurrently;
   - otherwise rows for declared profiles only, and the PR says so.
 
-**D2 — what flips each answer.** This is for the cache stamp.
+**D2 — what flips each answer, and which scope wins.** The first half is for the cache stamp;
+the second decides Claude Code's rule (re-review N3).
+- **Scope precedence**, recorded from `claude plugin list --json` under the alternate folder, for
+  a throwaway plane:
+  - (a) a local-scope disable beside a user-scope enable;
+  - (b) a project-scope enable beside a user-scope disable.
+  - For each, record every entry's `scope`, `projectPath` and `enabled`.
+- The plan author's reading of the default folder (*Measured while writing this plan*) found the
+  pairs `(local, False)`, `(project, False)`, `(project, True)` and `(user, True)` side by side.
+  That shows they coexist, not which one wins.
+- If D2 cannot settle the order, the most-specific rule below stands, because it fails closed.
 - Claude Code under the alternate folder, in turn:
   - install the plugin at project scope for a throwaway plane;
   - disable it (`claude plugin disable`);
@@ -1604,6 +1731,13 @@ Readings go into `docs/harnesses.md` and the PR.
   - `tests/test_a_second_launch_focuses_instead_of_dragging.py` (`_launch` at `:343`, `_press`
     at `:672`, `:729`) and `tests/test_a_workspace_tab_opens_what_it_names.py`'s in-process
     launches (`:517`, `:532`) → `wired_as_today`.
+  - `tests/test_frame_launcher.py::Launch` and `::LaunchInsideTmux`,
+    `tests/test_charter_records_the_plane_as_it_changes.py::TheLauncherTakesTheDecision`, and
+    `tests/test_a_chat_opens_in_the_background_with_its_first_message.py::TheLaunchOpensWithoutMovingAnyone`
+    → `wired_as_today` (re-review N4).
+  - `tests/test_a_background_chat_really_starts_on_its_brief.py`, whose recorder Task 2 put
+    first on `PATH` as `claude` → the recorder answers `plugin list --json` with a covering,
+    enabled entry.
   - `tests/test_a_workspace_tab_opens_what_it_names.py::ARealTabOpensARealWorkspace`, whose
     harness is a sleeping script on `PATH`, and
     `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py`'s recorder → answer
@@ -1702,9 +1836,12 @@ the earlier reason. It applies to built-ins exactly as to declared profiles (Rul
   - It reads every covering entry, not the first (review 6). `installed_for` returns the first
     entry `covers` accepts, and this machine lists user, project and local entries, enabled and
     disabled, side by side.
-  - `UNKNOWN` → `UNKNOWN_STATE`. No covering entry → `UNWIRED`. Some covering entry with
-    `enabled is True` → `WIRED`. Covering entries, none enabled → `UNWIRED`, detail
-    `"installed but disabled"`.
+  - **The most specific covering scope decides: local over project over user** (re-review N3).
+    A chat that disables charter in `.claude/settings.local.json` is unwired whatever the user
+    entry says, and a project enable over a user disable is wired.
+  - `UNKNOWN` → `UNKNOWN_STATE`. No covering entry → `UNWIRED`. The most specific covering
+    entry `enabled is True` → `WIRED`, otherwise `UNWIRED` with detail
+    `"disabled at <scope> scope"`.
   - The profile's command is what runs (`[*command, "plugin", "list", "--json"]`), so a wrapper
     script or a pinned binary answers for itself.
 - **Codex.**
@@ -1725,9 +1862,14 @@ the earlier reason. It applies to built-ins exactly as to declared profiles (Rul
   - Parse the JSON. `home = opencode.global_dir(env)`, the directory that holds `plugin/`.
     `WIRED` iff some `plugin` entry, read as a path with any `file://` prefix removed, equals
     `home / opencode.SHIM_PATH` — both `Path`s, compared resolved — and
-    `opencode.shim_is_charters(home)` is True, a byte match (review 5).
+    `opencode.shim_is_charters(home)` is True, a byte match (review 5), **and**
+    `opencode.foreign_plugins(home)` is empty (re-review N1).
   - `unvouched` is not the test: it answers `()` when the shim is missing
     (`opencode.py:530`), so an entry naming a deleted file would read as wired.
+  - Neither is `shim_is_charters` alone. `foreign_plugins` (`opencode.py:494-505`) and ADR 0015's
+    amendment (`:205-217`) record the attack: a byte-perfect `plugin/charter.ts` beside
+    `plugin/aaa_boot.ts` containing `Object.hasOwn = () => false` let a vault read through while
+    the shim compared equal.
   - Bad JSON, non-zero exit or timeout → `UNKNOWN_STATE`.
 
 **The fix sentence.**
@@ -1751,7 +1893,15 @@ CANNOT_TELL = ("charter: charter could not ask {kind} whether profile '{name}' i
   (review B2, Ruling 13). A start pays the probe twice, about 0.4–1.5 s. The cache it could have
   reused is a file a chat can write, key, stamp and date ahead.
 - **The selector** (Task 5) reads `cached` to draw its rows, and probes on a miss. That answer is
-  display-only: picking a row runs `launcher.start`, which probes again.
+  display-only: picking a row runs `launcher.attempt`, which probes again.
+- **A handoff probes twice** (re-review N8).
+  - Once in `background_refusal`, from the target workspace's directory
+    (`workspace.workspace_dir(ws)`, or `config.ROOT` before `--create` makes it), so
+    `charter handoff` refuses visibly before it writes anything.
+  - Then once in the pane before `exec`. `_launch` skips its own pre-tmux wiring probe for an
+    `Opening`.
+- **After a yes** the whole chain runs again from the top, wiring included (re-review N2): a
+  yes never walks past a refusal behind it.
 - **A `charter doctor` a person runs** probes, concurrently, and remembers each answer.
   `charter doctor --preflight`, which the SessionStart hook runs, never probes: no profile probe
   runs on a hook path (Ruling 11).
@@ -1811,8 +1961,9 @@ with an ignored file:
 - Unapproved profiles: `profile 'x' is not approved yet — charter x`.
 
 **`doctor`** — `check_profile_wiring(preflight=…)`:
-- `preflight=True` returns `[]`. The `harness profiles` row from Task 1 still runs there: it
-  spends one git call and runs no harness.
+- `preflight=True` returns `[]`, and `check_harness_profiles(preflight=True)` skips its git
+  ignore check (re-review N8), so SessionStart's preflight spends no git call on profiles. It
+  still reports refused profiles and a missing `default`, which cost one file read.
 - Otherwise, every profile the selector would list (declared, plus built-ins whose program is on
   `PATH`), subject to D1's rule. Built-ins are probed and refused like any profile
   (Ruling 10).
@@ -1846,7 +1997,12 @@ Class `ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCas
 - `test_a_disabled_install_is_unwired`: `enabled: false` → `UNWIRED`, `"disabled" in detail`.
 - `test_a_disabled_user_entry_listed_first_does_not_hide_an_enabled_project_entry`:
   `[{"id": "charter@charter", "scope": "user", "enabled": false}, {"id": "charter@charter", "scope": "project", "projectPath": <dir>, "enabled": true}]`
-  → `WIRED` (review 6).
+  → `WIRED` (review 6): the project entry is the more specific scope.
+- `test_a_local_disable_over_a_user_enable_is_unwired`:
+  `[{"id": "charter@charter", "scope": "user", "enabled": true}, {"id": "charter@charter", "scope": "local", "projectPath": <dir>, "enabled": false}]`
+  → `UNWIRED`, `"disabled at local scope" in detail` (re-review N3).
+- `test_a_project_enable_over_a_user_disable_is_wired`: the pair listed in the other order →
+  `WIRED`, so the order of the list decides nothing.
 - `test_an_unreadable_list_is_unknown_and_refuses`: rc 1 → `UNKNOWN_STATE`; `refusal(...)`
   contains `"could not ask"` and `"plugin list --json"`.
 - `test_a_probe_that_times_out_refuses`: `util.run` raises `util.ProcTimeout` →
@@ -1873,6 +2029,13 @@ Class `OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase)`
 - `test_no_shim_is_unwired`: `{"plugin": []}` → `UNWIRED`.
 - `test_a_plugin_entry_naming_a_missing_shim_is_unwired`: the entry names
   `<xdg>/opencode/plugin/charter.ts` and no file is there → `UNWIRED` (review 5).
+- `test_a_byte_perfect_shim_beside_a_foreign_plugin_is_not_wired`: the shim written by
+  `refresh_shim` (so `shim_is_charters` is True) and `plugin/aaa_boot.ts` holding
+  `Object.hasOwn = () => false` beside it, the probe naming the shim → `UNWIRED`, and `detail`
+  names `aaa_boot.ts`. This is the documented bypass (re-review N1).
+- `test_an_opencode_probe_that_times_out_refuses`: `util.run` raises `util.ProcTimeout` for
+  `debug config` → `UNKNOWN_STATE`, and `refusal(...)` contains `"could not ask"`
+  (re-review N1).
 - `test_a_shim_charter_cannot_vouch_for_is_unwired`: foreign shim content → `UNWIRED`.
 - `test_bad_json_is_unknown`: → `UNKNOWN_STATE`.
 
@@ -1882,6 +2045,15 @@ Class `NothingUnapprovedIsRun(PersonaIso, unittest.TestCase)`:
 - `test_doctor_does_not_probe_an_unapproved_profile`: its row is `WARN`, `hint == "charter claude-alt"`,
   `util.run` not called for it.
 - `test_install_asks_first`: stdin `"n\n"` on a tty → rc 130, `plugincache.install` not called.
+- `test_a_yes_on_an_unwired_profile_still_refuses_with_no_frame`: an unapproved declared
+  profile, `detect` → `UNWIRED`, stdin and stdout ttys answering `"y\n"`; `charter <name> --no-frame`
+  → the record is written, `execvpe` not called, rc 1, and stderr holds `"not wired"`
+  (re-review N2).
+- `test_a_yes_on_an_unwired_profile_still_refuses_in_the_pane`: the same through
+  `cmd_frame_launch`, with `tmuxctl.pane_by_pid` faked to prove the frame for `os.getpid()` →
+  no exec, `"not wired"`.
+- `test_callers_branch_on_the_kind_not_the_text`: `NEEDS_ASKING` patched to a different
+  sentence → the pane still asks (the kind decided).
 
 Class `TheLaunchRefusesAnUnwiredProfile(PersonaIso, unittest.TestCase)` — Task 2's
 `ALaunchNamesAProfile` patches, profile approved:
@@ -1947,6 +2119,9 @@ Class `DoctorHasARowPerProfile(PersonaIso, unittest.TestCase)`:
   present, `len(run_all()) > 20`.
 - `test_rows_are_probed_concurrently`: two probes each sleeping 0.3 s (patched) → the rows take
   < 0.55 s.
+- `test_the_preflight_runs_no_git_for_profiles`: `util.run` raising for any git argv →
+  `doctor.run_all(preflight=True)` raises nothing and holds a `harness profiles` row
+  (re-review N8).
 - `test_the_preflight_never_probes`: `mock.patch("charter.wiring.detect", side_effect=AssertionError)`
   and `util.run` raising for a harness argv → `doctor.run_all(preflight=True)` raises nothing
   and holds no `profile …` row.
@@ -2155,12 +2330,15 @@ def record_picked_kind(fid: str, harness_name: str) -> None: ...
      130 with `is_waiting` and prints neither `early_death_message` nor
      `_say_the_plane_is_recorded`.
 6. **On a Choice:**
-   - `state.clear_waiting(fid)`;
-   - `state.record_picked_kind(fid, p.harness)`, so panels, `chats.harness_of`, `leave.plan` and
-     `_same_profile_as` read the kind from the file;
-   - `state.record_profile(fid, p.name)`;
-   - `launcher.start(p, [], fid=fid, attended=True)`, which re-runs every guard fresh and
-     `exec`s.
+   - `launcher.attempt(p, [], fid=fid, attended=True, on_exec=…)`, which re-runs every guard
+     fresh.
+   - Only when it is about to `exec` does `on_exec` run: `state.clear_waiting(fid)`, then
+     `state.record_picked_kind(fid, p.harness)` — so panels, `chats.harness_of`, `leave.plan`
+     and `_same_profile_as` read the kind from the file — then `state.record_profile(fid, p.name)`.
+   - **A pick refused at launch returns to the selector** (re-review N7). `attempt` hands back
+     the `Refusal`; the pane re-opens the selector with that row updated (`refused=True`, its
+     note the refusal's text) and the reason in `footer`, and stays waiting. Only Esc closes the
+     window.
    - The window's tmux `-e CHARTER_HARNESS=` was empty at creation; the exec environment sets it
      for the harness and every hook it runs.
 
@@ -2218,11 +2396,15 @@ Class `ThePick(PersonaIso, unittest.TestCase)` — `palette.own_the_tty` patched
 
 Class `ThePaneWaitsThenBecomesTheHarness(PersonaIso, unittest.TestCase)` — `cmd_frame_launch` with
 `--select`, `pane.claim` stood in, `launcher.os.execvpe` patched, `CHARTER_SESSION_ID=beta.1`
-(`clear=True`), `state.record_waiting("beta.1")`:
+(`clear=True`), `tmuxctl.pane_by_pid` faked to answer `beta.1`'s window for `os.getpid()`
+(ruling 29, revised), `state.record_waiting("beta.1")`:
 - `test_a_pick_records_kind_and_profile_then_execs`: → `identity("beta.1")["CHARTER_HARNESS"] == "codex"`,
   `state.profile == "codex-alt"`, `not is_waiting`, execvpe called.
-- `test_a_pick_reruns_the_guards_fresh`: `wiring.detect` → `UNWIRED` at `start` (the row was
-  cached wired) → returns `REFUSED_EXIT`, no exec.
+- `test_a_pick_refused_at_launch_returns_to_the_selector`: `wiring.detect` → `UNWIRED` at the
+  pick, though the row was cached wired → no exec and no `SystemExit`. The next `own_the_tty`
+  call's `Selector` has that row `refused` with `"not wired"` in its note and the reason in
+  `footer`, and `state.is_waiting("beta.1")` is still True (re-review N7).
+- `test_only_escape_closes_the_selector_window`: a refused pick, then Esc → `SystemExit(130)`.
 - `test_escape_exits_130_and_leaves_it_waiting`: → `SystemExit(130)`, `is_waiting` still True.
 
 Class `AWaitingPaneIsNotAChat(PersonaIso, unittest.TestCase)`:
@@ -2605,8 +2787,9 @@ An adversarial review found 2 blocking and 10 should-fix problems. Each was chec
   `check_credential_paths` depend on exactly that.
 - **5.** opencode is wired only when the shim it names matches charter's bytes. *Reason:*
   `unvouched()` answers `()` for a missing shim.
-- **6.** Claude Code is wired when any covering entry is enabled. *Reason:* `installed_for`
-  returns the first covering entry, and this machine lists disabled and enabled entries together.
+- **6.** Claude Code detection reads every covering entry, not the first; N3 (ruling 28) then
+  decides by the most specific scope. *Reason:* `installed_for` returns the first covering
+  entry, and this machine lists disabled and enabled entries together.
 - **7.** Where `[shell_environment_policy]` exists without charter's line, `harness install`
   refuses and prints the line. *Reason:* `codex.install()` answers `present` for any such table,
   so the old fix looped.
@@ -2625,6 +2808,37 @@ An adversarial review found 2 blocking and 10 should-fix problems. Each was chec
 - **13.** `UNKNOWN_PROFILE_KEY` stays, because a typo'd key would launch the wrong account. The
   refusal of other keys in `charter.toml`'s `[harness]` is dropped.
 - **14.** `PROFILES` is derived before `HARNESS`.
+
+### Re-review rulings on the plan at `35b1d09` (rulings 26–32)
+
+- **N1 (26).** opencode is wired only when the entry names `home / SHIM_PATH`,
+  `shim_is_charters` matches, and `foreign_plugins` is empty. *Reason:* the byte check alone
+  passes the documented bypass, a byte-perfect `charter.ts` beside `plugin/aaa_boot.ts`
+  (`opencode.py:494-505`, ADR 0015).
+- **N2 (27).** Refusals are typed (`launcher.Refusal.kind`), and after a yes the whole chain runs
+  again from the top before `exec`, on every path. *Reason:* a yes must never walk past a wiring
+  refusal, and text comparison breaks the day a sentence is reworded.
+- **N3 (28).** Claude Code is wired by the most specific covering scope, local over project over
+  user; D2 records both pairs. *Reason:* "any enabled" fails open when a chat disables charter
+  locally over a user enable. The most-specific rule fails closed if D2 cannot settle it.
+- **N4 (31).** More existing tests are listed per task, and each task's first step runs the whole
+  suite in the background. *Reason:* the lists were a floor that kept missing classes.
+- **N5 (29, revised).** A launcher is framed only when tmux says its `os.getpid()` is the
+  `#{pane_pid}` of a pane whose window is named for its chat, on that chat's server. It is read
+  with one `list-panes -a`, before `exec`. `$TMUX_PANE`, `$CHARTER_SESSION_ID` and charter's
+  pane record are never proof, and nothing waits. *Reason:* a model's tool shell inherits the
+  chat's `$TMUX_PANE` and session id (measured: shell pid 4707 under `pane_pid` 53118). An
+  environment check would let `charter frame-launch` run from it rewrite the chat's profile
+  record, which reopen follows.
+- **N6.** "Never hangs" was false. Declared-profile real-tmux tests seed records through
+  `approve_profile` and fail fast through `assert_approved`. *Reason:* an attended pane with a
+  tty asks and waits until the suite is killed.
+- **N7 (30).** A pick refused at launch returns to the selector with its reason; only Esc
+  closes. *Reason:* a cached "wired" that fails the fresh probe would otherwise close the chat.
+- **N8 (32).** `git_path_state` is one `git status` call under `LC_ALL=C`; the preflight runs
+  no profile git check; a handoff probes twice, from the target workspace's directory and in
+  the pane. *Reason:* English-text matching breaks under a localised git, and every probe or git
+  call on a hook path is paid per session.
 
 ### What the rulings cost in the code
 
@@ -2651,5 +2865,10 @@ None is impossible. Four carry a cost the tasks above now pay:
   mapping, defaulting to `os.environ`, so a profile's folder is resolved by the same rule and no
   second resolver exists.
 - **Real-tmux tests that patch `ClaudeCodeHarness.binary` stop controlling the pane** (Task 2).
-  The launcher resolves the profile in its own process, so those tests declare a profile
-  instead.
+  The launcher resolves the profile in its own process, so those tests put their recorder first
+  on the tmux client's `PATH` as `claude` instead.
+- **Ruling 29's pid proof is a guard rail, not a boundary.** A process that deliberately starts
+  its own tmux pane, in a window named like a chat, passes it. And a window name is a readout:
+  with `allow-rename on`, a pane's own output can rename its window (`commands_frame._CHAT_OPTION`'s
+  note). The name is sound proof only because the check runs before the pane has printed
+  anything. The docs and the spec state both.
