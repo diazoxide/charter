@@ -167,6 +167,26 @@ command = ["claude\r\u001B[2Kharmless"]
         self.assertNotIn("\x1b", out)
         self.assertIn(contain.readable("claude\r\x1b[2Kharmless"), out)
 
+    def test_the_fix_for_the_files_state_is_its_own_line(self):
+        """Sweep survivor [17/156]. Every refused line already carries its state's reason, so
+        a test that looks for "charter reinit" anywhere in the listing passes with the fix
+        line gone. This reads the `!` line itself, for a committable file and for a tracked
+        one, whose fix is not `charter reinit` alone."""
+        env = {**os.environ, **_gitguard.environment()}
+        subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
+                       capture_output=True, env=env)
+        out = self._list(_OK)
+        fixes = [ln for ln in self._profiles_block(out).splitlines() if ln.startswith("!")]
+        self.assertEqual(len(fixes), 1, out)
+        self.assertTrue(fixes[0].rstrip().endswith(": charter reinit"), fixes[0])
+        for args in (["add", "-f", "charter.local.toml"], ["commit", "-q", "-m", "tracked"]):
+            subprocess.run(["git", "-C", str(config.ROOT), *args], check=True,
+                           capture_output=True, env=env)
+        out = self._list()
+        fixes = [ln for ln in self._profiles_block(out).splitlines() if ln.startswith("!")]
+        self.assertEqual(len(fixes), 1, out)
+        self.assertIn("git rm --cached charter.local.toml, commit that removal", fixes[0])
+
     def test_a_name_that_skipped_validation_is_still_listed_escaped(self):
         """Ruling 35 at the NAME cell itself. A declared name passes `NAME_RE` before it can
         reach a row, so today no name carries a control byte — but the listing does not lean
