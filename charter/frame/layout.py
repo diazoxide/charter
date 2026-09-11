@@ -1216,11 +1216,12 @@ def window_argv(*, socket: str, session: str, window: str, cwd: str) -> list[str
 
     *cwd* is `-c`, for the same reason `respawn_argv` takes one — see its docstring.
     """
-    # The directory through `tmuxctl.verbatim`, for :func:`respawn_argv`'s reason: one that
-    # ends in `;` otherwise ends this command at `-P` (#957).
+    # The directory through `tmuxctl.start_directory`, for :func:`respawn_argv`'s reason:
+    # tmux reads it as a format (#961), and one that ends in `;` otherwise ends this command
+    # at `-P` (#957).
     return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", window,
-                 "-c", tmuxctl.verbatim(cwd), "-P", "-F", "#{window_id} #{pane_id}", "--",
-                 *PLACEHOLDER)
+                 "-c", tmuxctl.start_directory(cwd), "-P", "-F", "#{window_id} #{pane_id}",
+                 "--", *PLACEHOLDER)
 
 
 def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
@@ -1290,9 +1291,10 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     # Every data argument through `tmuxctl.verbatim` — the directory, each `-e` value (in
     # `_env_argv`) and each harness argument. tmux reads ANY argument ending in `;` as its
     # own command separator: a harness argument loses the `;`, and a directory or a value
-    # ends the command at the next flag (#957).
+    # ends the command at the next flag (#957). The directory's is `tmuxctl.start_directory`,
+    # which also doubles each `#` tmux would read as a format (#961).
     return _tmux(socket, "respawn-pane", "-k", "-t", harness_pane,
-                 "-c", tmuxctl.verbatim(cwd),
+                 "-c", tmuxctl.start_directory(cwd),
                  *_env_argv(env), "--", *map(tmuxctl.verbatim, harness_argv))
 
 
@@ -1403,10 +1405,10 @@ def chat_window_argv(*, socket: str, session: str, chat: str, cwd: str,
     otherwise be the SESSION's, which is wherever the launcher that created the workspace
     happened to be — and the panels split off this pane inherit its directory in turn.
     """
-    # `tmuxctl.verbatim` for the directory and each harness argument, for
-    # :func:`respawn_argv`'s reason (#957).
+    # `tmuxctl.start_directory` for the directory and `tmuxctl.verbatim` for each harness
+    # argument, for :func:`respawn_argv`'s reason (#957, #961).
     return _tmux(socket, "new-window", "-d", "-a", "-t", session, "-n", chat,
-                 "-c", tmuxctl.verbatim(cwd),
+                 "-c", tmuxctl.start_directory(cwd),
                  "-P", "-F", "#{pane_id}", *_env_argv(env), "--",
                  *map(tmuxctl.verbatim, harness_argv))
 

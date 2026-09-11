@@ -486,6 +486,58 @@ def verbatim(arg: str) -> str:
     return arg[:-1] + "\\;" if arg.endswith(";") else arg
 
 
+#: A run of `#` that tmux's format expander reads as the start of a format: every run except
+#: one that `[` directly follows. See :func:`start_directory` for what was measured.
+_FORMAT_HASHES = re.compile(r"#+(?![#\[])")
+
+
+def _literal_hashes(text: str) -> str:
+    """*text* with each `#` tmux would expand spelled `##`, and a run of `#` directly before
+    `[` left as it is — :func:`start_directory`'s first half, kept apart so the suite can pin
+    that its two halves give one string in either order."""
+    return _FORMAT_HASHES.sub(lambda run: run.group(0) * 2, text)
+
+
+def start_directory(path: str) -> str:
+    r"""*path*, spelled so tmux starts a pane in exactly that directory (#961).
+
+    **tmux reads a `-c <start-directory>` as a FORMAT before it looks for the directory**,
+    and says nothing when the answer is somewhere else. Measured on tmux 3.7c and at the 3.2
+    floor through `new-window -c` and `respawn-pane -c`, every start rc 0 with an empty
+    stderr: `x#{session_name}` started in `xbase` when a directory by that name sat beside
+    it, and in `$HOME` when none did; `a#S`, `a#,b` and `a##b` went to `$HOME` too; and on
+    3.7c, not on 3.2, a trailing `#` was dropped, so a directory named `#` started in its
+    parent. `y#(touch job-ran)` went to `$HOME` as well, and its command RAN in 5 of 5
+    starts per command whose client a chained `run-shell` held connected. Sent as one
+    command, the way charter sends each of these, it ran in 0 of 30 per command.
+
+    `##` is tmux's own literal `#`, and doubling each `#` brought every one of those names
+    to the directory asked for — **except a run of `#` directly before `[`**, which tmux
+    already hands on as it is: `a#[b`, `a##[b`, `a###[b`, `a####[b` and `a#[fg=red]b` each
+    started in place unescaped and, doubled, each went to `$HOME`, on both versions. So that
+    run alone is left as it is. A `#` after the `[` is still doubled: `a#[#{session_name}`
+    goes to tmux as `a#[##{session_name}`, and lands.
+
+    Then :func:`verbatim`, because a directory ending in `;` still ends tmux's command
+    (#957). The order of the two halves cannot change the string — `verbatim` adds only a
+    `\` before a final `;`, and neither character decides whether a run of `#` is doubled —
+    and both orders were measured to start the pane in the same place for every name above.
+
+    **Not :func:`inert_format`.** That is for text tmux draws: it doubles every `#`, and
+    adds a space before a leading `-` and after a trailing `#`. In a start directory a
+    doubled `#[` sent each name above to `$HOME`, and a space is a character the
+    directory's name does not have.
+
+    For `-c` only. An `-e NAME=VALUE` is not read as a format — measured through
+    `new-session`, `new-window` and `respawn-pane` on both versions, values carrying
+    `#{session_name}`, `##`, `#S`, `#[` and `#(…)` each arrived exactly — so an identity
+    value goes through :func:`verbatim` alone. And `new-session` is handed no directory:
+    from a working directory named `x#{session_name}` it started exactly there, on both
+    versions, with a server already running and without one.
+    """
+    return verbatim(_literal_hashes(path))
+
+
 def chain(argvs: list[list[str]]) -> list[str] | None:
     """Several tmux commands as ONE invocation, so the SERVER runs all of them.
 
@@ -552,12 +604,16 @@ def inert_format(text: str) -> str:
     name by `state.workspace_prefix`'s alphabet, a hotkey by `instance._HOTKEY_RE`, a
     chrome or background value by a lookup table that answers `()` for anything it does not
     know. charter sets no `status-left`, `status-right`, `pane-border-format` or
-    `window-status-format`, and has no `display-menu` or `display-popup` at all, so there
-    is no format today whose text is not a module constant.
+    `window-status-format`, and has no `display-menu` or `display-popup` at all. This
+    paragraph used to end "so there is no format today whose text is not a module
+    constant", and #961 is why it no longer does: a `-c` start directory is a format too,
+    and its text is the name of the directory a chat was launched from. :func:`start_directory`
+    closes that one, and it is not a second spelling of this function — its docstring
+    names the run of `#` tmux reads differently there.
 
     It is kept rather than deleted because the measurements above are the reason those
-    guards are shaped the way they are, and because the next surface that hands tmux a
-    string built from a name will need exactly this. **A caller that appears must use it
+    guards are shaped the way they are, and because the next surface that hands tmux text
+    to draw, built from a name, will need exactly this. **A caller that appears must use it
     rather than re-spell it** — a second copy would be a second answer to "what may reach
     tmux's parser", which is #547's shape and which this repo has already paid for once.
     If no such surface arrives, this and its tests are a clean deletion.
