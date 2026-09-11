@@ -319,6 +319,23 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         self.assertEqual(len(set(said)), 9, said)
 
 
+class OnlyAnOpeningIsReadAsOne(unittest.TestCase):
+    """`_opening`'s `isinstance`, for `_reopening`'s reason. `args` is whatever namespace a
+    caller built: one that happens to carry an unrelated `opening` attribute, or a `Mock`
+    that answers every attribute, must not be read as a background open — whose "persona"
+    would then be handed to `persona.set_active`."""
+
+    def test_an_unrelated_opening_attribute_is_not_an_opening(self):
+        self.assertIsNone(commands_frame._opening(SimpleNamespace(opening="beta")))
+
+    def test_a_mock_that_answers_every_attribute_is_not_an_opening(self):
+        self.assertIsNone(commands_frame._opening(mock.Mock()))
+
+    def test_an_opening_is_read_as_itself(self):
+        opening = commands_frame.Opening("fix it please")
+        self.assertIs(commands_frame._opening(SimpleNamespace(opening=opening)), opening)
+
+
 class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
     """The real `_launch`, with tmux and everything that would start a process stood in."""
 
@@ -328,13 +345,15 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
         self.make_persona("forge")
         self.argvs: list[list[str]] = []
 
-    def _launch(self, *, opening=None, attach=False):
+    def _launch(self, *, opening=None, attach=False, reopening=None):
         args = SimpleNamespace(harness="claude", rest=["fix it please"], no_frame=False,
                                workspace="beta", pick=False, size=(120, 40))
         if attach is False:
             args.attach = False
         if opening is not None:
             args.opening = opening
+        if reopening is not None:
+            args.reopening = reopening
 
         def run(action, argv, **kw):
             self.argvs.append(list(argv))
@@ -411,6 +430,16 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
         is left absent, is still the operator's terminal and still lands on its chat."""
         self._launch(attach=None)
         self.assertTrue([a for a in self.argvs if "select-window" in a], self.argvs)
+
+    def test_a_reopen_still_selects_no_window_and_drops_no_panels(self):
+        """The `_reopening` half of the gate this change re-spelled — the deletion sweep
+        showed nothing pinned it. A reopen builds several chats with nobody attached: a
+        select would move a client that does not exist yet, and a teardown would strip the
+        panels off the sibling the same reopen had just drawn (`_reopening`)."""
+        recorded = SimpleNamespace(chat="beta.9", persona="")
+        self._launch(reopening=commands_frame.Reopening(recorded), attach=None)
+        self.assertFalse([a for a in self.argvs if "select-window" in a], self.argvs)
+        self.drop.assert_not_called()
 
 
 if __name__ == "__main__":
