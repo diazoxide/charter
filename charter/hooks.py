@@ -27,6 +27,7 @@ these handlers via ``charter hook <name> --plugin-version X.Y.Z``; see :func:`di
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import posixpath
@@ -871,25 +872,44 @@ def _heredoc_openers(line: str) -> list:
     return [m for m in _HEREDOC_RE.finditer(line) if not _inside_quotes(line, m.start())]
 
 
-def _inside_quotes(line: str, at: int) -> bool:
-    """Whether offset *at* sits inside a single- or double-quoted region of *line*.
+#: The quoting contexts a position can sit in. `"(" `and a backtick are SUBSTITUTIONS — inside
+#: them quoting starts again from nothing — so they are on the stack but are not "quoted".
+_QUOTED_CONTEXTS = ("'", '"', "$'", '$"')
 
-    A backslash escapes the next character outside single quotes, where bash takes it
-    literally. Reading the source this way rather than asking the lexer is deliberate: this
-    runs on lines the lexer could not take apart, which is why the phantoms matter at all.
 
-    **A substitution inside double quotes is not quoted.** `"$(cat <<'EOF')"` runs a command,
-    and that command's `<<` is a real opener — this repository's own commit messages are
-    written `git commit -m "$(cat <<'EOF' … EOF)"`, and treating their heredoc as a phantom
-    read the message as commands and refused it as a misspelled handoff. So `$(` and a
-    backtick open a nested context in which quoting starts again from nothing.
+@functools.lru_cache(maxsize=512)
+def _quote_map(line: str) -> tuple[bool, ...]:
+    """For each offset in *line*, whether it sits inside quotes — computed in ONE pass.
+
+    Read off the source rather than from the lexer, because this runs on lines the lexer could
+    not take apart, which is why the phantom `<<` matters at all. A backslash escapes the next
+    character outside single quotes, where bash takes it literally.
+
+    **A substitution inside double quotes is not quoted.** `"$(cat <<'EOF')"` runs a command and
+    that command's `<<` is a real opener — this repository's own commit messages are written
+    `git commit -m "$(cat <<'EOF' … EOF)"` — so `$(` and a backtick open a nested context.
+
+    **But `$'` opens nothing inside `"…"`**, where both shells read a bare `$` as a literal. The
+    `elif top == '"'` arm therefore comes BEFORE the `$'`/`$"` arm: with the order reversed, the
+    `$` in an ordinary regex anchor (`grep -v "^$" f`) swallowed the closing quote, the rest of
+    the line read as quoted, and every later heredoc opener was erased (review round 7, item 1).
+
+    One map per line, cached, because :func:`_pipeline_slice` and
+    :func:`_crowded_substitutions` ask about every position: re-scanning from the start each
+    time made the layout O(n²) and a long first message could outlast the hook's own timeout
+    (review round 7, item 2).
     """
-    stack: list[str] = []                      # "'", '"', or "(" for a substitution
+    flags = [False] * (len(line) + 1)
+    stack: list[str] = []
     i = 0
-    while i < at and i < len(line):
+    while i < len(line):
+        here = bool(stack) and stack[-1] in _QUOTED_CONTEXTS
+        flags[i] = here
         c = line[i]
         top = stack[-1] if stack else ""
         if top != "'" and c == "\\":
+            if i + 1 < len(line):
+                flags[i + 1] = here
             i += 2
             continue
         if top == "'":
@@ -899,32 +919,36 @@ def _inside_quotes(line: str, at: int) -> bool:
             # Closes on its own quote, and nothing else opens inside it: `$(` is literal there.
             if c == top[1]:
                 stack.pop()
-        elif c == "$" and line[i:i + 2] == "$(":
+        elif line.startswith("$(", i):
             stack.append("(")
-            i += 2
-            continue
-        elif c == "$" and line[i:i + 2] in ("$'", '$"'):
-            # ANSI-C (`$'don\'t'`) and locale (`$"…"`) quoting: a backslash escapes the next
-            # character, which a plain `'` never does. Reading `\'` as CLOSING the string put
-            # the scan one quote out of step for the rest of the line, which erased the real
-            # `bash <<'EOF'` opener after it entirely (review round 6, ruling 2).
-            stack.append("$" + line[i + 1])
+            flags[i + 1] = here
             i += 2
             continue
         elif c == "`":
-            if top == "`":
-                stack.pop()
-            else:
-                stack.append("`")
-        elif c == ")" and top == "(":
-            stack.pop()
+            stack.pop() if top == "`" else stack.append("`")
         elif top == '"':
+            # Ahead of the `$'` arm on purpose — see the docstring. Inside `"…"` only the
+            # closing quote (and a substitution, handled above) means anything.
             if c == '"':
                 stack.pop()
+        elif line.startswith(("$'", '$"'), i):
+            stack.append("$" + line[i + 1])
+            flags[i + 1] = here
+            i += 2
+            continue
+        elif c == ")" and top == "(":
+            stack.pop()
         elif c in "'\"":
             stack.append(c)
         i += 1
-    return bool(stack) and stack[-1] in ("'", '"', "$'", '$"')
+    flags[len(line)] = bool(stack) and stack[-1] in _QUOTED_CONTEXTS
+    return tuple(flags)
+
+
+def _inside_quotes(line: str, at: int) -> bool:
+    """Whether offset *at* sits inside a single- or double-quoted region of *line*."""
+    flags = _quote_map(line)
+    return flags[at] if 0 <= at < len(flags) else flags[-1]
 
 
 #: Where a command that opens a heredoc can START inside a line the whole-line pass could not
@@ -933,25 +957,62 @@ def _inside_quotes(line: str, at: int) -> bool:
 _OPENER_CUTS = ("$(", "`", "(", "{", "&&", "||", ";", "|&", "|", "&", "\n")
 
 
+#: Operators that START a new command where they appear unquoted. A closed `$( … )`, `${ … }`
+#: or `( … )` is NOT one of them — it is an argument, and the command it sits in goes on.
+_COMMAND_STARTS = ("&&", "||", ";;", ";", "|&", "|", "&", "\n")
+
+
 def _heredoc_opener_words(line: str, start: int) -> list[str] | None:
     """The words of the command that opens the `<<` at *start* — its program first — or ``None``
     when the source does not settle what that program is.
 
     Read off the SOURCE rather than off the token stream, because this is only reached when the
     line is one :func:`_line_pipelines` would not attribute, which is exactly when the token
-    stream is not a reliable map of it. Cutting at the nearest command-start marker finds `cat`
-    in `git commit -m "$(cat <<'EOF'`, where the `<<` sits inside a quoted word and the lexer
-    reports no heredoc at all.
+    stream is not a reliable map of it.
 
-    ``None`` when a substitution CLOSED between the cut and the `<<`: in
-    `$(which bash) <<'EOF'` the nearest `$(` is the substitution's, so cutting there reads the
-    program as `which` — a name, and the wrong one, since the program is whatever `which`
-    printed. Naming the wrong program is worse than naming none (review round 6, ruling 3).
+    The command begins after the last thing that STARTS one: an unquoted control operator, or a
+    group/substitution that is still OPEN at the `<<`. A substitution that has already CLOSED is
+    an argument — a redirect target (`cat > "$(date +%F).md" <<'EOF'`), a flag value
+    (`mail -s "${SUBJ}" me <<'EOF'`) — and so is a `${…}`; cutting at either lost a program that
+    was plainly nameable and refused twelve ordinary commands (review round 7, item 3).
+
+    ``None`` when the program word is not a name: `${RUNNER} <<'EOF'` is decided at runtime, and
+    in `$(which bash) <<'EOF'` the substitution IS the program. Both keep review round 6's
+    ruling 3 — an opener charter cannot name is a reason to search the body.
     """
-    head = line[:start]
-    cuts = [head.rfind(m) + len(m) for m in _OPENER_CUTS if head.rfind(m) >= 0]
-    words = head[max(cuts, default=0):].split()
-    return None if any(")" in w or "`" in w for w in words) else words
+    stack: list[int] = []                      # command starts saved across open groups
+    cmd = 0
+    i = 0
+    n = min(start, len(line))
+    while i < n:
+        if _inside_quotes(line, i):
+            i += 1
+            continue
+        # `${…}` needs no case of its own: `{` saves the command start and `}` restores it, so
+        # a parameter expansion leaves it exactly where it was. One was written and deleted
+        # again when no input could tell the two apart.
+        if line.startswith("$(", i):
+            stack.append(cmd)
+            cmd = i + 2
+            i += 2
+            continue
+        c = line[i]
+        if c in "({":
+            stack.append(cmd)
+            cmd = i + 1
+        elif c in ")}" and stack:
+            cmd = stack.pop()                  # the group was an argument; the command goes on
+        else:
+            for op in _COMMAND_STARTS:
+                if line.startswith(op, i):
+                    cmd = i + len(op)
+                    i += len(op)
+                    break
+            else:
+                i += 1
+            continue
+        i += 1
+    return line[cmd:n].split() or None
 
 
 def _crowded_substitutions(line: str) -> set[int]:

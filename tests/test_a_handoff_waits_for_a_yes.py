@@ -22,6 +22,7 @@ import os
 import shutil
 import stat
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -779,6 +780,79 @@ class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
             self.assertIsNone(_reason(self._decide(
                 "echo $'don\\'t' && cat <<'EOF' > notes.md\n"
                 "charter handoff beta asks first.\nEOF")))
+
+    def test_a_dollar_inside_double_quotes_opens_nothing(self):
+        """Review round 7, item 1. Inside `"…"` both shells read a bare `$` as a literal, so
+        `$'` opens no ANSI-C string there. Treating it as an opener let the `$` swallow the
+        closing quote: the rest of the line read as quoted and EVERY later heredoc opener was
+        erased. The trigger is a regex anchor — `"^$"`, `"handoff$"` — which is ordinary typing,
+        so this cost a fail-open and an over-refusal at the same time."""
+        for name, cmd in (("a blank-line filter", 'grep -v "^$" f && bash <<\'EOF\''),
+                          ("a price", 'echo "cost: 5$" && bash <<\'EOF\''),
+                          ("an apostrophe and a dollar", 'echo "don\'t 5$" && bash <<\'EOF\''),
+                          ("$' literal inside the quotes", 'echo "don\'t $\'" ; bash <<\'EOF\'')):
+            with self.subTest(hidden_by=name):
+                self.assertIn("a shell runs", _reason(self._decide(
+                    f"{cmd}\n{HEREDOC}\nEOF")) or "")
+        for name, cmd in (("^$", 'grep -v "^$" f && cat <<\'EOF\' > n.md'),
+                          ("handoff$", 'rg -n "handoff$" docs/ && cat <<\'EOF\' > n.md')):
+            with self.subTest(anchor=name):
+                self.assertIsNone(_reason(self._decide(
+                    f"{cmd}\ncharter handoff beta now asks first.\nEOF")))
+
+    def test_a_heredoc_operator_inside_an_ansi_c_word_opens_nothing_either(self):
+        """`$'…'` counts as QUOTED, like `'…'` and `"…"` — so a `<<` inside one is a phantom.
+        Drop it from the quoted contexts and `echo $'<<X'` becomes an opener whose terminator
+        never arrives, swallowing the real `cat` after it and refusing ordinary prose."""
+        with self.subTest(direction="the phantom is skipped"):
+            self.assertIsNone(_reason(self._decide(
+                "echo $'<<X' && cat <<'EOF' > n.md\ncharter handoff beta now asks first.\nEOF")))
+        with self.subTest(direction="a real opener after it is still found"):
+            self.assertIn("a shell runs", _reason(self._decide(
+                f"echo $'<<X' && bash <<'EOF'\n{HEREDOC}\nEOF")) or "")
+
+    def test_a_closed_substitution_before_the_heredoc_is_an_argument(self):
+        """Item 3. A `${…}` or a CLOSED `$( … )` before the `<<` is a redirect target or a flag
+        value, not the start of a new command — cutting the opener words there threw away a
+        program that was plainly nameable and refused twelve ordinary commands. The opener is
+        `tee`, `mail`, `git`, `cat` in every row here."""
+        prose = "charter handoff beta now asks first."
+        for name, cmd in (
+            ("tee ${OUT}", f"( tee ${{OUT}} <<'EOF' )\n{prose}\nEOF"),
+            ("mail -s x ${TO}", f"( mail -s x ${{TO}} <<'EOF' )\n{prose}\nEOF"),
+            ('mail -s "${SUBJ}"', f"( mail -s \"${{SUBJ}}\" me <<'EOF' )\n{prose}\nEOF"),
+            ("git commit -F - ${FLAGS}",
+             f"( git commit -F - ${{FLAGS}} <<'EOF' )\nDocs\n\n{prose}\nEOF"),
+            ('cat > "$(date +%F).md"', f"( cat > \"$(date +%F).md\" <<'EOF' )\n{prose}\nEOF"),
+            ('tee "$(mktemp)"', f"( tee \"$(mktemp)\" <<'EOF' )\n{prose}\nEOF"),
+            ("a ${…} earlier in the group", f"( n=${{N}}; wc -l <<'EOF' )\n{prose}\nEOF"),
+        ):
+            with self.subTest(opener=name):
+                self.assertIsNone(_reason(self._decide(cmd)))
+
+    def test_an_opener_that_IS_a_substitution_is_still_unresolvable(self):
+        """The other half of item 3, and round 6's ruling 3 kept intact: when the substitution
+        or the variable IS the program, charter still cannot name it, so the body is searched.
+        Only a CLOSED substitution standing before the opener was ever an argument."""
+        for name, cmd in (("${RUNNER}", f"( ${{RUNNER}} <<'EOF' )\n{HEREDOC}\nEOF"),
+                          ("$(which bash)", f"( $(which bash) <<'EOF' )\n{HEREDOC}\nEOF"),
+                          ("$(which cat)", f"( $(which cat) <<'EOF' )\n{HEREDOC}\nEOF")):
+            with self.subTest(opener=name):
+                self.assertIn("a shell runs", _reason(self._decide(cmd)) or "")
+
+    def test_a_long_command_line_is_decided_in_linear_time(self):
+        """Item 2, a fail-open in disguise. `_pipeline_slice` and `_crowded_substitutions` ask
+        about every position on the line; re-scanning the quoting from the start each time made
+        this O(n²) — 29.8 s for a 17 KB line, past the hook's own 60 s timeout, and a guard that
+        times out is a guard that stops deciding. A first message is capped at 12,288 bytes, so
+        the size is reachable with ordinary input. The bound is deliberately loose: the point is
+        the SHAPE of the curve, and quadratic blows through it by two orders of magnitude."""
+        pad = " ".join(f"notes-{i}.md" for i in range(1400))
+        cmd = f"( cat {pad} <<'A' > n.md )\ncharter handoff beta now asks first.\nA"
+        self.assertGreater(len(cmd.split("\n")[0]), 16000)
+        started = time.monotonic()
+        self._decide(cmd)
+        self.assertLess(time.monotonic() - started, 5.0)
 
     def test_two_heredocs_in_one_substitution_take_the_conservative_answer(self):
         """Ruling 4. In `x=$( cat <<'A' > n.md; bash <<'B' )` bash hands the FIRST body to

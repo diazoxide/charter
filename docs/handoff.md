@@ -122,14 +122,28 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
   body is data and the second is searched. The one place that is set aside: when two or more
   heredocs share a single `$( … )` and any of them is a shell's, every body in that substitution
   is searched, because bash's ordering inside a substitution does not match the attribution.
+  **That rule reaches exactly that shape** — `$( … )`, two or more heredocs, a shell among them.
+  A substitution holding one heredoc, or holding only readers, is not covered, and a shell can
+  run the handoff in those.
+
+  **Downstream, only a program charter can NAME counts.** An unresolvable *opener* is a reason
+  to search the body, but an unresolvable or remote *downstream* member of the pipeline is not:
+  `cat <<'A' | ${RUNNER}`, `cat <<'A' | ssh host`, and `|&` inside a group (`( cat <<'A' |& bash )`,
+  where the same pipe at top level is caught) all run the handoff and are allowed.
 
   A `<<` inside quotes opens nothing: `echo "use <<EOF for heredocs"` is a sentence and
   `rg '<<\w' docs/` is a pattern. A `<<` inside `$( … )` *is* an opener even when quotes
-  surround it, which is how `git commit -m "$(cat <<'EOF' … EOF)"` is written. An ANSI-C word
-  (`$'don\'t'`) is read correctly here, but the shared lexer behind the secret-leak guard cannot
-  parse one, so a call carrying it keeps every heredoc body visible to *that* guard — prose in a
-  brief on such a line can be refused as a read. That errs toward refusing, never toward missing
-  a leak.
+  surround it, which is how `git commit -m "$(cat <<'EOF' … EOF)"` is written. Inside `"…"` a
+  bare `$` is a literal, so `$'` opens nothing there — `grep -v "^$" f` is a blank-line filter,
+  not a quote.
+
+  An ANSI-C word (`$'don\'t'`) is read correctly by this scan, but the shared lexer behind the
+  secret-leak guard cannot parse one. A call carrying it keeps every heredoc body visible to
+  *that* guard, so prose in a brief on such a line can be refused as a read — measured on this
+  branch, on 2b59d8a and on main, and identical in all three. For the leak guard that errs
+  toward refusing. It is not a claim about this gate: the same scan feeds both, and while it
+  mis-read `$'` inside `"…"` it erased real openers and let handoffs through. That is fixed and
+  pinned in both directions.
 - **with a stdin other than one quoted heredoc** on the handoff's own segment — so the prompt
   shows exactly the text the new chat is sent.
 

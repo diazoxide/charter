@@ -385,9 +385,21 @@ rule while one who reads a bare refusal files an issue.
   reader. Each heredoc is judged by its own opener and its own pipeline, so
   `( cat <<'A' > notes.md; bash <<'B' )` searches only the second body — except that when two or
   more heredocs share one `$( … )` and any is a shell's, every body there is searched, because
-  bash's ordering inside a substitution does not match the attribution. A `<<` inside quotes is
+  bash's ordering inside a substitution does not match the attribution. That reaches exactly
+  that shape: a substitution holding ONE heredoc, or only readers, is not covered, and a shell
+  can run the handoff in those. Downstream, only a program that can be NAMED counts — an
+  unresolvable *opener* is a reason to search, an unresolvable or remote *downstream* member is
+  not, so `cat <<'A' | ${RUNNER}`, `cat <<'A' | ssh host` and `( cat <<'A' |& bash )` are
+  allowed while a shell runs the handoff. A `<<` inside quotes is
   not an opener at all, while a `<<` inside `$( … )` is one even inside quotes — the spelling
-  `git commit -m "$(cat <<'EOF' … EOF)"` depends on that.
+  `git commit -m "$(cat <<'EOF' … EOF)"` depends on that. Inside `"…"` a bare `$` is a literal,
+  so `$'` opens nothing there and `grep -v "^$" f` is a filter rather than a quote.
+
+  An **ANSI-C word** (`$'don\'t'`) is read correctly by that scan, but the shared lexer cannot
+  parse one, so a call carrying it keeps every heredoc body visible to the secret-leak guard and
+  prose in a brief on such a line can be refused as a read — measured identical on this branch,
+  on 2b59d8a and on main. For the leak guard that errs toward refusing; it is not a claim about
+  A7, whose own mis-reading of `$'` inside `"…"` erased real openers until it was fixed.
 
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
   segment is stdin charter sends on, never a command the shell runs, so it is skipped the way a
