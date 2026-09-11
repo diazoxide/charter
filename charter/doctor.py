@@ -219,10 +219,20 @@ def check_ssh() -> Result:
     verifies every repo in scope carries ITS forge's token-only git policy
     (`gitpolicy.forge_for` resolves which forge per repo)."""
     from . import config as _config, gitpolicy
-    scope = gitpolicy.repos(_config.ROOT, _config.WORKSPACES_DIR)
+    scope, unseen = gitpolicy.scan(_config.ROOT, _config.WORKSPACES_DIR)
     drift = {r: gitpolicy.check(r) for r in scope}
     bad = {r: d for r, d in drift.items() if d}
+    # A directory under `workspaces/` charter cannot look into (ADR 0009, #942 final review):
+    # whether it is a clone cannot be told, so it is named with what clears it — never raised out
+    # of doctor, as it was on 3.11–3.13, and never left out of the count without a word.
+    cannot = (f"   {', '.join(f'{p.parent.name}/{p.name}' for p in unseen)} cannot be checked "
+              f"— restoring read access to it clears this." if unseen else "")
     if not bad:
+        if unseen:
+            return Result("git auth", WARN,
+                          detail=f"token-only across {len(scope)} repo(s); {len(unseen)} "
+                                 f"director(ies) under workspaces/ cannot be checked",
+                          hint=cannot.lstrip())
         return Result("git auth", OK,
                       detail=f"token-only across {len(scope)} repo(s) (each forge's own "
                              f"HTTPS token; no SSH/signing)")
@@ -248,7 +258,7 @@ def check_ssh() -> Result:
         "git auth",
         WARN,
         detail=f"{len(bad)}/{len(scope)} repo(s) not token-only: {names}",
-        hint=hint,
+        hint=hint + cannot,
     )
 
 
@@ -2095,14 +2105,16 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         # Ruling H (review round 4): the launch works around this — it writes nothing it could
         # not record first, and keeps every line — and only a person can clear it. The reason is
         # the errno that publish failed with (review round 5, R5), never a guess from a mode bit.
+        # What clears it follows that errno (#942 final review): a full disk or a read-only mount
+        # has no write access to restore.
         refused = dict.fromkeys(
-            f"{ws}/{row[0].name}: {_workspace.unrecorded_reason(row[0]) or 'no errno on record'}"
+            f"{ws}/{row[0].name}: "
+            f"{_workspace.unrecorded_fix(row[0], 'that checkout') or 'no errno on record'}"
             for ws, rel, status in findings if status == "unrecorded"
             for row in [_workspace.checkout_row(ws, rel)] if row)
-        first.append("An 'unrecorded' marker is one charter could not publish ("
-                     + "; ".join(refused) + "), so it writes nothing there it could not record "
-                     "first and keeps every exclude line it had; restoring write access to that "
-                     "checkout clears it.")
+        first.append("An 'unrecorded' marker is one charter could not publish, so it writes "
+                     "nothing there it could not record first and keeps every exclude line it "
+                     "had. What clears it: " + "; ".join(refused) + ".")
     if "unreadable" in statuses:
         # Never "remove it" (#942, review rounds 2 and 3): charter cannot see what is in the file.
         first.append("An 'unreadable' path is one charter cannot read: it is left exactly as it "

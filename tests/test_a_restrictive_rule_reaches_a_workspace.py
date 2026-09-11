@@ -1484,7 +1484,8 @@ class TheSharedExcludeHoldsWhatEveryTreeNeeds(PlaneWithRestrictions):
         dropped the sibling's line."""
         wt = self.edited_clone_and_a_withdrawn_worktree()
         admin = self.clone / ".git" / "worktrees"
-        with _refused(files=[admin, Path(os.path.realpath(admin))], calls=("lstat", "stat")):
+        with _refused(files=[admin, Path(os.path.realpath(admin))],
+                      calls=("lstat", "stat", "scandir")):
             workspace.wire_guest(wt)
         self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
         self.assertEqual(_status(self.clone), "")
@@ -2196,6 +2197,209 @@ class R5TrueReasonsAndNoDestructiveAdvice(PlaneWithRestrictions):
         self.assertIn("EROFS", said)
         self.assertIn("EROFS", f"{r.detail} {r.hint}")
         self.assertEqual(_status(clone), "")
+
+
+class AFileCharterWritesAgainIsSettled(RoundFiveCheckout):
+    """Final review (#942), a regression against efdd827: a launch that wrote a deleted file again
+    published its pending intent and then skipped the settle, because the record it ended with
+    equalled the one it READ at the start. The entry stayed pending for good, and since R3 a
+    pending entry never reads `harness-edited` — so the harness's first approval left the file
+    `harness-behind` for ever, with every rule in it and nothing that cleared the warning."""
+
+    def test_a_local_file_written_again_takes_an_approval_as_harness_edited(self):
+        self.local.unlink()
+        workspace.ensure(self.ws)
+        self.assertEqual(self.local.read_text(), workspace._guest_files(self.clone)[LOCAL],
+                         "fixture: the launch did not write the file again")
+        self.assertEqual(json.loads(self.marker.read_text())[LOCAL],
+                         workspace.content_digest(self.local.read_text()))
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        workspace.ensure(self.ws)
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[LOCAL], "harness-edited")
+        self.assertNotIn("harness-behind", doctor.check_workspace_harness().detail)
+
+
+class AWorktreeListGitCannotBackUpKeepsEveryLine(RoundFiveCheckout):
+    """#942 final review, ruling G's own class: `git worktree list` exiting 0 is not a whole list.
+
+    Measured on git 2.50.1. With `<common>/worktrees` unreadable, or one worktree's directory in
+    it, or only that worktree's `gitdir` file, git lists the rest, exits 0, and says nothing of the
+    one it could not read. Charter took that short list for the whole one and dropped the line a
+    live sibling still needed: its `.claude/settings.local.json`, the harness's approvals. With only
+    `gitdir` unreadable, that sibling still works, and its `git status` showed the file at once."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.ensure("other")
+        self.other = workspace.workspace_dir("other") / "api"
+        _git(self.clone, "worktree", "add", "-q", "-b", "wt-other", str(self.other))
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        _as_the_harness_would(self.other / LOCAL, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        self.admin = workspace.git_exclude_file(self.clone).parent.parent / "worktrees"
+        self.entry = next(
+            p for p in self.admin.iterdir()
+            if os.path.realpath(Path((p / "gitdir").read_text().strip()).parent)
+            == os.path.realpath(self.other))
+
+    def wired_while_unreadable(self, locked: Path, mode: int) -> str:
+        """Wire from the main checkout with *locked* at mode 000; doctor's hint, asked then."""
+        locked.chmod(0o000)
+        self.addCleanup(locked.chmod, mode)
+        workspace.wire_harnesses(self.ws)
+        hint = doctor.check_workspace_harness().hint
+        locked.chmod(mode)
+        return hint
+
+    def assert_every_line_stays(self, hint: str, named: Path) -> None:
+        self.assertFalse(self.local.exists(), "fixture: the clone's own copy was not withdrawn")
+        self.assertIn(f"/{LOCAL}", self.excludes(self.clone).splitlines())
+        self.assertEqual(_status(self.other), "")
+        self.assertIn(f"{named} cannot be checked — restoring read access clears this", hint)
+
+    def test_the_worktrees_directory_unreadable(self):
+        self.assert_every_line_stays(self.wired_while_unreadable(self.admin, 0o755), self.admin)
+
+    def test_one_worktrees_directory_unreadable(self):
+        self.assert_every_line_stays(self.wired_while_unreadable(self.entry, 0o755),
+                                     self.entry / "gitdir")
+
+    def test_a_stray_file_among_the_worktrees_takes_no_trust_away(self):
+        """Git passes over a file in `worktrees/` that is no worktree's directory (measured), and
+        so does charter: the line still leaves once no checkout holds the file."""
+        (self.admin / "README").write_text("stray\n")
+        (self.other / LOCAL).unlink()
+        workspace.wire_harnesses(self.ws)
+        self.assertFalse(self.local.exists(), "fixture: the clone's own copy was not withdrawn")
+        self.assertNotIn(f"/{LOCAL}", self.excludes(self.clone).splitlines())
+
+    def test_one_worktrees_gitdir_missing(self):
+        """Git leaves a worktree whose `gitdir` file is gone out of its list, exits 0, and marks
+        nothing prunable (measured)."""
+        gitdir = self.entry / "gitdir"
+        saved = gitdir.read_bytes()
+
+        def put_back() -> None:
+            if not gitdir.exists():
+                gitdir.write_bytes(saved)
+
+        gitdir.unlink()
+        self.addCleanup(put_back)
+        workspace.wire_harnesses(self.ws)
+        hint = doctor.check_workspace_harness().hint
+        put_back()
+        self.assertFalse(self.local.exists(), "fixture: the clone's own copy was not withdrawn")
+        self.assertIn(f"/{LOCAL}", self.excludes(self.clone).splitlines())
+        self.assertEqual(_status(self.other), "")
+        self.assertIn(f"{gitdir} is missing", hint)
+        self.assertIn("git worktree repair", hint)
+
+    def test_one_worktrees_gitdir_unreadable_while_that_worktree_still_works(self):
+        gitdir = self.entry / "gitdir"
+        gitdir.chmod(0o000)
+        self.addCleanup(gitdir.chmod, 0o644)
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(_status(self.other), "", "the sibling's local settings showed while it worked")
+        hint = doctor.check_workspace_harness().hint
+        gitdir.chmod(0o644)
+        self.assert_every_line_stays(hint, gitdir)
+
+
+class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
+    """Final review addendum (#942): a `refs` directory charter cannot read, and `charter workspace
+    reinit` and `charter doctor`.
+
+    Measured before the fix, at the CLI in a throwaway plane, on 3.14 and 3.11, on this branch
+    AND on main (3286a4f): a clone's `.git/refs` at mode 000 never raised anywhere — reinit rc 0.
+    The WORKSPACE's own `refs/` at mode 000, which is what the round-4 probe locked, raised a
+    PermissionError out of `reinit` everywhere (`scaffold`'s `Path.exists` on 3.11–3.13, its
+    write on 3.14) and out of `doctor` on 3.11 (`gitpolicy.repos`). ADR 0009: name the path
+    charter could not check and what clears it, and change nothing it cannot see."""
+
+    def reinit(self) -> tuple[int, str]:
+        said: list[str] = []
+        with mock.patch.object(commands_workspace.util, "ok", side_effect=said.append), \
+             mock.patch.object(commands_workspace.util, "warn", side_effect=said.append), \
+             mock.patch.object(commands_workspace.util, "err", side_effect=said.append), \
+             mock.patch.object(commands_workspace.util, "info", side_effect=lambda m: None):
+            rc = commands_workspace.cmd_workspace_reinit(SimpleNamespace(name=self.ws, all=False))
+        return rc, " ".join(said)
+
+    def locked(self, path: Path) -> None:
+        path.chmod(0o000)
+        self.addCleanup(path.chmod, 0o755)
+
+    def test_a_clones_unreadable_git_refs_costs_nothing(self):
+        refs = self.clone / ".git" / "refs"
+        self.locked(refs)
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertNotIn("cannot be checked", f"{said} {doctor.check_ssh().hint}")
+        doctor.check_workspace_harness()
+        refs.chmod(0o755)
+        self.assertEqual(_status(self.clone), "")
+
+    def test_a_workspace_refs_directory_is_named_by_reinit_and_doctor(self):
+        self.locked(workspace.refs_dir(self.ws))
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn("refs/README.md cannot be checked", said)
+        self.assertIn("restoring read access", said)
+        self.assertNotIn("Up to date", said)
+        r = doctor.check_ssh()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertIn(f"{self.ws}/refs", f"{r.detail} {r.hint}")
+        self.assertIn("read access", r.hint)
+        workspace.refs_dir(self.ws).chmod(0o755)
+        self.assertEqual(_status(self.clone), "")
+
+
+class TheFixForAnUnpublishedRecordMatchesItsErrno(RoundFiveCheckout):
+    """Final review (#942): every failed publish was told to "restore write access", and a full
+    disk or a read-only mount has no write access to restore. The advice follows the errno."""
+
+    def refused_with(self, code: int, says: str) -> dict[str, str]:
+        """What the chat, doctor, reinit and `guard ask` say once a launch's record publish failed
+        with *code*."""
+        self.plane_moves_shared()
+        real = os.replace
+
+        def refusing(src, dst, *args, **kwargs):
+            if os.fspath(dst) == os.fspath(self.marker):
+                raise OSError(code, says, os.fspath(dst))
+            return real(src, dst, *args, **kwargs)
+
+        with mock.patch("os.replace", refusing):
+            workspace.ensure(self.ws)
+            reinit = " ".join(self.reinit_said())
+            self.at_the_plane()
+            _, guard = self.invoke(commands.cmd_guard_ask, pattern="helm uninstall *", local=False)
+        self.assertEqual(_status(self.clone), "")
+        return {"chat": _briefing(self, self.clone), "doctor": doctor.check_workspace_harness().hint,
+                "reinit": reinit, "guard ask": guard}
+
+    def test_a_full_disk_is_told_to_free_space(self):
+        for who, said in self.refused_with(errno.ENOSPC, "No space left on device").items():
+            self.assertIn("free space", said, who)
+            self.assertNotIn("write access", said, who)
+
+    def test_a_read_only_mount_is_told_to_remount_it(self):
+        for who, said in self.refused_with(errno.EROFS, "Read-only file system").items():
+            self.assertIn("read-only", said, who)
+            self.assertNotIn("write access", said, who)
+
+    def test_a_refused_permission_is_told_to_restore_write_access(self):
+        for who, said in self.refused_with(errno.EACCES, "Permission denied").items():
+            self.assertIn("write access", said, who)
+            self.assertNotIn("free space", said, who)
+
+    def test_any_other_refusal_names_its_errno_and_claims_no_cause(self):
+        for who, said in self.refused_with(errno.EIO, "Input/output error").items():
+            self.assertIn("EIO", said, who)
+            self.assertIn("what stops writes", said, who)
+            for claim in ("write access", "free space", "read-only"):
+                self.assertNotIn(claim, said, who)
 
 
 class UtilRunCanWithholdAVariable(unittest.TestCase):

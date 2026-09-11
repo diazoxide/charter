@@ -1517,8 +1517,11 @@ def cmd_workspace_reinit(args) -> int:
                           f"untouched, and hidden in that checkout while it is there; if this is "
                           f"your own file and you mean to commit it: git add -f {inside[1]}")
             elif did == "foreign":
+                # No removal advice here either (#942 final review, R5): `doctor` says a foreign
+                # file stays exactly as it is, and one command may not advise what the other rules
+                # out.
                 util.warn(f"'{n}': {rel} was not written by charter — left completely "
-                          f"untouched. Remove it if you want charter's own again.")
+                          f"untouched; charter never overwrites it.")
             elif did == "blocked":
                 util.err(f"'{n}': {rel} could not be written — something is in the way at "
                          f"that path. charter never deletes or renames existing content.")
@@ -1557,17 +1560,23 @@ def cmd_workspace_reinit(args) -> int:
                 # Ruling H (#942 review round 4): a write charter could not record first is not
                 # made, and the lines stay. Not `blocked`: nothing is in the way at that path. With
                 # the errno the publish failed with (review round 5, R5).
-                refused = workspace.unrecorded_reason(inside[0]) if inside else ""
-                util.warn(f"'{n}': {rel} — charter could not publish its record there first"
-                          f"{f' ({refused})' if refused else ''}, so it wrote nothing and kept "
-                          f"every exclude line it had; restoring write access to that checkout "
-                          f"clears this.")
+                refused = workspace.unrecorded_fix(inside[0], "that checkout") if inside else ""
+                util.warn(f"'{n}': {rel} — charter could not publish its record there first, so "
+                          f"it wrote nothing and kept every exclude line it had"
+                          f"{f'; {refused}' if refused else ''}.")
             else:
                 repairs += 1
                 repaired.add(n)
                 util.ok(f"Reinitialized '{n}' → "
                         f"{'wrote' if did == 'created' else 'refreshed'} {rel} "
                         f"(charter's harness layer).")
+        for rel in before["unreadable"]:
+            # ADR 0009 (#942 final review): a baseline file charter cannot check is named with what
+            # clears it, and `scaffold` writes nothing over it. It was a traceback out of this
+            # command, on every interpreter, for a workspace `refs/` at mode 000.
+            unresolved.add(n)
+            util.warn(f"'{n}': {rel} cannot be checked — charter writes nothing there it cannot "
+                      f"see; restoring read access to that path clears this.")
         # The BACKFILL half of #884, and the reason it is checked after rather than read
         # off `before`: `workspace.scaffold_manifest` swallows its own failure, because it
         # runs from `ensure` on a launch path where raising would cost the operator their

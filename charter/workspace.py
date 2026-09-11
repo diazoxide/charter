@@ -1573,7 +1573,11 @@ def scaffold(name: str) -> None:
     refs = refs_dir(name)
     refs.mkdir(parents=True, exist_ok=True)
     rr = refs / "README.md"
-    if not rr.exists():
+    # `_exists`, never `Path.exists` (#942 final review): with the workspace's `refs/` at mode 000
+    # that raised on 3.11–3.13, and on 3.14 answered False so the write below raised instead — a
+    # traceback out of `workspace reinit` on every interpreter, for a file charter only creates
+    # where it is certainly absent. `reinit` names what could not be checked.
+    if _exists(rr, follow=True) is False:
         rr.write_text(f"# {name} — task references\n\nDrop docs, links, and snippets for "
                       f"this task here (local, gitignored).\n")
     scaffold_charter(name)  # workspace.md — the living vision/context/glossary charter
@@ -2135,6 +2139,7 @@ def _materialise(base: Path, want_all: dict[str, str],
     before = dict(marker)
     rows = _withdraw(base, want_all, marker)
     writes: list[tuple[str, str]] = []
+    published = before
     for rel, status in _layer_status(base, want_all, marker):
         if status == "unreadable":
             # Not `foreign` (#942, review rounds 2 and 3), for any generated path: one state,
@@ -2187,6 +2192,14 @@ def _materialise(base: Path, want_all: dict[str, str],
             rows.extend((rel, "unrecorded") for rel, _status in writes)
             return rows
         marker = intent
+        # What the settle below is compared with (#942 final review): the record this launch
+        # published, never the one it read. Compared with the record read at the start, a launch
+        # that wrote a deleted file again ended on that very record and skipped the settle, so
+        # the pending entry it had just published stayed pending for good — and a pending entry
+        # never reads `harness-edited`. In a workspace directory this publish may have failed;
+        # the settle then tries again unless every write was blocked, when nothing it wrote needs
+        # recording.
+        published = dict(intent)
     for rel, status in writes:
         want = want_all[rel]
         try:
@@ -2198,7 +2211,7 @@ def _materialise(base: Path, want_all: dict[str, str],
             continue
         marker[rel] = content_digest(want)
         rows.append((rel, "created" if status == "missing" else "refreshed"))
-    if marker == before:
+    if marker == published:
         # Only when something changed. Rewriting the marker on every `ensure` would make a
         # workspace's mtimes move for a call that changed nothing, which is the noise
         # `_ensure_guard_hook` avoids one file over.
@@ -2315,6 +2328,29 @@ def unrecorded_reason(tree: Path) -> str:
         return f"{doc['errno']}: {doc['says']}"
     except (OSError, ValueError, KeyError, TypeError):
         return ""
+
+
+#: What clears a record publish that failed, by the errno it failed with (#942 final review).
+#: "Restore write access" was the advice for every one of them, and a full disk or a read-only
+#: mount has no write access to restore. An errno not named here gets no guessed cause.
+_UNRECORDED_FIXES = {
+    "EACCES": "restore write access to {where}",
+    "ENOSPC": "free space on the disk that holds {where}",
+    "EROFS": "remount the read-only filesystem that holds {where} read-write",
+}
+
+
+def unrecorded_fix(tree: Path, where: str) -> str:
+    """What clears guest checkout *tree*'s failed record publish, worded for *where* and ending
+    with its errno — ``""`` when no failed publish is on record. READ ONLY.
+
+    One wording for the chat, `doctor`, `reinit` and `guard ask`, so no two of them can hand a
+    reader different remedies for one refusal."""
+    reason = unrecorded_reason(tree)
+    if not reason:
+        return ""
+    fix = _UNRECORDED_FIXES.get(reason.partition(":")[0], "fix what stops writes to {where}")
+    return f"{fix.format(where=where)} ({reason})"
 
 
 # --------------------------------------------------------------------------- #
@@ -2535,14 +2571,34 @@ def _live_trees(tree: Path, exclude: Path) -> tuple[list[Path] | None, str]:
     *tree* — and a launch wires every checkout in its workspace, at ~7 ms a spawn (measured).
     """
     common = exclude.parent.parent
-    # `_exists`, not `os.path.isdir` (review round 4, N1's class): that answered False for an
-    # EIO too, so charter skipped git, took this checkout for the only tree, and dropped a
-    # sibling's line.
-    admin = _exists(common / "worktrees")
-    if admin is False:
+    admin = common / "worktrees"
+    # READ, never only lstat (#942 final review, ruling G's own class). Measured on git 2.50.1: with
+    # `worktrees/` unreadable, or one worktree's directory in it, or only that worktree's `gitdir`,
+    # `git worktree list` lists the rest and exits 0. The lstat before this passed all three, so
+    # charter took git's short list for the whole one and dropped the line a live sibling still
+    # needed. What git cannot read there, charter cannot account for. And an error other than "not
+    # there" is doubt, never "no worktrees": `os.path.isdir` answered False for an EIO (review
+    # round 4, N1's class), and charter took this checkout for the only tree.
+    try:
+        with os.scandir(admin) as entries:
+            names = [entry.name for entry in entries]
+    except (FileNotFoundError, NotADirectoryError):
         return [tree], ""
-    if admin is None:
-        return None, f"{common / 'worktrees'} cannot be checked — restoring read access clears this"
+    except OSError:
+        return None, f"{admin} cannot be checked — restoring read access clears this"
+    for name in names:
+        gitdir = admin / name / "gitdir"
+        try:
+            gitdir.read_bytes()
+        except NotADirectoryError:
+            # A stray file in `worktrees/`, which git passes over too (measured).
+            continue
+        except FileNotFoundError:
+            # Git leaves that worktree out of its list as well, and says nothing (measured).
+            return None, (f"{gitdir} is missing, so git leaves that worktree out of its list — "
+                          f"`git worktree repair` from that worktree clears this")
+        except OSError:
+            return None, f"{gitdir} cannot be checked — restoring read access clears this"
     answers = getattr(_SCOPE, "answers", None)
     key = os.path.realpath(common)
     if answers is not None and key in answers:
@@ -2831,7 +2887,7 @@ def rules_not_in_force(cwd) -> str:
     base = workspace_dir(parts[0])
     if len(parts) > 1 and git_dir(base / parts[1]) is not None:
         tree, where = base / parts[1], "this checkout"
-        want, marker, refused = _guest_files(tree), _read_marker_at(tree), unrecorded_reason(tree)
+        want, marker, refused = _guest_files(tree), _read_marker_at(tree), unrecorded_fix(tree, where)
     elif len(parts) == 1:
         tree, where = base, "this workspace"
         want, marker, refused = _layer_files(parts[0]), _read_marker(parts[0]), ""
@@ -2854,7 +2910,7 @@ def rules_not_in_force(cwd) -> str:
         if not missing:
             continue
         if status in ("missing", "stale") and refused:
-            fix = f"restore write access to {where} ({refused})"
+            fix = refused
         elif status in ("missing", "stale"):
             fix = f"`charter workspace reinit {parts[0]}` writes them"
         elif status == "unreadable":
@@ -3288,17 +3344,20 @@ def structure_version(name: str) -> int:
 
 
 def structure_status(name: str) -> dict:
-    """{'ok', 'missing': [rel…], 'version', 'target'} — is the workspace's on-disk
-    layout current? ``ok`` iff no baseline file is missing AND the marker is up to date."""
+    """{'ok', 'missing': [rel…], 'unreadable': [rel…], 'version', 'target'} — is the
+    workspace's on-disk layout current? ``ok`` iff no baseline file is missing AND the marker is
+    up to date."""
     # `_exists`, through symlinks (#942 review round 4): `Path.exists` raised on 3.11–3.13 for a
     # component that cannot be checked, crashing `workspace reinit` before it could say so. A
     # component that cannot be checked is not called missing — scaffolding over it is a write
-    # into something charter cannot see.
-    missing = sorted(rel for rel, p in _required_components(name).items()
-                     if _exists(p, follow=True) is False)
+    # into something charter cannot see — and is listed apart, for `reinit` to name with what
+    # clears it (ADR 0009, #942 final review).
+    seen = {rel: _exists(p, follow=True) for rel, p in _required_components(name).items()}
+    missing = sorted(rel for rel, there in seen.items() if there is False)
     ver = structure_version(name)
-    return {"ok": (not missing) and ver >= STRUCTURE_VERSION,
-            "missing": missing, "version": ver, "target": STRUCTURE_VERSION}
+    return {"ok": (not missing) and ver >= STRUCTURE_VERSION, "missing": missing,
+            "unreadable": sorted(rel for rel, there in seen.items() if there is None),
+            "version": ver, "target": STRUCTURE_VERSION}
 
 
 def needs_reinit(name: str) -> bool:

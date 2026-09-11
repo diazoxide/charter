@@ -1804,8 +1804,8 @@ def _mirror_into_workspaces() -> None:
             elif status == "unrecorded":
                 unrecorded.append(where)
                 row = workspace.checkout_row(ws, rel)
-                if row and workspace.unrecorded_reason(row[0]):
-                    refusals[workspace.unrecorded_reason(row[0])] = None
+                if row and workspace.unrecorded_fix(row[0], "that checkout"):
+                    refusals[workspace.unrecorded_fix(row[0], "that checkout")] = None
             elif status == "withheld":
                 withheld.append(where)
             elif status in ("foreign", "blocked"):
@@ -1839,10 +1839,9 @@ def _mirror_into_workspaces() -> None:
     if unrecorded:
         # Ruling H (#942 review round 4): a write charter could not record first is not made.
         why = "; ".join(refusals)
-        util.warn(f"  {', '.join(unrecorded)}: charter could not publish its record there first"
-                  f"{f' ({why})' if why else ''}, so it wrote nothing there and kept every exclude "
-                  f"line it had — the rule is not in force in a chat rooted there until that "
-                  f"checkout is writable.")
+        util.warn(f"  {', '.join(unrecorded)}: charter could not publish its record there first, "
+                  f"so it wrote nothing there and kept every exclude line it had, and the rule is "
+                  f"not in force in a chat rooted there{f' until you {why}' if why else ''}.")
     if withheld:
         util.warn(f"  {', '.join(withheld)} was not written: charter could not hide it in "
                   f"that checkout's .git/info/exclude, and a machine-local rule it cannot "

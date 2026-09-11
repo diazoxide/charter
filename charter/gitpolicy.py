@@ -198,12 +198,31 @@ def apply(repo: Path) -> list[str]:
 
 def repos(root: Path, workspaces_dir: Path) -> list[Path]:
     """The control plane itself plus every repo clone under ``workspaces/<ws>/<repo>``."""
+    return scan(root, workspaces_dir)[0]
+
+
+def scan(root: Path, workspaces_dir: Path) -> tuple[list[Path], list[Path]]:
+    """:func:`repos`, and beside it every directory under ``workspaces/<ws>/`` whose ``.git``
+    charter cannot check.
+
+    #942 final review: `Path.exists` RAISED for one on 3.11–3.13 — a workspace's own `refs/` at
+    mode 000 took `charter doctor` down — and answered False on 3.14, leaving what may be a clone
+    out of the count without a word. `workspace._exists` tells those apart, and `doctor`'s
+    `check_ssh` names the second kind (ADR 0009)."""
+    from .workspace import _exists
+
     out = [Path(root)] if is_git_repo(root) else []
+    unseen: list[Path] = []
     if Path(workspaces_dir).exists():
         for ws in sorted(Path(workspaces_dir).iterdir()):
             if not ws.is_dir():
                 continue
             for clone in sorted(ws.iterdir()):
-                if clone.is_dir() and is_git_repo(clone):
+                if not clone.is_dir():
+                    continue
+                there = _exists(clone / ".git", follow=True)
+                if there:
                     out.append(clone)
-    return out
+                elif there is None:
+                    unseen.append(clone)
+    return out, unseen

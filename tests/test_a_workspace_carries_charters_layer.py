@@ -897,12 +897,16 @@ class WhatReinitSaysAboutTheLayer(WorkspaceLayer):
         return said
 
     def test_a_hand_edited_file_is_named_as_the_operators_and_left(self):
+        """And never with advice to remove it (#942 final review): `doctor` says a foreign file
+        stays as it is, and `reinit` saying "Remove it" beside that was two answers to one
+        question — the one R5 rules out."""
         self.settings().write_text("{}")
         said = self._reinit()
         self.assertIn(
             f"'{self.ws}': .claude/settings.json was not written by charter — left "
-            f"completely untouched. Remove it if you want charter's own again.",
+            f"completely untouched; charter never overwrites it.",
             [m for _, m in said])
+        self.assertNotIn("Remove", " ".join(m for _, m in said))
         self.assertEqual(self.settings().read_text(), "{}")
 
     def test_a_current_layer_reports_nothing_at_all(self):
