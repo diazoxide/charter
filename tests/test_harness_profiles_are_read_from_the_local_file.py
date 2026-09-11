@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import cli, config, contain, instance, profiles
+from charter import cli, config, contain, instance, profiles, util
 from tests import _envguard, _isolation
 from tests._isolation import PersonaIso
 
@@ -79,6 +79,31 @@ class TheLocalFileIsRead(_LocalFile):
         self.assertEqual(self._read().profiles["claude"],
                          profiles.Profile("claude", "claude", "claude-code", ("claude",), (),
                                           "built-in"))
+
+    def test_a_harness_registered_without_a_cli_name_is_no_kind_and_no_profile(self):
+        """`Harness.cli_name` defaults to "", and a harness with no word after `charter` is not
+        launchable as one. Without the filter in `_kinds` it would be a kind named "" and a
+        built-in profile nobody can type. Every harness registered today has a word, so only
+        a registry with one that does not can show the filter doing anything."""
+        from types import SimpleNamespace
+
+        from charter.harness import registry
+
+        headless = SimpleNamespace(name="headless", cli_name="")
+        with mock.patch.object(registry, "all", return_value=[*registry.all(), headless]):
+            self.assertNotIn("", profiles._kinds())
+            self.assertEqual(set(profiles.builtins()), _BUILT_INS)
+
+    def test_a_cfg_that_is_not_a_table_declares_nothing_and_raises_nothing(self):
+        """`derive`'s docstring promises it never raises, and `current` hands it whatever
+        `instance.load` returned. A value that is not a table declares nothing: the built-ins,
+        and no refusal. The sweep of `ce7f5d8` collapsed the `isinstance(cfg, dict)` guard to
+        `cfg.get("harness")` with the suite still green."""
+        for cfg in (None, [], "schema = 1"):
+            with self.subTest(cfg=cfg):
+                r = profiles.derive(config.ROOT, cfg)
+                self.assertEqual(set(r.profiles), _BUILT_INS)
+                self.assertEqual(r.refused, ())
 
     def test_a_declared_profile_is_read_with_its_kind_command_and_env(self):
         p = self._local(_WORK).profiles["claude-work"]
@@ -354,6 +379,26 @@ class ABrokenProfileIsRefusedAlone(_LocalFile):
                 with self.subTest(harness=h.name):
                     self.assertIn(h.name, profiles.LOGIN)
 
+    def test_a_kind_registered_without_a_login_sentence_still_gets_one(self):
+        """The pin above holds for every kind today. This is what a kind registered without a
+        login sentence costs: a general sentence in the refusal, not the row — doctor reads
+        through here, and doctor is what the operator runs when something is wrong."""
+        with mock.patch.dict(profiles.LOGIN, clear=True):
+            reason = self._refused('[harness.s]\nkind = "claude"\ncommand = ["claude"]\n'
+                                   'env = { API_KEY = "v" }\n', "s")
+        self.assertIn("log in inside that harness", reason)
+
+    def test_a_refusal_names_the_first_offending_variable_by_name(self):
+        """By name, not by where it was written: reordering a table changes no sentence. The
+        sweep of `ce7f5d8` swapped the `sorted` for `list` with the suite still green."""
+        for env, first, later in (('{ CHARTER_Z = "1", CHARTER_A = "2" }', "CHARTER_A", "CHARTER_Z"),
+                                  ('{ Z_TOKEN = "1", A_KEY = "2" }', "A_KEY", "Z_TOKEN")):
+            with self.subTest(env=env):
+                reason = self._refused('[harness.v]\nkind = "claude"\ncommand = ["claude"]\n'
+                                       f'env = {env}\n', "v")
+                self.assertIn(first, reason)
+                self.assertNotIn(later, reason)
+
     def test_an_unreadable_local_file_keeps_the_built_ins(self):
         r = self._local(_OK + "[harness")
         self.assertEqual(set(r.profiles), _BUILT_INS)
@@ -457,6 +502,74 @@ class ABrokenProfileIsRefusedAlone(_LocalFile):
             with self.subTest(name=name):
                 reason = self._refused(f"[harness.{name}]\n", name)
                 self.assertIn('has kind ""', reason)
+
+
+class EveryLayerEscapesWhatItRepeats(_LocalFile):
+    """Ruling 35 at each layer that repeats a value, not only where the value is first read.
+
+    A name reaching these layers today has passed `NAME_RE` or is a built-in's word, so it
+    carries no control byte — but a layer that leaned on that would print whatever a future
+    source of names hands it. Survivor [12] asked this of `harness list`'s NAME cell; the
+    sweep of `ce7f5d8` asked it of the three layers below. Git's own words come from outside
+    charter whatever validates the rest."""
+
+    _ODD = "a" + chr(13) + "b"
+
+    def _unvalidated(self, command=("claude",)) -> profiles.ProfileSet:
+        odd = profiles.Profile(self._ODD, "claude", "claude-code", command, (),
+                               "charter.local.toml")
+        return profiles.ProfileSet({self._ODD: odd}, (), self._ODD, "charter.local.toml", None)
+
+    def test_the_ignore_check_refuses_an_unvalidated_name_escaped(self):
+        """`with_ignore_check` names each profile it moves, and `_narrowed` names the default
+        it had to drop."""
+        r = profiles.with_ignore_check(self._unvalidated(),
+                                       profiles.IgnoreCheck("git would carry it", "fix"))
+        self.assertEqual([x.name for x in r.refused], [contain.readable(self._ODD)])
+        self.assertIsNone(r.default)
+        self.assertEqual(r.default_refused, contain.readable(self._ODD))
+
+    def test_current_refuses_an_unvalidated_name_escaped(self):
+        """`current()` names a profile it refuses for a command that is charter itself."""
+        profiles._last.clear()
+        self.addCleanup(profiles._last.clear)
+        with mock.patch.object(profiles, "derive", return_value=self._unvalidated(("charter",))):
+            r = profiles.current()
+        [refused] = [x for x in r.refused if x.source == "charter.local.toml"]
+        self.assertEqual(refused.name, contain.readable(self._ODD))
+        self.assertIn(contain.readable(self._ODD), refused.reason)
+        self.assertNotIn(chr(13), refused.reason)
+
+    def test_gits_own_words_are_escaped_in_the_refusal_and_the_fix(self):
+        (config.ROOT / "charter.local.toml").write_text(_OK)
+        said = "fatal: " + self._ODD
+        with mock.patch.object(util, "git_path_state", return_value=(util.UNKNOWN_GIT, said)):
+            check = profiles.ignore_check(config.ROOT)
+        for text in check:
+            self.assertIn(contain.readable(said), text)
+            self.assertNotIn(chr(13), text)
+
+    def test_the_parsers_own_words_are_escaped(self):
+        """Why the file could not be read is `tomllib`'s or the operating system's text, and
+        `LOCAL_UNREADABLE` repeats it."""
+        said = "bad " + self._ODD
+        with mock.patch.object(profiles, "_read_local", return_value=({}, said)):
+            r = self._read()
+        [refused] = [x for x in r.refused if x.source == "charter.local.toml"]
+        self.assertIn(contain.readable(said), refused.reason)
+        self.assertNotIn(chr(13), refused.reason)
+
+
+class TheIgnoreCheckMovesOnlyWhatTheLocalFileDeclares(_LocalFile):
+    def test_a_built_in_stays_a_profile_and_is_not_also_refused(self):
+        """F1 refuses what `charter.local.toml` declares, because that file is the one git
+        would carry. A built-in comes from the registry, so it stays a profile — and appears
+        once: refused as well, it would read as broken while it still launches. The sweep of
+        `ce7f5d8` dropped the `p.source == LOCAL_FILE` filter with the suite still green."""
+        r = profiles.with_ignore_check(self._local(_OK),
+                                       profiles.IgnoreCheck("git would carry it", "fix"))
+        self.assertEqual(set(r.profiles), _BUILT_INS)
+        self.assertEqual([x.name for x in r.refused], ["ok"])
 
 
 class CharterTomlCarriesNoProfile(_LocalFile):
