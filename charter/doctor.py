@@ -1733,6 +1733,68 @@ def check_ask_rules() -> Result:
                        "want — this names it so the prompts are not a mystery.")
 
 
+def check_handoff_gate() -> Result:
+    """Does a `charter handoff` wait for the operator's yes here? (chat handoff)
+
+    A handoff's brief becomes a new chat's first message and runs with the operator's
+    authority, and the consent is the harness's own `ask` rule for `charter handoff *`,
+    which `charter init` writes. So a missing rule is a warning carrying the command that
+    adds it — never a repair. Removing the rule is the operator's decision (ADR 0013); this
+    row says that, and charter does not put the rule back.
+
+    **Each harness is asked through its own writer**, `apply_ask_rule(dry_run=True)` — the
+    write path minus the write — so this row and `charter guard` cannot disagree about what
+    "present" means. Claude Code is asked about :func:`session_root`, the directory whose
+    settings the host actually reads (#855); the others about the plane, where their rules
+    live. A file charter cannot parse or read is a not-checked warning and never "missing":
+    telling someone to add a rule to a file charter could not open sends them to edit
+    something broken.
+
+    A passing row still names, per harness, what no rule can do: where charter's hook has
+    nothing to read a sub-agent or an unattended run from, its `handoff-gate` deficit says so
+    on a `↳` line — the shape `check_harness` uses for a ceiling.
+    """
+    from . import config as _config
+    from .commands import HANDOFF_ASK_PATTERN
+    from .harness import registry as _harness
+
+    name = "handoff gate"
+    rows = []
+    for h in _harness.all():
+        root = session_root() if h.name == _harness.CLAUDE_CODE else _config.ROOT
+        try:
+            status, detail = h.apply_ask_rule(root, HANDOFF_ASK_PATTERN, dry_run=True)
+        except OSError as e:
+            # The settings loaders test `Path.exists` outside their own `try`, and on a file
+            # under a directory charter may not enter that raises on Python 3.11-3.13 (3.14
+            # answers False) — measured. Unreadable is not missing, and a raise here would
+            # take the whole preflight down with it.
+            return Result(name, WARN,
+                          detail=f"{h.name}'s settings could not be read ({e}) — charter "
+                                 f"cannot tell whether `charter handoff` asks first",
+                          hint=_NOT_CHECKED_HINT)
+        rows.append((h, status, detail))
+    broken = next((detail for _h, status, detail in rows if status == "malformed"), None)
+    if broken:
+        return Result(name, WARN,
+                      detail=f"{broken} is not valid — charter cannot tell whether "
+                             f"`charter handoff` asks first",
+                      hint=_NOT_CHECKED_HINT)
+    missing = [h.name for h, status, _detail in rows if status == "added"]
+    if missing:
+        return Result(name, WARN,
+                      detail=f"no ask rule for `charter handoff` under {', '.join(missing)}",
+                      hint="A handoff's brief becomes a new chat's first message and runs with "
+                           "your authority; this rule is the prompt that asks you first, and "
+                           "on Claude Code it asks under bypassPermissions too. Add it: charter "
+                           "guard ask 'charter handoff *'. Removing it is your choice — this "
+                           "row says so, and charter does not put it back.")
+    present = [h.name for h, status, _detail in rows if status == "present"]
+    gaps = [f"        ↳ {h.name}: {d.detail}" for h, _status, _detail in rows
+            for d in h.deficits if d.key == "handoff-gate"]
+    return Result(name, OK, detail="\n".join([f"asks first under {', '.join(present)}", *gaps]))
+
+
 #: The skills the plugin ships. A constant rather than a directory listing because the CLI
 #: is installed from a wheel that contains no `skills/` — that directory belongs to the
 #: plugin artifact. A test asserts this equals the repo's `skills/`, so the two cannot part
@@ -3206,7 +3268,7 @@ def _checks():
                 check_memory_indexes(), check_personas(), check_persona_grant(),
                 check_front_door(),
                 check_news_adoption(),
-                check_ask_rules(),
+                check_ask_rules(), check_handoff_gate(),
                 check_shadowed_knowledge(),
                 check_credential_paths(),
                 check_mcp_launchers(), check_plugin_install(), check_plugin_skew(),
@@ -3245,7 +3307,8 @@ _FIXED_CHECK_NAMES = (
     "plane-root guard", "guard seen", "nested plane", "workspace clones",
     "workspace layer", "changes",
     "inventory", "vaults", "vault registry", "version lock", "memory indexes",
-    "personas", "persona grant", "front door", "news", "ask rules", "shadowed docs",
+    "personas", "persona grant", "front door", "news", "ask rules", "handoff gate",
+    "shadowed docs",
     "credential paths", "mcp", "plugin install", "plugin", "plugin files",
 )
 

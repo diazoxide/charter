@@ -48,7 +48,7 @@ policy this plane holds — and `$CHARTER_HOME` puts a real vault directory with
 directory that
 holds no `charter.toml`. What does *not* fire out there is every guard whose subject is the
 plane itself: the single-credential rule, the two plane-root guards, the release floor, the
-state-write guard, and the persona tool-gate's auto-approval. A denial about a control
+handoff guard, the state-write guard, and the persona tool-gate's auto-approval. A denial about a control
 plane that does not exist explains nothing to the person reading it.
 
 One consequence worth stating plainly: a refusal outside a plane is **delivered without
@@ -350,7 +350,34 @@ rule while one who reads a bare refusal files an issue.
   asserts that, so if one is ever added the guard is told rather than quietly
   under-reading. Ungated on there being a control plane, for the reason above.
 
-An eighth path is not a guard but an allowance: a program the **active persona** declares in
+- **A handoff the prompt cannot stand in front of.** A handoff's brief becomes a new chat's
+  first message and runs with your authority, so its consent is your harness's own permission
+  prompt: the `ask` rule for `charter handoff *` that `charter init` writes (see
+  [handoff.md](handoff.md), *The prompt is the consent*). This guard refuses what that prompt
+  cannot cover. Each refusal needs a fact no command pattern can see.
+
+  | Refused | Why the prompt cannot cover it |
+  | --- | --- |
+  | a call from a **sub-agent**: the payload carries `agent_id` | You are talking to the parent chat, and what the sub-agent found goes back there anyway. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
+  | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `charter ws todo` as the way to keep the work. |
+  | any **spelling** other than `charter handoff …` at the start of its command | A rule matches words. On Claude Code 2.1.268, `python3 -m charter handoff` and a path to charter ran with no prompt. A `FOO=1` prefix and an `env` wrapper were matched there and are refused anyway, so a model has one spelling to follow. |
+  | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before charter reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
+
+  **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
+  segment is stdin charter sends on, never a command the shell runs, so it is skipped the way a
+  reader's is. A brief that names `.charter/vaults/…` in prose, or holds one apostrophe, is not
+  refused as a read. Only that body: in `charter handoff beta && bash <<'EOF'` the body belongs
+  to `bash` and is read as commands. A refused handoff leaves `routing: require`'s pending mark
+  in place, and its trace row carries the refusal's name and no part of the command.
+
+  Gated on a control plane, unlike the two substitution guards above: this is a policy about a
+  plane's chats, not a fact about the shell. **What it does not reach:** opencode's plugin
+  builds a payload with neither `agent_id` nor `permission_mode`, so there the `ask` rule is
+  the whole gate. Codex has no command-pattern permissions, so an attended Codex chat's handoff
+  runs without a prompt, and `codex exec --approve-for-me` reports `permission_mode: default`,
+  so it is not refused as unattended. `charter doctor`'s `handoff gate` row names both gaps.
+
+One more path is not a guard but an allowance: a program the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the
 **program**, so every argument rides along — which is why seven things are not smoothed
 whatever `tools:` says: destructive subcommands (`kubectl delete`, `charter secret`,

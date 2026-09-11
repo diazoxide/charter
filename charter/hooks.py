@@ -769,6 +769,33 @@ def _reader_of(line: str) -> bool:
     return os.path.basename(prog).lower() in _READERS
 
 
+def _feeds_a_handoff(head: str) -> bool:
+    """Whether *head* — a line up to its first heredoc — is one `charter handoff` and nothing
+    else, which makes that heredoc's body the brief.
+
+    Beside :func:`_reader_of` and not a change to :data:`_READERS`: charter is not a program
+    that opens a file operand. A brief is stdin text charter sends to a new chat as its first
+    message; the shell never runs a line of it. Read as commands, every line of a brief is
+    segmented by the leak guard, and a brief that mentions a vault path in prose is refused
+    as a read of it — a line that begins `cat`, or a single apostrophe, which leaves the whole
+    call unparseable and scanned as raw text for a path. That is #258's shape arriving
+    through the one command whose entire input is prose.
+
+    **One segment, and the reason is the direction a mistake here fails in.** In
+    `charter handoff beta && bash <<'EOF'` the heredoc is `bash`'s, its body is a script, and
+    removing it because the same line also names a handoff would hide a real read from the
+    one guard that runs in every directory. `cd x && charter handoff beta <<'BRIEF'` is not
+    treated as a brief either, so its body is read as commands: the cost is a false denial on
+    a brief that names a vault path, never a missed read. :func:`_reader_of` asks about the
+    whole line instead, and is not changed here.
+    """
+    segments = _segment_argv(head)
+    if len(segments) != 1:
+        return False
+    prog, _env, argv = _split_env(segments[0])
+    return _runs_handoff(prog, argv)
+
+
 def _strip_reader_heredocs(cmd: str) -> str:
     """Remove heredoc BODIES fed to a reader — they are stdin data, never arguments.
 
@@ -777,9 +804,14 @@ def _strip_reader_heredocs(cmd: str) -> str:
     own layout is refused as a *read* of it (#258). Documentation about charter is exactly
     the text most likely to name these paths.
 
-    Only a reader's heredoc. A body fed to `bash`/`python` is a script, not data, and
+    Only a reader's heredoc — and a `charter handoff`'s, whose body is its brief
+    (:func:`_feeds_a_handoff`). A body fed to `bash`/`python` is a script, not data, and
     removing it would hide commands from a guard rather than prose — a distinction worth
     the extra condition even though this guard does not scan such bodies today.
+
+    The terminator is matched by ``lines[i].strip() == delim``, which can only end a body
+    EARLIER than bash would (bash wants the line exactly). Earlier is the direction that
+    hands more text back to the guard, never less.
     """
     if "<<" not in cmd:
         return cmd
@@ -790,7 +822,7 @@ def _strip_reader_heredocs(cmd: str) -> str:
         line = lines[i]
         out.append(line)
         m = _HEREDOC_RE.search(line)
-        if m and _reader_of(line):
+        if m and (_reader_of(line) or _feeds_a_handoff(line[:m.start()])):
             delim = m.group(2)
             i += 1
             while i < len(lines) and lines[i].strip() != delim:
@@ -4090,6 +4122,34 @@ def _charter_words(prog: str, argv: list[str]) -> list[str] | None:
     return None
 
 
+def _runs_handoff(prog: str, argv: list[str]) -> bool:
+    """Whether this ONE segment runs `charter handoff`, in any spelling charter recognises —
+    the plain one, `python3 -m charter`, a path to charter, behind a prefix or a wrapper.
+
+    Every spelling, on purpose. Which spellings the harness's permission prompt covers is a
+    separate question with a measured answer, and A7 (:func:`_handoff_refusal`) asks it; this
+    answers only "is a handoff about to run", which is what a guard has to know before it
+    can say anything about one.
+    """
+    words = _charter_words(prog, argv)
+    return bool(words) and words[0] == "handoff"
+
+
+def _is_handoff(cmd: str | None) -> bool:
+    """Whether any segment of *cmd* runs `charter handoff` (chat handoff).
+
+    Shared: A7 finds the handoff line with it, and the routing-mark clear that
+    `charter handoff` brings reads it too, so the two cannot disagree about what a handoff is.
+
+    **Any segment, and newlines are segment boundaries here** (:data:`_PUNCTUATION_CHARS`), so
+    a heredoc body line that itself begins `charter handoff` counts as well. That over-match
+    costs one cleared mark where it is read on its own; A7 skips heredoc bodies before it
+    judges anything (:func:`_strip_reader_heredocs`).
+    """
+    return any(_runs_handoff(prog, argv)
+               for prog, _env, argv in map(_split_env, _segment_argv(cmd)))
+
+
 def _charter_prose_command(cmd: str | None) -> tuple[str, str, str | None] | None:
     """``("charter persona remember", what it does with the text, its file input)`` — or
     ``None`` when no segment of *cmd* is one.
@@ -4194,6 +4254,141 @@ def _charter_substitution_hit(cmd: str | None) -> tuple[str, str] | None:
         f"and pass it as \"$VAR\" — a parameter expansion is not a substitution. This guard "
         f"reads the SHAPE of the line; it does not know what the command would print, and "
         f"does not claim to keep a credential out of a file.")
+
+
+# --------------------------------------------------------------------------- #
+# A7: a handoff waits for a yes the operator can see (chat handoff)            #
+# --------------------------------------------------------------------------- #
+# A handoff's brief becomes a new chat's first message, and a first message runs with the
+# operator's authority. The consent is the harness's own permission prompt — the `ask` rule
+# for `charter handoff *` that `charter init` writes (ADR 0014: a pattern belongs to the
+# host). Each refusal below covers something that prompt cannot: who is asking, whether
+# anybody is there to answer, a spelling the rule does not match, and a stdin the prompt
+# would not show. Every one needs a fact no command pattern can see — the payload's
+# `agent_id` and `permission_mode`, or how the shell feeds stdin — which is why these live
+# in the hook and not in a second rule.
+
+#: What each A7 refusal says. Spelled once, so a denial reads the same wherever it is quoted.
+_HANDOFF_SUBAGENT = (
+    "`charter handoff` is refused from inside a sub-agent. A brief becomes a new chat's first "
+    "message and runs with the operator's authority, so only the chat the operator is talking "
+    "to may propose one — and whatever this sub-agent found goes back to that chat anyway. "
+    "Return it to the parent chat, and let the parent propose the handoff.")
+_HANDOFF_UNATTENDED = (
+    "`charter handoff` is refused in an unattended run (`permission_mode: bypassPermissions`). "
+    "A handoff opens a chat that starts working on its brief with the operator's authority, "
+    "and its consent is a permission prompt nobody is here to answer. Record the work "
+    "instead — charter ws todo --workspace <workspace> \"<what>\" — and hand it off from a "
+    "chat someone is attending.")
+_HANDOFF_SPELLING = (
+    "`charter handoff` must be spelled exactly that, at the start of its command. The "
+    "permission rule that asks you first is `Bash(charter handoff *)`, and a spelling that "
+    "rule does not match gets no prompt: on Claude Code 2.1.268, `python3 -m charter handoff` "
+    "and a path to charter both ran with none. Run: charter handoff <workspace> <<'BRIEF'")
+_HANDOFF_SOURCE = (
+    "`charter handoff` takes its brief from a QUOTED heredoc in the same call — <<'BRIEF' — "
+    "so the permission prompt shows exactly the text the new chat is sent. This call feeds it "
+    "{what}, which the shell would change or hide before charter reads it. Write: "
+    "charter handoff <workspace> <<'BRIEF' … BRIEF")
+
+
+def _handoff_segment(toks: list[_Tok]) -> tuple[list[_Tok] | None, bool]:
+    """``(the first segment that runs charter handoff, whether a pipe feeds it)``.
+
+    A walk of its own over the line's tokens rather than :func:`_segment_argv`, because the
+    two facts this guard needs are exactly the two that function discards: the operator in
+    FRONT of a segment (a `|` is stdin arriving from another program) and whether a word was
+    quoted (a heredoc delimiter's quoting decides whether its body expands). Substitutions and
+    groups are not unpicked: a handoff found only inside one is not at the start of its own
+    command, and the caller refuses that as a spelling.
+    """
+    segments: list[tuple[list[_Tok], str]] = []
+    seg: list[_Tok] = []
+    before = ""
+    for tok in toks:
+        if tok.is_op(*_CONTROL_OPERATORS):
+            segments.append((seg, before))
+            seg, before = [], tok.text
+        else:
+            seg.append(tok)
+    segments.append((seg, before))
+    for seg, before in segments:
+        prog, _env, argv = _split_env([t.text for t in seg])
+        if _runs_handoff(prog, argv):
+            return seg, before in ("|", "|&")
+    return None, False
+
+
+def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
+    """``(trace reason, denial)`` for a `charter handoff` the operator's permission prompt
+    cannot stand in front of — or ``None``.
+
+    **The first handoff INVOCATION line is the one judged.** Heredoc bodies opened on earlier
+    lines are skipped the way the leak guard skips them (:func:`_strip_reader_heredocs`), so a
+    document being written that shows the command is prose rather than a handoff.
+
+    The refusals, in order:
+
+    * ``handoff-subagent`` — the payload carries ``agent_id`` on a harness where that is
+      measured to mean a sub-agent. Claude Code 2.1.268 and codex-cli 0.147.0 (`codex exec
+      --enable multi_agent_v2`) both sent none in the main conversation and one on a
+      sub-agent's Bash call. opencode's plugin builds a payload with no such field, and a
+      harness nobody measured is not read as one.
+    * ``handoff-unattended`` — ``permission_mode: bypassPermissions`` (:func:`_unattended`).
+    * ``handoff-spelling`` — the handoff's own segment does not begin with the words
+      `charter handoff`. On Claude Code 2.1.268, `python3 -m charter handoff` and a path to
+      charter ran with no prompt. A `FOO=1` prefix and an `env` wrapper were matched there
+      and are refused anyway: "spelled exactly that" is one rule a model can follow, and no
+      other harness's matcher has been measured.
+    * ``handoff-brief-source`` — stdin that is not exactly one quoted heredoc on the handoff's
+      own segment, or a live substitution anywhere in the call (:func:`_live_substitution`,
+      scoped to the whole call like A5 and A6, for their reason).
+
+    **Quoting is read off the delimiter token.** That is the answer :func:`_heredoc_header`
+    gives — any quoting anywhere in the word makes the body literal — taken from the
+    tokenizer that already found this `<<`, where a search of the raw line for it would be
+    misled by a quoted `"<<"` earlier on the line.
+    `TheQuotingJudgementIsTheSubstitutionGuards` holds the two to one answer.
+    """
+    line = next((ln for ln in _strip_reader_heredocs(cmd).split("\n") if _is_handoff(ln)),
+                None)
+    if line is None:
+        return None
+    from .harness import claude_code, codex
+    if data.get("agent_id") and os.environ.get("CHARTER_HARNESS") in (claude_code.NAME,
+                                                                        codex.NAME):
+        return "handoff-subagent", _HANDOFF_SUBAGENT
+    if _unattended(data):
+        return "handoff-unattended", _HANDOFF_UNATTENDED
+    try:
+        toks = _split_punctuation(_lex(line))
+    except ValueError:
+        # The shell would still be reading that quote on the next line, so which heredoc (if
+        # any) feeds this command cannot be read off it. Refused rather than guessed.
+        return "handoff-brief-source", _HANDOFF_SOURCE.format(
+            what="a quote left open on its line, so no heredoc can be seen feeding it")
+    seg, piped = _handoff_segment(toks)
+    if seg is None or [t.text for t in seg[:2]] != ["charter", "handoff"]:
+        return "handoff-spelling", _HANDOFF_SPELLING
+    heredocs = [i for i, t in enumerate(seg) if t.is_op("<<")]
+    if any(t.is_op("<<<") for t in seg):
+        what = "a here-string (<<<)"
+    elif any(t.is_op(*_REDIRECT_READS) for t in seg):
+        what = "a file (<), which the prompt shows as a path rather than as the brief"
+    elif piped:
+        what = "a pipe"
+    elif not heredocs:
+        what = "no heredoc at all"
+    elif len(heredocs) > 1:
+        # bash reads every body and hands the command only the last one (GNU bash 3.2.57).
+        what = "more than one heredoc, and the shell sends charter only the last"
+    elif all(t.bare for t in seg[heredocs[0] + 1:heredocs[0] + 2]):
+        what = "an unquoted heredoc, which expands $… and `…` in the brief"
+    elif _live_substitution(cmd):
+        what = "a live command substitution"
+    else:
+        return None
+    return "handoff-brief-source", _HANDOFF_SOURCE.format(what=what)
 
 
 # --------------------------------------------------------------------------- #
@@ -4699,7 +4894,7 @@ def _trace_head(cmd: str) -> str:
 def pretooluse() -> int:
     """The Bash guard. **The one handler that is only PARTLY plane-gated** (#852).
 
-    Its refusals divide, and `_in_a_plane` documents the line at length: A2/A3/A3b/A4 and
+    Its refusals divide, and `_in_a_plane` documents the line at length: A2/A3/A3b/A4/A7 and
     every piece of bookkeeping here are about a control plane and are silent without one,
     while A (the leak guard), A5 and A6 are facts about the shell and run in any directory.
     So this reads the gate once, into *plane*, rather than returning early on it.
@@ -4808,6 +5003,22 @@ def pretooluse() -> int:
         spelling, why = own
         rc = _deny("PreToolUse", why)
         _trace("deny", sid, reason="charter-substitution", shape=spelling, cmd=head)
+        return rc
+    # A7: a `charter handoff` the operator's permission prompt cannot stand in front of (chat
+    # handoff). GATED, unlike A5 and A6 beside it: those refuse a fact about the shell, and
+    # this refuses a policy about a plane's chats — a handoff opens a chat in one of this
+    # plane's workspaces, and outside a plane there is no such chat to consent to. After A6,
+    # so a line that also persists prose through a live substitution is explained by that
+    # guard. `charter handoff`'s routing-mark clear belongs AFTER this: a refused handoff
+    # opened nothing, so the turn still owes its routing answer.
+    hand = _handoff_refusal(cmd, data) if plane else None
+    if hand:
+        reason, why = hand
+        rc = _deny("PreToolUse", why)
+        # No `cmd=`, the one row here without it: a handoff's command line carries its brief,
+        # and keeping every field of that line out of the tally is simpler to hold than
+        # deciding which part of it is safe.
+        _trace("deny", sid, reason=reason)
         return rc
     # B WAS HERE: the clone-commit nudge, removed in #371 — see the note where it lived.
     # Nothing on this handler asks any more; every remaining verdict is a deny or an allow.

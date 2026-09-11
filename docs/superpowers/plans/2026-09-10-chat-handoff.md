@@ -71,6 +71,17 @@ carries the rulings that touch it.
 - **Q17 addition:** if `handoffs_since_first_advice` is a key something outside the module reads
   (`charter persona stats`, a JSON surface), keep the old key readable beside the new name.
 - **Q20 addition:** reuse the guard's existing leak classifier rather than writing a second one.
+- **Task 4 dispatch rulings (2026-09-11), applied in Task 4's PR.** (1) Task 4 introduces
+  `hooks._is_handoff` with Task 2's signature and semantics; Task 2 consumes it. (2) Task 4 adds no
+  clearing line: A7 ends that guard family, a refused handoff keeps the routing mark, and Task 2
+  places `if plane and _is_handoff(cmd): _route_mark_clear(sid)` after A7. (3)
+  `test_a_handed_off_chat_may_hand_off_again` lands without `state.record_brief`; Task 2 re-adds
+  the brief variant. (4) Task 4's Part B is superseded by #942 (PR #948): no `WORKSPACE_ASK` and no
+  second mirroring writer (ADR 0014); Task 4 tests that the handoff rule reaches a workspace chat's
+  generated settings through #948's path, and asserts nothing about `deny`, which #942 carries.
+  (5) Doctor's `{stale}` hint reuses #948's lag detection. Measured in Task 4 and applied there:
+  G3 widens D1 to Codex, and G1 rewrote D3's text, because Claude Code 2.1.268 DID match a
+  `VAR=value` prefix and an `env` wrapper and did not match `python3 -m charter` or a path.
 
 **Line anchors** are against `main` @ 98686c3 (v0.60.0). #936 will move some of them in
 `commands_frame.py` and `hooks.py`; re-anchor by symbol name, never by number.
@@ -411,8 +422,8 @@ on `main`.
   the core commands (791-796); import `commands_handoff` beside the other `commands_*` modules.
 - `charter/frame/state.py:1940-1966` — `record_brief` and `brief` directly after `chat_cwd`.
 - `charter/dispatch.py:134-160` — `HANDOFF` and `record_handoff` directly after `record_resume`.
-- `charter/hooks.py` — `_is_handoff` beside `_charter_prose_command` (4093); one clearing line in
-  `pretooluse` after A6 (4806-4811), before the persona tool-gate (4827).
+- `charter/hooks.py` — one clearing line in `pretooluse` after A7, before the persona tool-gate.
+  `_is_handoff` itself landed with Task 4 (Task 4 dispatch ruling 1).
 - `pyproject.toml:55-68` — `"docs/handoff.md" = "charter/_docs/handoff.md"` (the comment at 49-54:
   `tests/test_docs_show.py` fails on a page that is not force-included).
 - `docs/workspaces.md` `## See also` (240); `README.md` further-reading list (370-375).
@@ -427,8 +438,7 @@ Consumes: Task 1's `commands_frame.background_refusal`, `open_in_background`, `O
 `todos.add` (57), `duplicate_of` (77); `persona.valid_name` (64), `list_personas` (217);
 `switch._some` (frame/switch.py:228); `harness.get`/`harness.current`
 (harness/registry.py:32, 38); `hooks._secret_kind` (hooks.py:375);
-`hooks._segment_argv` (1607), `_split_env` (1981), `_charter_words` (4058),
-`_route_mark_clear` (6243).
+`hooks._is_handoff` (Task 4), `_route_mark_clear` (6243).
 
 Produces:
 
@@ -457,9 +467,6 @@ HANDOFF = "handoff"
 def record_handoff(*, placement: str, created: bool,
                    when: datetime | None = None) -> Path | None: ...
     # row: {"created": bool, "event": "handoff", "placement": "here"|"elsewhere", "ts": iso}
-
-# charter/hooks.py
-def _is_handoff(cmd: str | None) -> bool: ...   # any segment whose charter words start "handoff"
 ```
 
 **Behaviour**
@@ -530,7 +537,7 @@ Then the writes, in the spec's order:
    persona, no brief (Open question 16).
 6. stdout, one line: `f"charter handoff: opened chat {opened.chat} in workspace '{ws}', started on the brief"`; return 0.
 
-The routing mark: `hooks.pretooluse` gains, after A6 and before the tool-gate,
+The routing mark: `hooks.pretooluse` gains, after A7 (Task 4's handoff guard) and before the tool-gate,
 `if plane and _is_handoff(cmd): _route_mark_clear(sid)` — `pretooluse_dispatch`'s rule
 (5802-5804) for the same reason: the handoff IS the routing. It lives in the hook because the
 mark is keyed on the payload's `session_id` (6210-6213), which the CLI only knows for Claude
@@ -609,6 +616,9 @@ Class `TheHookClearsTheRoutingMark(PlaneIso)`:
 - `test_a_handoff_clears_the_routing_mark_like_a_dispatch` — `hooks._route_mark_set("s", ["forge"])`; `run_hook(hooks.pretooluse, {"session_id": "s", "tool_input": {"command": "charter handoff beta <<'BRIEF'\nfix it\nBRIEF"}, "cwd": str(workspace.workspace_dir("alpha"))})` → `hooks._route_mark_take("s") is None`.
 - `test_a_command_that_only_mentions_handoff_keeps_the_mark` — `echo 'charter handoff beta'` → `_route_mark_take("s") == ["forge"]`.
 - `test_outside_a_plane_it_touches_no_mark` (on `PersonaIso`) — the mark file is not created or removed.
+- `test_a_handed_off_chat_with_its_brief_recorded_may_hand_off_again` — Task 4's
+  `test_a_handed_off_chat_may_hand_off_again` with `state.record_brief("beta.1", "x")` added, which
+  Task 4 could not call (Task 4 dispatch ruling 3).
 
 Class `AHandedOffChatIsBornInItsWorkspace(PlaneIso)` — **the #936 property**, observed without its internals:
 plant `beta.1` the way `_launch` does (`state.frame_dir(create=True)`, `record_server`,
@@ -624,7 +634,7 @@ plant `beta.1` the way `_launch` does (`state.frame_dir(create=True)`, `record_s
   that is why Task 1 exports `background_refusal` and why the brief is read before the frame check
   (the printed command needs it).
 - `handoff.py` holds no I/O beyond `read_brief`'s stream, so every string is testable without a plane.
-- `_is_handoff` reads every segment `_segment_argv` yields; newlines are separators there
+- `_is_handoff` (Task 4's) reads every segment `_segment_argv` yields; newlines are separators there
   (`_PUNCTUATION_CHARS`, hooks.py:1281), so a heredoc line that itself begins `charter handoff`
   also counts. Harmless for clearing a mark; Task 4 strips handoff heredoc bodies before its denials.
 - The `workspace_for` call for `source_ws` is total (it never answers `None`), which is what a
@@ -816,8 +826,11 @@ Class `AHandoffArrives(_AHandoffFromAlpha)` — Task 2's fixture.
 
 ## Task 4: The gate — the default `ask` rule, the `doctor` check, the guard's refusals
 
-**Depends on:** Task 2 (`charter handoff` exists; `hooks._is_handoff`; the clearing line this
-task's denials must sit in front of). Independent of Tasks 3 and 5.
+**Depends on:** Task 1, and #942 (PR #948) for the two parts that consume it: the workspace reach
+and doctor's `{stale}` hint. Not on Task 2: the gate lands first, so this task introduces
+`hooks._is_handoff` and Task 2 places its clearing line after A7. Independent of Tasks 3 and 5.
+The Task 4 dispatch rulings under *Controller rulings* change this section: B is superseded by
+#942, D1 widens to Codex and D3's text changed on G1–G3's measurements.
 
 **A fact on `main` the spec does not mention, and it decides this task's shape.** A framed
 chat's cwd is its workspace directory (`commands_frame._launch_root`, 7589), Claude Code reads
@@ -845,14 +858,15 @@ generated workspace settings (Open question 1 carries the alternatives).
 
 - `charter/commands.py` — `HANDOFF_ASK_PATTERN` beside `_as_rule` (1260); `ensure_handoff_gate`
   beside `cmd_guard_ask` (1727-1789); `cmd_init` calls it after the `_wire_harnesses` loop (2356-2363).
-- `charter/harness/claude_code.py` — `WORKSPACE_ASK` beside `WORKSPACE_KEYS` (42);
-  `workspace_files` (210-241) mirrors the asks.
+- `charter/harness/claude_code.py` — superseded (ruling 4): #942 (PR #948) mirrors `ask` and
+  `deny` into generated workspace settings, and this task adds no `WORKSPACE_ASK` and no second writer.
 - `charter/doctor.py` — `check_handoff_gate` after `check_ask_rules` (1700-1733); add it to
   `_checks` after `check_ask_rules()` (3209) and `"handoff gate"` to `_FIXED_CHECK_NAMES` after
   `"ask rules"` (3248).
-- `charter/hooks.py` — `_handoff_refusal` beside `_charter_substitution_hit` (4130); A7 in
-  `pretooluse` after A6 (4806-4811) and before Task 2's clearing line; `_strip_reader_heredocs`
-  (772-801) also strips a `charter handoff` heredoc body.
+- `charter/hooks.py` — `_is_handoff` (introduced here, ruling 1) after `_charter_words`;
+  `_handoff_refusal` beside `_charter_substitution_hit`; A7 in `pretooluse` after A6, with Task 2's
+  clearing line to follow it; `_strip_reader_heredocs` also strips the body of a heredoc on a
+  `charter handoff`'s own segment.
 - `charter/harness/codex.py:139-169`, `charter/harness/opencode.py:669-716` — `Deficit("handoff-gate", …)`.
 - `tests/test_a_handoff_waits_for_a_yes.py`; `docs/hooks.md`, `docs/harnesses.md`,
   `docs/workspaces.md`, `docs/handoff.md`; `docs/news/unreleased-a-handoff-waits-for-your-yes.md`.
@@ -876,13 +890,11 @@ HANDOFF_ASK_PATTERN = "charter handoff *"
 def ensure_handoff_gate(root: Path) -> tuple[list[tuple], bool]: ...
     # _guard_apply("apply_ask_rule", root, HANDOFF_ASK_PATTERN, local=False)
 
-# charter/harness/claude_code.py
-WORKSPACE_ASK = ("permissions", "ask")        # the one permission bucket that travels
-
 # charter/doctor.py
 def check_handoff_gate() -> Result: ...       # name "handoff gate"
 
 # charter/hooks.py
+def _is_handoff(cmd: str | None) -> bool: ...   # any segment whose charter words start "handoff"
 def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None: ...   # (trace reason, denial)
 ```
 
@@ -898,7 +910,9 @@ skill walks after `charter update` — and not by `update` re-writing it, becaus
 operator's choice (Open question 2). This reverses `cmd_guard_ask`'s note that `init` never
 touches `permissions` (1737-1740); edit that docstring and record the reversal in Task 6's ADR.
 
-**B — the rule reaches a workspace chat.** In `ClaudeCodeHarness.workspace_files`, after `doc` is
+**B — the rule reaches a workspace chat. Superseded by #942 (PR #948), ruling 4:** Task 4
+consumes #948's mirror and tests that the handoff rule reaches a workspace chat's generated
+settings through it. The first draft follows, kept for the record. In `ClaudeCodeHarness.workspace_files`, after `doc` is
 built from `WORKSPACE_KEYS`: when `settings["permissions"]` is a dict whose `"ask"` is a list,
 `asks = [r for r in that list if isinstance(r, str)]`, and when `asks` is non-empty
 `doc["permissions"] = {"ask": asks}`. Only `ask`: an ask can only add a prompt, where an `allow`
@@ -919,7 +933,7 @@ as `malformed`). Then, in this order:
 1. any `malformed` → `Result("handoff gate", WARN, detail=f"{detail} is not valid — charter cannot tell whether `charter handoff` asks first", hint=_NOT_CHECKED_HINT)`.
 2. any `added` (the rule is missing) → `WARN`, `detail=f"no ask rule for `charter handoff` under {names}"`,
    `hint="A handoff's brief becomes a new chat's first message and runs with your authority; this rule is the prompt that asks you first, in every mode. Add it: charter guard ask 'charter handoff *'{stale}. Removing it is your choice — this row says so, and charter does not put it back."`
-   where `{stale}` is `" — the plane already holds it, so this session's directory carries a stale layer: charter workspace reinit"` when the session root is not `config.ROOT` and Claude Code's `dry_run` against `config.ROOT` answers `present`.
+   where (ruling 5, after #948 merges: from #948's lag detection, not derived a second way) `{stale}` is `" — the plane already holds it, so this session's directory carries a stale layer: charter workspace reinit"` when the session root is not `config.ROOT` and Claude Code's `dry_run` against `config.ROOT` answers `present`.
 3. otherwise `OK`, `detail=f"asks first under {present names}"`, followed by one
    `"        ↳ {harness}: {deficit.detail}"` line per `handoff-gate` deficit (the `check_harness`
    line shape, doctor.py:1398-1406), so the gaps are named for every harness, not only the current one.
@@ -931,20 +945,24 @@ bodies of heredocs opened on earlier lines). Refusals, in order; each is
 `rc = _deny("PreToolUse", text)` then `_trace("deny", sid, reason=<reason>)` with **no** `cmd=`
 (a handoff's command carries the brief):
 
-1. `handoff-subagent` — `data.get("agent_id")` and `os.environ.get("CHARTER_HARNESS") == claude_code.NAME`:
+1. `handoff-subagent` — `data.get("agent_id")` and `os.environ.get("CHARTER_HARNESS") in (claude_code.NAME, codex.NAME)`
+   (G3: codex-cli 0.147.0 sent `agent_id` only inside a sub-agent; Claude Code 2.1.268 measured the same):
    `"`charter handoff` is refused from inside a sub-agent. A brief becomes a new chat's first message and runs with the operator's authority, so only the chat the operator is talking to may propose one — and whatever this sub-agent found goes back to that chat anyway. Return it to the parent chat, and let the parent propose the handoff."`
 2. `handoff-unattended` — `_unattended(data)`:
    `"`charter handoff` is refused in an unattended run (`permission_mode: bypassPermissions`). A handoff opens a chat that starts working on its brief with the operator's authority, and its consent is a permission prompt nobody is here to answer. Record the work instead — charter ws todo --workspace <workspace> \"<what>\" — and hand it off from a chat someone is attending."`
 3. `handoff-spelling` — the handoff segment's raw tokens do not begin `["charter", "handoff"]` (an
    env assignment, a wrapper, a path to charter, or `python -m charter`):
-   `"`charter handoff` must be spelled exactly that, at the start of its command. The permission rule that asks you first is `Bash(charter handoff *)`, and `python3 -m charter handoff`, a path to charter, a wrapper or a `VAR=value` prefix is a spelling that rule does not match — so the prompt would not appear. Run: charter handoff <workspace> <<'BRIEF'"`
+   `"`charter handoff` must be spelled exactly that, at the start of its command. The permission rule that asks you first is `Bash(charter handoff *)`, and a spelling that rule does not match gets no prompt: on Claude Code 2.1.268, `python3 -m charter handoff` and a path to charter both ran with none. Run: charter handoff <workspace> <<'BRIEF'"`
+   (rewritten on G1: Claude Code 2.1.268 matched a `VAR=value` prefix and an `env` wrapper, so the text names only the spellings it did not match; both are still refused).
 4. `handoff-brief-source` — the handoff line is not fed by exactly one heredoc whose
    `_heredoc_header` answers `expands=False`, or it is piped into, or it carries `<` or `<<<`, or
    `_live_substitution(cmd)` finds a live substitution anywhere in the call:
    `"`charter handoff` takes its brief from a QUOTED heredoc in the same call — <<'BRIEF' — so the permission prompt shows exactly the text the new chat is sent. This call feeds it {what}, which the shell would change or hide before charter reads it. Write: charter handoff <workspace> <<'BRIEF' … BRIEF"`
    with `{what}` ∈ `"an unquoted heredoc, which expands $… and `…` in the brief"`, `"a pipe"`,
    `"a file (<), which the prompt shows as a path rather than as the brief"`, `"a here-string (<<<)"`,
-   `"no heredoc at all"`, `"a live command substitution"` (Open question 6).
+   `"no heredoc at all"`, `"a live command substitution"` (Open question 6), plus two the
+   implementation needed: `"more than one heredoc, and the shell sends charter only the last"` and
+   `"a quote left open on its line, so no heredoc can be seen feeding it"`.
 
 **E — the brief is data to the leak guard.** `_strip_reader_heredocs` (772-801) also drops the body
 of a heredoc on a line whose program is `charter` and whose charter words start with `handoff`
@@ -970,10 +988,10 @@ Class `TheGuardRefusesWhatThePromptCannotCover(PlaneIso)` — `mock.patch.dict(o
 
 - `test_a_sub_agents_handoff_is_refused_by_name` — `agent_id="a1"` → `"from inside a sub-agent" in reason`.
 - `test_the_chat_the_operator_is_talking_to_is_not_refused` — no `agent_id` → `_reason(r) is None`.
-- `test_a_handed_off_chat_may_hand_off_again` — `state.record_brief("beta.1", "x")`, env `CHARTER_SESSION_ID=beta.1` → not refused (no depth limit, spec: Consent).
+- `test_a_handed_off_chat_may_hand_off_again` — env `CHARTER_SESSION_ID=beta.1` → not refused (no depth limit, spec: Consent). Without `state.record_brief` (ruling 3).
 - `test_an_unattended_handoff_is_refused_by_name` — `permission_mode="bypassPermissions"` → `"unattended run" in reason`.
 - `test_auto_mode_is_attended` — `permission_mode="auto"` → not refused.
-- `test_a_codex_agent_id_is_not_read_as_a_sub_agent_until_measured` — `CHARTER_HARNESS=codex`, `agent_id="a1"` → not refused (pins the harness conjunct; flip it if G3 says so).
+- `test_a_codex_sub_agents_handoff_is_refused_by_name` — flipped by G3; `test_an_agent_id_from_a_harness_nobody_measured_is_not_read_as_a_sub_agent` (`CHARTER_HARNESS=opencode`) pins the harness conjunct instead.
 - `test_the_module_spelling_is_refused` — `"python3 -m charter handoff beta <<'BRIEF'\nx y\nBRIEF"` → `"spelled exactly" in reason`.
 - `test_an_environment_prefix_is_refused` — `"FOO=1 " + HEREDOC` → `"spelled exactly" in reason`.
 - `test_a_path_to_charter_is_refused` — `"/usr/local/bin/" + HEREDOC` → `"spelled exactly" in reason`.
@@ -1004,7 +1022,10 @@ Class `TheRuleIsWrittenForANewPlane(PersonaIso)`:
 - `test_a_malformed_settings_file_blocks_every_harness_and_is_left_untouched` — `.claude/settings.json` holds `"{nope"` → `blocked is True`, its bytes unchanged, `opencode.json` absent.
 - `test_init_writes_the_gate` — `mock.patch("charter.commands.ensure_handoff_gate", return_value=([], False))`; run `commands.cmd_init` with the fixture `tests/test_init.py` already uses (read it first; do not build a second one) → called once with the plane root.
 
-Class `AWorkspaceCarriesTheAskRules(PersonaIso)` — the plane's `.claude/settings.json` holds
+Class `AWorkspaceCarriesTheAskRules(PersonaIso)` — **replaced (ruling 4, after #948 merges)** by tests
+that the handoff rule reaches a workspace chat's generated settings through #948's path, including
+a launch refreshing a workspace after the plane gains the rule, with no assertion that `deny`
+stays out. First draft, for the record: the plane's `.claude/settings.json` holds
 `{"enabledPlugins": {"charter@charter": true}, "permissions": {"ask": ["Bash(charter handoff *)"], "allow": ["Bash(ls *)"], "deny": ["Bash(rm *)"]}}`.
 
 - `test_a_workspace_settings_document_carries_the_planes_asks` — `json.loads(ClaudeCodeHarness().workspace_files()[".claude/settings.json"])["permissions"] == {"ask": ["Bash(charter handoff *)"]}`.
@@ -1019,7 +1040,7 @@ Class `DoctorNamesTheGate(SessionRootCase)` — `SessionRootCase` from tests/tes
 
 - `test_a_missing_rule_is_a_warning_naming_the_command_that_adds_it` — no rules → `status == WARN`, `"charter guard ask 'charter handoff *'" in hint`, `"your choice" in hint`.
 - `test_a_rule_in_force_is_ok` — rules in the plane's `.claude/settings.json` and `opencode.json`, `rooted_at(config.ROOT)` → `OK`, `"asks first under claude-code" in detail`.
-- `test_a_session_rooted_in_a_stale_workspace_is_sent_to_reinit` — plane holds the rule, `self.workspace/.claude/settings.json` does not, `rooted_at(self.workspace)` → `WARN`, `"charter workspace reinit" in hint`.
+- `test_a_session_rooted_in_a_stale_workspace_is_sent_to_reinit` (ruling 5, after #948 merges) — plane holds the rule, `self.workspace/.claude/settings.json` does not, `rooted_at(self.workspace)` → `WARN`, `"charter workspace reinit" in hint`.
 - `test_a_workspace_that_carries_the_rule_is_ok` — both files hold it, rooted at the workspace → `OK`.
 - `test_a_malformed_settings_file_is_not_read_as_a_missing_rule` — `"{nope"` → `WARN`, `hint == doctor._NOT_CHECKED_HINT`, `"guard ask" not in hint`.
 - `test_the_harnesses_that_cannot_refuse_are_named` — the `OK` detail contains both `handoff-gate` deficit details.
@@ -1051,7 +1072,9 @@ Class `EveryHarnessSaysHowAHandoffIsGated(unittest.TestCase)`:
   how to remove it and what `doctor` then says.
 - `docs/news/unreleased-a-handoff-waits-for-your-yes.md`:
   `headline: A handoff waits for your yes in every mode, and a sub-agent or an unattended run cannot propose one`,
-  `adopt: guard ask 'charter handoff *'`, no `check:` (no probeable command's exit code answers
+  `adopt: guard handoff` — the implementation found `adopt: guard ask 'charter handoff *'` can never
+  parse, because `news._tokens` refuses quote characters and splits on whitespace, so Task 4 added
+  `charter guard handoff`, which delegates to `cmd_guard_ask` with the fixed pattern — no `check:` (no probeable command's exit code answers
   whether a rule exists — confirm `doctor`'s exit code before ever adding one). Body says every
   `charter guard ask` rule now reaches workspace chats.
 
@@ -1320,7 +1343,8 @@ considered options):
 
 - **Decision.** A handoff's consent is the host's own `ask` rule for `charter handoff`, written by
   `charter init` through `commands.ensure_handoff_gate` (the `_guard_apply` writer), offered to
-  existing planes by the news entry's `adopt:`, and mirrored into workspace settings as asks only.
+  existing planes by the news entry's `adopt:`, and carried into workspace settings by #942's mirror,
+  which carries `ask` and `deny` — `deny` travels too, per #942 — and never `allow`.
   charter's hook refuses what that prompt cannot cover: a sub-agent's call, an unattended run, a
   spelling the rule does not match, and a stdin the prompt cannot show. No depth limit, because every
   hop needs a yes. Removing the rule is the operator's choice, and `doctor` says so.
