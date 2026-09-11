@@ -757,29 +757,149 @@ def _is_charter(prog: str, args: list[str]) -> bool:
 _HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 
-def _reader_of(line: str) -> bool:
-    """Whether *line* starts by invoking a program in :data:`_READERS`.
+#: Programs that RUN a heredoc reaching their pipeline as CODE, so its body is never data.
+#: Two shapes: a shell/interpreter whose stdin (or `<<` body) IS a script (`bash <<X`,
+#: `python3 <<X`), and a program that turns the stream into a COMMAND it runs (`xargs`,
+#: `parallel`, `eval`). `awk`/`sed`/`grep` are deliberately absent — their program is an
+#: ARGUMENT and the heredoc is a data stream, which is exactly the #258 body that must stay
+#: strippable. A wrapper (`env`, `sudo`, `nohup`, `timeout`, …) is absent too: it does not
+#: run the body, the program it wraps does, and :func:`_split_env` names that program.
+#:
+#: This is a NAME list and inherits the same ceiling as :data:`_READERS`: a shell spelled a
+#: way this set misses is a missed *deny*, never a wrong one, because the fallback is to keep
+#: the body VISIBLE (the guard then scans it) rather than to strip it. Erring toward "an
+#: executor is present" only ever shows the guard more text.
+_EXECUTORS = frozenset(
+    "sh bash zsh fish dash ksh mksh csh tcsh ash busybox "
+    "python python2 python3 pypy pypy3 ipython node nodejs deno bun ts-node tsx "
+    "perl ruby irb php lua luajit tclsh osascript groovy scala jshell "
+    "julia elixir iex erl escript xargs parallel eval".split())
 
-    Goes through :func:`_split_env`, so the leading `VAR=value` assignments AND the
-    wrapper prefixes (`env`, `sudo`, `command`, …) are stripped by the same code the
-    guards use to find a program. Answering "which program is this" two different ways in
-    one module is how `env cat` ended up invisible to one of them.
+def _is_executor(name: str) -> bool:
+    """Whether *name* is a program in :data:`_EXECUTORS`, version suffix included.
+
+    The suffix (`python3.12`, `node20`) is asked of `toolgate._VERSIONED` rather than of a
+    second spelling of it here: that pattern already answers "is this binary an interpreter
+    that runs text" for the tool gate, and two regexes for one question drift apart. Its
+    over-matching is load-bearing in this direction too — a name it wrongly admits only keeps
+    a body visible. Imported at call time, the way `toolgate` imports this module: each needs
+    the other when a command is judged, never when the module loads.
     """
-    prog, _env, _argv = _split_env(line.strip().split())
-    return os.path.basename(prog).lower() in _READERS
+    from . import toolgate
+    base = os.path.basename(name).lower()
+    return base in _EXECUTORS or bool(toolgate._VERSIONED.match(base))
+
+
+def _line_pipelines(line: str):
+    """*line* as its pipelines: ``[(programs, has_executor, heredoc_counts)]``, or ``None``
+    when the line cannot be attributed safely.
+
+    Split on the control operators that separate pipelines (`;`, `&&`, `||`, `&`, `;;`) but
+    NOT on `|`, because a pipeline shares one execution fate: a body a reader opens is run
+    all the same if any command downstream of it in the pipe is a shell — in `zsh`'s
+    ``MULTIOS`` even a body a single pipe appears to discard (`cat <<A | bash <<B`) reaches
+    both. `has_executor` is therefore per PIPELINE, `programs` and `heredoc_counts` per
+    command within it (`programs[k]` opened `heredoc_counts[k]` of the `<<` on this line).
+
+    Reuses the module's own lexer, so quoting is honoured rather than re-derived — a `;` or
+    `<<` inside quotes is a word here as it is to a shell. A **group, subshell or command
+    substitution** (`{ … }`, `( … )`, `$( … )`) returns ``None`` rather than a guess: their
+    output can be re-piped (`{ cat <<X; } | bash`), so mis-reading the boundary would strip a
+    body a shell runs. ``None`` means the caller strips nothing on the line, which keeps every
+    body visible — the safe direction.
+    """
+    try:
+        toks = _split_punctuation(_lex(line))
+    except ValueError:
+        return None
+    pipelines: list = []
+    current: list[list[str]] = [[]]        # commands of the pipeline being built
+    for t in toks:
+        if not t.bare:
+            current[-1].append(t.text)
+        elif t.text in _GROUPING:
+            return None                    # a group/subshell/substitution — do not guess
+        elif t.text in ("|", "|&"):
+            current.append([])
+        elif t.text in _CONTROL_OPERATORS:
+            cmds = [c for c in current if c]
+            if cmds:
+                pipelines.append(cmds)
+            current = [[]]
+        else:
+            current[-1].append(t.text)
+    cmds = [c for c in current if c]
+    if cmds:
+        pipelines.append(cmds)
+    out = []
+    for cmds in pipelines:
+        progs = [_split_env(c)[0] for c in cmds]
+        hcounts = [sum(1 for tk in c if tk == "<<") for c in cmds]
+        executor = any(_is_executor(c[0]) or _is_executor(p)
+                       for c, p in zip(cmds, progs) if c)
+        out.append((progs, executor, hcounts))
+    return out
+
+
+def _heredoc_strip_plan(line: str):
+    """``[(delimiter, strip?)]`` for the heredocs opened on *line*, in the order their bodies
+    follow — or ``None`` when nothing on the line may be stripped.
+
+    A body is stdin DATA (strip) only when a **quoted** heredoc feeds a **reader** whose
+    **pipeline runs no executor**. Each clause earns its place:
+
+    * *quoted* — an unquoted `<<EOF` is expanded before the reader sees it, so a `$( … )` in
+      the body RUNS (`cat <<EOF\\n$(cat <vault>)\\nEOF`). Only `<<'EOF'` / `<<"EOF"` are inert.
+    * *reader* — the program that OPENS the `<<` (its segment's, via :func:`_split_env`), so
+      `env cat <<'X'` is a reader behind a wrapper and its body is still data.
+    * *no executor in the pipeline* — the defect this replaces (#973): the old pre-pass asked
+      only whether the LINE began with a reader, so `cat x && bash <<'EOF'`, `… | bash`,
+      `… || bash`, `… & bash` and `cat x; bash <<'EOF'` each dropped a body a shell ran.
+
+    Attribution comes from :func:`_line_pipelines`; the delimiters and their order come from
+    :data:`_HEREDOC_RE`. When the two disagree on how many heredocs the line opens — a
+    here-string `<<<x`, a `<<` inside quotes or a comment, which the regex counts and the
+    lexer does not — the answer is ``None``: the line is not one this pre-pass can take
+    apart, so it strips nothing and the bodies stay visible for the guard to read.
+    """
+    headers = list(_HEREDOC_RE.finditer(line))
+    if not headers:
+        return []
+    pipelines = _line_pipelines(line)
+    if pipelines is None:
+        return None
+    if sum(hc for _progs, _ex, hcounts in pipelines for hc in hcounts) != len(headers):
+        return None
+    plan: list[tuple[str, bool]] = []
+    k = 0
+    for progs, executor, hcounts in pipelines:
+        for prog, hc in zip(progs, hcounts):
+            reader = os.path.basename(prog).lower() in _READERS
+            for _ in range(hc):
+                m = headers[k]
+                k += 1
+                quoted = bool(m.group(1))
+                plan.append((m.group(2), reader and quoted and not executor))
+    return plan
 
 
 def _strip_reader_heredocs(cmd: str) -> str:
-    """Remove heredoc BODIES fed to a reader — they are stdin data, never arguments.
+    """Remove heredoc BODIES that are stdin DATA — never the ones a command runs.
 
     `_segment_argv` shlex-splits the whole command string, so `cat > file <<'DOC' … DOC`
     hands the body to the leak check as `cat`'s argv, and a document *describing* charter's
     own layout is refused as a *read* of it (#258). Documentation about charter is exactly
     the text most likely to name these paths.
 
-    Only a reader's heredoc. A body fed to `bash`/`python` is a script, not data, and
-    removing it would hide commands from a guard rather than prose — a distinction worth
-    the extra condition even though this guard does not scan such bodies today.
+    A body is dropped only when :func:`_heredoc_strip_plan` calls it data — a quoted heredoc
+    fed to a reader with no executor in its pipeline. A body fed to `bash`/`python`, or to a
+    reader whose output pipes into one, is a SCRIPT: dropping it would hide the very commands
+    the guard exists to read, so it is kept, and this guard's newline-segmentation then reads
+    each of its lines as the command it is.
+
+    The terminator is matched by ``line.strip() == delim``, which can only end a body EARLIER
+    than bash would (bash wants the line exactly, modulo the tabs a `<<-` strips). Earlier
+    hands the guard MORE text, never less — the safe direction for a security pre-pass.
     """
     if "<<" not in cmd:
         return cmd
@@ -787,17 +907,22 @@ def _strip_reader_heredocs(cmd: str) -> str:
     out: list[str] = []
     i = 0
     while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        m = _HEREDOC_RE.search(line)
-        if m and _reader_of(line):
-            delim = m.group(2)
-            i += 1
-            while i < len(lines) and lines[i].strip() != delim:
-                i += 1  # drop the body
-            i += 1       # and the terminator
-            continue
+        out.append(lines[i])
+        plan = _heredoc_strip_plan(lines[i])
         i += 1
+        if not plan:
+            continue
+        # The bodies of THIS line's heredocs follow in order; consume each to its delimiter,
+        # dropping a data body and keeping a script one so the guard still sees it.
+        for delim, drop in plan:
+            while i < len(lines) and lines[i].strip() != delim:
+                if not drop:
+                    out.append(lines[i])
+                i += 1
+            if i < len(lines):                 # the terminator line itself
+                if not drop:
+                    out.append(lines[i])
+                i += 1
     return "\n".join(out)
 
 
