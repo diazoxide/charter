@@ -52,7 +52,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, commands_workspace, config, doctor, hooks, util, workspace
+from charter import commands, commands_workspace, config, doctor, gitpolicy, hooks, util, workspace
 from charter.harness import claude_code, registry
 
 from tests import _isolation
@@ -2354,6 +2354,14 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
         workspace.refs_dir(self.ws).chmod(0o755)
         self.assertEqual(_status(self.clone), "")
 
+    def test_doctor_names_a_directory_it_cannot_look_into_where_every_repo_is_token_only(self):
+        """doctor.py `check_ssh`: the row goes WARN for it alone, and leads with the path."""
+        self.locked(workspace.refs_dir(self.ws))
+        with mock.patch.object(gitpolicy, "check", return_value=[]):
+            r = doctor.check_ssh()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertTrue(r.hint.startswith(f"{self.ws}/refs cannot be checked"), r.hint)
+
 
 class TheFixForAnUnpublishedRecordMatchesItsErrno(RoundFiveCheckout):
     """Final review (#942): every failed publish was told to "restore write access", and a full
@@ -2400,6 +2408,448 @@ class TheFixForAnUnpublishedRecordMatchesItsErrno(RoundFiveCheckout):
             self.assertIn("what stops writes", said, who)
             for claim in ("write access", "free space", "read-only"):
                 self.assertNotIn(claim, said, who)
+
+
+@contextmanager
+def _publishes_refused(*markers: Path, code: int = errno.EACCES, says: str = "Permission denied"):
+    """Every publish of *markers* refused with *code* — the way a root without write access, a full
+    disk or a read-only mount refuses one — while every other rename is made."""
+    real = os.replace
+    wanted = {os.fspath(m) for m in markers}
+
+    def refusing(src, dst, *args, **kwargs):
+        if os.fspath(dst) in wanted:
+            raise OSError(code, says, os.fspath(dst))
+        return real(src, dst, *args, **kwargs)
+
+    with mock.patch("os.replace", refusing):
+        yield
+
+
+def _no_note_can_be_kept() -> None:
+    """A file where the directory of failed-publish notes goes, so no note is ever kept."""
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (config.STATE_DIR / "unrecorded").write_text("not a directory\n")
+
+
+class SweepOfRoundFiveGuardAsk(RoundFiveCheckout):
+    """Survivors of the deletion sweep of 98a1999 in `commands._mirror_into_workspaces` (#942)."""
+
+    def guard_ask(self) -> str:
+        self.at_the_plane()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="helm uninstall *", local=False)
+        return said
+
+    def test_no_errno_on_record_offers_no_remedy_and_costs_no_launch(self):
+        """commands.py:1843, the empty branch; workspace.py:2306, the note's narrowed catch."""
+        _no_note_can_be_kept()
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+            said = self.guard_ask()
+        self.assertIn("could not publish its record there first", said)
+        self.assertNotIn("until you", said)
+
+    def test_two_unpublished_records_list_only_the_remedy_on_record(self):
+        """commands.py:1807: `api`'s note cannot be kept and `web`'s can — one remedy, no blank."""
+        web = self.checkout("web", real=True)
+        workspace.wire_harnesses(self.ws)
+        note = workspace._unrecorded_note(self.clone)
+        note.mkdir(parents=True)
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker, web / workspace.GENERATED_MARKER):
+            said = self.guard_ask()
+        self.assertIn("until you restore write access to that checkout (EACCES", said)
+
+
+class SweepOfRoundFiveReinit(RoundFiveCheckout):
+    """Survivors in `cmd_workspace_reinit` (#942): a workspace holding a state `reinit` cannot clear
+    is never called up to date, and each state is worded as what it is."""
+
+    def said(self) -> str:
+        return " ".join(self.reinit_said())
+
+    def assert_not_up_to_date(self, expected: str) -> None:
+        said = self.said()
+        self.assertIn(expected, said)
+        self.assertNotIn("Up to date", said)
+
+    def test_a_foreign_file_in_the_workspace_directory(self):
+        self.generated().write_text("{}\n")
+        self.assert_not_up_to_date("was not written by charter")
+
+    def test_a_blocked_write(self):
+        fresh = _repo(workspace.workspace_dir(self.ws) / "fresh")
+        (fresh / ".claude").write_text("in the way\n")
+        self.said()                                  # the first pass writes the block: a repair
+        self.assert_not_up_to_date("could not be written")
+
+    def test_an_unreadable_file(self):
+        self.generated().unlink()
+        self.generated().mkdir()
+        self.assert_not_up_to_date("cannot be read")
+
+    def test_an_unpublished_record(self):
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            self.said()                              # the workspace directory's refresh: a repair
+            self.assert_not_up_to_date("could not publish its record there first")
+
+    def test_a_checkout_file_somebody_rewrote_is_offered_the_commit(self):
+        """commands_workspace.py:1512."""
+        self.shared.write_text('{"env": {"THEIRS": "1"}}\n')
+        said = self.said()
+        self.assertIn("if this is your own file and you mean to commit it: "
+                      "git add -f .claude/settings.json", said)
+        self.assertNotIn("Remove", said)
+
+    def test_no_errno_on_record_leaves_no_empty_remedy(self):
+        """commands_workspace.py:1562."""
+        _no_note_can_be_kept()
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            said = self.said()
+        self.assertIn("kept every exclude line it had.", said)
+
+    def test_all_counts_a_workspace_it_could_not_bring_up_to_date(self):
+        """commands_workspace.py:1620."""
+        workspace.ensure("south")
+        self.generated().write_text("{}\n")
+        said: list[str] = []
+        with mock.patch.object(commands_workspace.util, "ok", side_effect=said.append), \
+             mock.patch.object(commands_workspace.util, "warn", side_effect=said.append), \
+             mock.patch.object(commands_workspace.util, "err", side_effect=said.append), \
+             mock.patch.object(commands_workspace.util, "info", side_effect=said.append):
+            commands_workspace.cmd_workspace_reinit(SimpleNamespace(name=None, all=True))
+        self.assertIn("1 still hold what the rows above name", " ".join(said))
+
+
+class SweepOfRoundFiveDoctor(RoundFiveCheckout):
+    """Survivors in doctor's `workspace layer` hint (#942): it leads with what clears each state."""
+
+    def hint(self) -> str:
+        return doctor.check_workspace_harness().hint
+
+    def test_a_missing_file_alone_is_led_by_reinit(self):
+        self.generated().unlink()
+        self.assertTrue(self.hint().startswith("charter workspace reinit --all"), self.hint())
+
+    def test_an_unwanted_file_alone_is_led_by_reinit(self):
+        (config.ROOT / LOCAL).unlink()
+        self.assertTrue(self.hint().startswith("charter workspace reinit --all"), self.hint())
+
+    def test_a_stale_file_beside_a_harness_kept_one_is_led_by_reinit(self):
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.plane_moves_local()
+        self.plane_moves_shared()
+        self.assertTrue(self.hint().startswith("charter workspace reinit --all"), self.hint())
+
+    def test_a_stale_file_alone_leaves_no_rest_to_clear(self):
+        self.plane_moves_shared()
+        hint = self.hint()
+        self.assertTrue(hint.startswith("charter workspace reinit --all"), hint)
+        self.assertNotIn("clears the rest", hint)
+
+    def test_a_harness_kept_file_alone_is_not_sent_to_reinit(self):
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.plane_moves_local()
+        self.assertNotIn("charter workspace reinit", self.hint())
+
+    def test_an_unreadable_file_leads_and_reinit_clears_the_rest(self):
+        self.generated().unlink()
+        self.generated().mkdir()
+        self.plane_moves_shared()
+        hint = self.hint()
+        self.assertTrue(hint.startswith("An 'unreadable' path"), hint)
+        self.assertIn("restoring read access to it clears this", hint)
+        self.assertIn("charter workspace reinit --all clears the rest.", hint)
+
+    def test_an_unrecorded_checkout_is_never_sent_to_reinit(self):
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+        hint = self.hint()
+        self.assertTrue(hint.startswith("An 'unrecorded' marker"), hint)
+        self.assertNotIn("charter workspace reinit", hint)
+
+    def test_the_unrecorded_sentence_names_only_unrecorded_checkouts(self):
+        web = self.checkout("web", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+        (web / SHARED).write_text("{}\n")
+        hint = self.hint()
+        self.assertIn(f"{self.ws}/api:", hint)
+        self.assertNotIn(f"{self.ws}/web", hint)
+
+    def test_only_a_foreign_file_is_offered_the_commit(self):
+        self.shared.write_text('{"env": {"THEIRS": "1"}}\n')
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.plane_moves_local()
+        hint = self.hint()
+        self.assertIn("git add -f .claude/settings.json", hint)
+        self.assertNotIn("git add -f .claude/settings.local.json", hint)
+
+    def test_the_commit_offered_is_the_path_and_nothing_after_it(self):
+        self.shared.write_text('{"env": {"THEIRS": "1"}}\n')
+        self.assertNotIn("git add -f .claude/settings.json.", self.hint())
+
+    def test_a_foreign_file_in_the_workspace_directory_ends_its_sentence(self):
+        self.generated().write_text("{}\n")
+        self.assertIn("stays hidden while it is there.", self.hint())
+
+
+class SweepOfRoundFiveTheChatsLine(RoundFiveCheckout):
+    """Survivors in `workspace.rules_not_in_force`, `hooks._rules_gap` and `rules_held` (#942)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _isolation.no_background_refresh(self)
+
+    def test_text_that_is_not_json_holds_no_rules(self):
+        self.assertEqual(claude_code.ClaudeCodeHarness().rules_held("{"), frozenset())
+
+    def test_a_harness_that_sends_no_cwd_is_told_about_the_directory_it_runs_in(self):
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.plane_moves_local()
+        workspace.ensure(self.ws)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.clone)
+        out = _isolation.run_hook(hooks.sessionstart, {"session_id": "r5"})
+        told = ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext", "")
+        self.assertIn("Bash(git push --force *)", told)
+
+    def test_a_check_that_raises_costs_its_line_and_not_the_briefing(self):
+        with mock.patch.object(workspace, "rules_not_in_force", side_effect=RuntimeError("boom")):
+            told = _briefing(self, self.clone)
+        self.assertTrue(told.strip(), "the whole briefing was lost")
+
+    def test_a_directory_outside_the_workspaces_is_answered_not_raised(self):
+        self.assertEqual(workspace.rules_not_in_force(config.ROOT), "")
+
+    def test_a_workspace_directory_holding_somebodys_copy_is_told(self):
+        self.generated().write_text("{}\n")
+        self.assertIn("in this workspace",
+                      workspace.rules_not_in_force(workspace.workspace_dir(self.ws)))
+
+    def test_a_directory_in_a_workspace_that_is_no_checkout_is_told_nothing(self):
+        self.generated().write_text("{}\n")
+        memory = workspace.memory_dir(self.ws)
+        self.assertTrue(memory.is_dir(), "fixture: the workspace has no memory directory")
+        self.assertEqual(workspace.rules_not_in_force(memory), "")
+
+    def test_a_file_no_rule_rides_in_is_passed_over(self):
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(workspace.rules_not_in_force(self.clone), "")
+
+    def test_each_file_gets_its_own_fix_beside_an_unpublished_record(self):
+        _as_the_harness_would(self.local, "Bash(npm test *)")
+        self.plane_moves_local()
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+        told = workspace.rules_not_in_force(self.clone)
+        self.assertIn("restore write access to this checkout", told)
+        self.assertIn(f"add them to {LOCAL} by hand", told)
+
+    def test_a_missing_file_an_unpublished_record_kept_out_is_told_to_restore_the_record(self):
+        self.local.unlink()
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+        self.assertFalse(self.local.exists(), "fixture: the local file was written anyway")
+        told = workspace.rules_not_in_force(self.clone)
+        self.assertIn("restore write access to this checkout", told)
+        self.assertNotIn("reinit", told)
+
+    def test_a_stale_file_is_sent_to_reinit(self):
+        self.plane_moves_shared()
+        self.assertIn(f"`charter workspace reinit {self.ws}` writes them",
+                      workspace.rules_not_in_force(self.clone))
+
+    def test_a_missing_file_is_sent_to_reinit(self):
+        self.local.unlink()
+        self.assertIn(f"`charter workspace reinit {self.ws}` writes them",
+                      workspace.rules_not_in_force(self.clone))
+
+    def test_an_unreadable_file_is_told_to_restore_read_access(self):
+        self.shared.unlink()
+        self.shared.mkdir()
+        self.assertIn(f"restore read access to {SHARED}", workspace.rules_not_in_force(self.clone))
+
+
+class SweepOfRoundFiveTheRecord(RoundFiveCheckout):
+    """Survivors in the marker, its note and the exclude block (#942)."""
+
+    def test_a_hand_edited_pending_entry_holding_an_object_is_passed_over(self):
+        """workspace.py:1906."""
+        doc = json.loads(self.marker.read_text())
+        doc[SHARED] = [{"hand": "edited"}, doc[SHARED]]
+        self.marker.write_text(json.dumps(doc))
+        new = self.plane_moves_shared()
+        workspace.ensure(self.ws)
+        self.assertEqual(self.shared.read_text(), new)
+
+    def test_a_checkout_that_cannot_be_listed_keeps_the_temp_line_on_the_way_out(self):
+        """workspace.py:1926 and :1928 — a refused `scandir`, which chmod reaches on every
+        platform charter supports (macOS and Linux) and a mock reaches the same way on each."""
+        with _refused(files=[self.clone], calls=("scandir",)):
+            workspace.unwire_guest(self.clone)
+        self.assertIn(".charter-generated.*.tmp", self.exclude.read_text().splitlines())
+
+    def test_a_record_that_cannot_be_settled_is_reported(self):
+        """workspace.py:2212."""
+        self.plane_moves_shared()
+        real = os.replace
+        publishes: list[str] = []
+
+        def settle_refused(src, dst, *args, **kwargs):
+            if os.fspath(dst) == os.fspath(self.marker):
+                publishes.append(os.fspath(dst))
+                if len(publishes) == 2:
+                    raise OSError(errno.ENOSPC, "No space left on device", os.fspath(dst))
+            return real(src, dst, *args, **kwargs)
+
+        with mock.patch("os.replace", settle_refused):
+            rows = dict(workspace.wire_harnesses(self.ws))
+        self.assertEqual(len(publishes), 2, "fixture: no settle was published")
+        self.assertEqual(rows.get(f"api/{workspace.GENERATED_MARKER}"), "unrecorded")
+
+    def test_a_write_that_fails_leaves_no_temp_file(self):
+        """workspace.py:2253."""
+        self.plane_moves_shared()
+        with _publishes_refused(self.shared, code=errno.ENOSPC, says="No space left on device"):
+            rows = dict(workspace.wire_harnesses(self.ws))
+        self.assertEqual(rows[f"api/{SHARED}"], "blocked")
+        self.assertEqual([p.name for p in (self.clone / ".claude").iterdir()
+                          if fnmatch.fnmatchcase(p.name, _TEMP_GLOB)], [])
+
+    def test_an_errno_python_has_no_name_for_is_kept_as_its_number(self):
+        """workspace.py:2304."""
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker, code=99999, says="strange"):
+            workspace.ensure(self.ws)
+        self.assertEqual(workspace.unrecorded_reason(self.clone), "99999: strange")
+
+    def test_a_line_the_operator_removed_for_their_own_file_is_not_put_back(self):
+        """workspace.py:2392."""
+        self.shared.write_text('{"env": {"THEIRS": "1"}}\n')
+        lines = self.exclude.read_text().splitlines(keepends=True)
+        self.exclude.write_text("".join(ln for ln in lines if ln.strip() != f"/{SHARED}"))
+        workspace.ensure(self.ws)
+        self.assertNotIn(f"/{SHARED}", self.exclude.read_text().splitlines())
+        self.assertIn(SHARED, _status(self.clone))
+
+    def test_a_note_with_nothing_left_to_write_is_no_finding(self):
+        """workspace.py:2781, the first conjunct."""
+        plane = (config.ROOT / SHARED).read_text()
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+        self.assertTrue(workspace.unrecorded_reason(self.clone), "fixture: no note was kept")
+        (config.ROOT / SHARED).write_text(plane)
+        self.assertNotIn(workspace.GENERATED_MARKER, dict(workspace.guest_layer(self.clone)))
+
+    def test_a_missing_file_behind_an_unpublished_record_is_reported_unrecorded(self):
+        """workspace.py:2781, "missing"."""
+        agent = config.ROOT / ".claude" / "agents" / "steward.md"
+        agent.parent.mkdir(parents=True, exist_ok=True)
+        agent.write_text("# steward\n")
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+        self.assertFalse((self.clone / ".claude" / "agents" / "steward.md").exists(),
+                         "fixture: the agent file was written anyway")
+        self.assertEqual(dict(workspace.guest_layer(self.clone))[workspace.GENERATED_MARKER],
+                         "unrecorded")
+
+
+class SweepOfRoundFiveTheBlock(RoundFiveCheckout):
+    """Mutations CI's sweep of 98a1999 ran out of time on, pinned ahead of the local sweep (#942)."""
+
+    def test_an_unaccounted_block_beside_a_workspace_directory_finding_is_reported_not_raised(self):
+        """workspace.py `_exclude_state`'s `if p is None`: doctor asks every finding's directory
+        for its unaccounted reasons, and a workspace directory has no exclude file."""
+        self.shared.write_text('{"env": {"THEIRS": "1"}}\n')
+        self.generated().unlink()
+        with _refused(files=[self.shared], calls=("lstat",)):
+            r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/api/.git/info/exclude (unaccounted)", r.detail)
+        self.assertIn("cannot be checked", r.hint)
+
+    def test_a_lost_marker_under_a_listing_that_cannot_be_trusted_still_reports_the_block(self):
+        """workspace.py `guest_layer`'s `status == "unaccounted"`: charter owns nothing there now,
+        and the block it keeps is reported all the same."""
+        wt = workspace.workspace_dir(self.ws) / "api-wt"
+        _git(self.clone, "worktree", "add", "-q", "-b", "wt1", str(wt))
+        workspace.wire_harnesses(self.ws)
+        _git(self.clone, "worktree", "lock", str(wt))
+        (wt / ".git").unlink()
+        self.marker.unlink()
+        self.assertEqual(dict(workspace.guest_layer(self.clone)).get(".git/info/exclude"),
+                         "unaccounted")
+
+    def test_the_workspaces_directory_itself_is_answered_not_raised(self):
+        """workspace.py `rules_not_in_force`'s `if not parts`."""
+        _isolation.no_background_refresh(self)
+        self.assertEqual(workspace.rules_not_in_force(config.WORKSPACES_DIR), "")
+
+    def test_a_worktrees_directory_that_cannot_be_checked_distrusts_what_git_lists_anyway(self):
+        """workspace.py `_live_trees`' `if admin is None`. Measured on git 2.50.1: with a
+        repository's `worktrees/` unreadable, `git worktree list --porcelain` exits 0 and lists the
+        main worktree alone. So what git answers there cannot be backed up, and is not trusted."""
+        workspace.ensure("other")
+        other = workspace.workspace_dir("other") / "api"
+        _git(self.clone, "worktree", "add", "-q", "-b", "wt-other", str(other))
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        _as_the_harness_would(other / LOCAL, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        admin = workspace.git_exclude_file(self.clone).parent.parent / "worktrees"
+        main_alone = (f"worktree {os.path.realpath(self.clone)}\nHEAD {'0' * 40}\n"
+                      f"branch refs/heads/main\n\n")
+        real_run = util.run
+
+        def git_as_it_answers_there(cmd, *args, **kwargs):
+            if "worktree" in cmd and "list" in cmd:
+                return SimpleNamespace(returncode=0, stdout=main_alone, stderr="")
+            return real_run(cmd, *args, **kwargs)
+
+        with _refused(files=[admin], calls=("lstat", "scandir")), \
+             mock.patch.object(workspace.util, "run", side_effect=git_as_it_answers_there):
+            workspace.wire_harnesses(self.ws)
+        self.assertFalse(self.local.exists(), "fixture: the clone's own copy was not withdrawn")
+        self.assertEqual(_status(other), "")
+
+    def test_a_temp_file_at_the_root_keeps_the_temp_line_when_that_line_is_all_that_is_left(self):
+        """workspace.py `_shared_rels`: a temp file's pattern names no directory of its own —
+        `Path(".charter-generated.*.tmp").parent` is the checkout root — so leaving that line out
+        of the directories to scan left the root unscanned whenever it was the block's last line,
+        and a temp file there lost its line."""
+        (self.clone / ".charter-generated.4242.0123456789ab.tmp").write_text("{")
+        with _refused(files=[self.clone], calls=("scandir",)):
+            workspace.unwire_guest(self.clone)
+        left = [ln for ln in self.exclude.read_text().splitlines() if ln and not ln.startswith("#")]
+        self.assertEqual(left, [".charter-generated.*.tmp"], "fixture: more than the temp line is left")
+        workspace.unwire_guest(self.clone)
+        self.assertIn(".charter-generated.*.tmp", self.exclude.read_text().splitlines())
+        self.assertEqual(_status(self.clone), "")
+
+    def test_a_worktree_in_another_workspace_that_lost_its_marker_still_keeps_its_line(self):
+        """workspace.py `_wired`'s location half: a checkout inside this plane's workspaces is one
+        charter wires, marker or none, so the file there keeps its line."""
+        workspace.ensure("other")
+        other = workspace.workspace_dir("other") / "api"
+        _git(self.clone, "worktree", "add", "-q", "-b", "wt-other", str(other))
+        workspace.wire_harnesses("other")
+        _as_the_harness_would(other / LOCAL, "Bash(npm test *)")
+        (other / workspace.GENERATED_MARKER).unlink()
+        (config.ROOT / LOCAL).unlink()
+        workspace.wire_harnesses(self.ws)
+        self.assertFalse(self.local.exists(), "fixture: the clone's own copy was not withdrawn")
+        self.assertEqual(_status(other), "")
 
 
 class UtilRunCanWithholdAVariable(unittest.TestCase):

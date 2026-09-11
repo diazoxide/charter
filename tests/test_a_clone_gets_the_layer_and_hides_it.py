@@ -817,6 +817,20 @@ class RemovingAWorkspaceWithAWorktree(CloneLayer):
         workspace.unwire_guests(self.ws)
         self.assertNotIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
 
+    def test_a_main_repo_holding_a_file_at_a_charter_path_keeps_no_line_for_it(self):
+        """#942 review round 5, R2: a line stays while its path is there IN A CHECKOUT CHARTER
+        WIRES. The main repo is not one — outside the plane's workspaces, no marker — so its own
+        untracked `.claude/settings.json` does not keep charter's block in that repository once
+        the workspace holding its worktree goes."""
+        main = self.main / "svc-main"
+        (main / ".claude").mkdir(exist_ok=True)
+        (main / ".claude" / "settings.json").write_text('{"env": {"MAINS_OWN": "1"}}\n')
+        main_exclude = main / ".git" / "info" / "exclude"
+        self.assertIn("/.claude/settings.json", main_exclude.read_text(),
+                      "fixture: the worktree's wire did not name the path")
+        workspace.unwire_guests(self.ws)
+        self.assertNotIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
+
     def test_workspace_remove_unwires_before_it_deletes(self):
         main_exclude = self.main / "svc-main" / ".git" / "info" / "exclude"
         out, err = io.StringIO(), io.StringIO()
