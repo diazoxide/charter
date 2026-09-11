@@ -92,9 +92,13 @@ class _TwoChatsOnARealServer(PersonaIso):
             self.skipTest(f"the frame's floor is tmux {tmuxctl.FLOOR[0]}.{tmuxctl.FLOOR[1]};"
                           f" this machine has {v}")
         make_plane(self)
+        #: The tmux binary this case measures, resolved once. Every command the case sends
+        #: itself, and the client it attaches, runs this file; `tmuxctl`'s own calls resolve
+        #: the same `$PATH`, which is how a run is pointed at the 3.2 floor binary.
+        self.tmux = shutil.which("tmux")
         self.socket = _tmuxreap.name(f"{self.SLUG}-{next(_SERVERS)}")
         self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
-        self.addCleanup(subprocess.run, ["tmux", "-L", self.socket, "kill-server"],
+        self.addCleanup(subprocess.run, [self.tmux, "-L", self.socket, "kill-server"],
                         capture_output=True, timeout=20)
         #: Where the server this case starts writes its `-v` log, read only on a failure.
         self.tmux_logs = self.tmp / "tmux-logs"
@@ -132,7 +136,7 @@ class _TwoChatsOnARealServer(PersonaIso):
             self.panes[ws] = pane
 
     def _tmux(self, *args: str, env=None) -> subprocess.CompletedProcess:
-        return subprocess.run(["tmux", "-L", self.socket, *args], capture_output=True,
+        return subprocess.run([self.tmux, "-L", self.socket, *args], capture_output=True,
                               text=True, timeout=20, env=env)
 
     def _session(self, name: str, env: dict) -> str:
@@ -140,7 +144,7 @@ class _TwoChatsOnARealServer(PersonaIso):
 
         `-v` so the server this starts keeps a log, run from :attr:`tmux_logs` because that
         is where tmux writes it; read only when something went wrong."""
-        argv = ["tmux", "-v", "-L", self.socket, "-f", "/dev/null", "new-session", "-d",
+        argv = [self.tmux, "-v", "-L", self.socket, "-f", "/dev/null", "new-session", "-d",
                 "-s", name, "-x", str(self.COLS), "-y", str(self.ROWS),
                 "-P", "-F", "#{pane_id}", "--", "sleep", "600"]
         existed = os.path.exists(_tmuxsocket.socket_path(self.socket))
@@ -155,7 +159,8 @@ class _TwoChatsOnARealServer(PersonaIso):
         """Everything a failed session start on a runner nobody can log into needs to say."""
         named = {k: env.get(k) for k in ("TERM", "SHELL", "HOME", "TMUX_TMPDIR", "LANG",
                                          "LC_ALL", "PATH")}
-        version = subprocess.run(["tmux", "-V"], capture_output=True, text=True).stdout.strip()
+        version = subprocess.run([self.tmux, "-V"], capture_output=True,
+                                 text=True).stdout.strip()
         logs = []
         for log in sorted(self.tmux_logs.glob("tmux-*.log")):
             lines = log.read_text(errors="replace").splitlines()
@@ -294,16 +299,22 @@ class ABackgroundChatWithItsPanelsMovesNoAttachedClient(_TwoChatsOnARealServer,
         """A real client on *session*, on a pty sized to the window, and its tmux name — or
         ``None`` where no terminal type would attach.
 
+        **The client is :attr:`tmux`, the binary this case measures, by its absolute path**:
+        a bare `tmux` resolved again here could be a different binary from the server the case
+        is asking about.
+
         Started through `subprocess.Popen` with the pty as its three streams, and not as a
-        `pty.fork` child that `os.execvp`s: `tests/test_plane_spawn_guard.py` watches `Popen`
-        and requires every exec-family call in the tree to be one it has written down. The
-        client needs no controlling terminal — tmux's server opens the client's tty by name —
-        measured attaching this way on tmux 3.7c and 3.2 on macOS and 3.4 on Linux."""
+        `pty.fork` child that `os.execvp`s, because `tests/test_plane_spawn_guard.py` requires
+        every exec-family call in the tree to be one it has written down. That static guard is
+        the whole of what covers this call: the runtime `_planeguard` does not resolve a bare,
+        non-interpreter program through `$PATH`, so it would not refuse a charter posing as
+        tmux. The client needs no controlling terminal — tmux's server opens the client's tty
+        by name — measured attaching this way on tmux 3.7c and 3.2 on macOS and 3.4 on Linux."""
         for term in _TERM_CANDIDATES:
             master, slave = os.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ,
                         struct.pack("HHHH", self.ROWS, self.COLS, 0, 0))
-            client = subprocess.Popen(["tmux", "-L", self.socket, "attach", "-t", session],
+            client = subprocess.Popen([self.tmux, "-L", self.socket, "attach", "-t", session],
                                       stdin=slave, stdout=slave, stderr=slave,
                                       env=dict(os.environ, TERM=term),
                                       start_new_session=True)
