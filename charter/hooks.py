@@ -864,6 +864,19 @@ def _heredoc_strip_plan(line: str):
     here-string `<<<x`, a `<<` inside quotes or a comment, which the regex counts and the
     lexer does not — the answer is ``None``: the line is not one this pre-pass can take
     apart, so it strips nothing and the bodies stay visible for the guard to read.
+
+    Each entry is ``(delimiter, drop, header)``. The first two are what this pre-pass acts
+    on: `delimiter` is :data:`_HEREDOC_RE`'s reading, which is what :func:`_strip_reader_heredocs`
+    matches terminator lines against, and `drop` is the verdict above. **`header` decides
+    nothing here** — it is :func:`_heredoc_header`'s answer for the same `<<`,
+    ``(delimiter after bash's quote removal, expands, the `<<-` flag, index past the
+    header)`` or ``None``, carried so a second caller has the bash-accurate facts without
+    re-parsing the line. The two delimiters differ where quoting splits a word: for
+    `<<EO'F'` the regex reads `EO` while bash reads `EOF`. Acting on the regex's shorter
+    reading is the safe direction *here* — a terminator that is never found keeps the body
+    visible — so the verdicts stay keyed on it; a caller that would DROP a body on this plan
+    must use `header` instead. A spelling the regex does not match at all (`<<\\EOF`) yields
+    no entry, so there is nothing to carry facts on.
     """
     headers = list(_HEREDOC_RE.finditer(line))
     if not headers:
@@ -873,7 +886,7 @@ def _heredoc_strip_plan(line: str):
         return None
     if sum(hc for _progs, _ex, hcounts in pipelines for hc in hcounts) != len(headers):
         return None
-    plan: list[tuple[str, bool]] = []
+    plan: list[tuple[str, bool, tuple | None]] = []
     k = 0
     for progs, executor, hcounts in pipelines:
         for prog, hc in zip(progs, hcounts):
@@ -882,7 +895,8 @@ def _heredoc_strip_plan(line: str):
                 m = headers[k]
                 k += 1
                 quoted = bool(m.group("q"))
-                plan.append((m.group("delim"), reader and quoted and not executor))
+                plan.append((m.group("delim"), reader and quoted and not executor,
+                             _heredoc_header(line, m.start())))
     return plan
 
 
@@ -1008,7 +1022,7 @@ def _strip_reader_heredocs(cmd: str) -> str:
         plan = _heredoc_strip_plan(plan_text)
         drop = {}
         if plan is not None and len(plan) == body_count:
-            drop = {idx: d for idx, (_delim, d) in enumerate(plan)}
+            drop = {idx: d for idx, (_delim, d, _head) in enumerate(plan)}
         for kind, idx, text in chunks:
             if kind == "cmd" or not drop.get(idx, False):
                 out.append(text)

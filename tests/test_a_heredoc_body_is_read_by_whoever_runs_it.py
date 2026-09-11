@@ -225,6 +225,47 @@ class TheTerminatorMatchesBashExactly(PlaneIso):
         self.assertIsNone(hooks._leak_reason(cmd))
 
 
+class ThePlanCarriesBashsOwnDelimiter(PlaneIso):
+    """Each plan entry carries `_heredoc_header`'s answer as DATA, so a second caller has the
+    bash-accurate delimiter without re-parsing — and decides nothing here.
+
+    Where quoting splits the delimiter word, the two readings differ: for `<<EO'F'` the
+    pre-pass's regex reads `EO` while bash reads `EOF` (measured against bash, zsh and dash).
+    Acting on the shorter reading is the safe direction *here* — a terminator that is never
+    found leaves the body visible — so the verdicts stay keyed on it. A caller that would DROP
+    a body (a `charter handoff` brief, say) must use the carried header instead, or it would
+    drop to end of input and swallow the commands after the heredoc.
+    """
+
+    SPLIT_QUOTED = ["EO'F'", "'EO'F", '"EO"F']
+
+    def test_every_split_quote_spelling_exposes_bashs_delimiter(self):
+        for spell in self.SPLIT_QUOTED:
+            header = "cat <<" + spell
+            with self.subTest(spelling=spell):
+                plan = hooks._heredoc_strip_plan(header)
+                self.assertEqual(1, len(plan), header)
+                self.assertEqual("EOF", plan[0][2][0], "carried delimiter is bash's")
+                self.assertEqual("EO", plan[0][0], "the pre-pass still matches on its own")
+
+    def test_the_carried_header_decides_nothing(self):
+        """The verdicts of those spellings are exactly what they were before the facts were
+        carried — the data is inert."""
+        for spell, denied in (("EO'F'", True), ("'EO'F", False), ('"EO"F', False),
+                              ("\\EOF", True)):
+            cmd = f"cat <<{spell}\nbody\nEOF\n{READ}"
+            with self.subTest(spelling=spell):
+                self.assertEqual(denied, _deny(cmd, str(self.tmp)), cmd)
+
+    def test_a_backslash_delimiter_has_no_entry_to_carry(self):
+        """`<<\\EOF` is not matched by the pre-pass's header regex at all, so there is no
+        entry — the bash-accurate fact is still one `_heredoc_header` call away, and nothing
+        is stripped, which is why the verdict above is a denial."""
+        header = "cat <<\\EOF"
+        self.assertEqual([], hooks._heredoc_strip_plan(header))
+        self.assertEqual("EOF", hooks._heredoc_header(header, header.index("<<"))[0])
+
+
 class TheHeaderCountBailIsLoadBearing(PlaneIso):
     """`_heredoc_strip_plan` bails when the header regex and the lexer disagree on how many
     heredocs a line opens. Deleting the bail raises `IndexError` in `_leak_reason` here, and
