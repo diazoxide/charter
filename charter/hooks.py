@@ -972,9 +972,11 @@ def _strip_reader_heredocs(cmd: str) -> str:
         body_count = 0
         plan_text = ""
         join = ""                                 # separator carried from the previous stage
-        while i < n:
+        while True:
             # A command line, with any backslash-newline splices folded in first — bash does
             # this before it looks for heredoc bodies, so the bodies follow the folded whole.
+            # No bound of its own: out of lines, the fold below yields "", which opens no
+            # heredoc and continues no pipeline, so this breaks on the next test.
             folded = ""
             while i < n:
                 line = lines[i]
@@ -985,7 +987,7 @@ def _strip_reader_heredocs(cmd: str) -> str:
                     continue
                 folded += line
                 break
-            plan_text = folded if not plan_text else plan_text + join + folded
+            plan_text = plan_text + join + folded      # `join` is "" until a stage continues
             # This command line's heredoc bodies follow, in order; buffer each.
             for m in _HEREDOC_RE.finditer(folded):
                 delim = m.group("delim")
@@ -1007,11 +1009,11 @@ def _strip_reader_heredocs(cmd: str) -> str:
                         (body_line.lstrip("\t") if dash else body_line) == delim)
                     if is_terminator:
                         break
-                    chunks.append((idx,body_line))
+                    chunks.append((idx, body_line))
                     spliced = expands and _ends_in_line_continuation(body_line)
                     i += 1
                 if i < n:                          # the terminator line itself
-                    chunks.append((idx,lines[i]))
+                    chunks.append((idx, lines[i]))
                     i += 1
             if not _pipeline_continues(folded):
                 break
