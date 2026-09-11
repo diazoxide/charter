@@ -90,6 +90,9 @@ share = "local"                  # "local" | "commit" | "push". Default: "local"
 default = "default"              # Default: "default".
 
 # What bare `charter` opens. Opt-in; absent, `charter` on its own prints the usage list.
+# `default` is the only key read here. Harness profiles — a command and an environment
+# each — live in charter.local.toml, which is never committed, and a [harness.<name>]
+# table in this file is refused. See "[harness] — profiles, and the default" below.
 [harness]
 default = "claude"               # "claude" | "opencode" | "codex" — the word you would
                                   # have typed after `charter`. No default: charter does
@@ -455,7 +458,126 @@ On a plane that declares the [dev channel](install.md#4-the-dev-channel--trying-
 `charter version` never suggests this command, because a pin and the dev channel cannot
 both be declared. It names `charter update` instead.
 
-## `[harness].default` — bare `charter`
+## `[harness]` — profiles, and the default
+
+Two Claude Code accounts, work in one config folder and personal in another, or a Codex
+pinned to an older release: charter ran one program per harness, one way, and had no way to
+be told otherwise. A shell alias does not help — charter runs the harness with no shell, so
+the alias never resolves. A **harness profile** is the way: a kind, a command and an
+environment, declared in a file that stays on your machine.
+
+**Profiles are listed by `charter harness list`; launching one arrives in a later release.**
+Today charter reads them, refuses the broken ones by name, and keeps the file out of git.
+`charter claude`, bare `charter` and every chat still start exactly as they did.
+
+### Profiles live in `charter.local.toml`, never in `charter.toml`
+
+```toml
+# charter.local.toml — beside charter.toml, never committed
+[harness]
+default = "claude-work"                          # optional
+
+[harness.claude-work]
+kind = "claude"
+command = ["claude"]
+env = { CLAUDE_CONFIG_DIR = "~/.claude-work" }
+
+[harness.codex-pinned]
+kind = "codex"
+command = ["npx", "-y", "@openai/codex@0.140.0"]
+```
+
+A profile's command runs on a click, with no harness permission prompt in between. In the
+committed file a merged PR, or a chat, could change that command and have it run on every
+machine that pulls it. So charter reads profiles only from `charter.local.toml`, and a
+`[harness.<name>]` table in `charter.toml` is refused with a pointer to the local file.
+`charter.toml`'s `[harness]` keeps `default`; any other key there is ignored, as it always
+was. A `default` in the local file wins over the committed one.
+
+**The local file carries `[harness]` and nothing else.** Any other section in it is refused
+by name. An ignored file that could override `[[forge]]` — whose hosts steer the
+one-credential guard — would change plane policy with no trace in git.
+
+- `kind` — which harness program: `claude`, `opencode` or `codex`, the word you would type
+  after `charter`.
+- `command` — a list of arguments, never a shell string, because no shell runs it. A leading
+  `~` in its first word is expanded, since no shell is there to do it.
+- `env` — optional: variables set on the harness, each value's leading `~` expanded.
+- The table's name is letters, digits, `_` and `-`, starting with a letter or digit. No dot:
+  a dot in a name broke tmux targets once (#695).
+
+**Every harness is also a built-in profile named after itself** — `claude` runs `claude`,
+with no extra environment — so a plane that declares nothing sees no change. A declared
+profile of the same name replaces it, which is how plain `claude` gets pinned. A built-in
+cannot be hidden, but a replacement that is refused takes the name with it rather than
+letting the built-in stand in: you said how `claude` runs, and running the default in its
+place would run the command you replaced.
+
+### What is refused, and the fix
+
+A broken profile is refused alone, by name, and every other profile still loads.
+`charter harness list` and `charter doctor` both say which one and why.
+
+| Refused | Why | Fix |
+|---|---|---|
+| a `kind` charter cannot launch | nothing could start it | `claude`, `opencode` or `codex` |
+| a `command` that is not a non-empty list of text | no shell runs it, so `"claude --resume x"` names one program | `["claude", "--resume", "x"]` |
+| a `command` whose first word is charter itself | a profile names the harness a chat runs, and charter is not a harness | the harness's own command |
+| a name holding a dot or any other character, or named `default` | a dot breaks tmux targets; `default` is the one key under `[harness]` that is not a profile | rename the table |
+| a name `charter` already uses — `doctor`, `workspace`, `frame` | `charter doctor` would always be the command, never the profile | rename the table |
+| an `env` that is not a table of text | a variable holds text | `env = { NAME = "value" }` |
+| an `env` name starting with `CHARTER_` | charter sets those itself, and a profile's own setting would tell charter's hooks the wrong harness or plane | delete the variable |
+| an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD` | a variable set on the harness reaches the model's shell, as the next section measures | log in inside the harness |
+| a key other than `kind`, `command` and `env` | a typo such as `enviroment` would drop `CLAUDE_CONFIG_DIR` and launch the default account without a word | remove or respell it |
+| a file that is not valid TOML | nothing in it can be read | fix the file; the built-ins still load |
+
+### No credentials in a profile
+
+Anything set on the harness process reaches the shell the model runs — measured on Claude
+Code, and on Codex, whose default `shell_environment_policy` passed a `*_TOKEN` variable
+straight through. A vault reference would change nothing: the key would only rest somewhere
+else before landing in the same shell. So a variable named like a credential is refused, and
+the refusal names the harness's own login, kept in the config folder the profile already
+moves:
+
+- Claude Code: set `CLAUDE_CONFIG_DIR` and run `/login` inside Claude Code.
+- Codex: set `CODEX_HOME` and run `codex login`.
+- opencode: set `XDG_DATA_HOME` and run `opencode auth login`.
+
+The pattern can refuse an innocent name — `KEYBOARD_LAYOUT` holds `KEY` — and a wrapper
+script on `PATH` can still export a key. Charter declines to hold one; it cannot prevent one.
+
+### Kept out of git, and checked
+
+`charter init` writes `/charter.local.toml` into a new plane's `.gitignore`, and
+`charter reinit` adds it to a plane made before this existed. The line is not trusted
+blindly: `charter harness list` and `charter doctor` ask git, and while git tracks the file
+or would commit it, every profile declared there is listed refused, with the reason, and one
+line names the fix:
+
+```
+refused:
+  claude-work: git would commit charter.local.toml, so the profiles in it are refused until it is ignored — charter reinit adds /charter.local.toml to .gitignore.
+! to use the profiles in charter.local.toml: charter reinit
+```
+
+Each state has its own fix. A committable file needs the ignore line, which `charter reinit`
+adds. A tracked file stays refused after the ignore line is added, because the next commit
+still carries it — even after `git rm --cached`, until that removal is committed — so its fix
+is `git rm --cached charter.local.toml`, commit that removal, then `charter reinit`. A plane
+that is not a git repository has nothing to commit to, and passes. Any other answer git cannot
+give — git missing, a timeout, an answer it cannot read — refuses too, because an unknown is
+not a pass; the fix names the command to run by hand, `git status --ignored --
+charter.local.toml`, beside what git said.
+
+The check is one `git --no-optional-locks status`, which takes no `index.lock` from a commit
+running beside it. It runs when a person asks — `charter harness list`, `charter doctor` —
+and not when charter merely reads its config. One hook does pay it: the SessionStart hook
+runs `charter doctor`, so on a plane that has `charter.local.toml`, each session start makes
+that one `git status`. `charter doctor`'s `harness profiles` row warns for each refusal
+above, with each state's own fix, and for a `default` that names no profile this machine has.
+
+### `default` — bare `charter`
 
 **Opt-in.** Absent, `charter` on its own prints the usage list, exactly as it always has.
 
@@ -470,9 +592,13 @@ everything else the launcher does are the same behaviours, not a second set of t
 subcommand keeps working untouched, `charter claude` included.
 
 The value is one of the words you would type after `charter`: `claude`, `opencode`,
-`codex` — whatever `charter harness list` shows, read out of charter's own registry rather
-than a list in this page, so a harness added to charter becomes a legal default the day it
-is registered.
+`codex` — the built-in profiles `charter harness list` shows, read out of charter's own
+registry rather than a list in this page, so a harness added to charter becomes a legal
+default the day it is registered. **Until launching a profile arrives, bare `charter` reads
+this key from `charter.toml` alone, and only as one of those words.** A `default` in
+`charter.local.toml` marks its row in `charter harness list` and launches nothing yet, and a
+declared profile's name in `charter.toml` is reported below like any other name charter
+cannot launch.
 
 **Charter does not pick one for you.** No default and you get the usage message, not
 "whatever is installed" (a machine with two of them has no answer, and the answer would

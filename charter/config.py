@@ -713,6 +713,12 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: charter does not recognise degrades to exactly that.
     d["UPDATE"] = _instance.update_of(cfg)
 
+    # Harness profiles are deliberately NOT derived here (ruling 43, superseding review 14):
+    # nothing reads `charter.local.toml` and no `charter.profiles` code runs on this path.
+    # Every command and every hook process derives config, so a read here was paid on every
+    # tool call, and the deletion sweep charged each line of `charter.profiles` to the whole
+    # suite. `profiles.current()` reads and validates the file when a surface asks.
+
     #: What bare ``charter`` launches — ``{"default": None, "refused": None}`` unless the
     #: plane opts in with ``[harness] default``. ``default`` is a name out of charter's own
     #: registry or ``None``; ``refused`` names a declared value that is not one, so the two

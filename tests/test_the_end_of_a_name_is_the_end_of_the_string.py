@@ -209,6 +209,10 @@ ADMITTERS: dict[str, str] = {
     # accepted `"e0c9d13\n"`, putting a newline into a git argv out of a file a hand edit
     # or a half-written append can reach.
     "commands_change._SHA_RE": "e0c9d13",
+    # A harness profile's name, read out of `charter.local.toml` — a file a chat can write —
+    # and bound for a command line and a tmux target. `.match` would have admitted
+    # `"claude-work\n"` as a name.
+    "profiles.NAME_RE": "claude-work",
 }
 
 #: **Detectors** — "is this token one I must account for?". Over-matching makes the guard

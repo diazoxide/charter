@@ -704,6 +704,50 @@ def check_plane_root() -> Result:
     )
 
 
+def check_harness_profiles() -> Result:
+    """This machine's harness profiles, as `charter.local.toml` declares them now — and
+    whether git would carry that file.
+
+    Through `profiles.current()`, the one reader (ruling 43): it reads the file as it is now,
+    and applies the refusals every surface sees, a name that clashes with a command included.
+
+    The git check lives here and not in `profiles.current()` because a person runs `doctor` —
+    though `charter doctor` is also what the SessionStart hook runs, so until doctor has a
+    preflight mode, a session start on a plane with the file pays this one lock-free
+    `git status`. `profiles.ignore_check` never raises, so one slow
+    git costs this row and nothing more: `_checks` builds every row in one list with no
+    per-check guard.
+
+    Each state's hint is that state's own fix (F3): `charter reinit` adds the ignore line, and
+    that fixes a committable file only. WARN rather than FAIL even for a tracked file: its
+    profiles are refused, so nothing runs.
+    """
+    from . import config as _config, profiles
+
+    name = "harness profiles"
+    # Read first, whatever git says, the way `charter harness list` does: the ignore check
+    # answers from git without opening the file, and a row that skipped the read on a
+    # committable file would be the one surface that reached the operator's own profiles with
+    # no read the suite's guard could see (`tests/_planeguard`, ruling 43).
+    profile_set = profiles.current()
+    check = profiles.ignore_check(_config.ROOT)
+    if check.reason:
+        return Result(name, WARN, detail=check.reason, hint=check.fix)
+    names = ", ".join(profile_set.profiles)
+    refused = profile_set.refused
+    if refused:
+        return Result(name, WARN,
+                      detail=f"{len(refused)} refused: "
+                             f"{', '.join(r.name or r.source for r in refused)}",
+                      hint=refused[0].reason)
+    if profile_set.default_refused is not None:
+        return Result(name, WARN,
+                      detail=profiles.DEFAULT_REFUSED.format(value=profile_set.default_refused,
+                                                             names=names),
+                      hint=profiles.DEFAULT_FIX.format(names=names))
+    return Result(name, OK, detail=f"{len(profile_set.profiles)} profile(s): {names}")
+
+
 def check_index_lock() -> Result:
     """A ``.git/index.lock`` left in the plane's own repository — noticed *before* a save
     runs into it.
@@ -3520,7 +3564,8 @@ def _checks():
     for forge in declared_or_default_forges():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
-    results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
+    results += [check_ssh(), check_control_plane_config(), check_harness_profiles(),
+                check_control_plane_schema(),
                 check_plane_root(), check_index_lock(),
                 check_session_root(), check_session_layer(),
                 check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
@@ -3563,7 +3608,7 @@ def _checks():
 _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
-    "git auth", "charter.toml", "schema", "plane root", "index lock",
+    "git auth", "charter.toml", "harness profiles", "schema", "plane root", "index lock",
     "session root", "session layer",
     "harness", "frame",
     "plane-root guard", "guard seen", "nested plane", "workspace clones",

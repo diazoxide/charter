@@ -30,8 +30,7 @@ import unittest
 from pathlib import Path
 
 from charter import doctor
-from tests import _envguard
-from tests._isolation import PersonaIso, pin_update_channel
+from tests._isolation import PersonaIso
 
 
 class LauncherCase(PersonaIso):
@@ -185,15 +184,10 @@ class TestProjectScopedServersAreChecked(LauncherCase):
         self.assertEqual(self.check().status, doctor.OK)
 
 
-class TestItIsWiredIn(unittest.TestCase):
-    def setUp(self) -> None:
-        # Outside a frame, with no session id and no pinned workspace: stated here
-        # rather than inherited from the shell the suite was launched from
-        # (#519, #521, #528).
-        _envguard.unset_all()
-
-        # `run_all` reaches `check_plugin_freshness`, and so the channel (#459).
-        pin_update_channel(self)
+class TestItIsWiredIn(PersonaIso):
+    """On a throwaway plane (`PersonaIso` also states the environment and the channel):
+    `run_all` reaches `charter.local.toml` through the `harness profiles` row, and the real
+    plane's file is the operator's own — `tests/_planeguard` refuses the read."""
 
     def test_the_check_runs_in_doctor(self):
         """A check nothing calls is the same silence it was written to end."""

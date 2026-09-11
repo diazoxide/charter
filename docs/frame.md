@@ -20,7 +20,7 @@ plane places it*, below). The middle pane is the harness's and charter draws not
 
 `charter` on its own opens the frame once the plane says which harness it means —
 `[harness] default = "claude"` in `charter.toml`, documented in
-[control-plane.md](control-plane.md#harnessdefault--bare-charter). It is a rewrite of the
+[control-plane.md](control-plane.md#default--bare-charter). It is a rewrite of the
 command rather than a route of its own: `charter` becomes `charter claude` and everything
 below applies to it unchanged. A plane that names no default keeps the usage list, and so
 does `charter` with its output piped or redirected — a script asking whether charter is

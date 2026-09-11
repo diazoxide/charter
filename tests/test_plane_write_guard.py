@@ -54,6 +54,37 @@ class WhatIsGuarded(unittest.TestCase):
                               "a test could rewrite the file that makes that directory a "
                               "control plane")
 
+    def test_the_guarded_files_include_this_planes_local_profiles(self):
+        """`charter.local.toml` is the one file whose loss or rewrite changes which command a
+        click runs on this machine, and it is in no commit to restore it from. Asserted on the
+        guard as installed rather than on a patched one, so deleting the line that adds it
+        fails here."""
+        for real in _planeguard._REAL_ROOT:
+            with self.subTest(plane=real):
+                self.assertIn(os.path.join(real, "charter.local.toml"), _planeguard._REAL,
+                              "a test could rewrite the operator's harness profiles")
+
+    def test_the_planes_local_profiles_cannot_be_read_either(self):
+        """Ruling 43 made `profiles.current()` read `charter.local.toml` when a surface asks, so
+        no `config` setting stands between a test and the operator's own profiles any more. The
+        read itself is refused, before anything is opened — so whether the file exists on this
+        machine does not change the answer."""
+        for real in _planeguard._REAL_ROOT:
+            local = os.path.join(real, "charter.local.toml")
+            with self.subTest(plane=real, via="open"), \
+                 self.assertRaises(_planeguard.RealPlaneRead):
+                builtins.open(local)
+            with self.subTest(plane=real, via="Path.read_bytes"), \
+                 self.assertRaises(_planeguard.RealPlaneRead):
+                Path(local).read_bytes()
+
+    def test_reading_profiles_off_the_real_plane_is_refused(self):
+        """What the review of `a36194d` measured: with no isolation, `profiles.current()` read
+        whatever `charter.local.toml` sat at the real plane's root."""
+        from charter import profiles
+        with self.assertRaises(_planeguard.RealPlaneRead):
+            profiles.current()
+
     def test_the_suite_reads_the_checkout_these_modules_were_loaded_from(self):
         """#785. `root._plane_of` sends a linked worktree's plane back to the tree it was
         cut from, so without the pin in `_planeguard.install` a run in a worktree asserts
@@ -407,6 +438,26 @@ class WritesAreRefused(_FakePlane):
         with self.assertRaises(_planeguard.RealPlaneWrite):
             os.replace(self.elsewhere / "spare", marker)
         self.assertEqual(marker.read_text(), "schema = 1\n")
+
+    def test_the_planes_local_profiles_file_cannot_be_written(self):
+        """The same spellings as the marker above, for the file beside it that holds this
+        machine's harness profiles. `WhatIsGuarded` pins that the installed guard names it;
+        this pins that a name in the guard refuses every way a rewrite arrives."""
+        local = self.elsewhere / "charter.local.toml"
+        local.write_text("[harness]\n")
+        self.enterContext(mock.patch.object(
+            _planeguard, "_REAL", (*_planeguard._REAL, str(local))))
+        for mode in ("w", "a", "r+"):
+            with self.subTest(mode=mode), self.assertRaises(_planeguard.RealPlaneWrite):
+                builtins.open(local, mode)
+        with self.assertRaises(_planeguard.RealPlaneWrite):
+            local.write_text("")
+        with self.assertRaises(_planeguard.RealPlaneWrite):
+            os.unlink(local)
+        (self.elsewhere / "spare").write_text("new file")
+        with self.assertRaises(_planeguard.RealPlaneWrite):
+            os.replace(self.elsewhere / "spare", local)
+        self.assertEqual(local.read_text(), "[harness]\n")
 
     def test_it_is_that_one_file_and_not_the_directory_holding_it(self):
         """The boundary this entry has to keep, or it becomes the "stream of false alarms"

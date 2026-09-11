@@ -16,7 +16,7 @@ import unittest
 
 from charter import config, doctor, persona
 from tests import _envguard
-from tests._isolation import PersonaIso, pin_update_channel
+from tests._isolation import PersonaIso
 
 
 class PersonaCheck(PersonaIso):
@@ -138,10 +138,6 @@ class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
         # (#519, #521, #528).
         _envguard.unset_all()
 
-        # The two cases that drive the real `iter_all`/`run_all` reach
-        # `check_plugin_freshness`, and so the channel (#459).
-        pin_update_channel(self)
-
     def test_run_raises_a_charter_error_not_subprocess_timeoutexpired(self):
         """`cli.main` catches `KeyboardInterrupt` and nothing else, so a bare
         `TimeoutExpired` reached the user as a traceback from inside charter."""
@@ -154,18 +150,6 @@ class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
     def test_a_command_without_a_timeout_is_unbounded_as_before(self):
         from charter import util
         self.assertEqual(util.run(["true"], check=False).returncode, 0)
-
-    def test_doctor_yields_results_one_at_a_time(self):
-        """The streaming half: what makes a killed preflight say where it stopped."""
-        from charter import doctor
-        it = doctor.iter_all()
-        first = next(it)
-        self.assertIsInstance(first, doctor.Result)
-        self.assertTrue(first.name)
-
-    def test_run_all_still_returns_them_all(self):
-        from charter import doctor
-        self.assertEqual(len(doctor.run_all()), len(list(doctor.iter_all())))
 
     def test_a_timed_out_vault_is_its_own_state(self):
         """Not "unhealthy" — the vault is fine, the provider CLI did not answer, and the
@@ -180,6 +164,22 @@ class RunTakesATimeoutAndDoctorStreams(unittest.TestCase):
             res = doctor.check_vaults()
         self.assertEqual(res.status, doctor.WARN)
         self.assertIn("timed out", res.hint)
+
+
+class DoctorStreamsOnAThrowawayPlane(PersonaIso):
+    """The two cases that drive the whole preflight, on a throwaway plane. `run_all` reaches
+    `charter.local.toml` through the `harness profiles` row, and the real plane's file is the
+    operator's own — `tests/_planeguard` refuses the read."""
+
+    def test_doctor_yields_results_one_at_a_time(self):
+        """The streaming half: what makes a killed preflight say where it stopped."""
+        it = doctor.iter_all()
+        first = next(it)
+        self.assertIsInstance(first, doctor.Result)
+        self.assertTrue(first.name)
+
+    def test_run_all_still_returns_them_all(self):
+        self.assertEqual(len(doctor.run_all()), len(list(doctor.iter_all())))
 
 
 if __name__ == "__main__":
