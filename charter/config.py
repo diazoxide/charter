@@ -24,7 +24,6 @@ from pathlib import Path
 
 from . import instance as _instance
 from . import legacyenv as _legacyenv
-from . import profiles as _profiles
 from . import root as _root
 
 #: Fallbacks used when a control plane declares nothing (or none was found).
@@ -714,20 +713,11 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: charter does not recognise degrades to exactly that.
     d["UPDATE"] = _instance.update_of(cfg)
 
-    #: Every harness profile this machine has — the built-ins and what `charter.local.toml`
-    #: declares — and every declared one refused, with its reason. See `charter.profiles`.
-    #:
-    #: Derived BEFORE ``HARNESS`` (review 14): what ``[harness] default`` resolves against is
-    #: read off the profiles. A file read and nothing more — no git call and no subprocess —
-    #: because every hook process runs this derivation. Whether git would carry the file is
-    #: `profiles.ignore_check`, which `charter harness list` and `charter doctor` run —
-    #: including the doctor the SessionStart hook runs, until the plan's Task 4 gives it a
-    #: `--preflight` mode (ruling 40).
-    #:
-    #: Held as `ProfileSet._asdict()`, and `profiles.current` rebuilds the tuple: the read
-    #: guard in `tests/_planeguard` stands a refusing `dict` in for a guarded setting, and it
-    #: can stand in for nothing else.
-    d["PROFILES"] = _profiles.derive(root, cfg)._asdict()
+    # Harness profiles are deliberately NOT derived here (ruling 43, superseding review 14):
+    # nothing reads `charter.local.toml` and no `charter.profiles` code runs on this path.
+    # Every command and every hook process derives config, so a read here was paid on every
+    # tool call, and the deletion sweep charged each line of `charter.profiles` to the whole
+    # suite. `profiles.current()` reads and validates the file when a surface asks.
 
     #: What bare ``charter`` launches — ``{"default": None, "refused": None}`` unless the
     #: plane opts in with ``[harness] default``. ``default`` is a name out of charter's own

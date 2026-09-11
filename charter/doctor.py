@@ -695,15 +695,13 @@ def check_harness_profiles() -> Result:
     """This machine's harness profiles, as `charter.local.toml` declares them now — and
     whether git would carry that file.
 
-    Read from `instance.load` and `profiles.derive` rather than `config.PROFILES`, the way the
-    `charter.toml` row reads `instance.harness_of`: the row is about the FILE, and `derive`
-    ran before anybody could have fixed it. Through `profiles.current`, so a name that clashes
-    with a command reads here as it does everywhere else.
+    Through `profiles.current()`, the one reader (ruling 43): it reads the file as it is now,
+    and applies the refusals every surface sees, a name that clashes with a command included.
 
-    The git check lives here and not in `derive` because a person runs `doctor`, and every
-    hook process runs `derive` — though `charter doctor` is also what the SessionStart hook
-    runs, so until doctor has a preflight mode, a session start on a plane with the file
-    pays this one lock-free `git status`. `profiles.ignore_check` never raises, so one slow
+    The git check lives here and not in `profiles.current()` because a person runs `doctor` —
+    though `charter doctor` is also what the SessionStart hook runs, so until doctor has a
+    preflight mode, a session start on a plane with the file pays this one lock-free
+    `git status`. `profiles.ignore_check` never raises, so one slow
     git costs this row and nothing more: `_checks` builds every row in one list with no
     per-check guard.
 
@@ -711,19 +709,13 @@ def check_harness_profiles() -> Result:
     that fixes a committable file only. WARN rather than FAIL even for a tracked file: its
     profiles are refused, so nothing runs.
     """
-    from . import config as _config, instance as _instance, profiles
+    from . import config as _config, profiles
 
     name = "harness profiles"
     check = profiles.ignore_check(_config.ROOT)
     if check.reason:
         return Result(name, WARN, detail=check.reason, hint=check.fix)
-    # A malformed `charter.toml` is the `charter.toml` row's to name; this row still reads
-    # the local file rather than reporting on nothing.
-    try:
-        cfg = _instance.load(_config.ROOT)
-    except Exception:
-        cfg = {}
-    profile_set = profiles.current(profiles.derive(_config.ROOT, cfg))
+    profile_set = profiles.current()
     names = ", ".join(profile_set.profiles)
     refused = profile_set.refused
     if refused:

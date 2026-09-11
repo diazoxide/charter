@@ -15,11 +15,18 @@ round trip through the constant cannot pin the name an operator types.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from charter import cli, config, instance, profiles
+from tests import _envguard, _isolation
 from tests._isolation import PersonaIso
+
+#: The checkout these tests were loaded from: a child `python -c` run here imports it.
+REPO = Path(__file__).resolve().parents[1]
 
 #: The spec's own example: a second Claude Code account in its own config folder.
 _WORK = """
@@ -46,11 +53,9 @@ class _LocalFile(PersonaIso):
         (config.ROOT / "charter.local.toml").write_text(text)
         return profiles.derive(config.ROOT, instance.load(config.ROOT))
 
-    def _current(self, text: str) -> dict:
+    def _current(self, text: str) -> profiles.ProfileSet:
+        # `profiles.current()` reads the file itself (ruling 43): nothing to re-derive.
         (config.ROOT / "charter.local.toml").write_text(text)
-        # Re-derived, so `config.PROFILES` is this plane's; `PersonaIso`'s own snapshot is
-        # the one its cleanup puts back.
-        config.use(config.ROOT)
         return profiles.current()
 
     def _charter_toml(self, text: str) -> None:
@@ -432,22 +437,94 @@ class NamesThatClashWithACommand(_LocalFile):
         self.assertNotIn("claude", cli.command_words())
 
 
-class TheConfigReadIsCheap(_LocalFile):
-    def test_deriving_profiles_runs_no_subprocess(self):
-        """Every hook process runs `config.derive`, and `hooks/hooks.json` fires on Bash,
-        Read, Grep, Write, Edit, Task, Skill and SendMessage — so the git check belongs to
-        the surfaces a person runs, never to this read. The file here is one git would
-        commit, which is exactly when a git call would be tempting."""
+class ReadingProfilesIsCheap(_LocalFile):
+    def test_reading_profiles_runs_no_subprocess(self):
+        """The git check belongs to the ignore check a surface asks for, never to the read
+        itself. The file here is one git would commit, which is exactly when a git call in
+        the read would be tempting."""
         (config.ROOT / "charter.local.toml").write_text(_WORK)
-        with mock.patch("subprocess.run", side_effect=AssertionError("a config read ran git")), \
-             mock.patch("subprocess.Popen", side_effect=AssertionError("a config read spawned")):
-            config.use(config.ROOT)
-        self.assertIn("claude-work", config.PROFILES["profiles"])
+        with mock.patch("subprocess.run", side_effect=AssertionError("reading profiles ran git")), \
+             mock.patch("subprocess.Popen", side_effect=AssertionError("reading profiles spawned")):
+            read = profiles.current()
+        self.assertIn("claude-work", read.profiles)
 
-    def test_config_carries_the_profiles(self):
+
+class ImportingConfigReadsNoProfile(unittest.TestCase):
+    """Ruling 43. `config.derive` runs for every command and every hook process, so a profile
+    read there is paid on every tool call — and the deletion sweep charged every line of
+    `charter.profiles` to the whole suite, 347 test modules a mutation, which no CI shard could
+    finish. So importing config opens no `charter.local.toml` and runs no profiles code, and
+    `profiles.current()` reads the file when a surface asks."""
+
+    def setUp(self) -> None:
+        # Outside a frame, with no session id: stated rather than inherited from the shell.
+        _envguard.unset_all()
+
+    def test_importing_config_opens_no_local_file_and_runs_no_profiles_code(self):
+        plane, env = _isolation.child_plane_env(self)
+        (plane / "charter.local.toml").write_text(_WORK)
+        probe = (
+            "import sys\n"
+            "opened = []\n"
+            "sys.addaudithook(lambda event, args: opened.append(str(args[0])) "
+            "if event == 'open' and 'charter.local.toml' in str(args[0]) else None)\n"
+            "import charter.config\n"
+            "print('charter.profiles' in sys.modules, bool(opened), "
+            "hasattr(charter.config, 'PROFILES'))\n")
+        done = subprocess.run([sys.executable, "-c", probe], cwd=REPO, env=env,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.stdout.strip(), "False False False", done.stderr)
+
+    def test_config_derives_no_profiles(self):
+        """Ruling 43 supersedes review 14's "PROFILES derived before HARNESS"."""
+        self.assertNotIn("PROFILES", config.DERIVED)
+
+
+class BareCharterIsUnchanged(_LocalFile):
+    def test_a_local_default_naming_a_declared_profile_leaves_the_harness_default_alone(self):
+        """Pin, ruling 43 point 3. Bare `charter` reads `config.HARNESS`, which keeps exactly
+        `charter.toml`'s `[harness] default`: a local `default` naming a declared profile must
+        not reach it until launching a profile exists — while `harness list` and doctor, which
+        ask `profiles.current()`, still see it."""
+        for committed in ("", '[harness]\ndefault = "codex"\n'):
+            with self.subTest(committed=committed):
+                self._charter_toml(committed)
+                (config.ROOT / "charter.local.toml").unlink(missing_ok=True)
+                config.use(config.ROOT)
+                without = dict(config.HARNESS)
+                (config.ROOT / "charter.local.toml").write_text(
+                    '[harness]\ndefault = "claude-work"\n' + _WORK)
+                config.use(config.ROOT)
+                self.assertEqual(dict(config.HARNESS), without)
+                self.assertEqual(profiles.current().default, "claude-work")
+
+
+class CurrentIsReadOncePerFile(_LocalFile):
+    """`profiles.current()` is memoized per process (ruling 43), and the memo is keyed on what
+    the two files hold, so an edit is read again without anybody re-deriving config."""
+
+    def test_the_answer_is_memoized_while_the_files_are_unchanged(self):
         (config.ROOT / "charter.local.toml").write_text(_WORK)
-        config.use(config.ROOT)
-        self.assertIn("claude-work", config.PROFILES["profiles"])
+        self.assertIs(profiles.current(), profiles.current())
+
+    def test_an_edited_local_file_is_read_again(self):
+        (config.ROOT / "charter.local.toml").write_text(_WORK)
+        self.assertIn("claude-work", profiles.current().profiles)
+        (config.ROOT / "charter.local.toml").write_text(_OK)
+        now = profiles.current()
+        self.assertIn("ok", now.profiles)
+        self.assertNotIn("claude-work", now.profiles)
+
+    def test_an_edited_charter_toml_is_read_again(self):
+        self._charter_toml('[harness]\ndefault = "codex"\n')
+        self.assertEqual(profiles.current().default, "codex")
+        self._charter_toml('[harness]\ndefault = "opencode"\n')
+        self.assertEqual(profiles.current().default, "opencode")
+
+    def test_the_file_is_the_one_other_places_spell_out(self):
+        """`commands.LOCAL_PROFILES_IGNORE` and `tests/_planeguard` spell the name rather than
+        import this module (ruling 43: importing it would put it on every import path)."""
+        self.assertEqual(profiles.LOCAL_FILE, "charter.local.toml")
 
 
 class TheSentencesSayOnlyWhatIsTrueNow(unittest.TestCase):
@@ -460,11 +537,6 @@ class TheSentencesSayOnlyWhatIsTrueNow(unittest.TestCase):
                     self.assertNotIn("selector", value.lower())
 
 
-class ProfilesAreDerivedBeforeTheHarnessDefault(unittest.TestCase):
-    def test_profiles_come_first(self):
-        """Review 14: what `[harness] default` resolves against is read off the profiles, so
-        they have to exist by the time it is derived."""
-        self.assertLess(config.DERIVED.index("PROFILES"), config.DERIVED.index("HARNESS"))
 
 
 if __name__ == "__main__":

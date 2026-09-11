@@ -14,12 +14,15 @@ committed file could be changed by a merged PR or by a chat and then run on ever
 carries `[harness]` and nothing else: a full overlay would let an ignored file change plane
 policy — `[[forge]]` hosts steer the credential guard — with no trace in git.
 
-**Reading costs no subprocess.** :func:`derive` runs inside `config.derive`, which every
-hook process runs, and `hooks/hooks.json` fires on Bash, Read, Grep, Write, Edit, Task, Skill
-and SendMessage. The one git call — would git carry this file? — is :func:`ignore_check`,
-and `charter harness list` and `charter doctor` ask it. Doctor is also what the SessionStart
-hook runs, so until the plan's Task 4 gives it a `--preflight` mode, a session start on a
-plane that has the file pays that one lock-free `git status` (ruling 40).
+**Nothing here runs on import (ruling 43).** `config` reads nothing from
+`charter.local.toml` and runs none of this code: every command and every hook process
+derives config, and `hooks/hooks.json` fires on Bash, Read, Grep, Write, Edit, Task, Skill
+and SendMessage — and the deletion sweep charged every line imported there to the whole
+suite. :func:`current` reads and validates the file when a surface asks — `charter harness
+list` and `charter doctor` today — and runs no subprocess. The one git call — would git
+carry this file? — is :func:`ignore_check`, asked by the same two surfaces. Doctor is also
+what the SessionStart hook runs, so until the plan's Task 4 gives it a `--preflight` mode, a
+session start on a plane that has the file pays that one lock-free `git status` (ruling 40).
 
 **A broken profile is refused alone, by name, with its reason**, and the rest still load.
 `[[frame.component]]` refuses its whole arrangement over one bad entry, and that is the right
@@ -106,9 +109,7 @@ class ProfileSet(NamedTuple):
 
     :func:`derive`, :func:`current` and :func:`with_ignore_check` all answer in this shape,
     so a caller reads attributes, and a misspelt one is an `AttributeError` at the line that
-    misspelt it rather than a `KeyError` wherever the dict was next read. `config.PROFILES`
-    holds it as ``._asdict()``, for one reason: `tests/_planeguard` refuses a test's read of a
-    setting by standing a refusing `dict` in for it, and it can stand in for nothing else.
+    misspelt it rather than a `KeyError` wherever the dict was next read.
     """
     profiles: dict[str, Profile]
     refused: tuple[Refused, ...]
@@ -277,8 +278,8 @@ def _profile_refusal(name: str, table, kinds: dict) -> str:
 def derive(root: Path, cfg: dict) -> ProfileSet:
     """Every profile this plane has, and every declared one refused with its reason.
 
-    Never raises and runs no subprocess: `config.derive` calls it for every command and
-    every hook, `charter --version` included.
+    Never raises and runs no subprocess. :func:`current` is its one caller outside the
+    tests, and nothing calls it on import (ruling 43).
 
     1. The built-ins, in registry order.
     2. `charter.toml`'s `[harness]`: a table there is refused with a pointer to the local
@@ -372,9 +373,30 @@ def _narrowed(derived: ProfileSet, found: dict, refused: list) -> ProfileSet:
                             default_refused=default_refused)
 
 
-def current(derived: ProfileSet | None = None) -> ProfileSet:
-    """:func:`derive`'s answer — ``config.PROFILES`` unless *derived* is given — with the two
-    refusals that need charter's own commands to decide.
+#: The last answer :func:`current` gave, with the key it was computed for: the plane's root
+#: and the bytes its two files held. One slot, per process — a second caller asks no parse
+#: and no validation again, and an edit changes the key, so the answer is never stale.
+_last: list = []
+
+
+def _bytes(path: Path) -> bytes | None:
+    """*path*'s bytes, or ``None`` when there is nothing to read — part of a memo key."""
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def current() -> ProfileSet:
+    """Every profile this plane has, validated — the one place profiles are read (ruling 43).
+
+    `config` reads nothing from `charter.local.toml`, so this reads `charter.toml` and the
+    local file itself, as they are now: `charter harness list` and `charter doctor` call it
+    today, and the launcher, bare launch, `+` and the selector will from Task 2 on. The
+    local `default` is resolved here and nowhere else, which is why `config.HARNESS` — what
+    bare `charter` launches — stays exactly `charter.toml`'s.
+
+    On top of :func:`derive`, the two refusals that need charter's own commands to decide:
 
     - A name `charter <name>` already means (`cli.command_words`), with
       :data:`CLASHING_NAME`. The kind clash in `cli._add_frame_parsers` raises at
@@ -384,15 +406,21 @@ def current(derived: ProfileSet | None = None) -> ProfileSet:
       `hooks._is_charter` already knows `charter`, `edm` and `python -m charter`, so there is
       no second list.
 
-    A separate pass because `config.derive` runs before `cli` and `hooks` can be imported,
-    and importing either there would be a cycle. Every surface reads this, never
-    ``config.PROFILES`` directly. *derived* is for a caller whose question is the file as it
-    is now rather than as this process derived it — `doctor`'s row.
+    Memoized per process, keyed on what the two files hold (:data:`_last`).
     """
-    from . import cli, config, hooks
+    from . import cli, config, hooks, instance
 
-    if derived is None:
-        derived = ProfileSet(**config.PROFILES)
+    root = Path(config.ROOT)
+    key = (str(root), _bytes(root / LOCAL_FILE), _bytes(root / _root.MARKER))
+    if _last and _last[0][0] == key:
+        return _last[0][1]
+    try:
+        cfg = instance.load(root)
+    except Exception:
+        # A malformed or too-new `charter.toml` is the `charter.toml` doctor row's to name;
+        # the local file is still read rather than reporting on nothing.
+        cfg = {}
+    derived = derive(root, cfg)
     words = cli.command_words()
     found = dict(derived.profiles)
     refused = list(derived.refused)
@@ -406,7 +434,9 @@ def current(derived: ProfileSet | None = None) -> ProfileSet:
             continue
         del found[name]
         refused.append(Refused(shown, p.source, reason))
-    return _narrowed(derived, found, refused)
+    answer = _narrowed(derived, found, refused)
+    _last[:] = [(key, answer)]
+    return answer
 
 
 def with_ignore_check(derived: ProfileSet, check: IgnoreCheck) -> ProfileSet:

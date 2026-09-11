@@ -365,11 +365,7 @@ def _guard_os(name: str, *, arg: int = 0, both: bool = False) -> None:
 #: run it. Values that are dicts, and only dicts: the refusal works by handing back an
 #: object that will not answer, and a `str` or a `Path` cannot be made to refuse without
 #: breaking the formatting of every message that legitimately quotes it.
-#:
-#: ``PROFILES`` is the same shape with the dial turned up: it is read off
-#: ``charter.local.toml``, a file that by design exists on one machine and in no commit, so a
-#: test reading the developer's own profiles asserts against a fixture no other run can see.
-_GUARDED_SETTINGS = ("UPDATE", "HARNESS", "PROFILES")
+_GUARDED_SETTINGS = ("UPDATE", "HARNESS")
 
 
 class RealPlaneRead(BaseException):
@@ -1769,11 +1765,12 @@ def install() -> None:
     #
     # `charter.local.toml` beside each, for the reason the marker is guarded and one more: it
     # holds which command a click runs on this machine, and it is in no commit, so a test that
-    # rewrote it would leave nothing to restore it from.
-    from charter import profiles as _profiles
+    # rewrote it would leave nothing to restore it from. Spelled out rather than imported
+    # from `charter.profiles`: this runs as the `tests` package is imported, ruling 43 keeps
+    # that module off every import path, and a test keeps the two names the same.
     markers = tuple(dict.fromkeys(
         m for r in (str(config.ROOT), *plane)
-        for name in (_root.MARKER, _profiles.LOCAL_FILE)
+        for name in (_root.MARKER, "charter.local.toml")
         for m in _both_spellings(Path(r) / name)))
     _REAL = ((written,) if written == resolved else (written, resolved)) + markers
 

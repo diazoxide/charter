@@ -105,6 +105,12 @@ class InitAndReinitIgnoreIt(InitIso):
         self.assertEqual(self._gitignore().read_bytes(), before)
         self.assertNotIn("charter.local.toml", self.said.getvalue())
 
+    def test_the_ignore_line_names_the_file_profiles_reads(self):
+        """`LOCAL_PROFILES_IGNORE` spells the name instead of importing `charter.profiles`
+        (ruling 43), so this is what keeps the ignored file and the read file the same one."""
+        from charter import profiles
+        self.assertEqual(commands.LOCAL_PROFILES_IGNORE, "/" + profiles.LOCAL_FILE)
+
     def test_the_backfill_says_whether_it_wrote(self):
         """`reinit` reports what it changed, not what it asked for (ADR 0013)."""
         self._gitignore().write_text(_BEFORE)

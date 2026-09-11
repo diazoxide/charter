@@ -7,8 +7,8 @@ import json
 import re
 from pathlib import Path
 
-from . import (config, contain, docsrc, doctor, gitstate, instance, inventory, profiles,
-               render, tui, util, workspace, worktree)
+from . import (config, contain, docsrc, doctor, gitstate, instance, inventory, render,
+               tui, util, workspace, worktree)
 # One committer for the control plane, in charter/planegit.py. Re-exported rather
 # than moved-and-updated so every existing caller and test keeps working — the point
 # of the extraction is that there is ONE implementation, not that callers churn.
@@ -1661,9 +1661,10 @@ def _ensure_local_settings_ignored(root: Path) -> None:
 #: profile's command runs on a click with no permission prompt in between, so the file it
 #: lives in is safe only while git will not carry it (harness-profiles spec, *Where profiles
 #: live*). In the baseline for a fresh plane, and backfilled by `reinit` for one made before
-#: it — `LOCAL_SETTINGS_IGNORE`'s shape, for the same reason. Built from the filename
-#: `profiles` reads, so the two cannot name different files.
-LOCAL_PROFILES_IGNORE = "/" + profiles.LOCAL_FILE
+#: it — `LOCAL_SETTINGS_IGNORE`'s shape, for the same reason. Spelled out rather than built
+#: from `profiles.LOCAL_FILE`: importing `charter.profiles` here would put it on the import
+#: path of every command (ruling 43), and a test keeps the two naming the same file.
+LOCAL_PROFILES_IGNORE = "/charter.local.toml"
 
 
 def _ensure_local_profiles_ignored(root: Path) -> bool:

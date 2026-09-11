@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 
-from . import config, contain, profiles, tui, util
+from . import config, contain, tui, util
 from .harness import codex, registry
 
 
@@ -33,6 +33,10 @@ def _list_profiles() -> None:
     read. When git would carry the file, every profile it declares is listed refused with
     that state's reason (F1), and one line names the state's fix.
     """
+    # Imported here and not at the top: `cli` imports this module for every command, and
+    # ruling 43 keeps `charter.profiles` off every command's import path.
+    from . import profiles
+
     check = profiles.ignore_check(config.ROOT)
     profile_set = profiles.with_ignore_check(profiles.current(), check)
     order = list(profiles.builtins())
