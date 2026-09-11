@@ -156,6 +156,7 @@ class ProcError(RuntimeError):
 def run(
     cmd: Sequence[str], cwd=None, check: bool = True, capture: bool = True,
     input: str | None = None, env: dict | None = None, timeout: float | None = None,
+    unset: Sequence[str] = (),
 ) -> subprocess.CompletedProcess:
     """Run ``cmd``. Raises :class:`ProcError` on failure when ``check``.
 
@@ -178,6 +179,11 @@ def run(
     ``VAULT_TOKEN``) for the duration of one call, without charter ever setting it on
     itself — a mutated `os.environ` would outlive the call and silently apply to the next
     vault, which is the identity confusion the whole feature exists to prevent.
+
+    ``unset`` names variables the child must NOT inherit, which an overlay cannot say: it can
+    only add. ``GIT_DIR`` exported by a git hook points every git the child runs at that hook's
+    repository whatever ``-C`` says — measured in #942's review round 3, where
+    ``git worktree list`` answered for the plane and a clone's exclude line was dropped.
     """
     overlay = dict(env or {})
     if cmd and cmd[0] == "git":
@@ -200,6 +206,10 @@ def run(
     child_env = None
     if overlay:
         child_env = {**os.environ, **{k: v for k, v in overlay.items() if v is not None}}
+    if unset:
+        # After the overlay, so neither the inherited environment nor an overlay can put a
+        # withheld name back.
+        child_env = {k: v for k, v in (child_env or os.environ).items() if k not in unset}
     try:
         proc = subprocess.run(
             list(cmd),

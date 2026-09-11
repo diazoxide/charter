@@ -76,3 +76,12 @@ sync step, and nothing that can drift, because there is only one record.
   is the failure shape this repo keeps paying for (#177, #197).
 * If Claude Code ever gains directory-scoped rules, three more guards become expressible and
   this decision should be revisited rather than defended.
+* **"Every engineer on the repo gets the same list" was true of the FILE and false of the
+  chats** (#942). The host reads project settings from the session's own directory and does
+  not walk up, and a framed chat stands in `workspaces/<ws>/` — so a rule written here was
+  not in force in the directory where the guarded command is typed, and nothing said so.
+  One record is still the decision; what it cost was a *generated* copy per workspace and
+  per checkout, carrying `permissions.ask` and `permissions.deny` and never `permissions.
+  allow`. That asymmetry is the decision's shape rather than an exception to it: charter
+  carries the host's rules where the host will read them, and a restriction can travel
+  where a grant must not.

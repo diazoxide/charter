@@ -285,6 +285,10 @@ class TheReportIsInAStableOrder(CloneLayer):
         listed = [ln for ln in self.excludes().splitlines() if ln.startswith("/")]
         self.assertEqual(listed, ["/.claude/agents/alpha.md", "/.claude/settings.json",
                                   f"/{workspace.GENERATED_MARKER}"])
+        # Charter's temp-file name, UNANCHORED and spelled by hand (#942 review round 5, R1): a
+        # temp is written beside every file charter writes, so one line covers `.claude/` and
+        # `.claude/agents/` as well as the checkout root.
+        self.assertIn(".charter-generated.*.tmp", self.excludes().splitlines())
 
     def test_what_unwiring_reports_removing_is_sorted(self):
         """The persona arrives AFTER the first wire, for `test_the_block_stays_sorted_when
@@ -364,7 +368,10 @@ class TheWriteIsIdempotent(CloneLayer):
         self.wire()
         text = self.excludes()
         self.assertIn("*.tmp", text)
-        self.assertEqual(text.count("*.tmp"), 1)
+        # Whole lines, not a substring count: charter's own block now carries
+        # `/.charter-generated.*.tmp` (#942 review round 3), which contains `*.tmp` and would read
+        # as the operator's line doubled when it is exactly once, where they wrote it.
+        self.assertEqual(text.splitlines().count("*.tmp"), 1)
         self.assertIn(workspace._EXCLUDE_BEGIN, text)
 
     def test_an_unterminated_block_is_replaced_rather_than_doubled(self):
@@ -436,15 +443,32 @@ class AFileCharterDidNotWrite(CloneLayer):
         self.assertNotIn(".git/info/exclude", rows)
         self.assertNotIn(workspace._EXCLUDE_BEGIN, self.excludes())
 
-    def test_a_path_the_operator_takes_over_stops_being_hidden(self):
-        """charter wrote it, then they rewrote it. The marker no longer vouches for the
-        content, so the next wire drops it from the block and their edit becomes visible
-        to them again."""
+    def test_a_path_the_operator_takes_over_stays_hidden_is_never_overwritten_and_is_named(self):
+        """charter wrote it, then they rewrote it.
+
+        **Reversed in #942 review round 5 (ruling R2).** This case used to assert that the next
+        wire dropped the file from the block, so their edit showed in `git status` again. That
+        rule — a record's digest deciding a line leaves — is the rule a launch race used to drop
+        the line for charter's own generated `settings.json`, which carries the plane's rules
+        and `env`: committed by accident into a shared repository, it changes teammates'
+        settings. Hidden while it is there is the safe direction, and a reversible one: charter
+        never overwrites the file, and doctor names it and says how to commit it on purpose."""
         self.wire()
         self.assertIn("/.claude/settings.json", self.excludes())
-        (self.clone / ".claude" / "settings.json").write_text('{"env": {"X": "1"}}\n')
+        theirs = '{"env": {"X": "1"}}\n'
+        p = self.clone / ".claude" / "settings.json"
+        p.write_text(theirs)
         self.wire()
-        self.assertNotIn("/.claude/settings.json", self.excludes())
+        self.assertIn("/.claude/settings.json", self.excludes())
+        self.assertEqual(self.status(), "")
+        self.assertEqual(p.read_text(), theirs)
+        _isolation.make_plane(self)      # doctor's check answers only inside a real plane
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/svc/.claude/settings.json (foreign)", r.detail)
+        self.assertIn("if this is your own file and you mean to commit it: "
+                      "git add -f .claude/settings.json", r.hint)
+        self.assertNotIn("Remove", r.hint)
+        self.assertNotIn("delet", r.hint)
 
 
 class TheExcludeIsReported(CloneLayer):
@@ -687,7 +711,9 @@ class WhatCannotBeReadOrWritten(CloneLayer):
         p.mkdir()
         rows = dict(workspace.guest_layer(self.clone))
         self.assertEqual(rows[".claude/settings.json"], "unreadable")
-        self.assertEqual(dict(self.wire())[".claude/settings.json"], "foreign")
+        # One state, one name (#942 review round 3): the write reported `foreign` here, and
+        # `foreign`'s sentences advise removing a path charter only failed to read.
+        self.assertEqual(dict(self.wire())[".claude/settings.json"], "unreadable")
 
     def test_a_workspace_that_does_not_exist_has_no_guests(self):
         self.assertEqual(workspace.guest_trees("never-made"), [])
@@ -788,6 +814,20 @@ class RemovingAWorkspaceWithAWorktree(CloneLayer):
     def test_the_block_is_gone_from_the_main_repo(self):
         main_exclude = self.main / "svc-main" / ".git" / "info" / "exclude"
         self.assertIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
+        workspace.unwire_guests(self.ws)
+        self.assertNotIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
+
+    def test_a_main_repo_holding_a_file_at_a_charter_path_keeps_no_line_for_it(self):
+        """#942 review round 5, R2: a line stays while its path is there IN A CHECKOUT CHARTER
+        WIRES. The main repo is not one — outside the plane's workspaces, no marker — so its own
+        untracked `.claude/settings.json` does not keep charter's block in that repository once
+        the workspace holding its worktree goes."""
+        main = self.main / "svc-main"
+        (main / ".claude").mkdir(exist_ok=True)
+        (main / ".claude" / "settings.json").write_text('{"env": {"MAINS_OWN": "1"}}\n')
+        main_exclude = main / ".git" / "info" / "exclude"
+        self.assertIn("/.claude/settings.json", main_exclude.read_text(),
+                      "fixture: the worktree's wire did not name the path")
         workspace.unwire_guests(self.ws)
         self.assertNotIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
 

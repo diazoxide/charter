@@ -515,5 +515,51 @@ class UnrecognizedForgeIsUnmanagedCase(unittest.TestCase):
         self.assertEqual(forge.kind, "gitlab")
 
 
+class TheScopeScanIsExact(unittest.TestCase):
+    """What the deletion sweep asks of `gitpolicy.scan`, which `repos` and doctor's `git auth` row
+    both read (#942 final review)."""
+
+    def plane(self) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="edm-scan5-"))
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        return root
+
+    def git_init(self, p: Path) -> Path:
+        p.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(p)], check=True, capture_output=True,
+                       env={**os.environ, **_ENV})
+        return p
+
+    def test_a_root_that_is_no_repository_is_not_in_scope(self):
+        root = self.plane()
+        clone = self.git_init(root / "workspaces" / "w" / "repoA")
+        self.assertEqual(gitpolicy.repos(root, root / "workspaces"), [clone])
+
+    def test_a_directory_in_a_workspace_that_is_no_repository_is_not_in_scope(self):
+        root = self.git_init(self.plane())
+        (root / "workspaces" / "w" / "memory").mkdir(parents=True)
+        # And it is not "cannot be checked" either: a directory with no `.git` is a plain answer,
+        # which doctor must not name (#942 closing verification).
+        self.assertEqual(gitpolicy.scan(root, root / "workspaces"), ([root], []))
+
+    def test_a_file_among_the_workspaces_is_passed_over(self):
+        """Finder leaves a `.DS_Store` in any directory it has shown."""
+        root = self.git_init(self.plane())
+        (root / "workspaces").mkdir()
+        (root / "workspaces" / ".DS_Store").write_bytes(b"\0")
+        self.assertEqual(gitpolicy.repos(root, root / "workspaces"), [root])
+
+    def test_repositories_come_back_in_path_order_whatever_order_the_directory_lists(self):
+        root = self.git_init(self.plane())
+        zeta = self.git_init(root / "workspaces" / "alpha" / "zeta")
+        eta = self.git_init(root / "workspaces" / "alpha" / "eta")
+        theta = self.git_init(root / "workspaces" / "beta" / "theta")
+        real = Path.iterdir
+        with mock.patch.object(Path, "iterdir",
+                               lambda self: iter(sorted(real(self), reverse=True))):
+            found = gitpolicy.repos(root, root / "workspaces")
+        self.assertEqual(found, [root, eta, zeta, theta])
+
+
 if __name__ == "__main__":
     unittest.main()

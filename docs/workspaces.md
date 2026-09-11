@@ -31,14 +31,95 @@ workspace tab put it — would therefore get no plugin and no `$CHARTER_HARNESS`
 agents and skills arrived anyway, because those *do* walk up and this directory is not a
 git boundary.
 
-So charter generates one file here, at launch: `.claude/settings.json`, holding the plane's
-own `enabledPlugins` and `env` and nothing else. Skills come with the plugin and agents
-already walk up; a second copy of either would shadow the plugin's.
+So charter generates `.claude/settings.json` here, at launch: the plane's own
+`enabledPlugins` and `env`, plus the **restrictive half** of its `permissions`. Skills come
+with the plugin and agents already walk up; a second copy of either would shadow the
+plugin's.
 
-`statusLine` was the third key mirrored here until 0.57.0. Charter no longer writes one
+`statusLine` was a third key mirrored here until 0.57.0. Charter no longer writes one
 into any settings file, so there is nothing of charter's under that key to carry sideways
-— and a `statusLine` an operator wired themselves stays where they put it, the way
-`permissions` always has.
+— and a `statusLine` an operator wired themselves stays where they put it.
+
+### Your `guard ask` rules come with it
+
+`permissions.ask` and `permissions.deny` travel. **`permissions.allow` never does.** A grant
+copied sideways puts a permission in force in a directory nobody clicked for it in; a
+restriction is the opposite — it adds a prompt or a refusal and can make nothing run — so
+leaving it behind was what made `charter guard ask 'terraform apply *'` *not* prompt in the
+workspace chat that would run `terraform apply`, while the command said the rule applied to
+everyone on the repo.
+
+A `--local` rule reaches a workspace directory without being copied. Measured on Claude Code
+2.1.267 (git 2.50.1), with `claude -p` against a `deny` in throwaway repositories:
+
+| the rule is in | the session starts in | result |
+|---|---|---|
+| the git root's `.claude/settings.local.json` | a subdirectory | blocked |
+| the subdirectory's own `.claude/settings.local.json` | that subdirectory | blocked |
+| the git root's `.claude/settings.json` | a subdirectory | ran |
+| the outer repo's `.claude/settings.local.json` | a clone nested inside it | ran |
+| the clone's own `.claude/settings.local.json` | that clone | blocked |
+| the main checkout's `.claude/settings.local.json` | a linked worktree of it | blocked |
+
+So the local file is read at the git root as well as in the starting directory — the docs
+date that to 2.1.211 — and the shared file is not. `workspaces/<name>/` sits inside the
+plane's own repository, so the plane's `.claude/settings.local.json` is already in force
+there and charter generates no copy. A clone is a git root of its own, so it gets a
+generated `.claude/settings.local.json` holding the plane's local `ask` and `deny` — separate
+from the shared file, so a decision that is yours on this machine does not arrive looking
+like the team's.
+
+**In a clone that file is shared with Claude Code**, which saves "Yes, and don't ask again"
+into it. Charter writes the clone's `.git/info/exclude` entry *before* the file, and writes
+no local file at all where the exclude cannot be written: a machine-local rule it cannot hide
+would be committable, and `guard ask`, `workspace reinit` and `clone` each say so in a
+sentence of its own. Once Claude Code has added its own approvals, charter keeps the file
+hidden for as long as it exists, never rewrites it and never merges into it — and "hidden"
+holds across the repository: a clone and its linked worktrees read one `.git/info/exclude`,
+so charter's block there lists what every one of them needs, and the local file's line stays
+while that file exists in any of them, whatever charter's own records say. Once the file is
+gone and the plane no longer declares it, its line goes. `doctor` only mentions it once the
+plane has moved on since — the plane's newer rules are then not in that file — and never
+suggests deleting a file that holds your approvals, nor one it cannot read.
+
+**A file charter wrote in a clone stays hidden while it is there**, whatever charter's own
+records say — a generated file, its `.charter-generated` record, a temp file an interrupted
+write left — in every checkout charter wires that reads the same `.git/info/exclude`. That
+includes a generated file you have since rewritten: charter never overwrites it, `doctor` names
+it `foreign`, and if it is your own file and you mean to commit it, `git add -f` it. A line goes
+only once its path is confirmed absent in all of those checkouts and the plane no longer
+declares it. While git cannot list the worktrees in time, or lists one charter cannot look into,
+every line stays, and so does a line whose path cannot be checked; a worktree git calls
+prunable is advised `git worktree prune` only when charter itself finds it gone.
+
+Charter writes each of those files whole — to a temp file beside it, flushed to disk, then
+renamed over it — so a kill leaves the old content or the new and never half of either. A temp
+file a kill leaves behind is named `.charter-generated.<pid>.<random>.tmp`, and the block hides
+that pattern anywhere in the checkout, so a file of your own whose name matches it
+(`.charter-generated.notes.tmp`) is hidden too. Before rewriting a generated file charter
+records the write as pending, and it overwrites only content one of its records lists; anything
+else is yours or the harness's. Where the record cannot be published — a checkout root that is
+not writable, a read-only or full disk — charter writes nothing there and keeps the lines.
+`doctor`'s `workspace layer` row calls the first kind of block `unaccounted` and that marker
+`unrecorded`, with the error the publish failed with, and says what clears each. A chat that
+starts in a workspace or a clone where one of the plane's ask/deny rules is not in force is
+told which rules are missing, and what fixes it.
+
+`charter guard ask` refreshes every workspace's layer as it writes, so the rule is in force
+before the command returns rather than at the next launch. It runs both ways: drop a rule
+from the plane's settings and the mirror of it is withdrawn — a file charter generated and
+no longer generates is removed, but only while its content still matches what charter wrote.
+A plane settings file that does not parse is not a plane that declares nothing: every
+workspace keeps its last good copy, and `doctor`'s `workspace layer` row names the file.
+
+Codex has no command-pattern permissions at all, so there is nothing to carry there and
+`guard ask` already says so. **opencode has one gap that stands**: it resolves `opencode.json`
+at the repository root, so a workspace *directory* already resolves to the plane's own copy
+and the rule is in force — but a clone at `workspaces/<name>/<repo>/` is a repository root of
+its own, and charter generates no `opencode.json` there. An opencode session rooted inside a
+clone does not have the plane's rules. Charter does not mirror the plane's file into a repo
+it does not own, because that file also holds grants; a *generated* checkout `opencode.json`
+carrying only the restrictive half is the honest way to close it and is not built.
 
 It is **charter's file, and only while it stays charter's**. A `.charter-generated` sidecar
 records a hash of what charter wrote. A file that still matches is refreshed when the
@@ -56,7 +137,8 @@ clone's `.gitignore`, hides only the exact paths it wrote (never a `.claude/` gl
 would take your own untracked files with it), never touches a file it did not generate, and
 removes its files and its exclude block when the workspace goes. `git status` in your repo
 is unaffected. Linked worktrees included — their `info/exclude` is the main repo's, which is
-also why removal is not just a `rm -rf`. **`CLAUDE.md` is deliberately left behind**: a guest
+also why removal is not just a `rm -rf`, and why removing a workspace takes away only the
+lines no other checkout of that repository still needs. **`CLAUDE.md` is deliberately left behind**: a guest
 hides its own files, it does not narrate the host's.
 
 **And it is every harness's layer, not Claude Code's.** What a clone cuts off is spelled by
@@ -66,7 +148,11 @@ each harness, measured against the installed binary: `.claude/agents/` and `.cla
 travels is **capability**, never a grant: `opencode.json` is read at a repository root and is
 carried by nothing, because `charter guard` keeps this plane's permission rules in it and
 copying those sideways would put an `allow` in force in a repo nobody granted it in — the
-same reason `.claude/settings.json`'s mirror is three keys and not the file.
+same reason `.claude/settings.json`'s mirror is a list of keys and not the file. A mirror
+cannot drop a key, which is the whole difference between the two mechanisms: charter
+*generates* the Claude Code settings and can therefore carry the restrictive half of
+`permissions` and leave the grants behind, and it *copies* `.opencode/agent/`, which it
+cannot.
 
 That is about a **clone**. A workspace **directory** is a different question, and there the
 ceiling stands: only Claude Code binds config to the directory a session starts in.

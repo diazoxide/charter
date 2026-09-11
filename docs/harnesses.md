@@ -130,8 +130,19 @@ is **capability** — agents, skills, commands — and three things are delibera
 - **A harness's config file.** `opencode.json` is read at a repository root, so a clone does
   stop seeing the plane's copy — and `charter guard` keeps this plane's `permission` grants
   in that same file. Copying it would put an `allow` in force in a repository nobody granted
-  it in, which is what `.claude/settings.json`'s three mirrored keys already refuse for
-  Claude Code. A mirror cannot drop a key; that is the difference between the two lists.
+  it in, which is what `.claude/settings.json`'s mirrored keys already refuse for
+  Claude Code. A mirror cannot drop a key; that is the difference between the two lists —
+  and it is why Claude Code's settings arrive **generated** instead: `permissions.ask` and
+  `permissions.deny` from the plane's shared file into a workspace's and a clone's
+  `.claude/settings.json`, and from its local file into a clone's own
+  `.claude/settings.local.json` only, never `permissions.allow` (#942). Claude Code reads
+  the local file at the git root (measured on 2.1.267), which a workspace directory shares
+  with the plane and a clone does not — see *A chat standing here gets charter* in
+  `docs/workspaces.md` for the measurement and for how charter keeps that file hidden once
+  Claude Code writes its own approvals into it.
+  The consequence for opencode is a standing gap and not a silence: a session rooted inside
+  a clone does not have the plane's `guard ask` rules. A generated checkout `opencode.json`
+  carrying only the restrictive half is the route, and is not built.
 - **A project `.codex/config.toml`**, because Codex ignores it — writing it would look like
   wiring while being inert.
 - **`CLAUDE.md` or any equivalent**, because a guest hides its own files and does not

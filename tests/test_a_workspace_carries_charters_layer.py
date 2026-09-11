@@ -80,9 +80,25 @@ class WhatIsWritten(WorkspaceLayer):
             (config.ROOT / ".claude" / "settings.json").read_text()),
             "fixture no longer carries the key this test is about")
 
-    def test_the_planes_other_keys_stay_in_the_plane(self):
-        """A `permissions` block is the plane's decision about the plane's own root."""
+    def test_a_grant_alone_leaves_the_permissions_key_out_entirely(self):
+        """An `allow` is the plane's decision about the plane's own root, and copying one
+        sideways puts a permission in force where nobody clicked for it."""
         self.assertNotIn("permissions", json.loads(self.settings().read_text()))
+
+    def test_only_the_restrictive_half_of_permissions_travels(self):
+        """#942, and the blind spot the case above had on its own: this fixture declared
+        nothing but a grant, so *"the whole key stays in the plane"* and *"only grants stay
+        in the plane"* were indistinguishable. `ask` and `deny` are the opposite of a grant
+        — they add a prompt and a refusal — so they travel, and the sentence above survives
+        untouched. `test_a_restrictive_rule_reaches_a_workspace` is the whole of it."""
+        _plane_settings(config.ROOT, permissions={
+            "allow": ["Bash(ls:*)"],
+            "ask": ["Bash(terraform apply *)"],
+            "deny": ["Bash(rm -rf /)"]})
+        workspace.wire_harnesses(self.ws)
+        perms = json.loads(self.settings().read_text())["permissions"]
+        self.assertEqual(perms, {"ask": ["Bash(terraform apply *)"],
+                                 "deny": ["Bash(rm -rf /)"]})
 
     def test_nothing_else_is_materialised_into_the_workspace(self):
         """Skills arrive with the plugin; agents walk up from here because this directory
@@ -628,12 +644,20 @@ class TheRowsQuietStates(WorkspaceLayer):
         """
         (config.ROOT / ".claude" / "settings.json").write_text(json.dumps(
             {"permissions": {"allow": ["Bash(ls:*)"]}}))
+        # Wired once more, so the file charter generated at setUp is withdrawn: the plane no
+        # longer declares anything it mirrored. Without this the workspace still holds a
+        # generated file nothing wants, and since #942 the row names it `unwanted` — a true
+        # finding, about a different plane from the one this case describes.
+        workspace.wire_harnesses(self.ws)
         self.assertTrue(workspace.list_workspaces(),
                         "no workspace at all — the count below would be zero either way")
         r = doctor.check_workspace_harness()
         self.assertEqual(r.status, doctor.OK)
-        self.assertIn("nothing to mirror — the plane declares no plugin or env of its "
-                      "own", r.detail)
+        # "or ask/deny rule" since #942: a plane whose only `permissions` are grants
+        # declares nothing this row mirrors, and naming only the two keys would let a plane
+        # that DOES declare an ask rule read as having nothing to mirror.
+        self.assertIn("nothing to mirror — the plane declares no plugin, env or ask/deny "
+                      "rule of its own", r.detail)
         self.assertNotIn("generated file(s)", r.detail)
 
 
@@ -795,7 +819,12 @@ class TheRowsComeBackInOneOrder(WorkspaceLayer):
         early = SimpleNamespace(workspace_files=lambda: {"a-early.json": "{}\n"})
         with mock.patch.object(registry, "all", return_value=[late, early]):
             rows = workspace.harness_layer(self.ws)
-        self.assertEqual([rel for rel, _ in rows], ["a-early.json", "z-late.json"],
+        # `unwanted` rows set aside: the workspace still holds the `.claude/settings.json` the
+        # real registry generated at setUp, and under a registry of two stand-ins nothing
+        # generates it any more — which `harness_layer` reports since #942, after the rows
+        # this case is about.
+        self.assertEqual([rel for rel, status in rows if status != "unwanted"],
+                         ["a-early.json", "z-late.json"],
                          "the rows came back in the order the harnesses were registered")
 
 
@@ -868,12 +897,16 @@ class WhatReinitSaysAboutTheLayer(WorkspaceLayer):
         return said
 
     def test_a_hand_edited_file_is_named_as_the_operators_and_left(self):
+        """And never with advice to remove it (#942 final review): `doctor` says a foreign file
+        stays as it is, and `reinit` saying "Remove it" beside that was two answers to one
+        question — the one R5 rules out."""
         self.settings().write_text("{}")
         said = self._reinit()
         self.assertIn(
             f"'{self.ws}': .claude/settings.json was not written by charter — left "
-            f"completely untouched. Remove it if you want charter's own again.",
+            f"completely untouched; charter never overwrites it.",
             [m for _, m in said])
+        self.assertNotIn("Remove", " ".join(m for _, m in said))
         self.assertEqual(self.settings().read_text(), "{}")
 
     def test_a_current_layer_reports_nothing_at_all(self):

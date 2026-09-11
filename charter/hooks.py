@@ -5608,6 +5608,13 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
     if ws:
         parts.append(ws)  # first: the start-of-session action gate
 
+    if live:
+        # Straight after the gate: a safety rule of the plane's that is not in force where this
+        # chat is rooted is the next thing it must know (#942 review round 5, R4).
+        gap = _rules_gap(data)
+        if gap:
+            parts.append(gap)
+
     name = persona.resolve_active()
     d = persona.resolve(name) if name else None  # inheritance applied (merged role/remit)
     if d:
@@ -5689,6 +5696,21 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
     # deliberately, by someone about to commit the result.
 
     return parts
+
+
+def _rules_gap(data: dict) -> str:
+    """`workspace.rules_not_in_force` for the directory this chat is rooted in — ``""`` when
+    every rule is in force, and on any failure: a check that raises costs its own line, never
+    the rest of the briefing, which `sessionstart` would drop whole.
+
+    Live sessions only (#942 review round 5, R4). It reads the files a harness session reads at
+    this moment, and `context_block` writes a file that outlives what it read.
+    """
+    try:
+        from . import workspace
+        return workspace.rules_not_in_force(data.get("cwd") or os.getcwd())
+    except Exception:
+        return ""
 
 
 def context_block(cwd=None) -> str:

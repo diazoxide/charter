@@ -481,10 +481,22 @@ def _wire_clones(ws: str) -> None:
     for tree in workspace.guest_trees(ws):
         rows = workspace.wire_guest(tree)
         made = [rel for rel, status in rows if status in ("created", "refreshed")]
-        if made:
+        if made and (".git/info/exclude", "blocked") not in rows:
             util.info(f"{tree.name}: charter's layer written ({len(made)} file(s)) and "
                       f"hidden in that repo's .git/info/exclude — `git status` there is "
                       f"unaffected, and nothing charter wrote can be committed.")
+        elif made:
+            # That sentence is two claims, and with the exclude unwritable neither holds.
+            util.warn(f"{tree.name}: charter's layer written ({len(made)} file(s)), but that "
+                      f"repo's .git/info/exclude could not be updated — those files show in "
+                      f"its `git status`.")
+        for rel, status in rows:
+            if status == "withheld":
+                # A sentence of its own (#942): the one file charter refused to write, and
+                # why — a machine-local rule it cannot hide would be committable there.
+                util.warn(f"{tree.name}/{rel} was not written: charter could not hide it in "
+                          f"that checkout's .git/info/exclude, and a machine-local rule it "
+                          f"cannot hide would be committable there.")
 
 
 #: Concurrent clones. The same number `_build_batch` uses for its API probes, so there is
@@ -1734,6 +1746,122 @@ def cmd_guard_allow(args) -> int:
     return rc
 
 
+def _mirror_into_workspaces() -> None:
+    """Bring every workspace's generated layer up to date with the rule just written (#942).
+
+    `charter guard ask` writes the plane's settings and says the rule "applies to everyone
+    on this repo". A chat at `workspaces/<ws>/` reads its OWN settings file and nothing
+    above it, so that sentence is true of the file and was false of the chats where the
+    guarded command actually runs. The restrictive buckets travel in the generated layer
+    now; this is what closes the window between writing the rule and the next launch, which
+    is the only other thing that regenerates one (`ensure` → `scaffold` → `wire_harnesses`).
+
+    The same loop `charter workspace reinit --all` runs, deliberately: a second way to
+    regenerate a workspace is a second answer to "what is current", and this file has paid
+    for that shape before.
+
+    **Not called from `cmd_guard_allow`.** A grant is never mirrored, so a refresh there
+    could only carry UNRELATED drift into every workspace as a side effect of a command that
+    did not ask for it — `Harness.provision` keeps the same restraint one module over, and
+    #857 is the surprise both are avoiding.
+
+    A COUNT rather than a row per file, because `guard` already prints a line per harness
+    and a plane with a dozen workspaces would bury it. What it must not do is stay silent
+    about a file that did NOT take the rule: charter never repairs a generated file somebody
+    has since edited, so the rule is honestly not in force in that chat, and a tick over
+    that is what stops you checking.
+    """
+    from . import workspace
+
+    try:
+        names = workspace.list_workspaces()
+    except OSError:
+        # The rule IS written. The mirror is the follow-up, and a plane whose `workspaces/`
+        # cannot be listed must not turn a successful `guard ask` into a failure.
+        return
+    changed, unreached, behind, unreadable, withheld, unhidden = [], [], [], [], [], []
+    unrecorded: list[str] = []
+    refusals: dict[str, None] = {}
+    wired: list[tuple[str, list]] = []
+    # One worktree listing per repository across every workspace (review round 4): checkouts in
+    # two workspaces can share one repository, and a hung git cost 5 s per call.
+    with workspace.worktree_answers():
+        for ws in names:
+            try:
+                wired.append((ws, workspace.wire_harnesses(ws)))
+            except (OSError, ValueError):
+                # One workspace that cannot be wired costs its own rows and not the rest —
+                # `_layer_files`' rule about a misbehaving harness, one level up.
+                continue
+    for ws, rows in wired:
+        for rel, status in rows:
+            where = f"{ws}/{rel}"
+            if rel.endswith(".git/info/exclude"):
+                # Not a generated file, and never a rule out of force. The first version
+                # counted this row as a file and, when it was blocked, reported the rule
+                # "NOT in force" there — backwards on both counts: the rule was in force,
+                # and what was wrong is that charter's files showed in that repo's status.
+                if status == "blocked":
+                    unhidden.append(where)
+            elif status in ("created", "refreshed", "removed"):
+                # `removed` counts: the layer comes into step in both directions, and a run
+                # that only withdrew something still did work.
+                changed.append(where)
+            elif status == "harness-behind":
+                behind.append(where)
+            elif status == "unreadable":
+                unreadable.append(where)
+            elif status == "unrecorded":
+                unrecorded.append(where)
+                row = workspace.checkout_row(ws, rel)
+                if workspace.unrecorded_fix(row[0], "that checkout"):
+                    refusals[workspace.unrecorded_fix(row[0], "that checkout")] = None
+            elif status == "withheld":
+                withheld.append(where)
+            elif status in ("foreign", "blocked"):
+                unreached.append(where)
+    if changed:
+        util.info(f"  {len(changed)} generated file(s) under workspaces/ brought into step "
+                  f"— a chat there reads its own settings file, never the plane's.")
+    if unreached:
+        # Never "remove one" (review round 5, R5): in a checkout the file is somebody's own work,
+        # stays hidden while it is there, and holds whatever they put in it.
+        util.warn(f"  NOT in force in {', '.join(unreached)} — charter could not write those "
+                  f"files, or did not write what they hold and never overwrites it; add the rule "
+                  f"to one by hand if a chat rooted there needs it.")
+    if behind:
+        # Never "remove it": the approvals in that file are the harness's, and the advice
+        # that suits a file somebody else wrote would destroy them.
+        # True of a file charter wrote and the harness has since added to, of one that was there
+        # before charter ever was, and of charter's own write whose record is gone — "no longer
+        # rewrites" was false of the second, "did not put there" of the third (#942, round 3).
+        util.warn(f"  {', '.join(behind)}: a file charter cannot vouch for as its own write, and "
+                  f"the harness saves its approvals into that file, so charter does not rewrite "
+                  f"it and did not add this rule there — add the rule to that file by hand if a "
+                  f"chat rooted there needs it.")
+    if unreadable:
+        # Never "remove it" either (#942, review rounds 2 and 3): charter cannot see what is in
+        # the file. Nor "until it can be read": a harness-edited file read again is
+        # `harness-behind` and never receives the rule, so the sentence states the condition.
+        util.warn(f"  {', '.join(unreadable)} cannot be read, so charter left it exactly as it "
+                  f"is and did not add this rule there; it writes there again only if that file "
+                  f"turns out to be exactly what charter last wrote.")
+    if unrecorded:
+        # Ruling H (#942 review round 4): a write charter could not record first is not made.
+        why = "; ".join(refusals)
+        util.warn(f"  {', '.join(unrecorded)}: charter could not publish its record there first, "
+                  f"so it wrote nothing there and kept every exclude line it had, and the rule is "
+                  f"not in force in a chat rooted there{f' until you {why}' if why else ''}.")
+    if withheld:
+        util.warn(f"  {', '.join(withheld)} was not written: charter could not hide it in "
+                  f"that checkout's .git/info/exclude, and a machine-local rule it cannot "
+                  f"hide would be committable there. The plane's --local rules are not in "
+                  f"force in a chat rooted there.")
+    if unhidden:
+        util.warn(f"  Could not update {', '.join(unhidden)} — charter's generated files in "
+                  f"that checkout show in its own git status until it can.")
+
+
 def cmd_guard_ask(args) -> int:
     """Add a force-prompt rule to `permissions.ask` in the plane's `.claude/settings.json`.
 
@@ -1793,6 +1921,7 @@ def cmd_guard_ask(args) -> int:
         else:
             util.info("  These files are committed, so the rule applies to everyone on this "
                       "repo — no sync step, and nothing that can drift (ADR 0014).")
+        _mirror_into_workspaces()
         _warn_if_shadowing(registry.get(registry.CLAUDE_CODE).ask_rule(pattern))
     _say_where_it_cannot_reach(results)
     _say_if_uneven(wrote, rc == 1)

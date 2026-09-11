@@ -594,6 +594,17 @@ Policy that *can* be written as a command pattern belongs in Claude Code's own
 `permissions`, not here — `charter guard ask <pattern>` writes it there. Charter keeps only
 what needs context the host cannot see. That line is ADR 0014.
 
+The host reads the shared `.claude/settings.json` from the session's own directory and does
+not walk up, and a framed chat stands in `workspaces/<name>/`. So charter carries the
+**restrictive** half — `ask` and `deny`, never `allow` — into the file it generates for each
+workspace and each clone inside one, and `charter guard ask` refreshes those as it writes.
+Without that the rule was written, reported, and not in force where the guarded command gets
+typed (#942). A `--local` rule lives in `.claude/settings.local.json`, which the host reads
+at the git root, so it already reaches a workspace directory; a clone gets a generated copy
+of its restrictive half.
+`charter doctor`'s `workspace layer` row is what names a workspace whose copy has fallen
+behind, and it says what that costs rather than only which file is stale.
+
 ## What gets injected
 
 `SessionStart` puts a bounded amount of context in front of the session: the active

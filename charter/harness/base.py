@@ -28,6 +28,19 @@ failure #168, #177, #261 and #851 are each an instance of.
 checkout, so an operator on opencode or Codex got a workspace with none of the plane's
 agents or skills (#868). Reporting a harness under another's rules and *writing* another
 harness's files are the same mistake; only the second one lands on disk.
+
+:meth:`Harness.restrictive_rules` is the ninth, and it is the same argument for the same
+reason a third time: since #942 a generated workspace file carries the plane's `ask` and
+`deny` rules, so *"this file is stale"* now sometimes means *"a safety rule is not in force
+in that chat"* — and which of the plane's policy rides in a generated file is a fact about
+that harness's config format, not one `doctor` may read out of Claude Code's settings for
+everybody.
+
+:meth:`Harness.checkout_files`, :attr:`Harness.cowritten` and :meth:`Harness.held_files`
+came with it, each a measured fact about one harness that `workspace.py` must not spell: a
+file the harness resolves at the git root reaches a workspace directory and stops at a
+clone; a file the harness also writes into is not "the operator's" when its digest moves;
+and a plane file charter cannot read is not a plane that declares nothing.
 """
 
 from __future__ import annotations
@@ -397,6 +410,77 @@ class Harness:
         this whole mechanism exists to draw.
         """
         return {}
+
+    #: Generated paths, relative to a checkout, that THIS HARNESS also writes into itself.
+    #:
+    #: The digest marker decides "charter's file" versus "the operator's", and for a path
+    #: the harness co-writes that test answers wrong in the dangerous direction. Claude
+    #: Code saves "Yes, and don't ask again" into a clone's `.claude/settings.local.json`;
+    #: the digest stops matching; and the first version of #942 then called the file
+    #: foreign, dropped it from the checkout's exclude block, and put the plane's private
+    #: rules plus the operator's grants into somebody else's `git status`. A path listed
+    #: here stays hidden while it exists, is never rewritten or merged into once the
+    #: harness has edited it, and is never the subject of "remove it".
+    cowritten: tuple[str, ...] = ()
+
+    def checkout_files(self) -> dict[str, str]:
+        """What a checkout with a git root of its own needs that a workspace directory does
+        not — ``{relpath: text}``, generated.
+
+        The generated counterpart of :attr:`inherited_paths`, for the same boundary. A file
+        the harness resolves at the GIT ROOT is found from anywhere inside the plane's
+        repository, `workspaces/<ws>/` included, and stops being found at a clone. Answered
+        by :meth:`workspace_files` instead, it would also land in every workspace directory,
+        where the plane's own copy is already read — measured for Claude Code's
+        `.claude/settings.local.json` on 2.1.267.
+        """
+        return {}
+
+    def held_files(self) -> dict[str, str]:
+        """Generated paths whose SOURCE cannot be read right now — ``{relpath: source}``.
+
+        Charter keeps whatever is on disk at those paths — it neither writes nor withdraws
+        them — and `doctor` names *source*. An unparseable plane file is not the plane
+        declaring nothing: read as that, the first version of #942 withdrew every
+        workspace's `enabledPlugins`, `env` and `deny` over a typo, where the last good
+        file is the one a session should keep reading until the plane parses again.
+        """
+        return {}
+
+    def restrictive_rules(self) -> dict[str, tuple[str, ...]]:
+        """The plane's own rules that only ever REFUSE or PROMPT, keyed by the generated
+        path each rides in — ``{}`` when this harness carries none.
+
+        The argument is `doctor`'s. `workspace layer` warns when a generated file has gone
+        stale, and since #942 one of the things such a file holds up is the plane's
+        `ask`/`deny` rules — a *safety* rule not in force in that chat, a different order of
+        consequence from a plugin not enabled there yet. *Which of the plane's policy
+        travels* is a fact about a harness's own config format: read out of
+        `.claude/settings.json` inside `doctor` it would be the
+        hardcoded-literal-per-harness failure `registry.py` exists to end.
+
+        **Keyed by path**, so the row counts only the rules riding in the files it names —
+        a missing agent file holds up no rule, and a checkout's local file holds up only the
+        plane's local ones.
+
+        **Not derivable from :meth:`workspace_files`.** That answers with finished TEXT, so
+        a caller would have to parse each harness's format back out — a second reader of a
+        document the harness already understands.
+        """
+        return {}
+
+    def rules_held(self, text: str) -> frozenset[str]:
+        """The ask/deny rules *text* — one of this harness's generated files, as found on disk —
+        actually holds, spelled as :meth:`restrictive_rules` spells them; empty when it holds none
+        or is not in this harness's format.
+
+        The half :meth:`restrictive_rules` cannot answer (#942 review round 5, R4): which of the
+        rules riding in a file are MISSING from the copy a chat reads. A file somebody rewrote,
+        or one the harness keeps, holds whatever it holds, and a status says only that it is not
+        charter's current text. Read by the harness for that method's reason — a caller parsing
+        each harness's format back out is a second reader of a document it already understands.
+        """
+        return frozenset()
 
     def upgrade(self, root: Path) -> tuple[str, str]:
         """Move THIS harness's installed charter artifact to the running CLI's version.

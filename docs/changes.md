@@ -200,5 +200,11 @@ by default; `--local` writes the gitignored `.claude/settings.local.json` instea
 that travels in a commit enrols a whole team on one person's click. A team that genuinely
 wants the prompt for everybody drops the flag — a decision, made once, visible in a diff.
 
+It reaches the chats where landings happen. Claude Code reads `.claude/settings.local.json`
+at the git root, so a chat in `workspaces/<name>/` — inside the plane's repository — already
+has the rule. A clone is a git root of its own, so charter mirrors the plane's local `ask`
+and `deny` into that clone's own `.claude/settings.local.json`, hidden in its
+`.git/info/exclude` before the file is written (#942).
+
 Because Claude Code matches on the full command string, the prompt shows **which change and
 which repo**.
