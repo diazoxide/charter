@@ -53,6 +53,31 @@ def _source() -> str:
     return PLUGIN if os.environ.get("CLAUDE_PLUGIN_ROOT") else SETTINGS
 
 
+def _claude_config_dir() -> str | None:
+    """The Claude Code config folder this process would use, made absolute — or ``None``
+    when it cannot be resolved.
+
+    **Absolute, because a folder is compared across processes that stand in different
+    directories.** `$CLAUDE_CONFIG_DIR=cfg` (or an empty value) is relative to wherever it is
+    read, so recorded as spelled, a sighting made in the plane root compared equal to a
+    `doctor` run from a workspace, where ``cfg`` names another folder — a false green by
+    string equality, the #969 defect one step removed.
+
+    `Path.home()` raises with no `$HOME` and no passwd entry, and making a relative folder
+    absolute asks for a working directory that may have been deleted. `mark` runs inside the
+    guard, which must never fail a turn over bookkeeping, so the sighting is still recorded;
+    one with no folder simply vouches for none.
+    """
+    import os
+
+    from .harness import claude_code
+
+    try:
+        return os.path.abspath(claude_code.config_home())
+    except (RuntimeError, OSError):
+        return None
+
+
 def mark(harness: str | None = None, when: datetime | None = None,
          source: str | None = None) -> Path | None:
     """Record that a guard just ran. Best-effort — never raises, never blocks a turn.
@@ -77,11 +102,17 @@ def mark(harness: str | None = None, when: datetime | None = None,
     # plugin replacing it was live — while the running session held no declaration at all
     # (#261). A sighting belongs to the thing that made it.
     src = source or _source()
+    # And under WHICH Claude Code config folder (#969), for the same reason one field over:
+    # `$CLAUDE_CONFIG_DIR` moves the plugin manifest and the settings a declaration lives in,
+    # so a sighting made under `~/.claude` read as proof for a session under a second
+    # account's folder — where no charter hook ran at all.
+    folder = _claude_config_dir()
     p = path()
     try:
         config.private_mkdir(p.parent)
         config.write_for(p, json.dumps({"ts": when.isoformat(timespec="seconds"),
-                                       "harness": harness, "source": src},
+                                       "harness": harness, "source": src,
+                                       "claude_config_dir": folder},
                                       sort_keys=True) + "\n")
         return p
     except OSError:
@@ -97,6 +128,17 @@ def last_source() -> str | None:
         return None
     val = rec.get("source")
     return str(val) if val else None
+
+
+def last_claude_config_dir() -> str | None:
+    """The Claude Code config folder the latest sighting ran under (#969) — or ``None``: no
+    sighting, one from before the field, or one whose folder could not be resolved.
+
+    ``None`` vouches for nothing, the reading `check_guard_wired` already gives a sighting
+    with no `source`. It is not reported as a fault either; the next guarded call replaces it.
+    """
+    rec = last()
+    return rec.get("claude_config_dir") if rec else None
 
 
 def last() -> dict | None:

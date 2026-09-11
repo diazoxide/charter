@@ -839,11 +839,18 @@ def _settings_files(root: Path | None = None) -> list[Path]:
     this session names its own root: `commands._ensure_guard_hook` is about to write the
     PLANE's `settings.json` and must read the plane's `enabledPlugins`, whatever directory
     the operator happened to be standing in when they typed `charter reinit`.
+
+    **The user half is the config folder Claude Code is using, not ``~/.claude``** (#969).
+    `$CLAUDE_CONFIG_DIR` moves it — a second account is the usual reason — and a session
+    under that folder never opens ``~/.claude/settings.json``. Reading it anyway credited
+    the session with a guard hook and an `enabledPlugins` entry it did not have.
     """
+    from .harness import claude_code as _cc
+
     here = Path(root) if root is not None else session_root()
     return [here / ".claude" / "settings.json",
             here / ".claude" / "settings.local.json",
-            Path.home() / ".claude" / "settings.json"]
+            _cc.config_home() / "settings.json"]
 
 
 def _settings_docs(root: Path | None = None) -> list[dict]:
@@ -913,10 +920,17 @@ def _plugin_declaring_guard(root: Path | None = None) -> str | None:
     ``settings.json`` is not enabled for a chat rooted at ``workspaces/<ws>/`` (#851). A
     caller writing a specific file names that file's directory instead.
     """
+    from .harness import claude_code as _cc
+
     enabled = _enabled_plugin_ids(root)
     if not enabled:
         return None
-    manifest = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+    # The manifest of the config folder Claude Code is USING (#969). This read
+    # `~/.claude/plugins/installed_plugins.json` while `plugin install` asked `claude plugin
+    # list`, which follows `$CLAUDE_CONFIG_DIR` — so one report said the plugin was not
+    # installed for this plane and, rows earlier, that the guard it carries was wired. Under
+    # that folder no charter hook ran at all: installed somewhere else read as installed here.
+    manifest = _cc.config_home() / "plugins" / "installed_plugins.json"
     try:
         doc = json.loads(manifest.read_text())
     except (OSError, ValueError):
@@ -1041,14 +1055,20 @@ def check_session_root() -> Result:
         return Result(name, OK, detail=f"{here} — no control plane found")
     if session_is_the_plane():
         return Result(name, OK, detail=f"{here} — the plane")
+    from .harness import claude_code as _cc
+
     cwd_only, walking = _discovery_rules()
     lines = [f"{here} — not the plane ({_config.ROOT})"]
+    # The folder the rows below actually read, not a spelling of the default one (#969):
+    # under `$CLAUDE_CONFIG_DIR` they read that folder, and naming `~/.claude/` here would
+    # send the operator to check a file no row consulted.
+    user = f"{util.short_path(_cc.config_home())}/"
     if cwd_only:
         lines.append(f"the host reads {_named(cwd_only)} from the session's own directory "
                      f"and does not walk up, so the plane's .claude/ is not in force for "
-                     f"them — the rows below read {here}/.claude/ and ~/.claude/")
+                     f"them — the rows below read {here}/.claude/ and {user}")
     else:
-        lines.append(f"the rows below read {here}/.claude/ and ~/.claude/, not the "
+        lines.append(f"the rows below read {here}/.claude/ and {user}, not the "
                      f"plane's")
     if walking:
         # Said here, in the row that would otherwise be read as "none of it reaches",
@@ -1244,9 +1264,10 @@ def check_guard_wired() -> Result:
 
     Reachable means ANY of: running under the plugin, or `charter hook pretooluse` declared
     in the plane's ``.claude/settings.json``, its ``.claude/settings.local.json``, or the
-    user's ``~/.claude/settings.json``. All four, because a plane that IS wired and gets
-    warned every session teaches people to ignore the row — the failure
-    `check_memory_indexes` already records.
+    user settings of the config folder Claude Code is using — ``$CLAUDE_CONFIG_DIR/
+    settings.json`` when that is set, ``~/.claude/settings.json`` otherwise (#969). All
+    four, because a plane that IS wired and gets warned every session teaches people to
+    ignore the row — the failure `check_memory_indexes` already records.
 
     It asserts that specific handler rather than "some hook exists": a plane wiring only
     `sessionstart` is unprotected while looking configured, which is this issue again one
@@ -1299,14 +1320,29 @@ def check_guard_wired() -> Result:
         # Reaching the handler is the only proof available, which is what `guardseen`
         # exists to record; a sighting from THIS plugin is that proof.
         from . import guardseen as _seen
-        if _seen.last_source() == _seen.PLUGIN:
+        from .harness import claude_code as _cc
+
+        # ...and only for the config folder it ran under (#969). `$CLAUDE_CONFIG_DIR` moves
+        # the manifest and settings this row just read, so a guard that fired yesterday under
+        # `~/.claude` says nothing about a session under a second account's folder — where
+        # the plugin can be installed and not yet loaded, which is #261's window reached from
+        # a new direction. A sighting that predates the recorded folder cannot say which one
+        # it ran under, so it vouches for none; the next guarded Bash call replaces it.
+        # Absolute on both sides, as `guardseen` records it: a relative `$CLAUDE_CONFIG_DIR`
+        # is a different folder in every directory it is read from.
+        folder = _cc.config_home()
+        if (_seen.last_source() == _seen.PLUGIN
+                and _seen.last_claude_config_dir() == os.path.abspath(folder)):
             return Result(name, OK,
                           detail=f"wired (enabled plugin {plugin}) — and it has fired here")
+        # The folder is named because `guard seen`, one row down, can truthfully say a
+        # guard ran minutes ago. Under another folder both rows are right, and without the
+        # folder they read as a contradiction — which is how #969 was reported.
         return Result(
             name, WARN,
-            detail=f"enabled plugin {plugin} declares it, but nothing has fired here yet — "
-                   f"a plugin's hooks load at session start, so this is wired for the NEXT "
-                   f"session and THIS one may be unguarded",
+            detail=f"enabled plugin {plugin} declares it, but nothing has fired here under "
+                   f"{util.short_path(folder)} yet — a plugin's hooks load at session start, "
+                   f"so this is wired for the NEXT session and THIS one may be unguarded",
             hint="Restart the session (or run a Bash command through it and re-check). If "
                  "you just removed a duplicate `hooks` block on this check's advice, that "
                  "was right — but it was the declaration this session actually had.")
@@ -1319,8 +1355,13 @@ def check_guard_wired() -> Result:
     # remedy that looks like a fix and is not.
     if not session_is_the_plane():
         from . import config as _config
+        from .harness import claude_code as _cc
 
         here = session_root()
+        # The user settings file of the folder in use (#969). Under `$CLAUDE_CONFIG_DIR`
+        # a declaration in `~/.claude/settings.json` reaches no session at all, so naming
+        # that file would be a remedy that is followed, believed, and changes nothing.
+        user = util.short_path(_cc.config_home() / "settings.json")
         return Result(
             name, WARN,
             detail=f"pretooluse is not wired — branch moves in the plane root are NOT "
@@ -1329,8 +1370,8 @@ def check_guard_wired() -> Result:
                   f"the host does not walk up — so the plane's .claude/settings.json never "
                   f"reaches here, wired or not. `charter reinit` writes THAT file, so it "
                   f"would not change this session. Declare `charter hook pretooluse` under "
-                  f"hooks.PreToolUse in {here}/.claude/settings.json, or in "
-                  f"~/.claude/settings.json which every session reads — or install the "
+                  f"hooks.PreToolUse in {here}/.claude/settings.json, or in {user}, which "
+                  f"every session on that Claude config folder reads — or install the "
                   f"Claude Code plugin."))
     return Result(name, WARN,
                   detail="pretooluse is not wired — branch moves in the plane root are "
@@ -2952,8 +2993,15 @@ _REMOVED_SHIMS = ("edm", "charter")
 
 def _claude_json() -> Path:
     """Claude Code's user-level config — where `mcpServers` registrations live, both the
-    user-scoped ones and the per-project ones under `projects`."""
-    return Path.home() / ".claude.json"
+    user-scoped ones and the per-project ones under `projects`.
+
+    The file of the config folder Claude Code is using, not ``~/.claude.json`` (#969):
+    measured on 2.1.268, with `$CLAUDE_CONFIG_DIR` set Claude Code writes `.claude.json`
+    inside that folder, so the servers a second account registers are there and the home
+    file's are not launched at all. `claude_code.global_config_file` owns the rule."""
+    from .harness import claude_code as _cc
+
+    return _cc.global_config_file()
 
 
 def _vault_in_args(args) -> str | None:
@@ -3112,10 +3160,13 @@ def check_mcp_launchers() -> Result:
         # A machine that never registered an MCP server is healthy, not unknown.
         return Result("mcp", OK, detail="no MCP servers registered")
     except (OSError, ValueError, UnicodeDecodeError) as exc:
-        return Result("mcp", WARN, detail=f"~/.claude.json unreadable ({_first_line(str(exc))})",
+        # Named by the path actually read (#969): the file moves with `$CLAUDE_CONFIG_DIR`,
+        # and a row that always says `~/.claude.json` sends the reader to the wrong file.
+        return Result("mcp", WARN,
+                      detail=f"{util.short_path(path)} unreadable ({_first_line(str(exc))})",
                       hint=_NOT_CHECKED_HINT)
     if not isinstance(doc, dict):
-        return Result("mcp", WARN, detail="~/.claude.json is not an object",
+        return Result("mcp", WARN, detail=f"{util.short_path(path)} is not an object",
                       hint=_NOT_CHECKED_HINT)
 
     registered = _registered_launchers(doc)

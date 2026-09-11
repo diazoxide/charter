@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from pathlib import Path
 
 from .base import Harness, LayerPart
@@ -100,6 +101,57 @@ LAYER = (
 #: plane and there is no gap here for a mirror to close. What a mirror would add is the
 #: plane's instructions inside somebody else's repository, read there as that repository's.
 WALKUP_DIRS = (".claude/agents", ".claude/skills")
+
+
+def config_home() -> Path:
+    """The folder Claude Code keeps its user-level state in — ``settings.json`` and the
+    ``plugins/`` manifest among it — resolved the way the binary resolves it (#969).
+
+    Not ``~/.claude`` by assumption. `$CLAUDE_CONFIG_DIR` moves it, most often for a second
+    account, and 2.1.268 moves that account's login with it (the Keychain item's name gains
+    a hash of the folder) — so a session set up that way never reads the default folder's
+    plugins or settings, and a checker reading them answers for a session that is not
+    running.
+
+    Read off the 2.1.268 binary: ``(CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"))
+    .normalize("NFC")``. Two details follow from that spelling, and both are pinned:
+
+    * `??`, not `||` — an EMPTY value is kept, and names the working directory. Measured:
+      ``CLAUDE_CONFIG_DIR= claude plugin list --json`` listed the plugins recorded in
+      ``./plugins/installed_plugins.json``. Reading empty as unset would be a kinder rule
+      about a different folder from the one Claude Code reads.
+    * NFC — on a filesystem that keeps normalisation forms apart, a decomposed name is a
+      different directory, and the binary reads the composed one.
+
+    **Not followed yet**, each a narrower knob than this one: `$CLAUDE_CODE_PLUGIN_CACHE_DIR`
+    moves the plugin manifest out of this folder, and the cowork switch
+    (`$CLAUDE_CODE_USE_COWORK_PLUGINS`) renames ``plugins/`` and ``settings.json`` inside it.
+    """
+    named = os.environ.get("CLAUDE_CONFIG_DIR")
+    raw = os.path.join(Path.home(), ".claude") if named is None else named
+    return Path(unicodedata.normalize("NFC", raw))
+
+
+def global_config_file() -> Path:
+    """Claude Code's ``.claude.json`` for the folder in use — where `mcpServers` live (#969).
+
+    Its own rule, not :func:`config_home`'s, read off the same binary: a legacy
+    ``.config.json`` inside the config home wins while it exists; otherwise the file is
+    ``join(CLAUDE_CONFIG_DIR || homedir(), ".claude.json")``. So `||` here where the folder
+    has `??` — an empty value falls back to home for this one file — and the raw value
+    rather than the NFC one. Measured: with `$CLAUDE_CONFIG_DIR` set, Claude Code writes
+    ``.claude.json`` inside that folder.
+
+    ``os.path.exists`` because the binary asks `existsSync`, and both answer False rather
+    than raise for a path they cannot stat: a raise here would take the `mcp` row down over
+    a file Claude Code itself passes over.
+
+    Not followed: `$CLAUDE_CODE_CUSTOM_OAUTH_URL` renames the file ``.claude-custom-oauth.json``.
+    """
+    legacy = config_home() / ".config.json"
+    if os.path.exists(legacy):
+        return legacy
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"
 
 
 class ClaudeCodeHarness(Harness):

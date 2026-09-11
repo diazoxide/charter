@@ -101,6 +101,18 @@ plugin loads nothing until it is enabled. charter will not enable it for you —
 plugin enable charter@charter --scope project` is yours to run, since turning a plugin off
 is a choice and charter does not revert a deliberate edit.
 
+**These rows answer for the Claude Code config folder in use.** `plugin install`, `plugin
+files`, `plane-root guard`, `guard seen`, `session root` and `mcp` read the folder Claude Code
+itself reads: `$CLAUDE_CONFIG_DIR` when it is set — the usual way to run a second account —
+and `~/.claude` with `~/.claude.json` when it is not. With the variable set, Claude Code keeps
+that folder's own plugins, settings and `.claude.json`, so a plugin installed under
+`~/.claude` does not count there, and `plane-root guard` warns rather than staying green. A
+guard that fired under one folder vouches for that folder only. `charter reinit` asks the
+same question before it writes the guard hook, so it too answers for the shell it runs in.
+Run both from the shell you start Claude Code from, so they see the same variable. One row
+does not follow the variable yet: `personas` still looks for a persona's skills under
+`~/.claude`.
+
 By hand, if you would rather, or if `charter doctor --fix` could not (an old `claude`, no
 network):
 

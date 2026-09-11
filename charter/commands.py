@@ -1146,6 +1146,14 @@ def _plugin_dispatches_guard(root: Path) -> str | None:
 
     Shared with `doctor.check_guard_wired` on purpose. A writer and a checker answering
     "is this wired?" from different evidence is how the guard came to be declared twice.
+
+    **So it follows `$CLAUDE_CONFIG_DIR` with doctor (#969)**, which means it answers for the
+    Claude Code config folder of the shell `charter reinit` runs in. That is a real
+    consequence, not an accident: in a second-account shell whose folder has no plugin, this
+    writes the hook into a settings file every folder shares. The alternative was worse. Kept
+    on `~/.claude`, `doctor` in that shell says the guard is not wired and points at
+    `charter reinit`, and `reinit` answers that nothing needs doing — a remedy followed,
+    believed, and changing nothing.
     """
     from . import doctor
 
