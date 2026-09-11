@@ -110,8 +110,12 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
 - **with a stdin other than one quoted heredoc** on the handoff's own segment — so the prompt
   shows exactly the text the new chat is sent.
 
-A handoff's brief is data, not commands, to charter's secret-leak guard: a brief that names a
-vault path in prose is not refused as a read of it. The brief ends where **bash** ends it, not
+A handoff's brief is data, not commands, to charter's secret-leak guard. None of these is
+refused as a read any more: a brief that names a vault path in prose, a brief that holds an
+apostrophe (which used to leave the call unparseable, so the whole of it was scanned as raw
+text), and a brief whose line OPENS with a reader — `cat .charter/vaults/dev.json would
+print it, so never run that.` Those are the briefs a chat writes to warn the next chat off
+a secret, and refusing them taught chats to leave the warning out. The brief ends where **bash** ends it, not
 where a regex would: a line that only looks like the terminator (`<<` wants the delimiter alone
 on the line) and a terminator eaten by a line continuation both keep the body going, so what
 follows either one is still brief. A brief whose terminator never appears in the call is not
@@ -124,7 +128,12 @@ The hook refuses the spellings of a handoff it can recognise, so a chat working 
 keeps your prompt in front of its handoff. It reads a command's words; it is not a shell, and it
 does not stop a chat set on getting around it. It does not see a handoff run by an interpreter
 (`python3 -c`, `node -e`, or `os.system` inside a `python3 - <<'PY'` body), through a variable,
-from a script file, or more than one string deep. It
+from a script file, or more than one string deep. **One apostrophe can switch the look off.** The
+look inside `eval` and `sh -c` strings reads the call with reader heredoc bodies removed, so a
+body that is *not* a reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body — holding a
+lone `'` (as in `don't`) leaves the call unparseable, and a handoff in a later `eval '…'` or
+`bash -c '…'` is then allowed. A `cat` body is stripped before the look, so the same apostrophe
+there costs nothing. It
 recognises a word only when the word reads `charter` or `handoff` once quoting, expansion and glob
 characters are removed, so it does not recognise a brace split inside the word (`{hand,}off`,
 `h{a,}ndoff`), an ANSI-C escape (`$'\x68andoff'`, `$'\x63harter'`) or a parameter default split

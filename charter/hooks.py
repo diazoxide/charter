@@ -756,8 +756,14 @@ def _is_charter(prog: str, args: list[str]) -> bool:
 #: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, `<<-DELIM` — the start of a heredoc. `dash` records
 #: the `<<-` form (its terminator ignores leading TABS); `q` is the quote that makes the body
 #: non-expanding; `delim` is the word a body ends on.
+#: `bs` is the backslash spelling of a quoted delimiter: `<<\EOF` ends on a line reading `EOF`
+#: and its body is literal, exactly as `<<'EOF'` does. It is matched so this regex and
+#: :func:`_heredoc_header` agree on how many heredocs a line opens — the two are compared, and a
+#: spelling only one of them sees makes every plan on that line unknown. Missing it also let the
+#: body be read as top-level commands, which is how a handoff inside `bash <<\EOF` reached the
+#: host with no prompt (review round 4, finding 1).
 _HEREDOC_RE = re.compile(
-    r"<<(?P<dash>-?)\s*(?P<q>['\"]?)(?P<delim>[A-Za-z_][A-Za-z0-9_]*)(?P=q)")
+    r"<<(?P<dash>-?)\s*(?P<bs>\\?)(?P<q>['\"]?)(?P<delim>[A-Za-z_][A-Za-z0-9_]*)(?P=q)")
 
 
 #: Programs that RUN a heredoc reaching their pipeline as CODE, so its body is never data.
@@ -840,6 +846,81 @@ def _line_pipelines(line: str):
     return out
 
 
+#: Where a command that opens a heredoc can START inside a line the whole-line pass could not
+#: take apart. Only used to find the program in front of a `<<` the LEXER never saw as an
+#: operator — one inside `$( … )`, a backquote or a group — so it is a cut list, not a parser.
+_OPENER_CUTS = ("$(", "`", "(", "{", "&&", "||", ";", "|&", "|", "&", "\n")
+
+
+def _heredoc_opener_words(line: str, start: int) -> list[str]:
+    """The words of the command that opens the `<<` at *start* — its program first.
+
+    Read off the SOURCE rather than off the token stream, because this is only reached when the
+    line is one :func:`_line_pipelines` would not attribute, which is exactly when the token
+    stream is not a reliable map of it. Cutting at the nearest command-start marker finds `cat`
+    in `git commit -m "$(cat <<'EOF'`, where the `<<` sits inside a quoted word and the lexer
+    reports no heredoc at all.
+    """
+    head = line[:start]
+    cuts = [head.rfind(m) + len(m) for m in _OPENER_CUTS if head.rfind(m) >= 0]
+    return head[max(cuts, default=0):].split()
+
+
+def _heredoc_could_run(line: str, start: int) -> bool:
+    """Whether a shell RUNS the body of the `<<` at *start*, for a *line* whose whole-line plan
+    :func:`_heredoc_strip_plan` returned ``None`` for. **Errs toward yes.**
+
+    A7 and the leak guard share one plan, and an unknown plan has to fail the same way for both
+    or the pair contradicts itself. The leak guard's unknown is "keep every body visible", which
+    still denies; A7's used to be "drop every body", which is the opposite, and a canonical
+    handoff inside `bash <<'EOF'` then ran with no prompt in every shape that loses the plan —
+    a `<<` quoted or in a comment, a here-string, a group, a subshell, a substitution
+    (review round 4, finding 1).
+
+    Flipping that default to "everything could run" is NOT the answer: measured, it costs two
+    over-refusals, both `git commit -m "$(cat <<'EOF'…)"` — the shape review round 3 fixed. So
+    the fallback is per heredoc, and asks the only question that decides it: does anything RUN
+    this body? An executor anywhere on the line answers yes, because a body a reader opens is
+    run all the same when a shell is downstream of it (`cat <<'A' | bash`), and a line this pass
+    could not split into pipelines is one where "downstream" cannot be located. Otherwise the
+    opener decides: a brief is data, a reader's body is data if it is QUOTED (an unquoted one
+    expands, and a `$( … )` in it RUNS — the same clause :func:`_heredoc_strip_plan` applies),
+    and anything else could run.
+    """
+    words = _heredoc_opener_words(line, start)
+    if not words:
+        return True
+    if words[:2] == ["charter", "handoff"]:
+        return False                           # a brief: charter's stdin, which nobody runs
+    if os.path.basename(_split_env(words)[0]).lower() not in _READERS:
+        return True
+    header = _heredoc_header(line, start)
+    if header is None or header[1]:
+        return True                            # unquoted: a `$( … )` in the body RUNS
+    return _line_runs_text(line)
+
+
+def _line_runs_text(line: str) -> bool:
+    """Whether any word of *line* names a program that runs text it is given.
+
+    Read off the source, word by word, because this is reached only for a line the lexer could
+    not take apart — `git commit -m "$(cat <<'EOF'` leaves a quote open until after the body, so
+    the one shape that most needs an answer is the one that raises. Splitting on the shell's own
+    separators finds `bash` in `cat <<'A' | bash`, in `(bash)` and in `$(bash …)` alike.
+
+    Over-matching is the safe direction here and is deliberate: a plain argument that happens to
+    read `bash` costs one over-refusal on a line nothing could attribute anyway, while a missed
+    executor would call a body data that a shell runs. The one over-match worth removing is the
+    heredoc's own DELIMITER, because naming it after the language in the body is an ordinary
+    thing to do — `cat <<'PYTHON'` opens no interpreter — so the headers are cut out first.
+    """
+    for word in re.split(r"""[\s;&|()<>{}"'`]+""", _HEREDOC_RE.sub(" ", line)):
+        word = word.strip("$\\")
+        if word and (_is_executor(word) or _is_executor(os.path.basename(word).lower())):
+            return True
+    return False
+
+
 def _brief_heredocs(line: str) -> set[int]:
     """The heredocs on *line*, by position in :data:`_HEREDOC_RE`'s order, whose opener command
     is one bare `charter handoff` — the ones whose body is a BRIEF (chat handoff).
@@ -913,8 +994,9 @@ def _heredoc_strip_plan(line: str):
     `<<EO'F'` the regex reads `EO` while bash reads `EOF`. Acting on the regex's shorter
     reading is the safe direction *here* — a terminator that is never found keeps the body
     visible — so the verdicts stay keyed on it; a caller that would DROP a body on this plan
-    must use `header` instead. A spelling the regex does not match at all (`<<\\EOF`) yields
-    no entry, so there is nothing to carry facts on.
+    must use `header` instead. `<<\\EOF` is matched too, so the regex and the lexer agree on
+    the COUNT for it — they must, or every plan on that line is unknown — but `quoted` stays
+    keyed on the quote group, so its body is carried and never stripped (review round 4).
     """
     headers = list(_HEREDOC_RE.finditer(line))
     if not headers:
@@ -1040,6 +1122,7 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
         chunks: list[tuple[int, str]] = []
         ended: dict[int, bool] = {}
         briefs: set[int] = set()
+        fallback: dict[int, bool] = {}            # per-heredoc verdict, for an unknown plan
         body_count = 0
         plan_text = ""
         join = ""                                 # separator carried from the previous stage
@@ -1059,17 +1142,29 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
             plan_text = folded if not plan_text else plan_text + join + folded
             # This command line's heredoc bodies follow, in order; buffer each.
             brief_here = _brief_heredocs(folded)
+            # When this line is one the whole-line pass cannot attribute, each heredoc is
+            # judged on its own (:func:`_heredoc_could_run`) rather than all of them sharing
+            # one default — the defect in review round 4, finding 1.
+            unknown = _heredoc_strip_plan(folded) is None
             for h, m in enumerate(_HEREDOC_RE.finditer(folded)):
                 header = _heredoc_header(folded, m.start())
                 idx = body_count
                 body_count += 1
-                if h in brief_here and header is not None:
-                    briefs.add(idx)
+                could_run = _heredoc_could_run(folded, m.start()) if unknown else None
+                if unknown:
+                    fallback[idx] = could_run
+                # The header is bash's own reading of the delimiter, and the ONLY safe source
+                # for a body that will be treated as data: the regex stops at the first quote
+                # (`<<EO'F'` reads as `EO`), so its terminator is never found and the "body"
+                # runs to the end of the input, taking real commands with it.
+                if header is not None and (h in brief_here or could_run is False):
+                    if h in brief_here:
+                        briefs.add(idx)
                     delim, expands, dash = header[0], header[1], header[2]
                 else:
                     delim = m.group("delim")
                     dash = bool(m.group("dash"))
-                    expands = not m.group("q")
+                    expands = not (m.group("q") or m.group("bs"))
                 # Bash ends the body on a line EQUAL to the delimiter — a `<<-` ignoring only
                 # leading TABS. Not `.strip()`: a lenient match ends a KEPT (shell) body early,
                 # and the real read that spills past it is then read as the next heredoc's body
@@ -1102,6 +1197,11 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
         if plan is not None:
             drop = {idx: d for idx, (_delim, d, _head, _ex) in enumerate(plan)}
             executed = {idx: ex for idx, (_delim, _d, _head, ex) in enumerate(plan)}
+        else:
+            # Nothing is DROPPED on an unattributable line — the leak guard's unknown keeps
+            # every body visible, and that does not change. What the fallback supplies is the
+            # other verdict: which of those bodies a shell would RUN, which is what A7 reads.
+            executed = fallback
         for idx, text in chunks:
             unterminated_brief = idx in briefs and not ended.get(idx, True)
             layout.append((text, idx >= 0,

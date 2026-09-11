@@ -33,7 +33,10 @@ Inside a control plane, charter's Bash hook refuses a `charter handoff`:
   `charter $'handoff'` or a handoff inside `bash -c` or a `bash <<'EOF'` body;
 - fed anything but one quoted heredoc on its own segment, so the prompt shows the exact brief.
 
-A brief that names a vault path in prose is not refused as a read of it.
+A brief is no longer refused as a read when it names a vault path in prose, when it holds
+an apostrophe, or when one of its lines opens with a reader (`cat .charter/vaults/dev.json
+would print it, so never run that.`) — the briefs a chat writes to warn the next chat off a
+secret.
 
 ## Limits
 
@@ -43,6 +46,9 @@ A brief that names a vault path in prose is not refused as a read of it.
   the word whole (`charter {hand,}off`, `charter $'\x68andoff'`, both of which ran with no prompt),
   or more than one string deep is not seen. Claude Code's docs
   say the same of its own rule: it "isn't a security boundary around the program".
+- **One apostrophe can switch the look inside shell strings off.** A heredoc body that is not a
+  reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body — holding a lone `'` leaves
+  the call unparseable, and a handoff in a later `eval '…'` or `bash -c '…'` is then allowed.
 - **`python3 -m charter handoff` is refused**, and that is the spelling `CONTRIBUTING.md` uses to
   run a checkout. The rule does not match it, so allowing it would run a handoff unasked.
 - **opencode cannot refuse a handoff from a sub-agent or an unattended run.** The payload charter's

@@ -568,6 +568,87 @@ class TheBriefIsDataWhereverBashEndsIt(PlaneIso):
             "charter handoff b <<'BRIEF' && bash <<'A'\nFix the widget.\n BRIEF\n"
             "cat .charter/vaults/dev.json\nBRIEF\necho in-a\nA")))
 
+    def test_the_briefs_end_is_read_off_the_header_not_the_plans_delimiter(self):
+        """Round 4, finding 3. The line the fix turns on is the header read — `delim, expands,
+        dash` taken from `_heredoc_header` rather than from `_HEREDOC_RE`'s `delim` group. Put
+        the regex reading back and these pass a brief no terminator ever matches (the regex
+        stops at `BRIEF`, bash at `BRIEFX`), so the body is never data and its prose is scanned
+        as a read. Each spelling below is one bash ends at a different word than the regex does.
+        """
+        bodies = {
+            # Plain prose naming a vault path is NOT enough to tell the two readings apart —
+            # the guard does not call it a read either way. These two are what it reacts to.
+            "a line that opens with a reader":
+                "cat .charter/vaults/dev.json would print it, so never run that.",
+            "prose holding an apostrophe":
+                "The token lives in .charter/vaults/dev.json; don't print it.",
+        }
+        for body_name, body in bodies.items():
+            for opener, terminator in (("<<BRIEF'X'", "BRIEFX"), ('<<"BRIEF"X', "BRIEFX"),
+                                       ("<<'BR'IEF", "BRIEF")):
+                with self.subTest(opener=opener, body=body_name):
+                    r = self._decide(f"charter handoff b {opener}\n{body}\n{terminator}")
+                    self.assertNotIn(hooks._READ_REASON, _reason(r) or "")
+
+
+class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
+    """Round 4, finding 1. A7 and the leak guard read the SAME heredoc plan, and used to take
+    opposite defaults when that plan came back unknown: the leak guard keeps every body visible
+    and still denies, while A7 dropped every body and so saw nothing. A canonical handoff inside
+    a shell's heredoc then reached the host — which matched only `bash` — with no prompt.
+
+    A whole-line plan goes unknown for ordinary reasons: a `<<` the regex finds inside quotes or
+    a comment that the lexer does not, a here-string, or a group/subshell/substitution, which
+    `_line_pipelines` refuses to guess at. The answer is not to flip the default — that refuses
+    `git commit -m "$(cat <<'EOF'…)"`, the shape round 3 fixed — but to fall back PER HEREDOC.
+    """
+
+    HANDOFF = "charter handoff beta <<'BRIEF'\nFix it.\nBRIEF"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"},
+                                          clear=True))
+        workspace.ensure("alpha")
+
+    def _decide(self, command, **payload):
+        return run_hook(hooks.pretooluse, {"tool_input": {"command": command}, "session_id": "s",
+                                           "cwd": str(workspace.workspace_dir("alpha")),
+                                           **payload})
+
+    def test_a_handoff_in_a_shells_heredoc_is_refused_however_the_plan_was_lost(self):
+        """Every shape here opens `bash`'s heredoc and puts the exact canonical handoff in the
+        body. Each was measured running with NO prompt before this fix."""
+        for name, cmd in (
+            ("a quoted `<<` in an earlier word", f"echo '<<X' && bash <<'EOF'\n{self.HANDOFF}\nEOF"),
+            ("a `<<` in a comment", f"bash <<'EOF' # <<X\n{self.HANDOFF}\nEOF"),
+            ("an earlier here-string", f"cat <<<x; bash <<'EOF'\n{self.HANDOFF}\nEOF"),
+            ("a subshell", f"( bash <<'EOF' )\n{self.HANDOFF}\nEOF"),
+            ("a group", f"{{ bash <<'EOF'; }}\n{self.HANDOFF}\nEOF"),
+            ("a command substitution", f"x=$( bash <<'EOF' )\n{self.HANDOFF}\nEOF"),
+            ("a backslash-quoted delimiter", f"bash <<\\EOF\n{self.HANDOFF}\nEOF"),
+        ):
+            with self.subTest(shape=name):
+                self.assertIn("a shell runs", _reason(self._decide(cmd)) or "")
+
+    def test_a_body_no_one_runs_is_still_data_when_the_plan_is_unknown(self):
+        """The other half, and the reason the default is not simply flipped: `git` runs no body.
+        The second shape is the one that loses the plan — the `<<` sits inside a quoted word, so
+        the lexer sees no heredoc at all — and it is this branch's own commit-message spelling.
+        """
+        message = ("A handoff waits for your yes\n\nRefuses `charter handoff` from a sub-agent.")
+        for how, cmd in (("-F -", f"git commit -F - <<'EOF'\n{message}\nEOF"),
+                         ("-m $(cat …)", f'git commit -m "$(cat <<\'EOF\'\n{message}\nEOF\n)"')):
+            with self.subTest(how=how):
+                self.assertIsNone(_reason(self._decide(cmd)))
+
+    def test_a_brief_is_still_data_when_the_plan_is_unknown(self):
+        """A brief is data by the same fallback: nobody runs it. Without the `charter handoff`
+        arm, this brief's own prose would be searched for a handoff and refused."""
+        self.assertIsNone(_reason(self._decide(
+            "echo '<<X' && charter handoff beta <<'BRIEF'\n"
+            "Ask the next chat to run charter handoff when it is done.\nBRIEF")))
+
 
 class TheQuotingJudgementIsTheSubstitutionGuards(PlaneIso):
     """"Quoted" means what `_heredoc_header` says it means — any quoting anywhere in the

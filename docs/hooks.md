@@ -377,8 +377,9 @@ rule while one who reads a bare refusal files an issue.
 
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
   segment is stdin charter sends on, never a command the shell runs, so it is skipped the way a
-  reader's is. A brief that names `.charter/vaults/…` in prose, or holds one apostrophe, is not
-  refused as a read. Only that body: in `charter handoff beta && bash <<'EOF'` the body belongs
+  reader's is. A brief that names `.charter/vaults/…` in prose, holds one apostrophe, or
+  opens a line with a reader (`cat .charter/vaults/dev.json would print it, so never run
+  that.`) is not refused as a read. Only that body: in `charter handoff beta && bash <<'EOF'` the body belongs
   to `bash` and is read as commands. A refused handoff leaves `routing: require`'s pending mark
   in place, and its trace row carries the refusal's name and no part of the command.
 
@@ -395,7 +396,11 @@ rule while one who reads a bare refusal files an issue.
   `os.system` inside a `python3 - <<'PY'` body),
   through a variable, from a script file, behind an expansion that does not leave the word whole
   (`{hand,}off`, `$'\x68andoff'`, `hand${x:-}off`), or more than one string deep is not seen.
-  Claude Code says the same of its rule:
+  The look inside `eval` and `sh -c` strings reads the call with reader heredoc bodies removed,
+  so a body that is NOT a reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body —
+  holding a lone `'` (as in `don't`) leaves the call unparseable and the look is skipped, so a
+  handoff in a later `eval '…'` or `bash -c '…'` is allowed; a `cat` body is stripped first and
+  costs nothing. Claude Code says the same of its rule:
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
