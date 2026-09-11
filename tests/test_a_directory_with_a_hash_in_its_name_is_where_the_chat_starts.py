@@ -295,8 +295,9 @@ class ARealTmuxStartsTheChatInThatDirectory(PersonaIso, unittest.TestCase):
     def test_a_run_of_hashes_before_a_bracket_is_not_doubled(self):
         """A guard on the escape's one exception rather than on the defect: the first three
         names started in the right place before the escape and pass without it. Doubled
-        like every other `#`, each went to `$HOME` on both versions. The fourth moved
-        before the escape, and only the `#` after the `[` may be doubled for it to land."""
+        like every other `#`, each went to `$HOME` on both versions. The fourth went to
+        `$HOME` before the escape and doubled whole, and lands with the `#` after the `[`
+        doubled and the one before it left as it is."""
         self._starts_in("a#[b")
         self._starts_in("a##[b")
         self._starts_in("a#[fg=red]b")
