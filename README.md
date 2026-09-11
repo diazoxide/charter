@@ -94,6 +94,10 @@ this to `charter.toml` and the command is `charter` on its own:
 default = "claude"
 ```
 
+The value names a **profile** — `claude`, `codex` and `opencode` are the built-in one per
+harness, and `charter.local.toml` is where you declare your own (a pinned version, a second
+account); see [control-plane.md](docs/control-plane.md#harness--profiles-and-the-default).
+
 Piped anywhere, bare `charter` prints its usage instead of starting an agent.
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,

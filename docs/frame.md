@@ -14,9 +14,18 @@ plane places it*, below). The middle pane is the harness's and charter draws not
 (ADR 0018), so a capture with no agent to run has `charter status` in there.
 
     charter claude               # or codex, opencode
+    charter claude-work          # any profile charter.local.toml declares
     charter                      # the same thing, on a plane with [harness] default
     charter frame -- <cmd>       # anything charter has never met
     charter claude --no-frame    # bare, no frame at all
+
+`charter <profile>` names a **harness profile** — a kind, a command and an environment,
+declared in `charter.local.toml`
+([control-plane.md](control-plane.md#harness--profiles-and-the-default)). `claude`, `codex`
+and `opencode` are themselves profiles, the built-in one per harness, and this release
+starts those. A profile the file declares does not run yet: it is refused with a sentence
+saying charter cannot yet ask before a declared command runs, because nothing stands for
+your approval of a command until the release that adds one.
 
 `charter` on its own opens the frame once the plane says which harness it means —
 `[harness] default = "claude"` in `charter.toml`, documented in
@@ -806,8 +815,9 @@ one. There is no third answer available from a hook channel that reports prompts
 calls: charter can be late to stop claiming, or early, and it is set to be early.
 
 **The chat bar ends in a `+` and a `-`, and one of them is a button and one is a door.**
-Pressing the `+` opens another chat: same workspace, same harness you are already in, its
-id allocated for you — which is why it takes nothing and asks nothing. It runs `charter
+Pressing the `+` opens another chat: same workspace, same **profile** you are already in —
+two chats of one harness may be two accounts, so the answer is the one in front of you —
+its id allocated for you, which is why it takes nothing and asks nothing. It runs `charter
 frame-new-chat`, which is `charter <harness>` in this workspace with one difference: it
 builds the frame without becoming your terminal, because the process behind a click is not
 one.
@@ -837,8 +847,10 @@ something costs you the belief that it is there.
 It stops, and says why on the attention row, in four cases: your frame is a window in a
 tmux you already had (charter makes no chats for you there — `charter <harness>` in the
 workspace still does); charter cannot prove the workspace's tmux session is this plane's
-rather than another project's; this chat records no harness charter can launch and your
-plane declares no `[harness] default`; or charter cannot enter the workspace's directory.
+rather than another project's; this chat records no profile charter can launch and your
+plane declares no `[harness] default`; the profile it records cannot start, and the reason
+is the one the launch would have given you; or charter cannot enter the workspace's
+directory.
 
 **The workspace bar has neither, deliberately.** A new chat is nothing but a press. A new
 workspace is a directory and a *name*, which is `charter workspace create` — and a picker
@@ -1034,10 +1046,10 @@ what that chat will and will not get back.
 ```
 quit · 5 to choose from
 >   quit — stop 4 chats in 3 workspaces; 2 of 4 can resume the conversation
-    alpha.1 · claude-code       conversation resumes
-  * alpha.2 · claude-code       reopens empty — no session id recorded for this chat yet
+    alpha.1 · claude            conversation resumes
+  * alpha.2 · claude            reopens empty — no session id recorded for this chat yet
     api.1 · opencode            reopens empty — opencode records no session id to resume …
-    gone.3 · claude-code        conversation resumes · workspace 'gone' is gone — reopen…
+    gone.3 · claude-work        conversation resumes · workspace 'gone' is gone — reopen…
 
   up/down move   enter choose   esc cancel   F12 back to the harness
 ```
@@ -1058,6 +1070,22 @@ resuming it. It attaches you to the workspace you pressed quit in, on the chat t
 front of you. The record describes one quit and is consumed chat by chat, so running it
 twice does not double your tabs — and if some chat could not be started, exactly that chat
 stays recorded, so a second `charter reopen` retries just it.
+
+**Each chat comes back on its own profile, and a chat whose profile is gone does not come
+back at all.** It is skipped, by name, and left in the record:
+
+```
+⚠ charter reopen: api.2 ran on profile 'claude-work', which this plane no longer declares
+  — not reopened, because another profile may be another account, where its conversation
+  does not exist. Declare 'claude-work' again in charter.local.toml and run charter reopen
+  to bring it back.
+```
+
+Charter does not substitute another profile for it, and that is the point rather than
+caution: a profile can be a different account, where the conversation this chat wants to
+resume was never held and the workspace's code was never meant to go. Declaring it again
+and running `charter reopen` brings that chat back — which is what leaving it in the record
+is for.
 
 **A chat comes back in its workspace, and is told when that is not where it had been.** The
 record stores the directory the harness was actually standing in; the restore lands in
@@ -1342,6 +1370,48 @@ is not reported, and its output is not reprinted: that was its stdout, and chart
 invent it on stderr. If you want a short command's output, `--no-frame` — or a pipe, which
 bypasses the frame on its own — is the right tool; the frame is for something you sit in
 front of.
+
+## How a harness starts
+
+**Every chat pane's first process is charter, and charter replaces itself with the
+harness.** The pane starts `charter frame-launch --profile <name> -- <the rest>` — the
+window's first command on charter's own server, and what `respawn-pane` starts after the
+placeholder inside a tmux you already have. It runs the profile's checks there and then
+`exec`s the profile's command with the profile's environment applied.
+
+Three reasons, the first a constraint:
+
+- **the profile's environment reaches the harness without crossing tmux.** Charter puts
+  exactly five variables on a tmux command line and nothing else may join them, so a
+  profile's `env` could not travel that way — and values that never go through tmux's own
+  argument parser cannot be mangled by it;
+- **one place runs the checks for every open** — a typed command, the `+`, a workspace tab,
+  a reopen, a handoff;
+- **`exec` keeps the pid**, so the pane is the harness's own.
+
+That last one is why nothing else here changes, and it was measured before it was built on
+— tmux 3.7c and the 3.2 floor, on charter's own server and in an operator's own tmux: the
+pane id charter records, `remain-on-exit`, the exit code, the `pane-died` hooks and the
+early-death report all answer exactly what they answered when the harness was started
+directly. Only one reading differs, and nothing in charter reads it: until the `exec`,
+`#{pane_current_command}` names charter's interpreter rather than the harness.
+
+**A refusal in the pane waits for you.** A launcher that refuses — a command that is no
+longer on `PATH`, a profile this release cannot yet approve — prints its sentence in the
+pane and waits for you to press Enter, because a pane that printed and exited would have its window
+closed before anything could read it: measured, charter's own check for a chat that died
+early answers a few milliseconds before the launcher's first line has even run. A chat
+nobody is watching — one a reopen or a handoff opened — has nobody to press that key, so it
+records the refusal instead and the command that opened it reports that.
+
+**`charter frame-launch` is in a frame only when tmux says so.** Before it starts anything,
+it asks tmux whether its own pid is the `#{pane_pid}` of a live pane belonging to the chat
+it was given — the window's name on charter's own server, the `@charter_chat` option in
+yours, where a window name is only a label anything can rewrite. `$TMUX_PANE` and
+`$CHARTER_SESSION_ID` are never proof: an agent's own tool shell inherits both from its
+chat, so a `charter frame-launch` run from there is a launch with no frame that rewrites no
+chat's record. It is a guard rail against that mistake and not a boundary: a process that
+deliberately starts its own tmux pane in a window named like a chat passes it.
 
 ## When the terminal is too small
 

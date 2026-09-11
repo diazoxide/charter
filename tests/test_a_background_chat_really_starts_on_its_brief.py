@@ -44,11 +44,14 @@ import termios
 import time
 import unittest
 from contextlib import ExitStack
+from pathlib import Path
 from unittest import mock
 
 from charter import commands_frame, config
 from charter.frame import layout, state, tmuxctl
-from charter.harness import claude_code
+
+#: This checkout, for the `$PYTHONPATH` the pane's own launcher needs — see `setUp`.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 from tests import _tmuxreap, _tmuxsocket
 from tests._isolation import PersonaIso, make_plane, no_update_check_in
@@ -105,7 +108,14 @@ class _TwoChatsOnARealServer(PersonaIso):
         self.tmux_logs.mkdir()
         self.records = self.tmp / "records"
         self.records.mkdir()
-        self.recorder = self.tmp / "claude-recorder"
+        # **The recorder IS `claude`, first on the `PATH` the tmux client is started
+        # with.** Patching `ClaudeCodeHarness.binary` used to decide what ran in the pane;
+        # since profiles it decides nothing there, because the pane's first process is
+        # charter's own launcher and it resolves the profile's command in ITS process, out
+        # of reach of any patch this one makes.
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        self.recorder = bindir / "claude"
         self.recorder.write_text(
             f"#!{sys.executable}\n"
             "import json, os, sys, time\n"
@@ -116,8 +126,20 @@ class _TwoChatsOnARealServer(PersonaIso):
             "os.replace(p + '.tmp', p)\n"
             "time.sleep(120)\n")
         self.recorder.chmod(0o755)
-        server_env = dict(os.environ, RECORD_DIR=str(self.records),
-                          CHARTER_ROOT=str(config.ROOT))
+        # `$PYTHONPATH` because the pane's launcher is a real `python -P -m charter` child
+        # and `-P` keeps its own cwd — a workspace directory — off `sys.path` (#390): it
+        # would not find the charter under test at all, and a launcher that cannot start
+        # takes its window with it. Stated on THIS process's environment as well as on the
+        # server's, because a pane's `$PATH` comes from the tmux CLIENT (measured) while
+        # the rest of its environment comes from the server.
+        self.enterContext(mock.patch.dict(os.environ, {
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "RECORD_DIR": str(self.records),
+            "CHARTER_ROOT": str(config.ROOT),
+            "PYTHONPATH": os.pathsep.join(
+                [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
+        }))
+        server_env = dict(os.environ)
         #: Each workspace's recorded chat pane.
         self.panes: dict[str, str] = {}
         for ws in ("alpha", "beta"):
@@ -173,8 +195,7 @@ class _TwoChatsOnARealServer(PersonaIso):
 
     def _stand_ins(self) -> list:
         """Everything an open runs with here beyond the real launcher and the real tmux."""
-        return [mock.patch.object(claude_code.ClaudeCodeHarness, "binary", str(self.recorder)),
-                mock.patch.object(commands_frame, "_spawn_gather"),
+        return [mock.patch.object(commands_frame, "_spawn_gather"),
                 mock.patch("sys.stdout.isatty", return_value=True),
                 mock.patch("sys.stdin.isatty", return_value=False)]
 

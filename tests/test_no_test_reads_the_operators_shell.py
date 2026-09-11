@@ -57,6 +57,20 @@ class WhatIsGuarded(unittest.TestCase):
         self.assertIn("CHARTER_SESSION_ID", _envguard._LOUD)
         self.assertIn("CLAUDE_CODE_SESSION_ID", _envguard._LOUD)
 
+    def test_the_profile_a_chat_runs_is_guarded(self):
+        """`$CHARTER_HARNESS_PROFILE` is an identity by this module's own test — inside a
+        frame it is that chat's profile, in CI it is unset — so a test that reads it
+        without saying what it holds is reading the operator's own terminal."""
+        self.assertIn("CHARTER_HARNESS_PROFILE", _envguard._LOUD)
+
+    def test_the_profile_does_not_ride_the_frames_identity(self):
+        """And it is guarded by a SPELLING rather than by the derivation above, because it
+        must never join that list: every name in `_FRAME_IDENTITY` goes onto a tmux `-e`,
+        which is world-readable argv. The launcher sets the profile at the `exec` instead
+        (`frame/launcher.environment`), which is the whole reason `env` can reach a harness
+        without `layout.CARRIABLE`."""
+        self.assertNotIn("CHARTER_HARNESS_PROFILE", commands_frame._FRAME_IDENTITY)
+
     def test_tmux_itself_is_guarded_not_only_its_pane(self):
         """The pair that decides "am I inside a tmux". `$TMUX_PANE` arrives from
         `_PANE_ID_VARS`; `$TMUX` has no constant to derive it from and is spelled once."""

@@ -1150,9 +1150,24 @@ KIND_MISMATCH = ("charter: profile '{name}' is a {kind} profile, not a {asked} o
     window named like a chat or an `@charter_chat` set to one, passes this check. It is a guard
     rail against a model's accidental misuse, not a boundary.
 - `rest` loses a leading `--` the way `_launch` strips it (`:5105`).
-- Every failure prints to the pane's stdout/stderr and exits non-zero. `_launch`'s eager
-  `_query_pane_dead_status` then reports it with `_pane_last_words` (L4), so the operator reads
-  charter's own sentence.
+- **Every failure reaches the operator without the dead pane (ruling 42, measured — this
+  paragraph replaces what Task 2 was written with).** The claim here was that `_launch`'s
+  eager `_query_pane_dead_status` reports a pane's refusal with `_pane_last_words`, and the
+  measurement says it cannot: the eager ask completes 6-14 ms after the start while a
+  Python launcher's first line runs at 19-22 ms, so all 40 measured refusals were missed —
+  on charter's own server the teardown hook had already killed the window
+  (`_pane_last_words` → `[]`), and in the operator's tmux `_launch_in_operator_tmux` closes
+  it before reading. So:
+  - an **attended** launcher prints its refusal in the pane and **waits for Enter** before
+    exiting (`launcher._wait_for_the_operator` — a LINE and not a raw keystroke, because a
+    `tcsetattr` from a pane left the launcher killed by a signal on a Linux runner) — the pane is charter's while no harness has run in
+    it (ADR 0018 as the spec amends it, and ruling 30's spirit);
+  - an **unattended** one records the refusal and its exit code under the chat
+    (`state.record_launch`) and exits; the launch that opened the chat reads it back
+    (`commands_frame._await_the_launcher`, bounded by `_LAUNCHER_SECONDS`) and reports it,
+    which is what a reopen and a handoff have instead of somebody at the pane. The same
+    record carries the ordinary "the harness has the pane now" answer, so a chat that
+    started costs no wait at all.
 
 **`KNOWN` entry** (`tests/test_plane_spawn_guard.py`):
 
@@ -1382,9 +1397,15 @@ case, which seeds a launch record. The server env carries `CHARTER_ROOT`, so
   the recorder wrote.
 - `test_a_harness_exit_code_travels_as_it_did` (L2): recorder exits 7 →
   `state.exit_code(fid) == 7` after the hook fires; the window is gone.
-- `test_a_refusal_in_the_pane_is_what_the_operator_reads` (L4): the recorder removed from disk
-  after the pre-tmux check (patch `launcher.refusal` to `""` for the pre-tmux call only) →
-  `_launch` returns 127 and stderr contains `"not on PATH"`, read off the pane.
+- `test_an_attended_pane_holds_its_refusal_until_somebody_reads_it` and
+  `test_an_unattended_refusal_is_read_back_by_the_launch_that_opened_the_chat` (L4, as
+  ruling 42 rewrites it): the plane declares a profile and the pre-tmux `launcher.refusal`
+  is stood down in the launching process only, so the PANE's own launcher refuses (review
+  B1) — the state the two checks exist for. Attended: the refusal is on the pane and
+  `#{pane_dead}` is still `0` until a key is sent, then the chat's exit code is
+  `REFUSED_EXIT`. Unattended: `_launch` returns `REFUSED_EXIT` and says the pane's own
+  sentence. (The original — a recorder removed from disk, read back through
+  `_pane_last_words` — is the thing the measurement showed cannot work.)
 - `test_the_exec_env_reaches_the_harness_and_not_tmux` (L6): the recorder's env holds
   `CHARTER_HARNESS_PROFILE=claude`, and neither `show-environment -g` nor
   `show-environment -t <session>` holds that name.

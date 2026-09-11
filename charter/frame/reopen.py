@@ -118,6 +118,15 @@ class Chat(NamedTuple):
     #: reopen can put the operator back on it rather than on whichever window it created
     #: first.
     active: bool
+    #: The PROFILE this chat ran — `charter.local.toml`'s name for its command and
+    #: environment — or ``""`` for a chat recorded before profiles existed, which reopens on
+    #: the built-in named after its kind. A reopen never substitutes another
+    #: (`commands_frame._reopen_one`): a profile may be another account, where this chat's
+    #: conversation does not exist.
+    #:
+    #: Defaulted, because a manifest written one field ago is the migration case this whole
+    #: reader is built to survive (:func:`_chat`), and `VERSION` stays 1 for it.
+    profile: str = ""
 
 
 class Frame(NamedTuple):
@@ -305,7 +314,7 @@ def _chat(raw) -> Chat | None:
         return None
     text = {k: (raw.get(k) if isinstance(raw.get(k), str) else "")
             for k in ("chat", "workspace", "persona", "harness", "cwd", "resume",
-                      "transcript")}
+                      "transcript", "profile")}
     return Chat(active=raw.get("active") is True, **text)
 
 

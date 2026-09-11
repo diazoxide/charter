@@ -109,6 +109,11 @@ class Doomed(NamedTuple):
     #: has to say so. ``False`` for a cwd that is gone, for one that was never recorded and
     #: for a chat with no workspace: none of those is a chat standing somewhere else.
     cwd_outside: bool
+    #: The profile this chat is running (`state.record_profile`), or ``""`` for a chat
+    #: launched by a charter that predates profiles — which is what a reopen needs to put
+    #: it back on its own account rather than on another one, and what the row shows in
+    #: place of the harness (:func:`title`).
+    profile: str = ""
 
 
 class Plan(NamedTuple):
@@ -184,6 +189,10 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
             # the act have to be one reading, which is this record's whole reason.
             cwd_outside=(bool(cwd) and bool(ws) and os.path.isdir(cwd)
                          and not ws_mod.contains(ws, cwd)),
+            # Read off the chat's own record rather than out of `identity`: the profile is
+            # not one of the five names a frame's identity carries onto a tmux argv, and a
+            # reopen has to have it to bring the chat back on its own account.
+            profile=state.profile(fid) or "",
         ))
     return Plan(chats=tuple(out), focus=focus)
 
@@ -419,7 +428,11 @@ def title(c: Doomed) -> str:
     title is, and never here (`chats.py`'s rule, and the masked-containment finding behind
     it).
     """
-    return f"{c.chat} · {c.harness}" if c.harness else c.chat
+    # The PROFILE where there is one: two chats of one kind may be two accounts, and the
+    # profile is the name the operator gave the one this row is about. A chat from before
+    # profiles still names its harness, which is all it ever recorded.
+    shown = c.profile or c.harness
+    return f"{c.chat} · {shown}" if shown else c.chat
 
 
 #: The row that OPENS the confirmation, the row that goes through with it, and one row per

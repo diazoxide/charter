@@ -1,0 +1,340 @@
+"""A real chat pane starts as charter's launcher and becomes the harness — on real tmux.
+
+The claim this file holds is the one the whole feature rests on: every chat pane's first
+process is `charter frame-launch`, and after its `exec` the pane is indistinguishable from
+one the harness was started in directly. The pane id charter recorded, the exit code, the
+`pane-died` hooks, `$TMUX_PANE` and the liveness list all answer what they answered before
+profiles existed — measured on tmux 3.7c and at the 3.2 floor, on charter's own server and
+in an operator's, before any of it was built
+(`workspaces/harness-profiles/refs/task2-measure/`, and `docs/frame.md`'s *How a harness
+starts*). This is that measurement as a test, on whatever tmux the runner has.
+
+**And the two halves of ruling 42**, which the measurement is the reason for: a refusal the
+pane prints and exits on is read by nobody — the eager dead-status ask completes 6-14 ms
+after the start while the launcher's first line runs at 19-22 ms, and the teardown hook
+then kills the window. So an attended pane shows its refusal and WAITS for a key, and an
+unattended one records it where the launch that opened the chat reads it back.
+
+**The recorder is the harness here**, first on the `PATH` the tmux client is started with:
+a launcher resolves the profile in its own process, so patching `ClaudeCodeHarness.binary`
+in this one would not reach the pane at all.
+"""
+
+from __future__ import annotations
+
+import itertools
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from charter import commands_frame, config
+from charter.frame import launcher, state, tmuxctl
+
+from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
+from tests._isolation import PersonaIso, make_plane, no_background_refresh, \
+    no_update_check_in
+
+_HAS_TMUX = shutil.which("tmux") is not None
+
+#: A fresh socket per CASE, never per class: a server told to exit is still accepting on
+#: its socket for a few milliseconds, and the next case's `new-session` draws that race
+#: (`test_a_background_chat_really_starts_on_its_brief.py` records the CI run that showed
+#: it).
+_SERVERS = itertools.count()
+
+#: This checkout, for the `$PYTHONPATH` the pane's own launcher needs. `-P` keeps the
+#: child's cwd off `sys.path` (#390) and its cwd is a workspace directory, so without this
+#: `python -P -m charter frame-launch` cannot import the charter under test — it would exit
+#: at once and take its window with it, which looks exactly like a launch that never
+#: happened.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_LOCAL = """
+[harness.claude-work]
+kind = "claude"
+command = ["claude"]
+env = { CLAUDE_CONFIG_DIR = "~/.cw" }
+"""
+
+
+def _await(predicate, timeout: float = 15.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return bool(predicate())
+
+
+class _ARealChatOnARealServer(PersonaIso):
+    """One workspace, a real private server, and a recorder standing in for `claude`."""
+
+    WS = "beta"
+    SLUG = "pane-becomes-harness"
+    #: What the recorder exits with once it has written its file. `None` keeps it alive.
+    EXIT_WITH: int | None = None
+
+    def setUp(self) -> None:
+        super().setUp()
+        v = tmuxctl.version()
+        if v is None or v < tmuxctl.FLOOR:
+            self.skipTest(f"the frame's floor is tmux {tmuxctl.FLOOR[0]}.{tmuxctl.FLOOR[1]}"
+                          f"; this machine has {v}")
+        make_plane(self)
+        no_background_refresh(self)
+        no_update_check_in(config.ROOT)
+        # A launch with no terminal of its own: `attach=False`, the way a tab or a handoff
+        # drives it, and the state `os.get_terminal_size()` raising is the seam for.
+        _ttyguard.no_terminal()
+        self.tmux = shutil.which("tmux")
+        self.socket = _tmuxreap.name(f"{self.SLUG}-{next(_SERVERS)}")
+        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.addCleanup(self._reap_the_server)
+        # A detached `charter frame-gather` outlives the case and is refused by
+        # `tests/_planeguard`; what is asked here is what tmux does.
+        self.enterContext(mock.patch.object(commands_frame, "_spawn_gather"))
+        # No panel panes: every one is another `-m charter` child, and none of them is what
+        # this file is about.
+        self.enterContext(mock.patch.object(commands_frame, "_drawable_slots",
+                                            return_value=[]))
+        (config.WORKSPACES_DIR / self.WS).mkdir(parents=True, exist_ok=True)
+
+        self.records = self.tmp / "records"
+        self.records.mkdir()
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        # **The harness**: it writes down the argv, the environment and the pid it was
+        # given — which is the whole measurement — and then either stays or exits with a
+        # number the frame has to carry out.
+        (bindir / "claude").write_text(
+            f"#!{sys.executable}\n"
+            "import json, os, sys, time\n"
+            "out = os.path.join(os.environ['RECORD_DIR'], 'harness.json')\n"
+            "with open(out + '.tmp', 'w') as f:\n"
+            "    json.dump({'argv': sys.argv[1:], 'env': dict(os.environ),\n"
+            "               'pid': os.getpid()}, f)\n"
+            "os.replace(out + '.tmp', out)\n"
+            f"{'sys.exit(' + str(self.EXIT_WITH) + ')' if self.EXIT_WITH is not None else 'time.sleep(300)'}\n")
+        (bindir / "claude").chmod(0o755)
+        self.enterContext(mock.patch.dict(os.environ, {
+            # First on the client's `PATH`, ahead of `tests/_claudeguard`'s own fake: the
+            # launcher resolves the profile's command in the PANE, so this is the only way
+            # to decide what really runs there.
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "RECORD_DIR": str(self.records),
+            "CHARTER_ROOT": str(config.ROOT),
+            "PYTHONPATH": os.pathsep.join(
+                [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
+            **_gitguard.environment(),
+        }, clear=True))
+
+    def _reap_the_server(self) -> None:
+        subprocess.run([self.tmux, "-L", self.socket, "kill-server"],
+                       capture_output=True, timeout=20)
+        try:
+            os.unlink(_tmuxsocket.socket_path(self.socket))
+        except OSError:
+            pass
+
+    def _tmux(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([self.tmux, "-L", self.socket, *args], capture_output=True,
+                              text=True, timeout=20)
+
+    def _launch(self, **ns) -> int:
+        args = SimpleNamespace(**{"harness": "claude", "rest": [], "no_frame": False,
+                                  "workspace": self.WS, "pick": False, "attach": False,
+                                  "size": (120, 40), **ns})
+        return commands_frame._launch(args)
+
+    def _harness(self) -> dict:
+        """What the exec'd harness wrote down, once it has run."""
+        record = self.records / "harness.json"
+        self.assertTrue(_await(record.is_file),
+                        f"the harness never ran in the pane: {self._pane_text()}")
+        return json.loads(record.read_text())
+
+    def _alive(self, pane: str) -> bool:
+        """Is *pane*'s own process still running?
+
+        **The reading a refusal in the pane is asserted on, rather than the exit code the
+        `pane-died` hook records** — and the difference is measured rather than assumed. A
+        launcher that refuses exits without ever `exec`ing a harness, and on the Linux
+        runner that pane comes back dead with an EMPTY `#{pane_dead_status}` and no exit
+        file written, where the same pane on macOS carries the number; a pane whose HARNESS
+        exits records its code on both (`TheHarnessExitCodeTravelsAsItDid`, which is where
+        that contract belongs). What ruling 42 is about is whether the sentence survives
+        long enough to be read and whether a keypress then releases it, and that is exactly
+        what this answers.
+
+        A pane tmux no longer lists at all is not alive either — the teardown hook closes
+        the window once the chat is over.
+        """
+        out = self._tmux("display-message", "-p", "-t", pane, "#{pane_dead}")
+        return out.returncode == 0 and out.stdout.strip() == "0"
+
+    def _pane_text(self, pane: str | None = None) -> str:
+        """What is on the pane, with tmux's own hard wrap taken out.
+
+        `capture-pane` returns the pane as it is DRAWN, so a sentence longer than the pane
+        is wide comes back broken across lines mid-word. Joining is what makes an assertion
+        about the sentence rather than about the width of the window it landed in.
+        """
+        pane = pane or (state.harness_pane("beta.1") or "")
+        out = self._tmux("capture-pane", "-p", "-S", "-", "-t", pane).stdout
+        return "".join(out.splitlines())
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ThePaneCharterStartsIsThePaneTheHarnessRunsIn(_ARealChatOnARealServer,
+                                                    unittest.TestCase):
+    """L1, L5 and L6 of the measurement, as one launch: the pane charter recorded is the
+    pane the harness is in, it is that pane to every status reader, and the profile's
+    environment arrived without crossing tmux."""
+
+    def test_the_pane_charter_recorded_is_the_one_the_harness_is_running_in(self):
+        self.assertEqual(self._launch(), 0)
+        fid = "beta.1"
+        pane = state.harness_pane(fid)
+        self.assertTrue(pane, "the launch recorded no harness pane")
+        harness = self._harness()
+        pid = self._tmux("display-message", "-p", "-t", pane, "#{pane_pid}").stdout.strip()
+        self.assertEqual(pid, str(harness["pid"]),
+                         "the `exec` did not keep the launcher's pid for the harness, so "
+                         "the pane charter recorded is not the harness's own")
+
+    def test_the_harness_is_still_this_chat_to_every_status_reader(self):
+        """L5: `$TMUX_PANE` inside the harness is the pane charter recorded, and the chat
+        is in the server's own liveness list — which is what `state.reap` spares."""
+        self.assertEqual(self._launch(), 0)
+        fid = "beta.1"
+        harness = self._harness()
+        self.assertEqual(harness["env"].get("TMUX_PANE"), state.harness_pane(fid))
+        self.assertTrue(_await(lambda: fid in (commands_frame._live_chats(self.socket)
+                                               or set())),
+                        "the chat is not in the server's liveness list")
+
+    def test_the_profile_reaches_the_harness_and_never_tmux(self):
+        """L6, and the constraint the launcher exists for: `CHARTER_HARNESS_PROFILE` is set
+        at the `exec`, so it reaches the harness without joining `layout.CARRIABLE` and
+        without passing through tmux's own argument parser."""
+        self.assertEqual(self._launch(), 0)
+        harness = self._harness()
+        self.assertEqual(harness["env"].get("CHARTER_HARNESS_PROFILE"), "claude")
+        self.assertEqual(harness["env"].get("CHARTER_HARNESS"), "claude-code")
+        for scope in (("show-environment", "-g"),
+                      ("show-environment", "-t", state.workspace_prefix(self.WS))):
+            said = self._tmux(*scope).stdout
+            self.assertNotIn("CHARTER_HARNESS_PROFILE", said,
+                             "the profile crossed tmux, where only its name may go")
+
+    def test_the_chat_is_framed_because_the_pane_proved_it(self):
+        """Rulings 29 and 33 end to end: the launcher asked tmux whether its own pid was
+        the `#{pane_pid}` of a live pane whose window is named for this chat, and kept the
+        chat's session id because it was. A launcher that could not prove it drops that id
+        — which is what stops a `charter frame-launch` run from a model's tool shell
+        rewriting a chat's record."""
+        self.assertEqual(self._launch(), 0)
+        self.assertEqual(self._harness()["env"].get("CHARTER_SESSION_ID"), "beta.1")
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class TheHarnessExitCodeTravelsAsItDid(_ARealChatOnARealServer, unittest.TestCase):
+    """L2: the `pane-died` hooks are installed against the launcher's pane and fire for the
+    harness that replaced it, so the code the harness chose is the code charter records."""
+
+    SLUG = "pane-exit-code"
+    EXIT_WITH = 7
+
+    def test_a_harness_exit_code_travels_as_it_did(self):
+        self.assertEqual(self._launch(), 0)
+        fid = "beta.1"
+        self.assertTrue(_await(lambda: state.exit_code(fid) == 7),
+                        f"the exit code did not reach the chat's state: "
+                        f"{state.exit_code(fid)!r}")
+        self.assertTrue(_await(lambda: fid not in self._tmux(
+            "list-windows", "-a", "-F", "#{window_name}").stdout.split()),
+            "the teardown hook did not close the window of a chat that ended")
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.TestCase):
+    """Ruling 42, both halves, against a real pane.
+
+    The plane declares a profile, so the pane's own launcher refuses it (review B1) — while
+    the check this process makes before tmux is stood down, which is exactly the state the
+    two checks exist for: the plane can move between them.
+    """
+
+    SLUG = "pane-refusal"
+
+    def setUp(self) -> None:
+        super().setUp()
+        (config.ROOT / "charter.local.toml").write_text(_LOCAL)
+        (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
+        subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
+                       capture_output=True, env=dict(os.environ))
+        # Only the pre-tmux call, in THIS process. The pane's launcher is another process
+        # and runs the whole chain for itself, which is the half under test.
+        self.enterContext(mock.patch.object(launcher, "refusal", return_value=None))
+
+    def test_an_attended_pane_holds_its_refusal_until_somebody_reads_it(self):
+        self.assertEqual(self._launch(profile="claude-work"), 0)
+        fid = "beta.1"
+        pane = state.harness_pane(fid)
+        self.assertTrue(_await(
+            lambda: "cannot yet ask before a declared command runs" in self._pane_text(pane)),
+            f"the pane never showed the refusal: {self._pane_text(pane)!r}")
+        # **The property ruling 42 is about**: it is still there to be read. A launcher that
+        # printed and exited would have had its window killed by the teardown hook 6-14 ms
+        # after the start, and all 40 measured refusals were lost that way.
+        self.assertEqual(
+            self._tmux("display-message", "-p", "-t", pane, "#{pane_dead}").stdout.strip(),
+            "0", "the pane died with the refusal on it instead of waiting")
+        sent = self._tmux("send-keys", "-t", pane, "Enter")
+        self.assertEqual(sent.returncode, 0, sent.stderr)
+        self.assertTrue(_await(lambda: not self._alive(pane), 30),
+                        f"the keypress did not let the launcher go: "
+                        f"{self._pane_text(pane)!r}")
+
+    def test_a_key_pressed_before_the_pane_is_listening_is_not_lost(self):
+        """**The window between the refusal appearing and the read starting is where an
+        operator actually presses.** `tty.setraw`'s own default is `TCSAFLUSH`, which
+        discards input that arrived before the mode change — so a key pressed in that
+        window was thrown away and the pane waited for a second one nobody knew to send.
+        Measured on CI (Linux, tmux 3.4), where the case above went red for exactly this;
+        on the machine it was written on the timing happened to fall the other way, which
+        is why this case sends the key as early as it possibly can."""
+        self.assertEqual(self._launch(profile="claude-work"), 0)
+        pane = state.harness_pane("beta.1")
+        self._tmux("send-keys", "-t", pane, "Enter")
+        self.assertTrue(_await(lambda: not self._alive(pane), 30),
+                        f"the keypress was swallowed: {self._pane_text(pane)!r}")
+
+    def test_an_unattended_refusal_is_read_back_by_the_launch_that_opened_the_chat(self):
+        """Nobody is at a chat a handoff opens, so there is no key to wait for: the pane
+        records what it did and this launch — which has a caller listening — reports it and
+        carries the refusal's own exit code out.
+
+        Asserted on what was SAID rather than on the record it was read from: the launch
+        ends by reaping the chat that never started, so the record has done its job and
+        gone by the time anything could look at it. What has to survive is the sentence.
+        """
+        said: list[str] = []
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
+            rc = self._launch(profile="claude-work",
+                              opening=commands_frame.Opening("fix the widget please"))
+        self.assertEqual(rc, launcher.REFUSED_EXIT)
+        self.assertTrue(
+            any("cannot yet ask before a declared command runs" in s for s in said),
+            f"the launch did not report what the pane refused: {said}")
+
+
+if __name__ == "__main__":
+    unittest.main()

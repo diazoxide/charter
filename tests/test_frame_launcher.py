@@ -237,8 +237,15 @@ class MissingHarnessBinary(PersonaIso, unittest.TestCase):
         where `_record_crash` lives — a test calling `bypass` directly could never
         observe it."""
         from charter import cli
-        with mock.patch("os.execvp", side_effect=FileNotFoundError(2, "No such file")), \
+        # `os.execvpe` and not `os.execvp`: a profile carries an environment, so the
+        # launcher execs with one — and the condition is the same one, a `claude` that is
+        # not installed.
+        with mock.patch("charter.frame.launcher.os.execvpe",
+                        side_effect=FileNotFoundError(2, "No such file")), \
+             mock.patch("charter.frame.launcher.shutil.which",
+                        return_value="/nowhere/claude"), \
              mock.patch("sys.stdout.isatty", return_value=True), \
+             mock.patch("sys.stdin.isatty", return_value=False), \
              mock.patch("charter.cli._record_crash") as crash, \
              mock.patch("charter.util.err"):
             rc = cli.main(["claude", "--no-frame"])
@@ -1135,7 +1142,11 @@ class Respawn(PersonaIso, unittest.TestCase):
         self.assertEqual(fake.respawns, [])
 
 
-class MissingTmux(unittest.TestCase):
+class MissingTmux(PersonaIso, unittest.TestCase):
+    """`PersonaIso` since a launch resolves its profile before it asks tmux anything:
+    `profiles.current()` reads the plane's own `charter.local.toml`, and `tests/_planeguard`
+    refuses a read of the developer's — this machine's profiles are in no commit."""
+
     def test_an_absent_tmux_names_the_remedy_and_does_not_start_a_frame(self):
         """Adapted from the task brief's own draft, which mocked `tmuxctl.available()`.
         Correction 5 requires `cmd_launch` to call `tmuxctl.version()` exactly ONCE and
@@ -1175,16 +1186,18 @@ def _ceilings(line: str) -> list[str]:
     return [ln for ln in line.split("\n") if "↳" in ln]
 
 
-class Probe(unittest.TestCase):
+class Probe(PersonaIso, unittest.TestCase):
     """`--probe` (on `cmd_launch`) and `charter frame-probe` (`cmd_probe`) share one
     read-only gate, `commands_frame.frame_ready` — mirroring `cmd_launch`'s OWN behaviour
     below `tmuxctl.FLOOR` (warn, still runs), not a stricter refusal, is the whole point:
     a probe that refused there would report a frame this same launcher goes on to draw.
     """
     def setUp(self) -> None:
-        # Outside a frame, with no session id and no pinned workspace: stated here
-        # rather than inherited from the shell the suite was launched from
-        # (#519, #521, #528).
+        # `PersonaIso` for the case below that reaches the LAUNCH path, which resolves a
+        # profile off the plane (`profiles.current()`) — the developer's own file is
+        # refused outright by `tests/_planeguard`. It declares the environment unset too,
+        # which is what this class said for itself before (#519, #521, #528).
+        super().setUp()
         _envguard.unset_all()
 
     def test_present_and_at_the_floor_exits_zero(self):
@@ -4548,25 +4561,45 @@ class BypassRouting(PersonaIso, unittest.TestCase):
     `state.reap` and all — which writes frame state under `config.STATE_DIR` and reaps
     everything beside it. That was the developer's real `.charter/` until this."""
 
-    def test_the_no_frame_flag_routes_to_bypass(self):
-        args = SimpleNamespace(harness="claude", rest=[], no_frame=True)
-        with mock.patch("charter.commands_frame.bypass", return_value=0) as byp, \
-             mock.patch("sys.stdout.isatty", return_value=True), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
-            rc = commands_frame.cmd_launch(args)
-        byp.assert_called_once_with(["claude"])
-        run.assert_not_called()
-        self.assertEqual(rc, 0)
+    def _routed(self, **ns):
+        """Where a launch with no frame goes, and what it never touches.
 
-    def test_a_non_tty_stdout_routes_to_bypass_even_without_the_flag(self):
-        args = SimpleNamespace(harness="claude", rest=[], no_frame=False)
-        with mock.patch("charter.commands_frame.bypass", return_value=0) as byp, \
-             mock.patch("sys.stdout.isatty", return_value=False), \
-             mock.patch("charter.commands_frame.subprocess.run") as run:
+        **It is the LAUNCHER since profiles, not `bypass`** — and that is the decision
+        under test rather than a rename: the launcher runs the profile's own checks and
+        `exec`s its command with its environment, so `--no-frame` and a pipe are not ways
+        around a guard. `bypass` is still what a launch with no profile reaches
+        (`charter frame -- <cmd>`), and it must not be reached from here.
+        """
+        args = SimpleNamespace(**{"harness": "claude", "rest": [], **ns})
+        with mock.patch("charter.frame.launcher.start", return_value=0) as started, \
+                mock.patch("charter.commands_frame.bypass", return_value=0) as byp, \
+                mock.patch("sys.stdin.isatty", return_value=False), \
+                mock.patch("sys.stdout.isatty",
+                           return_value=ns.get("no_frame", False)), \
+                mock.patch("charter.commands_frame.subprocess.run") as run:
             rc = commands_frame.cmd_launch(args)
-        byp.assert_called_once_with(["claude"])
-        run.assert_not_called()
         self.assertEqual(rc, 0)
+        run.assert_not_called()
+        byp.assert_not_called()
+        return started
+
+    def test_the_no_frame_flag_routes_to_the_launcher(self):
+        started = self._routed(no_frame=True)
+        started.assert_called_once()
+        self.assertEqual(started.call_args.args[0].name, "claude")
+
+    def test_a_non_tty_stdout_routes_to_the_launcher_even_without_the_flag(self):
+        started = self._routed(no_frame=False)
+        started.assert_called_once()
+
+    def test_a_launch_with_no_profile_still_reaches_bypass(self):
+        """The escape hatch: `charter frame -- <cmd>` runs a command charter has never met,
+        so there is no profile to resolve and nothing to check it against."""
+        args = SimpleNamespace(harness="frame", rest=["--", "true"], no_frame=True)
+        with mock.patch("charter.commands_frame.bypass", return_value=0) as byp, \
+                mock.patch("sys.stdout.isatty", return_value=True):
+            self.assertEqual(commands_frame.cmd_launch(args), 0)
+        byp.assert_called_once_with(["true"])
 
     def test_a_tty_without_no_frame_does_not_bypass(self):
         fake = _FakeTmux(exit_code=0)
@@ -4940,7 +4973,7 @@ class FrameArgvSplit(unittest.TestCase):
                 self.assertIsNone(frame_rest)
 
 
-class MainDeliversFrameRest(unittest.TestCase):
+class MainDeliversFrameRest(PersonaIso, unittest.TestCase):
     """The DELIVERY half of Critical 2. `FrameArgvSplit` above tests `_split_frame_argv`
     in isolation, re-implementing in its own `_parse` helper the graft `cli.main` itself
     performs (`args.rest = frame_rest`) — a test that only exercises the helper cannot
@@ -4948,12 +4981,21 @@ class MainDeliversFrameRest(unittest.TestCase):
     frame_rest` from `main()` left the full suite green, while `charter claude -p hi`
     silently ran with `rest=[]`, dropping `-p hi` entirely."""
 
-    def test_charter_claude_dash_p_hi_reaches_bypass_via_main(self):
+    def test_charter_claude_dash_p_hi_reaches_the_harness_via_main(self):
+        """The same delivery, one layer along: a harness launch with no frame is the
+        LAUNCHER's `exec` now (it runs the profile's checks first), so what this asserts is
+        the argv that reaches the harness — `-p hi` and nothing charter added."""
         from charter import cli
-        with mock.patch("charter.commands_frame.bypass", return_value=0) as byp:
+        with mock.patch("charter.frame.launcher.os.execvpe") as execd, \
+                mock.patch("charter.frame.launcher.shutil.which",
+                           return_value="/nowhere/claude"), \
+                mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("sys.stdin.isatty", return_value=False):
             rc = cli.main(["claude", "--no-frame", "-p", "hi"])
-        byp.assert_called_once_with(["claude", "-p", "hi"])
         self.assertEqual(rc, 0)
+        execd.assert_called_once()
+        self.assertEqual(execd.call_args.args[0], "claude")
+        self.assertEqual(execd.call_args.args[1], ["claude", "-p", "hi"])
 
     def test_charter_frame_palette_reaches_cmd_palette_via_main(self):
         """The delivery half of the `_split_frame_argv` fix above: a test that only
@@ -5449,7 +5491,12 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         new_window = next(c for c in fake.calls if "new-window" in c)
         self.assertNotIn("claude", new_window, f"the harness started too early: {new_window}")
         respawn = next(c for c in fake.calls if "respawn-pane" in c)
-        self.assertEqual(respawn[respawn.index("--") + 1:], ["claude"])
+        # What `respawn-pane` starts is charter's own launcher, which resolves the profile
+        # in the pane and `exec`s it there (`frame/launcher.py`): the harness's own command
+        # never reaches tmux at all, and only the profile's NAME does.
+        self.assertEqual(respawn[-5:], ["frame-launch", "--profile", "claude",
+                                        "--attended", "--"])
+        self.assertNotIn("claude", respawn[respawn.index("--") + 1:][:1])
 
     def test_the_pane_is_kept_askable_before_the_harness_can_exit(self):
         """Matched on the PANE scope, not on the string: charter arms `remain-on-exit`

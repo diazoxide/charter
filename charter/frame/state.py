@@ -932,6 +932,101 @@ def record_workspace(fid: str, name: str) -> None:
         return
 
 
+#: Which harness PROFILE this chat runs, as `charter.local.toml` names it — one file, for
+#: `workspace`'s own reason: one fact, written by the one process that knows it.
+#:
+#: **It is not `identity`, and the difference is the promise that list carries.**
+#: `record_identity` holds `commands_frame._FRAME_IDENTITY`, and every value in it goes onto
+#: a tmux `-e` argv, which is world-readable in `/proc/<pid>/cmdline`. `CHARTER_HARNESS`
+#: stays the KIND there because hooks compare it to `claude-code`; the profile is the
+#: launcher's own answer, set at the exec (`frame/launcher.environment`) and written here.
+_PROFILE_FILE = "profile"
+
+
+def record_profile(fid: str, name: str) -> None:
+    """Write down which profile this chat runs.
+
+    Same atomic-write, never-raise, rewrite-on-every-launch shape as
+    :func:`record_workspace`, and for the identical reason: an adopted directory's value is
+    another chat's answer, so it is overwritten rather than merged.
+
+    Written by the launch before tmux is asked for anything — `+`, a tab, a reopen and a
+    handoff all read it back to decide what the next chat runs — and again by the pane's own
+    launcher, which is the one that resolved the profile in the end.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.replace_for(d / _PROFILE_FILE, f"{name}\n")
+    except OSError:
+        return
+
+
+def profile(fid: str) -> str | None:
+    """The profile recorded for *fid*, or ``None``.
+
+    ``None`` for a chat launched by a charter that predates profiles, for a record that
+    cannot be read, and for an empty one — `charter frame -- <cmd>` runs no profile and
+    records the empty answer rather than a name it does not have. Three reasons, one answer,
+    because every caller does the same thing with it: fall back to what the chat's kind
+    says, and never to a substitute (`commands_frame._same_profile_as`).
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / _PROFILE_FILE).read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+#: What the pane's own launcher decided, for the launch that opened the chat to read back.
+#:
+#: **Ruling 42, and it is measured rather than argued.** `_launch`'s eager dead-status ask
+#: completes 6-14 ms after the start while a Python launcher's first line runs at 19-22 ms,
+#: so a refusal the pane printed and exited on is never read off the pane: on charter's own
+#: server the teardown hook kills the window at once, and `_pane_last_words` answered `[]`
+#: in all 40 measured runs. An attended pane waits for a key instead; an unattended one —
+#: a reopen, a handoff — has nobody to wait for, so it leaves its answer here.
+_LAUNCH_FILE = "launch"
+
+
+def record_launch(fid: str, code: int = 0, text: str = "") -> None:
+    """Record what the pane's launcher did: nothing but ``0`` once it has handed the pane to
+    the harness, or the code it is exiting with and the refusal it just printed.
+
+    Both outcomes, not only the refusal, because the launch that is waiting for one of them
+    would otherwise pay its whole budget on every chat that started perfectly well.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.replace_for(d / _LAUNCH_FILE, f"{int(code)}\n{text}")
+    except OSError:
+        return
+
+
+def launch(fid: str) -> tuple[int, str] | None:
+    """``(exit code, refusal)`` the pane's launcher recorded, or ``None`` when it has not
+    answered yet. ``(0, "")`` is the harness having taken the pane over."""
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        raw = (d / _LAUNCH_FILE).read_text()
+    except OSError:
+        return None
+    code, _, text = raw.partition("\n")
+    try:
+        return int(code), text
+    except ValueError:
+        # A half-written or hand-edited record says nothing, which is what "not yet" means
+        # here: the caller carries on as it would for a launcher still working.
+        return None
+
+
 def frame_workspace(fid: str) -> str | None:
     """The workspace *fid* was launched for, or ``None`` when charter does not know.
 

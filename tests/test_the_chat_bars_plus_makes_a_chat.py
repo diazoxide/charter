@@ -74,7 +74,14 @@ class _APlusOnAFrameInAlpha(PersonaIso, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+        # `$PATH` is stated rather than cleared with the rest: a press now runs the
+        # profile's own guards before it launches (`commands_frame._launch_refusal`), and
+        # the first of them asks whether the command is on `PATH`. An empty environment is
+        # no machine anybody has — it would refuse every press here for a reason none of
+        # these cases is about, and `tests/_claudeguard` puts the `claude` they resolve on
+        # exactly this `PATH`.
+        self.enterContext(mock.patch.dict(
+            os.environ, {"PATH": os.environ.get("PATH", "")}, clear=True))
         (config.WORKSPACES_DIR / "alpha").mkdir(parents=True, exist_ok=True)
         _a_chat(self.FID, ws="alpha")
         self.said = self.enterContext(
@@ -155,11 +162,18 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
 
     def test_a_chat_with_no_recorded_harness_falls_back_to_the_planes_default(self):
         """The migration case — a chat launched by a charter that predates
-        `state.record_identity`."""
+        `state.record_identity`, which is the one rung where nothing about the chat itself
+        is left to go on.
+
+        The default is declared in the FILE rather than patched onto `config.HARNESS`:
+        since ruling 43 the effective default is `profiles.current()`'s, which reads
+        `charter.local.toml` over `charter.toml`, and a patched setting would pin a value
+        this path no longer reads."""
         state.record_identity(self.FID, {"CHARTER_HARNESS": ""})
-        with mock.patch.dict(config.HARNESS, {"default": "claude"}):
-            self._press()
+        (config.ROOT / "charter.local.toml").write_text('[harness]\ndefault = "claude"\n')
+        self._press()
         self.assertEqual(self.launched[0].harness, "claude")
+        self.assertEqual(self.launched[0].profile, "claude")
 
     def test_the_launch_is_sized_for_the_window_the_chat_is_on(self):
         """A launcher with no terminal of its own measures nothing, and `cmd_launch`'s own
@@ -333,7 +347,7 @@ class ThePressSaysWhyWhenItWillNotMakeAChat(_APlusOnAFrameInAlpha):
         self.assertEqual(self.launched, [])
         said = self._sentences()
         self.assertEqual(len(said), 1, said)
-        self.assertIn("records no harness this charter can launch", said[0])
+        self.assertIn("records no profile this charter can launch", said[0])
         self.assertIn("[harness] default", said[0],
                       "the refusal does not name the key that would fix it")
         self.assertTrue(said[0].startswith("cannot open another chat:"),

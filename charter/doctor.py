@@ -341,8 +341,16 @@ def check_control_plane_config() -> Result:
     # Read from `instance.load` rather than `config.HARNESS`, the way the worktrees branch
     # reads `instance.worktrees_of`: this row is about the FILE, and `derive` already ran
     # before anybody could have fixed it.
+    # **A profile is a name this key may hold** (ruling 43, and the spec's *`default` only
+    # preselects*). `instance.harness_of` compares the value against the launchable KINDS
+    # alone — `config.derive` reads nothing from `charter.local.toml`, so it cannot know the
+    # profiles — and a `default` naming a declared profile therefore arrives here as
+    # "refused" when it is nothing of the kind. `profiles.current()` is the one reader that
+    # knows, memoised per process and already paid for by the `harness profiles` row above.
+    from . import profiles as _profiles
+
     _refused = _instance.harness_of(_cfg).get("refused")
-    if _refused:
+    if _refused and _refused not in _profiles.current().profiles:
         return Result(
             "charter.toml",
             WARN,

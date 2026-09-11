@@ -326,8 +326,8 @@ here without starting one; [frame.md](frame.md) is the rest. If you ran `charter
 inside a Claude Code session, restart that session first — the plugin loads at the next one.
 
 `init` writes no `[harness] default`, so bare `charter` prints its usage until the plane
-names a harness — one key in `charter.toml`
-([control-plane.md](control-plane.md#default--bare-charter)):
+names a profile — one key in `charter.toml`, and `claude` is the built-in profile of Claude
+Code ([control-plane.md](control-plane.md#default--bare-charter)):
 
 ```toml
 [harness]

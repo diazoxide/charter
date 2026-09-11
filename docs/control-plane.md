@@ -466,9 +466,13 @@ be told otherwise. A shell alias does not help — charter runs the harness with
 the alias never resolves. A **harness profile** is the way: a kind, a command and an
 environment, declared in a file that stays on your machine.
 
-**Profiles are listed by `charter harness list`; launching one arrives in a later release.**
-Today charter reads them, refuses the broken ones by name, and keeps the file out of git.
-`charter claude`, bare `charter` and every chat still start exactly as they did.
+**Every chat now starts through charter's own launcher, and launching a DECLARED profile
+arrives in a later release.** Charter reads the profiles, refuses the broken ones by name,
+and keeps the file out of git; `charter claude`, bare `charter`, the `+`, a workspace tab
+and a reopen all run the built-in profile of their harness and record it. A profile this
+file declares is refused, by name, with a sentence saying charter cannot yet ask before a
+declared command runs — the release that adds the asking is the one that lets it launch,
+because until then nothing stands for your approval of a command that runs on a click.
 
 ### Profiles live in `charter.local.toml`, never in `charter.toml`
 
@@ -591,14 +595,16 @@ that one and runs it, so the workspace picker, `--no-frame`, `--probe`, `--works
 everything else the launcher does are the same behaviours, not a second set of them. Every
 subcommand keeps working untouched, `charter claude` included.
 
-The value is one of the words you would type after `charter`: `claude`, `opencode`,
-`codex` — the built-in profiles `charter harness list` shows, read out of charter's own
-registry rather than a list in this page, so a harness added to charter becomes a legal
-default the day it is registered. **Until launching a profile arrives, bare `charter` reads
-this key from `charter.toml` alone, and only as one of those words.** A `default` in
-`charter.local.toml` marks its row in `charter harness list` and launches nothing yet, and a
-declared profile's name in `charter.toml` is reported below like any other name charter
-cannot launch.
+The value is the name of a profile: one of the words you would type after `charter` —
+`claude`, `opencode`, `codex`, the built-in profiles `charter harness list` shows, read out
+of charter's own registry rather than a list in this page — or the name of a profile
+`charter.local.toml` declares. A `default` in the local file wins over the committed one,
+which is how a machine chooses its own without touching what everybody else pulls.
+
+**A declared profile is a legal value here and does not launch yet**: bare `charter` on a
+plane whose default names one is refused with the launcher's own sentence — charter cannot
+yet ask before a declared command runs — rather than started. A built-in default starts
+exactly as it did.
 
 **Charter does not pick one for you.** No default and you get the usage message, not
 "whatever is installed" (a machine with two of them has no answer, and the answer would
@@ -609,8 +615,8 @@ machine-local memory deciding what a committed command does). Naming it is one l
 
 ```
 $ charter
-✗ charter: [harness] default = "clyde" in ~/plane/charter.toml is not a harness charter
-  can launch — one of: claude, opencode, codex. Nothing was started.
+✗ charter: [harness] default = "clyde" names no profile this machine has — one of:
+  claude, codex, opencode.
 ```
 
 That is the whole reason this key is checked where it is read rather than where it is
