@@ -9,12 +9,59 @@ consent), and nothing here is ever done as a side effect of something else.
 
 from __future__ import annotations
 
-from . import util
+import sys
+
+from . import config, contain, profiles, tui, util
 from .harness import codex, registry
 
 
+def _list_profiles() -> None:
+    """Every harness profile this machine has, the file it came from, and why any was refused.
+
+    There is no `charter harness add` — a chat can run a command as easily as it can edit the
+    file, so a command could never stand for the operator's approval — so this is how an
+    operator who edited `charter.local.toml` reads back what charter made of it.
+
+    Read through `profiles.current`, what every launch surface reads, so a name that clashes
+    with a command is listed as refused here too. Built-ins first in registry order (a
+    declared replacement keeps its kind's place), then declared profiles by name. Widths are
+    measured from the cells (`tui.column`, `cmd_workspace_list`'s rule), and every cell that
+    came out of the file is contained first: a command is text a chat can write, and a
+    carriage return in it could otherwise redraw this line (ruling 35).
+
+    The git check runs here because a person typed this command; it never runs on a config
+    read.
+    """
+    read = profiles.current()
+    order = list(profiles.builtins())
+    rows = sorted(read["profiles"].values(),
+                  key=lambda p: (p.name not in order,
+                                 order.index(p.name) if p.name in order else 0, p.name))
+    heads = ("NAME", "KIND", "COMMAND")
+    body = [(contain.readable(p.name), p.kind, profiles.display(p)) for p in rows]
+    widths = [tui.column(h, [row[i] for row in body]) for i, h in enumerate(heads)]
+
+    def line(mark: str, cells, last: str) -> str:
+        return (mark + "".join(tui.pad(c, w) for c, w in zip(cells, widths)) + last).rstrip()
+
+    print(line("  ", heads, "FROM"), file=sys.stderr)
+    for p, cells in zip(rows, body):
+        print(line("* " if p.name == read["default"] else "  ", cells, p.source),
+              file=sys.stderr)
+    if read["refused"]:
+        print("refused:", file=sys.stderr)
+        for r in read["refused"]:
+            print(f"  {r.name or r.source}: {r.reason}", file=sys.stderr)
+    ignored = profiles.ignored_refusal(config.ROOT)
+    if ignored:
+        util.warn(ignored)
+
+
 def cmd_harness_list(args) -> int:
-    """Every registered harness, its ceilings, and which one this session is in."""
+    """Every harness profile, then every registered harness, its ceilings, and which one this
+    session is in."""
+    _list_profiles()
+    print(file=sys.stderr)
     live = registry.current()
     for h in registry.all():
         mark = "*" if h.name == live else " "

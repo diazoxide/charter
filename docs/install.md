@@ -327,7 +327,7 @@ inside a Claude Code session, restart that session first — the plugin loads at
 
 `init` writes no `[harness] default`, so bare `charter` prints its usage until the plane
 names a harness — one key in `charter.toml`
-([control-plane.md](control-plane.md#harnessdefault--bare-charter)):
+([control-plane.md](control-plane.md#default--bare-charter)):
 
 ```toml
 [harness]

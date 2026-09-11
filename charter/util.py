@@ -440,3 +440,67 @@ def git_ignores(root, path) -> bool | None:
         return None
     return run(["git", "-C", str(root), "check-ignore", "-q", str(path)],
                check=False).returncode == 0
+
+
+#: What git says about one path, as :func:`git_path_state` reports it. Five answers and not
+#: :func:`git_ignores`' ``bool | None``, because "git could not look" has to be one of them: a
+#: probe whose failure reads as its benign answer is a check that fails open (#917).
+NOT_A_REPO, TRACKED, IGNORED, COMMITTABLE, UNKNOWN_GIT = (
+    "not-a-repo", "tracked", "ignored", "committable", "unknown")
+
+#: The letters porcelain v1 uses for a path git tracks, in either column.
+_TRACKED_STATUS = frozenset(" MTADRCU")
+
+
+def git_path_state(root, path, *, timeout: float = 5.0) -> tuple[str, str]:
+    """``(state, why)`` for the existing *path* inside *root*: one of :data:`NOT_A_REPO`,
+    :data:`TRACKED`, :data:`IGNORED`, :data:`COMMITTABLE` or :data:`UNKNOWN_GIT`, and, for
+    that last one, what git said. Never raises.
+
+    Beside :func:`git_ignores` and not a change to it (review 4): `commands_secrets` and
+    `doctor.check_credential_paths` read that one's ``None`` for every non-zero `rev-parse`
+    as "not a repository", and a timeout added there would raise into both.
+
+    **One git call** (re-review N8), measured on git 2.50.1 for a file that exists:
+
+    - rc 0, ``?? <path>`` — git would commit it: :data:`COMMITTABLE`.
+    - rc 0, ``!! <path>`` — ignored and untracked: :data:`IGNORED`.
+    - rc 0 and nothing printed, or any tracked status (`` M``, or ``D `` beside ``!!`` after
+      `git rm --cached` and before the commit): :data:`TRACKED`, ignored or not, because the
+      next commit still carries it.
+    - rc 128 with ``not a git repository``: :data:`NOT_A_REPO`.
+    - anything else — another rc 128 such as ``dubious ownership``, git missing, a timeout, a
+      status line this cannot read: :data:`UNKNOWN_GIT`. An unknown is not a pass.
+
+    ``--no-optional-locks`` because a plain `status` refreshes the index and takes
+    `index.lock` when it can, and this runs often enough to break a concurrent `charter save`
+    — #917's failure (ruling 34). ``LC_ALL=C`` because "not a git repository" is git's own
+    sentence and a translated git says it in another language (ruling 32).
+    ``--untracked-files=all`` overrides an operator's `status.showUntrackedFiles=no`, which
+    would otherwise hide ``??``.
+    """
+    cmd = ["git", "--no-optional-locks", "-C", str(root), "status", "--porcelain=v1",
+           "--ignored=matching", "--untracked-files=all", "--", str(path)]
+    try:
+        proc = run(cmd, check=False, timeout=timeout, env={"LC_ALL": "C"})
+    except (ProcTimeout, OSError) as e:
+        return UNKNOWN_GIT, str(e)
+    said = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        if proc.returncode == 128 and "not a git repository" in said:
+            return NOT_A_REPO, ""
+        return UNKNOWN_GIT, said.splitlines()[0] if said else f"git exited {proc.returncode}"
+    codes = set()
+    for line in (proc.stdout or "").splitlines():
+        code = line[:2]
+        if code in ("??", "!!"):
+            codes.add(code)
+        elif set(code) <= _TRACKED_STATUS:
+            codes.add(TRACKED)
+        else:
+            return UNKNOWN_GIT, f"git status printed {line!r}"
+    if not codes or TRACKED in codes:
+        return TRACKED, ""
+    if "??" in codes:
+        return COMMITTABLE, ""
+    return IGNORED, ""

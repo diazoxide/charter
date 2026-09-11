@@ -8,11 +8,16 @@ each: the plane-root guard, the one-credential rule, the secret-leak check, and 
 persona's declared tools.
 
 ```bash
-charter harness list          # every harness, what it can't carry, and which one you're in
+charter harness list          # every profile, every harness, what it can't carry, and which one you're in
 charter harness install codex # Codex only — see below
 ```
 
 ```
+  NAME      KIND      COMMAND   FROM
+* claude    claude    claude    built-in
+  opencode  opencode  opencode  built-in
+  codex     codex     codex     built-in
+
   claude-code
 * opencode
       ↳ status-bar: no status-bar socket: opencode has no `statusLine` config …
@@ -26,9 +31,49 @@ charter harness install codex # Codex only — see below
       ↳ wiring-scope: no project-level config: hooks live only in `~/.codex/config.toml` …
 ```
 
-The `*` is the harness this session is in, and those names are what `$CHARTER_HARNESS`
+The profiles come first, and there `*` marks `[harness] default` (see [Profiles](#profiles)).
+Below them, `*` is the harness this session is in, and those names are what `$CHARTER_HARNESS`
 holds. A harness charter has no record of is reported too, as a warning rather than a clean
 row — an unverified integration and a complete one must not read the same.
+
+## Profiles
+
+A harness profile is a named way to launch one harness: its kind, its command, its
+environment. Every harness charter knows is a built-in profile named after itself. Two
+Claude Code accounts, or a Codex pinned to an older release, are profiles you declare in
+`charter.local.toml`, a file charter keeps out of git. The shape, what is refused and why,
+and how the file is kept uncommitted are in
+[control-plane.md](control-plane.md#harness--profiles-and-the-default).
+
+`charter harness list` shows every profile charter read, before the harnesses' ceilings:
+
+```
+  NAME          KIND      COMMAND                                  FROM
+  claude        claude    claude                                   built-in
+  opencode      opencode  opencode                                 built-in
+  codex         codex     codex                                    built-in
+* claude-work   claude    CLAUDE_CONFIG_DIR=~/.claude-work claude  charter.local.toml
+  codex-pinned  codex     npx -y @openai/codex@0.140.0             charter.local.toml
+refused:
+  claude.alt: profile 'claude.alt' is not a name charter accepts — letters, digits, '_' and '-', starting with a letter or digit. Rename the table.
+```
+
+- **NAME** — what the profile is called; `*` marks `[harness] default`.
+- **KIND** — which harness program it launches.
+- **COMMAND** — the environment it sets, then its command. A control character in either is
+  shown escaped, never interpreted: the file is one a chat can write, and a carriage return
+  could otherwise redraw the line to show a different command.
+- **FROM** — `built-in`, or the file that declared it.
+
+Then `refused:`, one line per profile charter would not read and why, and a warning while
+git would commit the file.
+
+**There is no `charter harness add`.** A profile is added by editing `charter.local.toml`. A
+chat can run a command as easily as it can edit a file, so a command could never stand for
+your approval of what a profile runs; it would only save typing.
+
+Launching a profile arrives in a later release. Today the list is what charter read, and
+every launch is the one it always was.
 
 ## What each harness lets charter offer
 

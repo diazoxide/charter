@@ -230,7 +230,7 @@ class TestGitignorePresenceCheckIsPrecise(InitIso):
         idempotence while actually exercising the append path."""
         (self.root / ".gitignore").write_text(
             "/workspaces/*/*\n!/workspaces/.gitkeep\n/.charter/\n"
-            f"{commands.LOCAL_SETTINGS_IGNORE}\n")
+            f"{commands.LOCAL_SETTINGS_IGNORE}\n{commands.LOCAL_PROFILES_IGNORE}\n")
         before = (self.root / ".gitignore").read_text()
         self._init()
         after = (self.root / ".gitignore").read_text()

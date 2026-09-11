@@ -34,6 +34,15 @@ class WhatIsGuarded(unittest.TestCase):
     def test_the_channel_is_on_the_guarded_list(self):
         self.assertIn("UPDATE", _planeguard._GUARDED_SETTINGS)
 
+    def test_the_profiles_are_guarded_like_the_harness_default(self):
+        """`config.PROFILES` is read off the developer's own `charter.local.toml` — a file
+        that exists only on their machine, which is the `channel = "dev"` situation with the
+        dial turned up: nobody else's run can even see the fixture."""
+        self.assertIn("PROFILES", _planeguard._GUARDED_SETTINGS)
+        self.assertIn("PROFILES", config.DERIVED)
+        with TemporaryDirectory() as tmp:
+            self.assertIsInstance(config.derive(Path(tmp))["PROFILES"], dict)
+
     def test_every_guarded_name_is_a_setting_config_actually_derives(self):
         """A typo here would guard nothing and say nothing — the shape of a silent hole."""
         for name in _planeguard._GUARDED_SETTINGS:

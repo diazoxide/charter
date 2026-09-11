@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import os
 import sys
 
@@ -646,6 +647,24 @@ def _add_workspace_parser(sub) -> None:
     aus.set_defaults(func=commands_workspace.cmd_workspace_autosave)
     pbg = wsub.add_parser("_pushbg")    # internal: background push half of autosave
     pbg.set_defaults(func=commands_workspace.cmd_workspace_pushbg)
+
+
+@functools.cache
+def command_words() -> frozenset[str]:
+    """Every word `charter <word>` already means, minus the registered kinds' own launchers.
+
+    A harness profile named like one of these could never launch — `charter doctor` is
+    `doctor` whatever `charter.local.toml` says — so `profiles.current` refuses it by name.
+    Asked of the parser `main` dispatches through rather than of a list kept beside it, so a
+    command added tomorrow is a word no profile can take on the day it is added. The kinds
+    are left out because a declared profile named after its kind is how plain `claude` gets
+    pinned.
+
+    Built once per process: the parser does not change for the life of one.
+    """
+    subparsers = next(action for action in build_parser()._actions
+                      if isinstance(action, argparse._SubParsersAction))
+    return frozenset(subparsers.choices) - {h.cli_name for h in harness.all() if h.cli_name}
 
 
 def _add_frame_parsers(sub) -> None:

@@ -691,6 +691,47 @@ def check_plane_root() -> Result:
     )
 
 
+def check_harness_profiles() -> Result:
+    """This machine's harness profiles, as `charter.local.toml` declares them now — and
+    whether git would carry that file.
+
+    Read from `instance.load` and `profiles.derive` rather than `config.PROFILES`, the way the
+    `charter.toml` row reads `instance.harness_of`: the row is about the FILE, and `derive`
+    ran before anybody could have fixed it. Through `profiles.current`, so a name that clashes
+    with a command reads here as it does everywhere else.
+
+    The git check lives here and not in `derive` because a person runs `doctor`, and every
+    hook process runs `derive`. `profiles.ignored_refusal` never raises, so one slow git costs
+    this row and nothing more: `_checks` builds every row in one list with no per-check guard.
+    """
+    from . import config as _config, instance as _instance, profiles
+
+    name = "harness profiles"
+    ignored = profiles.ignored_refusal(_config.ROOT)
+    if ignored:
+        return Result(name, WARN, detail=ignored, hint="charter reinit")
+    # A malformed `charter.toml` is the `charter.toml` row's to name; this row still reads
+    # the local file rather than reporting on nothing.
+    try:
+        cfg = _instance.load(_config.ROOT)
+    except Exception:
+        cfg = {}
+    read = profiles.current(profiles.derive(_config.ROOT, cfg))
+    names = ", ".join(read["profiles"])
+    refused = read["refused"]
+    if refused:
+        return Result(name, WARN,
+                      detail=f"{len(refused)} refused: "
+                             f"{', '.join(r.name or r.source for r in refused)}",
+                      hint=refused[0].reason)
+    if read["default_refused"] is not None:
+        return Result(name, WARN,
+                      detail=profiles.DEFAULT_REFUSED.format(value=read["default_refused"],
+                                                             names=names),
+                      hint="the selector will start on no row until it names one")
+    return Result(name, OK, detail=f"{len(read['profiles'])} profile(s): {names}")
+
+
 def check_index_lock() -> Result:
     """A ``.git/index.lock`` left in the plane's own repository — noticed *before* a save
     runs into it.
@@ -3317,7 +3358,8 @@ def _checks():
     for forge in declared_or_default_forges():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
-    results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
+    results += [check_ssh(), check_control_plane_config(), check_harness_profiles(),
+                check_control_plane_schema(),
                 check_plane_root(), check_index_lock(),
                 check_session_root(), check_session_layer(),
                 check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
@@ -3360,7 +3402,7 @@ def _checks():
 _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
-    "git auth", "charter.toml", "schema", "plane root", "index lock",
+    "git auth", "charter.toml", "harness profiles", "schema", "plane root", "index lock",
     "session root", "session layer",
     "harness", "frame",
     "plane-root guard", "guard seen", "nested plane", "workspace clones",

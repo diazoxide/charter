@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_harness
-from tests import _envguard
+from tests._isolation import PersonaIso
 
 
 def _run(fn, args) -> tuple[int, str]:
@@ -22,12 +22,10 @@ def _run(fn, args) -> tuple[int, str]:
     return rc, out.getvalue() + err.getvalue()
 
 
-class HarnessList(unittest.TestCase):
-    def setUp(self) -> None:
-        # Outside a frame, with no session id and no pinned workspace: stated here
-        # rather than inherited from the shell the suite was launched from
-        # (#519, #521, #528).
-        _envguard.unset_all()
+class HarnessList(PersonaIso):
+    """Against a throwaway plane, outside a frame (`PersonaIso`). The listing now starts with
+    this plane's harness profiles, and those are read off `charter.local.toml` — a file that
+    exists only on the machine running the suite, so `_planeguard` refuses the real one."""
 
     def test_it_names_every_registered_harness_and_its_ceilings(self):
         rc, text = _run(commands_harness.cmd_harness_list, SimpleNamespace())

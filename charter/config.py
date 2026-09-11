@@ -24,6 +24,7 @@ from pathlib import Path
 
 from . import instance as _instance
 from . import legacyenv as _legacyenv
+from . import profiles as _profiles
 from . import root as _root
 
 #: Fallbacks used when a control plane declares nothing (or none was found).
@@ -712,6 +713,15 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: `charter.channel`. ``{"channel": "stable"}`` unless the plane opts in, and a value
     #: charter does not recognise degrades to exactly that.
     d["UPDATE"] = _instance.update_of(cfg)
+
+    #: Every harness profile this machine has — the built-ins and what `charter.local.toml`
+    #: declares — and every declared one refused, with its reason. See `charter.profiles`.
+    #:
+    #: Derived BEFORE ``HARNESS`` (review 14): what ``[harness] default`` resolves against is
+    #: read off the profiles. A file read and nothing more — no git call and no subprocess —
+    #: because every hook process runs this derivation; whether git would carry the file is
+    #: `profiles.ignored_refusal`, asked by the surfaces a person runs.
+    d["PROFILES"] = _profiles.derive(root, cfg)
 
     #: What bare ``charter`` launches — ``{"default": None, "refused": None}`` unless the
     #: plane opts in with ``[harness] default``. ``default`` is a name out of charter's own

@@ -1037,6 +1037,10 @@ _GITIGNORE_BASELINE = """\
 # sibling `.claude/settings.json` is deliberately NOT ignored — that one is the team's.
 /.claude/settings.local.json
 
+# This machine's harness profiles (commands, config folders). Never committed: a profile's
+# command runs on a click, and a merged edit would run it on every machine.
+/charter.local.toml
+
 # Python
 __pycache__/
 *.py[cod]
@@ -1071,6 +1075,8 @@ def _ensure_gitignore(root: Path) -> bool:
         missing.append("/.charter/")
     if LOCAL_SETTINGS_IGNORE not in existing_lines:
         missing.append(LOCAL_SETTINGS_IGNORE)
+    if LOCAL_PROFILES_IGNORE not in existing_lines:
+        missing.append(LOCAL_PROFILES_IGNORE)
     if not missing:
         return False
     # The write itself goes through the one shared appender — `charter browser install`
@@ -1649,6 +1655,27 @@ def _ensure_local_settings_ignored(root: Path) -> None:
         return
     util.append_gitignore(root, [LOCAL_SETTINGS_IGNORE],
                           "added by `charter guard --local`")
+
+
+#: The `.gitignore` line that keeps this machine's harness profiles out of every commit. A
+#: profile's command runs on a click with no permission prompt in between, so the file it
+#: lives in is safe only while git will not carry it (harness-profiles spec, *Where profiles
+#: live*). In the baseline for a fresh plane, and backfilled by `reinit` for one made before
+#: it — `LOCAL_SETTINGS_IGNORE`'s shape, for the same reason.
+LOCAL_PROFILES_IGNORE = "/charter.local.toml"
+
+
+def _ensure_local_profiles_ignored(root: Path) -> bool:
+    """Backfill :data:`LOCAL_PROFILES_IGNORE` into a plane made before it. True iff it wrote.
+
+    `reinit` is the remedy both `profiles.NOT_IGNORED` and `doctor`'s `harness profiles` row
+    name, so it has to be the command that makes the promise true. Whole-line and additive
+    through the one shared appender, which already answers "present" by writing nothing — so
+    what it wrote is the whole answer, and `reinit` reports what it changed (ADR 0013).
+    """
+    return bool(util.append_gitignore(
+        root, [LOCAL_PROFILES_IGNORE],
+        "added by `charter reinit` — harness profiles stay on this machine"))
 
 
 def add_ask_rule(root: Path, rule: str, local: bool = False,
@@ -2514,6 +2541,12 @@ def cmd_reinit(args) -> int:
     from . import instance as _instance
 
     created, present, blocked = _create_baseline_dirs(config.ROOT)
+
+    # A plane made before harness profiles has no ignore line for the file they live in, and
+    # `profiles.ignored_refusal` refuses every profile in it until it does — so this is the
+    # command that refusal names.
+    if _ensure_local_profiles_ignored(config.ROOT):
+        created.append(f".gitignore ({LOCAL_PROFILES_IGNORE})")
 
     # The plane-root guard, on the SAME terms as init. `doctor`'s hint for an unwired plane
     # names `charter reinit`, so reinit has to be the command that actually wires it (#168).
