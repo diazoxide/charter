@@ -2400,6 +2400,21 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
         self.assertEqual(r.status, doctor.WARN)
         self.assertTrue(r.hint.startswith(f"{self.ws}/refs cannot be checked"), r.hint)
 
+    def test_a_drifted_repo_with_nothing_unchecked_is_advised_in_that_sentence_alone(self):
+        """`doctor.py`'s `… if unseen else ""`, which CI's sweep of 4e5fb9c found nothing killing.
+        The drifted-repo hint ENDS with this value, so dropping the arm ships `charter git-policy
+        --apply   .` — three spaces and a bare dot — as the advice.
+
+        Asserted by equality, and that is the point: the pin that used to carry this line asserted
+        that a STRING was absent, and f2bcaf9 moved that string inside the `join`, so the collapsed
+        value stopped containing it while still being wrong. A whole sentence cannot rot that way —
+        any lost arm, any stray space, is red."""
+        with mock.patch.object(gitpolicy, "check", return_value=["remote 'origin' uses SSH"]):
+            r = doctor.check_ssh()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(
+            r.hint, "Apply the single-credential policy to every clone: charter git-policy --apply")
+
 
 class TheFixForAnUnpublishedRecordMatchesItsErrno(RoundFiveCheckout):
     """Final review (#942): every failed publish was told to "restore write access", and a full
@@ -3191,11 +3206,12 @@ class TheTwoSurvivorsCIsSweepNamed(PlaneWithRestrictions):
         a looping one — the conditional and an unconditional `realpath` do the same thing in all
         but one: a parent symlink whose destination is GONE.
 
-        There `realpath` names the destination, so charter would CREATE the missing directory
-        wherever that link points — outside the checkout, if that is where it points — and write
-        the layer into it. As written, the mkdir meets the dangling link, the row reads `blocked`,
-        and charter invents nothing: ADR 0015's restraint, and this plane's "fail toward no
-        change"."""
+        There `realpath` names the destination, so charter would CREATE the missing directory the
+        link points at — INSIDE the checkout, which is as far as this reaches: `_harness_files`
+        drops any rel resolving outside it, so a link that leaves the checkout produces no write
+        and no row either way (the test below measures that). As written, the mkdir meets the
+        dangling link, the row reads `blocked`, and charter invents nothing: ADR 0015's restraint,
+        and this plane's "fail toward no change"."""
         clone = self.checkout()
         gone = clone / "elsewhere"
         (clone / ".claude").symlink_to(gone)
@@ -3203,6 +3219,18 @@ class TheTwoSurvivorsCIsSweepNamed(PlaneWithRestrictions):
         self.assertEqual(rows[f"svc/{SHARED}"], "blocked")
         self.assertFalse(gone.exists(), "charter built the destination of a dangling symlink")
         self.assertFalse(os.path.lexists(clone / "elsewhere"))
+
+    def test_a_layer_path_that_leaves_the_checkout_is_neither_written_nor_reported(self):
+        """The measurement behind the correction above, and the bound on the case: containment in
+        `_harness_files` drops every rel whose resolved target is not inside the checkout, so a
+        `.claude` pointing anywhere else is not a write charter refuses — it is a path charter
+        never has. No row, nothing created, with the `_write_whole` conditional or without it."""
+        clone = self.checkout("away")
+        outside = self.tmp / "not-the-checkout"
+        (clone / ".claude").symlink_to(outside)
+        rows = dict(workspace.wire_harnesses(self.ws))
+        self.assertEqual([rel for rel in rows if rel.startswith("away/.claude/")], [])
+        self.assertFalse(outside.exists(), "charter wrote outside the checkout")
 
 
 if __name__ == "__main__":  # pragma: no cover
