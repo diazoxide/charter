@@ -3140,5 +3140,47 @@ class WhatGitListsDecidesNothingItCannotBackUp(PlaneWithRestrictions):
         self.assertIn(f"/{SHARED}\n", self.excludes(api))
 
 
+class TheTwoSurvivorsCIsSweepNamed(PlaneWithRestrictions):
+    """CI's sweep of c76ce74 named two lines nothing killed. Each is pinned here by the input the
+    line exists for — and neither input is a mock, so what is pinned is the behaviour."""
+
+    def test_a_manifest_behind_a_symlink_loop_is_named_as_uncheckable_not_missed(self):
+        """`commands_workspace.py`'s `if there is None:`. Disabling the branch left the suite green
+        because the existing test asserted `"workspace.json cannot be checked"`, and the
+        `unreadable` row one loop above says those words too. Only this branch says which of the
+        two things charter does not know — whether the file is THERE — so that is what is asserted.
+
+        A symlink loop rather than a `chmod`: `os.stat` answers ELOOP for every user, root
+        included, and it is a state charter meets (`doctor` names loops under `workspaces/`)."""
+        manifest = workspace.manifest_path(self.ws)
+        manifest.unlink()
+        manifest.symlink_to(manifest)
+        said = " ".join(self.reinit_said())
+        self.assertIn("workspace.json cannot be checked — charter cannot say whether it is there",
+                      said)
+        self.assertNotIn("could not be written", said)
+        self.assertNotIn("nothing to do", said)
+
+    def test_a_generated_path_behind_a_dangling_symlink_is_refused_not_invented(self):
+        """`workspace.py`'s `_write_whole` target line, the `else` half. Measured on macOS over
+        every shape charter writes — a plain path, a path under the `/tmp` symlink, a file that is
+        itself a symlink, a parent that is a symlink to a real directory, a dangling file symlink,
+        a looping one — the conditional and an unconditional `realpath` do the same thing in all
+        but one: a parent symlink whose destination is GONE.
+
+        There `realpath` names the destination, so charter would CREATE the missing directory
+        wherever that link points — outside the checkout, if that is where it points — and write
+        the layer into it. As written, the mkdir meets the dangling link, the row reads `blocked`,
+        and charter invents nothing: ADR 0015's restraint, and this plane's "fail toward no
+        change"."""
+        clone = self.checkout()
+        gone = clone / "elsewhere"
+        (clone / ".claude").symlink_to(gone)
+        rows = dict(workspace.wire_harnesses(self.ws))
+        self.assertEqual(rows[f"svc/{SHARED}"], "blocked")
+        self.assertFalse(gone.exists(), "charter built the destination of a dangling symlink")
+        self.assertFalse(os.path.lexists(clone / "elsewhere"))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
