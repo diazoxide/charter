@@ -70,7 +70,9 @@ command = ["npx", "-y", "@openai/codex@0.140.0"]
   that is not a non-empty list of strings; a `command` whose first word is charter itself,
   which the selector would open in a loop; a reserved, illegal or clashing name; an `env`
   name starting with `CHARTER_`, which would lie to every hook about which harness or plane
-  this is; and an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. That last
+  this is; a key inside a profile other than `kind`, `command` and `env`, because a typo such
+  as `enviroment` would drop `CLAUDE_CONFIG_DIR` and launch the default account without a word;
+  and an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. That last
   refusal names the harness's own login instead — `CLAUDE_CONFIG_DIR` + `/login`,
   `CODEX_HOME` + `codex login`, `XDG_DATA_HOME` + `opencode auth login`. A broken profile is
   refused alone. `[[frame.component]]` refuses its whole arrangement over one bad entry (the
@@ -90,8 +92,8 @@ a key. Charter declines to hold one; it cannot prevent one.
   machine, and a profile's command runs on a click with no harness permission prompt in
   between — so a command in the committed file could be changed by a merged PR or by a chat,
   and then run on every machine. A `[harness.<name>]` table in `charter.toml` is refused with
-  a pointer to the local file. `charter.toml`'s `[harness]` keeps `default` and nothing else;
-  the local `default` wins.
+  a pointer to the local file; that is the one new refusal there. `charter.toml`'s `[harness]`
+  keeps `default`, any other key in it is ignored as it is today, and the local `default` wins.
 - **The local file accepts `[harness]` and nothing else**, refusing every other section by
   name. A full overlay would let an ignored file change plane policy — `[[forge]]` hosts
   steer the credential guard (`gitpolicy`) — with no trace in git, and "override" has no
@@ -101,7 +103,10 @@ a key. Charter declines to hold one; it cannot prevent one.
   into the plane's `.gitignore`, and `charter reinit` adds it to an existing plane. This
   amends ADR 0017, whose rule covers only a path charter creates that carries credentials:
   this file carries none, and its whole meaning is "not committed". If git tracks the file or
-  would not ignore it, charter refuses its profiles and says why, and `doctor` warns. A
+  would not ignore it, charter refuses its profiles and says why, and `doctor` warns. A plane
+  that is not a git repository has nothing to commit to and passes; any other answer git cannot
+  give — a failure, a timeout — refuses the profiles too, and one slow git never takes `doctor`
+  down. A
   declared replacement of a built-in is refused with the rest: that name refuses rather than
   falling back to the built-in, which would run a command the operator replaced. The check
   runs at launch, in the selector, in `charter harness list` and `harness install`, and in
@@ -123,8 +128,10 @@ charter's process (*How a harness starts*).
    one, shows its command and asks `run this? [y/N]` before it runs. Built-ins never ask.
    Why: once the file is ignored an edit leaves no diff; nothing stops a chat editing plane
    config; and the command goes to tmux, not through a harness permission prompt. Codex
-   trusts hooks by hash for the same reason. An open that nobody is at (*The selector*)
-   refuses where it would have asked. Nothing runs a declared profile's command before its
+   trusts hooks by hash for the same reason. An open that nobody is at (*The selector*),
+   or one with no terminal on both stdin and stdout to ask in, refuses where it would have
+   asked; a pane's launcher is unattended unless the open says otherwise, so it never waits on
+   a question nobody can see. Nothing runs a declared profile's command before its
    record matches — not a launch, not a wiring probe, not an install.
 3. **The profile is wired.** Measured on claude 2.1.268, codex-cli 0.147.0 and opencode
    1.18.23, in throwaway folders with no login and no model tokens: a harness pointed at
@@ -147,14 +154,18 @@ charter's process (*How a harness starts*).
      cannot be asked: `codex plugin list` answers the same for an empty `CODEX_HOME` and a
      wired one, so charter reads that home's `config.toml`, and wired needs all three marks —
      the plugin enabled, the `shell_environment_policy.set` line, and trust for its hooks. It
-     is the home charter can see; one a wrapper script exports is not.
+     is the home charter can see; one a wrapper script exports is not. Claude Code counts as
+     wired when any entry covering the chat's directory is enabled — this machine lists disabled
+     and enabled entries side by side — and opencode's answer counts only when the shim it names
+     is charter's own, byte for byte.
    - `charter init` and `charter harness install <profile>` run each kind's wiring under that
      profile's environment, the plugin install included; `harness install` resolves a profile
      name first, then a registry name, so `charter harness install codex` still works.
      `charter reinit` installs no software, the rule it already keeps: it wires what is only
      files (opencode's shim) and names `charter harness install <profile>` for a Claude Code
      profile missing its plugin. Codex stays opt-in: only `harness install` writes its
-     `shell_environment_policy` line under the profile's `CODEX_HOME`, and it prints the steps
+     `shell_environment_policy` line under the profile's `CODEX_HOME` — where that table exists
+     without charter's line it prints the line to add and edits nothing — and it prints the steps
      charter cannot take — installing the plugin, approving its hooks — with `CODEX_HOME=`
      prefixed. Never at launch: a click would write a plugin into a second account unasked,
      and Codex ignores hooks nobody approved anyway.
@@ -189,6 +200,13 @@ charter, on tmux 3.7c and at the 3.2 floor, on charter's own server and in the o
 tmux. Those two versions are run by hand; CI runs whatever tmux its runner image ships (3.4).
 Once the harness runs, `pane_current_command` has to read what a direct start reads; before,
 it names charter's interpreter, which nothing in charter reads — only tests do.
+
+A launch with no frame — `--no-frame`, or output that is not a terminal — `exec`s the process
+that was typed. It drops an inherited `CHARTER_SESSION_ID` and sets `CHARTER_HARNESS` to the kind
+it launches: that pair is what makes a hook write a harness's session id into another chat's
+state. `CHARTER_ROOT`, `CHARTER_WORKSPACE` and `CHARTER_PERSONA` are pins and stay. A bare harness
+started from a chat's shell keeps that chat's plane and workspace, and
+`CHARTER_PERSONA=forge charter claude --no-frame` means what it says.
 
 **A chat records its profile.** `CHARTER_HARNESS` stays the kind: hooks compare it to
 `claude-code` for session ids, resume and the working spinner. The profile is a field of its
@@ -283,7 +301,8 @@ instead of the harness (`layout.chat_window_argv`, `layout.session_argv`).
   still carry a key.
 - Detecting wiring spends a harness subprocess per profile — measured at about 215–281 ms for
   `claude plugin list --json` and 720–750 ms for `opencode debug config`; Codex's is a file
-  read. The selector reads a stamped cache, a launch always probes, and a hook never does.
+  read. The selector reads a stamped cache to draw its rows and nothing else — an entry
+  stamped in the future is stale — a launch always probes, and a hook never does.
 - The launch record and the wiring cache live under `.charter/`, as writable by a chat as
   `charter.local.toml` is. The ask catches a changed command only when whatever changed it did
   not also forge the record, and a launch never trusts the cache — it probes fresh. Charter
@@ -316,8 +335,12 @@ step is `/login` inside `~/.claude-alt`.
    `.gitignore` guarantee, `charter harness list`. Nothing launches differently yet.
 2. **A profile launches.** It opens with the launcher measurement above. `charter <profile>`,
    the launcher and its `exec`, `CHARTER_HARNESS_PROFILE` in state and in the manifest; `+`,
-   tabs, reopen and handoff carry the profile; reopen skips a missing one.
-3. **A new or changed command asks once.**
+   tabs, reopen and handoff carry the profile; reopen skips a missing one. Every declared
+   profile — a built-in's replacement included — refuses to launch here, with its own sentence
+   saying approval is not built yet; only built-ins no declared profile replaces launch.
+   `main` must never run an unapproved declared command between merges, and without this a
+   chat that wrote `charter.local.toml` would have its command run by the next `+`.
+3. **A new or changed command asks once**, and removes task 2's refusal of declared profiles.
 4. **A profile is wired or refuses:** detection, the fix, `charter harness install
    <profile>`, `init` and `reinit` per profile, `doctor` per profile. It starts once PR #970
    is on `main`.
