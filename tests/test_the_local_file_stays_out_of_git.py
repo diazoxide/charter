@@ -186,6 +186,18 @@ class TheFileMustBeIgnoredToBeUsed(PersonaIso):
                         return_value=_answer(128, "", "fatal: detected dubious ownership\n")):
             self.assertIn("dubious ownership", profiles.ignored_refusal(config.ROOT))
 
+    def test_a_git_that_fails_saying_nothing_is_named_by_its_exit(self):
+        """`git_path_state` never raises (its docstring), and a git that failed in silence is
+        still an answer to name: git exited, and with what. The sweep of `ce7f5d8` collapsed
+        the `else` to `said.splitlines()[0]`, which raises on an empty stderr, and dropped the
+        `or ""`, which raises when nothing was captured at all."""
+        self._declare()
+        for err in ("", None):
+            with self.subTest(err=err), \
+                 mock.patch("charter.util.run", return_value=_answer(1, "", err)):
+                self.assertEqual(util.git_path_state(config.ROOT, "charter.local.toml"),
+                                 (util.UNKNOWN_GIT, "git exited 1"))
+
     def test_the_ignore_check_takes_no_index_lock(self):
         """Ruling 34: this runs at launch, in the pane, in the selector, in `harness list`
         and in doctor, often enough to break a concurrent commit on a plain `status`."""

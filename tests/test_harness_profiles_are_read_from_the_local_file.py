@@ -474,6 +474,8 @@ class ABrokenProfileIsRefusedAlone(_LocalFile):
              "u", f"envi{cr}ronment"),
             ("NESTED_TABLE", _OK + '[harness.n."a\\rb"]\n' + tail,
              esc(f"n.a{cr}b"), f"a{cr}b"),
+            ("NESTED_TABLE, the parent", _OK + '[harness."p\\rq".sub]\n' + tail,
+             esc(f"p{cr}q.sub"), f"p{cr}q"),
             ("LOCAL_SECTION", _OK + '["for\\rge"]\nhost = "x"\n',
              esc(f"for{cr}ge"), f"for{cr}ge"),
         ]
