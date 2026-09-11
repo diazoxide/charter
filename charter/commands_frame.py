@@ -2553,8 +2553,9 @@ def _guest_harness_env(env: dict[str, str]) -> dict[str, str]:
     servers is in that one extra name. On charter's own private server the base the `-e`
     overlays is a server SOME charter launcher started, so its `$PATH` is a charter
     launcher's. On the operator's it is a server THEY started, possibly weeks ago, in
-    another shell — and `cmd_launch` has already resolved the harness binary
-    (`shutil.which(h.binary)`) against charter's OWN `$PATH`. Handing the pane a
+    another shell — and `cmd_launch` has already resolved the harness's first word
+    (`shutil.which(argv[0])` — its binary, or the operator's own `[harness.<name>]
+    command`) against charter's OWN `$PATH`. Handing the pane a
     different one would make that check a promise charter cannot keep: the frame comes
     up, the exec fails, and the operator gets `_UNKNOWN_DEATH_CODE` for a binary charter
     said it had found.
@@ -4542,7 +4543,8 @@ def early_death_message(argv: list[str], code: int, last_words: list[str]) -> st
 
     **The design call #384 left open, and the argument for taking it this way.** `charter
     <harness>` can refuse a missing binary before tmux (see `cmd_launch`'s `if h and not
-    shutil.which(h.binary)`), because charter chose that name itself. `charter frame --
+    shutil.which(argv[0])`), because that word is either a name charter chose itself or one
+    the operator wrote into their own `.charter/local.toml` as an executable. `charter frame --
     <cmd>` cannot be closed the same way without changing what it ACCEPTS, and what it
     accepts is tmux's rule, not charter's — verified against tmux 3.7c:
 
@@ -5062,7 +5064,15 @@ def _launch(args) -> int:
     # is the separator that told argparse to stop parsing, not part of the command.
     if rest and rest[0] == "--":
         rest = rest[1:]
-    argv = h.launch_argv(rest) if h else rest
+    # The operator's own way of reaching this harness — `[harness.<name>] command` in the
+    # plane's per-developer `.charter/local.toml` (`instance.harness_local_of`), `None` on
+    # every plane that wrote none, which is every plane until somebody does. Read HERE and
+    # handed to `launch_argv` rather than read by the harness: `harness/base.py` knows what
+    # a harness is, and which account one operator bills a chat to is not that. A plain
+    # subscript: `harness_local_of` returns the ``command`` key on every path, and a
+    # fallback here would be a guard no test can reach.
+    command = config.HARNESS_LOCAL["command"].get(h.cli_name) if h else None
+    argv = h.launch_argv(rest, command=command) if h else rest
     if not argv:
         util.err("charter frame: nothing to run — `charter frame -- <command>`")
         return 2
@@ -5096,19 +5106,26 @@ def _launch(args) -> int:
     # output, exit 127, no alternate-screen switch. `charter claude` before installing
     # `claude` returned instantly with no explanation of any kind.
     #
-    # Scoped to `if h` deliberately, and this is the whole reason the check sits here
-    # rather than over `argv[0]`. A registered harness's binary comes from charter's own
-    # registry (`harness.base.binary`), so `shutil.which` is asking about a name charter
-    # chose. `charter frame -- <cmd>` is the opposite: `argv[0]` is the operator's own
-    # verbatim word, and it is allowed to be a shell builtin, a relative path, or
-    # anything else tmux's own resolution accepts — a `which` check over THAT would
-    # narrow what the escape hatch accepts, which is a design change and not this fix.
+    # Scoped to `if h` deliberately, and that scope is the whole reason the check sits
+    # here. For a REGISTERED harness `argv[0]` is one of two things, both meant to be an
+    # executable: charter's own `harness.base.binary`, or the first word of the
+    # `[harness.<name>] command` the operator wrote into their `.charter/local.toml` —
+    # and it is `argv[0]` that is asked about rather than `h.binary`, because with a
+    # command in force the binary is not what is about to be exec'd, so `claude` being
+    # installed would answer the wrong question and `ccs` missing would die inside tmux
+    # with nothing drawn, the exact silence this check exists to end. `shutil.which`
+    # takes a path with a separator in it as well as a `$PATH` word, so `["./bin/claude"]`
+    # is answered honestly too. `charter frame -- <cmd>` is the opposite: `argv[0]` is
+    # the operator's own verbatim word, and it is allowed to be a shell builtin, a
+    # relative path, or anything else tmux's own resolution accepts — a `which` check
+    # over THAT would narrow what the escape hatch accepts, which is a design change and
+    # not this fix, and `h is None` there keeps it out of this branch.
     #
     # The escape hatch's ACCEPTANCE is still exactly that: nothing is refused for it, and
     # #384 deliberately did not change that either (see the module docstring, and
     # `early_death_message`'s own). Its SILENCE is what changed — the same death is now
     # legible from the other end, once tmux has already answered.
-    if h and not shutil.which(h.binary):
+    if h and not shutil.which(argv[0]):
         return bypass(argv)
 
     # ONE call (correction 5): asking `tmux -V` twice on a path that branches on the

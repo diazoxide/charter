@@ -378,6 +378,60 @@ def check_control_plane_config() -> Result:
     return Result("charter.toml", OK, detail=f"parsed cleanly ({_config.ROOT})")
 
 
+def check_local_config() -> Result:
+    """``.charter/local.toml`` — the per-developer half of the plane's configuration, and
+    whether what it declares is in force.
+
+    The `charter.toml` row's reason, one file over. A ``[harness.<name>] command`` charter
+    cannot honour degrades to launching the harness's own binary
+    (`instance.harness_local_of`), which is byte-identical to what a plane with no such
+    file does — so `charter claude` on a machine with a typo in this file behaves as though
+    the file were absent, and the launch itself deliberately prints nothing before tmux
+    takes the screen (`commands_frame.frame_ready`'s docstring measures why). This row and
+    `charter harness list` are the whole surface, which is why the row also says what IS
+    in force: an override that reads green and names `ccs work` is the one an operator can
+    check against what they meant.
+
+    WARN and never FAIL, for the malformed file and the refused table alike. Charter
+    carries on with the binary, which is a working plane; the operator is just not getting
+    what they wrote, and that is what the row says. `_first_line` on the parse error for
+    the `charter.toml` row's reason — the message names the file and the position, and a
+    second line would break the table.
+    """
+    from . import config as _config, contain, instance as _instance
+
+    where = _config.LOCAL_CONFIG
+    if _config.LOCAL_CONFIG_ERROR is not None:
+        return Result(
+            "local.toml",
+            WARN,
+            detail=_first_line(_config.LOCAL_CONFIG_ERROR),
+            hint=f"Fix or remove {where}. Until it parses, every `charter <harness>` runs "
+                 f"the harness's own binary, exactly as a plane with no local.toml does.",
+        )
+    refused = _config.HARNESS_LOCAL["refused"]
+    if refused:
+        shown = "; ".join(refused[:3]) + (" …" if len(refused) > 3 else "")
+        return Result(
+            "local.toml",
+            WARN,
+            detail=f"{len(refused)} [harness.*] override(s) in {where} are not in force",
+            hint=f"{shown}. A `[harness.<name>]` table names one of: "
+                 f"{', '.join(_instance.launchable_harnesses())}, and its `command` is a "
+                 f"list of words — `command = [\"ccs\", \"work\"]`. Until fixed, "
+                 f"`charter <harness>` runs the harness's own binary, exactly as a plane "
+                 f"with no local.toml does.",
+        )
+    commands = _config.HARNESS_LOCAL["command"]
+    if commands:
+        # The words are the operator's own, out of a file they wrote — but this line is
+        # charter's report format, and one row is one row.
+        shown = ", ".join(f"{name} → {contain.readable(' '.join(words))}"
+                          for name, words in commands.items())
+        return Result("local.toml", OK, detail=shown)
+    return Result("local.toml", OK, detail="no per-developer overrides")
+
+
 def check_control_plane_schema() -> Result:
     """Structural drift, from ``charter.instance.drift``: baseline top-level directories
     (personas/, inventory/, workspaces/) a control plane is expected to have. This is
@@ -3196,7 +3250,8 @@ def _checks():
     for forge in declared_or_default_forges():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
-    results += [check_ssh(), check_control_plane_config(), check_control_plane_schema(),
+    results += [check_ssh(), check_control_plane_config(), check_local_config(),
+                check_control_plane_schema(),
                 check_plane_root(), check_index_lock(),
                 check_session_root(), check_session_layer(),
                 check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
@@ -3239,7 +3294,7 @@ def _checks():
 _FIXED_CHECK_NAMES = (
     "python3", "git", "git identity",
     # ← the forge cli/auth pair is spliced in here, see `check_names`
-    "git auth", "charter.toml", "schema", "plane root", "index lock",
+    "git auth", "charter.toml", "local.toml", "schema", "plane root", "index lock",
     "session root", "session layer",
     "harness", "frame",
     "plane-root guard", "guard seen", "nested plane", "workspace clones",

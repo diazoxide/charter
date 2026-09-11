@@ -95,6 +95,10 @@ default = "claude"               # "claude" | "opencode" | "codex" — the word 
                                   # have typed after `charter`. No default: charter does
                                   # not pick one for you. A name it does not know is
                                   # REPORTED, not ignored — see "Bare `charter`" below.
+                                  # HOW `charter claude` reaches Claude Code on your
+                                  # machine (`ccs work`, a binary off $PATH) is not here:
+                                  # it is `[harness.claude] command` in .charter/local.toml,
+                                  # yours and never committed — see that section below.
 
 # Which charter this plane tracks. Opt-in; absent, you track published releases.
 [update]
@@ -498,6 +502,57 @@ is a terminal. Piped or redirected, it prints the usage message and exits 2, whi
 it did before this key existed — so a script that runs `charter 2>&1 | head` to find out
 whether charter is installed gets an answer instead of an agent session. `charter claude`
 into a pipe is unaffected: it runs the harness bare, as it always did.
+
+## `[harness.<name>].command` — your own launcher, in `.charter/local.toml`
+
+**Opt-in, and per developer.** `charter claude` execs `claude`, by that name, off your
+`$PATH`. If you reach Claude Code some other way — a wrapper that picks which account a
+chat is billed to (`ccs work`, `ccs personal`), a script that sets the environment first,
+a binary you keep off `$PATH` — name it in the plane's `.charter/local.toml`:
+
+```toml
+[harness.claude]
+command = ["ccs", "work"]
+```
+
+With it, `charter claude` runs `ccs work` where it ran `claude`, and everything else is
+unchanged: the frame, the workspace picker, `--no-frame`, `--resume` on a `charter reopen`.
+Your arguments follow the command, so `charter claude -p hi` is `ccs work -p hi`. It is
+still the Claude Code harness charter is launching — `$CHARTER_HARNESS` set in the pane,
+the workspace layer written, the chat resumable — which is what `charter frame -- ccs work`
+cannot give you: the escape hatch runs the words and forgets the harness.
+
+The table is named by the word you type after `charter` — `claude`, `opencode`, `codex`,
+whatever `charter harness list` shows — and `command` is a **list of words**, one argv
+element each. `"ccs work"` is refused, not split: there is deliberately no shell between
+charter and the harness ([frame.md](frame.md#what-charter-frame----cmd-accepts)), so
+splitting it would be inventing one. A path works where a word does
+(`["/opt/claude/bin/claude"]`). Each harness has its own table; one file can carry a
+`[harness.claude]` and a `[harness.codex]`.
+
+**Not in `charter.toml`, and that is a rule rather than a limitation.** `charter.toml` is
+committed and arrives from somebody else's machine, and the containment rule says a name
+charter reads out of a committed file cannot choose what it runs — it is why
+`[harness] default` above is only ever *compared* against charter's own registry. A
+`command` is exactly that choice, so it lives in `.charter/`, which `init` gitignores on
+every plane, whose files are yours alone (mode 0600), and which already holds your half of
+the vault registry over the committed one. It is also the right scope: which account you
+bill a chat to is your business, and a teammate on the same plane may run plain `claude`.
+`$CHARTER_HOME` moves this file with the rest of `.charter/`.
+
+**A table charter cannot honour is reported, not ignored.** A misspelt harness name, a
+`command` that is not a list of words, or a `[harness] claude = "…"` where a table should
+be, each degrade to the binary — exactly what a plane with no `local.toml` gets, so from
+the launch alone you could not tell a typo from a file you never wrote. `charter doctor`
+has a `local.toml` row that names each one, and prints `claude → ccs work` when the
+override is in force; `charter harness list` prints `→ runs: ccs work` under the harness.
+The launch itself prints nothing: a warning before tmux takes the screen is lost with it
+([frame.md](frame.md)). A file that does not parse is reported the same way, and charter
+carries on with the binary until it does.
+
+`charter claude` still checks that what it is about to run is installed before drawing
+anything — the command's first word now, rather than `claude` — and exits 127 naming it
+when it is not.
 
 ## `[update].channel` — the dev channel
 

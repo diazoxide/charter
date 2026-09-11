@@ -9,16 +9,27 @@ consent), and nothing here is ever done as a side effect of something else.
 
 from __future__ import annotations
 
-from . import util
+from . import config, contain, util
 from .harness import codex, registry
 
 
 def cmd_harness_list(args) -> int:
     """Every registered harness, its ceilings, and which one this session is in."""
     live = registry.current()
+    commands = config.HARNESS_LOCAL["command"]
     for h in registry.all():
         mark = "*" if h.name == live else " "
         util.info(f"{mark} {h.name}")
+        # The operator's own launcher for this harness, when their `.charter/local.toml`
+        # names one (`instance.harness_local_of`). Besides `doctor` this is the one place
+        # that says what `charter <cli_name>` will actually run, and the reader asking
+        # "what does charter know about this harness" is the one who needs to hear it —
+        # a refused table is `doctor`'s to name, not this listing's, which reports what IS
+        # in force. `contain.readable`: the words are the operator's own, and one row is
+        # one row.
+        words = commands.get(h.cli_name)
+        if words:
+            util.info(f"      → runs: {contain.readable(' '.join(words))}")
         for d in h.deficits:
             util.info(f"      ↳ {d.key}: {d.detail}")
             if d.remedy:

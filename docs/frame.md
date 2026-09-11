@@ -26,6 +26,20 @@ below applies to it unchanged. A plane that names no default keeps the usage lis
 does `charter` with its output piped or redirected — a script asking whether charter is
 installed must not get a harness session instead of an answer.
 
+`charter claude` execs `claude` by that name, off your `$PATH`. If you reach Claude Code
+through something else — `ccs work`, which picks the account a chat is billed to; a binary
+you keep off `$PATH` — name it in the plane's `.charter/local.toml` and `charter claude`
+runs that in the binary's place, your arguments after it, with the harness still known to
+charter: `$CHARTER_HARNESS` in the pane, the workspace layer, `charter reopen`. Per
+developer and never committed, for the reason
+[control-plane.md](control-plane.md#harnessnamecommand--your-own-launcher-in-charterlocaltoml)
+gives. `charter frame -- ccs work` is not that: it runs the words and forgets the harness.
+
+```toml
+[harness.claude]
+command = ["ccs", "work"]
+```
+
 `claude`, `codex` and `opencode` are top-level commands (`charter claude`), never nested
 under `frame` (`charter frame claude`) — `charter frame` is its own, separate escape hatch
 for a command charter has no launcher for at all. That is not just naming: once `charter

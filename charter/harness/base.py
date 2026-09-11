@@ -258,15 +258,27 @@ class Harness:
     #: one attribute would make each of those a change to the other's meaning.
     binary: str = ""
 
-    def launch_argv(self, extra: list[str]) -> list[str]:
+    def launch_argv(self, extra: list[str], command: list[str] | None = None) -> list[str]:
         """Argv for starting this harness, with the operator's arguments appended.
+
+        *command* is the operator's own way of reaching this harness — ``["ccs", "work"]``
+        for a wrapper that picks which account a chat is billed to, a path for a binary
+        kept off ``$PATH`` — read out of the plane's per-developer ``.charter/local.toml``
+        (`instance.harness_local_of`) and handed in by the launcher rather than read here:
+        this module knows what a harness IS, and how one operator reaches it on one
+        machine is not that. It stands where :attr:`binary` stood and *extra* still
+        follows it, so ``--resume <id>`` on a reopen reaches whatever the wrapper forwards
+        to. ``None`` — every plane that wrote no such file — is the binary, exactly as
+        before. It is never read out of a COMMITTED file: README's containment rule, and
+        `instance.harness_of` refusing a ``default`` it cannot match, are why the setting
+        lives where it does.
 
         A **list**, never a joined string, and that is a security property rather than a
         style preference: tmux does not shell-interpret separate arguments and does
         interpret a joined one (pinned against 3.7c). Returning a string here would put
         command injection back into every launch.
         """
-        return [self.binary, *extra]
+        return [*(command or [self.binary]), *extra]
 
     def detect(self) -> bool:
         """Is this harness live, judged by its own native evidence?

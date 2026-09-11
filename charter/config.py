@@ -752,6 +752,29 @@ def derive(root: Path, start: Path | None = None) -> dict:
     state = _migrate_state_dir(root)
     d["STATE_DIR"] = state
 
+    #: The per-developer half of the plane's configuration — `instance.LOCAL_FILE`, beside
+    #: the vault registry, so it is gitignored and one account's like everything in here.
+    #: A derived path rather than a literal in `doctor`, because the row that names this
+    #: file has to name the one that was READ, and ``$CHARTER_HOME`` moves it.
+    d["LOCAL_CONFIG"] = state / _instance.LOCAL_FILE
+
+    #: Parsed once, and degraded the way `charter.toml` is above: this module is imported
+    #: by every command, and a typo in a file one operator wrote must not take `charter
+    #: --version` down. No `PLANE_REFUSAL` half here — the file declares no plane format,
+    #: so nothing in it can be unplaceable, only unreadable. `doctor` names it.
+    try:
+        local = _instance.load_local(state)
+        d["LOCAL_CONFIG_ERROR"] = None
+    except Exception as e:            # malformed TOML, unreadable file
+        local, d["LOCAL_CONFIG_ERROR"] = {}, str(e)
+
+    #: How `charter <harness>` reaches each harness on THIS machine — ``{"command": {},
+    #: "refused": []}`` unless the operator wrote a ``[harness.<name>] command`` into
+    #: `LOCAL_CONFIG`. ``command`` is keyed by the word after ``charter``; ``refused``
+    #: names every table that is declared and not in force. Read from the state dir and
+    #: never from `charter.toml` — `instance.harness_local_of` has the argument.
+    d["HARNESS_LOCAL"] = _instance.harness_local_of(local)
+
     #: Registry of configured vaults (name -> provider + config + persona).
     d["VAULTS_REGISTRY"] = state / "vaults.json"
 

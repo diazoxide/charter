@@ -3009,3 +3009,95 @@ def harness_of(cfg: dict) -> dict:
     # function exists to empty.
     out["refused"] = contain.readable(value)
     return out
+
+
+#: The per-developer half of the plane's configuration — ``<state dir>/local.toml``,
+#: beside the vault registry in ``.charter/``, read by :func:`load_local`. One table
+#: today, ``[harness.<name>]``, and it lives here and not in `charter.toml` for a reason
+#: the README states as a rule: **a name charter reads out of a committed file cannot
+#: choose what it runs.** A harness's ``command`` is exactly that choice. `charter.toml`
+#: arrives from somebody else's machine; this file is written by the operator whose
+#: machine it runs on, gitignored on every plane `init` has written, and one account's
+#: (`config.STATE_FILE_MODE`) like everything beside it. It is also the right scope on
+#: the merits — which account a chat is billed to is one operator's business, and a
+#: teammate on the same plane may run plain `claude`.
+LOCAL_FILE = "local.toml"
+
+
+def load_local(state_dir: Path) -> dict:
+    """Parse ``<state dir>/local.toml``. Returns ``{}`` when there is no such file.
+
+    :func:`load` without the schema check: this file declares no plane format, because it
+    describes no plane — only how one operator reaches a harness on one machine, so there
+    is nothing in it a newer charter could have laid out differently. Malformed TOML
+    raises, as `load` does, and `config.derive` catches it into ``LOCAL_CONFIG_ERROR`` for
+    `doctor` to name, so a typo here never takes ``charter --version`` down with it.
+    """
+    p = Path(state_dir) / LOCAL_FILE
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return {}
+    try:
+        return tomllib.loads(raw.decode("utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"{p} is not valid TOML: {e}") from None
+
+
+def harness_local_of(cfg: dict) -> dict:
+    """The ``[harness.<name>]`` tables of `local.toml`, as ``{"command": …, "refused": …}``.
+
+    ``command`` maps a launchable harness's :attr:`~charter.harness.base.Harness.cli_name`
+    — ``claude``, the word after ``charter``, never ``claude-code``, :func:`harness_of`'s
+    own rule — to the argv that starts it in the binary's place: ``["ccs", "work"]``. The
+    words are the operator's own and pass through as written, which is the one place this
+    differs from :func:`harness_of`, and it differs because the FILE does: `charter.toml`
+    is committed and its values are only ever compared against charter's registry; this
+    file is one machine's, and choosing what runs on that machine is what it is for.
+
+    What is checked is the SHAPE, and every failure of it is refused and named rather than
+    degraded: a table for a harness charter cannot launch; a ``command`` that is not a
+    non-empty list of non-empty strings — ``"ccs work"`` is one word naming no program,
+    and splitting it would be a shell's job when there is deliberately no shell between
+    here and `execvp` (`harness.base.launch_argv`); a harness key holding a value where a
+    table should be, which is the shape of ``[harness] default = "claude"`` copied across
+    from `charter.toml`. Each becomes one line of ``refused``, and `doctor` prints them,
+    because a refused override degrades to launching the binary — byte-identical to what
+    a plane with no `local.toml` does, which is #535's shape: a declared thing silently
+    not in force. Rendered through :func:`contain.readable`, since a value out of this
+    file is about to be told to somebody as the thing to fix, and a newline in it would
+    forge a second row of charter's own report.
+
+    ``refused`` is a list on every path, `frame_of`'s rule for ``components``: a key
+    present on one path and absent on another is two shapes for one answer.
+    """
+    out: dict = {"command": {}, "refused": []}
+    section = cfg.get("harness")
+    if not isinstance(section, dict):
+        return out
+    known = launchable_harnesses()
+    for name, table in section.items():
+        shown = contain.readable(name)
+        if not isinstance(table, dict):
+            out["refused"].append(
+                f"[harness] {shown} = {contain.readable(table)} is not a "
+                f"[harness.<name>] table")
+            continue
+        if name not in known:
+            out["refused"].append(
+                f"[harness.{shown}] is not a harness charter can launch")
+            continue
+        if "command" not in table:
+            continue
+        words = table["command"]
+        # `bool` is an `int` and `tomllib` yields both; neither is a word. A list is what
+        # `execvp` and tmux take, and every element has to be a word that names something
+        # — `[""]` resolves to nothing and would die inside tmux with nothing drawn.
+        if (not isinstance(words, list) or not words
+                or not all(isinstance(w, str) and w for w in words)):
+            out["refused"].append(
+                f"[harness.{shown}] command = {contain.readable(words)} is not a list "
+                f"of words")
+            continue
+        out["command"][name] = words
+    return out

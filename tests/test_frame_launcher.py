@@ -201,12 +201,13 @@ class MissingHarnessBinary(PersonaIso, unittest.TestCase):
         """`charter frame -- <cmd>` must behave exactly as it did. `argv[0]` there is the
         operator's own verbatim word and is allowed to be a shell builtin, a relative
         path, or anything else tmux's own resolution accepts — so the check is scoped to
-        `if h`, a REGISTERED harness whose binary charter itself chose
-        (`harness.base.binary`), and never to `argv[0]`.
+        `if h`, a REGISTERED harness, whose `argv[0]` is either the binary charter itself
+        chose (`harness.base.binary`) or the first word of the `[harness.<name>] command`
+        the operator wrote into their own `.charter/local.toml` as an executable.
 
-        This is what fails if anyone "simplifies" the guard to `not
-        shutil.which(argv[0])`: a command charter has never met, provably not on `$PATH`,
-        must still reach `new-session`."""
+        This is what fails if anyone "simplifies" the guard by dropping the `if h`: a
+        command charter has never met, provably not on `$PATH`, must still reach
+        `new-session`."""
         fake = _FakeTmux(exit_code=0)
         self.assertIsNone(shutil.which("charter-definitely-not-a-real-binary-xyz"))
         # NOTHING resolves on `$PATH` for the duration — the strongest form of the
