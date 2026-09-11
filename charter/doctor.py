@@ -2008,6 +2008,15 @@ def check_workspace_harness() -> Result:
     from . import config as _config
     from . import workspace as _workspace
 
+    # One worktree listing per repository for the whole run (review round 4): the check reads
+    # every workspace, and a hung git cost 5 s per checkout without it.
+    with _workspace.worktree_answers():
+        return _workspace_harness_result(_config, _workspace)
+
+
+def _workspace_harness_result(_config, _workspace) -> Result:
+    """:func:`check_workspace_harness`' body, inside its one :func:`workspace.worktree_answers`
+    block."""
     name = "workspace layer"
     if not _config.HAS_CONTROL_PLANE:
         return Result(name, OK, detail="no control plane found")
@@ -2072,8 +2081,12 @@ def check_workspace_harness() -> Result:
     # No leading arrow — `Result.render` writes one. `check_workspace_clones` carries its
     # own and therefore prints two; that is a wart rather than the convention (76 of the
     # 77 hints in this file start with the command), and not one to copy.
-    hint = f"charter workspace reinit --all{aside}"
     statuses = {status for _ws, _rel, status in findings}
+    # Led by `reinit` only when a finding is one it clears (review round 4): an unaccounted
+    # block, an unrecorded marker, an unreadable or harness-kept file all stay after it, and a
+    # hint that leads with a command that changes nothing is the tick that stops a reader.
+    reinit_clears = bool(statuses & {"missing", "stale", "foreign", "unwanted"})
+    hint = f"charter workspace reinit --all{aside}" if reinit_clears else ""
     if "foreign" in statuses:
         hint += ("   A 'foreign' file is one charter did not write: it is left completely "
                  "untouched and never repaired. Remove it to have charter generate its "
@@ -2090,12 +2103,22 @@ def check_workspace_harness() -> Result:
                  "hand if that checkout needs it.")
     if "unaccounted" in statuses:
         # Ruling G (#942, review round 3): charter keeps every line it cannot prove unneeded,
-        # and says what it could not account for instead of ticking over it.
-        why = [reason for ws, rel, status in findings if status == "unaccounted"
-               for reason in _workspace.unaccounted(
-                   _workspace.workspace_dir(ws) / rel.split("/", 1)[0])]
+        # and says what it could not account for instead of ticking over it. Asked of every
+        # finding's checkout and printed once each (review round 4): checkouts sharing one
+        # exclude share its reasons, and a filter to the `unaccounted` rows only was a way of
+        # not printing them twice that the dedupe now is.
+        why = dict.fromkeys(reason for ws, rel, _status in findings
+                            for reason in _workspace.unaccounted(
+                                _workspace.workspace_dir(ws) / rel.split("/", 1)[0]))
         hint += ("   An 'unaccounted' exclude block is still hiding a path charter cannot prove "
                  "it no longer needs, and keeps hiding it until it can: " + "; ".join(why) + ".")
+    if "unrecorded" in statuses:
+        # Ruling H (review round 4): the launch works around this — it writes nothing it could
+        # not record first, and keeps every line — and only a person can clear it.
+        hint += ("   An 'unrecorded' marker is one charter cannot publish because that checkout's "
+                 "root is not writable, so it writes nothing there it could not record first and "
+                 "keeps every exclude line it had; restoring write access to that checkout "
+                 "clears it.")
     counts = _mirrored_restrictions()
     behind = sum(n for key, n in counts.items()
                  if any(rel == key or rel.endswith(f"/{key}")
@@ -2116,6 +2139,8 @@ def check_workspace_harness() -> Result:
         hint += (f"   The plane's {behind} ask/deny rule(s) ride in these generated files, "
                  f"so where one is not current a chat in that directory may not be "
                  f"prompted or refused by them.")
+    if not reinit_clears:
+        hint = (hint + aside).lstrip()
     detail = [f"{ws}/{rel} ({status})" for ws, rel, status in findings]
     return Result(name, WARN,
                   detail=", ".join(detail[:4]) + (", …" if len(detail) > 4 else ""),

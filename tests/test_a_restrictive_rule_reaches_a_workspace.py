@@ -127,6 +127,11 @@ def _refused(files=(), inside=(), calls=("lstat",)):
         yield
 
 
+class _Killed(BaseException):
+    """A process killed at an injected point: nothing after it runs, and no `except Exception`
+    or cleanup that a real SIGKILL would skip gets to run either (review round 4)."""
+
+
 def _as_the_harness_would(path: Path, rule: str) -> str:
     """Append an `allow` the way "Yes, and don't ask again" does; return the new text.
 
@@ -1412,6 +1417,70 @@ class TheSharedExcludeHoldsWhatEveryTreeNeeds(PlaneWithRestrictions):
         self.assertTrue(given, "fixture: git was never asked")
         self.assertEqual(set(given), {doctor.CHECK_TIMEOUT})
 
+    def test_a_worktrees_directory_that_cannot_be_checked_takes_no_line_away(self):
+        """Review round 4, N1's class: `os.path.isdir(<common>/worktrees)` answered False for an
+        EIO as well, so charter skipped git, took this checkout for the only tree there is, and
+        dropped the sibling's line."""
+        wt = self.edited_clone_and_a_withdrawn_worktree()
+        admin = self.clone / ".git" / "worktrees"
+        with _refused(files=[admin, Path(os.path.realpath(admin))], calls=("lstat", "stat")):
+            workspace.wire_guest(wt)
+        self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
+        self.assertEqual(_status(self.clone), "")
+
+    def test_every_variable_git_treats_as_repository_local_is_withheld(self):
+        """Review round 4: `GIT_DIR` and `GIT_WORK_TREE` one by one missed `GIT_COMMON_DIR`. The
+        list is git's own answer to "which variables name a repository", measured on 2.50.1."""
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("git is not installed")
+        listed = subprocess.run([git, "rev-parse", "--local-env-vars"], capture_output=True,
+                                text=True, check=True).stdout.split()
+        self.assertTrue(listed, "fixture: git printed no repository-local variables")
+        self.assertLessEqual(set(listed), set(workspace._GIT_ENV))
+
+    def test_an_exported_git_common_dir_does_not_decide_which_trees_share_the_file(self):
+        wt = self.edited_clone_and_a_withdrawn_worktree()
+        unrelated = _repo(self.tmp / "unrelated")
+        with mock.patch.dict(os.environ, {"GIT_COMMON_DIR": str(unrelated / ".git")}):
+            workspace.wire_guest(wt)
+        self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
+        self.assertEqual(_status(self.clone), "")
+
+    def test_three_checkouts_of_one_repository_ask_git_once_per_wire(self):
+        """Review round 4: the 5 s budget is per call. With git hung for 8 s and three checkouts
+        sharing one common directory, a launch asked four times and took 20 s."""
+        self.worktree("api-wt")
+        self.worktree("api-wt2")
+        calls = self.git_asked()
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(len([c for c in calls if "worktree" in c]), 1)
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(len([c for c in calls if "worktree" in c]), 2,
+                         "a second wire must ask git again, not reuse the first wire's answer")
+
+    def test_doctor_asks_git_once_per_repository(self):
+        """Across workspaces too: `other` holds a worktree of this same clone."""
+        self.worktree("api-wt")
+        workspace.ensure("other")
+        self.worktree("api", ws="other")
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        calls = self.git_asked()
+        doctor.check_workspace_harness()
+        self.assertEqual(len([c for c in calls if "worktree" in c]), 1)
+
+    def test_guard_ask_asks_git_once_per_repository_across_workspaces(self):
+        workspace.ensure("other")
+        self.worktree("api", ws="other")
+        self.worktree("api-wt")
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        calls = self.git_asked()
+        self.at_the_plane()
+        self.invoke(commands.cmd_guard_ask, pattern="kubectl delete *", local=False)
+        self.assertEqual(len([c for c in calls if "worktree" in c]), 1)
+
     def test_an_exported_git_dir_does_not_decide_which_trees_share_the_file(self):
         """Review round 3: a launch with `GIT_DIR` exported — charter run from a git hook —
         asked THAT repository which worktrees there are, and dropped the sibling's line."""
@@ -1465,8 +1534,10 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
         self.marker.write_text("")
         self.launch()
         self.assert_still_hidden()
-        self.assertIn(f"{workspace.GENERATED_MARKER} cannot be read",
-                      " ".join(workspace.unaccounted(self.clone)))
+        said = " ".join(workspace.unaccounted(self.clone))
+        self.assertIn(f"{workspace.GENERATED_MARKER} cannot be read", said)
+        # What clears it, named (review round 4): `reinit` does not.
+        self.assertIn("restoring read access", said)
 
     def test_a_lost_record_stays_hidden_after_charter_writes_a_new_one(self):
         """The record a later wire writes names only what that wire wrote. Read as the whole
@@ -1493,6 +1564,10 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
         # found the `unaccounted` filter deciding exactly that).
         self.assertEqual(
             r.hint.count(f"{SHARED} is there and nothing charter recorded accounts for it"), 1)
+        # Review round 4: `reinit` clears none of this, so the hint does not lead with it, and
+        # it names what does.
+        self.assertFalse(r.hint.startswith("charter workspace reinit"), r.hint)
+        self.assertIn("delete it and the next launch writes and records charter's own", r.hint)
 
     def test_what_could_not_be_accounted_for_comes_back_in_path_order(self):
         """Doctor prints these, and a report that reshuffles from run to run cannot be diffed.
@@ -1656,6 +1731,148 @@ class HarnessBehindIsTrueOfAFileCharterNeverWrote(PlaneWithRestrictions):
         self.assertNotIn("no longer", said)
 
 
+class SilenceIsNotAVerdict(PlaneWithRestrictions):
+    """Review round 4, ruling H: a line for a path that EXISTS leaves charter's block only when a
+    record saying charter does not own that path was both PUBLISHED and READ.
+
+    A generated file charter had written, whose new digest never reached the marker, read as
+    somebody else's file: its old digest no longer matched. It happened on a SIGKILL just before
+    the marker was published (on main too) and, since round 2 publishes through a temp file, on
+    every launch into a checkout whose root is not writable — `?? .claude/settings.json`, with
+    doctor saying "all current". Kills are injected at a point rather than sent: nothing after
+    the point runs, as after a real SIGKILL."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plane_local(config.ROOT, ask=["Bash(charter change land *)"])
+        self.clone = self.checkout("api", real=True)
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(_status(self.clone), "", "fixture: the clone was not hidden to begin with")
+        self.shared = self.clone / SHARED
+        self.marker = self.clone / workspace.GENERATED_MARKER
+
+    def plane_moves(self) -> str:
+        """The plane gains a rule, so the next wire rewrites the clone's shared settings."""
+        _plane_settings(config.ROOT, permissions={
+            "ask": ["Bash(terraform apply *)", "Bash(kubectl *)"], "deny": ["Bash(rm -rf /)"]})
+        new = workspace._guest_files(self.clone)[SHARED]
+        self.assertNotEqual(self.shared.read_text(), new, "fixture: the plane did not move")
+        return new
+
+    def test_a_kill_after_writing_a_file_and_before_recording_it_leaves_it_hidden(self):
+        new = self.plane_moves()
+        real = config.replace_for
+
+        def _killed_after_the_write(path, data):
+            if os.fspath(path) == os.fspath(self.marker) and self.shared.read_text() == new:
+                config.temp_beside(path).write_text(data)
+                raise _Killed()
+            return real(path, data)
+
+        with mock.patch.object(config, "replace_for", _killed_after_the_write):
+            with self.assertRaises(_Killed):
+                workspace.wire_harnesses(self.ws)
+        self.assertEqual(self.shared.read_text(), new, "fixture: the kill came before the write")
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(self.clone), "")
+        self.assertEqual(json.loads(self.marker.read_text())[SHARED],
+                         workspace.content_digest(new))
+
+    def test_a_kill_halfway_through_writing_a_file_leaves_it_hidden_and_rewrites_it(self):
+        new = self.plane_moves()
+        real = Path.write_text
+
+        def _killed_mid_write(path, data, *args, **kwargs):
+            if os.fspath(path) == os.fspath(self.shared):
+                real(path, data[: len(data) // 2], *args, **kwargs)
+                raise _Killed()
+            return real(path, data, *args, **kwargs)
+
+        with mock.patch.object(Path, "write_text", _killed_mid_write):
+            with self.assertRaises(_Killed):
+                workspace.wire_harnesses(self.ws)
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(self.clone), "")
+        self.assertEqual(self.shared.read_text(), new)
+
+    def test_a_checkout_root_charter_cannot_write_keeps_every_line_and_doctor_says_so(self):
+        new = self.plane_moves()
+        self.clone.chmod(0o555)
+        self.addCleanup(self.clone.chmod, 0o755)
+        with self.assertRaises(PermissionError, msg="fixture: this user can write a 555 directory"):
+            (self.clone / "probe").write_text("x")
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(self.clone), "")
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/api/{workspace.GENERATED_MARKER} (unrecorded)", r.detail)
+        self.assertIn("restoring write access", r.hint)
+        self.assertIn("could not publish its record there first", " ".join(self.reinit_said()))
+        self.at_the_plane()
+        _, said = self.invoke(commands.cmd_guard_ask, pattern="helm uninstall *", local=False)
+        self.assertIn("could not publish its record there first", said)
+        self.assertEqual(_status(self.clone), "")
+        self.assertNotEqual(self.shared.read_text(), new,
+                            "fixture: charter wrote a file it could not record first")
+        self.clone.chmod(0o755)
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(self.clone), "")
+        # What the plane wants NOW: the `guard ask` above moved it again while the root was
+        # read-only, and the first launch that can record its write brings the file all the way.
+        self.assertEqual(self.shared.read_text(), workspace._guest_files(self.clone)[SHARED])
+
+    def test_a_checkout_root_charter_cannot_write_is_no_finding_while_nothing_needs_writing(self):
+        """`unrecorded` is about a record a launch needs to publish, not about a mode bit."""
+        self.clone.chmod(0o555)
+        self.addCleanup(self.clone.chmod, 0o755)
+        r = doctor.check_workspace_harness()
+        self.assertNotIn("unrecorded", f"{r.detail} {r.hint}")
+
+    def test_a_kill_during_a_first_wire_leaves_no_temp_file_showing(self):
+        """Minor 1: the pattern line is in the block before the first temp file exists — the
+        first pass names the marker before anything is published."""
+        fresh = _repo(workspace.workspace_dir(self.ws) / "fresh")
+        marker = fresh / workspace.GENERATED_MARKER
+        real = config.replace_for
+
+        def _killed_inside_the_publish(path, data):
+            if os.fspath(path) == os.fspath(marker):
+                config.temp_beside(path).write_text(data)
+                raise _Killed()
+            return real(path, data)
+
+        with mock.patch.object(config, "replace_for", _killed_inside_the_publish):
+            with self.assertRaises(_Killed):
+                workspace.wire_harnesses(self.ws)
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(fresh), "")
+
+    def test_a_stale_temp_file_keeps_its_line_while_it_is_there(self):
+        """…and it stays while such a file is there, whatever became of the marker's own line."""
+        config.temp_beside(self.marker).write_text("{")
+        self.marker.unlink()
+        workspace.ensure(self.ws)
+        self.assertEqual(_status(self.clone), "")
+
+
+class ClassHitsInReinitSayWhatTheyCouldNotCheck(PlaneWithRestrictions):
+    """Review round 4, minor 2's class, in `cmd_workspace_reinit`: `Path.exists` read an error as
+    absence — "no workspace", "workspace.json could not be written" — and raised on 3.11–3.13."""
+
+    def test_a_workspace_directory_that_cannot_be_checked_is_not_called_missing(self):
+        wd = workspace.workspace_dir(self.ws)
+        with _refused(files=[wd], calls=("lstat", "stat")):
+            said = " ".join(self.reinit_said())
+        self.assertIn(f"workspace '{self.ws}' cannot be checked", said)
+        self.assertNotIn("no workspace", said)
+
+    def test_a_manifest_that_cannot_be_checked_is_not_called_unwritten(self):
+        manifest = workspace.manifest_path(self.ws)
+        with _refused(files=[manifest], calls=("lstat", "stat")):
+            said = " ".join(self.reinit_said())
+        self.assertIn("workspace.json cannot be checked", said)
+        self.assertNotIn("could not be written", said)
+
+
 class UtilRunCanWithholdAVariable(unittest.TestCase):
     """`util.run(..., unset=...)` (#942 review round 3). `env` is an overlay and can only ADD to
     what a child inherits; `GIT_DIR` exported by a git hook has to be taken away, or every git
@@ -1816,6 +2033,10 @@ class WhatGitListsDecidesNothingItCannotBackUp(PlaneWithRestrictions):
         # there and doctor has nothing to say about it — a reason printed over a block that is
         # fully accounted for is the cry-wolf the round-3 sweep found in `current - need`.
         self.assertEqual(workspace.unaccounted(clone), [])
+        # Review round 4: `reinit` cannot clear this, and neither can anything else — say so.
+        r = doctor.check_workspace_harness()
+        self.assertIn("a separate git dir keeps this line by design; nothing to do", r.hint)
+        self.assertFalse(r.hint.startswith("charter workspace reinit"), r.hint)
 
     def test_a_worktree_git_lists_as_prunable_takes_no_line_away(self):
         clone = self.checkout("api", real=True)
@@ -1837,7 +2058,51 @@ class WhatGitListsDecidesNothingItCannotBackUp(PlaneWithRestrictions):
         workspace.wire_harnesses("other2")
         workspace.wire_harnesses(self.ws)
         self.assertNotIn(LOCAL, _status(moved))
-        self.assertIn("prunable", " ".join(workspace.unaccounted(clone)))
+        said = " ".join(workspace.unaccounted(clone))
+        self.assertIn("prunable", said)
+        # Git's own reason, not charter's guess (review round 4): "moved or deleted" was said of
+        # a worktree that was only unreadable.
+        self.assertIn("gitdir file points to non-existent location", said)
+        self.assertNotIn("moved or deleted", said)
+        self.assertIn("git worktree repair", said)
+
+    def test_a_listed_checkout_that_is_not_there_says_what_clears_it(self):
+        """A LOCKED worktree whose `.git` is gone: git lists it, not as prunable, and it is no
+        separate git dir — so "by design" would be false of it."""
+        clone = self.checkout("api", real=True)
+        wt = workspace.workspace_dir(self.ws) / "api-wt"
+        _git(clone, "worktree", "add", "-q", "-b", "wt1", str(wt))
+        workspace.wire_harnesses(self.ws)
+        _as_the_harness_would(wt / LOCAL, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        _git(clone, "worktree", "lock", str(wt))
+        (wt / ".git").unlink()
+        workspace.wire_guest(clone)
+        said = " ".join(workspace.unaccounted(clone))
+        self.assertIn("not a checkout", said)
+        self.assertIn("restoring that checkout", said)
+        self.assertNotIn("by design", said)
+
+    def test_a_reason_two_checkouts_share_is_printed_once(self):
+        """Review round 4: two checkouts reading one exclude reported git's one doubt twice."""
+        clone = self.checkout("api", real=True)
+        wt = workspace.workspace_dir(self.ws) / "api-wt"
+        _git(clone, "worktree", "add", "-q", "-b", "wt1", str(wt))
+        workspace.ensure("other")
+        gone = workspace.workspace_dir("other") / "api"
+        _git(clone, "worktree", "add", "-q", "-b", "wt-other", str(gone))
+        workspace.wire_harnesses(self.ws)
+        workspace.wire_harnesses("other")
+        _as_the_harness_would(gone / LOCAL, "Bash(npm test *)")
+        (config.ROOT / LOCAL).unlink()
+        workspace.wire_harnesses(self.ws)
+        self.assertIn(f"/{LOCAL}\n", self.excludes(clone),
+                      "fixture: the approving worktree's line did not stay")
+        shutil.rmtree(gone)
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/api/.git/info/exclude (unaccounted)", r.detail)
+        self.assertIn(f"{self.ws}/api-wt/.git/info/exclude (unaccounted)", r.detail)
+        self.assertEqual(r.hint.count("as prunable"), 1, r.hint)
 
     def test_a_bare_repositorys_worktrees_still_let_an_unneeded_line_go(self):
         """The `bare` entry names a git directory, not a checkout, and says so — so it is

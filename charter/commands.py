@@ -1770,13 +1770,19 @@ def _mirror_into_workspaces() -> None:
         # cannot be listed must not turn a successful `guard ask` into a failure.
         return
     changed, unreached, behind, unreadable, withheld, unhidden = [], [], [], [], [], []
-    for ws in names:
-        try:
-            rows = workspace.wire_harnesses(ws)
-        except (OSError, ValueError):
-            # One workspace that cannot be wired costs its own rows and not the rest —
-            # `_layer_files`' rule about a misbehaving harness, one level up.
-            continue
+    unrecorded: list[str] = []
+    wired: list[tuple[str, list]] = []
+    # One worktree listing per repository across every workspace (review round 4): checkouts in
+    # two workspaces can share one repository, and a hung git cost 5 s per call.
+    with workspace.worktree_answers():
+        for ws in names:
+            try:
+                wired.append((ws, workspace.wire_harnesses(ws)))
+            except (OSError, ValueError):
+                # One workspace that cannot be wired costs its own rows and not the rest —
+                # `_layer_files`' rule about a misbehaving harness, one level up.
+                continue
+    for ws, rows in wired:
         for rel, status in rows:
             where = f"{ws}/{rel}"
             if rel.endswith(".git/info/exclude"):
@@ -1794,6 +1800,8 @@ def _mirror_into_workspaces() -> None:
                 behind.append(where)
             elif status == "unreadable":
                 unreadable.append(where)
+            elif status == "unrecorded":
+                unrecorded.append(where)
             elif status == "withheld":
                 withheld.append(where)
             elif status in ("foreign", "blocked"):
@@ -1822,6 +1830,11 @@ def _mirror_into_workspaces() -> None:
         util.warn(f"  {', '.join(unreadable)} cannot be read, so charter left it exactly as it "
                   f"is and did not add this rule there; it writes there again only if that file "
                   f"turns out to be exactly what charter last wrote.")
+    if unrecorded:
+        # Ruling H (#942 review round 4): a write charter could not record first is not made.
+        util.warn(f"  {', '.join(unrecorded)}: charter could not publish its record there first, "
+                  f"so it wrote nothing there and kept every exclude line it had — the rule is "
+                  f"not in force in a chat rooted there until that checkout is writable.")
     if withheld:
         util.warn(f"  {', '.join(withheld)} was not written: charter could not hide it in "
                   f"that checkout's .git/info/exclude, and a machine-local rule it cannot "

@@ -1447,7 +1447,14 @@ def cmd_workspace_reinit(args) -> int:
         names = workspace.list_workspaces()
     else:
         name = getattr(args, "name", None) or workspace.resolve()
-        if not workspace.workspace_dir(name).exists():
+        # Asked with `workspace._exists` (#942 review round 4, minor 2's class): `Path.exists`
+        # called an EIO "no workspace", and raised instead on 3.11–3.13.
+        there = workspace._exists(workspace.workspace_dir(name), follow=True)
+        if there is None:
+            util.err(f"workspace '{name}' cannot be checked — charter changes nothing it cannot "
+                     f"see; restoring read access to {workspace.workspace_dir(name)} clears this.")
+            return 1
+        if there is False:
             util.err(f"no workspace '{name}'")
             return 1
         names = [name]
@@ -1530,6 +1537,12 @@ def cmd_workspace_reinit(args) -> int:
                 util.warn(f"'{n}': {rel} cannot be read — left exactly as it is; charter writes "
                           f"there again only if that file turns out to be exactly what charter "
                           f"last wrote.")
+            elif did == "unrecorded":
+                # Ruling H (#942 review round 4): a write charter could not record first is not
+                # made, and the lines stay. Not `blocked`: nothing is in the way at that path.
+                util.warn(f"'{n}': {rel} — charter could not publish its record there first, so "
+                          f"it wrote nothing and kept every exclude line it had; restoring write "
+                          f"access to that checkout clears this.")
             else:
                 repairs += 1
                 repaired.add(n)
@@ -1549,7 +1562,13 @@ def cmd_workspace_reinit(args) -> int:
         # only way the file is still absent is that this call could not write it. The
         # sweep found the conjunct as a survivor and it was right — an equivalent mutant
         # and dead code are one finding.
-        if not workspace.manifest_path(n).exists():
+        there = workspace._exists(workspace.manifest_path(n), follow=True)
+        if there is None:
+            # Not "could not be written" (#942 review round 4, minor 2's class): an lstat that
+            # fails proves nothing about the file, and that sentence sends somebody to fix a write.
+            util.warn(f"'{n}': workspace.json cannot be checked — charter cannot say whether it "
+                      f"is there; restoring read access to it clears this.")
+        elif there is False:
             blocked.add(n)
             before["missing"] = [m for m in before["missing"] if m != "workspace.json"]
             before["ok"] = not before["missing"] and before["version"] >= before["target"]
