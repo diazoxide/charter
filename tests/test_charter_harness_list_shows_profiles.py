@@ -83,6 +83,19 @@ class HarnessListShowsProfiles(PersonaIso):
                 self.assertTrue(self._row(out, name).rstrip().endswith("built-in"), out)
         self.assertNotIn("refused:", out)
 
+    def test_built_ins_come_first_in_registry_order_then_declared_by_name(self):
+        """The plan's order. A declared replacement keeps its kind's place, and a declared
+        name that sorts early still comes after every built-in. Registry order is not
+        alphabetical — `opencode` is registered before `codex` — so a listing that sorted
+        built-ins by name would put `codex` second and fail here."""
+        out = self._list('[harness.zzz-last]\nkind = "claude"\ncommand = ["claude"]\n'
+                         '[harness.codex]\nkind = "codex"\ncommand = ["/opt/codex"]\n'
+                         '[harness.aaa-first]\nkind = "claude"\ncommand = ["claude"]\n')
+        names = [line[2:].split()[0] for line in self._profiles_block(out).splitlines()
+                 if line[2:].split() and line[2:].split()[0] != "NAME"
+                 and not line.startswith(("refused:", "!", "  refused"))]
+        self.assertEqual(names, ["claude", "opencode", "codex", "aaa-first", "zzz-last"], out)
+
     def test_a_declared_profile_shows_its_command_env_and_file(self):
         row = self._row(self._list(_WORK), "claude-work")
         self.assertIn("CLAUDE_CONFIG_DIR=~/.claude-work claude", row)

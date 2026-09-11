@@ -664,7 +664,10 @@ def command_words() -> frozenset[str]:
     """
     subparsers = next(action for action in build_parser()._actions
                       if isinstance(action, argparse._SubParsersAction))
-    return frozenset(subparsers.choices) - {h.cli_name for h in harness.all() if h.cli_name}
+    # No `if h.cli_name` filter: a harness with no launcher contributes "", which names no
+    # subcommand, so subtracting it changes nothing — the deletion sweep measured the filter
+    # as a line the suite could lose, and a line nothing can observe is a line to delete.
+    return frozenset(subparsers.choices) - {h.cli_name for h in harness.all()}
 
 
 def _add_frame_parsers(sub) -> None:
