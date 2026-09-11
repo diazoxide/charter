@@ -176,8 +176,38 @@ class TheTrapsBashParsesOneWay(PlaneIso):
         cmd = f"cat x # <<'EOF'\n{READ}\nEOF"
         self.assertTrue(self.denies(cmd), cmd)
 
+    def test_an_unquoted_heredoc_marker_in_a_comment_opens_nothing(self):
+        """The #972-reviewer shape: `# <<EOF` is comment text, so the next line is a command
+        and is read. The old regex matched the `<<EOF` and stripped to end of input, hiding
+        it. Measured allowed on main `a5aa860`."""
+        cmd = f"cat notes.txt # <<EOF\n{READ}"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_heredoc_marker_in_single_quotes_is_an_argument(self):
+        """`grep '<<EOF' file` searches for the literal text `<<EOF`; it opens no heredoc, so
+        the next line is read. Measured allowed on main `a5aa860`."""
+        cmd = f"grep '<<EOF' file\n{READ}"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_an_escaped_heredoc_operator_opens_nothing(self):
+        r"""`cat x \<<EOF` — the `\<` is not the heredoc operator, so no body is opened and
+        the next line is a command. Measured allowed on main `a5aa860`."""
+        cmd = f"cat x \\<<EOF\n{READ}"
+        self.assertTrue(self.denies(cmd), cmd)
+
     def test_a_quoted_heredoc_marker_opens_nothing(self):
         cmd = f'cat "<<EOF"\n{READ}\nEOF'
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_real_heredoc_after_a_comment_marker_still_works(self):
+        """The comment's fake `<<EOF` must not swallow a genuine heredoc on a later line. The
+        real one is a quoted reader body — stdin data — so its prose mention stays allowed
+        (#258), proving the comment did not derail heredoc detection."""
+        cmd = f"cat notes.txt # <<EOF\ncat <<'DOC'\n{MENTION}\nDOC"
+        self.assertFalse(self.denies(cmd), cmd)
+
+    def test_a_real_shell_heredoc_after_a_comment_marker_is_still_denied(self):
+        cmd = f"echo hi # <<EOF\nbash <<'DOC'\n{READ}\nDOC"
         self.assertTrue(self.denies(cmd), cmd)
 
     def test_a_grouped_reader_piped_into_a_shell(self):
