@@ -1296,6 +1296,18 @@ def check_guard_wired() -> Result:
     if not _config.HAS_CONTROL_PLANE:
         return Result(name, OK, detail="no control plane found")
 
+    from . import guardseen as _seen
+
+    # A Claude Code config folder that cannot be compared — empty, relative, or with no home to
+    # resolve it from — turns every answer below into a guess: the plugin list and the user
+    # settings this row reads resolve against doctor's working directory, not Claude Code's,
+    # and no sighting can vouch for that folder. So it is said first, whatever the sightings,
+    # with the one remedy that changes it (the #970 re-review: this row read "nothing has fired
+    # here yet" there, and its "run a Bash command" hint could never clear it).
+    standing = _seen.folder_standing()
+    if standing.folder_in_doubt:
+        return Result(name, WARN, detail=f"not checked — {standing.doubt}", hint=standing.hint)
+
     # `commands._ensure_guard_hook` asks the SAME question through the same function.
     # Reading different evidence is how a writer and a checker disagreed about "wired"
     # and left the guard declared twice — and enabled is not dispatched (#177).
@@ -1336,16 +1348,13 @@ def check_guard_wired() -> Result:
         #
         # Reaching the handler is the only proof available, which is what `guardseen`
         # exists to record; a sighting from THIS plugin is that proof.
-        from . import guardseen as _seen
-
         if _seen.last_source() == _seen.PLUGIN:
             # ...and only for the Claude Code config folder it ran under (#969).
             # `$CLAUDE_CONFIG_DIR` moves the manifest and settings this row just read, so a
             # guard that fired yesterday under `~/.claude` says nothing about a session under a
             # second account's folder — where the plugin can be installed and not yet loaded,
-            # #261's window reached from a new direction. `guardseen.folder_standing` is the
-            # one place that decides it, for this row and for `guard seen` alike.
-            standing = _seen.folder_standing()
+            # #261's window reached from a new direction. `guardseen.folder_standing`, read at
+            # the top of this row, is the one place that decides it, for `guard seen` too.
             if standing.doubt is None:
                 return Result(name, OK,
                               detail=f"wired (enabled plugin {plugin}) — and it has fired here")
@@ -1356,10 +1365,9 @@ def check_guard_wired() -> Result:
             return Result(
                 name, WARN,
                 detail=f"enabled plugin {plugin} declares it and a guard has fired from it, "
-                       f"but {standing.doubt} — so nothing shows it is loaded for the folder "
-                       f"in use",
-                hint="Run a Bash command in a Claude Code session on this config folder and "
-                     "re-check: a sighting made there is what vouches for it.")
+                       f"but {standing.doubt}. Until a guard fires under the folder in use, "
+                       f"nothing shows the plugin is loaded there",
+                hint=standing.hint)
         return Result(
             name, WARN,
             detail=f"enabled plugin {plugin} declares it, but nothing has fired here yet — "
@@ -1599,15 +1607,24 @@ def check_guard_seen() -> Result:
 
     name = "guard seen"
     rec = _seen.last()
+    standing = _seen.folder_standing()
+    if standing.folder_in_doubt:
+        # Whatever the sightings — none, a plane nobody has worked in, another harness's —
+        # because the remedy is the folder, and every other branch of this row ends in "run a
+        # Bash command", which records one more sighting nothing can be compared with (the
+        # #970 re-review). The age is kept when there is one: it is still true.
+        seen = (f"last ran {_seen_age(rec.get('ts'))} ago under "
+                f"{rec.get('harness') or 'an unnamed harness'}, but " if rec else "")
+        return Result(name, WARN, detail=f"{seen}{standing.doubt}", hint=standing.hint)
     if rec:
         at = _seen_age(rec.get("ts"))
         where = rec.get("harness") or "an unnamed harness"
         # An age under another Claude Code config folder is not an age of anything in this
         # one (#969). Green here sat under the guard row's warning and told the reader the
         # guard had just run for them. `guardseen.folder_standing` decides it, for this row
-        # and for `plane-root guard` alike; a Codex or opencode sighting has no folder to be
-        # wrong about and passes straight through.
-        standing = _seen.folder_standing()
+        # and for `plane-root guard` alike: a sighting from a NAMED harness other than Claude
+        # Code has no folder to be wrong about and passes through, and one that names no
+        # harness at all is unknown and says so.
         if standing.doubt is not None:
             detail = f"last ran {at} ago under {where}, but {standing.doubt}"
             # A settings declaration in the folder the sighting DID run under is still there.
@@ -1620,10 +1637,7 @@ def check_guard_seen() -> Result:
                 detail += (f"; its declaration is still in "
                            f"{util.short_path(Path(standing.elsewhere) / 'settings.json')}, a "
                            f"file sessions on the folder in use never read")
-            return Result(name, WARN, detail=detail,
-                          hint="That sighting says nothing about the Claude Code config folder "
-                               "in use. Run a Bash command in a Claude Code session on this "
-                               "folder and re-check.")
+            return Result(name, WARN, detail=detail, hint=standing.hint)
         # A sighting is evidence for the declaration that PRODUCED it and for no other. The
         # settings block that fired minutes ago can have been deleted since — on this
         # command's own duplicate-guard advice — and "last ran 0m ago" then invites the

@@ -114,9 +114,15 @@ start Claude Code from, so it sees the same variable.
   plane's committed `.claude/settings.json`, which every folder's sessions read, so whether it
   writes the guard hook is decided by `~/.claude` whatever your shell says.
 - **A guard sighting counts only for the folder it ran under.** `plane-root guard` and `guard
-  seen` both stay yellow for a sighting from another folder, one recorded before charter kept
-  the folder, or any sighting under a relative `$CLAUDE_CONFIG_DIR`, and each says which case it
-  is. One Bash command in a Claude Code session on the folder you use clears the first two.
+  seen` stay yellow for a sighting from another folder, one recorded before charter kept the
+  folder, or one that names no harness (`$CHARTER_HARNESS` unset and no plugin), and each says
+  which case it is. A Bash command in a Claude Code session on the folder you use clears the
+  first two; for the third, `charter reinit` writes `$CHARTER_HARNESS` into
+  `.claude/settings.json`, and a session started after that names its harness.
+- **An empty or relative `$CLAUDE_CONFIG_DIR` is reported on both guard rows**, whatever the
+  sightings. Claude Code resolves it against its own working directory, which charter cannot
+  see, so nothing can be compared with it. Set it to an absolute path; running a command
+  changes nothing there.
 - **Three narrower Claude Code settings are not followed**, so with any of them set these rows
   read the wrong file:
   - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.

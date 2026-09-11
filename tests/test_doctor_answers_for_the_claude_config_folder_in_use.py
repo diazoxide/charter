@@ -441,6 +441,100 @@ class TestARelativeFolderNeverVouches(ConfigFolderCase):
         self.assertIn("relative", r.detail)
 
 
+class TestASightingThatNamesNoHarnessIsUnknown(ConfigFolderCase):
+    """A Claude Code session wired through settings, with `$CHARTER_HARNESS` unset, writes a
+    sighting that names no harness: `detect()` knows Claude Code only by `$CLAUDE_PLUGIN_ROOT`.
+    Deciding "Claude Code" from the name or the plugin source alone read that as another
+    harness's sighting, and it passed straight through under any folder (the #970 re-review).
+    It is unknown: it never vouches, it is never green, and the row says it cannot tell."""
+
+    def unnamed(self) -> None:
+        self.a_sighting_under(None, source=guardseen.SETTINGS, harness=None)
+
+    def test_guard_seen_is_not_green_under_a_named_folder(self):
+        self.unnamed()
+        self.use_folder(self.other)
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertIn("cannot tell which harness", r.detail)
+
+    def test_nor_under_the_default_folder(self):
+        """Not a folder mismatch: nothing about the folder in use makes it count."""
+        self.unnamed()
+        self.assertEqual(doctor.check_guard_seen().status, WARN)
+
+    def test_the_remedy_is_the_step_that_names_the_harness(self):
+        self.unnamed()
+        self.assertIn("CHARTER_HARNESS", doctor.check_guard_seen().hint)
+
+    def test_a_named_harness_other_than_claude_code_keeps_todays_behaviour(self):
+        self.a_sighting_under(self.other, source=guardseen.SETTINGS, harness="opencode")
+        self.use_the_default_folder()
+        self.assertEqual(doctor.check_guard_seen().status, OK)
+
+
+class TestARelativeFolderIsSaidWhateverTheSightings(ConfigFolderCase):
+    """A relative `$CLAUDE_CONFIG_DIR` used to be reported only beside a plugin sighting. With
+    none, or with a settings sighting, the rows read "nothing has fired here yet" and "plane not
+    worked in yet", and both hints said to run a Bash command and re-check — which records one
+    more sighting that nothing can be compared with. A remedy followed that changes nothing
+    (the #970 re-review). Whenever the folder is relative both rows say so, and name the one fix
+    that changes them."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        os.environ["CLAUDE_CONFIG_DIR"] = "cfg"
+
+    def assert_it_names_the_fix(self, r) -> None:
+        self.assertEqual(r.status, WARN)
+        self.assertIn("relative", r.detail)
+        self.assertIn("absolute path", r.hint)
+        self.assertNotIn("Bash command", r.hint)
+
+    def test_the_guard_row_with_no_sighting_at_all(self):
+        self.assert_it_names_the_fix(doctor.check_guard_wired())
+
+    def test_the_guard_row_with_a_settings_sighting_and_the_plugin_enabled(self):
+        self.install_in(config.ROOT / "cfg")
+        self.enable_in_the_plane()
+        guardseen.mark(harness="claude-code", source=guardseen.SETTINGS)
+        self.assert_it_names_the_fix(doctor.check_guard_wired())
+
+    def test_the_guard_row_even_in_a_process_the_plugin_launched(self):
+        with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_ROOT": str(self.plugin())}):
+            self.assert_it_names_the_fix(doctor.check_guard_wired())
+
+    def test_guard_seen_on_a_plane_nobody_has_worked_in(self):
+        self.assert_it_names_the_fix(doctor.check_guard_seen())
+
+    def test_guard_seen_with_a_settings_sighting_keeps_its_age(self):
+        guardseen.mark(harness="claude-code", source=guardseen.SETTINGS)
+        r = doctor.check_guard_seen()
+        self.assert_it_names_the_fix(r)
+        self.assertIn("last ran", r.detail)
+
+    def test_guard_seen_with_another_harnesses_sighting(self):
+        """Whatever the sightings: the folder is the operator's Claude Code setting, and it is
+        wrong whichever harness last fired."""
+        guardseen.mark(harness="codex", source=guardseen.SETTINGS)
+        self.assert_it_names_the_fix(doctor.check_guard_seen())
+
+
+class TestAnEmptyFolderIsCalledEmpty(ConfigFolderCase):
+    def test_both_rows_say_it_is_empty_and_what_claude_code_uses_then(self):
+        """The binary spells the folder ``CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")``, and
+        `??` keeps an empty string, so Claude Code uses its own working directory. "'.' is a
+        relative path" named nothing the operator had typed (the #970 re-review)."""
+        os.environ["CLAUDE_CONFIG_DIR"] = ""
+        for r in (doctor.check_guard_wired(), doctor.check_guard_seen()):
+            with self.subTest(row=r.name):
+                self.assertEqual(r.status, WARN)
+                self.assertIn("empty", r.detail)
+                self.assertIn("working directory", r.detail)
+                self.assertNotIn("'.'", r.detail)
+                self.assertIn("absolute path", r.hint)
+
+
 class TestOneFunctionDecidesWhetherASightingCounts(ConfigFolderCase):
     """`guardseen.folder_standing` is the only place that rule lives, with one exception
     policy, so the two rows cannot drift apart the way a writer and a checker once did."""
@@ -456,6 +550,8 @@ class TestOneFunctionDecidesWhetherASightingCounts(ConfigFolderCase):
                                side_effect=RuntimeError("Could not determine home directory.")):
             standing = guardseen.folder_standing()
         self.assertIn("cannot be resolved", standing.doubt)
+        self.assertTrue(standing.folder_in_doubt)
+        self.assertIn("HOME", standing.hint)
 
     def test_a_sighting_that_recorded_no_folder_is_a_doubt_with_nowhere_named(self):
         with mock.patch.object(claude_code, "config_home",
@@ -535,10 +631,14 @@ class TestAPathWithALiteralTildeIsNeverAbbreviated(ConfigFolderCase):
         self.assertFalse(shown.startswith("~"), shown)
 
     def test_the_guard_rows_remedy_names_the_folder_actually_read(self):
-        ws = self.rooted_in_a_workspace()
-        os.environ["CLAUDE_CONFIG_DIR"] = "~/acct2"
+        """An absolute folder with a literal `~` segment is read, and named in full. A relative
+        one never reaches this remedy: both guard rows report it as relative first."""
+        self.rooted_in_a_workspace()
+        acct = self.home / "~" / "acct2"
+        self.use_folder(acct)
         hint = doctor.check_guard_wired().hint
-        self.assertIn(os.path.join(str(ws), "~", "acct2", "settings.json"), hint)
+        self.assertIn(str(acct / "settings.json"), hint)
+        self.assertNotIn("~/~/", hint)
 
 
 if __name__ == "__main__":

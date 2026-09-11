@@ -13,8 +13,9 @@ folder no charter hook runs at all.
 reads: `$CLAUDE_CONFIG_DIR` when it is set, `~/.claude` and `~/.claude.json` when it is not.
 `plugin install` and `plugin files` already did, by asking Claude Code. A guard sighting now
 records the folder it ran under and counts for that folder only. Both guard rows stay yellow,
-and say which case it is, for a sighting from another folder, one from before this release,
-or any sighting under a relative `$CLAUDE_CONFIG_DIR`.
+and say which case it is, for a sighting from another folder, one from before this release, or
+one that names no harness. An empty or relative `$CLAUDE_CONFIG_DIR` is reported on both rows
+whatever the sightings, with the only fix that changes them: an absolute path.
 
 **What does not follow it.** The `personas` row still looks for a persona's skills under
 `~/.claude`. `charter reinit` keeps deciding from `~/.claude` on purpose: it writes the plane's

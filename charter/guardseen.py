@@ -71,9 +71,20 @@ def _is_claude_code(harness: str | None, source: str | None) -> bool:
     return harness == claude_code.NAME or source == PLUGIN
 
 
-def _folder_in_use() -> tuple[str | None, str | None]:
-    """The Claude Code config folder this process would use, as ``(folder, None)`` — or
-    ``(None, why)`` when there is no absolute folder to record or to compare with.
+#: The one remedy for a folder in use that cannot be compared (empty or relative). Said once,
+#: because both guard rows print it.
+_ABSOLUTE_FOLDER = ("Set CLAUDE_CONFIG_DIR to an absolute path in the shell you start Claude Code "
+                    "from, then re-check.")
+
+#: The remedy for a sighting that cannot vouch for a folder that CAN be compared. It works: a
+#: guard firing in such a session records that very folder, and the row changes.
+_FIRE_HERE = ("Run a Bash command in a Claude Code session on this config folder, then re-check: "
+              "a guard that fires there records the folder it ran under.")
+
+
+def _folder_in_use() -> tuple[str | None, str | None, str | None]:
+    """The Claude Code config folder this process would use, as ``(folder, None, None)`` — or
+    ``(None, why, fix)`` when there is no absolute folder to record or to compare with.
 
     **One exception policy for both ends of the comparison** — `mark`, which records, and
     :func:`folder_standing`, which compares — so the two can never disagree about what counts
@@ -86,20 +97,35 @@ def _folder_in_use() -> tuple[str | None, str | None]:
     equal to `cfg` from a workspace. So a relative folder is recorded as none and compared with
     nothing, and the row that cannot compare says so.
 
+    **An empty value is named as empty** (the #970 re-review). The binary spells the folder
+    ``CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")``, and `??` keeps an empty string, so
+    Claude Code uses its own working directory; "'.' is a relative path" named nothing the
+    operator had typed. No path is printed for a relative folder either: the one charter could
+    print is resolved against its OWN directory, which is exactly the answer it cannot vouch for.
+
     Only `RuntimeError`: `Path.home()` raises it with no `$HOME` and no passwd entry, and the
     resolver does no I/O that could raise anything else.
+
+    The third element is the one remedy that changes a row in that state — never "run a Bash
+    command", which records one more sighting that nothing can be compared with.
     """
     from .harness import claude_code
 
+    if os.environ.get("CLAUDE_CONFIG_DIR") == "":
+        return None, ("$CLAUDE_CONFIG_DIR is set but empty, so Claude Code uses its own working "
+                      "directory as the config folder, and charter cannot see that "
+                      "directory"), _ABSOLUTE_FOLDER
     try:
-        folder = str(claude_code.config_home())
+        folder = claude_code.config_home()
     except RuntimeError:
-        return None, ("the Claude Code config folder in use cannot be resolved (there is no "
-                      "home folder)")
+        return None, ("the Claude Code config folder in use cannot be resolved: there is no "
+                      "home folder"), ("Set HOME, or set CLAUDE_CONFIG_DIR to an absolute path, "
+                                       "in the shell you start Claude Code from, then re-check.")
     if not os.path.isabs(folder):
-        return None, (f"the Claude Code config folder in use, {folder!r}, is a relative path — "
-                      f"a different folder in every directory it is read from")
-    return folder, None
+        return None, ("the Claude Code config folder in use is a relative path, which Claude Code "
+                      "resolves against its own working directory, and charter cannot see that "
+                      "directory"), _ABSOLUTE_FOLDER
+    return str(folder), None, None
 
 
 def mark(harness: str | None = None, when: datetime | None = None,
@@ -158,14 +184,19 @@ def last_source() -> str | None:
 class FolderStanding(NamedTuple):
     """Whether the latest sighting counts for the Claude Code config folder in use (#969).
 
-    ``doubt`` is ``None`` when it does — or when there is nothing for a folder to be wrong
-    about: no sighting, or another harness's. Otherwise it is the clause a `doctor` row prints
-    to say why the sighting cannot vouch. ``elsewhere`` is the other absolute folder the
-    sighting provably ran under, and nothing else: a sighting charter cannot place names none.
+    ``doubt`` is ``None`` when it does — or when there is nothing to be wrong about: no
+    sighting, or one from a NAMED harness other than Claude Code. Otherwise it is the clause a
+    `doctor` row prints, and ``hint`` is the one remedy that can change that row, never a step
+    that would leave it as it is. ``elsewhere`` is the other absolute folder the sighting
+    provably ran under, and nothing else. ``folder_in_doubt`` says the doubt is about the folder
+    in use itself: it holds whatever the sightings are, so a row reports it before anything it
+    would otherwise have read from that folder.
     """
 
     doubt: str | None
+    hint: str | None
     elsewhere: str | None
+    folder_in_doubt: bool
 
 
 def folder_standing() -> FolderStanding:
@@ -177,32 +208,49 @@ def folder_standing() -> FolderStanding:
     once disagreed about "wired" (#177). Each way a sighting fails to count is a different
     thing for the reader to do, so each says so in its own words:
 
-    * the folder in use cannot be compared at all — relative, or unresolvable — so nothing
-      can vouch for it, the next sighting included;
+    * the folder in use cannot be compared at all — empty, relative, or unresolvable — so
+      nothing can vouch for it, whatever the sightings; the remedy is the folder, not a command
+      (the #970 re-review: "run a Bash command" there was followed and changed nothing);
+    * the sighting names no harness and no plugin launched it — charter cannot tell whose it
+      is, or which folder it ran under. Unknown, never green (the #970 re-review: it used to
+      pass straight through as another harness's);
     * the sighting predates folder recording — something fired, under a folder charter cannot
       name. Neither a pass nor "nothing fired" (ADR 0009); the next guarded call replaces it;
     * the sighting recorded no folder — the same, from a process that had none to record;
     * it ran under another folder — named, because that is the incident.
     """
+    folder, why, fix = _folder_in_use()
+    if folder is None:
+        return FolderStanding(f"{why}, so no guard sighting can be compared with it", fix,
+                              None, True)
     rec = last()
-    if not rec or not _is_claude_code(rec.get("harness"), rec.get("source")):
-        return FolderStanding(None, None)
-    in_use, why = _folder_in_use()
-    if in_use is None:
-        return FolderStanding(f"{why}, so no guard sighting can be compared with it", None)
+    if not rec:
+        return FolderStanding(None, None, None, False)
+    harness, source = rec.get("harness"), rec.get("source")
+    if not harness and source != PLUGIN:
+        return FolderStanding(
+            "that sighting names no harness, so charter cannot tell which harness recorded it "
+            "or under which Claude Code config folder",
+            "A sighting names its harness when $CHARTER_HARNESS is set in the session "
+            "(`charter reinit` writes it into .claude/settings.json) or charter's plugin "
+            "launched the guard. Run a Bash command in a session started that way, then "
+            "re-check.", None, False)
+    if not _is_claude_code(harness, source):
+        return FolderStanding(None, None, None, False)
     if CLAUDE_CONFIG_DIR not in rec:
         return FolderStanding("that sighting predates charter recording which Claude Code "
                               "config folder a guard ran under, so charter cannot tell which "
-                              "folder it came from", None)
+                              "folder it came from", _FIRE_HERE, None, False)
     recorded = rec[CLAUDE_CONFIG_DIR]
     if not isinstance(recorded, str):
         return FolderStanding("that sighting recorded no absolute Claude Code config folder, "
-                              "so charter cannot tell which folder it came from", None)
-    if recorded != in_use:
+                              "so charter cannot tell which folder it came from", _FIRE_HERE,
+                              None, False)
+    if recorded != folder:
         return FolderStanding(f"that sighting ran under Claude Code config folder "
-                              f"{util.short_path(recorded)}, not {util.short_path(in_use)}, "
-                              f"the one in use", recorded)
-    return FolderStanding(None, None)
+                              f"{util.short_path(recorded)}, not {util.short_path(folder)}, "
+                              f"the one in use", _FIRE_HERE, recorded, False)
+    return FolderStanding(None, None, None, False)
 
 
 def last() -> dict | None:
