@@ -217,6 +217,15 @@ class TheTerminatorMatchesBashExactly(PlaneIso):
         cmd = f"bash <<A && cat <<'B'\necho a\\\nA\n{READ}\nA\ndata\nB"
         self.assertTrue(self.denies(cmd), cmd)
 
+    def test_a_quoted_body_does_not_splice_a_trailing_backslash(self):
+        """The other half of the splice rule, and a leak-hider without it. A QUOTED body is
+        literal, so a line ending in `\\` splices nothing and the next line still terminates
+        it. Splicing regardless of quoting would run `cat`'s body on past its `A`, swallow the
+        read meant for `bash <<'B'` into the dropped reader body, and allow a command that
+        leaks in bash, zsh and dash."""
+        cmd = f"cat <<'A' && bash <<'B'\ndata\\\nA\n{READ}\nB"
+        self.assertTrue(self.denies(cmd), cmd)
+
     def test_a_dash_terminator_still_strips_leading_tabs(self):
         """`<<-` strips leading tabs from body and terminator alike, so a tab-indented
         terminator still ends the body. A quoted reader body naming a path stays data (#258),
