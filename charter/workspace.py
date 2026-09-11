@@ -2842,12 +2842,15 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
     """
     marker = _read_marker_at(tree)
     rows = _layer_status(tree, _guest_files(tree), marker)
-    if (any(s in ("missing", "stale") for _rel, s in rows)
+    if (any(s in ("missing", "stale", "unwanted") for _rel, s in rows)
             and unrecorded_reason(tree)):
         # Ruling H (review round 4): a launch cannot publish the record a write needs first, so
         # it writes nothing and keeps every line — and says so here, where somebody looks. On the
         # errno the last publish failed with (review round 5, R5), never on `os.access`, which
-        # passes a read-only filesystem and a full disk alike.
+        # passes a read-only filesystem and a full disk alike. `unwanted` stays (#942 closing
+        # verification, which reverted its deletion): a withdrawal the checkout refuses, beside a
+        # note an earlier publish left, otherwise led doctor's hint with a `reinit` that clears
+        # neither.
         rows.append((GENERATED_MARKER, "unrecorded"))
     owned = _charter_owned(tree, marker)
     status = _exclude_status(tree, owned)

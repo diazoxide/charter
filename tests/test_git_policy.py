@@ -538,7 +538,9 @@ class TheScopeScanIsExact(unittest.TestCase):
     def test_a_directory_in_a_workspace_that_is_no_repository_is_not_in_scope(self):
         root = self.git_init(self.plane())
         (root / "workspaces" / "w" / "memory").mkdir(parents=True)
-        self.assertEqual(gitpolicy.repos(root, root / "workspaces"), [root])
+        # And it is not "cannot be checked" either: a directory with no `.git` is a plain answer,
+        # which doctor must not name (#942 closing verification).
+        self.assertEqual(gitpolicy.scan(root, root / "workspaces"), ([root], []))
 
     def test_a_file_among_the_workspaces_is_passed_over(self):
         """Finder leaves a `.DS_Store` in any directory it has shown."""

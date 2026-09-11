@@ -7,6 +7,7 @@ Nothing here changes the system.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import platform
@@ -225,8 +226,13 @@ def check_ssh() -> Result:
     # A directory under `workspaces/` charter cannot look into (ADR 0009, #942 final review):
     # whether it is a clone cannot be told, so it is named with what clears it — never raised out
     # of doctor, as it was on 3.11–3.13, and never left out of the count without a word.
-    cannot = (f"   {', '.join(f'{p.parent.name}/{p.name}' for p in unseen)} cannot be checked "
-              f"— restoring read access to it clears this." if unseen else "")
+    # Worded for the cause the check actually met (#942 closing verification): restoring read
+    # access does nothing for a symlink loop.
+    cannot = ("   " + "; ".join(
+        f"{p.parent.name}/{p.name} cannot be checked — "
+        + (f"fix the symlink loop at {p}" if code == errno.ELOOP
+           else "restoring read access to it clears this")
+        for p, code in unseen) + "." if unseen else "")
     if not bad:
         if unseen:
             return Result("git auth", WARN,

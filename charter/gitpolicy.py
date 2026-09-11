@@ -35,6 +35,7 @@ forge host the control plane knows about (see ``hooks._known_forges``).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from . import config, util
@@ -208,19 +209,23 @@ def scan(root: Path, workspaces_dir: Path) -> tuple[list[Path], list[Path]]:
     #942 final review: `Path.exists` RAISED for one on 3.11–3.13 — a workspace's own `refs/` at
     mode 000 took `charter doctor` down — and answered False on 3.14, leaving what may be a clone
     out of the count without a word. `workspace._exists` tells those apart, and `doctor`'s
-    `check_ssh` names the second kind (ADR 0009)."""
-    from .workspace import _exists
+    `check_ssh` names the second kind (ADR 0009).
 
+    Each such directory comes with the errno the check failed with (#942 closing verification):
+    a symlink loop is cleared at the loop, and only a refusal by restoring read access."""
     out = [Path(root)] if is_git_repo(root) else []
-    unseen: list[Path] = []
+    unseen: list[tuple[Path, int | None]] = []
     if Path(workspaces_dir).exists():
         for ws in sorted(Path(workspaces_dir).iterdir()):
             if not ws.is_dir():
                 continue
             for clone in sorted(ws.iterdir()):
-                there = _exists(clone / ".git", follow=True)
-                if there:
-                    out.append(clone)
-                elif there is None:
-                    unseen.append(clone)
+                try:
+                    os.stat(clone / ".git")
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                except OSError as e:
+                    unseen.append((clone, e.errno))
+                    continue
+                out.append(clone)
     return out, unseen

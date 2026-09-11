@@ -2354,6 +2354,21 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
         workspace.refs_dir(self.ws).chmod(0o755)
         self.assertEqual(_status(self.clone), "")
 
+    def test_a_symlink_loop_among_a_workspaces_directories_is_named_as_a_loop(self):
+        """#942 closing verification: restoring read access clears no symlink loop."""
+        loop = workspace.workspace_dir(self.ws) / "loop"
+        loop.symlink_to(loop)
+        r = doctor.check_ssh()
+        self.assertIn(f"{self.ws}/loop cannot be checked — fix the symlink loop at {loop}", r.hint)
+        self.assertNotIn("read access", r.hint)
+
+    def test_a_directory_it_may_not_search_is_told_to_restore_read_access(self):
+        self.locked(workspace.refs_dir(self.ws))
+        r = doctor.check_ssh()
+        self.assertIn(f"{self.ws}/refs cannot be checked — restoring read access to it clears this",
+                      r.hint)
+        self.assertNotIn("symlink loop", r.hint)
+
     def test_doctor_names_a_directory_it_cannot_look_into_where_every_repo_is_token_only(self):
         """doctor.py `check_ssh`: the row goes WARN for it alone, and leads with the path."""
         self.locked(workspace.refs_dir(self.ws))
@@ -2752,6 +2767,28 @@ class SweepOfRoundFiveTheRecord(RoundFiveCheckout):
         self.assertTrue(workspace.unrecorded_reason(self.clone), "fixture: no note was kept")
         (config.ROOT / SHARED).write_text(plane)
         self.assertNotIn(workspace.GENERATED_MARKER, dict(workspace.guest_layer(self.clone)))
+
+    def test_a_withdrawal_the_checkout_refuses_beside_an_earlier_note_is_led_by_what_clears_it(self):
+        """workspace.py `guest_layer`'s "unwanted" (#942 closing verification, which reverted its
+        deletion). An earlier launch could not publish; the plane then returns to what the checkout
+        holds and drops `--local`, and `.claude/` refuses the unlink. Without "unwanted" the
+        unrecorded row went, and doctor's hint led with a `reinit` that prints "Up to date"."""
+        plane = (config.ROOT / SHARED).read_text()
+        self.plane_moves_shared()
+        with _publishes_refused(self.marker):
+            workspace.ensure(self.ws)
+        self.assertTrue(workspace.unrecorded_reason(self.clone), "fixture: no note was kept")
+        (config.ROOT / SHARED).write_text(plane)
+        (config.ROOT / LOCAL).unlink()
+        claude = self.clone / ".claude"
+        claude.chmod(0o555)
+        self.addCleanup(claude.chmod, 0o755)
+        workspace.ensure(self.ws)
+        self.assertTrue(self.local.exists(), "fixture: the withdrawal was not refused")
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"{self.ws}/api/{workspace.GENERATED_MARKER} (unrecorded)", r.detail)
+        self.assertTrue(r.hint.startswith("An 'unrecorded' marker"), r.hint)
+        self.assertIn("restore write access to that checkout (EACCES", r.hint)
 
     def test_a_missing_file_behind_an_unpublished_record_is_reported_unrecorded(self):
         """workspace.py:2781, "missing"."""
