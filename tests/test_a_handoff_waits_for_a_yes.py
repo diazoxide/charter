@@ -725,13 +725,90 @@ class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
             with self.subTest(spelling=name):
                 self.assertIn("a shell runs", _reason(self._decide(cmd)) or "")
 
-    def test_an_opener_that_cannot_be_named_falls_back_to_the_whole_line(self):
-        """Ruling D, and the only surviving use of `_line_runs_text`. `${RUNNER}` is decided at
-        runtime, so no program can be named for this heredoc; the fail-safe then asks whether
-        anything on the line runs text at all, and `bash` downstream says yes. Stub
-        `_line_runs_text` to `False`, or empty the executor list, and this goes green."""
+    def test_a_brief_on_a_plan_less_line_is_still_charters_stdin(self):
+        """The `charter handoff` arm of the per-heredoc decision, isolated. A group later on the
+        line costs the whole-line plan, but the handoff itself is spelled canonically, so the
+        gate has no other reason to refuse — and the brief's prose deliberately OPENS a line with
+        the two words. Drop the arm and that prose is read as a misspelled handoff."""
+        self.assertIsNone(_reason(self._decide(
+            "charter handoff beta <<'BRIEF' && { true; }\n"
+            "charter handoff gamma is the next step.\nBRIEF")))
+
+    def test_an_opener_that_cannot_be_resolved_to_a_name_searches_its_body(self):
+        """Review round 6, ruling 3. A name charter does not have is not a name charter may
+        assume is harmless: with `RUNNER=bash` both shells run the body. Round 5 asked instead
+        whether anything ELSE on the line ran text, which answers "no" when the only shell on
+        the line is the unnameable word itself — so these ran with no prompt.
+
+        `$(which bash)` is the same fault wearing a name: cutting at the nearest `$(` reads the
+        program as `which`, which is not the program that runs. A word that came out of a
+        substitution is not a name charter has."""
+        for name, cmd in (("a variable", f"( ${{RUNNER}} <<'EOF' )\n{HEREDOC}\nEOF"),
+                          ("$SHELL", f"( ${{SHELL}} <<'EOF' )\n{HEREDOC}\nEOF"),
+                          ("a substitution", f"( $(which bash) <<'EOF' )\n{HEREDOC}\nEOF")):
+            with self.subTest(opener=name):
+                self.assertIn("a shell runs", _reason(self._decide(cmd)) or "")
+
+    def test_a_pipe_hands_the_body_on_and_a_semicolon_does_not(self):
+        """Ruling 1, and the line between the two regressions this branch traded back and forth.
+        Round 4 asked the whole LINE and refused 22 good-faith commands whose shell sat after a
+        `;` or `&&`; round 5 asked the opener's word alone and let `cat <<'A' | bash` through,
+        which both shells run. The pipeline is the unit a shell actually uses."""
+        for name, cmd, refused in (
+            ("a pipe, in a subshell", f"( cat <<'A' | bash )\n{HEREDOC}\nA", True),
+            ("a pipe, in a group", f"{{ cat <<'A' | bash; }}\n{HEREDOC}\nA", True),
+            ("a semicolon", "( cat <<'A' > n.md; bash <<'B' )\n"
+                            "charter handoff beta asks first.\nA\necho hi\nB", False),
+            ("an &&", "( cat <<'A' > n.md && bash )\ncharter handoff beta asks first.\nA", False),
+        ):
+            with self.subTest(joined_by=name):
+                if refused:
+                    self.assertIn("a shell runs", _reason(self._decide(cmd)) or "")
+                else:
+                    self.assertIsNone(_reason(self._decide(cmd)))
+
+    def test_ansi_c_quoting_is_its_own_context(self):
+        """Ruling 2. In `$'don\\'t'` the `\\'` CLOSES the string in bash and zsh. Reading it as a
+        close and the next `'` as a reopen put the scan one quote out of step, which erased the
+        real `bash <<'EOF'` opener entirely — and cost an over-refusal the other way, on prose
+        that merely holds an apostrophe."""
+        with self.subTest(direction="the erased opener"):
+            self.assertIn("a shell runs", _reason(self._decide(
+                f"echo $'don\\'t' && bash <<'EOF'\n{HEREDOC}\nEOF")) or "")
+        with self.subTest(direction="the prose over-refusal"):
+            self.assertIsNone(_reason(self._decide(
+                "echo $'don\\'t' && cat <<'EOF' > notes.md\n"
+                "charter handoff beta asks first.\nEOF")))
+
+    def test_two_heredocs_in_one_substitution_take_the_conservative_answer(self):
+        """Ruling 4. In `x=$( cat <<'A' > n.md; bash <<'B' )` bash hands the FIRST body to
+        `bash` and leaves `n.md` empty — the opposite of this guard's attribution, so the
+        handoff in the "cat" body runs. Getting bash's ordering right inside a substitution is
+        not work this guard carries, so every body in such a substitution is searched. A
+        substitution holding ONE reader heredoc is untouched, which is how commit messages are
+        written here."""
+        with self.subTest(shape="two heredocs, one of them a shell's"):
+            self.assertIn("a shell runs", _reason(self._decide(
+                f"x=$( cat <<'A' > n.md; bash <<'B' )\n{HEREDOC}\nA\necho hi\nB")) or "")
+        with self.subTest(shape="one reader heredoc"):
+            self.assertIsNone(_reason(self._decide(
+                'git commit -m "$(cat <<\'EOF\'\nDocs\n\n'
+                'charter handoff beta now asks first.\nEOF\n)"')))
+
+    def test_ssh_runs_the_body_on_the_other_machine(self):
+        """`ssh` is not a local interpreter and is not in `_EXECUTORS`, which the leak guard also
+        reads — what `ssh` does with a body is a question about this gate, not about a secret
+        leaving the host. It still runs the body, so the body is searched."""
         self.assertIn("a shell runs", _reason(self._decide(
-            f"( ${{RUNNER}} <<'EOF' | bash )\n{HEREDOC}\nEOF")) or "")
+            f"( ssh host <<'EOF' )\n{HEREDOC}\nEOF")) or "")
+
+    def test_a_reader_piped_into_a_shell_is_searched_whoever_opened_it(self):
+        """What `_line_runs_text` pins now that it asks about the PIPELINE rather than the line:
+        `cat` is a named non-shell, so only the `| bash` downstream of it makes its body a
+        script. Stub `_line_runs_text` to `False`, or empty the executor list, and this goes
+        green while `cat <<'A'; bash` — the row above — stays allowed either way."""
+        self.assertIn("a shell runs", _reason(self._decide(
+            f"( cat <<'A' | bash )\n{HEREDOC}\nA")) or "")
 
 
 class TheQuotingJudgementIsTheSubstitutionGuards(PlaneIso):

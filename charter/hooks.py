@@ -895,8 +895,20 @@ def _inside_quotes(line: str, at: int) -> bool:
         if top == "'":
             if c == "'":
                 stack.pop()
+        elif top in ("$'", '$"'):
+            # Closes on its own quote, and nothing else opens inside it: `$(` is literal there.
+            if c == top[1]:
+                stack.pop()
         elif c == "$" and line[i:i + 2] == "$(":
             stack.append("(")
+            i += 2
+            continue
+        elif c == "$" and line[i:i + 2] in ("$'", '$"'):
+            # ANSI-C (`$'don\'t'`) and locale (`$"…"`) quoting: a backslash escapes the next
+            # character, which a plain `'` never does. Reading `\'` as CLOSING the string put
+            # the scan one quote out of step for the rest of the line, which erased the real
+            # `bash <<'EOF'` opener after it entirely (review round 6, ruling 2).
+            stack.append("$" + line[i + 1])
             i += 2
             continue
         elif c == "`":
@@ -912,7 +924,7 @@ def _inside_quotes(line: str, at: int) -> bool:
         elif c in "'\"":
             stack.append(c)
         i += 1
-    return bool(stack) and stack[-1] in ("'", '"')
+    return bool(stack) and stack[-1] in ("'", '"', "$'", '$"')
 
 
 #: Where a command that opens a heredoc can START inside a line the whole-line pass could not
@@ -921,18 +933,100 @@ def _inside_quotes(line: str, at: int) -> bool:
 _OPENER_CUTS = ("$(", "`", "(", "{", "&&", "||", ";", "|&", "|", "&", "\n")
 
 
-def _heredoc_opener_words(line: str, start: int) -> list[str]:
-    """The words of the command that opens the `<<` at *start* — its program first.
+def _heredoc_opener_words(line: str, start: int) -> list[str] | None:
+    """The words of the command that opens the `<<` at *start* — its program first — or ``None``
+    when the source does not settle what that program is.
 
     Read off the SOURCE rather than off the token stream, because this is only reached when the
     line is one :func:`_line_pipelines` would not attribute, which is exactly when the token
     stream is not a reliable map of it. Cutting at the nearest command-start marker finds `cat`
     in `git commit -m "$(cat <<'EOF'`, where the `<<` sits inside a quoted word and the lexer
     reports no heredoc at all.
+
+    ``None`` when a substitution CLOSED between the cut and the `<<`: in
+    `$(which bash) <<'EOF'` the nearest `$(` is the substitution's, so cutting there reads the
+    program as `which` — a name, and the wrong one, since the program is whatever `which`
+    printed. Naming the wrong program is worse than naming none (review round 6, ruling 3).
     """
     head = line[:start]
     cuts = [head.rfind(m) + len(m) for m in _OPENER_CUTS if head.rfind(m) >= 0]
-    return head[max(cuts, default=0):].split()
+    words = head[max(cuts, default=0):].split()
+    return None if any(")" in w or "`" in w for w in words) else words
+
+
+def _crowded_substitutions(line: str) -> set[int]:
+    """Indices into :func:`_heredoc_openers` whose body sits in a `$( … )` that holds TWO or more
+    heredocs, one of which an executor opened. Every body in such a substitution could run.
+
+    Bash's own ordering there is not what charter's attribution assumes: in
+    `x=$( cat <<'A' > n.md; bash <<'B' )` bash hands the FIRST body to `bash` and leaves `n.md`
+    empty, so the handoff in the "cat" body runs. Getting that ordering right is not work this
+    guard should carry, so the conservative answer is taken for the whole substitution (review
+    round 6, ruling 4). The cost is an over-refusal only where a reader heredoc and a shell
+    heredoc share one `$( … )`, which nobody writes by accident; a substitution holding a single
+    reader heredoc is untouched.
+    """
+    forced: set[int] = set()
+    openers = _heredoc_openers(line)
+    depth, spans, open_at = 0, [], -1
+    i = 0
+    while i < len(line):                       # the `$( … )` spans, quoting honoured
+        if not _inside_quotes(line, i):
+            if line.startswith("$(", i):
+                if depth == 0:
+                    open_at = i
+                depth += 1
+                i += 2
+                continue
+            if line[i] == ")" and depth:
+                depth -= 1
+                if depth == 0:
+                    spans.append((open_at, i))
+        i += 1
+    for lo, hi in spans:
+        inside = [k for k, m in enumerate(openers) if lo < m.start() < hi]
+        if len(inside) < 2:
+            continue
+        if any(_is_executor(_opener_program(_heredoc_opener_words(line, openers[k].start())) or "")
+               for k in inside):
+            forced.update(inside)
+    return forced
+
+
+#: Separators that END a pipeline. `|` is deliberately absent: it CONTINUES one, handing the
+#: body onward, which is the whole of review round 6's ruling 1.
+_PIPELINE_BREAKS = ("&&", "||", ";;", ";", "&", "\n")
+
+
+def _pipeline_slice(line: str, start: int) -> str:
+    """The text of the pipeline containing the `<<` at *start*.
+
+    The unit a shell actually uses. `cat <<'A' | bash` feeds the body to `bash`, so the body is a
+    script; `cat <<'A'; bash` and `cat <<'A' && bash` do not, so it is data. Round 4 asked the
+    whole LINE and over-refused 22 good-faith commands whose shell sat after a `;` or `&&`; round
+    5 asked the opener's word alone and let `cat <<'A' | bash` through. The pipeline is the
+    answer to both (review round 6, ruling 1).
+
+    Breaks are found on the source with quoting honoured, since this runs where the lexer could
+    not, and a `;` inside quotes separates nothing.
+    """
+    lo, hi = 0, len(line)
+    i = 0
+    while i < len(line):
+        if _inside_quotes(line, i):
+            i += 1
+            continue
+        for br in _PIPELINE_BREAKS:
+            if line.startswith(br, i):
+                if i < start:
+                    lo = i + len(br)
+                else:
+                    hi = i
+                    return line[lo:hi]
+                i += len(br) - 1
+                break
+        i += 1
+    return line[lo:hi]
 
 
 def _heredoc_could_run(line: str, start: int) -> bool:
@@ -956,24 +1050,34 @@ def _heredoc_could_run(line: str, start: int) -> bool:
 
     1. a **shell or interpreter** — including one reached through `env`/`nohup` (:func:`_split_env`
        names it) and `ssh`, where the remote shell runs the body — **searches** the body;
-    2. **any other program that can be named** — `git`, `tee`, `mail`, `wc`, every
+    2. a program that **cannot be resolved to a name** — a variable (`${RUNNER} <<'EOF'`), or a
+       word that came out of a substitution (`$(which bash) <<'EOF'`) — **searches** it too. A
+       name charter does not have is not a name charter may assume is harmless, and with
+       `RUNNER=bash` both shells run the body (review round 6, ruling 3);
+    3. **any other program that can be named** — `git`, `tee`, `mail`, `wc`, every
        :data:`_READERS` member — hands the body on as DATA. `git commit -F -` is neither a
        reader nor a shell, and treating that gap as "could run" refused this branch's own commit
-       messages inside `( … )` (review round 5, ruling A);
-    3. a program that **cannot be named** — a variable, an expansion — falls back to
-       :func:`_line_runs_text`, "is there an executor anywhere on this line". That is the
-       fail-safe, and it is the ONLY place the whole-line question survives.
+       messages inside `( … )` (review round 5, ruling A).
+
+    And whatever the opener, the body is searched when an executor stands **downstream of it in
+    the same PIPELINE** — `cat <<'A' | bash` is a script, `cat <<'A'; bash` is not
+    (:func:`_pipeline_slice`).
 
     An UNQUOTED body is searched whatever opened it: it expands before the program sees it, so a
     `$( … )` in it runs — the same clause :func:`_heredoc_strip_plan` applies.
+
+    A **brief** needs no arm of its own here, and had one until it was measured: `charter` is a
+    nameable program that is not a shell, so rule 3 already calls its body data. Nothing could
+    tell the two apart — A7 stops at the first line that runs a handoff, and a brief's opener
+    line is always that line — so the arm was deleted rather than left as an unpinnable branch
+    (CONTRIBUTING: a fallback with no red test is a fallback nobody notices losing).
     """
-    words = _heredoc_opener_words(line, start)
-    if words[:2] == ["charter", "handoff"]:
-        return False                           # a brief: charter's stdin, which nobody runs
-    prog = _opener_program(words)
+    prog = _opener_program(_heredoc_opener_words(line, start))
     if prog is None:
-        return _line_runs_text(line)
+        return True
     if _is_executor(prog) or prog in _REMOTE_SHELLS:
+        return True
+    if _line_runs_text(_pipeline_slice(line, start)):
         return True
     header = _heredoc_header(line, start)
     return header is None or header[1]         # unquoted: a `$( … )` in the body RUNS
@@ -986,13 +1090,13 @@ def _heredoc_could_run(line: str, start: int) -> bool:
 _REMOTE_SHELLS = frozenset({"ssh"})
 
 
-def _opener_program(words: list[str]) -> str | None:
+def _opener_program(words: list[str] | None) -> str | None:
     """The program *words* names, lowercased and without its directory — or ``None`` when the
     source does not name one at all.
 
     ``None`` is the honest answer for `"$PROG" <<'EOF'` or `${RUNNER} <<'EOF'`: the program is
-    decided at runtime, and guessing either way would be a guess. It is what sends
-    :func:`_heredoc_could_run` to its fail-safe.
+    decided at runtime, and guessing either way would be a guess. It is what makes
+    :func:`_heredoc_could_run` search the body.
     """
     if not words:
         return None
@@ -1246,11 +1350,13 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
             # judged on its own (:func:`_heredoc_could_run`) rather than all of them sharing
             # one default — the defect in review round 4, finding 1.
             unknown = _heredoc_strip_plan(folded) is None
+            crowded = _crowded_substitutions(folded) if unknown else set()
             for h, m in enumerate(_heredoc_openers(folded)):
                 header = _heredoc_header(folded, m.start())
                 idx = body_count
                 body_count += 1
-                could_run = _heredoc_could_run(folded, m.start()) if unknown else None
+                could_run = (h in crowded or _heredoc_could_run(folded, m.start())
+                             ) if unknown else None
                 if unknown:
                     fallback[idx] = could_run
                 # The header is bash's own reading of the delimiter, and the ONLY safe source

@@ -109,16 +109,27 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
 
   **A heredoc body is searched when its OWN opener is a shell or an interpreter** — `bash`,
   `sh`, `python3`, `perl`, one of those behind `env` or `nohup`, or `ssh`, where the remote
-  shell runs it — **or when charter cannot tell what the opener is**, as with `${RUNNER} <<'EOF'`,
-  where the program is decided at runtime. Every other opener hands its body on without running
-  it, so the body is data: `git commit -F -`, `tee`, `mail`, `wc`, and every reader such as
-  `cat`. A brief — the body of a `charter handoff` heredoc — is data for the same reason.
-  Each heredoc is judged by the program that opened *it*, so in
-  `( cat <<'A' > notes.md; bash <<'B' )` the first body is data and the second is searched.
+  shell runs it — **or when charter cannot resolve the opener to a name**, as with
+  `${RUNNER} <<'EOF'`, where the program is decided at runtime, or `$(which bash) <<'EOF'`,
+  where the word came out of a substitution. Every other opener hands its body on without
+  running it, so the body is data: `git commit -F -`, `tee`, `mail`, `wc`, and every reader such
+  as `cat`. A brief — the body of a `charter handoff` heredoc — is data for the same reason.
+
+  **And a body is searched when an executor stands downstream of its opener in the same
+  pipeline**, because that is what a shell does with it: `cat <<'A' | bash` is a script, while
+  `cat <<'A'; bash` and `cat <<'A' && bash` are not. Each heredoc is judged by the program that
+  opened *it* and by its own pipeline, so in `( cat <<'A' > notes.md; bash <<'B' )` the first
+  body is data and the second is searched. The one place that is set aside: when two or more
+  heredocs share a single `$( … )` and any of them is a shell's, every body in that substitution
+  is searched, because bash's ordering inside a substitution does not match the attribution.
 
   A `<<` inside quotes opens nothing: `echo "use <<EOF for heredocs"` is a sentence and
   `rg '<<\w' docs/` is a pattern. A `<<` inside `$( … )` *is* an opener even when quotes
-  surround it, which is how `git commit -m "$(cat <<'EOF' … EOF)"` is written.
+  surround it, which is how `git commit -m "$(cat <<'EOF' … EOF)"` is written. An ANSI-C word
+  (`$'don\'t'`) is read correctly here, but the shared lexer behind the secret-leak guard cannot
+  parse one, so a call carrying it keeps every heredoc body visible to *that* guard — prose in a
+  brief on such a line can be refused as a read. That errs toward refusing, never toward missing
+  a leak.
 - **with a stdin other than one quoted heredoc** on the handoff's own segment — so the prompt
   shows exactly the text the new chat is sent.
 
@@ -140,7 +151,10 @@ The hook refuses the spellings of a handoff it can recognise, so a chat working 
 keeps your prompt in front of its handoff. It reads a command's words; it is not a shell, and it
 does not stop a chat set on getting around it. It does not see a handoff run by an interpreter
 (`python3 -c`, `node -e`, or `os.system` inside a `python3 - <<'PY'` body), through a variable,
-from a script file, or more than one string deep. **One apostrophe can switch the look off.** The
+from a script file, or more than one string deep. It does not see a shell hidden behind a
+**name charter cannot know**: `r() { bash; }; r <<'EOF'` defines a function and calls it, so the
+opener reads as `r`, the body is treated as data, and the handoff in it runs — the same class as
+an interpreter or a script file, and evasion-shaped rather than a spelling a chat reaches for. **One apostrophe can switch the look off.** The
 look inside `eval` and `sh -c` strings reads the call with reader heredoc bodies removed, so a
 body that is *not* a reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body — holding a
 lone `'` (as in `don't`) leaves the call unparseable, and a handoff in a later `eval '…'` or

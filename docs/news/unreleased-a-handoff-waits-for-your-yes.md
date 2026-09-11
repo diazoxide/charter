@@ -34,9 +34,11 @@ Inside a control plane, charter's Bash hook refuses a `charter handoff`:
 - fed anything but one quoted heredoc on its own segment, so the prompt shows the exact brief.
 
 A heredoc body is searched when its own opener is a shell or an interpreter (`bash <<'EOF'`,
-`python3 <<'PY'`, `ssh`), or when charter cannot name the opener. Every other opener hands its
+`python3 <<'PY'`, `ssh`); when charter cannot resolve the opener to a name (`${RUNNER} <<'EOF'`,
+`$(which bash) <<'EOF'`); or when an executor stands downstream of it in the same pipeline, so
+`cat <<'A' | bash` is a script where `cat <<'A'; bash` is not. Every other opener hands its
 body on without running it, so `git commit -F -`, `tee`, `mail` and every reader keep their
-bodies as data — each heredoc judged by the program that opened it, so
+bodies as data — each heredoc judged by its own opener and its own pipeline, so
 `( cat <<'A' > notes.md; bash <<'B' )` searches only `bash`'s. A `<<` inside quotes opens
 nothing; a `<<` inside `$( … )` opens a heredoc even when quotes surround it.
 

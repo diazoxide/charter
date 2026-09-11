@@ -377,11 +377,15 @@ rule while one who reads a bare refusal files an issue.
 
   **Which heredoc bodies A7 searches.** A body is searched when its OWN opener is a shell or an
   interpreter (`bash`, `sh`, `python3`, `perl`, one of those behind `env`/`nohup`, or `ssh`,
-  whose remote shell runs it), or when charter cannot name the opener at all (`${RUNNER} <<'EOF'`
-  — decided at runtime), in which case it also asks whether anything on the line runs text. Any
-  other opener hands its body on without running it, so the body is data: `git commit -F -`,
-  `tee`, `mail`, `wc`, every reader. Each heredoc is judged by the program that opened *it*, so
-  `( cat <<'A' > notes.md; bash <<'B' )` searches only the second body. A `<<` inside quotes is
+  whose remote shell runs it); when charter cannot resolve the opener to a name
+  (`${RUNNER} <<'EOF'`, decided at runtime, or `$(which bash) <<'EOF'`, a word out of a
+  substitution); or when an executor stands downstream of the opener **in the same pipeline**,
+  since `cat <<'A' | bash` is a script where `cat <<'A'; bash` is not. Any other opener hands its
+  body on without running it, so the body is data: `git commit -F -`, `tee`, `mail`, `wc`, every
+  reader. Each heredoc is judged by its own opener and its own pipeline, so
+  `( cat <<'A' > notes.md; bash <<'B' )` searches only the second body — except that when two or
+  more heredocs share one `$( … )` and any is a shell's, every body there is searched, because
+  bash's ordering inside a substitution does not match the attribution. A `<<` inside quotes is
   not an opener at all, while a `<<` inside `$( … )` is one even inside quotes — the spelling
   `git commit -m "$(cat <<'EOF' … EOF)"` depends on that.
 
@@ -406,6 +410,9 @@ rule while one who reads a bare refusal files an issue.
   `os.system` inside a `python3 - <<'PY'` body),
   through a variable, from a script file, behind an expansion that does not leave the word whole
   (`{hand,}off`, `$'\x68andoff'`, `hand${x:-}off`), or more than one string deep is not seen.
+  Nor is a shell behind a **name charter cannot know**: `r() { bash; }; r <<'EOF'` defines a
+  function and calls it, so the opener reads as `r` and its body is treated as data — the same
+  class as an interpreter or a script file.
   The look inside `eval` and `sh -c` strings reads the call with reader heredoc bodies removed,
   so a body that is NOT a reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body —
   holding a lone `'` (as in `don't`) leaves the call unparseable and the look is skipped, so a
