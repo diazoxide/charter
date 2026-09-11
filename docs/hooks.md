@@ -353,14 +353,16 @@ rule while one who reads a bare refusal files an issue.
 - **A handoff the prompt cannot stand in front of.** A handoff's brief becomes a new chat's
   first message and runs with your authority, so its consent is your harness's own permission
   prompt: the `ask` rule for `charter handoff *` that `charter init` writes (see
-  [handoff.md](handoff.md), *The prompt is the consent*). This guard refuses what that prompt
-  cannot cover. Each refusal needs a fact no command pattern can see.
+  [handoff.md](handoff.md), *The prompt is the consent*). This guard refuses the handoffs it can
+  recognise that the prompt would not stand in front of. Each refusal needs a fact no command
+  pattern can see.
 
   | Refused | Why the prompt cannot cover it |
   | --- | --- |
   | a call from a **sub-agent**: the payload carries `agent_id` | You are talking to the parent chat, and what the sub-agent found goes back there anyway. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
   | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `charter ws todo` as the way to keep the work. |
-  | any **spelling** other than `charter handoff …` at the start of its command: the two words unquoted, unescaped and one space apart, judged on the source rather than on what a shell makes of it | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to charter, and a quoted or split `handoff` (`charter 'handoff'`, `charter h""andoff`) ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted or escaped `charter`, two spaces, a tab and a line continuation were matched there and are refused anyway, so a model has one spelling to follow. |
+  | a **spelling** of `charter handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted, escaped or behind a shell expansion (`$'…'`, `$"…"`, `${…}`, `{…,}`, a glob); a gap other than one ASCII space before or after `handoff` | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to charter, `charter 'handoff'`, `charter $'handoff'`, `charter {handoff,}` and `charter hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `charter`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them. |
+  | a handoff **inside a string a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'` or `bash -c '…'` ran with no prompt. The refusal says to run it directly. |
   | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before charter reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
 
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
@@ -376,6 +378,16 @@ rule while one who reads a bare refusal files an issue.
   the whole gate. Codex has no command-pattern permissions, so an attended Codex chat's handoff
   runs without a prompt, and `codex exec --approve-for-me` reports `permission_mode: default`,
   so it is not refused as unattended. `charter doctor`'s `handoff gate` row names both gaps.
+
+  **What it does not see, on any harness.** It refuses the spellings of a handoff it can
+  recognise, so a chat working in good faith keeps the prompt in front of its handoff; it reads a
+  command's words and is not a shell. A handoff run by an interpreter (`python3 -c`, `node -e`),
+  through a variable, from a script file, behind an expansion it does not recognise, more than one
+  string deep, or inside a heredoc fed to a shell (`bash <<'EOF'`, until a follow-up change) is not
+  seen, and a `<<` inside a comment or quotes earlier in the call hides every later line from it
+  (heredoc detection is being reworked under issue #973). Claude Code says the same of its rule:
+  a Bash rule "isn't a security boundary around the program"
+  ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
 One more path is not a guard but an allowance: a program the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the

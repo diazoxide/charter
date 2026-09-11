@@ -87,6 +87,13 @@ carries the rulings that touch it.
   `charter 'handoff'` — which Claude Code 2.1.268 runs with no prompt — is refused along with every
   other variant. Phase 2 (ruling 4's #948-path tests, ruling 5's `{stale}` hint) is split into a
   follow-up PR after #948 merges; Task 4's PR merges as Phase 1.
+- **Task 4 review round 2 (2026-09-11).** A7 guards a good-faith chat's spelling mistakes and
+  names what it cannot see; it is not a shell parser, and it does not refuse every command that
+  merely mentions a handoff. R2b: exactly one ASCII space after `handoff` too, or the end of the
+  command. R2c: a shell expansion in a segment's first two words that still spells `charter` /
+  `handoff`, or globs to it, is a spelling refusal. R2d: one level into `eval` and
+  `sh|bash|zsh|dash|ksh -c` strings. Deferred and stated as limits: a `<<` in a comment or quotes
+  (issue #973's heredoc detection) and a handoff inside a heredoc fed to a shell (the follow-up PR).
 
 **Line anchors** are against `main` @ 98686c3 (v0.60.0). #936 will move some of them in
 `commands_frame.py` and `hooks.py`; re-anchor by symbol name, never by number.

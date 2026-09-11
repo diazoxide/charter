@@ -1351,16 +1351,18 @@ class _Tok:
     is an operand, not a boundary.
     """
 
-    __slots__ = ("text", "bare", "start")
+    __slots__ = ("text", "bare", "start", "end")
 
-    def __init__(self, text: str, bare: bool, start: int = -1) -> None:
+    def __init__(self, text: str, bare: bool, start: int = -1, end: int = -1) -> None:
         self.text = text
         self.bare = bare
-        #: Where the token's first character sits in the source, or -1 where nothing measured
-        #: it. Read by A7 alone, which judges the SPELLING a command was written with:
-        #: `'charter' handoff` and `charter  handoff` tokenize to the same two texts as the
-        #: exact form, and only the source tells them apart.
+        #: Where the token's first character sits in the source, and one past its last, or -1
+        #: where nothing measured them. Read by A7 alone, which judges the SPELLING a command
+        #: was written with: `'charter' handoff` and `charter  handoff` tokenize to the same
+        #: two texts as the exact form, and `charter $'handoff'` to a text no reader of words
+        #: recognises at all — only the source tells any of them apart.
         self.start = start
+        self.end = end
 
     def is_op(self, *texts: str) -> bool:
         """True when the shell would interpret this token as one of *texts* — or, with no
@@ -1438,6 +1440,7 @@ class _ShellLexer(shlex.shlex):
         self._bare = True
         self._state = " "
         self._start = -1
+        self._end = -1
         super().__init__(_NewlineKeepingStream(cmd), punctuation_chars=_PUNCTUATION_CHARS,
                          posix=True)
         self.whitespace_split = True
@@ -1453,6 +1456,12 @@ class _ShellLexer(shlex.shlex):
         """Where the token most recently returned by :meth:`read_token` began in the source —
         the index of the character that moved the lexer out of whitespace — or -1."""
         return self._start
+
+    @property
+    def end(self) -> int:
+        """One past the last source character of the token most recently returned by
+        :meth:`read_token`, or -1."""
+        return self._end
 
     @property
     def state(self):
@@ -1472,6 +1481,12 @@ class _ShellLexer(shlex.shlex):
         # back at the end of the previous token was read from the stream and is not re-read.
         if self._state == " " and value != " " and self._start < 0:
             self._start = self.instream._i - 1
+        # And where it ENDS: `shlex` leaves a word (`a`) or a punctuation run (`c`) for
+        # whitespace or for the end of the input (`None`). Leaving for whitespace, it has just
+        # read the one character that ended the token — a blank it drops, or a character it
+        # pushes back — so the token ends one before the stream; at the end of the input, at it.
+        if self._state in ("a", "c") and value in (" ", None):
+            self._end = self.instream._i - (1 if value == " " else 0)
         self._state = value
 
     @property
@@ -1485,6 +1500,7 @@ class _ShellLexer(shlex.shlex):
     def read_token(self):
         self._bare = True                  # per token, not per lex
         self._start = -1
+        self._end = -1
         return super().read_token()
 
 
@@ -1497,7 +1513,7 @@ def _lex(cmd: str) -> list[_Tok]:
         tok = lex.get_token()
         if tok is lex.eof:                 # `is`, not `==`: `''` is a real token (`cat ''`)
             return out
-        out.append(_Tok(tok, lex.bare, lex.start))
+        out.append(_Tok(tok, lex.bare, lex.start, lex.end))
 
 
 def _split_punctuation(toks: list[_Tok]) -> list[_Tok]:
@@ -1528,7 +1544,7 @@ def _split_punctuation(toks: list[_Tok]) -> list[_Tok]:
             at = t.start
             for p in _OPERATOR_SPLIT_RE.split(t.text):
                 if p:
-                    out.append(_Tok(p, True, at))
+                    out.append(_Tok(p, True, at, at + len(p)))
                 at += len(p)
         else:
             out.append(t)
@@ -4307,16 +4323,130 @@ _HANDOFF_UNATTENDED = (
     "chat someone is attending.")
 _HANDOFF_SPELLING = (
     "`charter handoff` must be spelled exactly that, at the start of its command: the two "
-    "words unquoted, unescaped and one space apart. The permission rule that asks you first is "
-    "`Bash(charter handoff *)`, and charter refuses every other spelling rather than bet on "
-    "which ones that rule matches — on Claude Code 2.1.268, `python3 -m charter handoff` and a "
-    "path to charter both ran with no prompt. Spell it exactly "
+    "words unquoted, unescaped and unexpanded, one space apart, and one space before what "
+    "follows. The permission rule that asks the operator first is `Bash(charter handoff *)`, "
+    "and a spelling it does not match gets no prompt — on Claude Code 2.1.268, "
+    "`python3 -m charter handoff`, a path to charter, `charter 'handoff'` and "
+    "`charter $'handoff'` all ran with none. This guard refuses the spellings of a handoff it "
+    "can recognise; it reads a command's words and is not a shell. Spell it exactly "
     "`charter handoff <workspace> <<'BRIEF'`.")
+_HANDOFF_SHELL_STRING = (
+    "`charter handoff` is refused inside a string a shell runs (`eval`, or `bash -c` and its "
+    "kin). The permission rule that asks the operator first is `Bash(charter handoff *)`, and "
+    "it reads the outer command — on Claude Code 2.1.268 a handoff inside `eval` or `bash -c` "
+    "ran with no prompt. This guard looks one level into such a string and no deeper. Run it "
+    "directly instead, spelled exactly `charter handoff <workspace> <<'BRIEF'`.")
 _HANDOFF_SOURCE = (
     "`charter handoff` takes its brief from a QUOTED heredoc in the same call — <<'BRIEF' — "
     "so the permission prompt shows exactly the text the new chat is sent. This call feeds it "
     "{what}, which the shell would change or hide before charter reads it. Write: "
     "charter handoff <workspace> <<'BRIEF' … BRIEF")
+
+
+def _segments_of(toks: list[_Tok]) -> list[tuple[list[_Tok], str]]:
+    """*toks* as ``(segment, the control operator in front of it)`` pairs, split wherever the
+    shell would interpret a control operator — `""` in front of the first."""
+    segments: list[tuple[list[_Tok], str]] = []
+    seg: list[_Tok] = []
+    before = ""
+    for tok in toks:
+        if tok.is_op(*_CONTROL_OPERATORS):
+            segments.append((seg, before))
+            seg, before = [], tok.text
+        else:
+            seg.append(tok)
+    segments.append((seg, before))
+    return segments
+
+
+#: The characters that make a word something the shell rewrites before a program sees it:
+#: quoting, an escape, `$` (parameter, ANSI-C and locale expansion), braces and globs.
+_SPELLING_MARKS = frozenset("$'\"\\{}?*[]")
+
+
+def _disguised_as(raw: str, word: str) -> bool:
+    """Whether *raw* — a word as the SOURCE spells it — is *word* behind a shell rewrite.
+
+    Only when *raw* carries a character the shell rewrites, and either what is left once those
+    characters are dropped still spells *word* (`$'handoff'`, `ha$''ndoff`, `${x:-handoff}`,
+    `{handoff,}`) or *word* matches *raw* as a glob (`hando?f`). A recognition of the usual
+    shapes, never a shell: `$h` holding `handoff` is not seen, and neither is anything an
+    interpreter, a variable or a script file produces.
+    """
+    import fnmatch
+
+    if not _SPELLING_MARKS.intersection(raw):
+        return False
+    kept = "".join(c for c in raw if c not in _SPELLING_MARKS)
+    return word in kept or fnmatch.fnmatchcase(word, raw)
+
+
+def _disguised_handoff(line: str) -> bool:
+    """Whether a segment of *line* begins `charter handoff` with a shell rewrite in either word.
+
+    `_charter_words` reads none of these as charter at all — `$'charter'` is the word
+    `$charter` to a tokenizer — and each ran a handoff with no prompt on Claude Code 2.1.268.
+    The first two words of a segment and only those, so `grep 'charter handoff' docs`, which
+    charter's own repository runs all day, is a search rather than a spelling of one.
+    """
+    try:
+        toks = _split_punctuation(_lex(line))
+    except ValueError:
+        return False
+    for seg, _before in _segments_of(toks):
+        if len(seg) < 2:
+            continue
+        first, second = (line[t.start:t.end] for t in seg[:2])
+        if ((first, second) != ("charter", "handoff")
+                and (first == "charter" or _disguised_as(first, "charter"))
+                and (second == "handoff" or _disguised_as(second, "handoff"))):
+            return True
+    return False
+
+
+#: The programs that run a STRING as shell: `eval` runs its words, and these run `-c`'s.
+_STRING_SHELLS = frozenset(("sh", "bash", "zsh", "dash", "ksh"))
+
+
+def _shell_string(seg: list[_Tok]) -> str | None:
+    """The text a segment hands a shell to run — `eval`'s words, or the argument of a shell's
+    `-c`, alone or in a cluster such as `-lc` — or ``None``."""
+    prog, _env, argv = _split_env([t.text for t in seg])
+    base = os.path.basename(prog)
+    if base == "eval":
+        return " ".join(argv[1:])
+    if base in _STRING_SHELLS:
+        for k, arg in enumerate(argv[1:-1], start=1):
+            if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
+                return argv[k + 1]
+    return None
+
+
+def _as_the_shell_reads(text: str) -> str:
+    """*text* with bash's backslash-newlines removed and every other whitespace character read
+    as a space — where A7 LOOKS for a handoff, never the text it judges."""
+    return "".join(" " if c.isspace() and c != "\n" else c for c in text.replace("\\\n", ""))
+
+
+def _shell_string_handoff(cmd: str) -> bool:
+    """Whether a string this call hands a shell to run holds a handoff — ONE level in.
+
+    The host's rule reads the outer command, so a handoff inside `eval '…'` or `bash -c '…'`
+    ran with no prompt on Claude Code 2.1.268. Looked for with the same two readers A7 uses on
+    a line (:func:`_is_handoff`, :func:`_disguised_handoff`), in the string exactly as the
+    shell would receive it. Not recursive: a string inside that string is not opened, and a
+    heredoc fed to a shell (`bash <<'EOF'`) is not either.
+    """
+    try:
+        toks = _split_punctuation(_lex(_strip_reader_heredocs(cmd)))
+    except ValueError:
+        return False
+    for seg, _before in _segments_of(toks):
+        inner = _shell_string(seg)
+        if inner is not None and (_is_handoff(_as_the_shell_reads(inner))
+                                  or _disguised_handoff(inner)):
+            return True
+    return False
 
 
 def _handoff_segment(toks: list[_Tok]) -> tuple[list[_Tok] | None, bool]:
@@ -4329,17 +4459,7 @@ def _handoff_segment(toks: list[_Tok]) -> tuple[list[_Tok] | None, bool]:
     groups are not unpicked: a handoff found only inside one is not at the start of its own
     command, and the caller refuses that as a spelling.
     """
-    segments: list[tuple[list[_Tok], str]] = []
-    seg: list[_Tok] = []
-    before = ""
-    for tok in toks:
-        if tok.is_op(*_CONTROL_OPERATORS):
-            segments.append((seg, before))
-            seg, before = [], tok.text
-        else:
-            seg.append(tok)
-    segments.append((seg, before))
-    for seg, before in segments:
+    for seg, before in _segments_of(toks):
         prog, _env, argv = _split_env([t.text for t in seg])
         if _runs_handoff(prog, argv):
             return seg, before in ("|", "|&")
@@ -4367,8 +4487,7 @@ def _handoff_line(cmd: str) -> str | None:
         while (len(line) - len(line.rstrip("\\"))) % 2 and i + 1 < len(lines):
             i += 1
             line += "\n" + lines[i]
-        seen = "".join(" " if c.isspace() else c for c in line.replace("\\\n", ""))
-        if _is_handoff(seen):
+        if _is_handoff(_as_the_shell_reads(line)) or _disguised_handoff(line):
             return line
         i += 1
     return None
@@ -4388,13 +4507,21 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
       sub-agent's Bash call. opencode's plugin builds a payload with no such field, and a
       harness nobody measured is not read as one.
     * ``handoff-unattended`` — ``permission_mode: bypassPermissions`` (:func:`_unattended`).
-    * ``handoff-spelling`` — the handoff's own segment is not `charter handoff` as the SOURCE
-      spells it: two bare words (no quote or escape anywhere in either), one ASCII space
-      apart. On Claude Code 2.1.268, `python3 -m charter handoff` and a path to charter ran
-      with no prompt; a `FOO=1` prefix and an `env` wrapper were matched and are refused
-      anyway, and so is every quoted, escaped or differently spaced form, whatever the host
-      does with it (docs/handoff.md has the measurement). "Spelled exactly that" is one rule
-      a model can follow, and no other harness's matcher has been measured.
+    * ``handoff-shell-string`` — a handoff inside a string a shell runs, one level deep
+      (:func:`_shell_string_handoff`); the host's rule reads only the outer command.
+    * ``handoff-spelling`` — a spelling of a handoff this guard can recognise that is not
+      `charter handoff` as the SOURCE spells it: two bare words (no quote or escape in either),
+      one ASCII space apart and one before whatever follows, with neither word behind a shell
+      expansion (:func:`_disguised_handoff`). On Claude Code 2.1.268, `python3 -m charter
+      handoff`, a path to charter, `charter 'handoff'` and `charter $'handoff'` ran with no
+      prompt (docs/handoff.md has the measurements).
+
+    **What A7 is, and is not.** It keeps a good-faith chat's permission prompt in front of its
+    handoff by refusing the spellings it can recognise. It reads a command's words and is not a
+    shell: an interpreter (`python3 -c`), a variable, a script file, a heredoc fed to a shell
+    and an expansion it does not recognise all run a handoff it never sees. Claude Code says the
+    same of its own rule — "isn't a security boundary around the program"
+    (https://code.claude.com/docs/en/permissions.md, *What a Bash rule doesn't match*).
     * ``handoff-brief-source`` — stdin that is not exactly one quoted heredoc on the handoff's
       own segment, or a live substitution anywhere in the call (:func:`_live_substitution`,
       scoped to the whole call like A5 and A6, for their reason).
@@ -4406,7 +4533,8 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
     `TheQuotingJudgementIsTheSubstitutionGuards` holds the two to one answer.
     """
     line = _handoff_line(cmd)
-    if line is None:
+    in_a_string = _shell_string_handoff(cmd)
+    if line is None and not in_a_string:
         return None
     from .harness import claude_code, codex
     if data.get("agent_id") and os.environ.get("CHARTER_HARNESS") in (claude_code.NAME,
@@ -4414,6 +4542,8 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
         return "handoff-subagent", _HANDOFF_SUBAGENT
     if _unattended(data):
         return "handoff-unattended", _HANDOFF_UNATTENDED
+    if in_a_string:
+        return "handoff-shell-string", _HANDOFF_SHELL_STRING
     try:
         toks = _split_punctuation(_lex(line))
     except ValueError:
@@ -4428,7 +4558,9 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
     # quote or escape touched either word; the offsets say what stood between them.
     if (seg is None or not (seg[0].bare and seg[1].bare)
             or [seg[0].text, seg[1].text] != ["charter", "handoff"]
-            or line[seg[0].start + len("charter"):seg[1].start] != " "):
+            or line[seg[0].end:seg[1].start] != " "
+            or (len(seg) > 2 and line[seg[1].end:seg[2].start] != " ")
+            or _disguised_handoff(line)):
         return "handoff-spelling", _HANDOFF_SPELLING
     heredocs = [i for i, t in enumerate(seg) if t.is_op("<<")]
     if any(t.is_op("<<<") for t in seg):

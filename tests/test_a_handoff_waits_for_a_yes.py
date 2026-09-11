@@ -166,6 +166,80 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
         r = self._decide("charter handoff beta \\")
         self.assertIn("left open on its line", _reason(r) or "")
 
+    # Review round 2 (R2b): the gap AFTER `handoff` is one ASCII space too, or the command ends.
+
+    def test_a_heredoc_glued_to_handoff_is_refused(self):
+        r = self._decide("charter handoff<<'BRIEF' beta\nFix the widget.\nBRIEF")
+        self.assertIn("spelled exactly", _reason(r) or "")
+
+    def test_two_spaces_after_handoff_are_refused(self):
+        r = self._decide("charter handoff  beta <<'BRIEF'\nFix the widget.\nBRIEF")
+        self.assertIn("spelled exactly", _reason(r) or "")
+
+    def test_a_tab_after_handoff_is_refused(self):
+        r = self._decide("charter handoff\tbeta <<'BRIEF'\nFix the widget.\nBRIEF")
+        self.assertIn("spelled exactly", _reason(r) or "")
+
+    def test_nothing_after_handoff_is_the_end_of_the_command_not_a_spelling(self):
+        self.assertIn("no heredoc at all", _reason(self._decide("charter handoff")) or "")
+
+    # Review round 2 (R2c): a shell expansion in either word. `_charter_words` reads none of
+    # these as charter at all, and each ran a handoff with no prompt on Claude Code 2.1.268.
+
+    def test_an_ansi_c_quoted_charter_is_refused(self):
+        self._refused_as_a_spelling("$'charter' handoff")
+
+    def test_an_ansi_c_quoted_handoff_is_refused(self):
+        self._refused_as_a_spelling("charter $'handoff'")
+
+    def test_an_empty_ansi_c_string_inside_handoff_is_refused(self):
+        self._refused_as_a_spelling("charter ha$''ndoff")
+
+    def test_a_brace_expansion_of_handoff_is_refused(self):
+        self._refused_as_a_spelling("charter {handoff,}")
+
+    def test_a_parameter_default_of_handoff_is_refused(self):
+        self._refused_as_a_spelling("charter ${x:-handoff}")
+
+    def test_a_glob_that_matches_handoff_is_refused(self):
+        self._refused_as_a_spelling("charter hando?f")
+
+    def test_a_locale_quoted_handoff_is_refused(self):
+        self._refused_as_a_spelling('charter $"handoff"')
+
+    def test_a_disguised_handoff_beside_an_exact_one_is_still_refused(self):
+        r = self._decide("charter handoff beta <<'BRIEF' && charter $'handoff' gamma\n"
+                         "Fix the widget.\nBRIEF")
+        self.assertIn("spelled exactly", _reason(r) or "")
+
+    def test_a_quoted_workspace_is_still_the_exact_spelling(self):
+        self.assertIsNone(_reason(self._decide(
+            "charter handoff 'beta' <<'BRIEF'\nFix the widget.\nBRIEF")))
+
+    def test_a_search_for_the_words_is_not_a_handoff(self):
+        """charter's own repository greps for these words all day; only the first two words
+        of a command are read, so a pattern naming them is not a spelling of one."""
+        self.assertIsNone(_reason(self._decide(
+            "grep -rn 'charter handoff' docs && rg 'hando?f' charter && echo $'charter' handoff")))
+
+    # Review round 2 (R2d): one level into a string a shell runs.
+
+    def test_a_handoff_inside_eval_is_refused(self):
+        r = self._decide("eval \"charter handoff b <<'BRIEF'\nFix it.\nBRIEF\"")
+        self.assertIn("inside a string a shell runs", _reason(r) or "")
+
+    def test_a_handoff_inside_bash_dash_c_is_refused(self):
+        r = self._decide("bash -c 'charter handoff b <<BRIEF\nx y\nBRIEF'")
+        self.assertIn("inside a string a shell runs", _reason(r) or "")
+
+    def test_a_handoff_inside_a_login_shells_dash_c_is_refused(self):
+        """`-lc` is `-l` and `-c` in one cluster, and it is the spelling agents reach for."""
+        r = self._decide("bash -lc 'charter handoff b <<BRIEF\nx y\nBRIEF'")
+        self.assertIn("inside a string a shell runs", _reason(r) or "")
+
+    def test_a_shell_string_that_only_searches_for_the_word_is_not_refused(self):
+        self.assertIsNone(_reason(self._decide("bash -c 'grep handoff x'")))
+
     def test_the_exact_spelling_after_indentation_and_another_command_is_allowed(self):
         self.assertIsNone(_reason(self._decide(
             "cd x;  charter handoff beta <<'BRIEF'\nFix the widget.\nBRIEF")))
@@ -297,6 +371,7 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
             _reason(self._decide("charter handoff beta <<'A' <<'B'\nfirst\nA\nsecond\nB")),
             _reason(self._decide("charter handoff beta --persona \"forge <<'BRIEF'\nx y\nBRIEF")),
             _reason(self._decide("charter handoff g --create --vision \"$(cat v)\" <<'BRIEF'\nx\nBRIEF")),
+            _reason(self._decide("bash -c 'charter handoff b <<< x'")),
         ]
         self.assertNotIn(None, reasons)
         self.assertEqual(len(set(reasons)), len(reasons), reasons)
