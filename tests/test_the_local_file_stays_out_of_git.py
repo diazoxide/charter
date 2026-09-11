@@ -198,6 +198,28 @@ class TheFileMustBeIgnoredToBeUsed(PersonaIso):
                 self.assertEqual(util.git_path_state(config.ROOT, "charter.local.toml"),
                                  (util.UNKNOWN_GIT, "git exited 1"))
 
+    def test_the_reason_git_gave_is_trimmed_at_both_ends(self):
+        """The reason is repeated inside a sentence, so it is git's first line without the
+        whitespace around it. The sweep of `ce7f5d8` swapped the `strip` for `lstrip` with
+        the suite still green."""
+        self._declare()
+        with mock.patch("charter.util.run",
+                        return_value=_answer(128, "", "  fatal: detected dubious ownership  \n")):
+            self.assertEqual(util.git_path_state(config.ROOT, "charter.local.toml"),
+                             (util.UNKNOWN_GIT, "fatal: detected dubious ownership"))
+
+    def test_a_git_that_prints_nothing_reads_as_tracked_even_with_nothing_captured(self):
+        """rc 0 with nothing printed is a tracked file (the docstring's measured table), and
+        `git_path_state` never raises, so a `run` that captured no stdout at all reads as
+        nothing printed. The sweep of `ce7f5d8` dropped the `or ""` with the suite still
+        green."""
+        self._declare()
+        for out in ("", None):
+            with self.subTest(out=out), \
+                 mock.patch("charter.util.run", return_value=_answer(0, out, "")):
+                self.assertEqual(util.git_path_state(config.ROOT, "charter.local.toml"),
+                                 (util.TRACKED, ""))
+
     def test_the_ignore_check_takes_no_index_lock(self):
         """Ruling 34: this runs at launch, in the pane, in the selector, in `harness list`
         and in doctor, often enough to break a concurrent commit on a plain `status`."""
