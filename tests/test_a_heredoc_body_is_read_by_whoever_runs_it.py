@@ -226,6 +226,31 @@ class TheTerminatorMatchesBashExactly(PlaneIso):
         cmd = f"cat <<'A' && bash <<'B'\ndata\\\nA\n{READ}\nB"
         self.assertTrue(self.denies(cmd), cmd)
 
+    def test_a_tab_indented_line_does_not_end_a_plain_heredoc(self):
+        """Only a `<<-` ignores leading tabs. On a plain `<<'A'` a tab-indented `A` is body
+        text, so bash's body — and the read inside it — runs on to the exact `A`. Ending the
+        kept shell body at the tab-indented line would hand that read to `cat <<'B'` to
+        strip."""
+        cmd = f"bash <<'A' && cat <<'B'\necho hi\n\tA\n{READ}\nB\nA\ndata\nB"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_dash_heredoc_ends_on_its_tab_indented_terminator(self):
+        """The other direction: `<<-` DOES ignore leading tabs, so the tab-indented `A` ends
+        that body. Failing to see it would run `cat`'s droppable body on over the read meant
+        for `bash <<'B'` and strip it away."""
+        cmd = f"cat <<-'A' && bash <<'B'\n\tdata\n\tA\n{READ}\nB"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_command_ending_in_a_continuation_backslash_still_decides(self):
+        """A last line ending in a backslash-newline continues onto a line that is not there.
+        The fold has to stop at the end of the input rather than read past it."""
+        cmd = f"cat <<'EOF'\n{MENTION}\nEOF\necho tail \\"
+        try:
+            decided = self.denies(cmd)
+        except Exception as exc:                       # noqa: BLE001
+            self.fail(f"the leak guard raised instead of deciding: {exc!r}")
+        self.assertFalse(decided, cmd)
+
     def test_a_dash_terminator_still_strips_leading_tabs(self):
         """`<<-` strips leading tabs from body and terminator alike, so a tab-indented
         terminator still ends the body. A quoted reader body naming a path stays data (#258),
