@@ -505,7 +505,7 @@ def git_path_state(root, path) -> tuple[str, str]:
             untracked = True
         elif code == "!!":
             continue
-        elif set(code) <= _TRACKED_STATUS:
+        elif set(code).issubset(_TRACKED_STATUS):
             tracked = True
         else:
             return UNKNOWN_GIT, f"git status printed {line!r}"
