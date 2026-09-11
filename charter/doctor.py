@@ -219,7 +219,7 @@ def check_ssh() -> Result:
     longer probes for a key (that was a contradictory hard requirement). Instead it
     verifies every repo in scope carries ITS forge's token-only git policy
     (`gitpolicy.forge_for` resolves which forge per repo)."""
-    from . import config as _config, gitpolicy
+    from . import config as _config, gitpolicy, workspace as _workspace
     scope, unseen = gitpolicy.scan(_config.ROOT, _config.WORKSPACES_DIR)
     drift = {r: gitpolicy.check(r) for r in scope}
     bad = {r: d for r, d in drift.items() if d}
@@ -229,9 +229,7 @@ def check_ssh() -> Result:
     # Worded for the cause the check actually met (#942 closing verification): restoring read
     # access does nothing for a symlink loop.
     cannot = ("   " + "; ".join(
-        f"{p.parent.name}/{p.name} cannot be checked — "
-        + (f"fix the symlink loop at {p}" if code == errno.ELOOP
-           else "restoring read access to it clears this")
+        f"{p.parent.name}/{p.name} cannot be checked — {_workspace.uncheckable_fix(code, p)}"
         for p, code in unseen) + "." if unseen else "")
     if not bad:
         if unseen:

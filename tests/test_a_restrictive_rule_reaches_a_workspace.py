@@ -2369,6 +2369,29 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
                       r.hint)
         self.assertNotIn("symlink loop", r.hint)
 
+    def test_a_baseline_file_behind_a_symlink_loop_is_told_to_fix_the_link(self):
+        """`reinit` takes the split the closing verification gave `doctor` and `gitpolicy`: a
+        baseline file it cannot check is worded by the cause the check MET. Restoring read access
+        clears no loop, and the sentence that said so sent the operator to the wrong repair."""
+        readme = workspace.refs_dir(self.ws) / "README.md"
+        readme.unlink()
+        readme.symlink_to(readme)
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn(f"refs/README.md cannot be checked — charter writes nothing there it "
+                      f"cannot see; fix the symlink loop at {readme}", said)
+        self.assertNotIn("read access", said)
+
+    def test_a_baseline_file_it_may_not_read_is_told_to_restore_read_access(self):
+        """The other half of the same split, at mode 000 — a refusal, and read access is what
+        clears it. Never "fix the symlink loop", which there is none of."""
+        self.locked(workspace.refs_dir(self.ws))
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn("refs/README.md cannot be checked — charter writes nothing there it cannot "
+                      "see; restoring read access to that path clears this", said)
+        self.assertNotIn("symlink loop", said)
+
     def test_doctor_names_a_directory_it_cannot_look_into_where_every_repo_is_token_only(self):
         """doctor.py `check_ssh`: the row goes WARN for it alone, and leads with the path."""
         self.locked(workspace.refs_dir(self.ws))

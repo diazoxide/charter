@@ -1883,13 +1883,23 @@ def _exists(p: Path, follow: bool = False) -> bool | None:
     the manifest behind the link, and a dangling link is a manifest that is not there — the
     blocker `cmd_workspace_reinit`'s tests use (review round 4).
     """
+    return _existence(p, follow)[0]
+
+
+def _existence(p: Path, follow: bool = False) -> tuple[bool | None, int | None]:
+    """:func:`_exists`'s answer, and the errno behind a ``None`` — ``(there, code)``.
+
+    The classification lives here alone, and `_exists` is this function with the cause dropped:
+    a caller that words what to DO about an unreadable path (`reinit`, through
+    `structure_status`) and a caller that only asks whether to write must not answer "is it
+    there" from two different reads. The cause is `None` whenever the path was answered for."""
     try:
         (os.stat if follow else os.lstat)(p)
     except (FileNotFoundError, NotADirectoryError):
-        return False
-    except OSError:
-        return None
-    return True
+        return False, None
+    except OSError as e:
+        return None, e.errno
+    return True, None
 
 
 def _recorded(marker: dict, rel: str) -> tuple[str, ...]:
@@ -2357,6 +2367,22 @@ def unrecorded_fix(tree: Path, where: str) -> str:
     fix = next((fix for name, fix in _UNRECORDED_FIXES.items() if reason.startswith(f"{name}:")),
                "fix what stops writes to {where}")
     return f"{fix.format(where=where)} ({reason})"
+
+
+def uncheckable_fix(code: int | None, path, where: str = "it") -> str:
+    """What clears a path charter could NOT check, worded for the errno the check met.
+
+    `ELOOP` names the link, because no permission bit is in the way of a loop and restoring read
+    access clears none — the one sentence sent operators to the wrong repair (#942 closing
+    verification). Anything else is read as a refusal: charter does not guess a third cause from
+    an errno it has not measured, and read access is what clears the refusals it has seen.
+
+    One decision for `doctor` and `reinit`, so the two cannot hand a reader different remedies
+    for one unreadable path. *where* is only how the access half points back at the path the
+    caller has already named — a row that just printed it says "it", a sentence further from it
+    says "that path"."""
+    return (f"fix the symlink loop at {path}" if code == errno.ELOOP
+            else f"restoring read access to {where} clears this")
 
 
 # --------------------------------------------------------------------------- #
@@ -3353,19 +3379,25 @@ def structure_version(name: str) -> int:
 
 
 def structure_status(name: str) -> dict:
-    """{'ok', 'missing': [rel…], 'unreadable': [rel…], 'version', 'target'} — is the
-    workspace's on-disk layout current? ``ok`` iff no baseline file is missing AND the marker is
-    up to date."""
+    """{'ok', 'missing': [rel…], 'unreadable': [(rel, path, errno)…], 'version', 'target'} — is
+    the workspace's on-disk layout current? ``ok`` iff no baseline file is missing AND the marker
+    is up to date.
+
+    ``unreadable`` carries the path and the errno the check met, not the rel alone: `reinit` words
+    what clears each one (:func:`uncheckable_fix`), and a second `stat` to ask why would be a
+    different answer from the one this dict reports."""
     # `_exists`, through symlinks (#942 review round 4): `Path.exists` raised on 3.11–3.13 for a
     # component that cannot be checked, crashing `workspace reinit` before it could say so. A
     # component that cannot be checked is not called missing — scaffolding over it is a write
     # into something charter cannot see — and is listed apart, for `reinit` to name with what
     # clears it (ADR 0009, #942 final review).
-    seen = {rel: _exists(p, follow=True) for rel, p in _required_components(name).items()}
-    missing = [rel for rel, there in seen.items() if there is False]
+    seen = {rel: (p, *_existence(p, follow=True))
+            for rel, p in _required_components(name).items()}
+    missing = [rel for rel, (_p, there, _code) in seen.items() if there is False]
     ver = structure_version(name)
     return {"ok": (not missing) and ver >= STRUCTURE_VERSION, "missing": missing,
-            "unreadable": [rel for rel, there in seen.items() if there is None],
+            "unreadable": [(rel, p, code) for rel, (p, there, code) in seen.items()
+                           if there is None],
             "version": ver, "target": STRUCTURE_VERSION}
 
 

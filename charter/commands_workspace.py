@@ -1569,13 +1569,18 @@ def cmd_workspace_reinit(args) -> int:
                 util.ok(f"Reinitialized '{n}' → "
                         f"{'wrote' if did == 'created' else 'refreshed'} {rel} "
                         f"(charter's harness layer).")
-        for rel in before["unreadable"]:
+        for rel, path, code in before["unreadable"]:
             # ADR 0009 (#942 final review): a baseline file charter cannot check is named with what
             # clears it, and `scaffold` writes nothing over it. It was a traceback out of this
             # command, on every interpreter, for a workspace `refs/` at mode 000.
+            #
+            # What clears it is the errno's, not one sentence for every cause: `doctor` and
+            # `gitpolicy` took that split in the closing verification and this said "restore read
+            # access" for a symlink loop, which no permission bit is in the way of. One function
+            # words both, so the two commands cannot differ about one path.
             unresolved.add(n)
             util.warn(f"'{n}': {rel} cannot be checked — charter writes nothing there it cannot "
-                      f"see; restoring read access to that path clears this.")
+                      f"see; {workspace.uncheckable_fix(code, path, 'that path')}.")
         # The BACKFILL half of #884, and the reason it is checked after rather than read
         # off `before`: `workspace.scaffold_manifest` swallows its own failure, because it
         # runs from `ensure` on a launch path where raising would cost the operator their
