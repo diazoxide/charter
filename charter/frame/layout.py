@@ -1455,7 +1455,8 @@ def _env_argv(env: dict[str, str] | None) -> list[str]:
             f"{len(unlisted)} other name(s): {unlisted}. A `-e` is argv, and argv is "
             "world-readable; see frame/layout.CARRIABLE")
     # Each `NAME=VALUE` through `tmuxctl.verbatim`: a value ending in `;` — a plane root, a
-    # `$PATH` — otherwise ends the command at the next flag, `unknown command: --` (#957).
+    # `$PATH` — otherwise ends the command early and tmux refuses the launch. What tmux says
+    # then depends on the state; `tmuxctl.verbatim` names each measured case (#957).
     return [x for name in sorted(env or {})
             for x in ("-e", tmuxctl.verbatim(f"{name}={env[name]}"))]
 

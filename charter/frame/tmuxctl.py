@@ -465,10 +465,16 @@ def verbatim(arg: str) -> str:
 
     **Every argument is read this way, not only the harness's** (review round 1 on #959). A
     `-c` directory or an `-e NAME=VALUE` ending in `;` ends the command early instead, and
-    the flag after it is read as a command of its own — `unknown command: -P`, `-e` or `--`,
-    rc 1, measured on both versions. And a MIDDLE harness argument ending in `;` made the
-    arguments after it a tmux command run on charter's server: `["a;", "set-option", "-g",
-    "@injected", "yes"]` set `@injected` and handed the harness `["a"]`, rc 0. Only an
+    tmux refuses the launch, rc 1. What it says depends on the state — measured on both
+    versions with the identity a real launch carries — and none of it names the value:
+    `unknown command: -P` for a directory, which reaches tmux only with a session already up
+    (`frame/layout.session_argv` takes no directory); `unknown command: -e` for a
+    `$CHARTER_ROOT` while a server is running, because another identity value follows it;
+    and `error connecting to …` when no server is running yet.
+
+    And a MIDDLE harness argument ending in `;` made the arguments after it a tmux command
+    run on charter's server: `["a;", "set-option", "-g", "@injected", "yes"]` set
+    `@injected` and handed the harness `["a"]`, rc 0. Only an
     operator's own typed arguments reach a harness argv today, so that was a latent surface
     rather than a hole; it is closed all the same.
 
