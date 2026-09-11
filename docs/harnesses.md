@@ -31,12 +31,13 @@ charter harness install codex # Codex only — see below
       ↳ wiring-scope: no project-level config: hooks live only in `~/.codex/config.toml` …
 ```
 
-The profiles come first, and there `*` marks `[harness] default` (see [Profiles](#profiles)).
+The profiles come first, and there `*` marks `[harness] default` (see
+[Two accounts of one harness](#two-accounts-of-one-harness-or-one-version-pinned)).
 Below them, `*` is the harness this session is in, and those names are what `$CHARTER_HARNESS`
 holds. A harness charter has no record of is reported too, as a warning rather than a clean
 row — an unverified integration and a complete one must not read the same.
 
-## Profiles
+## Two accounts of one harness, or one version pinned
 
 A harness profile is a named way to launch one harness: its kind, its command, its
 environment. Every harness charter knows is a built-in profile named after itself. Two

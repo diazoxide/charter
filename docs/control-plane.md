@@ -522,11 +522,11 @@ A broken profile is refused alone, by name, and every other profile still loads.
 |---|---|---|
 | a `kind` charter cannot launch | nothing could start it | `claude`, `opencode` or `codex` |
 | a `command` that is not a non-empty list of text | no shell runs it, so `"claude --resume x"` names one program | `["claude", "--resume", "x"]` |
-| a `command` whose first word is charter itself | a new chat on it would open charter again, forever | the harness's own command |
-| a name holding a dot or any other character, or named `default` | a dot breaks tmux targets; `default` names the starting row | rename the table |
+| a `command` whose first word is charter itself | a profile names the harness a chat runs, and charter is not a harness | the harness's own command |
+| a name holding a dot or any other character, or named `default` | a dot breaks tmux targets; `default` is the one key under `[harness]` that is not a profile | rename the table |
 | a name `charter` already uses — `doctor`, `workspace`, `frame` | `charter doctor` would always be the command, never the profile | rename the table |
 | an `env` that is not a table of text | a variable holds text | `env = { NAME = "value" }` |
-| an `env` name starting with `CHARTER_` | the launcher sets those itself, and a profile's own setting would tell charter's hooks the wrong harness or plane | delete the variable |
+| an `env` name starting with `CHARTER_` | charter sets those itself, and a profile's own setting would tell charter's hooks the wrong harness or plane | delete the variable |
 | an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD` | a variable set on the harness reaches the model's shell, as the next section measures | log in inside the harness |
 | a key other than `kind`, `command` and `env` | a typo such as `enviroment` would drop `CLAUDE_CONFIG_DIR` and launch the default account without a word | remove or respell it |
 | a file that is not valid TOML | nothing in it can be read | fix the file; the built-ins still load |
@@ -552,22 +552,30 @@ script on `PATH` can still export a key. Charter declines to hold one; it cannot
 `charter init` writes `/charter.local.toml` into a new plane's `.gitignore`, and
 `charter reinit` adds it to a plane made before this existed. The line is not trusted
 blindly: `charter harness list` and `charter doctor` ask git, and while git tracks the file
-or would commit it, every profile declared there is refused:
+or would commit it, every profile declared there is listed refused, with the reason, and one
+line names the fix:
 
 ```
-! git would commit charter.local.toml, so the profiles in it are refused until it is ignored — charter reinit adds /charter.local.toml to .gitignore.
+refused:
+  claude-work: git would commit charter.local.toml, so the profiles in it are refused until it is ignored — charter reinit adds /charter.local.toml to .gitignore.
+! to use the profiles in charter.local.toml: charter reinit
 ```
 
-A tracked file stays refused after the ignore line is added, because the next commit still
-carries it: `git rm --cached charter.local.toml`, then `charter reinit`. A plane that is not
-a git repository has nothing to commit to, and passes. Any other answer git cannot give — git
-missing, a timeout, an answer it cannot read — refuses too: an unknown is not a pass.
+Each state has its own fix. A committable file needs the ignore line, which `charter reinit`
+adds. A tracked file stays refused after the ignore line is added, because the next commit
+still carries it — even after `git rm --cached`, until that removal is committed — so its fix
+is `git rm --cached charter.local.toml`, commit that removal, then `charter reinit`. A plane
+that is not a git repository has nothing to commit to, and passes. Any other answer git cannot
+give — git missing, a timeout, an answer it cannot read — refuses too, because an unknown is
+not a pass; the fix names the command to run by hand, `git status --ignored --
+charter.local.toml`, beside what git said.
 
 The check is one `git --no-optional-locks status`, which takes no `index.lock` from a commit
 running beside it. It runs when a person asks — `charter harness list`, `charter doctor` —
-and never when charter merely reads its config, so no hook pays a git call for it.
-`charter doctor`'s `harness profiles` row warns for each refusal above, and for a `default`
-that names no profile this machine has.
+and not when charter merely reads its config. One hook does pay it: the SessionStart hook
+runs `charter doctor`, so on a plane that has `charter.local.toml`, each session start makes
+that one `git status`. `charter doctor`'s `harness profiles` row warns for each refusal
+above, with each state's own fix, and for a `default` that names no profile this machine has.
 
 ### `default` — bare `charter`
 

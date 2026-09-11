@@ -249,6 +249,23 @@ class TheFileMustBeIgnoredToBeUsed(PersonaIso):
                         return_value=_answer(0, "D  charter.local.toml\n!! charter.local.toml\n")):
             self.assertIn("git rm --cached", profiles.ignored_refusal(config.ROOT))
 
+    def test_untracking_takes_a_commit_before_the_file_passes(self):
+        """F3, on real git. The plan's fix — `git rm --cached`, then `charter reinit` — never
+        reaches a pass: until the removal is committed, status prints `D ` beside `!!`, which
+        the next commit still carries. So the sentence names the commit, and this walks the
+        whole fix to the pass."""
+        (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
+        self._declare()
+        _git(config.ROOT, "add", "-f", ".gitignore", "charter.local.toml")
+        _git(config.ROOT, "commit", "-q", "-m", "a profile committed by mistake")
+        self.assertIn("commit that removal", profiles.ignored_refusal(config.ROOT))
+        _git(config.ROOT, "rm", "-q", "--cached", "charter.local.toml")
+        self.assertIn("git rm --cached", profiles.ignored_refusal(config.ROOT),
+                      "a staged removal is still carried by the next commit")
+        _git(config.ROOT, "commit", "-q", "-m", "untrack the profiles")
+        commands._ensure_local_profiles_ignored(config.ROOT)
+        self.assertEqual(profiles.ignored_refusal(config.ROOT), "")
+
     def test_the_existing_callers_see_git_ignores_unchanged(self):
         """Pin. `commands_secrets` and `doctor.check_credential_paths` read `None` as "not a
         repository"; a timeout added there would raise into both (review 4)."""
@@ -306,6 +323,29 @@ class DoctorWarns(PersonaIso):
         self.assertEqual(r.status, OK)
         self.assertEqual(r.hint, "")
         self.assertIn("ok", r.detail)
+
+    def test_each_state_names_its_own_fix(self):
+        """F3. `charter reinit` adds the ignore line, which fixes one state of three: it does
+        not untrack a tracked file, and it does not make git answer."""
+        committable = self._row(_OK, ignored=False)
+        self.assertEqual(committable.hint, "charter reinit")
+        _git(config.ROOT, "add", "-f", "charter.local.toml")
+        _git(config.ROOT, "commit", "-q", "-m", "tracked")
+        tracked = doctor.check_harness_profiles()
+        self.assertIn("git rm --cached charter.local.toml", tracked.hint)
+        self.assertIn("commit", tracked.hint.split("git rm --cached charter.local.toml", 1)[1])
+        dubious = "fatal: detected dubious ownership in repository at '/x'\n"
+        with mock.patch("charter.util.run", return_value=_answer(128, "", dubious)):
+            unknown = doctor.check_harness_profiles()
+        self.assertIn("git status", unknown.hint)
+        self.assertIn("dubious ownership", unknown.hint)
+        self.assertEqual(len({committable.hint, tracked.hint, unknown.hint}), 3)
+
+    def test_a_default_that_names_nothing_is_given_a_fix_not_a_consequence(self):
+        """F2. Every hint names what to do."""
+        r = self._row('[harness]\ndefault = "nope"\n')
+        self.assertIn("[harness] default", r.hint)
+        self.assertNotIn("selector", r.hint)
 
     def test_a_git_that_hangs_costs_one_row(self):
         """`doctor._checks` builds its rows in one list with no per-check guard, so a check

@@ -16,7 +16,7 @@ policy — `[[forge]]` hosts steer the credential guard — with no trace in git
 
 **Reading costs no subprocess.** :func:`derive` runs inside `config.derive`, which every
 hook process runs, and `hooks/hooks.json` fires on Bash, Read, Grep, Write, Edit, Task, Skill
-and SendMessage. The one git call — would git carry this file? — is :func:`ignored_refusal`,
+and SendMessage. The one git call — would git carry this file? — is :func:`ignore_check`,
 and only the surfaces a person runs ask it.
 
 **A broken profile is refused alone, by name, with its reason**, and the rest still load.
@@ -66,16 +66,21 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 #: `Profile.source` for a registered kind nobody declared.
 BUILTIN = "built-in"
 
-#: The one key under `[harness]` that is not a profile: the row a selector starts on.
+#: The one key under `[harness]` that is not a profile: it names the default profile rather
+#: than declaring one.
 _DEFAULT = "default"
+
+#: The one table a profile's own table may hold: its environment. Any other table inside it
+#: is a dotted name written without quotes — `[harness.claude.alt]` — and is refused by that
+#: spelling (F4).
+_ENV = "env"
 
 #: Everything a profile table may hold. Any other key refuses the profile (review 13): a typo
 #: such as `enviroment` would otherwise drop `CLAUDE_CONFIG_DIR` and launch the default
 #: account without a word.
-_PROFILE_KEYS = frozenset({"kind", "command", "env"})
+_PROFILE_KEYS = frozenset({"kind", "command", _ENV})
 
-#: The prefix of charter's own variables. The launcher sets those at exec, and a profile's
-#: value would tell every hook the wrong harness or plane (Ruling 14).
+#: The prefix of charter's own variables, which charter sets itself (Ruling 14).
 _CHARTER_PREFIX = "CHARTER_"
 
 
@@ -94,9 +99,33 @@ class Refused(NamedTuple):
     reason: str    # one sentence: the rule, then the fix
 
 
+class ProfileSet(NamedTuple):
+    """Every profile a plane has, every declared one refused, and the default.
+
+    :func:`derive`, :func:`current` and :func:`with_ignore_check` all answer in this shape,
+    so a caller reads attributes, and a misspelt one is an `AttributeError` at the line that
+    misspelt it rather than a `KeyError` wherever the dict was next read. `config.PROFILES`
+    holds it as ``._asdict()``, for one reason: `tests/_planeguard` refuses a test's read of a
+    setting by standing a refusing `dict` in for it, and it can stand in for nothing else.
+    """
+    profiles: dict[str, Profile]
+    refused: tuple[Refused, ...]
+    default: str | None
+    default_from: str | None
+    default_refused: str | None
+
+
+class IgnoreCheck(NamedTuple):
+    """Whether git would carry the local file: the refusal, and the one fix for its state.
+    Both are ``""`` when the file may be used."""
+    reason: str
+    fix: str
+
+
 # Each refusal says the rule worked and names the fix in the same breath (CONTEXT.md,
-# *A refusal is the rule working*). Every `{}` field is filled with a contained value, and no
-# value of `env` is ever repeated back — only its NAME.
+# *A refusal is the rule working*), and says only what is true of this charter — no feature a
+# later release brings. Every `{}` field is filled with a contained value, and no value of
+# `env` is ever repeated back — only its NAME.
 PROFILE_IN_COMMITTED = (
     "[harness.{name}] is in charter.toml, which is committed — a profile's command runs on a "
     "click, so charter reads profiles only from charter.local.toml, which stays on this "
@@ -104,6 +133,10 @@ PROFILE_IN_COMMITTED = (
 LOCAL_UNREADABLE = (
     "charter.local.toml could not be read ({why}), so no declared profile was loaded — the "
     "built-in profiles still are. Fix the file and run charter harness list.")
+HARNESS_NOT_A_TABLE = (
+    "harness in charter.local.toml is not a table, so no declared profile was read — the "
+    "file holds a [harness] table with one [harness.<name>] table per profile. Write it that "
+    "way.")
 LOCAL_SECTION = (
     "[{section}] in charter.local.toml is not read — that file carries [harness] and nothing "
     "else, because an ignored file must not change plane policy with no trace in git. Put "
@@ -113,10 +146,10 @@ NOT_A_TABLE = (
     "with kind, command and optionally env.")
 ILLEGAL_NAME = (
     "profile '{name}' is not a name charter accepts — letters, digits, '_' and '-', starting "
-    "with a letter or digit. Rename the table.")
+    "with a letter or digit, and no dot, because a dot breaks tmux targets. Rename the table.")
 RESERVED_NAME = (
-    "a profile cannot be named 'default' — [harness] default names which profile the selector "
-    "starts on. Rename the table.")
+    "a profile cannot be named 'default' — `default` is the one key under [harness] that is "
+    "not a profile. Rename the table.")
 UNKNOWN_KIND = (
     "profile '{name}' has kind {kind}, which is not a harness charter can launch — one of: "
     "{kinds}. Set kind to one of them.")
@@ -131,43 +164,61 @@ SECRET_ENV = (
     "credential in a profile, because anything set on the harness reaches the model's own "
     "shell. Log in inside that harness instead: {login}.")
 CHARTER_ENV = (
-    "profile '{name}' sets {var}, one of charter's own variables — the launcher sets those at "
-    "exec, and a profile's value would tell every hook the wrong harness or plane. Remove it.")
+    "profile '{name}' sets {var}, one of charter's own variables — charter sets those itself, "
+    "and a profile's value would tell every hook the wrong harness or plane. Remove it.")
 CHARTER_COMMAND = (
-    "profile '{name}' runs charter itself — a new chat on it would open the profile selector "
-    "again, forever. Give it the harness's own command.")
+    "profile '{name}' runs charter itself — a profile names the harness a chat runs, and "
+    "charter is not a harness. Give it the harness's own command.")
 UNKNOWN_PROFILE_KEY = (
     "profile '{name}' has {key}, which charter does not read — a profile is kind, command and "
     "env. Remove it.")
 CLASHING_NAME = (
-    "profile '{name}' is named like the charter command `charter {name}`, which would keep it "
-    "from ever launching. Rename the table.")
-TRACKED = (
+    "profile '{name}' is named like the command `charter {name}`, and that name belongs to "
+    "the command. Rename the table.")
+TRACKED_FILE = (
     "git tracks charter.local.toml, so the profiles in it would reach every clone of this "
     "plane — charter refuses them until it is untracked: git rm --cached charter.local.toml, "
-    "then charter reinit.")
+    "commit that removal, then charter reinit.")
 NOT_IGNORED = (
     "git would commit charter.local.toml, so the profiles in it are refused until it is "
     "ignored — charter reinit adds /charter.local.toml to .gitignore.")
 GIT_CANNOT_TELL = (
     "git could not say whether charter.local.toml is ignored ({why}), so the profiles in it "
-    "are refused — an unknown is not a pass. Nothing was started. Check it by hand: git "
-    "check-ignore -v charter.local.toml")
+    "are refused — an unknown is not a pass. Run git status --ignored -- charter.local.toml "
+    "in the plane to see what git says.")
 DEFAULT_REFUSED = (
     "[harness] default = \"{value}\" names no profile this machine has — one of: {names}.")
 
+# One fix per state (F3). `charter reinit` adds the ignore line, which fixes exactly one of
+# the three: it does not untrack a tracked file — until the removal is committed, status
+# still prints `D ` beside `!!` — and it does not make git answer.
+FIX_NOT_IGNORED = "charter reinit"
+FIX_TRACKED = "git rm --cached charter.local.toml, commit that removal, then charter reinit"
+FIX_CANNOT_TELL = ("run git status --ignored -- charter.local.toml in the plane by hand; "
+                   "git said: {why}")
+DEFAULT_FIX = "set [harness] default to one of: {names}, or delete the key"
 
-def builtins() -> dict[str, Profile]:
+
+def _kinds() -> dict:
+    """Every launchable kind, by the word typed after `charter`, in registry order — the order
+    `instance.launchable_harnesses` reports them in."""
+    from .harness import registry
+
+    return {h.cli_name: h for h in registry.all() if h.cli_name}
+
+
+def builtins(kinds: dict | None = None) -> dict[str, Profile]:
     """One profile per registered harness with a `cli_name`, named after its kind.
 
     `command` is the harness's own `binary`, which is what `charter <kind>` runs today, so a
     plane that declares nothing sees no change. Asked of the registry rather than listed:
-    a kind registered tomorrow is a profile the day it is registered.
+    a kind registered tomorrow is a profile the day it is registered. *kinds* is
+    :func:`derive`'s own answer, passed through so one read asks the registry once.
     """
-    from .harness import registry
-
-    return {h.cli_name: Profile(h.cli_name, h.cli_name, h.name, (h.binary,), (), BUILTIN)
-            for h in registry.all() if h.cli_name}
+    if kinds is None:
+        kinds = _kinds()
+    return {word: Profile(word, word, h.name, (h.binary,), (), BUILTIN)
+            for word, h in kinds.items()}
 
 
 def _read_local(root: Path) -> tuple[dict, str]:
@@ -197,15 +248,13 @@ def _profile_refusal(name: str, table, kinds: dict) -> str:
         return RESERVED_NAME
     kind = table.get("kind", "")
     if not isinstance(kind, str) or kind not in kinds:
-        from . import instance
-
         return UNKNOWN_KIND.format(name=shown, kind=contain.readable(kind),
-                                   kinds=", ".join(instance.launchable_harnesses()))
+                                   kinds=", ".join(kinds))
     command = table.get("command")
     if not (isinstance(command, list) and command
             and all(isinstance(word, str) and word for word in command)):
         return BAD_COMMAND.format(name=shown)
-    env = table.get("env", {})
+    env = table.get(_ENV, {})
     if not (isinstance(env, dict) and all(isinstance(v, str) for v in env.values())):
         return BAD_ENV.format(name=shown)
     for var in sorted(env):
@@ -223,11 +272,8 @@ def _profile_refusal(name: str, table, kinds: dict) -> str:
     return ""
 
 
-def derive(root: Path, cfg: dict) -> dict:
+def derive(root: Path, cfg: dict) -> ProfileSet:
     """Every profile this plane has, and every declared one refused with its reason.
-
-    ``{"profiles": {name: Profile}, "refused": tuple[Refused, ...], "default": str | None,
-    "default_from": str | None, "default_refused": str | None}``.
 
     Never raises and runs no subprocess: `config.derive` calls it for every command and
     every hook, `charter --version` included.
@@ -237,17 +283,19 @@ def derive(root: Path, cfg: dict) -> dict:
        file; `default` is the candidate default; any other key is ignored as it always was
        (review 13 — no warning on a plane that did nothing wrong).
     3. The local file: only `[harness]` is read; `default` there wins; every other key is a
-       profile, validated by :func:`_profile_refusal`. A declared profile named like a
-       built-in replaces it. A REFUSED one takes the name with it: the operator said how that
-       name runs, and the built-in standing in would run the command they replaced — review
-       13's `enviroment` typo launching the default account, and ruling 19's reason for
-       never falling back to a replaced built-in.
+       profile, validated by :func:`_profile_refusal`.
+       - A table inside a profile's table, other than `env`, is a dotted name written without
+         quotes, and is refused by its dotted spelling for the dot, as `[harness."a.b"]` is.
+         The parent is a declaration only when it carries keys of its own (F4), so
+         `[harness.claude.alt]` alone leaves the built-in `claude` alone.
+       - A declared profile named like a built-in replaces it. A REFUSED one takes the name
+         with it (ruling 37, extending ruling 19): the operator said how that name runs, and
+         the built-in standing in would run the command they replaced — review 13's
+         `enviroment` typo launching the default account is that case exactly.
     4. The default, kept only when it names a profile in the result.
     """
-    from .harness import registry
-
-    kinds = {h.cli_name: h for h in registry.all() if h.cli_name}
-    found = builtins()
+    kinds = _kinds()
+    found = builtins(kinds)
     refused: list[Refused] = []
     default = default_from = None
 
@@ -271,13 +319,27 @@ def derive(root: Path, cfg: dict) -> dict:
             refused.append(Refused(shown, LOCAL_FILE, LOCAL_SECTION.format(section=shown)))
     local = top.get("harness", {})
     if not isinstance(local, dict):
-        refused.append(Refused("", LOCAL_FILE,
-                               LOCAL_UNREADABLE.format(why="[harness] is not a table")))
+        # Its own sentence (F5): the file parsed, so calling it unreadable would send the
+        # reader to fix TOML that is fine — ADR 0009's rule that an answer says its kind.
+        refused.append(Refused("", LOCAL_FILE, HARNESS_NOT_A_TABLE))
         local = {}
     for name, table in local.items():
         if name == _DEFAULT and not isinstance(table, dict):
             default, default_from = table, LOCAL_FILE
             continue
+        if isinstance(table, dict):
+            nested = [key for key, value in table.items()
+                      if key != _ENV and isinstance(value, dict)]
+            for key in nested:
+                dotted = contain.readable(f"{name}.{key}")
+                refused.append(Refused(dotted, LOCAL_FILE, ILLEGAL_NAME.format(name=dotted)))
+            # A parent holding nothing but sub-tables declares nothing, and the built-in of
+            # its name stays. One with keys of its own is validated WITH its nested tables:
+            # once parsed, `[harness.claude.alt]` and a typo'd `enviroment = { … }` are the
+            # same thing — a table under the profile — and review 13 needs the typo to
+            # refuse the profile rather than drop `CLAUDE_CONFIG_DIR` in silence.
+            if nested and len(nested) == len(table):
+                continue
         reason = _profile_refusal(name, table, kinds)
         if reason:
             found.pop(name, None)
@@ -285,7 +347,7 @@ def derive(root: Path, cfg: dict) -> dict:
             continue
         h = kinds[table["kind"]]
         found[name] = Profile(name, h.cli_name, h.name, tuple(table["command"]),
-                              tuple(sorted(table.get("env", {}).items())), LOCAL_FILE)
+                              tuple(sorted(table.get(_ENV, {}).items())), LOCAL_FILE)
 
     default_refused = None
     if default_from is not None:
@@ -295,12 +357,21 @@ def derive(root: Path, cfg: dict) -> dict:
             default = found[default].name
         else:
             default, default_refused = None, contain.readable(default)
-    return {"profiles": found, "refused": tuple(refused), "default": default,
-            "default_from": default_from, "default_refused": default_refused}
+    return ProfileSet(found, tuple(refused), default, default_from, default_refused)
 
 
-def current(read: dict | None = None) -> dict:
-    """:func:`derive`'s answer — ``config.PROFILES`` unless *read* is given — with the two
+def _narrowed(derived: ProfileSet, found: dict, refused: list) -> ProfileSet:
+    """*derived* with *found* as its profiles and *refused* as its refusals, and a default
+    that named a profile no longer found refused by value."""
+    default, default_refused = derived.default, derived.default_refused
+    if default is not None and default not in found:
+        default, default_refused = None, contain.readable(default)
+    return derived._replace(profiles=found, refused=tuple(refused), default=default,
+                            default_refused=default_refused)
+
+
+def current(derived: ProfileSet | None = None) -> ProfileSet:
+    """:func:`derive`'s answer — ``config.PROFILES`` unless *derived* is given — with the two
     refusals that need charter's own commands to decide.
 
     - A name `charter <name>` already means (`cli.command_words`), with
@@ -313,16 +384,16 @@ def current(read: dict | None = None) -> dict:
 
     A separate pass because `config.derive` runs before `cli` and `hooks` can be imported,
     and importing either there would be a cycle. Every surface reads this, never
-    ``config.PROFILES`` directly. *read* is for a caller whose question is the file as it is
-    now rather than as this process derived it — `doctor`'s row.
+    ``config.PROFILES`` directly. *derived* is for a caller whose question is the file as it
+    is now rather than as this process derived it — `doctor`'s row.
     """
     from . import cli, config, hooks
 
-    if read is None:
-        read = config.PROFILES
+    if derived is None:
+        derived = ProfileSet(**config.PROFILES)
     words = cli.command_words()
-    found = dict(read["profiles"])
-    refused = list(read["refused"])
+    found = dict(derived.profiles)
+    refused = list(derived.refused)
     for name, p in list(found.items()):
         shown = contain.readable(name)
         if name in words:
@@ -333,11 +404,25 @@ def current(read: dict | None = None) -> dict:
             continue
         del found[name]
         refused.append(Refused(shown, p.source, reason))
-    default, default_refused = read["default"], read["default_refused"]
-    if default is not None and default not in found:
-        default, default_refused = None, contain.readable(default)
-    return {"profiles": found, "refused": tuple(refused), "default": default,
-            "default_from": read["default_from"], "default_refused": default_refused}
+    return _narrowed(derived, found, refused)
+
+
+def with_ignore_check(derived: ProfileSet, check: IgnoreCheck) -> ProfileSet:
+    """*derived* with every profile the local file declares refused, when *check* says git
+    would carry that file (F1).
+
+    `NOT_IGNORED`, `TRACKED_FILE` and `GIT_CANNOT_TELL` each say "the profiles in it are
+    refused", so a surface that asked must show them refused — not as ordinary rows with a
+    warning under them. A declared replacement of a built-in is refused with the rest and the
+    built-in does not stand in (ruling 19). Takes the check rather than running it, so a
+    caller that also prints the state's fix asks git once.
+    """
+    if not check.reason:
+        return derived
+    found = {name: p for name, p in derived.profiles.items() if p.source != LOCAL_FILE}
+    moved = [Refused(contain.readable(name), LOCAL_FILE, check.reason)
+             for name, p in derived.profiles.items() if p.source == LOCAL_FILE]
+    return _narrowed(derived, found, [*derived.refused, *moved])
 
 
 def expanded_command(p: Profile) -> list[str]:
@@ -363,13 +448,13 @@ def display(p: Profile) -> str:
     return " ".join(pieces)
 
 
-def ignored_refusal(root: Path) -> str:
-    """Why git would carry *root*'s local file, or ``""`` when it would not.
+def ignore_check(root: Path) -> IgnoreCheck:
+    """Whether git would carry *root*'s local file, as a refusal and the fix for its state.
 
-    ``""`` when the file is absent (it declares nothing), when the plane is not a git
-    repository (nothing to commit to), or when git ignores the file and tracks it not.
-    :data:`TRACKED`, :data:`NOT_IGNORED` or :data:`GIT_CANNOT_TELL` otherwise — an answer git
-    could not give is not a pass.
+    A pass — both ``""`` — when the file is absent (it declares nothing), when the plane is
+    not a git repository (nothing to commit to), or when git ignores the file and tracks it
+    not. Otherwise :data:`TRACKED_FILE`, :data:`NOT_IGNORED` or :data:`GIT_CANNOT_TELL`, each
+    with its own fix (F3) — an answer git could not give is not a pass.
 
     The only function here that runs git, and never on a config read: one
     `util.git_path_state` call, which takes no `index.lock` (ruling 34) and never raises.
@@ -379,12 +464,18 @@ def ignored_refusal(root: Path) -> str:
     # `os.path.exists` and not `Path.exists`: on 3.11 the latter raises for a directory
     # nobody may search, and a check that raised would cost `doctor` every row after it.
     if not os.path.exists(os.path.join(root, LOCAL_FILE)):
-        return ""
+        return IgnoreCheck("", "")
     state, why = util.git_path_state(root, LOCAL_FILE)
     if state == util.TRACKED:
-        return TRACKED
+        return IgnoreCheck(TRACKED_FILE, FIX_TRACKED)
     if state == util.COMMITTABLE:
-        return NOT_IGNORED
+        return IgnoreCheck(NOT_IGNORED, FIX_NOT_IGNORED)
     if state == util.UNKNOWN_GIT:
-        return GIT_CANNOT_TELL.format(why=contain.readable(why))
-    return ""
+        shown = contain.readable(why)
+        return IgnoreCheck(GIT_CANNOT_TELL.format(why=shown), FIX_CANNOT_TELL.format(why=shown))
+    return IgnoreCheck("", "")
+
+
+def ignored_refusal(root: Path) -> str:
+    """:func:`ignore_check`'s refusal alone — ``""`` when the file may be used."""
+    return ignore_check(root).reason

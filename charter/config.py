@@ -721,7 +721,11 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #: read off the profiles. A file read and nothing more — no git call and no subprocess —
     #: because every hook process runs this derivation; whether git would carry the file is
     #: `profiles.ignored_refusal`, asked by the surfaces a person runs.
-    d["PROFILES"] = _profiles.derive(root, cfg)
+    #:
+    #: Held as `ProfileSet._asdict()`, and `profiles.current` rebuilds the tuple: the read
+    #: guard in `tests/_planeguard` stands a refusing `dict` in for a guarded setting, and it
+    #: can stand in for nothing else.
+    d["PROFILES"] = _profiles.derive(root, cfg)._asdict()
 
     #: What bare ``charter`` launches — ``{"default": None, "refused": None}`` unless the
     #: plane opts in with ``[harness] default``. ``default`` is a name out of charter's own

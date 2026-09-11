@@ -451,8 +451,13 @@ NOT_A_REPO, TRACKED, IGNORED, COMMITTABLE, UNKNOWN_GIT = (
 #: The letters porcelain v1 uses for a path git tracks, in either column.
 _TRACKED_STATUS = frozenset(" MTADRCU")
 
+#: How long :func:`git_path_state` waits for its one `git status`, in seconds. A constant
+#: rather than a parameter: no caller has ever needed another, and a knob nobody turns is a
+#: second place the answer could come from.
+_GIT_STATE_TIMEOUT = 5.0
 
-def git_path_state(root, path, *, timeout: float = 5.0) -> tuple[str, str]:
+
+def git_path_state(root, path) -> tuple[str, str]:
     """``(state, why)`` for the existing *path* inside *root*: one of :data:`NOT_A_REPO`,
     :data:`TRACKED`, :data:`IGNORED`, :data:`COMMITTABLE` or :data:`UNKNOWN_GIT`, and, for
     that last one, what git said. Never raises.
@@ -482,7 +487,7 @@ def git_path_state(root, path, *, timeout: float = 5.0) -> tuple[str, str]:
     cmd = ["git", "--no-optional-locks", "-C", str(root), "status", "--porcelain=v1",
            "--ignored=matching", "--untracked-files=all", "--", str(path)]
     try:
-        proc = run(cmd, check=False, timeout=timeout, env={"LC_ALL": "C"})
+        proc = run(cmd, check=False, timeout=_GIT_STATE_TIMEOUT, env={"LC_ALL": "C"})
     except (ProcTimeout, OSError) as e:
         return UNKNOWN_GIT, str(e)
     said = (proc.stderr or "").strip()
@@ -490,17 +495,20 @@ def git_path_state(root, path, *, timeout: float = 5.0) -> tuple[str, str]:
         if proc.returncode == 128 and "not a git repository" in said:
             return NOT_A_REPO, ""
         return UNKNOWN_GIT, said.splitlines()[0] if said else f"git exited {proc.returncode}"
-    codes = set()
-    for line in (proc.stdout or "").splitlines():
+    # What the porcelain lines say, kept apart from the states they decide: a tracked line
+    # anywhere wins, because the next commit carries the file whatever else is printed.
+    lines = (proc.stdout or "").splitlines()
+    tracked = untracked = False
+    for line in lines:
         code = line[:2]
-        if code in ("??", "!!"):
-            codes.add(code)
+        if code == "??":
+            untracked = True
+        elif code == "!!":
+            continue
         elif set(code) <= _TRACKED_STATUS:
-            codes.add(TRACKED)
+            tracked = True
         else:
             return UNKNOWN_GIT, f"git status printed {line!r}"
-    if not codes or TRACKED in codes:
+    if tracked or not lines:
         return TRACKED, ""
-    if "??" in codes:
-        return COMMITTABLE, ""
-    return IGNORED, ""
+    return (COMMITTABLE, "") if untracked else (IGNORED, "")

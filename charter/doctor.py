@@ -701,35 +701,42 @@ def check_harness_profiles() -> Result:
     with a command reads here as it does everywhere else.
 
     The git check lives here and not in `derive` because a person runs `doctor`, and every
-    hook process runs `derive`. `profiles.ignored_refusal` never raises, so one slow git costs
-    this row and nothing more: `_checks` builds every row in one list with no per-check guard.
+    hook process runs `derive` — though `charter doctor` is also what the SessionStart hook
+    runs, so until doctor has a preflight mode, a session start on a plane with the file
+    pays this one lock-free `git status`. `profiles.ignore_check` never raises, so one slow
+    git costs this row and nothing more: `_checks` builds every row in one list with no
+    per-check guard.
+
+    Each state's hint is that state's own fix (F3): `charter reinit` adds the ignore line, and
+    that fixes a committable file only. WARN rather than FAIL even for a tracked file: its
+    profiles are refused, so nothing runs.
     """
     from . import config as _config, instance as _instance, profiles
 
     name = "harness profiles"
-    ignored = profiles.ignored_refusal(_config.ROOT)
-    if ignored:
-        return Result(name, WARN, detail=ignored, hint="charter reinit")
+    check = profiles.ignore_check(_config.ROOT)
+    if check.reason:
+        return Result(name, WARN, detail=check.reason, hint=check.fix)
     # A malformed `charter.toml` is the `charter.toml` row's to name; this row still reads
     # the local file rather than reporting on nothing.
     try:
         cfg = _instance.load(_config.ROOT)
     except Exception:
         cfg = {}
-    read = profiles.current(profiles.derive(_config.ROOT, cfg))
-    names = ", ".join(read["profiles"])
-    refused = read["refused"]
+    profile_set = profiles.current(profiles.derive(_config.ROOT, cfg))
+    names = ", ".join(profile_set.profiles)
+    refused = profile_set.refused
     if refused:
         return Result(name, WARN,
                       detail=f"{len(refused)} refused: "
                              f"{', '.join(r.name or r.source for r in refused)}",
                       hint=refused[0].reason)
-    if read["default_refused"] is not None:
+    if profile_set.default_refused is not None:
         return Result(name, WARN,
-                      detail=profiles.DEFAULT_REFUSED.format(value=read["default_refused"],
+                      detail=profiles.DEFAULT_REFUSED.format(value=profile_set.default_refused,
                                                              names=names),
-                      hint="the selector will start on no row until it names one")
-    return Result(name, OK, detail=f"{len(read['profiles'])} profile(s): {names}")
+                      hint=profiles.DEFAULT_FIX.format(names=names))
+    return Result(name, OK, detail=f"{len(profile_set.profiles)} profile(s): {names}")
 
 
 def check_index_lock() -> Result:

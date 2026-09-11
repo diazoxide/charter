@@ -30,11 +30,13 @@ def _list_profiles() -> None:
     carriage return in it could otherwise redraw this line (ruling 35).
 
     The git check runs here because a person typed this command; it never runs on a config
-    read.
+    read. When git would carry the file, every profile it declares is listed refused with
+    that state's reason (F1), and one line names the state's fix.
     """
-    read = profiles.current()
+    check = profiles.ignore_check(config.ROOT)
+    profile_set = profiles.with_ignore_check(profiles.current(), check)
     order = list(profiles.builtins())
-    rows = sorted(read["profiles"].values(),
+    rows = sorted(profile_set.profiles.values(),
                   key=lambda p: (p.name not in order,
                                  order.index(p.name) if p.name in order else 0, p.name))
     heads = ("NAME", "KIND", "COMMAND")
@@ -46,15 +48,14 @@ def _list_profiles() -> None:
 
     print(line("  ", heads, "FROM"), file=sys.stderr)
     for p, cells in zip(rows, body):
-        print(line("* " if p.name == read["default"] else "  ", cells, p.source),
+        print(line("* " if p.name == profile_set.default else "  ", cells, p.source),
               file=sys.stderr)
-    if read["refused"]:
+    if profile_set.refused:
         print("refused:", file=sys.stderr)
-        for r in read["refused"]:
+        for r in profile_set.refused:
             print(f"  {r.name or r.source}: {r.reason}", file=sys.stderr)
-    ignored = profiles.ignored_refusal(config.ROOT)
-    if ignored:
-        util.warn(ignored)
+    if check.fix:
+        util.warn(f"to use the profiles in {profiles.LOCAL_FILE}: {check.fix}")
 
 
 def cmd_harness_list(args) -> int:

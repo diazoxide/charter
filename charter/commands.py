@@ -7,8 +7,8 @@ import json
 import re
 from pathlib import Path
 
-from . import (config, contain, docsrc, doctor, gitstate, instance, inventory, render,
-               tui, util, workspace, worktree)
+from . import (config, contain, docsrc, doctor, gitstate, instance, inventory, profiles,
+               render, tui, util, workspace, worktree)
 # One committer for the control plane, in charter/planegit.py. Re-exported rather
 # than moved-and-updated so every existing caller and test keeps working — the point
 # of the extraction is that there is ONE implementation, not that callers churn.
@@ -1661,12 +1661,20 @@ def _ensure_local_settings_ignored(root: Path) -> None:
 #: profile's command runs on a click with no permission prompt in between, so the file it
 #: lives in is safe only while git will not carry it (harness-profiles spec, *Where profiles
 #: live*). In the baseline for a fresh plane, and backfilled by `reinit` for one made before
-#: it — `LOCAL_SETTINGS_IGNORE`'s shape, for the same reason.
-LOCAL_PROFILES_IGNORE = "/charter.local.toml"
+#: it — `LOCAL_SETTINGS_IGNORE`'s shape, for the same reason. Built from the filename
+#: `profiles` reads, so the two cannot name different files.
+LOCAL_PROFILES_IGNORE = "/" + profiles.LOCAL_FILE
 
 
 def _ensure_local_profiles_ignored(root: Path) -> bool:
     """Backfill :data:`LOCAL_PROFILES_IGNORE` into a plane made before it. True iff it wrote.
+
+    **This goes past ADR 0017 as written, and says so.** That rule has charter ignore a path
+    it creates that carries credentials; `charter.local.toml` is neither — charter never
+    writes it, and a profile holds no credential. It is ignored because its whole meaning is
+    "not committed": the harness-profiles spec's *"Ignored" is guaranteed, not hoped for*
+    records the decision, and the ADR's own amendment follows with the records the plan's
+    Task 6 writes.
 
     `reinit` is the remedy both `profiles.NOT_IGNORED` and `doctor`'s `harness profiles` row
     name, so it has to be the command that makes the promise true. Whole-line and additive

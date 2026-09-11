@@ -25,8 +25,9 @@ instead.
 
 A profile's command will run on a click, so the file must never be committed. `charter init`
 writes `/charter.local.toml` into a new plane's `.gitignore` and `charter reinit` adds it to
-yours; `charter doctor` warns on its `harness profiles` row while git tracks the file or would
-commit it.
+yours. While git tracks the file or would commit it, `charter harness list` shows every
+profile in it refused and names the fix, and `charter doctor` warns on its `harness profiles`
+row.
 
 This release does not launch a profile yet. `charter claude`, bare `charter` and every chat
 start exactly as they did.

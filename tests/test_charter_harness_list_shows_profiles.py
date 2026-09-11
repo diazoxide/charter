@@ -120,6 +120,29 @@ class HarnessListShowsProfiles(PersonaIso):
         self.assertNotIn("doctor", self._rows(out))
         self.assertIn("charter doctor", self._profiles_block(out).split("refused:", 1)[1])
 
+    def test_a_committable_files_profile_is_listed_as_refused_not_as_a_row(self):
+        """F1. `NOT_IGNORED` says the profiles in the file are refused, so the listing shows
+        exactly that — not an ordinary row with a warning under it."""
+        subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
+                       capture_output=True, env={**os.environ, **_gitguard.environment()})
+        out = self._list(_WORK)
+        self.assertNotIn("claude-work", self._rows(out))
+        block = self._profiles_block(out)
+        (line,) = [ln for ln in block.split("refused:", 1)[1].splitlines()
+                   if ln.strip().startswith("claude-work:")]
+        self.assertIn("git would commit", line)
+        self.assertIn("charter reinit", block)
+
+    def test_ruling_37_a_refused_replacement_is_listed_refused_and_its_built_in_is_not(self):
+        """Pin. Ruling 37 in the listing: the name shows refused, with its reason, and no
+        built-in row stands in for it."""
+        out = self._list('[harness.claude]\nkind = "claude"\ncommand = ["claude"]\n'
+                         'enviroment = { CLAUDE_CONFIG_DIR = "~/.claude-work" }\n')
+        self.assertNotIn("claude", self._rows(out))
+        (line,) = [ln for ln in self._profiles_block(out).split("refused:", 1)[1].splitlines()
+                   if ln.strip().startswith("claude:")]
+        self.assertIn("does not read", line)
+
     def test_a_committable_file_is_said(self):
         subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
                        capture_output=True, env={**os.environ, **_gitguard.environment()})
