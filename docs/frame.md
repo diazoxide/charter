@@ -1193,6 +1193,47 @@ So a single argument can be a whole command line — builtins, `;`, pipelines, r
 while two or more are looked up as a program and its arguments, with nothing in between to
 expand or resolve them.
 
+**An argument that ends in `;` reaches the command with its `;`**, which tmux on its own
+would not do. tmux reads ANY argument ending in `;` as the separator between two of its own
+commands. Measured on tmux 3.7c and at the 3.2 floor, that cost three things:
+
+- `charter claude "run the tests;"` started the harness on `run the tests`, without a word,
+  and a lone `;` arrived as no argument at all.
+- A `;`-ending argument in the middle turned the arguments after it into a tmux command run
+  on charter's server: `charter claude "a;" set-option -g @x yes` set `@x` and started the
+  harness on `a`. Only arguments you type yourself reach that path, so it was a latent
+  surface rather than a hole. It is closed.
+- A directory or a `$CHARTER_ROOT` ending in `;` made tmux refuse the launch, because tmux
+  ended its command at the flag after it. What tmux said depended on the state, and none of
+  it named the directory: `unknown command: -P` for such a directory, on a second chat or
+  inside a tmux you already had; `unknown command: -e` for such a `$CHARTER_ROOT` when
+  charter's tmux server was already running; and `error connecting to …` when it was not
+  running yet — the first chat after a fresh install, a reboot, or the server stopping.
+
+Charter now hands tmux every such argument — the command's own, the directory it starts in,
+and each identity value — with one backslash before a trailing `;`: `\;`, tmux's own
+spelling of a literal one. The command gets exactly what you typed, `;;` and ` ;` included.
+**If you had been typing `\;` to get a `;` through, you now get the backslash too** — drop
+it. A `;` anywhere but last was never touched and still is not. This holds in a frame on
+charter's own server and inside a tmux you already had.
+
+**tmux takes one command of at most 16,364 bytes, arguments and all.** Past that — a whole
+spec pasted as `charter claude "<prompt>"` is the usual way there — tmux refuses the command,
+nothing starts, and charter says so in tmux's own number instead of pasting the command back:
+
+    ✗ charter frame: tmux refused the command that starts this chat as too long — tmux takes
+      at most 16,364 bytes in one command, and this launch's harness arguments alone are
+      20,014 bytes. Nothing was started; shorten them, or put the long text in a file and
+      pass its path instead.
+
+The count is the command's own arguments. The rest of the 16,364 is the window's name,
+directory and identity, which is why a launch a few hundred bytes under the limit can still
+be refused. Charter does not predict the refusal; it recognises it. The limit is tmux's,
+measured identically on 3.7c and 3.2 through all three ways charter starts a harness —
+`failed to send command` from 16,365 bytes, `command too long` from 16,381 — and only a
+refusal in one of those two sentences is reported this way. Any other refusal is reported as
+it always was.
+
 Charter deliberately does **not** check the command against `$PATH` before starting it.
 Such a check answers the wrong question for the first form (that text is not even one
 word), and for the second it is a guess where a real answer arrives milliseconds later: a

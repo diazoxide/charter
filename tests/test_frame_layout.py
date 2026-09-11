@@ -947,6 +947,17 @@ class NothingUnnamedReachesACommandLine(unittest.TestCase):
         carried = {cmd[i + 1].split("=", 1)[0] for i, a in enumerate(cmd) if a == "-e"}
         self.assertEqual(carried, set(layout.CARRIABLE))
 
+    def test_every_name_travels_in_one_order_whatever_order_it_was_built_in(self):
+        """`_env_argv`'s own promise — sorted, "so the command is the same on every launch"
+        — had nothing behind it: the deletion sweep swapped `sorted` for `list` and all
+        11,972 tests stayed green (review round 1 on #959). Two frames whose identities
+        were built in different orders must put the same command line in `ps`."""
+        built = {"CHARTER_SESSION_ID": "s", "CHARTER_HARNESS": "h", "CHARTER_ROOT": "/r"}
+        cmd = layout.respawn_argv(socket="charter", harness_pane="%7", env=built, cwd="/w",
+                                  harness_argv=["claude"])
+        self.assertEqual([cmd[i + 1] for i, a in enumerate(cmd) if a == "-e"],
+                         ["CHARTER_HARNESS=h", "CHARTER_ROOT=/r", "CHARTER_SESSION_ID=s"])
+
     def test_nothing_carriable_is_a_credential_by_name(self):
         """The property that makes putting any of these on an argv acceptable at all.
         A name is not proof, but a name that ANNOUNCES a secret is proof of the

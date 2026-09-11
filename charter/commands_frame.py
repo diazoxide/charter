@@ -3263,6 +3263,41 @@ def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
                                "remain-on-exit", "on")
 
 
+#: What a launch says when tmux refused to start its harness as too long (#957) — in tmux's
+#: own number, because the generic report pasted the whole command back, the long text
+#: included, and the one figure that explains the refusal was the one thing not on screen.
+#: *carried* is the harness's arguments alone: the rest of the limit is the window's own
+#: name, directory and identity, which is why a launch just under it can still be refused.
+TOO_LONG_FOR_TMUX = ("charter frame: tmux refused the command that starts this chat as too "
+                     "long — tmux takes at most {limit:,} bytes in one command, and this "
+                     "launch's harness arguments alone are {carried:,} bytes. Nothing was "
+                     "started; shorten them, or put the long text in a file and pass its "
+                     "path instead.")
+
+
+def _say_why_the_harness_did_not_start(action: str, cmd: list[str],
+                                       proc: subprocess.CompletedProcess,
+                                       harness_argv: list[str]) -> None:
+    """Report a refused harness start: tmux's length refusal by what it was, and anything
+    else exactly as `tmuxctl.report_failure` has always reported it.
+
+    Shared by both launch paths — `new-session`/`new-window` on charter's own server and
+    `respawn-pane` inside the operator's — for :func:`_same_harness_as`' reason: one
+    question, one answer. The cause is named only when tmux's own sentence says it
+    (`tmuxctl.refused_as_too_long`, ADR 0009).
+
+    `os.fsencode` and not `str.encode`, because that is how the argument reached `exec`: a
+    byte that is not UTF-8 arrives in `sys.argv` as a surrogate escape, and a strict encode
+    of it would raise in the middle of a failure report.
+    """
+    if tmuxctl.refused_as_too_long(proc.stderr):
+        util.err(TOO_LONG_FOR_TMUX.format(
+            limit=tmuxctl.MESSAGE_LIMIT,
+            carried=sum(len(os.fsencode(a)) for a in harness_argv)))
+        return
+    tmuxctl.report_failure(action, cmd, proc)
+
+
 def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
                              argv: list[str], h, v: tuple[int, int],
                              picked: bool) -> int | None:
@@ -3458,11 +3493,14 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         util.warn("charter frame: continuing without it — this frame's window may "
                   "close before charter can read the harness's exit code")
 
-    started = tmuxctl.run(
-        "starting the harness in it",
-        layout.respawn_argv(socket=socket, harness_pane=harness_pane,
-                            env=_guest_harness_env(env), cwd=cwd, harness_argv=argv))
+    # `report=False`: a refusal is reported just below, once, by what it was
+    # (`_say_why_the_harness_did_not_start`).
+    start_cmd = layout.respawn_argv(socket=socket, harness_pane=harness_pane,
+                                    env=_guest_harness_env(env), cwd=cwd, harness_argv=argv)
+    started = tmuxctl.run("starting the harness in it", start_cmd, report=False)
     if started.returncode != 0:
+        _say_why_the_harness_did_not_start("starting the harness in it", start_cmd,
+                                            started, argv)
         # The placeholder is still running in a window the operator never asked for and
         # would never learn the purpose of. Take it back.
         _close_window()
@@ -5427,8 +5465,11 @@ def _launch(args) -> int:
             harness_argv=argv, chat=fid,
             env=_frame_identity_env(env) if v >= tmuxctl.SESSION_ENV_FLOOR else None)
         started_what = "starting the frame"
-    proc = tmuxctl.run(started_what, start_cmd, env=env)
+    # `report=False`: a refusal is reported just below, once, by what it was — tmux's
+    # length refusal in its own number, anything else as `report_failure` always said it.
+    proc = tmuxctl.run(started_what, start_cmd, env=env, report=False)
     if proc.returncode != 0:
+        _say_why_the_harness_did_not_start(started_what, start_cmd, proc, argv)
         return 1
     harness_pane = proc.stdout.strip()
     if not harness_pane:
