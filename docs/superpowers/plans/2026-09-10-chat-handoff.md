@@ -94,6 +94,21 @@ carries the rulings that touch it.
   `handoff`, or globs to it, is a spelling refusal. R2d: one level into `eval` and
   `sh|bash|zsh|dash|ksh -c` strings. Deferred and stated as limits: a `<<` in a comment or quotes
   (issue #973's heredoc detection) and a handoff inside a heredoc fed to a shell (the follow-up PR).
+- **Task 4 review round 3 (2026-09-11), part A.** The docs stop implying every expansion is
+  recognised and name what is not: a brace split inside a word, an ANSI-C escape, a parameter
+  default split across a word, and the apostrophe that makes the shell-string look fail open. A
+  backslash-newline in the gap after `handoff` is refused, read off the source offsets rather than
+  the folded tokens. The six mutants that survived round 2's sweep are pinned. **Part B waits for
+  #974** (the fix for #973), which owns heredoc parsing: E becomes a `drop=True` case in that PR's
+  strip plan, with the delimiter read exactly as bash reads it, and A7 reads a heredoc body or a
+  multi-line string as commands only where the plan says an executor receives it — which also
+  closes the `bash <<'EOF'` deferral. Heredoc parsing belongs in one place, so neither lands here.
+  Part B takes the delimiter, `expands` and the `<<-` flag from `_heredoc_header` or from the header
+  facts #974 carries per plan entry, NEVER from a regex delimiter: bash reads `<<EO'F'`, `<<'EO'F`
+  and `<<"EO"F` all as `EOF`, and a regex misses `<<\EOF`. A wrong delimiter errs safe for #974's
+  own stripping (the terminator is never found, so the body stays visible) and the opposite way for
+  a drop case, which would swallow the commands after the heredoc — the class of the Critical this
+  round fixes. So a terminator that never appears means the body is not dropped.
 
 **Line anchors** are against `main` @ 98686c3 (v0.60.0). #936 will move some of them in
 `commands_frame.py` and `hooks.py`; re-anchor by symbol name, never by number.

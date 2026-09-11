@@ -240,6 +240,61 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
     def test_a_shell_string_that_only_searches_for_the_word_is_not_refused(self):
         self.assertIsNone(_reason(self._decide("bash -c 'grep handoff x'")))
 
+    # Review round 3 (A2): the gap after `handoff`, read off the source rather than the tokens.
+
+    def test_a_line_continuation_right_after_handoff_is_refused(self):
+        """bash removes the backslash-newline and runs `charter handoff beta`. The tokenizer
+        folds that pair into the next word, so the gap between the tokens reads as one space;
+        only the source shows what stood after `handoff`."""
+        r = self._decide("charter handoff \\\nbeta <<'BRIEF'\nFix the widget.\nBRIEF")
+        self.assertIn("spelled exactly", _reason(r) or "")
+
+    def test_a_line_continuation_later_in_the_command_is_still_the_exact_spelling(self):
+        self.assertIsNone(_reason(self._decide(
+            "charter handoff beta \\\n<<'BRIEF'\nFix the widget.\nBRIEF")))
+
+    # Review round 3 (A3): one pin per mutation that survived round 2's sweep. Each of these
+    # goes red when the line it names is deleted or narrowed.
+
+    def _refused_in_shell(self, shell: str) -> None:
+        r = self._decide(f"{shell} -c 'charter handoff b'")
+        self.assertIn("inside a string a shell runs", _reason(r) or "", shell)
+
+    def test_a_longer_word_beginning_handoff_is_not_a_spelling_of_it(self):
+        """Without the "does this word carry a shell character at all" precheck, `handoffs`
+        reads as `handoff` with something dropped, and an ordinary longer word — a typo, a
+        plural, a subcommand charter may grow — is refused as a disguise."""
+        self.assertIsNone(_reason(self._decide(
+            "charter handoffs beta <<'BRIEF'\nFix the widget.\nBRIEF")))
+
+    def test_a_disguised_handoff_inside_a_shell_string_is_refused(self):
+        """The string is read by BOTH readers: the plain one and the disguise reader."""
+        r = self._decide("bash -c 'charter {handoff,} b'")
+        self.assertIn("inside a string a shell runs", _reason(r) or "")
+
+    def test_a_handoff_inside_sh_dash_c_is_refused(self):
+        self._refused_in_shell("sh")
+
+    def test_a_handoff_inside_zsh_dash_c_is_refused(self):
+        self._refused_in_shell("zsh")
+
+    def test_a_handoff_inside_dash_dash_c_is_refused(self):
+        self._refused_in_shell("dash")
+
+    def test_a_handoff_inside_ksh_dash_c_is_refused(self):
+        self._refused_in_shell("ksh")
+
+    def test_a_disguised_word_at_the_end_of_the_call_is_read_whole(self):
+        """A token that ends at the end of the input ends AT the stream, not one character
+        before it: `hando?f` read as `hando?` is a glob that matches nothing."""
+        self.assertIn("spelled exactly", _reason(self._decide("charter hando?f")) or "")
+
+    def test_a_continuation_inside_a_shell_string_is_read_as_the_shell_reads_it(self):
+        """bash removes the backslash-newline inside the string before running it, so the
+        string has to be read that way too — `char\\<newline>ter handoff b` is a handoff."""
+        r = self._decide("bash -c 'char\\\nter handoff b'")
+        self.assertIn("inside a string a shell runs", _reason(r) or "")
+
     def test_the_exact_spelling_after_indentation_and_another_command_is_allowed(self):
         self.assertIsNone(_reason(self._decide(
             "cd x;  charter handoff beta <<'BRIEF'\nFix the widget.\nBRIEF")))

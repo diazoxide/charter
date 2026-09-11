@@ -4511,20 +4511,22 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
       (:func:`_shell_string_handoff`); the host's rule reads only the outer command.
     * ``handoff-spelling`` — a spelling of a handoff this guard can recognise that is not
       `charter handoff` as the SOURCE spells it: two bare words (no quote or escape in either),
-      one ASCII space apart and one before whatever follows, with neither word behind a shell
-      expansion (:func:`_disguised_handoff`). On Claude Code 2.1.268, `python3 -m charter
-      handoff`, a path to charter, `charter 'handoff'` and `charter $'handoff'` ran with no
-      prompt (docs/handoff.md has the measurements).
-
-    **What A7 is, and is not.** It keeps a good-faith chat's permission prompt in front of its
-    handoff by refusing the spellings it can recognise. It reads a command's words and is not a
-    shell: an interpreter (`python3 -c`), a variable, a script file, a heredoc fed to a shell
-    and an expansion it does not recognise all run a handoff it never sees. Claude Code says the
-    same of its own rule — "isn't a security boundary around the program"
-    (https://code.claude.com/docs/en/permissions.md, *What a Bash rule doesn't match*).
+      one ASCII space apart and one before whatever follows — a backslash-newline there is not
+      that space — and neither word one that reads `charter` or `handoff` behind quoting,
+      expansion or glob characters (:func:`_disguised_handoff`). On Claude Code 2.1.268,
+      `python3 -m charter handoff`, a path to charter, `charter 'handoff'` and
+      `charter $'handoff'` ran with no prompt (docs/handoff.md has the measurements).
     * ``handoff-brief-source`` — stdin that is not exactly one quoted heredoc on the handoff's
       own segment, or a live substitution anywhere in the call (:func:`_live_substitution`,
       scoped to the whole call like A5 and A6, for their reason).
+
+    **What A7 is, and is not.** It keeps a good-faith chat's permission prompt in front of its
+    handoff by refusing the spellings it can recognise. It reads a command's words and is not a
+    shell: an interpreter (`python3 -c`), a variable, a script file, a heredoc fed to a shell and
+    an expansion that does not leave a word whole (`{hand,}off`, `$'\\x68andoff'`) all run a
+    handoff it never sees. Claude Code says the same of its own rule — "isn't a security
+    boundary around the program" (https://code.claude.com/docs/en/permissions.md, *What a Bash
+    rule doesn't match*).
 
     **Quoting is read off the delimiter token.** That is the answer :func:`_heredoc_header`
     gives — any quoting anywhere in the word makes the body literal — taken from the
@@ -4559,7 +4561,11 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
     if (seg is None or not (seg[0].bare and seg[1].bare)
             or [seg[0].text, seg[1].text] != ["charter", "handoff"]
             or line[seg[0].end:seg[1].start] != " "
-            or (len(seg) > 2 and line[seg[1].end:seg[2].start] != " ")
+            # A backslash-newline after `handoff` is not that one space, and the tokens do not
+            # say so: the lexer folds the pair into the word that follows, leaving a gap that
+            # reads as a single space. The source is where it shows.
+            or (len(seg) > 2 and (line[seg[1].end:seg[2].start] != " "
+                                  or line.startswith("\\\n", seg[2].start)))
             or _disguised_handoff(line)):
         return "handoff-spelling", _HANDOFF_SPELLING
     heredocs = [i for i, t in enumerate(seg) if t.is_op("<<")]

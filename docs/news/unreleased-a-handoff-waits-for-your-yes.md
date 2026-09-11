@@ -26,7 +26,8 @@ Inside a control plane, charter's Bash hook refuses a `charter handoff`:
   to arrive only inside a sub-agent);
 - from an unattended run, read from `permission_mode: bypassPermissions`;
 - in a spelling it can recognise as other than `charter handoff …` (a wrapper, a path, a word
-  quoted, escaped or expanded, odd spacing), or inside `eval` or `bash -c`, because the rule did
+  quoted or escaped, a word that reads `charter` or `handoff` once its expansion characters are
+  removed, odd spacing), or inside `eval` or `bash -c`, because the rule did
   not match `python3 -m charter handoff`, a path to charter, `charter 'handoff'`,
   `charter $'handoff'` or a handoff inside `bash -c`;
 - fed anything but one quoted heredoc on its own segment, so the prompt shows the exact brief.
@@ -36,9 +37,11 @@ A brief that names a vault path in prose is not refused as a read of it.
 ## Limits
 
 - **The hook reads a command's words; it is not a shell.** A handoff run by an interpreter
-  (`python3 -c`), through a variable, from a script file or inside a heredoc fed to a shell is not
-  seen. Claude Code's docs say the same of its own rule: it "isn't a security boundary around the
-  program".
+  (`python3 -c`), through a variable, from a script file, behind an expansion that does not leave
+  the word whole (`charter {hand,}off`, `charter $'\x68andoff'`, both of which ran with no prompt),
+  more than one string deep, or inside a heredoc fed to a shell is not seen. A `<<` inside a comment
+  or quotes earlier in the call hides the lines after it from the hook (#973). Claude Code's docs
+  say the same of its own rule: it "isn't a security boundary around the program".
 - **`python3 -m charter handoff` is refused**, and that is the spelling `CONTRIBUTING.md` uses to
   run a checkout. The rule does not match it, so allowing it would run a handoff unasked.
 - **opencode cannot refuse a handoff from a sub-agent or an unattended run.** The payload charter's

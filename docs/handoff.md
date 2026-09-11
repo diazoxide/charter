@@ -69,10 +69,12 @@ measured.
 | `$'charter' handoff`, `charter $'handoff'`, `charter ha$''ndoff` | **runs with no prompt** |
 | `charter {handoff,}`, `charter ${x:-handoff}`, `charter hando?f` beside a file named `handoff` | **runs with no prompt** |
 | `eval '…'` or `bash -c '…'` holding the handoff | **runs with no prompt** |
+| `charter {hand,}off`, `charter $'\x68andoff'` | **runs with no prompt** |
 | `bash <<'EOF'` whose body is the handoff | **runs with no prompt** |
 
-charter's hook refuses every call in both tables except that last row, which it does not see
-(see *What charter's hook does not see*, below). One exact spelling is a rule a model can follow.
+charter's hook refuses every call in both tables except the last two rows, which it does not
+recognise (see *What charter's hook does not see*, below). One exact spelling is a rule a model can
+follow.
 
 **Where the rule has to be.** Claude Code reads `.claude/settings.json` from the session's own
 directory, not from above it. Measured on 2.1.268 in a plane built by `charter init`: the rule
@@ -94,11 +96,13 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
 - **in an unattended run**, when the payload says `permission_mode: bypassPermissions`. The
   refusal names `charter ws todo` as the way to keep the work.
 - **in a spelling it can recognise as other than `charter handoff …`** at the start of its
-  command: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted, escaped or behind a
-  shell expansion (`$'…'`, `$"…"`, `${…}`, `{…,}`, a glob); a gap other than one space before or
-  after `handoff`. The words are compared as written, not as a shell would read them, because
-  the rule above did not match `python3 -m charter handoff`, a path to charter, a quoted `handoff`
-  or the expansions in the second table.
+  command: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word
+  that still reads `charter` or `handoff` once its quoting, expansion and glob characters
+  (`$ ' " \ { } ? * [ ]`) are removed, such as `$'handoff'`, `${x:-handoff}` or `{handoff,}`, or one
+  that `handoff` matches as a glob, such as `hando?f`; a gap other than one space before or after
+  `handoff`, a line continuation included. The words are compared as written, not as a shell would
+  read them, because the rule above did not match `python3 -m charter handoff`, a path to charter,
+  a quoted `handoff` or those expansions.
 - **inside a string a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash` or
   `ksh` with `-c` (alone or in a cluster such as `-lc`). The refusal says to run it directly.
 - **with a stdin other than one quoted heredoc** on the handoff's own segment — so the prompt
@@ -112,11 +116,16 @@ vault path in prose is not refused as a read of it.
 The hook refuses the spellings of a handoff it can recognise, so a chat working in good faith
 keeps your prompt in front of its handoff. It reads a command's words; it is not a shell, and it
 does not stop a chat set on getting around it. It does not see a handoff run by an interpreter
-(`python3 -c`, `node -e`), through a variable, from a script file, behind a shell expansion other
-than the ones above, more than one string deep, or inside a heredoc fed to a shell
-(`bash <<'EOF'`) — that last one until a follow-up change. A `<<` inside a comment or quotes
-earlier in the same call also hides every line after it from the hook (heredoc detection is being
-reworked under issue #973). Claude Code says the same of its own rule: a Bash rule "isn't a
+(`python3 -c`, `node -e`), through a variable, from a script file, more than one string deep, or
+inside a heredoc fed to a shell (`bash <<'EOF'`) — that last one until a follow-up change. It
+recognises a word only when the word reads `charter` or `handoff` once quoting, expansion and glob
+characters are removed, so it does not recognise a brace split inside the word (`{hand,}off`,
+`h{a,}ndoff`), an ANSI-C escape (`$'\x68andoff'`, `$'\x63harter'`) or a parameter default split
+across it (`hand${x:-}off`, `${x:-hand}${y:-off}`). A `<<` inside a comment or quotes earlier in
+the same call also hides every line after it from the hook (heredoc detection is being reworked
+under issue #973). And the look inside `eval` and `sh -c` strings reads the whole call at once,
+so a single apostrophe in an earlier heredoc body that is not a reader's or a handoff's — a
+`python3 - <<'PY'` body, say — stops it, and the string is not opened. Claude Code says the same of its own rule: a Bash rule "isn't a
 security boundary around the program"
 ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
