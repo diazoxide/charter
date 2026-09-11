@@ -85,7 +85,10 @@ rule while one who reads a bare refusal files an issue.
   runs it: a shell that opens the `<<` (`bash <<'EOF'`), or one anywhere in the opener's
   pipeline (`cat x && bash <<'EOF'`, `cat <<'EOF' | bash`), so a vault read on any of its
   lines is denied wherever the reader on the line stands — it is the command that opens the
-  `<<`, and its pipeline, that decide, not the first word. A **quoted** heredoc fed only to a
+  `<<`, and its pipeline, that decide, not the first word. **The pipeline is followed across
+  lines**: a trailing `|` continues onto the command after the heredoc body (`cat <<'EOF' |`
+  … `EOF` … `bash`), and a backslash-newline splices before it, so the downstream shell is
+  seen either way. A **quoted** heredoc fed only to a
   reader (`cat <<'EOF'`) is stdin data: its body is dropped, so a document naming these paths
   is not refused as a read of them ([#258](https://github.com/diazoxide/charter/issues/258)).
   An *unquoted* body stays visible instead, because the shell expands it before the reader

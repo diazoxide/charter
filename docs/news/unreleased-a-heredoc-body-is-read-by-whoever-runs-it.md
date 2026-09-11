@@ -23,7 +23,10 @@ dropped only when a **quoted** heredoc feeds a **reader** whose pipeline runs **
 A body reaching a shell (`bash`, `sh`, `python3`, …), or a reader whose output pipes into one
 (`cat <<'EOF' | bash`), stays visible, and the guard reads each of its lines as the command
 it is. Bodies follow their `<<` in order across the whole line, so two heredocs going to
-different programs are told apart (`cat <<'A' && bash <<'B'` drops A, keeps B).
+different programs are told apart (`cat <<'A' && bash <<'B'` drops A, keeps B). The pipeline
+is followed across physical lines too: a trailing `|` continues onto the command after the
+heredoc body (`cat <<'EOF' |` then the body then `EOF` then `bash`), and a backslash-newline
+splices before it — so a shell reached on a continuation line is still seen.
 
 The false positive [#258](https://github.com/diazoxide/charter/issues/258) removed stays
 removed: a quoted `cat <<'X'` whose body merely names `.charter/` is stdin data and is not

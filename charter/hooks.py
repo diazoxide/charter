@@ -753,8 +753,11 @@ def _is_charter(prog: str, args: list[str]) -> bool:
     return False
 
 
-#: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, `<<-DELIM` — the start of a heredoc.
-_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+#: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, `<<-DELIM` — the start of a heredoc. `dash` records
+#: the `<<-` form (its terminator ignores leading TABS); `q` is the quote that makes the body
+#: non-expanding; `delim` is the word a body ends on.
+_HEREDOC_RE = re.compile(
+    r"<<(?P<dash>-?)\s*(?P<q>['\"]?)(?P<delim>[A-Za-z_][A-Za-z0-9_]*)(?P=q)")
 
 
 #: Programs that RUN a heredoc reaching their pipeline as CODE, so its body is never data.
@@ -878,9 +881,36 @@ def _heredoc_strip_plan(line: str):
             for _ in range(hc):
                 m = headers[k]
                 k += 1
-                quoted = bool(m.group(1))
-                plan.append((m.group(2), reader and quoted and not executor))
+                quoted = bool(m.group("q"))
+                plan.append((m.group("delim"), reader and quoted and not executor))
     return plan
+
+
+def _ends_in_line_continuation(line: str) -> bool:
+    """A bare trailing backslash: bash splices this line with the next BEFORE tokenizing, so
+    `cat <<'EOF' \\` then `| bash` is the one command `cat <<'EOF' | bash`, and the heredoc
+    body follows the spliced whole. An even run of trailing backslashes is a literal `\\`,
+    not a continuation."""
+    return line.endswith("\\") and (len(line) - len(line.rstrip("\\"))) % 2 == 1
+
+
+def _pipeline_continues(line: str) -> bool:
+    """A trailing bare `|` or `|&` pipes this command's output into the next command line —
+    which, unlike a backslash splice, sits AFTER the heredoc bodies this line opened.
+    Measured on bash, zsh and dash: `cat <<'EOF' |` then a body then `EOF` then `bash` feeds
+    that body to `bash`, which runs it. A per-physical-line plan cannot see that `bash`, so
+    the pipeline is reassembled before attribution (#973 review round 1).
+
+    `&&`, `||`, `&`, `;` are NOT this: measured, the heredoc stays with its own segment's
+    program and is not piped downstream, so a per-line plan already attributes them and they
+    are left alone. Quoting is honoured (`echo 'a |'` does not continue) and a `#` comment's
+    `|` is not a token.
+    """
+    try:
+        toks = _split_punctuation(_lex(line))
+    except ValueError:
+        return False
+    return bool(toks) and toks[-1].bare and toks[-1].text in ("|", "|&")
 
 
 def _strip_reader_heredocs(cmd: str) -> str:
@@ -897,32 +927,91 @@ def _strip_reader_heredocs(cmd: str) -> str:
     the guard exists to read, so it is kept, and this guard's newline-segmentation then reads
     each of its lines as the command it is.
 
-    The terminator is matched by ``line.strip() == delim``, which can only end a body EARLIER
-    than bash would (bash wants the line exactly, modulo the tabs a `<<-` strips). Earlier
-    hands the guard MORE text, never less — the safe direction for a security pre-pass.
+    **A pipeline can span physical lines**, and the executor can be on the continuation line
+    (`cat <<'EOF' |` … `EOF` … `bash`). So this works on the LOGICAL command, folding two
+    kinds of continuation in the order bash applies them:
+
+    * a **backslash-newline** splices before tokenizing, so it is folded into the command
+      line *before* that line's heredoc bodies are read;
+    * a trailing **`|`/`|&`** continues the pipeline onto the next command line, which sits
+      *after* the bodies — so those are read first, then the continuation is folded in.
+
+    The whole folded pipeline goes to :func:`_heredoc_strip_plan`, so a downstream executor is
+    attributed to the pipeline the body belongs to. Bodies are buffered as chunks and emitted
+    in place once the plan is known, because a body physically precedes the continuation that
+    decides its fate. A body line is never itself read as a continuation, even when it ends in
+    `|`.
+
+    The terminator is matched EXACTLY as bash does — a line equal to the delimiter, a `<<-`
+    ignoring only leading tabs. An earlier `.strip()`-lenient match looked safe (it hands the
+    guard more text) but was not: ending a KEPT shell body early spills its real read into the
+    next heredoc, whose reader body is then stripped and the read hidden. Bash's own boundary
+    is the one that attributes each line to the command that actually runs it.
     """
     if "<<" not in cmd:
         return cmd
     lines = cmd.split("\n")
     out: list[str] = []
     i = 0
-    while i < len(lines):
-        out.append(lines[i])
-        plan = _heredoc_strip_plan(lines[i])
-        i += 1
-        if not plan:
-            continue
-        # The bodies of THIS line's heredocs follow in order; consume each to its delimiter,
-        # dropping a data body and keeping a script one so the guard still sees it.
-        for delim, drop in plan:
-            while i < len(lines) and lines[i].strip() != delim:
-                if not drop:
-                    out.append(lines[i])
+    n = len(lines)
+    while i < n:
+        # One LOGICAL command: command-text lines folded for the plan, heredoc bodies
+        # buffered as chunks so their fate is decided once the whole pipeline is assembled.
+        chunks: list[tuple[str, int, str]] = []   # (kind, body_index, text); kind cmd|body
+        body_count = 0
+        plan_text = ""
+        join = ""                                 # separator carried from the previous stage
+        while i < n:
+            # A command line, with any backslash-newline splices folded in first — bash does
+            # this before it looks for heredoc bodies, so the bodies follow the folded whole.
+            folded = ""
+            while i < n:
+                line = lines[i]
+                chunks.append(("cmd", -1, line))
                 i += 1
-            if i < len(lines):                 # the terminator line itself
-                if not drop:
-                    out.append(lines[i])
-                i += 1
+                if _ends_in_line_continuation(line):
+                    folded += line[:-1]
+                    continue
+                folded += line
+                break
+            plan_text = folded if not plan_text else plan_text + join + folded
+            # This command line's heredoc bodies follow, in order; buffer each.
+            for m in _HEREDOC_RE.finditer(folded):
+                delim = m.group("delim")
+                dash = bool(m.group("dash"))
+                expands = not m.group("q")
+                idx = body_count
+                body_count += 1
+                # Bash ends the body on a line EQUAL to the delimiter — a `<<-` ignoring only
+                # leading TABS. Not `.strip()`: a lenient match ends a KEPT (shell) body early,
+                # and the real read that spills past it is then read as the next heredoc's body
+                # and, if that one is a reader's, stripped away (measured regression). In an
+                # UNQUOTED body a trailing backslash splices the next line, so that line cannot
+                # be the terminator — bash runs the body on past it (measured on bash/zsh/dash),
+                # which likewise keeps a kept shell body from ending early into a reader's.
+                spliced = False
+                while i < n:
+                    body_line = lines[i]
+                    is_terminator = not spliced and (
+                        (body_line.lstrip("\t") if dash else body_line) == delim)
+                    if is_terminator:
+                        break
+                    chunks.append(("body", idx, body_line))
+                    spliced = expands and _ends_in_line_continuation(body_line)
+                    i += 1
+                if i < n:                          # the terminator line itself
+                    chunks.append(("body", idx, lines[i]))
+                    i += 1
+            if not _pipeline_continues(folded):
+                break
+            join = " "                             # the next stage joins onto the same pipe
+        plan = _heredoc_strip_plan(plan_text)
+        drop = {}
+        if plan is not None and len(plan) == body_count:
+            drop = {idx: d for idx, (_delim, d) in enumerate(plan)}
+        for kind, idx, text in chunks:
+            if kind == "cmd" or not drop.get(idx, False):
+                out.append(text)
     return "\n".join(out)
 
 

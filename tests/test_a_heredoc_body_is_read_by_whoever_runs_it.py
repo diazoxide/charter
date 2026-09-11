@@ -135,6 +135,122 @@ class WhichCommandOpensTheHeredoc(PlaneIso):
         self.assertFalse(self.denies(cmd), cmd)
 
 
+class APipelineContinuesAcrossPhysicalLines(PlaneIso):
+    """A trailing pipe continues the pipeline onto the next command line — the line AFTER the
+    heredoc bodies. The executor is on that continuation line, so a per-physical-line plan
+    would miss it and strip a body a shell runs. Measured on bash, zsh AND dash: every
+    `SECRET RAN` shape below runs a planted secret; the `&&`/`||` shapes do not, because there
+    the heredoc stays with its own segment's program and is not piped downstream.
+    """
+
+    def denies(self, cmd: str) -> bool:
+        return _deny(cmd, str(self.tmp))
+
+    def test_trailing_pipe_then_a_shell_on_the_next_line(self):
+        """The reviewer's shape: `cat <<'EOF' |` \\n body \\n EOF \\n bash — bash runs the
+        body. Allowed on base; must deny."""
+        for tail in ("bash", "sh"):
+            cmd = f"cat <<'EOF' |\n{READ}\nEOF\n{tail}"
+            with self.subTest(tail=tail):
+                self.assertTrue(self.denies(cmd), cmd)
+
+    def test_trailing_pipe_with_a_reader_opener(self):
+        cmd = f"head <<'EOF' |\n{READ}\nEOF\nbash"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_writer_opener_piped_onward_to_a_shell(self):
+        """`tee x <<'EOF' |` \\n … \\n bash — tee reproduces the body to the pipe, bash runs
+        it."""
+        cmd = f"tee x <<'EOF' |\n{READ}\nEOF\nbash"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_three_stage_pipeline_across_lines(self):
+        cmd = f"cat <<'EOF' |\n{READ}\nEOF\ntee y |\nbash"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_backslash_newline_continuation_into_a_pipe(self):
+        r"""`cat <<'EOF' \` \\n `| bash` folds to `cat <<'EOF' | bash`, and the body follows."""
+        cmd = f"cat <<'EOF' \\\n| bash\n{READ}\nEOF"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_and_continuation_leaves_the_heredoc_with_its_own_segment(self):
+        """`cat <<'EOF' &&` \\n body \\n EOF \\n bash — measured on bash/zsh/dash: the body is
+        NOT piped to bash (that is a separate command), so a body that only mentions a path is
+        data and stays allowed."""
+        cmd = f"cat <<'EOF' &&\n{MENTION}\nEOF\nbash"
+        self.assertFalse(self.denies(cmd), cmd)
+
+    def test_or_continuation_the_same(self):
+        cmd = f"cat <<'EOF' ||\n{MENTION}\nEOF\nbash"
+        self.assertFalse(self.denies(cmd), cmd)
+
+    def test_a_trailing_ampersand_is_not_a_pipeline_continuation(self):
+        """`cat <<'EOF' &` backgrounds cat; `bash` on the next line is a separate command that
+        never receives the body. Measured: the secret does not run."""
+        cmd = f"cat <<'EOF' &\n{MENTION}\nEOF\nbash\nwait"
+        self.assertFalse(self.denies(cmd), cmd)
+
+
+class TheTerminatorMatchesBashExactly(PlaneIso):
+    """A heredoc ends where bash ends it, not at the first `.strip()`-equal line. A lenient
+    match ends a KEPT (shell) body EARLY, and the real body lines that spill past it are then
+    read as the NEXT heredoc's body — which, if that one is a reader's, gets stripped, hiding
+    the read. Measured on bash, zsh and dash: the secret runs; denied on main; the lenient
+    pre-pass had regressed it to allowed."""
+
+    def denies(self, cmd: str) -> bool:
+        return _deny(cmd, str(self.tmp))
+
+    def test_a_lenient_terminator_does_not_end_a_shell_body_early(self):
+        """`bash <<'A'` whose body contains a line ` A` (leading space) — not the terminator
+        to bash — followed by the real read, then the exact `A`. The read is inside bash's
+        body, and a following `cat <<'B'` must not swallow and strip it."""
+        cmd = f"bash <<'A' && cat <<'B'\necho hi\n A\n{READ}\nB\nA\ndata\nB"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_an_unquoted_body_backslash_splices_over_a_terminator(self):
+        """An UNQUOTED heredoc body splices a trailing backslash with the next line, so a
+        line that looks like the terminator is eaten and the body runs on. Measured on
+        bash/zsh/dash: `bash <<A` … `echo a\\` … `A` … read … `A` runs the read. The kept
+        shell body must extend past the spliced `A`, not hand the read to a later reader
+        heredoc to strip."""
+        cmd = f"bash <<A && cat <<'B'\necho a\\\nA\n{READ}\nA\ndata\nB"
+        self.assertTrue(self.denies(cmd), cmd)
+
+    def test_a_dash_terminator_still_strips_leading_tabs(self):
+        """`<<-` strips leading tabs from body and terminator alike, so a tab-indented
+        terminator still ends the body. A quoted reader body naming a path stays data (#258),
+        proving the tab-aware match did not run the body off the end."""
+        cmd = "cat > notes.md <<-'DOC'\n\t.charter/vaults/db.json\n\tDOC"
+        self.assertIsNone(hooks._leak_reason(cmd))
+
+
+class TheHeaderCountBailIsLoadBearing(PlaneIso):
+    """`_heredoc_strip_plan` bails when the header regex and the lexer disagree on how many
+    heredocs a line opens. Deleting the bail raises `IndexError` in `_leak_reason` here, and
+    flips a here-string classification — so it is pinned, not incidental (review M4)."""
+
+    def denies(self, cmd: str) -> bool:
+        return _deny(cmd, str(self.tmp))
+
+    def test_a_dangling_heredoc_operator_returns_a_decision_without_raising(self):
+        """`cat <<'EOF' | bash <<` — the second `<<` names no delimiter, so the lexer counts
+        two `<<` and the regex one. The bail must return a clean verdict, not raise."""
+        cmd = f"cat <<'EOF' | bash <<\n{READ}\nEOF"
+        try:
+            decided = self.denies(cmd)
+        except Exception as exc:                       # noqa: BLE001 — the point of the pin
+            self.fail(f"_leak_reason raised instead of deciding: {exc!r}")
+        self.assertTrue(decided, cmd)                  # a shell still runs the body
+
+    def test_a_here_string_before_a_heredoc_keeps_its_verdict(self):
+        """`cat <<<x <<'EOF'` — a here-string then a heredoc. The counts disagree, so the
+        pre-pass strips nothing; pin the resulting verdict so the bail cannot silently flip
+        it."""
+        cmd = f"cat <<<x <<'EOF'\n{READ}\nEOF"
+        self.assertTrue(self.denies(cmd), cmd)
+
+
 class TheTrapsBashParsesOneWay(PlaneIso):
     """Constructs whose `;`/`&&`/`<<` a naive splitter would read wrong."""
 
