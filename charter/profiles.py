@@ -17,7 +17,9 @@ policy — `[[forge]]` hosts steer the credential guard — with no trace in git
 **Reading costs no subprocess.** :func:`derive` runs inside `config.derive`, which every
 hook process runs, and `hooks/hooks.json` fires on Bash, Read, Grep, Write, Edit, Task, Skill
 and SendMessage. The one git call — would git carry this file? — is :func:`ignore_check`,
-and only the surfaces a person runs ask it.
+and `charter harness list` and `charter doctor` ask it. Doctor is also what the SessionStart
+hook runs, so until the plan's Task 4 gives it a `--preflight` mode, a session start on a
+plane that has the file pays that one lock-free `git status` (ruling 40).
 
 **A broken profile is refused alone, by name, with its reason**, and the rest still load.
 `[[frame.component]]` refuses its whole arrangement over one bad entry, and that is the right

@@ -56,7 +56,7 @@ and how the file is kept uncommitted are in
 * claude-work   claude    CLAUDE_CONFIG_DIR=~/.claude-work claude  charter.local.toml
   codex-pinned  codex     npx -y @openai/codex@0.140.0             charter.local.toml
 refused:
-  claude.alt: profile 'claude.alt' is not a name charter accepts — letters, digits, '_' and '-', starting with a letter or digit. Rename the table.
+  claude.alt: profile 'claude.alt' is not a name charter accepts — letters, digits, '_' and '-', starting with a letter or digit, and no dot, because a dot breaks tmux targets. Rename the table.
 ```
 
 - **NAME** — what the profile is called; `*` marks `[harness] default`.

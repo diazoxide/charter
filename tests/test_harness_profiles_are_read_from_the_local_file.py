@@ -219,6 +219,18 @@ class ABrokenProfileIsRefusedAlone(_LocalFile):
                 self.assertEqual(r.profiles["claude"].source, "built-in")
                 self.assertIn("ok", r.profiles)
 
+    def test_ruling_41_an_env_table_alone_declares_the_profile_and_refuses_the_name(self):
+        """Pin, ruling 41. `[harness.claude.env]` is the TOML spelling of profile `claude`'s
+        `env`, not a dotted name: `env` is a profile key. So it declares how `claude` runs,
+        and a replacement with no `kind` or `command` refuses the name — the built-in does
+        not stand in (ruling 37). Reading `env` as a dotted child instead would leave the
+        built-in running the default account."""
+        r = self._local(_OK + '[harness.claude.env]\nCLAUDE_CONFIG_DIR = "~/.claude-work"\n')
+        self.assertIn("ok", r.profiles)
+        self.assertNotIn("claude", r.profiles)
+        self.assertEqual([x.name for x in r.refused], ["claude"])
+        self.assertIn("claude, opencode, codex", r.refused[0].reason)
+
     def test_a_declared_profile_holding_a_dotted_child_is_refused_for_it_too(self):
         """F4's other half. A parent with keys of its own is a declaration, and it is read
         with its nested table in place: once parsed, `[harness.work.alt]` is the same thing as

@@ -719,8 +719,10 @@ def derive(root: Path, start: Path | None = None) -> dict:
     #:
     #: Derived BEFORE ``HARNESS`` (review 14): what ``[harness] default`` resolves against is
     #: read off the profiles. A file read and nothing more — no git call and no subprocess —
-    #: because every hook process runs this derivation; whether git would carry the file is
-    #: `profiles.ignored_refusal`, asked by the surfaces a person runs.
+    #: because every hook process runs this derivation. Whether git would carry the file is
+    #: `profiles.ignore_check`, which `charter harness list` and `charter doctor` run —
+    #: including the doctor the SessionStart hook runs, until the plan's Task 4 gives it a
+    #: `--preflight` mode (ruling 40).
     #:
     #: Held as `ProfileSet._asdict()`, and `profiles.current` rebuilds the tuple: the read
     #: guard in `tests/_planeguard` stands a refusing `dict` in for a guarded setting, and it

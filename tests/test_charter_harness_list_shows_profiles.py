@@ -167,6 +167,21 @@ command = ["claude\r\u001B[2Kharmless"]
         self.assertNotIn("\x1b", out)
         self.assertIn(contain.readable("claude\r\x1b[2Kharmless"), out)
 
+    def test_a_name_that_skipped_validation_is_still_listed_escaped(self):
+        """Ruling 35 at the NAME cell itself. A declared name passes `NAME_RE` before it can
+        reach a row, so today no name carries a control byte — but the listing does not lean
+        on every future source of names validating them first. The rendering layer alone
+        would turn a carriage return into a space, which is a different name; the escaped
+        spelling is what says which one this is."""
+        from charter import profiles
+        odd = profiles.Profile("a\rb", "claude", "claude-code", ("claude",), (),
+                               "charter.local.toml")
+        unvalidated = profiles.ProfileSet({"a\rb": odd}, (), None, None, None)
+        with mock.patch.object(profiles, "current", return_value=unvalidated):
+            out = self._list()
+        self.assertNotIn("\r", out)
+        self.assertIn(contain.readable("a\rb"), out)
+
     def test_the_kinds_ceilings_are_still_listed(self):
         out = self._list()
         self.assertIn("↳", out.split("\n\n", 1)[1])
