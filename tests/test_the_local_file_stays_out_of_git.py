@@ -283,7 +283,8 @@ class TheFileMustBeIgnoredToBeUsed(PersonaIso):
 
 class DoctorWarns(PersonaIso):
     """The row reads the file as it is now: `config` was derived in `setUp`, before any of
-    these files existed, so a row reading `config.PROFILES` would pass every one of them."""
+    these files existed, so a row reading a value derived with `config` (as `config.PROFILES`
+    was, before ruling 43 removed it) would pass every one of them."""
 
     def setUp(self) -> None:
         super().setUp()

@@ -270,8 +270,9 @@ def _profile_refusal(name: str, table, kinds: dict) -> str:
             return CHARTER_ENV.format(name=shown, var=contain.readable(var))
     for var in sorted(env):
         if any(word in var.upper() for word in SECRET_WORDS):
-            # `.get`, never an index: this runs inside `config.derive`, where a kind
-            # registered without a login sentence must cost a sentence, not every command.
+            # `.get`, never an index: `current()` runs this for doctor's row and the
+            # listing, and doctor is what the operator runs when something is wrong, so a
+            # kind registered without a login sentence costs a sentence, not the row.
             login = LOGIN.get(kinds[kind].name, "log in inside that harness")
             return SECRET_ENV.format(name=shown, var=contain.readable(var), login=login)
     for key in table:
