@@ -110,7 +110,8 @@ a key. Charter declines to hold one; it cannot prevent one.
   declared replacement of a built-in is refused with the rest: that name refuses rather than
   falling back to the built-in, which would run a command the operator replaced. The check
   runs at launch, in the selector, in `charter harness list` and `harness install`, and in a
-  `doctor` a person runs — one git call each time, never on a config read and never in
+  `doctor` a person runs — one `git --no-optional-locks status` call each time, which takes no
+  `index.lock` from a concurrent commit, never on a config read and never in
   SessionStart's preflight, so no hook pays a git call for it.
 - **Profiles are added by editing the file.** There is no `charter harness add`: a chat can
   run it as easily as it can edit the file, so it could never stand for the operator's
@@ -126,7 +127,8 @@ charter's process (*How a harness starts*).
 1. **The file is ignored** (above).
 2. **A new or changed command asks once.** Charter records each profile's `kind`, `command`
    and `env` as last launched, under `.charter/`. A profile with no record, or a different
-   one, shows its command and asks `run this? [y/N]` before it runs. Built-ins never ask.
+   one, shows its command — escaped, so a control byte from a file a chat can write cannot redraw the
+   prompt — and asks `run this? [y/N]` before it runs. Built-ins never ask.
    Why: once the file is ignored an edit leaves no diff; nothing stops a chat editing plane
    config; and the command goes to tmux, not through a harness permission prompt. Codex
    trusts hooks by hash for the same reason. An open that nobody is at (*The selector*),
@@ -158,7 +160,9 @@ charter's process (*How a harness starts*).
      the plugin enabled, the `shell_environment_policy.set` line, and trust for its hooks. It
      is the home charter can see; one a wrapper script exports is not. Claude Code is wired by
      the most specific entry covering the chat's directory — local over project over user — so a
-     chat that disables charter locally is unwired whatever the user entry says. opencode's
+     chat that disables charter locally is unwired whatever the user entry says. A `false` for
+     charter in `enabledPlugins`, in the most specific settings file covering the directory, is
+     unwired too, whatever the install records say. opencode's
      answer counts only when the shim it names is charter's own, byte for byte, and nothing
      foreign sits beside it in the plugin realm: a byte-perfect `charter.ts` beside a
      `plugin/aaa_boot.ts` let a vault read through (ADR 0015).
@@ -212,9 +216,13 @@ state. `CHARTER_ROOT`, `CHARTER_WORKSPACE` and `CHARTER_PERSONA` are pins and st
 started from a chat's shell keeps that chat's plane and workspace, and
 `CHARTER_PERSONA=forge charter claude --no-frame` means what it says.
 
-A launcher is in a frame only when tmux says so. Before it `exec`s, its own pid must be the
-`#{pane_pid}` of a pane whose window is named for the chat it claims, on that chat's server, read
-from tmux rather than from charter's records. `$TMUX_PANE` and `$CHARTER_SESSION_ID` are never
+A launcher is in a frame only when tmux says so. Before it `exec`s, and before it claims or draws
+anything, its own pid must be the `#{pane_pid}` of a live pane that belongs to the chat it
+claims, on that chat's server, read from tmux rather than from charter's records. On charter's
+own server that is a window named for the chat. In the operator's own tmux it is the
+`@charter_chat` option charter sets before `respawn-pane`, because there a hook or `allow-rename`
+output can rename a window. A launch that claims a chat and cannot prove it says so in one
+line. `$TMUX_PANE` and `$CHARTER_SESSION_ID` are never
 proof: a model's tool shell inherits both from its chat. So `charter frame-launch` run from that
 shell is a launch with no frame and rewrites no chat's record — reopen follows that record. This
 is a guard rail against a model's accidental misuse, not a boundary: a process that deliberately
