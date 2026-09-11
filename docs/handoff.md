@@ -48,6 +48,20 @@ and an interactive session under `bypassPermissions` showed *Permission rule
 Bash(charter handoff \*) requires confirmation for this command* with the full brief above it;
 declining ran nothing.
 
+**Quoting and spacing, measured the same way** on 2.1.268, under `manual` and
+`bypassPermissions` with identical results, each call carrying a heredoc body:
+
+| How the two words are written | With the rule |
+| --- | --- |
+| `\charter handoff`, `'charter' handoff`, `"charter" handoff`, `char""ter handoff`, `ch\arter handoff` | asks |
+| `charter  handoff` (two spaces), `charter` + tab + `handoff`, `charter \` + newline + `handoff` | asks |
+| `charter 'handoff'`, `charter "handoff"`, `charter h""andoff` | **runs with no prompt** |
+| `charter` + U+00A0 + `handoff` | no prompt, and the shell found no command by that name, so nothing ran |
+
+Every call but the last ran without the rule. The Bash tool ran them through zsh on the machine
+measured. charter refuses every row of this table all the same (see below): whatever the host
+matches today, one exact spelling is a rule a model can follow and a list of matched variants is not.
+
 **Where the rule has to be.** Claude Code reads `.claude/settings.json` from the session's own
 directory, not from above it. Measured on 2.1.268 in a plane built by `charter init`: the rule
 only in the plane's file asked in a session at the plane root, and did not ask in a session at
@@ -67,8 +81,10 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
   can propose the handoff itself.
 - **in an unattended run**, when the payload says `permission_mode: bypassPermissions`. The
   refusal names `charter ws todo` as the way to keep the work.
-- **in any spelling but `charter handoff …`** at the start of its command, because the rule
-  above did not match `python3 -m charter handoff` or a path to charter.
+- **in any spelling but `charter handoff …`** at the start of its command — the two words
+  unquoted, unescaped and one space apart, compared as written rather than as a shell would read
+  them — because the rule above did not match `python3 -m charter handoff`, a path to charter, or
+  a quoted or split `handoff`.
 - **with a stdin other than one quoted heredoc** on the handoff's own segment — so the prompt
   shows exactly the text the new chat is sent.
 

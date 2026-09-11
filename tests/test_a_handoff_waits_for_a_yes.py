@@ -108,6 +108,68 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
     def test_a_path_to_charter_is_refused(self):
         self.assertIn("spelled exactly", _reason(self._decide("/usr/local/bin/" + HEREDOC)) or "")
 
+    # Review round 1: the two words are compared as the SOURCE spells them, not as the shell
+    # would unquote them. Each of these runs `charter handoff` in bash, and whether the host
+    # rule prompts for it is a measured question (docs/handoff.md) — refused either way.
+
+    def _refused_as_a_spelling(self, spelling: str) -> None:
+        r = self._decide(spelling + " beta <<'BRIEF'\nFix the widget.\nBRIEF")
+        self.assertIn("spelled exactly", _reason(r) or "", spelling)
+
+    def test_a_backslash_before_charter_is_refused(self):
+        self._refused_as_a_spelling("\\charter handoff")
+
+    def test_a_single_quoted_charter_is_refused(self):
+        self._refused_as_a_spelling("'charter' handoff")
+
+    def test_a_double_quoted_charter_is_refused(self):
+        self._refused_as_a_spelling('"charter" handoff')
+
+    def test_charter_split_by_empty_quotes_is_refused(self):
+        self._refused_as_a_spelling('char""ter handoff')
+
+    def test_an_escape_inside_charter_is_refused(self):
+        self._refused_as_a_spelling("ch\\arter handoff")
+
+    def test_a_single_quoted_handoff_is_refused(self):
+        self._refused_as_a_spelling("charter 'handoff'")
+
+    def test_a_double_quoted_handoff_is_refused(self):
+        self._refused_as_a_spelling('charter "handoff"')
+
+    def test_handoff_split_by_empty_quotes_is_refused(self):
+        self._refused_as_a_spelling('charter h""andoff')
+
+    def test_two_spaces_between_the_words_are_refused(self):
+        self._refused_as_a_spelling("charter  handoff")
+
+    def test_a_tab_between_the_words_is_refused(self):
+        self._refused_as_a_spelling("charter\thandoff")
+
+    def test_a_non_breaking_space_between_the_words_is_refused(self):
+        """No shell reads U+00A0 as a separator, so this is one word to the tokenizer — the
+        guard has to see the handoff before it can refuse its spelling."""
+        self._refused_as_a_spelling("charter\u00a0handoff")
+
+    def test_a_line_continuation_between_the_words_is_refused(self):
+        """bash removes a backslash-newline and runs `charter handoff`; the source is still
+        not the two words one space apart."""
+        self._refused_as_a_spelling("charter \\\nhandoff")
+
+    def test_an_escaped_backslash_at_a_line_end_is_not_a_continuation(self):
+        """Two backslashes are a literal one, so the next line is its own command — and here
+        that command is a handoff with an unquoted heredoc, which must still be judged."""
+        r = self._decide("echo done \\\\\ncharter handoff beta <<BRIEF\nx y\nBRIEF")
+        self.assertIn("an unquoted heredoc", _reason(r) or "")
+
+    def test_a_backslash_ending_the_call_is_refused_rather_than_a_crash(self):
+        r = self._decide("charter handoff beta \\")
+        self.assertIn("left open on its line", _reason(r) or "")
+
+    def test_the_exact_spelling_after_indentation_and_another_command_is_allowed(self):
+        self.assertIsNone(_reason(self._decide(
+            "cd x;  charter handoff beta <<'BRIEF'\nFix the widget.\nBRIEF")))
+
     def test_a_handoff_inside_a_substitution_is_not_at_the_start_of_its_command(self):
         r = self._decide("echo $(charter handoff beta <<'BRIEF'\nx y\nBRIEF\n)")
         self.assertIn("spelled exactly", _reason(r) or "")
@@ -151,7 +213,7 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
 
     def test_a_quote_left_open_on_the_handoff_line_is_refused(self):
         r = self._decide("charter handoff beta --persona \"forge <<'BRIEF'\nx y\nBRIEF")
-        self.assertIn("a quote left open", _reason(r) or "")
+        self.assertIn("left open on its line", _reason(r) or "")
 
     def test_a_live_substitution_in_the_vision_is_refused(self):
         r = self._decide("charter handoff gamma --create --vision \"$(cat v)\" <<'BRIEF'\nx y\nBRIEF")

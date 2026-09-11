@@ -1351,11 +1351,16 @@ class _Tok:
     is an operand, not a boundary.
     """
 
-    __slots__ = ("text", "bare")
+    __slots__ = ("text", "bare", "start")
 
-    def __init__(self, text: str, bare: bool) -> None:
+    def __init__(self, text: str, bare: bool, start: int = -1) -> None:
         self.text = text
         self.bare = bare
+        #: Where the token's first character sits in the source, or -1 where nothing measured
+        #: it. Read by A7 alone, which judges the SPELLING a command was written with:
+        #: `'charter' handoff` and `charter  handoff` tokenize to the same two texts as the
+        #: exact form, and only the source tells them apart.
+        self.start = start
 
     def is_op(self, *texts: str) -> bool:
         """True when the shell would interpret this token as one of *texts* — or, with no
@@ -1432,6 +1437,7 @@ class _ShellLexer(shlex.shlex):
     def __init__(self, cmd: str) -> None:
         self._bare = True
         self._state = " "
+        self._start = -1
         super().__init__(_NewlineKeepingStream(cmd), punctuation_chars=_PUNCTUATION_CHARS,
                          posix=True)
         self.whitespace_split = True
@@ -1441,6 +1447,12 @@ class _ShellLexer(shlex.shlex):
     def bare(self) -> bool:
         """Was the token most recently returned by :meth:`read_token` free of quoting?"""
         return self._bare
+
+    @property
+    def start(self) -> int:
+        """Where the token most recently returned by :meth:`read_token` began in the source —
+        the index of the character that moved the lexer out of whitespace — or -1."""
+        return self._start
 
     @property
     def state(self):
@@ -1454,6 +1466,12 @@ class _ShellLexer(shlex.shlex):
         # the token, including a quote glued to the middle of one.
         if value and value in (getattr(self, "quotes", "") + getattr(self, "escape", "")):
             self._bare = False
+        # The same transition says where the token STARTS. `shlex` leaves whitespace on the
+        # token's first character — a word character, a quote, an escape or punctuation —
+        # and that is the last character read from the stream: a character `shlex` pushed
+        # back at the end of the previous token was read from the stream and is not re-read.
+        if self._state == " " and value != " " and self._start < 0:
+            self._start = self.instream._i - 1
         self._state = value
 
     @property
@@ -1466,6 +1484,7 @@ class _ShellLexer(shlex.shlex):
 
     def read_token(self):
         self._bare = True                  # per token, not per lex
+        self._start = -1
         return super().read_token()
 
 
@@ -1478,7 +1497,7 @@ def _lex(cmd: str) -> list[_Tok]:
         tok = lex.get_token()
         if tok is lex.eof:                 # `is`, not `==`: `''` is a real token (`cat ''`)
             return out
-        out.append(_Tok(tok, lex.bare))
+        out.append(_Tok(tok, lex.bare, lex.start))
 
 
 def _split_punctuation(toks: list[_Tok]) -> list[_Tok]:
@@ -1504,7 +1523,13 @@ def _split_punctuation(toks: list[_Tok]) -> list[_Tok]:
     out: list[_Tok] = []
     for t in toks:
         if t.bare and len(t.text) > 1 and all(c in _PUNCTUATION_CHARS for c in t.text):
-            out.extend(_Tok(p, True) for p in _OPERATOR_SPLIT_RE.split(t.text) if p)
+            # Each piece starts where it sits inside the run, so a split token's offset
+            # stays an offset into the source.
+            at = t.start
+            for p in _OPERATOR_SPLIT_RE.split(t.text):
+                if p:
+                    out.append(_Tok(p, True, at))
+                at += len(p)
         else:
             out.append(t)
     return out
@@ -4281,10 +4306,12 @@ _HANDOFF_UNATTENDED = (
     "instead — charter ws todo --workspace <workspace> \"<what>\" — and hand it off from a "
     "chat someone is attending.")
 _HANDOFF_SPELLING = (
-    "`charter handoff` must be spelled exactly that, at the start of its command. The "
-    "permission rule that asks you first is `Bash(charter handoff *)`, and a spelling that "
-    "rule does not match gets no prompt: on Claude Code 2.1.268, `python3 -m charter handoff` "
-    "and a path to charter both ran with none. Run: charter handoff <workspace> <<'BRIEF'")
+    "`charter handoff` must be spelled exactly that, at the start of its command: the two "
+    "words unquoted, unescaped and one space apart. The permission rule that asks you first is "
+    "`Bash(charter handoff *)`, and charter refuses every other spelling rather than bet on "
+    "which ones that rule matches — on Claude Code 2.1.268, `python3 -m charter handoff` and a "
+    "path to charter both ran with no prompt. Spell it exactly "
+    "`charter handoff <workspace> <<'BRIEF'`.")
 _HANDOFF_SOURCE = (
     "`charter handoff` takes its brief from a QUOTED heredoc in the same call — <<'BRIEF' — "
     "so the permission prompt shows exactly the text the new chat is sent. This call feeds it "
@@ -4319,13 +4346,39 @@ def _handoff_segment(toks: list[_Tok]) -> tuple[list[_Tok] | None, bool]:
     return None, False
 
 
+def _handoff_line(cmd: str) -> str | None:
+    """The first line of *cmd* that runs `charter handoff`, as its SOURCE is written — or
+    ``None``.
+
+    Heredoc bodies opened on earlier lines are skipped the way the leak guard skips them
+    (:func:`_strip_reader_heredocs`), so a document being written that shows the command is
+    prose rather than a handoff. A line ending in an odd number of backslashes is joined to
+    the next, because bash removes that backslash-newline and runs the two as one command.
+
+    The handoff is LOOKED FOR with the continuation removed and every whitespace character
+    read as a space, so `charter` and `handoff` split across a continuation or joined by a
+    non-breaking space (one word to the tokenizer, and to bash) are still found. What comes
+    back is the line as written, because A7 judges the spelling, and those are spellings.
+    """
+    lines = _strip_reader_heredocs(cmd).split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        while (len(line) - len(line.rstrip("\\"))) % 2 and i + 1 < len(lines):
+            i += 1
+            line += "\n" + lines[i]
+        seen = "".join(" " if c.isspace() else c for c in line.replace("\\\n", ""))
+        if _is_handoff(seen):
+            return line
+        i += 1
+    return None
+
+
 def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
     """``(trace reason, denial)`` for a `charter handoff` the operator's permission prompt
     cannot stand in front of — or ``None``.
 
-    **The first handoff INVOCATION line is the one judged.** Heredoc bodies opened on earlier
-    lines are skipped the way the leak guard skips them (:func:`_strip_reader_heredocs`), so a
-    document being written that shows the command is prose rather than a handoff.
+    **The first handoff INVOCATION line is the one judged** (:func:`_handoff_line`).
 
     The refusals, in order:
 
@@ -4335,11 +4388,13 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
       sub-agent's Bash call. opencode's plugin builds a payload with no such field, and a
       harness nobody measured is not read as one.
     * ``handoff-unattended`` — ``permission_mode: bypassPermissions`` (:func:`_unattended`).
-    * ``handoff-spelling`` — the handoff's own segment does not begin with the words
-      `charter handoff`. On Claude Code 2.1.268, `python3 -m charter handoff` and a path to
-      charter ran with no prompt. A `FOO=1` prefix and an `env` wrapper were matched there
-      and are refused anyway: "spelled exactly that" is one rule a model can follow, and no
-      other harness's matcher has been measured.
+    * ``handoff-spelling`` — the handoff's own segment is not `charter handoff` as the SOURCE
+      spells it: two bare words (no quote or escape anywhere in either), one ASCII space
+      apart. On Claude Code 2.1.268, `python3 -m charter handoff` and a path to charter ran
+      with no prompt; a `FOO=1` prefix and an `env` wrapper were matched and are refused
+      anyway, and so is every quoted, escaped or differently spaced form, whatever the host
+      does with it (docs/handoff.md has the measurement). "Spelled exactly that" is one rule
+      a model can follow, and no other harness's matcher has been measured.
     * ``handoff-brief-source`` — stdin that is not exactly one quoted heredoc on the handoff's
       own segment, or a live substitution anywhere in the call (:func:`_live_substitution`,
       scoped to the whole call like A5 and A6, for their reason).
@@ -4350,8 +4405,7 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
     misled by a quoted `"<<"` earlier on the line.
     `TheQuotingJudgementIsTheSubstitutionGuards` holds the two to one answer.
     """
-    line = next((ln for ln in _strip_reader_heredocs(cmd).split("\n") if _is_handoff(ln)),
-                None)
+    line = _handoff_line(cmd)
     if line is None:
         return None
     from .harness import claude_code, codex
@@ -4363,12 +4417,18 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
     try:
         toks = _split_punctuation(_lex(line))
     except ValueError:
-        # The shell would still be reading that quote on the next line, so which heredoc (if
-        # any) feeds this command cannot be read off it. Refused rather than guessed.
+        # The shell would still be reading that quote or escape past the end of the line, so
+        # which heredoc (if any) feeds this command cannot be read off it. Refused, not guessed.
         return "handoff-brief-source", _HANDOFF_SOURCE.format(
-            what="a quote left open on its line, so no heredoc can be seen feeding it")
+            what="a quote or an escape left open on its line, so no heredoc can be seen "
+                 "feeding it")
     seg, piped = _handoff_segment(toks)
-    if seg is None or [t.text for t in seg[:2]] != ["charter", "handoff"]:
+    # The SOURCE, not the words a shell makes of it: `'charter' handoff`, `\charter handoff`
+    # and `charter  handoff` tokenize to the same two texts as the exact form. `bare` says no
+    # quote or escape touched either word; the offsets say what stood between them.
+    if (seg is None or not (seg[0].bare and seg[1].bare)
+            or [seg[0].text, seg[1].text] != ["charter", "handoff"]
+            or line[seg[0].start + len("charter"):seg[1].start] != " "):
         return "handoff-spelling", _HANDOFF_SPELLING
     heredocs = [i for i, t in enumerate(seg) if t.is_op("<<")]
     if any(t.is_op("<<<") for t in seg):

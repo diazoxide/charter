@@ -25,8 +25,9 @@ Inside a control plane, charter's Bash hook refuses a `charter handoff`:
 - from a sub-agent, read from `agent_id` (measured on Claude Code 2.1.268 and codex-cli 0.147.0
   to arrive only inside a sub-agent);
 - from an unattended run, read from `permission_mode: bypassPermissions`;
-- in any spelling but `charter handoff …` at the start of its command, because the rule did not
-  match `python3 -m charter handoff` or a path to charter;
+- in any spelling but `charter handoff …` at the start of its command, the two words unquoted and
+  one space apart, because the rule did not match `python3 -m charter handoff`, a path to charter
+  or a quoted `handoff`;
 - fed anything but one quoted heredoc on its own segment, so the prompt shows the exact brief.
 
 A brief that names a vault path in prose is not refused as a read of it.

@@ -82,6 +82,11 @@ carries the rulings that touch it.
   (5) Doctor's `{stale}` hint reuses #948's lag detection. Measured in Task 4 and applied there:
   G3 widens D1 to Codex, and G1 rewrote D3's text, because Claude Code 2.1.268 DID match a
   `VAR=value` prefix and an `env` wrapper and did not match `python3 -m charter` or a path.
+- **Task 4 review round 1 (2026-09-11).** D3 judges the SOURCE spelling: both words bare (no quote
+  or escape) and one ASCII space apart, found through bash's continuation and any whitespace, so
+  `charter 'handoff'` — which Claude Code 2.1.268 runs with no prompt — is refused along with every
+  other variant. Phase 2 (ruling 4's #948-path tests, ruling 5's `{stale}` hint) is split into a
+  follow-up PR after #948 merges; Task 4's PR merges as Phase 1.
 
 **Line anchors** are against `main` @ 98686c3 (v0.60.0). #936 will move some of them in
 `commands_frame.py` and `hooks.py`; re-anchor by symbol name, never by number.
@@ -910,9 +915,9 @@ skill walks after `charter update` — and not by `update` re-writing it, becaus
 operator's choice (Open question 2). This reverses `cmd_guard_ask`'s note that `init` never
 touches `permissions` (1737-1740); edit that docstring and record the reversal in Task 6's ADR.
 
-**B — the rule reaches a workspace chat. Superseded by #942 (PR #948), ruling 4:** Task 4
-consumes #948's mirror and tests that the handoff rule reaches a workspace chat's generated
-settings through it. The first draft follows, kept for the record. In `ClaudeCodeHarness.workspace_files`, after `doc` is
+**B — the rule reaches a workspace chat. Superseded by #942 (PR #948), ruling 4:** a follow-up
+PR to Task 4, after #948 merges, consumes #948's mirror and tests that the handoff rule reaches a
+workspace chat's generated settings through it. The first draft follows, kept for the record. In `ClaudeCodeHarness.workspace_files`, after `doc` is
 built from `WORKSPACE_KEYS`: when `settings["permissions"]` is a dict whose `"ask"` is a list,
 `asks = [r for r in that list if isinstance(r, str)]`, and when `asks` is non-empty
 `doc["permissions"] = {"ask": asks}`. Only `ask`: an ask can only add a prompt, where an `allow`
