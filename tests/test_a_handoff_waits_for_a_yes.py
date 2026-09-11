@@ -541,23 +541,28 @@ class TheBriefIsDataWhereverBashEndsIt(PlaneIso):
         Ending the brief anywhere but where bash ends it breaks one half or the other — too
         early hides a real read, too late refuses a brief that only talks about one.
         """
-        for name, brief, in_a in (
-            ("a line that only looks like the terminator",
+        for name, quoted, brief, in_a in (
+            ("a line that only looks like the terminator", True,
              "charter handoff b <<'BRIEF' && bash <<'A'\nFix the widget.\n BRIEF\n"
              "cat .charter/vaults/dev.json\nBRIEF\necho in-a\nA",
              "charter handoff b <<'BRIEF' && bash <<'A'\nFix the widget.\n BRIEF\nBRIEF\n"
              "cat .charter/vaults/dev.json\nA"),
-            ("a terminator eaten by a line continuation",
+            ("a terminator eaten by a line continuation", False,
              "charter handoff b <<BRIEF && bash <<'A'\nFix the widget. \\\nBRIEF\n"
              "cat .charter/vaults/dev.json\nBRIEF\necho in-a\nA",
              "charter handoff b <<BRIEF && bash <<'A'\nFix the widget. \\\nBRIEF\nBRIEF\n"
              "cat .charter/vaults/dev.json\nA"),
         ):
             with self.subTest(shape=name, whose_body="the brief's"):
-                # Not `assertIsNone`: the second shape's brief is an UNQUOTED heredoc, which the
-                # handoff gate refuses on its own terms. The claim here is only about the leak
-                # guard — it is shown no read, because bash runs none.
-                self.assertNotIn(hooks._READ_REASON, _reason(self._decide(brief)) or "")
+                # Each row is pinned by the decision it produces, not by the absence of the read
+                # message: "no read reason" passes for free the moment the guard stops saying
+                # that for any reason at all. The first shape is allowed outright; the second's
+                # brief is an UNQUOTED heredoc, so the gate refuses it on its own separate
+                # terms — and a read would be a different refusal from either.
+                if quoted:
+                    self.assertIsNone(_reason(self._decide(brief)))
+                else:
+                    self.assertIn("QUOTED heredoc", _reason(self._decide(brief)) or "")
             with self.subTest(shape=name, whose_body="bash's"):
                 self._read_refused(in_a)
 
@@ -587,8 +592,11 @@ class TheBriefIsDataWhereverBashEndsIt(PlaneIso):
             for opener, terminator in (("<<BRIEF'X'", "BRIEFX"), ('<<"BRIEF"X', "BRIEFX"),
                                        ("<<'BR'IEF", "BRIEF")):
                 with self.subTest(opener=opener, body=body_name):
-                    r = self._decide(f"charter handoff b {opener}\n{body}\n{terminator}")
-                    self.assertNotIn(hooks._READ_REASON, _reason(r) or "")
+                    # Pinned as "allowed outright", not as "the read message is absent": the
+                    # second form goes green the moment the guard stops producing that message
+                    # for any reason, which is how a pin quietly stops pinning.
+                    self.assertIsNone(_reason(self._decide(
+                        f"charter handoff b {opener}\n{body}\n{terminator}")))
 
 
 class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
