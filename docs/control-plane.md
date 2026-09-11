@@ -526,8 +526,8 @@ A broken profile is refused alone, by name, and every other profile still loads.
 | a name holding a dot or any other character, or named `default` | a dot breaks tmux targets; `default` names the starting row | rename the table |
 | a name `charter` already uses — `doctor`, `workspace`, `frame` | `charter doctor` would always be the command, never the profile | rename the table |
 | an `env` that is not a table of text | a variable holds text | `env = { NAME = "value" }` |
-| an `env` name starting with `CHARTER_` | the launcher sets those, and a profile's value would tell every hook the wrong harness or plane | remove it |
-| an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD` | see *No credentials in a profile* below | log in inside the harness |
+| an `env` name starting with `CHARTER_` | the launcher sets those itself, and a profile's own setting would tell charter's hooks the wrong harness or plane | delete the variable |
+| an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD` | a variable set on the harness reaches the model's shell, as the next section measures | log in inside the harness |
 | a key other than `kind`, `command` and `env` | a typo such as `enviroment` would drop `CLAUDE_CONFIG_DIR` and launch the default account without a word | remove or respell it |
 | a file that is not valid TOML | nothing in it can be read | fix the file; the built-ins still load |
 
