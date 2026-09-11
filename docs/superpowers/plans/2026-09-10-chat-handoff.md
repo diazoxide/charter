@@ -199,11 +199,18 @@ def open_in_background(ws: str, *, caller: str, first_message: str,
   `` `x` ``, `$(echo x)`, a tab, U+2028. `tmuxctl.SEPARATOR`'s note (tmuxctl.py:440-446)
   measured an argument *containing* `;`; a *trailing* `;` is the unmeasured case. If any
   string does not arrive intact, stop and report — the seam's contract changes.
-- **M2 — the size limit.** Find the largest `text` (bytes, with the identity `-e` overlay
-  `_frame_identity_env` adds) that `new-window` and `new-session` accept. Hypothesis to
-  confirm or refute: the tmux client refuses a command message over its fixed message size
-  ("command too long"). Set `FIRST_MESSAGE_MAX_BYTES` below the smaller measured value with
-  the margin written beside it.
+  **Done by #959** (controller ruling on resume): it measured the trailing-`;` loss, and
+  every harness argument after `--`, every `-c` value and every `-e` value now goes through
+  `tmuxctl.verbatim`, so a first message ending in `;` arrives whole. Task 1 does not escape
+  again — #959's review traced every route to exactly one escape, and a second is a defect.
+- **M2 — the size limit.** Measured by #959 on 3.7c and 3.2: tmux refuses a command message
+  past 16,364 bytes (`tmuxctl.MESSAGE_LIMIT`), in one of two sentences, and #959 reports that
+  refusal in tmux's own words. **`FIRST_MESSAGE_MAX_BYTES = 12288` is `charter handoff`'s own
+  documented policy bound, not a prediction of tmux's limit** (ADR 0009 rejects predicting;
+  controller ruling on resume). It leaves about 4 KiB for the names, cwd and `CHARTER_ROOT`
+  the start command also carries, and it is checked before any side effect — before a
+  workspace is created and before the todo is written. Cost if wrong: a brief between 12,288
+  and about 15,800 bytes is refused although tmux would take it.
 - **M3 — nothing moves.** A session whose current window is A; open a background chat into
   it through the real `_launch`; `display-message -p -t <session id> '#{window_id}'` is A
   before and after. `_launch` still runs `select-pane -t <harness pane>` (5712) — the
@@ -231,7 +238,7 @@ the one tmux question last); each is a module constant with `{}` fields filled i
 4. `"\x00" in first_message` → `NUL_FIRST_MESSAGE`:
    `"cannot open a chat whose first message contains a NUL byte — a command-line argument cannot carry one. Nothing was opened."`
 5. `len(first_message.encode()) > FIRST_MESSAGE_MAX_BYTES` → `LONG_FIRST_MESSAGE`:
-   `"cannot open a chat with a {n}-byte first message — it travels to the harness as one tmux argument, and tmux refuses a command past {max} bytes (measured). Nothing was opened; shorten it, and name long material by its path instead of pasting it."`
+   `"cannot open a chat with a {n}-byte first message — charter refuses one past {max} bytes, its own bound, set under tmux's 16,364-byte command limit so the chat's names, directory and identity still fit beside it. Nothing was opened; shorten it, and name long material by its path instead of pasting it."` (Reworded on resume: the bound is charter's policy, not a measured tmux limit. Counted with `os.fsencode`, the bytes `exec` is handed, because a strict `str.encode` raises on a surrogate escape — #959's finding.)
 6. `tmuxctl.is_operator_socket(state.frame_server(caller) or SOCKET, own=SOCKET)` →
    `NO_BACKGROUND_CHAT_HERE`:
    `"this chat is a window in a tmux you already had, where charter's launcher stays awake for the life of the harness it starts — so it cannot open a chat in the background from here. Nothing was opened."`
@@ -306,6 +313,7 @@ seat, `display-message` answers `132:43`, `list-sessions` answers the names in
 - `test_the_launch_names_the_workspace_and_never_attaches` — `launched[0].workspace == "beta"`, `.attach is False`, `.pick is False`, `.no_frame is False`.
 - `test_the_first_message_rides_the_harnesses_own_argv` — subTest per harness recorded on `alpha.1`: `claude-code` → `rest == ["fix the widget please"]`; `opencode` → `["--prompt", "fix the widget please"]`; `codex` → `["fix the widget please"]`.
 - `test_the_opening_carries_the_new_chat_id_back` — `_open() == Opened(True, "beta.1", "")`.
+- `test_the_opening_carries_the_message_and_the_persona_it_was_given` — `launched[0].opening` is an `Opening` whose `first_message` and `persona` are what `_open` was given. (Added on resume, so dropping `persona` on the way to the launcher is caught here and not only by the `_launch` class.)
 - `test_it_is_sized_for_the_window_the_calling_chat_is_on` — `launched[0].size == (132, 43)`.
 - `test_the_launch_runs_in_the_target_workspaces_own_directory` — cwd read inside the fake `== str(workspace.workspace_dir("beta").resolve())` (compare `os.path.realpath`); after return `os.getcwd()` is what it was.
 - `test_a_pin_the_calling_chat_carries_does_not_reach_the_new_chat` — `os.environ` holds `CHARTER_WORKSPACE=alpha`, `CHARTER_PERSONA=forge`; inside the fake both read `""`; after return both read `alpha`/`forge` again.
@@ -314,10 +322,11 @@ seat, `display-message` answers `132:43`, `list-sessions` answers the names in
 - `test_a_first_message_starting_with_a_dash_is_refused` — `"--dangerously-skip-permissions now"` → `"starts with `-`" in message`, `launched == []`.
 - `test_a_single_word_first_message_is_refused` — `"login"` → `"single word 'login'" in message`.
 - `test_a_nul_byte_is_refused` — `"fix\x00 it"` → `"NUL byte" in message`.
-- `test_a_first_message_past_the_measured_limit_is_refused` — `"x " * (FIRST_MESSAGE_MAX_BYTES // 2 + 1)` → `"past" in message and str(FIRST_MESSAGE_MAX_BYTES) in message`.
-- `test_a_first_message_exactly_at_the_limit_is_taken` — a text whose `len(.encode()) == FIRST_MESSAGE_MAX_BYTES` with a space in it → `ok is True`, one launch. (Pins `>` against `>=`.)
+- `test_a_first_message_past_the_bound_is_refused` — `"x " * (FIRST_MESSAGE_MAX_BYTES // 2 + 1)` → `"past" in message and str(FIRST_MESSAGE_MAX_BYTES) in message`. (Renamed on resume: the bound is charter's policy, not a measured limit.)
+- `test_a_first_message_exactly_at_the_bound_is_taken` — a text whose `len(.encode()) == FIRST_MESSAGE_MAX_BYTES` with a space in it → `ok is True`, one launch. (Pins `>` against `>=`.)
 - `test_a_first_message_is_measured_in_bytes_not_characters` — `"é " * (FIRST_MESSAGE_MAX_BYTES // 3 + 1)` (fewer characters than the limit, more bytes) → refused.
-- `test_a_chat_in_a_tmux_you_already_had_is_refused` — `state.record_server("alpha.1", "/tmp/tmux-501/default")` → `"a tmux you already had" in message`, `launched == []`.
+- `test_a_byte_that_is_not_utf8_is_counted_not_crashed_on` — `"fix \udcff it"` → `background_refusal` answers `""`. (Added on resume: the count is `os.fsencode`, which a strict `str.encode` would turn into an exception.)
+- `test_a_chat_in_a_tmux_you_already_had_is_refused` — `state.record_server("alpha.1", _tmuxsocket.OPERATOR_SOCKET)` → `"a tmux you already had" in message`, `launched == []`. (A literal `/tmp/tmux-<uid>/…` path is refused by `test_no_test_bakes_a_uid_into_a_socket_path`.)
 - `test_a_chat_with_no_launchable_harness_is_refused` — identity harness `""`, `mock.patch.object(config, "HARNESS", None)` → `NO_HARNESS in message`.
 - `test_a_harness_charter_has_not_measured_is_refused` — patch `ClaudeCodeHarness.first_message_argv` to return `None` → `"has not measured how claude-code" in message`.
 - `test_a_session_this_plane_cannot_prove_is_its_own_is_refused` — `self.sessions = {"beta"}` with no beta seat in `list-panes` → `"probably another plane's" in message`, `launched == []`.
@@ -348,14 +357,16 @@ exist with `self.make_persona("forge")`.
 - `test_an_opening_writes_the_persona_it_was_given_under_the_new_chat` — `persona.for_session("beta.1") == "forge"`.
 - `test_an_opening_with_no_persona_writes_no_pointer` — `persona.for_session("beta.1") is None`.
 - `test_an_ordinary_launch_still_selects_its_window` — same patches, no `opening`, `attach` left absent: an argv containing `"select-window"` was recorded (the gate is `and`, not a replacement).
+- `test_an_opening_still_gets_its_panels_before_anyone_looks` — `_draw_panels` is called once for an opening. (Added on resume: Open question 15 as ruled, pinned so a later gate cannot quietly skip the panels too.)
 
 `tests/test_a_background_chat_really_starts_on_its_brief.py` — skipped when
 `shutil.which("tmux") is None`. Socket `_tmuxreap.name("handoff-argv")`, killed in
-`addCleanup`. A recorder script in `self.tmp` (`#!<sys.executable>` writing `json.dumps(sys.argv[1:])` to a path from its env).
+`addCleanup`. A recorder script in `self.tmp` (`#!<sys.executable>` writing `json.dumps(sys.argv[1:])` to a path from its env, then staying alive so the launch reaches `select-pane`). Every open stands in `_spawn_gather`: a launch forks a detached `charter frame-gather` with `start_new_session=True`, which `tests/_planeguard.py` refuses — shown failing without the stand-in (controller ruling on resume).
 
-- `test_hostile_text_reaches_the_harness_argv_byte_for_byte` — subTest per M1 string, through `tmuxctl.run(layout.chat_window_argv(...))` into a session made with `layout.session_argv(...)`: the recorded JSON `== ["<text>"]`.
-- `test_a_first_message_at_the_limit_starts_and_one_past_it_is_the_measured_refusal` — at `FIRST_MESSAGE_MAX_BYTES` plus the identity overlay the window starts; the documented over-limit size reproduces the measured failure.
-- `test_opening_a_background_chat_leaves_the_sessions_current_window_where_it_was` — M3 through `open_in_background` with `commands_frame.SOCKET` patched to the reaped name (the `mock.patch.object(commands_frame, "SOCKET", …)` shape of tests/test_frame_tmux_integration.py:6628), the harness's `binary` patched to the recorder, and a caller window sized so `commands_frame._drawable_slots(cols, rows) == []` (assert that in `setUp`) so no panel process starts.
+- `test_opening_a_background_chat_leaves_the_sessions_current_window_where_it_was` — M3 through `open_in_background` with `commands_frame.SOCKET` patched to the reaped name (the `mock.patch.object(commands_frame, "SOCKET", …)` shape of tests/test_frame_tmux_integration.py:6628), the harness's `binary` patched to the recorder, and a caller window sized so `commands_frame._drawable_slots(cols, rows) == []` (assert that in `setUp`) so no panel process starts. The recorded argv is exactly the brief, for one carrying a trailing `;`, a blank line, quotes, `$(…)` and `#{…}` — M1 through Task 1's own path.
+- `test_a_first_message_at_charters_bound_still_fits_under_tmuxs_limit` — a first message exactly `FIRST_MESSAGE_MAX_BYTES` long starts, and arrives whole.
+
+Both pass on tmux 3.7c and at the 3.2 floor. On resume, the byte-for-byte matrix and tmux's own limit are #959's tests (`test_a_harness_argument_ending_in_a_semicolon_arrives_whole`, `test_a_launch_too_long_for_tmux_says_so`), so they are not repeated here. And because the bound is a policy, "one past it is the measured refusal" no longer describes anything tmux does.
 
 **Implementation notes**
 
