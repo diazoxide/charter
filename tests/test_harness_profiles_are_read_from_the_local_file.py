@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import cli, config, instance, profiles
+from charter import cli, config, contain, instance, profiles
 from tests import _envguard, _isolation
 from tests._isolation import PersonaIso
 
@@ -402,6 +402,61 @@ class ABrokenProfileIsRefusedAlone(_LocalFile):
         self._charter_toml(profile)
         reasons.append(self._read().refused[0].reason)
         self.assertEqual(len(set(reasons)), len(reasons), reasons)
+
+    def test_every_value_a_refusal_repeats_back_is_escaped(self):
+        """Ruling 35: a name, kind, key or variable from a file a chat can write is shown,
+        never interpreted. `harness list` prints a refusal as `derive` returned it, so each
+        sentence has to carry the escaped spelling itself. Every case puts a carriage return
+        into the one value its sentence repeats. No test held such a value until the sweep of
+        `ce7f5d8` deleted three of these `contain.readable` calls with the suite still green:
+        the name in `_profile_refusal`, the variable `SECRET_ENV` names, and the dotted name
+        `NESTED_TABLE` gives."""
+        cr, esc = chr(13), contain.readable
+        tail = 'kind = "claude"\ncommand = ["claude"]\n'
+        cases = [
+            # (the sentence, the local file, the refused entry's name, the value repeated)
+            ("ILLEGAL_NAME", _OK + '[harness."we\\rird"]\n' + tail,
+             esc(f"we{cr}ird"), f"we{cr}ird"),
+            ("NOT_A_TABLE", '[harness]\n"we\\rird" = "claude"\n' + _OK,
+             esc(f"we{cr}ird"), f"we{cr}ird"),
+            ("UNKNOWN_KIND", _OK + '[harness.k]\nkind = "cl\\raude"\ncommand = ["claude"]\n',
+             "k", f"cl{cr}aude"),
+            ("CHARTER_ENV", _OK + '[harness.c]\n' + tail + 'env = { "CHARTER_\\rX" = "v" }\n',
+             "c", f"CHARTER_{cr}X"),
+            ("SECRET_ENV", _OK + '[harness.s]\n' + tail + 'env = { "API_\\rKEY" = "v" }\n',
+             "s", f"API_{cr}KEY"),
+            ("UNKNOWN_PROFILE_KEY", _OK + '[harness.u]\n' + tail + '"envi\\rronment" = "x"\n',
+             "u", f"envi{cr}ronment"),
+            ("NESTED_TABLE", _OK + '[harness.n."a\\rb"]\n' + tail,
+             esc(f"n.a{cr}b"), f"a{cr}b"),
+            ("LOCAL_SECTION", _OK + '["for\\rge"]\nhost = "x"\n',
+             esc(f"for{cr}ge"), f"for{cr}ge"),
+        ]
+        for sentence, text, name, value in cases:
+            with self.subTest(sentence=sentence):
+                reason = self._refused("", name, read=self._local(text))
+                self.assertIn(esc(value), reason)
+                self.assertNotIn(cr, reason)
+        with self.subTest(sentence="a refused default"):
+            r = self._local('[harness]\ndefault = "no\\rpe"\n' + _OK)
+            self.assertEqual(r.default_refused, esc(f"no{cr}pe"))
+        with self.subTest(sentence="PROFILE_IN_COMMITTED"):
+            self._charter_toml('[harness."we\\rird"]\n' + tail)
+            reason = self._refused("", esc(f"we{cr}ird"), read=self._local(_OK))
+            self.assertIn(esc(f"we{cr}ird"), reason)
+            self.assertNotIn(cr, reason)
+
+    def test_a_header_with_nothing_under_it_is_refused_not_skipped(self):
+        """`[harness.work]` alone declares a profile with no kind and no command, and a broken
+        profile is refused by name like any other. Skipped, it would be neither listed nor
+        refused, and `[harness.claude]` alone would leave the built-in running where the
+        operator declared a replacement (ruling 37). Only a parent holding nothing but
+        sub-tables declares nothing (F4) — the `nested and` in `derive` is what keeps an empty
+        table from counting as one, and the sweep of `ce7f5d8` found no test for it."""
+        for name in ("work", "claude"):
+            with self.subTest(name=name):
+                reason = self._refused(f"[harness.{name}]\n", name)
+                self.assertIn('has kind ""', reason)
 
 
 class CharterTomlCarriesNoProfile(_LocalFile):
