@@ -816,7 +816,17 @@ def _line_pipelines(line: str):
     output can be re-piped (`{ cat <<X; } | bash`), so mis-reading the boundary would strip a
     body a shell runs. ``None`` means the caller strips nothing on the line, which keeps every
     body visible — the safe direction.
+
+    A **backtick** substitution returns ``None`` for the same reason `$( … )` does, and needs
+    saying separately because the lexer does not treat it as punctuation: it folds ``x=`bash``
+    into one word, so the answer that comes back is WRONG rather than absent, and a caller
+    whose fallback fires only on ``None`` never fires. `` x=`bash <<'EOF'` `` ran a handoff with
+    no prompt on that account (review round 5, ruling C). The test is the raw character,
+    quoted or not: the narrow fix, rather than adding a backtick to :data:`_GROUPING`, which
+    would change how every input is lexed.
     """
+    if "`" in line:
+        return None
     try:
         toks = _split_punctuation(_lex(line))
     except ValueError:
@@ -844,6 +854,65 @@ def _line_pipelines(line: str):
                        for c, p in zip(cmds, progs) if c)
         out.append((progs, executor, hcounts))
     return out
+
+
+def _heredoc_openers(line: str) -> list:
+    """:data:`_HEREDOC_RE`'s matches on *line*, minus every one that falls inside QUOTES.
+
+    A `<<` inside quotes opens nothing — `echo "use <<EOF for heredocs"` is a sentence, and
+    `rg -n '<<\\w' docs/` is a pattern. Counting them costs twice: the count stops agreeing with
+    the lexer's, which makes every plan on the line unknown, and the phantom becomes a heredoc
+    whose terminator never arrives, so its "body" swallows the rest of the input and the REAL
+    opener after it is never consulted (review round 5, ruling B).
+
+    Only phantoms are removed, so this can refuse strictly less and never more. A real heredoc
+    whose terminator never arrives is untouched, and still refuses.
+    """
+    return [m for m in _HEREDOC_RE.finditer(line) if not _inside_quotes(line, m.start())]
+
+
+def _inside_quotes(line: str, at: int) -> bool:
+    """Whether offset *at* sits inside a single- or double-quoted region of *line*.
+
+    A backslash escapes the next character outside single quotes, where bash takes it
+    literally. Reading the source this way rather than asking the lexer is deliberate: this
+    runs on lines the lexer could not take apart, which is why the phantoms matter at all.
+
+    **A substitution inside double quotes is not quoted.** `"$(cat <<'EOF')"` runs a command,
+    and that command's `<<` is a real opener — this repository's own commit messages are
+    written `git commit -m "$(cat <<'EOF' … EOF)"`, and treating their heredoc as a phantom
+    read the message as commands and refused it as a misspelled handoff. So `$(` and a
+    backtick open a nested context in which quoting starts again from nothing.
+    """
+    stack: list[str] = []                      # "'", '"', or "(" for a substitution
+    i = 0
+    while i < at and i < len(line):
+        c = line[i]
+        top = stack[-1] if stack else ""
+        if top != "'" and c == "\\":
+            i += 2
+            continue
+        if top == "'":
+            if c == "'":
+                stack.pop()
+        elif c == "$" and line[i:i + 2] == "$(":
+            stack.append("(")
+            i += 2
+            continue
+        elif c == "`":
+            if top == "`":
+                stack.pop()
+            else:
+                stack.append("`")
+        elif c == ")" and top == "(":
+            stack.pop()
+        elif top == '"':
+            if c == '"':
+                stack.pop()
+        elif c in "'\"":
+            stack.append(c)
+        i += 1
+    return bool(stack) and stack[-1] in ("'", '"')
 
 
 #: Where a command that opens a heredoc can START inside a line the whole-line pass could not
@@ -882,22 +951,53 @@ def _heredoc_could_run(line: str, start: int) -> bool:
     the fallback is per heredoc, and asks the only question that decides it: does anything RUN
     this body? An executor anywhere on the line answers yes, because a body a reader opens is
     run all the same when a shell is downstream of it (`cat <<'A' | bash`), and a line this pass
-    could not split into pipelines is one where "downstream" cannot be located. Otherwise the
-    opener decides: a brief is data, a reader's body is data if it is QUOTED (an unquoted one
-    expands, and a `$( … )` in it RUNS — the same clause :func:`_heredoc_strip_plan` applies),
-    and anything else could run.
+    could not split into pipelines is one where "downstream" cannot be located. So the opener's
+    OWN program decides, and only three answers are possible:
+
+    1. a **shell or interpreter** — including one reached through `env`/`nohup` (:func:`_split_env`
+       names it) and `ssh`, where the remote shell runs the body — **searches** the body;
+    2. **any other program that can be named** — `git`, `tee`, `mail`, `wc`, every
+       :data:`_READERS` member — hands the body on as DATA. `git commit -F -` is neither a
+       reader nor a shell, and treating that gap as "could run" refused this branch's own commit
+       messages inside `( … )` (review round 5, ruling A);
+    3. a program that **cannot be named** — a variable, an expansion — falls back to
+       :func:`_line_runs_text`, "is there an executor anywhere on this line". That is the
+       fail-safe, and it is the ONLY place the whole-line question survives.
+
+    An UNQUOTED body is searched whatever opened it: it expands before the program sees it, so a
+    `$( … )` in it runs — the same clause :func:`_heredoc_strip_plan` applies.
     """
     words = _heredoc_opener_words(line, start)
-    if not words:
-        return True
     if words[:2] == ["charter", "handoff"]:
         return False                           # a brief: charter's stdin, which nobody runs
-    if os.path.basename(_split_env(words)[0]).lower() not in _READERS:
+    prog = _opener_program(words)
+    if prog is None:
+        return _line_runs_text(line)
+    if _is_executor(prog) or prog in _REMOTE_SHELLS:
         return True
     header = _heredoc_header(line, start)
-    if header is None or header[1]:
-        return True                            # unquoted: a `$( … )` in the body RUNS
-    return _line_runs_text(line)
+    return header is None or header[1]         # unquoted: a `$( … )` in the body RUNS
+
+
+#: Programs that run their input on ANOTHER machine, so the body is a script even though the
+#: local process is not a shell. Kept apart from :data:`_EXECUTORS`, which the leak guard also
+#: reads: what `ssh` does with a body is a question about the handoff gate, not about a secret
+#: leaving this host.
+_REMOTE_SHELLS = frozenset({"ssh"})
+
+
+def _opener_program(words: list[str]) -> str | None:
+    """The program *words* names, lowercased and without its directory — or ``None`` when the
+    source does not name one at all.
+
+    ``None`` is the honest answer for `"$PROG" <<'EOF'` or `${RUNNER} <<'EOF'`: the program is
+    decided at runtime, and guessing either way would be a guess. It is what sends
+    :func:`_heredoc_could_run` to its fail-safe.
+    """
+    if not words:
+        return None
+    prog = os.path.basename(_split_env(words)[0]).lower()
+    return prog if re.fullmatch(r"[a-z0-9_.+-]+", prog) else None
 
 
 def _line_runs_text(line: str) -> bool:
@@ -936,7 +1036,7 @@ def _brief_heredocs(line: str) -> set[int]:
     shows the guard more text. The count bail is :func:`_heredoc_strip_plan`'s, for its reason: an
     index space the lexer and the regex disagree about is one no caller can act on.
     """
-    headers = list(_HEREDOC_RE.finditer(line))
+    headers = _heredoc_openers(line)
     if not headers:
         return set()
     try:
@@ -998,7 +1098,7 @@ def _heredoc_strip_plan(line: str):
     the COUNT for it — they must, or every plan on that line is unknown — but `quoted` stays
     keyed on the quote group, so its body is carried and never stripped (review round 4).
     """
-    headers = list(_HEREDOC_RE.finditer(line))
+    headers = _heredoc_openers(line)
     if not headers:
         return []
     pipelines = _line_pipelines(line)
@@ -1146,7 +1246,7 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
             # judged on its own (:func:`_heredoc_could_run`) rather than all of them sharing
             # one default — the defect in review round 4, finding 1.
             unknown = _heredoc_strip_plan(folded) is None
-            for h, m in enumerate(_HEREDOC_RE.finditer(folded)):
+            for h, m in enumerate(_heredoc_openers(folded)):
                 header = _heredoc_header(folded, m.start())
                 idx = body_count
                 body_count += 1

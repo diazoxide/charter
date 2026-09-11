@@ -105,8 +105,20 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
   a quoted `handoff` or those expansions.
 - **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`,
   `dash` or `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body
-  (`bash <<'EOF'`). The refusal says to run it directly. A heredoc body counts as a shell's
-  whenever something runs it, so the body of a `charter handoff` heredoc — a brief — never does.
+  (`bash <<'EOF'`). The refusal says to run it directly.
+
+  **A heredoc body is searched when its OWN opener is a shell or an interpreter** — `bash`,
+  `sh`, `python3`, `perl`, one of those behind `env` or `nohup`, or `ssh`, where the remote
+  shell runs it — **or when charter cannot tell what the opener is**, as with `${RUNNER} <<'EOF'`,
+  where the program is decided at runtime. Every other opener hands its body on without running
+  it, so the body is data: `git commit -F -`, `tee`, `mail`, `wc`, and every reader such as
+  `cat`. A brief — the body of a `charter handoff` heredoc — is data for the same reason.
+  Each heredoc is judged by the program that opened *it*, so in
+  `( cat <<'A' > notes.md; bash <<'B' )` the first body is data and the second is searched.
+
+  A `<<` inside quotes opens nothing: `echo "use <<EOF for heredocs"` is a sentence and
+  `rg '<<\w' docs/` is a pattern. A `<<` inside `$( … )` *is* an opener even when quotes
+  surround it, which is how `git commit -m "$(cat <<'EOF' … EOF)"` is written.
 - **with a stdin other than one quoted heredoc** on the handoff's own segment — so the prompt
   shows exactly the text the new chat is sent.
 

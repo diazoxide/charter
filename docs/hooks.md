@@ -375,6 +375,16 @@ rule while one who reads a bare refusal files an issue.
   | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'`, `bash -c '…'` or a `bash <<'EOF'` body ran with no prompt. The refusal says to run it directly. Which heredoc bodies a shell runs is [#974](https://github.com/diazoxide/charter/pull/974)'s answer, the same one the leak guard uses, so a brief is never one of them. |
   | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before charter reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
 
+  **Which heredoc bodies A7 searches.** A body is searched when its OWN opener is a shell or an
+  interpreter (`bash`, `sh`, `python3`, `perl`, one of those behind `env`/`nohup`, or `ssh`,
+  whose remote shell runs it), or when charter cannot name the opener at all (`${RUNNER} <<'EOF'`
+  — decided at runtime), in which case it also asks whether anything on the line runs text. Any
+  other opener hands its body on without running it, so the body is data: `git commit -F -`,
+  `tee`, `mail`, `wc`, every reader. Each heredoc is judged by the program that opened *it*, so
+  `( cat <<'A' > notes.md; bash <<'B' )` searches only the second body. A `<<` inside quotes is
+  not an opener at all, while a `<<` inside `$( … )` is one even inside quotes — the spelling
+  `git commit -m "$(cat <<'EOF' … EOF)"` depends on that.
+
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
   segment is stdin charter sends on, never a command the shell runs, so it is skipped the way a
   reader's is. A brief that names `.charter/vaults/…` in prose, holds one apostrophe, or

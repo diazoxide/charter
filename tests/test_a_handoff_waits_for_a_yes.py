@@ -649,6 +649,82 @@ class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
             "echo '<<X' && charter handoff beta <<'BRIEF'\n"
             "Ask the next chat to run charter handoff when it is done.\nBRIEF")))
 
+    def test_each_heredoc_is_judged_by_its_own_opener(self):
+        """Review round 5, ruling A. ONE command, two heredocs, one subshell: the only thing
+        that differs between these two is which body holds the handoff. `cat`'s body is written
+        to a file and `bash`'s is run, so the pair can only come out right if each heredoc is
+        judged by the program that opened IT — not by whether the line mentions a shell
+        somewhere. Judging the line as a whole refused both."""
+        pair = "( cat <<'A' > notes.md; bash <<'B' )\n{}\n{}\nB"
+        with self.subTest(body="cat's, which is written to a file"):
+            self.assertIsNone(_reason(self._decide(
+                pair.format(HEREDOC + "\nA", "echo hi"))))
+        with self.subTest(body="bash's, which is run"):
+            self.assertIn("a shell runs", _reason(self._decide(
+                pair.format("notes\nA", HEREDOC))) or "")
+
+    def test_an_opener_that_runs_no_body_keeps_its_body_out_of_the_search(self):
+        """Ruling A again, on the openers that are neither a reader nor a shell. `git`, `tee`
+        and `mail` hand a body on — to a commit, a file, a message — and none of them runs it.
+        That gap is what refused this branch's own commit messages inside `( … )`."""
+        for name, cmd in (
+            ("git commit -F -",
+             "( git commit -F - <<'MSG'\nDocs\n\ncharter handoff beta now asks first.\nMSG\n)"),
+            ("tee", "( tee notes.md <<'EOF'\ncharter handoff beta asks first.\nEOF\n)"),
+            ("mail", "( mail -s x you@e <<'EOF'\ncharter handoff beta asks first.\nEOF\n)"),
+        ):
+            with self.subTest(opener=name):
+                self.assertIsNone(_reason(self._decide(cmd)))
+
+    def test_a_heredoc_operator_inside_quotes_opens_nothing(self):
+        """Ruling B. `<<` inside quotes is a sentence or a pattern, not an opener. Counting it
+        cost twice: the count stopped agreeing with the lexer's, and the phantom became a
+        heredoc whose terminator never arrives — so its body swallowed the rest of the input
+        and the REAL opener after it was never consulted."""
+        for name, cmd in (
+            ("a tip in double quotes",
+             'echo "use <<EOF for heredocs" && cat <<\'EOF\' > notes.md\n'
+             "charter handoff beta asks first.\nEOF"),
+            ("a regex in single quotes",
+             "rg -n '<<\\w' docs/ && cat <<'EOF' > notes.md\n"
+             "charter handoff beta asks first.\nEOF"),
+        ):
+            with self.subTest(phantom=name):
+                self.assertIsNone(_reason(self._decide(cmd)))
+
+    def test_a_real_heredoc_that_never_terminates_still_refuses(self):
+        """The other direction of ruling B, which the fix must not weaken: this `<<'EOF'` is
+        real, bash reads it to the end of the input, and the handoff in it is a handoff."""
+        self.assertIn("a shell runs", _reason(self._decide(
+            f"echo '<<X' && bash <<'EOF'\n{HEREDOC}")) or "")
+
+    def test_a_heredoc_inside_a_substitution_in_double_quotes_is_a_real_opener(self):
+        """The limit of ruling B, and the shape it nearly broke: `"$(cat <<'EOF')"` runs a
+        command, so its `<<` opens a real heredoc even though a `"` is open around it. This is
+        how this repository writes commit messages, and calling that heredoc a phantom read the
+        message as commands and refused it as a misspelled handoff."""
+        self.assertIsNone(_reason(self._decide(
+            'git commit -m "$(cat <<\'EOF\'\nDocs\n\ncharter handoff beta now asks first.\nEOF\n)"')))
+
+    def test_a_backtick_substitution_is_not_a_line_the_lexer_can_be_trusted_on(self):
+        """Ruling C. `$( bash <<'EOF' )` was pinned as shape 6; this is the same construct in
+        its other spelling. The lexer has no backtick in `_GROUPING`, so it folds ``x=`bash``
+        into one word and returns a plan that is WRONG rather than absent — and a fallback that
+        fires only on "no plan" never fires. All three spellings ran with no prompt."""
+        for name, cmd in (("with an assignment", f"x=`bash <<'EOF'`\n{HEREDOC}\nEOF"),
+                          ("sh, not bash", f"x=`sh <<'EOF'`\n{HEREDOC}\nEOF"),
+                          ("with no assignment", f"`bash <<'EOF'`\n{HEREDOC}\nEOF")):
+            with self.subTest(spelling=name):
+                self.assertIn("a shell runs", _reason(self._decide(cmd)) or "")
+
+    def test_an_opener_that_cannot_be_named_falls_back_to_the_whole_line(self):
+        """Ruling D, and the only surviving use of `_line_runs_text`. `${RUNNER}` is decided at
+        runtime, so no program can be named for this heredoc; the fail-safe then asks whether
+        anything on the line runs text at all, and `bash` downstream says yes. Stub
+        `_line_runs_text` to `False`, or empty the executor list, and this goes green."""
+        self.assertIn("a shell runs", _reason(self._decide(
+            f"( ${{RUNNER}} <<'EOF' | bash )\n{HEREDOC}\nEOF")) or "")
+
 
 class TheQuotingJudgementIsTheSubstitutionGuards(PlaneIso):
     """"Quoted" means what `_heredoc_header` says it means — any quoting anywhere in the

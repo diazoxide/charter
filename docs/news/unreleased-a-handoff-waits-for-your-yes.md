@@ -33,6 +33,13 @@ Inside a control plane, charter's Bash hook refuses a `charter handoff`:
   `charter $'handoff'` or a handoff inside `bash -c` or a `bash <<'EOF'` body;
 - fed anything but one quoted heredoc on its own segment, so the prompt shows the exact brief.
 
+A heredoc body is searched when its own opener is a shell or an interpreter (`bash <<'EOF'`,
+`python3 <<'PY'`, `ssh`), or when charter cannot name the opener. Every other opener hands its
+body on without running it, so `git commit -F -`, `tee`, `mail` and every reader keep their
+bodies as data — each heredoc judged by the program that opened it, so
+`( cat <<'A' > notes.md; bash <<'B' )` searches only `bash`'s. A `<<` inside quotes opens
+nothing; a `<<` inside `$( … )` opens a heredoc even when quotes surround it.
+
 A brief is no longer refused as a read when it names a vault path in prose, when it holds
 an apostrophe, or when one of its lines opens with a reader (`cat .charter/vaults/dev.json
 would print it, so never run that.`) — the briefs a chat writes to warn the next chat off a
