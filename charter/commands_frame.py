@@ -146,6 +146,7 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import NamedTuple
 
 from . import config, contain, harness, inflight, instance, tui, util, workspace
 from .frame import (actions as frame_actions, builtin_actions, chats, choose, component,
@@ -4849,6 +4850,47 @@ def _reopening(args) -> "Reopening | None":
     return got if isinstance(got, Reopening) else None
 
 
+class Opening:
+    """One chat on its way into a workspace nobody is attached to, and the id it came up as.
+
+    **`Reopening`'s seam, for a chat with no record to restore** (chat-handoff plan, Task
+    1). It rides the `args` namespace :func:`open_in_background` builds and is read with
+    `getattr`, for `Reopening`'s reasons: no CLI surface, and every other caller of
+    `cmd_launch` constructs an `args` without it. It is a second seam rather than a
+    `Reopening` holding an invented record, because a reopen also moves a captured
+    transcript and restores a recorded persona (:func:`_restore_recorded_chat`), and a new
+    chat has neither.
+
+    **Mutable, for `Reopening.fid`'s reason**: `cmd_launch` allocates the id and the driver
+    needs it back. :attr:`fid` stays ``""`` for a launch that never got as far as claiming
+    one, which is what lets "no chat came back" be reported rather than inferred.
+    """
+
+    def __init__(self, first_message: str, persona: str = "") -> None:
+        #: The whole first message. It reaches the harness through the launch's `rest`
+        #: (`harness.base.first_message_argv`); it is carried here so the driver's record of
+        #: what it opened says what the chat was started on.
+        self.first_message = first_message
+        #: The persona to point the new chat at before its harness starts, or ``""`` for
+        #: whichever one a new chat in that workspace gets when nothing is pinned.
+        self.persona = persona
+        #: The chat id the launcher allocated, or ``""`` if it never got one.
+        self.fid = ""
+
+
+def _opening(args) -> "Opening | None":
+    """The background open this launch is, or ``None`` for any other launch.
+
+    Two things in :func:`cmd_launch` turn on it: the persona pointer written under the new
+    id before the harness starts, and the `select-window`/`_drop_panels` pair, which an
+    opening skips — the chat it builds is not the one anybody is looking at, and the chat
+    the operator IS looking at keeps its panels. The rest already follows from
+    `attach=False`: no non-tty `bypass`, no recorder, no attach and no detach sentence.
+    """
+    got = getattr(args, "opening", None)
+    return got if isinstance(got, Opening) else None
+
+
 def _wants_attach(args) -> bool:
     """Whether this launch should become the operator's terminal.
 
@@ -5373,6 +5415,16 @@ def _launch(args) -> int:
     if restoring is not None:
         restoring.fid = fid
         _restore_recorded_chat(restoring.chat, fid)
+    # **And a background open learns its id here, for the same two reasons**: the id did not
+    # exist a line earlier, and a persona pointer written after the harness starts is read
+    # one turn late. The session's pointer and nothing else (`terminal_id=""`, the call
+    # `_restore_recorded_chat` makes), so no terminal the operator is typing in is repointed.
+    opening = _opening(args)
+    if opening is not None:
+        opening.fid = fid
+        if opening.persona:
+            from . import persona as persona_mod
+            persona_mod.set_active(opening.persona, session_id=fid, terminal_id="")
     state.clear_respawn(fid)
     state.bump(fid)
     # And the record this process keeps now knows which chat it is standing in (#845) —
@@ -5725,7 +5777,10 @@ def _launch(args) -> int:
             # window it was looking at, because nobody is looking yet — the one
             # `select-window` a reopen wants is the one `cmd_reopen` issues at the end, at
             # the chat the manifest says was active.
-            if _reopening(args) is None:
+            #
+            # **Nor does a background open** (`_opening`): the chat it builds is not the one
+            # anybody is looking at, and the chat the operator IS looking at keeps its panels.
+            if _reopening(args) is None and _opening(args) is None:
                 leaving = _chat_being_left(SOCKET, beside=fid)
                 selected = tmuxctl.run(
                     "selecting the chat",
@@ -5750,6 +5805,11 @@ def _launch(args) -> int:
             # `layout.panel_argvs`'s own split ordering, not something this diff
             # introduced, but leaving the frame in a state the operator can actually type
             # into is this launcher's job.
+            #
+            # **A background open runs it too, and no window moves.** Measured through a
+            # whole `open_in_background` on tmux 3.7c and at the 3.2 floor, this `select-pane`
+            # included: the target session's current window is the same before and after
+            # (`tests/test_a_background_chat_really_starts_on_its_brief.py`).
             tmuxctl.run("focusing the harness pane",
                         tmuxctl.server_argv(SOCKET, "select-pane", "-t", harness_pane),
                         env=env)
@@ -10517,3 +10577,195 @@ def cmd_new_chat(args) -> int:
         # command exists to answer, arriving through the door built to answer it.
         _say_on_screen(fid, f"could not open another chat — the launcher returned {rc}")
     return 0
+
+
+#: The most bytes a first message may carry into :func:`open_in_background`, counted the way
+#: `exec` is handed them.
+#:
+#: **Charter's own bound: a policy, not a prediction of tmux's limit** (ADR 0009). tmux
+#: refuses a command message past 16,364 bytes — measured on 3.7c and at the 3.2 floor,
+#: `tmuxctl.MESSAGE_LIMIT` (#959) — and the message that starts a chat carries its names, its
+#: directory and the identity overlay beside the first message. 12,288 leaves about 4 KiB for
+#: those; `tests/test_a_background_chat_really_starts_on_its_brief.py` starts a chat on a
+#: first message exactly this long through a real tmux. Anything tmux still refuses is
+#: reported in tmux's own words by `_say_why_the_harness_did_not_start`. The cost, stated: a
+#: brief between 12,288 and about 15,800 bytes is refused here although tmux would take it.
+FIRST_MESSAGE_MAX_BYTES = 12288
+
+#: What :func:`background_refusal` says. Every one is said before anything starts, so every
+#: one says the rule worked and names the fix in the same breath (CONTEXT.md, *A refusal is
+#: the rule working*).
+EMPTY_FIRST_MESSAGE = ("cannot open a chat with an empty first message — a chat nobody has "
+                       "told anything sits at its prompt, and one opened in the background "
+                       "is then silence by construction. Nothing was opened.")
+FLAG_FIRST_MESSAGE = ("cannot open a chat whose first message starts with `-` — the harness "
+                      "would read it as one of its own flags, not as a message. Nothing was "
+                      "opened; start the message with a word.")
+WORD_FIRST_MESSAGE = ("cannot open a chat whose first message is the single word '{word}' — "
+                      "the harness may read it as one of its own subcommands (`codex login`). "
+                      "Nothing was opened; say it as a sentence.")
+NUL_FIRST_MESSAGE = ("cannot open a chat whose first message contains a NUL byte — a "
+                     "command-line argument cannot carry one. Nothing was opened.")
+LONG_FIRST_MESSAGE = ("cannot open a chat with a {n}-byte first message — charter refuses one "
+                      "past {max} bytes, its own bound, set under tmux's 16,364-byte command "
+                      "limit so the chat's names, directory and identity still fit beside it. "
+                      "Nothing was opened; shorten it, and name long material by its path "
+                      "instead of pasting it.")
+NO_BACKGROUND_CHAT_HERE = ("this chat is a window in a tmux you already had, where charter's "
+                           "launcher stays awake for the life of the harness it starts — so "
+                           "it cannot open a chat in the background from here. Nothing was "
+                           "opened.")
+UNMEASURED_FIRST_MESSAGE = ("cannot open a chat in '{ws}': charter has not measured how "
+                            "{harness} takes a first message, so it will not guess at an "
+                            "argument. Nothing was opened.")
+NOT_THIS_PLANES_SESSION = ("cannot open a chat in '{ws}': a session of that name is running on "
+                           "this machine and this plane cannot prove it is its own — it is "
+                           "probably another plane's. Nothing was opened; attach to it by hand "
+                           "if it is yours: tmux -L {socket} attach -t {prefix}")
+
+
+class Opened(NamedTuple):
+    """What :func:`open_in_background` did: the chat it opened, or why it opened none."""
+
+    #: Whether a chat exists now that did not before.
+    ok: bool
+    #: The new chat's id, or ``""`` when none was opened.
+    chat: str
+    #: The refusal or the failure as one sentence, or ``""`` when *ok*.
+    message: str
+
+
+def background_refusal(ws: str, *, caller: str, first_message: str) -> str:
+    """Every reason :func:`open_in_background` would refuse, or ``""`` when it may open.
+
+    **Asked before anything starts, and it writes nothing**, so `charter handoff` (Task 2)
+    can ask it before any write of its own. :func:`open_in_background` asks it again because
+    the plane may have moved in between — a race answered by refusing late, which is still a
+    refusal and never a half-open chat.
+
+    Cheapest first, and the one tmux question last:
+
+    1. an empty first message: a chat told nothing sits at its prompt, silence by
+       construction;
+    2. one starting with `-`, which the harness would read as its own flag;
+    3. a single word, which a CLI with subcommands may match against them (`codex login`).
+       A handoff's stamp makes a real first message several words, so only a direct caller
+       of this seam gets here;
+    4. a NUL byte, which no command-line argument can carry;
+    5. more than :data:`FIRST_MESSAGE_MAX_BYTES`, counted with `os.fsencode` — the bytes
+       `exec` is handed. A byte that is not UTF-8 reaches a `str` as a surrogate escape,
+       and a strict `str.encode` raises on it;
+    6. a caller that is a window in the operator's own tmux, where the launcher stays awake
+       for the life of the harness (`_launch_in_operator_tmux`) and a Bash tool call would
+       hang on it;
+    7. no harness the caller's chat records and no `[harness] default` (:data:`NO_HARNESS`);
+    8. a harness charter has not measured the first message of;
+    9. a session of *ws*'s name that this plane cannot prove is its own —
+       :func:`_open_workspace`'s guard and :data:`NO_SESSION_HERE` said once. A session this
+       plane can prove is its own is joined, and a name no session holds is started.
+    """
+    # Split once, on whitespace: no words is an empty message, and one word is a single word.
+    # `split()` and never `strip()`, which the deletion sweep settled: `not text.strip()` and
+    # `not text.lstrip()` answer alike for every string, so the strip was a line nothing
+    # could pin, and the word it named could keep a trailing newline.
+    words = first_message.split()
+    if not words:
+        return EMPTY_FIRST_MESSAGE
+    if first_message.startswith("-"):
+        return FLAG_FIRST_MESSAGE
+    if len(words) == 1:
+        return WORD_FIRST_MESSAGE.format(word=contain.one_line(words[0]))
+    if "\x00" in first_message:
+        return NUL_FIRST_MESSAGE
+    size = len(os.fsencode(first_message))
+    if size > FIRST_MESSAGE_MAX_BYTES:
+        return LONG_FIRST_MESSAGE.format(n=size, max=FIRST_MESSAGE_MAX_BYTES)
+    socket = state.frame_server(caller) or SOCKET
+    if tmuxctl.is_operator_socket(socket, own=SOCKET):
+        return NO_BACKGROUND_CHAT_HERE
+    h = _same_harness_as(caller)
+    if h is None:
+        return f"cannot open a chat in '{ws}': {NO_HARNESS}"
+    if h.first_message_argv("x y") is None:
+        return UNMEASURED_FIRST_MESSAGE.format(ws=ws, harness=h.name)
+    prefix = state.workspace_prefix(ws)
+    if _plane_session(socket, ws=ws) is None and prefix in _live_sessions(socket):
+        return NOT_THIS_PLANES_SESSION.format(ws=ws, socket=socket, prefix=prefix)
+    return ""
+
+
+def open_in_background(ws: str, *, caller: str, first_message: str,
+                       persona: str = "") -> Opened:
+    """Open a chat in workspace *ws*, started on *first_message*, and move nobody.
+
+    **The seam `charter handoff` drives** (chat-handoff plan, Task 1): `cmd_launch` run for
+    the caller, on :func:`_open_workspace`'s and :func:`cmd_new_chat`'s precedent.
+    `attach=False` means no client moves and nothing blocks; the :class:`Opening` means the
+    new window is not selected and the chat the operator is on keeps its panels. The new
+    window still gets its panel processes before anyone looks, as every chat a reopen
+    builds does. The harness is the caller's own (:func:`_same_harness_as`), started on its
+    own spelling of a first message (`harness.base.first_message_argv`).
+
+    **Where, and how big.** *ws*'s own directory (:func:`_launch_root`), laid out for the
+    window *caller* is on: its own pane, else the pane :func:`_plane_session` proves is live
+    in *ws*, else nothing — which `_launch_size` reads as "measure your own terminal".
+    `cmd_new_chat`'s pair of readings, and its reason for never aiming an empty `-t`.
+
+    **The calling chat's pins stay behind.** `_frame_env` is ``dict(os.environ, …)`` and
+    `_frame_identity_env` carries `$CHARTER_WORKSPACE` and `$CHARTER_PERSONA` onto the new
+    window, so a pin the CALLER carries would become the new chat's: `state.own_workspace`'s
+    first rung would file it under the caller's workspace, which #936's launch-recorded lock
+    holds only for an unpinned launcher, and `switch.to_persona` would refuse to move it. So
+    both are emptied for the length of the launch and put back exactly, "was absent"
+    included. This is the one caller whose environment is another chat's —
+    `_open_workspace` and `cmd_new_chat` run as children of charter's own server — which is
+    why `_frame_env` itself is not changed.
+
+    **Success is a chat id with a harness pane, never a return code**: a launcher that
+    answered 0 and handed back no id has proved nothing exists.
+    """
+    refusal = background_refusal(ws, caller=caller, first_message=first_message)
+    if refusal:
+        return Opened(False, "", refusal)
+    h = _same_harness_as(caller)
+    socket = state.frame_server(caller) or SOCKET
+    pane = chats.pane_of(caller)
+    if pane is None:
+        seat = _plane_session(socket, ws=ws)
+        pane = chats.pane_of(seat[1]) if seat else None
+    size = _window_size(socket, pane) if pane else None
+    here_dir = os.getcwd()
+    try:
+        os.chdir(_launch_root(ws))
+    except OSError:
+        return Opened(False, "", f"cannot open a chat in '{ws}': charter cannot enter its "
+                                 "directory. Nothing was opened.")
+    from types import SimpleNamespace
+    opening = Opening(first_message, persona)
+    pins = {name: os.environ.get(name) for name in ("CHARTER_WORKSPACE", "CHARTER_PERSONA")}
+    try:
+        for name in pins:
+            os.environ[name] = ""
+        # Every field named, `_reopen_args`' rule. A non-empty `rest` also keeps §4k's
+        # open-or-focus shortcut out, which could never answer "run this".
+        rc = cmd_launch(SimpleNamespace(
+            harness=h.cli_name, rest=h.first_message_argv(first_message), no_frame=False,
+            workspace=ws, pick=False, attach=False, size=size, opening=opening))
+    finally:
+        for name, was in pins.items():
+            if was is None:
+                os.environ.pop(name)
+            else:
+                os.environ[name] = was
+        try:
+            os.chdir(here_dir)
+        except OSError:
+            pass
+    # Both halves are needed, and nothing more. An id the launcher never claimed is `""`,
+    # whose harness pane is `None` (`state.frame_dir("")` refuses), so the pane record alone
+    # stands for "a chat was started". The return code is still asked: a harness that died in
+    # its first moments leaves that record behind while `_launch` returns its exit code.
+    if rc == 0 and state.harness_pane(opening.fid) is not None:
+        return Opened(True, opening.fid, "")
+    return Opened(False, "", f"could not open a chat in '{ws}' — the launcher returned {rc} "
+                             "and no chat came back")

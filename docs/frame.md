@@ -642,6 +642,55 @@ one — so on a machine running several frames a refusal about one could be draw
 another. A panel reads its own frame's state, and every client attached to that frame sees
 it.
 
+### A chat opened for you in the background
+
+**A chat that hands work to a new chat has to start that chat without taking your screen.**
+`charter handoff` — the next piece of the chat-handoff plan, not shipped yet — opens a chat in
+a workspace you name and starts it on a first message you approved. The opening underneath
+it exists now, and it is built so nothing you are looking at changes:
+
+- **No client moves.** The chat is a new window in the target workspace's session, created
+  detached. It is not selected, nothing attaches, and the chat you are on keeps its panels.
+  Measured with a real session on tmux 3.7c and at the 3.2 floor: the session's current
+  window is the same one before and after the open. The new window still gets its panels
+  before anyone looks at it, as every chat a reopen builds does.
+- **The first message is the harness's own first prompt**, passed as one command-line
+  argument in that harness's spelling, and never typed into its pane:
+
+      claude "<message>"              Claude Code 2.1.268: claude [options] [command] [prompt]
+      codex "<message>"               codex-cli 0.147.0:   codex [OPTIONS] [PROMPT]
+      opencode --prompt "<message>"   opencode 1.18.23:    its positional is [project]
+
+  A harness charter has not measured is refused rather than handed a guess. The message
+  arrives whole — blank lines, quotes, `$(…)`, `#{…}` and a trailing `;` included — measured
+  through a real tmux on both versions. **Because it is an argument, any process on this
+  machine that can list processes can read it while the harness starts**, so a first message
+  is never the place for a secret.
+- **At most 12,288 bytes, and that bound is charter's own, not tmux's.** tmux refuses a
+  command past 16,364 bytes, and the command that starts a chat carries the chat's names,
+  its directory and its identity beside the message. A first message exactly 12,288 bytes
+  long starts, on 3.7c and at the 3.2 floor. The cost: one between 12,288 and about 15,800
+  bytes is refused although tmux would take it — name long material by its path instead.
+  Anything tmux still refuses is reported in tmux's own words (*What `charter frame --
+  <cmd>` accepts*, below).
+- **The new chat does not inherit the pins of the chat that opened it.** `$CHARTER_WORKSPACE`
+  and `$CHARTER_PERSONA` are emptied for the length of the launch, so a pinned chat cannot
+  file the new one under its own workspace or persona. The new chat gets the persona a new
+  chat in that workspace gets when nothing is pinned, unless one is named for it.
+
+Before starting anything, it refuses a first message that is empty, starts with `-`, is a
+single word (which a harness may read as a subcommand), carries a NUL byte, or is past the
+bound. It also refuses from a chat that is a window in a tmux you already had, where
+charter's launcher stays awake for the harness's whole life; from a chat that records no
+harness charter can launch; and into a workspace whose session name is running on this
+machine but cannot be proved this plane's. Each refusal says which rule it was, and that
+nothing was opened.
+
+Whether the new chat is locked to its workspace (#936) depends on the harness keeping the
+chat id charter starts it with. Two harnesses are named as not doing that yet: opencode's
+plugin overwrites `$CHARTER_SESSION_ID` (#946), and Codex gets no session id outside a frame
+(#954).
+
 ### The two bars, and why they are off unless you ask
 
 `chats` and `workspaces` are tab strips: the chat bar names every chat in this workspace

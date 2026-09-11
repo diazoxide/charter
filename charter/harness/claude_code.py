@@ -132,6 +132,17 @@ class ClaudeCodeHarness(Harness):
     cli_name = "claude"
     binary = "claude"
 
+    def first_message_argv(self, text: str) -> list[str] | None:
+        """`claude "<text>"`: the positional prompt starts the interactive session on it.
+
+        Measured with `claude --help` on Claude Code 2.1.268: `Usage: claude [options]
+        [command] [prompt]`, and it "starts an interactive session by default, use
+        -p/--print for non-interactive output" — so this is the session's first message,
+        not print mode. The `[command]` ahead of the prompt is why a single-word first
+        message is refused before it gets here (`commands_frame.WORD_FIRST_MESSAGE`).
+        """
+        return [text]
+
     def detect(self) -> bool:
         """``$CLAUDE_PLUGIN_ROOT`` is set for the plugin's own processes.
 

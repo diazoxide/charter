@@ -781,6 +781,14 @@ class OpenCodeHarness(Harness):
     cli_name = "opencode"
     binary = "opencode"
 
+    def first_message_argv(self, text: str) -> list[str] | None:
+        """`opencode --prompt "<text>"`, because opencode's positional is not a prompt.
+
+        Measured with `opencode --help` on opencode 1.18.23: the positional is `[project]`
+        ("start opencode tui"), and the prompt is `--prompt` ("prompt to use").
+        """
+        return ["--prompt", text]
+
     def stale_wiring(self) -> str:
         """What the installed plugin REALM is, when charter cannot vouch for all of it.
 
