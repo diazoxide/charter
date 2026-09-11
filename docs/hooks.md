@@ -81,8 +81,18 @@ rule while one who reads a bare refusal files an issue.
   argument and not a boundary (`cat \) <vault>` reads the vault), and the `&` inside the
   redirection `>&` is not the control operator `&` (`cat 2>&1 <vault>` is one command);
   while a newline *is* a boundary exactly as `;` is — every line of a multi-line command is
-  its own command, `bash <<'EOF'` bodies included — and `#` starts a comment only where a
-  word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
+  its own command. A **heredoc body** reaches the guard as those commands whenever something
+  runs it: a shell that opens the `<<` (`bash <<'EOF'`), or one anywhere in the opener's
+  pipeline (`cat x && bash <<'EOF'`, `cat <<'EOF' | bash`), so a vault read on any of its
+  lines is denied wherever the reader on the line stands — it is the command that opens the
+  `<<`, and its pipeline, that decide, not the first word. **The pipeline is followed across
+  lines**: a trailing `|` continues onto the command after the heredoc body (`cat <<'EOF' |`
+  … `EOF` … `bash`), and a backslash-newline splices before it, so the downstream shell is
+  seen either way. A **quoted** heredoc fed only to a
+  reader (`cat <<'EOF'`) is stdin data: its body is dropped, so a document naming these paths
+  is not refused as a read of them ([#258](https://github.com/diazoxide/charter/issues/258)).
+  An *unquoted* body stays visible instead, because the shell expands it before the reader
+  sees it and a `$( … )` in it would run. And `#` starts a comment only where a word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
   plain arguments anywhere but command position and `cat { <vault>` is one command that
   reads the vault. Beyond that: an unparseable quote does not hide the commands after it,
   an **unquoted** `$( … )` substitution is read both as the command it runs and as the word
