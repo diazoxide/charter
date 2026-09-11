@@ -1,9 +1,11 @@
 # Harness profiles — a chat starts on the harness you pick, launched the way you launch it
 
-**Status:** agreed 2026-09-11, in a grill between the operator and the `steward` persona.
+**Status:** agreed 2026-09-11, in a grill between the operator and the `steward` persona;
+amended the same day with the controller's rulings on the implementation plan
+(`docs/superpowers/plans/2026-09-11-harness-profiles.md`, *Controller rulings*).
 Decisions and the reasons behind each: `workspaces/harness-profiles/workspace.md` in the plane.
-**Depends on:** #969 — `doctor` has to read the config folder a harness actually uses before
-it can report one row per profile.
+**Depends on:** #969 (PR #970) — `doctor` has to read the config folder a harness actually
+uses before it can report one row per profile.
 
 ## The failure
 
@@ -12,8 +14,9 @@ Two, and one feature answers both.
 - **One program per harness kind, launched one way.** `Harness.binary` is a class attribute
   and `launch_argv` returns `[binary, *extra]`; nothing overrides either. An operator with two
   Claude Code accounts — a work `CLAUDE_CONFIG_DIR` and a personal one — or a pinned older
-  Codex has no way to tell charter so. A shell alias does not help: charter finds the binary
-  with `shutil.which` and runs it with no shell, so an rc-file alias never resolves.
+  Codex has no way to tell charter so. A shell alias does not help: charter runs the binary with
+  no shell — `execvp` without a frame, tmux's own exec in a pane, `shutil.which` only as a
+  pre-check before the frame is built — so an rc-file alias never resolves.
 - **Opening charter starts a harness nobody asked for.** Bare `charter` launches
   `[harness] default`, and `+` launches the kind of the chat it was pressed from
   (`_same_harness_as`). On an empty workspace that is a harness session started before
@@ -48,23 +51,31 @@ command = ["npx", "-y", "@openai/codex@0.140.0"]
 ```
 
 - `kind` must be a registered kind. `command` is a list of arguments, never a shell string;
-  its first element is resolved on PATH. A leading `~` is expanded in that first element and
-  in every `env` value, because no shell is there to do it. `env` is optional.
+  its first element is resolved on the `PATH` the launcher runs with — in a pane, the tmux
+  client's, because tmux overwrites a `-e PATH` — so a profile that needs another `PATH` sets
+  it in `env`, applied at `exec`. A leading `~` is expanded in that first element and in every
+  `env` value, because no shell is there to do it. `env` is optional.
 - Every table directly under `[harness]` is a profile. `default` is the one other key, so no
   profile may be named `default`.
-- A name follows the workspace-name alphabet — a dot in a workspace name broke tmux targets
-  in #695 — and may not equal a charter command, a clash `cli._add_frame_parsers` already
-  refuses for kinds.
+- A name is letters, digits, `_` and `-`, starting with a letter or digit. No dot: a dot in
+  a workspace name broke tmux targets in #695, although the workspace alphabet still allows
+  one. A name may not equal a charter command either. For a kind that clash raises
+  `ValueError` in `cli._add_frame_parsers` and takes every `charter` command down with it,
+  which is right for a registry mistake CI will see; a profile is one machine's file, so a
+  clashing one is refused by name like any other broken profile.
 - **Every registered kind is also a built-in profile** named after itself: `command = [kind]`,
   no `env`. A declared profile of the same name replaces it, which is how plain `claude` gets
   pinned. Built-ins cannot be hidden.
 - **Refused by name with its reason, and the rest still load:** an unknown `kind`; a `command`
-  that is not a non-empty list of strings; a reserved, illegal or clashing name; and an `env`
-  name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. That last refusal names the
-  harness's own login instead — `CLAUDE_CONFIG_DIR` + `/login`, `CODEX_HOME` +
-  `codex login`, `XDG_DATA_HOME` + `opencode auth login`. A broken profile is refused alone
-  rather than taking the file down, unlike `[[frame.component]]`: a missing panel is easy to
-  miss, and a missing profile is a row that is not in the selector.
+  that is not a non-empty list of strings; a `command` whose first word is charter itself,
+  which the selector would open in a loop; a reserved, illegal or clashing name; an `env`
+  name starting with `CHARTER_`, which would lie to every hook about which harness or plane
+  this is; and an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD`. That last
+  refusal names the harness's own login instead — `CLAUDE_CONFIG_DIR` + `/login`,
+  `CODEX_HOME` + `codex login`, `XDG_DATA_HOME` + `opencode auth login`. A broken profile is
+  refused alone. `[[frame.component]]` refuses its whole arrangement over one bad entry (the
+  rest of `[frame]` stays), and that is the right trade there: a missing panel is easy to
+  miss, while a missing profile is a row that is not in the selector.
 
 **Why no credentials.** A variable set on the harness process reaches the shell the model
 runs. Measured on Claude Code — the grill's own shell saw `CLAUDE_CODE_MESSAGING_TOKEN` — and
@@ -90,9 +101,11 @@ a key. Charter declines to hold one; it cannot prevent one.
   into the plane's `.gitignore`, and `charter reinit` adds it to an existing plane. This
   amends ADR 0017, whose rule covers only a path charter creates that carries credentials:
   this file carries none, and its whole meaning is "not committed". If git tracks the file or
-  would not ignore it, charter refuses its profiles and says why, and `doctor` warns. The
-  check runs at launch, in the selector and in `doctor` — never on a config read, so no hook
-  pays a git call per tool call.
+  would not ignore it, charter refuses its profiles and says why, and `doctor` warns. A
+  declared replacement of a built-in is refused with the rest: that name refuses rather than
+  falling back to the built-in, which would run a command the operator replaced. The check
+  runs at launch, in the selector, in `charter harness list` and `harness install`, and in
+  `doctor` — never on a config read, so no hook pays a git call per tool call.
 - **Profiles are added by editing the file.** There is no `charter harness add`: a chat can
   run it as easily as it can edit the file, so it could never stand for the operator's
   approval, and all it would buy is typing. `charter harness list` shows every profile charter
@@ -111,7 +124,8 @@ charter's process (*How a harness starts*).
    Why: once the file is ignored an edit leaves no diff; nothing stops a chat editing plane
    config; and the command goes to tmux, not through a harness permission prompt. Codex
    trusts hooks by hash for the same reason. An open that nobody is at (*The selector*)
-   refuses where it would have asked.
+   refuses where it would have asked. Nothing runs a declared profile's command before its
+   record matches — not a launch, not a wiring probe, not an install.
 3. **The profile is wired.** Measured on claude 2.1.268, codex-cli 0.147.0 and opencode
    1.18.23, in throwaway folders with no login and no model tokens: a harness pointed at
    another config folder loads none of charter's wiring. Claude Code lists no charter plugin
@@ -120,21 +134,41 @@ charter's process (*How a harness starts*).
    holds no plugin, no hook trust and no `shell_environment_policy.set`. opencode under
    another `XDG_CONFIG_HOME` loads no shim, and its shells get no `CHARTER_HARNESS`. So a
    profile that is not wired **refuses to launch and prints the fix**, and no flag launches
-   one unguarded.
+   one unguarded. Built-ins too: `charter codex` on a plane where nobody wired Codex, or
+   `charter opencode` where `init` never wrote the shim, refuses where it runs today — a chat
+   that looks guarded and is not is the same failure whichever profile started it. A probe
+   that cannot answer — a timeout, a non-zero exit, output that does not parse — refuses the
+   launch too, and names the probe to run by hand: an unknown is not a pass (ADR 0009).
    - **Wiring is detected by asking the harness under the profile's environment**, never
      inferred from variable names, because one account is reachable through variables that
      do and do not move the plugin: by its binary, Claude Code's
      `CLAUDE_SECURESTORAGE_CONFIG_DIR` moves only the login, and opencode's login follows
-     `XDG_DATA_HOME` while its plugins follow `XDG_CONFIG_HOME`.
-   - `charter init`, `charter reinit` and `charter harness install <profile>` run each kind's
-     wiring under that profile's environment. Never at launch: a click would write a plugin
-     into a second account unasked, and Codex ignores hooks nobody approved anyway.
-   - `doctor` shows one row per profile.
+     `XDG_DATA_HOME` while its plugins follow `XDG_CONFIG_HOME`. Codex is the exception that
+     cannot be asked: `codex plugin list` answers the same for an empty `CODEX_HOME` and a
+     wired one, so charter reads that home's `config.toml`, and wired needs all three marks —
+     the plugin enabled, the `shell_environment_policy.set` line, and trust for its hooks. It
+     is the home charter can see; one a wrapper script exports is not.
+   - `charter init` and `charter harness install <profile>` run each kind's wiring under that
+     profile's environment, the plugin install included; `harness install` resolves a profile
+     name first, then a registry name, so `charter harness install codex` still works.
+     `charter reinit` installs no software, the rule it already keeps: it wires what is only
+     files (opencode's shim) and names `charter harness install <profile>` for a Claude Code
+     profile missing its plugin. Codex stays opt-in: only `harness install` writes its
+     `shell_environment_policy` line under the profile's `CODEX_HOME`, and it prints the steps
+     charter cannot take — installing the plugin, approving its hooks — with `CODEX_HOME=`
+     prefixed. Never at launch: a click would write a plugin into a second account unasked,
+     and Codex ignores hooks nobody approved anyway.
+   - `doctor` shows one row per profile, and probes only when a person runs it: no profile
+     probe runs on a hook path, SessionStart's preflight included. No probe runs a declared
+     command whose launch record does not match; that row says the profile is not approved
+     yet.
 
 ## How a harness starts
 
 **Every chat pane starts as charter, and charter replaces itself with the harness.** The
-pane's first process is a charter launcher. It runs the checks above, then `exec`s the
+pane's first charter process is a launcher — the window's first command on charter's own
+server, and what `respawn-pane` starts in the operator's own tmux. It runs the checks above,
+then `exec`s the
 profile's `command` — plus whatever the open adds, `--resume <id>` or
 `Harness.first_message_argv` — with the profile's `env` applied. Three reasons, the first a
 constraint:
@@ -145,12 +179,16 @@ constraint:
   repo #957 and #961.
 - **One place runs the checks for every open** — the CLI, the selector, `+`, reopen, a
   handoff.
-- **`exec` keeps the pane's first process the harness.** The pid does not change, so the
-  pane id charter records, `remain-on-exit` and the `pane-died` path see what they see today.
+- **`exec` keeps the launcher's pid for the harness.** The harness is the process the launcher
+  was, so the pane id charter records, `remain-on-exit` and the `pane-died` path see what they
+  see today.
 
 The plan measures that last claim before building on it: what `pane_current_command`,
-`_pane_last_words` and the chat-status paths read from a pane whose first process was charter,
-on tmux 3.7c and at the 3.2 floor, on charter's own server and in the operator's own tmux.
+`_pane_last_words` and the chat-status paths read from a pane whose harness was exec'd by
+charter, on tmux 3.7c and at the 3.2 floor, on charter's own server and in the operator's own
+tmux. Those two versions are run by hand; CI runs whatever tmux its runner image ships (3.4).
+Once the harness runs, `pane_current_command` has to read what a direct start reads; before,
+it names charter's interpreter, which nothing in charter reads — only tests do.
 
 **A chat records its profile.** `CHARTER_HARNESS` stays the kind: hooks compare it to
 `claude-code` for session ids, resume and the working spinner. The profile is a field of its
@@ -170,17 +208,22 @@ harness today, it shows the profile.
   profile, so the chat-handoff spec's "the harness is the calling chat's" becomes "the profile
   is". A reopened chat whose profile is gone is **skipped** with a line naming the profile,
   never given another: another profile may be another account, where the chat's resume id
-  does not exist and its workspace's code was never meant to go.
+  does not exist and its workspace's code was never meant to go. It stays in the manifest, so
+  declaring the profile again and running `charter reopen` brings it back.
 - **It always shows**, even with one profile available. Skipping it would bring back the
   harness nobody picked on a machine with one harness; one profile costs one Enter.
 - **The rows.** Declared profiles always; a built-in only when its program is installed. A
   profile that cannot start stays listed with its reason on the row — command not on PATH;
-  not wired, with the fix; the file tracked by git — and Enter on it only shows the reason,
-  which is the palette's rule for a name it cannot switch to (`docs/frame.md`). A new or
-  changed profile shows its command on Enter and asks in place. The starting row is the
-  profile of the chat `+` was pressed from, else `default`; a `default` naming a profile this
-  machine lacks starts on nothing, and `doctor` warns.
-- **The surface** is the F2 palette's picker: type to filter, Enter to choose, Esc to cancel.
+  not wired, with the fix; the file tracked by git — and Enter on it keeps the selector open
+  and shows the reason in its footer. The palette does otherwise: Enter on a refused row closes
+  it and puts the reason on the attention row. Closing here would close the chat. A new or
+  changed profile says it is not approved yet, runs no probe, and on Enter shows its command
+  and asks in place. The starting row is the profile of the chat `+` was pressed from, else
+  `default`; a `default` naming a profile this machine lacks marks no row, the cursor goes
+  where the palette's own rule puts it — the first row that can run, so Enter always does
+  something — and `doctor` warns.
+- **The surface** is the F2 palette's picker, type to filter, Enter to choose, Esc to cancel,
+  drawn in the chat's own pane rather than in one split off it.
 - **Cancel.** Esc closes that window having started nothing; if it was the workspace's only
   window, the session goes with it — the frame's rule for its last chat. #518 put the
   workspace picker before tmux because cancelling inside the frame meant tearing down "a
@@ -189,10 +232,12 @@ harness today, it shows the profile.
 - **A waiting pane is not a chat.** It has a tab, so it can be left and come back to; it is
   not in the quit manifest and is never reopened; its kind and profile are recorded at the
   pick.
-- **Opening a running workspace adds nothing.** Where nobody is attached, bare `charter` on a
-  workspace whose chats are running attaches to them rather than opening another, as it
-  already does where somebody is attached. `+` adds a chat. A launch that names what to run
-  still runs it — `charter <profile>`, `charter frame -- <cmd>`.
+- **Opening a running workspace adds nothing — for a selector launch.** Bare `charter` on a
+  workspace whose chats are running attaches to them whether or not anybody else is attached.
+  Today a launch attaches only where somebody is, and opens a chat where nobody is. `+` adds a
+  chat. A launch that names what to run keeps today's rule: `charter <profile>` opens a chat
+  where nobody is attached, and a launch that carries a command — `charter frame -- <cmd>`,
+  `--resume <id>` — always runs it.
 - **The workspace prompt stays before tmux.** A workspace is a tmux session, so charter has to
   know which one before the frame exists; a profile belongs to one chat, so choosing it
   belongs in that chat's pane.
@@ -206,30 +251,43 @@ charter's, drawn before the pane's harness exists. Once a harness has run there,
 holds unchanged, its two reading moments included. A pane whose harness exits closes as it
 does today and never goes back to the selector.
 
-In the operator's own tmux the launcher takes the moment the `cat` placeholder
-(`layout.PLACEHOLDER`, `layout.window_argv`) holds today. On charter's own server the window's
-first command becomes the launcher instead of the harness (`layout.chat_window_argv`,
-`layout.session_argv`).
+In the operator's own tmux the `cat` placeholder stays (`layout.PLACEHOLDER`,
+`layout.window_argv`): it is what lets `remain-on-exit` be set on the pane before anything in
+it can exit, and a launcher in its place could `exec` a harness that dies first (#384). The
+launcher is what `respawn-pane` starts after it (`layout.respawn_argv`), where the harness
+went until now. On charter's own server the window's first command becomes the launcher
+instead of the harness (`layout.chat_window_argv`, `layout.session_argv`).
 
 ## What this changes elsewhere
 
 - The phase-5 spec's "two chats on one harness share that harness's credentials. Charter
   cannot separate them and does not pretend to" stops being true: two profiles of one kind can
   hold two logins.
-- `doctor`, dispatch's transcript lookup, persona skill lookup and `plugincache` read
-  `~/.claude` or run the default `claude`. Each either follows the profile it is about, or
-  says it answers for the default config folder. #969 is the first of them.
+- `doctor` read `~/.claude` whatever folder Claude Code used; #969 makes it follow the folder
+  in use (`claude_code.config_home`), and task 4 asks each profile's harness under its own
+  environment. `plugincache` reads no folder at all — it runs `claude` — and task 4 hands it
+  the profile's environment and command. Dispatch's transcript lookup and persona skill lookup
+  say they answer for the default config folder rather than follow a profile: neither is
+  about one chat.
+- Reopen's `[harness] default` fallback is gone. A chat whose kind this charter no longer
+  registers is skipped and stays recorded, like one whose profile is gone, rather than
+  reopened under another harness.
 - `[harness] default` launches nothing any more, and bare `charter` no longer exits on a
   refused default.
 - `charter harness list` lists profiles, and `charter harness install` accepts a profile name
-  as well as a kind.
+  first, then a registry name.
 
 ## Limits
 
 - A pattern match on `env` names can refuse an innocent variable, and a wrapper script can
   still carry a key.
-- Detecting wiring spends a harness subprocess per profile; the plan measures what the
-  selector pays for it and whether that has to be cached.
+- Detecting wiring spends a harness subprocess per profile — measured at about 215–281 ms for
+  `claude plugin list --json` and 720–750 ms for `opencode debug config`; Codex's is a file
+  read. The selector reads a stamped cache, a launch always probes, and a hook never does.
+- The launch record and the wiring cache live under `.charter/`, as writable by a chat as
+  `charter.local.toml` is. The ask catches a changed command only when whatever changed it did
+  not also forge the record, and a launch never trusts the cache — it probes fresh. Charter
+  adds no guard for either path: a path pattern is host policy (ADR 0014).
 - `claude plugin list --json` writes `.claude.json` into the config folder it runs against
   (measured), so asking a profile's harness is not write-free.
 - opencode also reads `~/.opencode/` as a config folder whatever `XDG_CONFIG_HOME` says — a
@@ -251,7 +309,9 @@ step is `/login` inside `~/.claude-alt`.
 
 ## Build order
 
-0. **#969 on `main`** — `doctor`'s plugin rows read the config folder the harness uses.
+0. **#969 on `main`** (PR #970) — `doctor`'s plugin rows read the config folder the harness
+   uses, through `claude_code.config_home`, which task 4 builds on rather than adding a second
+   resolver.
 1. **Profiles are read.** The local file, validation and refusals, built-ins, the
    `.gitignore` guarantee, `charter harness list`. Nothing launches differently yet.
 2. **A profile launches.** It opens with the launcher measurement above. `charter <profile>`,
@@ -259,15 +319,18 @@ step is `/login` inside `~/.claude-alt`.
    tabs, reopen and handoff carry the profile; reopen skips a missing one.
 3. **A new or changed command asks once.**
 4. **A profile is wired or refuses:** detection, the fix, `charter harness install
-   <profile>`, `init` and `reinit` per profile, `doctor` per profile.
+   <profile>`, `init` and `reinit` per profile, `doctor` per profile. It starts once PR #970
+   is on `main`.
 5. **The selector**, carrying 3's and 4's states on its rows; attach-and-add-nothing;
    `default` as the starting row.
-6. **The records:** ADR 0021 for the profile decisions, the 0017 and 0018 amendments,
+6. **The records:** ADR 0022 for the profile decisions (chat handoff's plan takes 0021), the
+   0017 and 0018 amendments,
    `CONTEXT.md`, the phase-5 spec's credentials line, and a review of the news entry.
 7. **The proof above, on this plane.**
 
 Each task moves the docs page for what it changes in its own PR, and task 1 starts
 `docs/news/unreleased-harness-profiles.md`, which each later task extends.
 
-**Order: 0 → 1 → 2 → {3, 4} → 5 → 6 → 7.** 3 and 4 touch different code; whichever merges
-second rebases its docs.
+**Order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7**, one at a time. 4 cannot run beside 3: detecting
+wiring runs the profile's own command, and only 3's launch record stands for the operator's
+approval of it.
