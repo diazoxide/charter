@@ -1147,17 +1147,19 @@ def _plugin_dispatches_guard(root: Path) -> str | None:
     Shared with `doctor.check_guard_wired` on purpose. A writer and a checker answering
     "is this wired?" from different evidence is how the guard came to be declared twice.
 
-    **So it follows `$CLAUDE_CONFIG_DIR` with doctor (#969)**, which means it answers for the
-    Claude Code config folder of the shell `charter reinit` runs in. That is a real
-    consequence, not an accident: in a second-account shell whose folder has no plugin, this
-    writes the hook into a settings file every folder shares. The alternative was worse. Kept
-    on `~/.claude`, `doctor` in that shell says the guard is not wired and points at
-    `charter reinit`, and `reinit` answers that nothing needs doing — a remedy followed,
-    believed, and changing nothing.
+    **But not the config folder doctor answers for (#969).** `doctor` follows
+    `$CLAUDE_CONFIG_DIR`, because a row reports on the session in front of it. This decides a
+    write into the plane's COMMITTED `.claude/settings.json`, which the sessions of every
+    config folder read, and a committed file must not change with one person's shell: followed
+    here, a second-account shell with no plugin wrote the hook into it, and every `~/.claude`
+    session that has the plugin then ran the guard twice. So it names ``~/.claude`` — the
+    evidence it used before #969 — whatever the shell says. Per-profile wiring is designed in
+    harness-profiles task 4; until then the writer keeps its old answer and `doctor` reports
+    the divergence.
     """
     from . import doctor
 
-    return doctor._plugin_declaring_guard(root)
+    return doctor._plugin_declaring_guard(root, folder=Path.home() / ".claude")
 
 
 def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:

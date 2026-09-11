@@ -828,7 +828,7 @@ def session_is_the_plane() -> bool:
     return session_root() == _canonical(Path(_config.ROOT))
 
 
-def _settings_files(root: Path | None = None) -> list[Path]:
+def _settings_files(root: Path | None = None, folder: Path | None = None) -> list[Path]:
     """The settings the HOST actually resolves, in the order it reads them.
 
     One list, used both for a directly-declared hook and for `enabledPlugins`, so the two
@@ -843,17 +843,30 @@ def _settings_files(root: Path | None = None) -> list[Path]:
     **The user half is the config folder Claude Code is using, not ``~/.claude``** (#969).
     `$CLAUDE_CONFIG_DIR` moves it — a second account is the usual reason — and a session
     under that folder never opens ``~/.claude/settings.json``. Reading it anyway credited
-    the session with a guard hook and an `enabledPlugins` entry it did not have.
+    the session with a guard hook and an `enabledPlugins` entry it did not have. *folder*
+    names another folder for the one caller that must not follow the shell — see
+    :func:`_claude_folder`.
     """
-    from .harness import claude_code as _cc
-
     here = Path(root) if root is not None else session_root()
     return [here / ".claude" / "settings.json",
             here / ".claude" / "settings.local.json",
-            _cc.config_home() / "settings.json"]
+            _claude_folder(folder) / "settings.json"]
 
 
-def _settings_docs(root: Path | None = None) -> list[dict]:
+def _claude_folder(folder: Path | None) -> Path:
+    """*folder*, or the Claude Code config folder in use when none is named (#969).
+
+    Every `doctor` row asks about the folder in use. `commands._plugin_dispatches_guard`
+    names ``~/.claude`` instead, because `charter reinit` writes the plane's committed
+    `.claude/settings.json` — read by the sessions of every config folder — and a committed
+    file must not change with one person's shell.
+    """
+    from .harness import claude_code as _claude_code
+
+    return Path(folder) if folder is not None else _claude_code.config_home()
+
+
+def _settings_docs(root: Path | None = None, folder: Path | None = None) -> list[dict]:
     """Every settings document the host resolves from *root*, parsed, unreadable ones dropped.
 
     One reader for :func:`_settings_files`, because two of them drifted once already: the
@@ -867,7 +880,7 @@ def _settings_docs(root: Path | None = None) -> list[dict]:
     not there.
     """
     out: list[dict] = []
-    for p in _settings_files(root):
+    for p in _settings_files(root, folder):
         try:
             doc = json.loads(p.read_text())
         except (OSError, ValueError, UnicodeDecodeError):
@@ -877,17 +890,18 @@ def _settings_docs(root: Path | None = None) -> list[dict]:
     return out
 
 
-def _enabled_plugin_ids(root: Path | None = None) -> set[str]:
+def _enabled_plugin_ids(root: Path | None = None, folder: Path | None = None) -> set[str]:
     """Plugin ids the host has ENABLED. Installed is not enabled (#177)."""
     out: set[str] = set()
-    for doc in _settings_docs(root):
+    for doc in _settings_docs(root, folder):
         for pid, on in (doc.get("enabledPlugins") or {}).items():
             if on:
                 out.add(pid)
     return out
 
 
-def _plugin_declaring_guard(root: Path | None = None) -> str | None:
+def _plugin_declaring_guard(root: Path | None = None,
+                            folder: Path | None = None) -> str | None:
     """An ENABLED Claude Code plugin whose own ``hooks.json`` dispatches the guard.
 
     ``CLAUDE_PLUGIN_ROOT`` is set only for the plugin's OWN processes, so a `charter doctor`
@@ -919,10 +933,12 @@ def _plugin_declaring_guard(root: Path | None = None) -> str | None:
     scoped to the directory the host read it from — a plugin enabled in the plane's
     ``settings.json`` is not enabled for a chat rooted at ``workspaces/<ws>/`` (#851). A
     caller writing a specific file names that file's directory instead.
-    """
-    from .harness import claude_code as _cc
 
-    enabled = _enabled_plugin_ids(root)
+    *folder* is the Claude Code config folder whose plugins and user settings to believe,
+    defaulting to the one in use (#969); see :func:`_claude_folder` for the caller that names
+    ``~/.claude`` instead.
+    """
+    enabled = _enabled_plugin_ids(root, folder)
     if not enabled:
         return None
     # The manifest of the config folder Claude Code is USING (#969). This read
@@ -930,7 +946,7 @@ def _plugin_declaring_guard(root: Path | None = None) -> str | None:
     # list`, which follows `$CLAUDE_CONFIG_DIR` — so one report said the plugin was not
     # installed for this plane and, rows earlier, that the guard it carries was wired. Under
     # that folder no charter hook ran at all: installed somewhere else read as installed here.
-    manifest = _cc.config_home() / "plugins" / "installed_plugins.json"
+    manifest = _claude_folder(folder) / "plugins" / "installed_plugins.json"
     try:
         doc = json.loads(manifest.read_text())
     except (OSError, ValueError):
@@ -1044,8 +1060,9 @@ def check_session_root() -> Result:
     directory answers yes to the first and no to the second. That belongs to
     `check_guard_seen`, which already answers dispatch from evidence (a guard that ran)
     rather than from configuration, and which says in its own docstring why no amount of
-    reading configuration can see it. Naming a directory as trusted by reading
-    ``~/.claude.json`` would be one more proxy in the family this row is fixing.
+    reading configuration can see it. Naming a directory as trusted by reading Claude Code's
+    ``.claude.json`` — which is not even ``~/.claude.json`` once `$CLAUDE_CONFIG_DIR` moves it
+    (#969) — would be one more proxy in the family this row is fixing.
     """
     from . import config as _config
 
@@ -1055,20 +1072,20 @@ def check_session_root() -> Result:
         return Result(name, OK, detail=f"{here} — no control plane found")
     if session_is_the_plane():
         return Result(name, OK, detail=f"{here} — the plane")
-    from .harness import claude_code as _cc
+    from .harness import claude_code as _claude_code
 
     cwd_only, walking = _discovery_rules()
     lines = [f"{here} — not the plane ({_config.ROOT})"]
     # The folder the rows below actually read, not a spelling of the default one (#969):
     # under `$CLAUDE_CONFIG_DIR` they read that folder, and naming `~/.claude/` here would
     # send the operator to check a file no row consulted.
-    user = f"{util.short_path(_cc.config_home())}/"
+    user_folder = f"{util.short_path(_claude_code.config_home())}/"
     if cwd_only:
         lines.append(f"the host reads {_named(cwd_only)} from the session's own directory "
                      f"and does not walk up, so the plane's .claude/ is not in force for "
-                     f"them — the rows below read {here}/.claude/ and {user}")
+                     f"them — the rows below read {here}/.claude/ and {user_folder}")
     else:
-        lines.append(f"the rows below read {here}/.claude/ and {user}, not the "
+        lines.append(f"the rows below read {here}/.claude/ and {user_folder}, not the "
                      f"plane's")
     if walking:
         # Said here, in the row that would otherwise be read as "none of it reaches",
@@ -1161,7 +1178,7 @@ def check_session_layer() -> Result:
     untrusted directory answers yes to the first and no to the second. Charter asks the
     question it **owns**: trust is inherited up to the git root, so a directory with a git
     root of its own needs its own acceptance. That comes from `git rev-parse
-    --show-toplevel` and no host-private state. ``~/.claude.json`` is deliberately not
+    --show-toplevel` and no host-private state. Claude Code's ``.claude.json`` is deliberately not
     read — a missing project entry there means *never opened* just as readily as
     *refused*, and reading absence as refusal would warn at planes that are fine, which is
     the failure two other checks in this file already record. Weaker than a verdict on
@@ -1320,29 +1337,34 @@ def check_guard_wired() -> Result:
         # Reaching the handler is the only proof available, which is what `guardseen`
         # exists to record; a sighting from THIS plugin is that proof.
         from . import guardseen as _seen
-        from .harness import claude_code as _cc
 
-        # ...and only for the config folder it ran under (#969). `$CLAUDE_CONFIG_DIR` moves
-        # the manifest and settings this row just read, so a guard that fired yesterday under
-        # `~/.claude` says nothing about a session under a second account's folder — where
-        # the plugin can be installed and not yet loaded, which is #261's window reached from
-        # a new direction. A sighting that predates the recorded folder cannot say which one
-        # it ran under, so it vouches for none; the next guarded Bash call replaces it.
-        # Absolute on both sides, as `guardseen` records it: a relative `$CLAUDE_CONFIG_DIR`
-        # is a different folder in every directory it is read from.
-        folder = _cc.config_home()
-        if (_seen.last_source() == _seen.PLUGIN
-                and _seen.last_claude_config_dir() == os.path.abspath(folder)):
-            return Result(name, OK,
-                          detail=f"wired (enabled plugin {plugin}) — and it has fired here")
-        # The folder is named because `guard seen`, one row down, can truthfully say a
-        # guard ran minutes ago. Under another folder both rows are right, and without the
-        # folder they read as a contradiction — which is how #969 was reported.
+        if _seen.last_source() == _seen.PLUGIN:
+            # ...and only for the Claude Code config folder it ran under (#969).
+            # `$CLAUDE_CONFIG_DIR` moves the manifest and settings this row just read, so a
+            # guard that fired yesterday under `~/.claude` says nothing about a session under a
+            # second account's folder — where the plugin can be installed and not yet loaded,
+            # #261's window reached from a new direction. `guardseen.folder_standing` is the
+            # one place that decides it, for this row and for `guard seen` alike.
+            standing = _seen.folder_standing()
+            if standing.doubt is None:
+                return Result(name, OK,
+                              detail=f"wired (enabled plugin {plugin}) — and it has fired here")
+            # Something DID fire from the plugin, so "nothing has fired here yet" would be
+            # false beside `guard seen`; and it cannot vouch for this folder, so a tick would
+            # be false too. Neither a pass nor a claim that nothing fired (ADR 0009): the row
+            # says which of the two it cannot tell, in `guardseen`'s words.
+            return Result(
+                name, WARN,
+                detail=f"enabled plugin {plugin} declares it and a guard has fired from it, "
+                       f"but {standing.doubt} — so nothing shows it is loaded for the folder "
+                       f"in use",
+                hint="Run a Bash command in a Claude Code session on this config folder and "
+                     "re-check: a sighting made there is what vouches for it.")
         return Result(
             name, WARN,
-            detail=f"enabled plugin {plugin} declares it, but nothing has fired here under "
-                   f"{util.short_path(folder)} yet — a plugin's hooks load at session start, "
-                   f"so this is wired for the NEXT session and THIS one may be unguarded",
+            detail=f"enabled plugin {plugin} declares it, but nothing has fired here yet — "
+                   f"a plugin's hooks load at session start, so this is wired for the NEXT "
+                   f"session and THIS one may be unguarded",
             hint="Restart the session (or run a Bash command through it and re-check). If "
                  "you just removed a duplicate `hooks` block on this check's advice, that "
                  "was right — but it was the declaration this session actually had.")
@@ -1355,13 +1377,13 @@ def check_guard_wired() -> Result:
     # remedy that looks like a fix and is not.
     if not session_is_the_plane():
         from . import config as _config
-        from .harness import claude_code as _cc
+        from .harness import claude_code as _claude_code
 
         here = session_root()
         # The user settings file of the folder in use (#969). Under `$CLAUDE_CONFIG_DIR`
         # a declaration in `~/.claude/settings.json` reaches no session at all, so naming
         # that file would be a remedy that is followed, believed, and changes nothing.
-        user = util.short_path(_cc.config_home() / "settings.json")
+        user_settings = util.short_path(_claude_code.config_home() / "settings.json")
         return Result(
             name, WARN,
             detail=f"pretooluse is not wired — branch moves in the plane root are NOT "
@@ -1370,15 +1392,27 @@ def check_guard_wired() -> Result:
                   f"the host does not walk up — so the plane's .claude/settings.json never "
                   f"reaches here, wired or not. `charter reinit` writes THAT file, so it "
                   f"would not change this session. Declare `charter hook pretooluse` under "
-                  f"hooks.PreToolUse in {here}/.claude/settings.json, or in {user}, which "
+                  f"hooks.PreToolUse in {here}/.claude/settings.json, or in {user_settings}, which "
                   f"every session on that Claude config folder reads — or install the "
                   f"Claude Code plugin."))
+    hint = ("The 0.30.0 guard only fires through `charter hook pretooluse`.  "
+            "→ charter reinit  (wires it into .claude/settings.json), or "
+            "install the Claude Code plugin.")
+    folder = _claude_folder(None)
+    if folder != Path.home() / ".claude":
+        # `charter reinit` decides from `~/.claude` whatever the shell says, because it writes
+        # a committed file every folder's sessions read (#969, `commands.
+        # _plugin_dispatches_guard`). So under another folder the first remedy above writes
+        # nothing whenever `~/.claude` already has the plugin — followed, believed, and
+        # changing nothing (#851). Said here, and the remedy that does act on this folder named.
+        hint += (f" This session uses the Claude Code config folder "
+                 f"{util.short_path(folder)}, and `charter reinit` still decides from "
+                 f"~/.claude: it writes nothing if the plugin is installed there. `charter "
+                 f"doctor --fix` run from this shell installs the plugin for this folder.")
     return Result(name, WARN,
                   detail="pretooluse is not wired — branch moves in the plane root are "
                          "NOT refused",
-                  hint=("The 0.30.0 guard only fires through `charter hook pretooluse`.  "
-                        "→ charter reinit  (wires it into .claude/settings.json), or "
-                        "install the Claude Code plugin."))
+                  hint=hint)
 
 
 def check_harness() -> Result:
@@ -1568,6 +1602,28 @@ def check_guard_seen() -> Result:
     if rec:
         at = _seen_age(rec.get("ts"))
         where = rec.get("harness") or "an unnamed harness"
+        # An age under another Claude Code config folder is not an age of anything in this
+        # one (#969). Green here sat under the guard row's warning and told the reader the
+        # guard had just run for them. `guardseen.folder_standing` decides it, for this row
+        # and for `plane-root guard` alike; a Codex or opencode sighting has no folder to be
+        # wrong about and passes straight through.
+        standing = _seen.folder_standing()
+        if standing.doubt is not None:
+            detail = f"last ran {at} ago under {where}, but {standing.doubt}"
+            # A settings declaration in the folder the sighting DID run under is still there.
+            # It is in a file this folder's sessions never open, and saying it is gone — the
+            # branch below — would send the reader looking for an edit nobody made. Said only
+            # where it is true: the sighting came from settings, and that file declares it.
+            if (_seen.last_source() == _seen.SETTINGS and standing.elsewhere
+                    and "charter hook pretooluse" in _read_text(
+                        Path(standing.elsewhere) / "settings.json")):
+                detail += (f"; its declaration is still in "
+                           f"{util.short_path(Path(standing.elsewhere) / 'settings.json')}, a "
+                           f"file sessions on the folder in use never read")
+            return Result(name, WARN, detail=detail,
+                          hint="That sighting says nothing about the Claude Code config folder "
+                               "in use. Run a Bash command in a Claude Code session on this "
+                               "folder and re-check.")
         # A sighting is evidence for the declaration that PRODUCED it and for no other. The
         # settings block that fired minutes ago can have been deleted since — on this
         # command's own duplicate-guard advice — and "last ran 0m ago" then invites the
@@ -2999,9 +3055,9 @@ def _claude_json() -> Path:
     measured on 2.1.268, with `$CLAUDE_CONFIG_DIR` set Claude Code writes `.claude.json`
     inside that folder, so the servers a second account registers are there and the home
     file's are not launched at all. `claude_code.global_config_file` owns the rule."""
-    from .harness import claude_code as _cc
+    from .harness import claude_code as _claude_code
 
-    return _cc.global_config_file()
+    return _claude_code.global_config_file()
 
 
 def _vault_in_args(args) -> str | None:
@@ -3026,7 +3082,7 @@ def _registered_launchers(doc: dict) -> list[tuple[str, str, list]]:
 
     Both scopes, because checking only the top level would miss most real registrations —
     project-scoped servers are the common case. Every container is type-checked on the way
-    down: `~/.claude.json` is a large harness-owned file (124KB of caches and counters on the
+    down: `.claude.json` is a large harness-owned file (124KB of caches and counters on the
     machine that reported #197) whose shape charter does not control, and one odd value
     must not take the whole preflight down.
     """
@@ -3199,7 +3255,7 @@ def check_mcp_launchers() -> Result:
                 # The half of the advice that was missing. The old command was an absolute
                 # path into a particular umbrella; a bare `charter` resolves its plane from
                 # the LAUNCHING directory, and an `mcpServers` entry at the top level of
-                # `~/.claude.json` is user-scope — it launches for every project, most of
+                # the config folder's `.claude.json` is user-scope — it launches for every project, most of
                 # which are not that plane. The server then starts, fails to find the vault,
                 # and the tools are missing again, silently, exactly as before.
                 fix += (f". It opens vault `{vault}`, so also set CHARTER_ROOT in this "

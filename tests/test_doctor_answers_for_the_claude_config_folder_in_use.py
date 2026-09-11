@@ -13,7 +13,12 @@ plugin was not installed for this plane and, rows earlier, that the guard was wi
 fired here — while under that folder no charter hook ran at all.
 
 And "has fired here" was a sighting from an earlier session, under whichever folder THAT
-session used. A sighting is evidence for the folder it ran under and for no other.
+session used. A sighting is evidence for the folder it ran under and for no other, and one
+that cannot say which folder it ran under is evidence for none.
+
+`charter reinit` is the deliberate exception. It writes the plane's committed
+`.claude/settings.json`, and a committed file must not change with one person's shell, so its
+write decision stays on `~/.claude` (per-profile wiring is harness-profiles task 4).
 
 Every fixture states `$HOME`, `$CLAUDE_CONFIG_DIR` and `$CLAUDE_PLUGIN_ROOT` itself, so none of
 this can pass on the developer's own Claude Code install and prove nothing on CI.
@@ -28,7 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
-from charter import commands, config, doctor, guardseen
+from charter import commands, config, doctor, guardseen, util
 from charter.harness import claude_code
 from tests._isolation import PersonaIso
 
@@ -39,9 +44,12 @@ OK, WARN, FAIL = doctor.OK, doctor.WARN, doctor.FAIL
 _PRETOOLUSE = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
     {"type": "command", "command": "charter hook pretooluse"}]}]}}
 
+#: The field a Claude Code sighting records its folder in, spelled by hand for the same reason.
+_FIELD = "claude_config_dir"
+
 
 class ConfigFolderCase(PersonaIso):
-    """A plane that enables charter's plugin, a home folder, and a second config folder."""
+    """A plane, a home folder, and a second config folder."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -96,8 +104,9 @@ class ConfigFolderCase(PersonaIso):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps({"enabledPlugins": {"charter@charter": True}}))
 
-    def a_sighting_under(self, folder: Path | None) -> None:
-        """The plugin's guard firing in a session that used *folder* (``None``: the default).
+    def a_sighting_under(self, folder: Path | None, source: str = guardseen.PLUGIN,
+                         harness: str = "claude-code") -> None:
+        """A guard firing in a session that used *folder* (``None``: the default).
 
         The environment is the only thing a hook process knows about its config folder, so
         the sighting is made with that environment in force."""
@@ -105,7 +114,14 @@ class ConfigFolderCase(PersonaIso):
             self.use_the_default_folder()
         else:
             self.use_folder(folder)
-        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
+        guardseen.mark(harness=harness, source=source)
+
+    def a_sighting_from_before_folders_were_recorded(self) -> None:
+        """What every charter before this change wrote: no folder field at all."""
+        p = guardseen.path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                 "harness": "claude-code", "source": guardseen.PLUGIN}))
 
     def write(self, path: Path, doc) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,7 +299,7 @@ class TestTheFolderIsResolvedTheWayClaudeCodeResolvesIt(ConfigFolderCase):
 
 
 class TestAPastSightingDoesNotVouchForAnotherFolder(ConfigFolderCase):
-    """Both folders carry the plugin, so the only thing left to decide the row is the
+    """Both folders carry the plugin, so the only thing left to decide the guard row is the
     sighting — and a sighting belongs to the folder it ran under (#261's rule, one field on)."""
 
     def setUp(self) -> None:
@@ -298,13 +314,9 @@ class TestAPastSightingDoesNotVouchForAnotherFolder(ConfigFolderCase):
         r = doctor.check_guard_wired()
         self.assertEqual(r.status, WARN)
         self.assertNotIn("and it has fired here", r.detail)
-
-    def test_the_warning_names_the_folder_it_answers_for(self):
-        """`guard seen` still reads "last ran 0m ago" on the next row, which is true. Without
-        the folder here the two rows would contradict each other, which is #969 again."""
-        self.a_sighting_under(None)
-        self.use_folder(self.other)
-        self.assertIn(str(self.other), doctor.check_guard_wired().detail)
+        # Both folders named, so the reader can see this is not `guard seen` contradicted.
+        self.assertIn(str(self.other), r.detail)
+        self.assertIn("~/.claude", r.detail)
 
     def test_a_sighting_under_the_named_folder_does(self):
         self.a_sighting_under(self.other)
@@ -312,22 +324,19 @@ class TestAPastSightingDoesNotVouchForAnotherFolder(ConfigFolderCase):
         self.assertEqual(r.status, OK)
         self.assertIn("and it has fired here", r.detail)
 
-    def test_a_sighting_from_before_the_folder_was_recorded_does_not_vouch(self):
-        """Unknown is not suspect, and it is not evidence either. The same call #261 made
-        for a sighting with no `source`: it clears on the next guarded Bash call."""
-        p = guardseen.path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                                 "harness": "claude-code", "source": guardseen.PLUGIN}))
-        self.assertEqual(doctor.check_guard_wired().status, WARN)
+    def test_a_sighting_from_before_folders_were_recorded_says_exactly_that(self):
+        """Neither a pass nor a claim that nothing fired (ADR 0009): something DID fire, and
+        charter cannot tell under which folder. Saying "nothing has fired here yet" beside
+        `guard seen`'s "last ran 0m ago" is #969's contradiction in a new pair of rows."""
+        self.a_sighting_from_before_folders_were_recorded()
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, WARN)
+        self.assertIn("predates", r.detail)
+        self.assertNotIn("nothing has fired", r.detail)
 
-    def test_a_sighting_records_the_folder_it_ran_under(self):
+    def test_a_sighting_records_the_absolute_folder_it_ran_under(self):
         self.a_sighting_under(self.other)
-        self.assertEqual(guardseen.last()["claude_config_dir"], str(self.other))
-        self.assertEqual(guardseen.last_claude_config_dir(), str(self.other))
-
-    def test_no_sighting_has_no_folder(self):
-        self.assertIsNone(guardseen.last_claude_config_dir())
+        self.assertEqual(guardseen.last()[_FIELD], str(self.other))
 
     def test_a_folder_that_cannot_be_resolved_still_records_the_sighting(self):
         """`mark` runs inside the guard and never raises. `Path.home()` can, with no `$HOME`
@@ -336,80 +345,200 @@ class TestAPastSightingDoesNotVouchForAnotherFolder(ConfigFolderCase):
                                side_effect=RuntimeError("Could not determine home directory.")):
             self.assertIsNotNone(guardseen.mark(harness="claude-code", source=guardseen.PLUGIN))
         rec = guardseen.last()
-        self.assertIn("claude_config_dir", rec)
-        self.assertIsNone(rec["claude_config_dir"])
+        self.assertIn(_FIELD, rec)
+        self.assertIsNone(rec[_FIELD])
 
 
-class TestARelativeFolderIsTheOneItNamedWhereItWasRead(ConfigFolderCase):
-    """`$CLAUDE_CONFIG_DIR=cfg` names a different folder in every directory it is read from.
+class TestGuardSeenComparesTheFolderToo(ConfigFolderCase):
+    """`guard seen` is an age, never a verdict about wiring — but an age under a different
+    folder is not an age of anything in this one. Green there sat under the guard row's
+    warning and told the reader the guard had just run for them."""
 
-    Recorded as spelled, a sighting made in the plane root compared equal to a `doctor` run
-    from a workspace, where ``cfg`` is somewhere else — a false green by string equality."""
+    def test_the_same_folder_is_still_green(self):
+        self.a_sighting_under(self.other)
+        self.assertEqual(doctor.check_guard_seen().status, OK)
+
+    def test_a_sighting_under_another_folder_is_not_green_and_names_both(self):
+        self.a_sighting_under(None)
+        self.use_folder(self.other)
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertIn(str(self.other), r.detail)
+        self.assertIn("~/.claude", r.detail)
+        self.assertNotIn("still in", r.detail, "a plugin sighting has no settings file to name")
+
+    def test_a_sighting_from_before_folders_were_recorded_is_not_green(self):
+        self.a_sighting_from_before_folders_were_recorded()
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertIn("predates", r.detail)
+
+    def test_another_harnesses_sighting_carries_no_claude_folder_and_is_unchanged(self):
+        """`guardseen` is harness-neutral: a Codex or opencode sighting has no Claude Code
+        folder to be wrong about, and must not be warned over one."""
+        self.a_sighting_under(self.other, source=guardseen.SETTINGS, harness="codex")
+        self.assertNotIn(_FIELD, guardseen.last())
+        self.use_the_default_folder()
+        self.assertEqual(doctor.check_guard_seen().status, OK)
+
+    def test_a_plugin_sighting_is_claude_codes_even_with_no_harness_named(self):
+        """`$CLAUDE_PLUGIN_ROOT` is Claude Code's own variable, so a plugin-launched guard is
+        a Claude Code sighting whatever the registry could name."""
+        self.use_folder(self.other)
+        guardseen.mark(harness=None, source=guardseen.PLUGIN)
+        self.assertEqual(guardseen.last()[_FIELD], str(self.other))
+
+    def test_a_settings_declaration_in_another_folder_is_named_not_called_gone(self):
+        """The sighting came from a hook in `~/.claude/settings.json`; this session uses a
+        folder whose plugin declares the guard instead. The declaration is not gone — it is
+        in a file this folder's sessions never read — and saying it is gone sends the reader
+        looking for an edit nobody made."""
+        self.write(self.home / ".claude" / "settings.json", _PRETOOLUSE)
+        self.a_sighting_under(None, source=guardseen.SETTINGS)
+        self.install_in(self.other)
+        self.enable_in_the_plane()
+        self.use_folder(self.other)
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertNotIn("no longer there", r.detail)
+        self.assertIn("still in ~/.claude/settings.json", r.detail)
+
+    def test_a_settings_sighting_elsewhere_names_no_file_that_does_not_declare_it(self):
+        self.a_sighting_under(None, source=guardseen.SETTINGS)
+        self.use_folder(self.other)
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertNotIn("still in", r.detail)
+
+
+class TestARelativeFolderNeverVouches(ConfigFolderCase):
+    """A relative `$CLAUDE_CONFIG_DIR` stays relative inside Claude Code, and nobody has
+    measured whether a hook process and a `doctor` resolve it against the same directory. So it
+    records no folder and nothing is compared with it — and the rows say why."""
 
     def setUp(self) -> None:
         super().setUp()
-        self.ws = self.rooted_in_a_workspace()
-        # Both directories carry the plugin under `cfg` and the session's own settings enable
-        # it, so the only thing left to decide the row is which folder the sighting names.
+        # The plugin under `cfg` beside the plane and enabled there, so the guard row reaches
+        # its plugin branch and only the relative folder is left to decide it.
         self.install_in(config.ROOT / "cfg")
-        self.install_in(self.ws / "cfg")
-        self.write(self.ws / ".claude" / "settings.json",
-                   {"enabledPlugins": {"charter@charter": True}})
+        self.enable_in_the_plane()
         os.environ["CLAUDE_CONFIG_DIR"] = "cfg"
+        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)  # in this very directory
 
-    def fired_in(self, where: Path) -> None:
-        os.chdir(where)
-        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
-        os.chdir(self.ws)
+    def test_the_sighting_records_no_folder(self):
+        rec = guardseen.last()
+        self.assertIn(_FIELD, rec)
+        self.assertIsNone(rec[_FIELD])
 
-    def test_fired_in_the_plane_root_it_does_not_vouch_for_a_workspace(self):
-        self.fired_in(config.ROOT)
+    def test_the_guard_row_says_the_folder_is_relative_and_is_not_green(self):
         r = doctor.check_guard_wired()
         self.assertEqual(r.status, WARN)
-        # The plugin's own warning, not "not wired": the plugin IS found here, so a WARN for
-        # any other reason would pass without the comparison ever being reached.
-        self.assertIn("nothing has fired here under", r.detail)
+        self.assertIn("relative", r.detail)
 
-    def test_fired_in_the_workspace_itself_it_does(self):
-        self.fired_in(self.ws)
-        r = doctor.check_guard_wired()
-        self.assertEqual(r.status, OK)
-        self.assertIn("and it has fired here", r.detail)
-
-    def test_a_working_directory_that_is_gone_still_records_the_sighting(self):
-        """Making a relative folder absolute asks for the working directory, and a deleted
-        one raises. `mark` runs inside the guard, which never fails a turn."""
-        with mock.patch("os.getcwd", side_effect=FileNotFoundError("gone")):
-            self.assertIsNotNone(guardseen.mark(harness="claude-code", source=guardseen.PLUGIN))
-        self.assertIsNone(guardseen.last()["claude_config_dir"])
+    def test_guard_seen_says_so_too(self):
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertIn("relative", r.detail)
 
 
-class TestReinitAsksTheFolderDoctorAsks(ConfigFolderCase):
-    """`charter reinit` skips writing the guard hook when an enabled plugin already dispatches
-    it, and it asks `doctor`'s own function, because a writer and a checker answering "is this
-    wired?" from different evidence is how the guard came to be declared twice. So it follows
-    `$CLAUDE_CONFIG_DIR` too. Kept on `~/.claude`, a second-account shell would hear `doctor`
-    say the guard is not wired and `reinit` answer that nothing needs doing."""
+class TestOneFunctionDecidesWhetherASightingCounts(ConfigFolderCase):
+    """`guardseen.folder_standing` is the only place that rule lives, with one exception
+    policy, so the two rows cannot drift apart the way a writer and a checker once did."""
 
-    def setUp(self) -> None:
-        super().setUp()
+    def test_no_sighting_has_nothing_to_doubt(self):
+        standing = guardseen.folder_standing()
+        self.assertIsNone(standing.doubt)
+        self.assertIsNone(standing.elsewhere)
+
+    def test_a_folder_in_use_that_cannot_be_resolved_is_a_doubt_not_a_crash(self):
+        self.a_sighting_under(self.other)
+        with mock.patch.object(claude_code, "config_home",
+                               side_effect=RuntimeError("Could not determine home directory.")):
+            standing = guardseen.folder_standing()
+        self.assertIn("cannot be resolved", standing.doubt)
+
+    def test_a_sighting_that_recorded_no_folder_is_a_doubt_with_nowhere_named(self):
+        with mock.patch.object(claude_code, "config_home",
+                               side_effect=RuntimeError("Could not determine home directory.")):
+            guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
+        self.use_folder(self.other)
+        standing = guardseen.folder_standing()
+        self.assertIn("recorded no absolute", standing.doubt)
+        self.assertIsNone(standing.elsewhere)
+
+    def test_only_a_different_recorded_folder_is_named_as_elsewhere(self):
+        self.a_sighting_under(None)
+        self.use_folder(self.other)
+        self.assertEqual(guardseen.folder_standing().elsewhere, str(self.home / ".claude"))
+
+
+class TestReinitDoesNotFollowTheShellsFolder(ConfigFolderCase):
+    """`charter reinit` writes the plane's committed `.claude/settings.json`, which the
+    sessions of EVERY config folder read. A committed file must not change with one person's
+    shell, so its write decision is exactly what it was before #969: `~/.claude`'s plugins and
+    user settings, whatever `$CLAUDE_CONFIG_DIR` says. Per-profile wiring is harness-profiles
+    task 4. Followed instead, a second-account shell with no plugin wrote the hook into that
+    file, and every `~/.claude` session with the plugin then ran the guard twice."""
+
+    def settings(self) -> Path:
+        return config.ROOT / ".claude" / "settings.json"
+
+    def test_a_plugin_in_the_default_folder_still_stops_the_write_under_another(self):
         self.install_in(self.home / ".claude")
         self.enable_in_the_plane()
-
-    def test_the_default_folder_sees_the_plugin(self):
-        self.assertEqual(commands._plugin_dispatches_guard(config.ROOT), "charter@charter")
-
-    def test_a_folder_without_the_plugin_does_not(self):
+        before = self.settings().read_text()
         self.use_folder(self.other)
-        self.assertIsNone(commands._plugin_dispatches_guard(config.ROOT))
-
-    def test_so_reinit_wires_the_hook_only_for_the_folder_without_the_plugin(self):
-        settings = config.ROOT / ".claude" / "settings.json"
         self.assertEqual(commands._ensure_guard_hook(config.ROOT)[0], "present")
-        self.assertNotIn("charter hook pretooluse", settings.read_text())
+        self.assertEqual(self.settings().read_text(), before)
+
+    def test_a_plugin_only_in_the_named_folder_does_not_stop_it(self):
+        self.install_in(self.other)
+        self.enable_in_the_plane()
         self.use_folder(self.other)
         self.assertEqual(commands._ensure_guard_hook(config.ROOT)[0], "created")
-        self.assertIn("charter hook pretooluse", settings.read_text())
+
+    def test_the_default_folders_user_settings_still_enable_the_plugin_for_it(self):
+        self.install_in(self.home / ".claude")
+        self.write(self.home / ".claude" / "settings.json",
+                   {"enabledPlugins": {"charter@charter": True}})
+        self.use_folder(self.other)
+        self.assertEqual(commands._ensure_guard_hook(config.ROOT)[0], "present")
+
+    def test_doctor_does_not_promise_a_named_folder_a_reinit_that_writes_nothing(self):
+        """The price of the rule above, said where the operator would pay it. Nothing is wired
+        here, and the plane-root row's remedy is `charter reinit` — which, under a named folder
+        whose `~/.claude` has the plugin, writes nothing (#851's remedy that is not one)."""
+        self.use_folder(self.other)
+        hint = doctor.check_guard_wired().hint
+        self.assertIn("charter doctor --fix", hint)
+        self.assertIn(str(self.other), hint)
+        self.use_the_default_folder()
+        self.assertNotIn("charter doctor --fix", doctor.check_guard_wired().hint, "the control")
+
+
+class TestAPathWithALiteralTildeIsNeverAbbreviated(ConfigFolderCase):
+    """`CLAUDE_CONFIG_DIR='~/acct2'` is read as `<cwd>/~/acct2` — nothing expands it — and a row
+    rendering that as `~/acct2/settings.json` names the home folder the code never read."""
+
+    def test_a_relative_tilde_path_is_shown_where_it_really_is(self):
+        p = Path("~") / "acct2" / "settings.json"
+        self.assertEqual(util.short_path(p),
+                         os.path.join(os.getcwd(), "~", "acct2", "settings.json"))
+
+    def test_a_tilde_segment_under_home_is_not_shortened_either(self):
+        p = self.home / "~" / "acct2"
+        self.assertEqual(util.short_path(p), str(p))
+
+    def test_with_no_working_directory_it_still_does_not_read_as_home(self):
+        with mock.patch("os.getcwd", side_effect=FileNotFoundError("gone")):
+            shown = util.short_path(Path("~") / "acct2")
+        self.assertFalse(shown.startswith("~"), shown)
+
+    def test_the_guard_rows_remedy_names_the_folder_actually_read(self):
+        ws = self.rooted_in_a_workspace()
+        os.environ["CLAUDE_CONFIG_DIR"] = "~/acct2"
+        hint = doctor.check_guard_wired().hint
+        self.assertIn(os.path.join(str(ws), "~", "acct2", "settings.json"), hint)
 
 
 if __name__ == "__main__":
