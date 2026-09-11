@@ -753,84 +753,377 @@ def _is_charter(prog: str, args: list[str]) -> bool:
     return False
 
 
-#: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, `<<-DELIM` — the start of a heredoc.
-_HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+#: `<<DELIM`, `<<'DELIM'`, `<<"DELIM"`, `<<-DELIM` — the start of a heredoc. `dash` records
+#: the `<<-` form (its terminator ignores leading TABS); `q` is the quote that makes the body
+#: non-expanding; `delim` is the word a body ends on.
+_HEREDOC_RE = re.compile(
+    r"<<(?P<dash>-?)\s*(?P<q>['\"]?)(?P<delim>[A-Za-z_][A-Za-z0-9_]*)(?P=q)")
 
 
-def _reader_of(line: str) -> bool:
-    """Whether *line* starts by invoking a program in :data:`_READERS`.
+#: Programs that RUN a heredoc reaching their pipeline as CODE, so its body is never data.
+#: Two shapes: a shell/interpreter whose stdin (or `<<` body) IS a script (`bash <<X`,
+#: `python3 <<X`), and a program that turns the stream into a COMMAND it runs (`xargs`,
+#: `parallel`, `eval`). `awk`/`sed`/`grep` are deliberately absent — their program is an
+#: ARGUMENT and the heredoc is a data stream, which is exactly the #258 body that must stay
+#: strippable. A wrapper (`env`, `sudo`, `nohup`, `timeout`, …) is absent too: it does not
+#: run the body, the program it wraps does, and :func:`_split_env` names that program.
+#:
+#: This is a NAME list and inherits the same ceiling as :data:`_READERS`: a shell spelled a
+#: way this set misses is a missed *deny*, never a wrong one, because the fallback is to keep
+#: the body VISIBLE (the guard then scans it) rather than to strip it. Erring toward "an
+#: executor is present" only ever shows the guard more text.
+_EXECUTORS = frozenset(
+    "sh bash zsh fish dash ksh mksh csh tcsh ash busybox "
+    "python python2 python3 pypy pypy3 ipython node nodejs deno bun ts-node tsx "
+    "perl ruby irb php lua luajit tclsh osascript groovy scala jshell "
+    "julia elixir iex erl escript xargs parallel eval".split())
 
-    Goes through :func:`_split_env`, so the leading `VAR=value` assignments AND the
-    wrapper prefixes (`env`, `sudo`, `command`, …) are stripped by the same code the
-    guards use to find a program. Answering "which program is this" two different ways in
-    one module is how `env cat` ended up invisible to one of them.
+def _is_executor(name: str) -> bool:
+    """Whether *name* is a program in :data:`_EXECUTORS`, version suffix included.
+
+    The suffix (`python3.12`, `node20`) is asked of `toolgate._VERSIONED` rather than of a
+    second spelling of it here: that pattern already answers "is this binary an interpreter
+    that runs text" for the tool gate, and two regexes for one question drift apart. Its
+    over-matching is load-bearing in this direction too — a name it wrongly admits only keeps
+    a body visible. Imported at call time, the way `toolgate` imports this module: each needs
+    the other when a command is judged, never when the module loads.
     """
-    prog, _env, _argv = _split_env(line.strip().split())
-    return os.path.basename(prog).lower() in _READERS
+    from . import toolgate
+    base = os.path.basename(name).lower()
+    return base in _EXECUTORS or bool(toolgate._VERSIONED.match(base))
 
 
-def _feeds_a_handoff(head: str) -> bool:
-    """Whether *head* — a line up to its first heredoc — is one `charter handoff` and nothing
-    else, which makes that heredoc's body the brief.
+def _line_pipelines(line: str):
+    """*line* as its pipelines: ``[(programs, has_executor, heredoc_counts)]``, or ``None``
+    when the line cannot be attributed safely.
 
-    Beside :func:`_reader_of` and not a change to :data:`_READERS`: charter is not a program
-    that opens a file operand. A brief is stdin text charter sends to a new chat as its first
-    message; the shell never runs a line of it. Read as commands, every line of a brief is
-    segmented by the leak guard, and a brief that mentions a vault path in prose is refused
-    as a read of it — a line that begins `cat`, or a single apostrophe, which leaves the whole
-    call unparseable and scanned as raw text for a path. That is #258's shape arriving
-    through the one command whose entire input is prose.
+    Split on the control operators that separate pipelines (`;`, `&&`, `||`, `&`, `;;`) but
+    NOT on `|`, because a pipeline shares one execution fate: a body a reader opens is run
+    all the same if any command downstream of it in the pipe is a shell — in `zsh`'s
+    ``MULTIOS`` even a body a single pipe appears to discard (`cat <<A | bash <<B`) reaches
+    both. `has_executor` is therefore per PIPELINE, `programs` and `heredoc_counts` per
+    command within it (`programs[k]` opened `heredoc_counts[k]` of the `<<` on this line).
 
-    **One segment, and the reason is the direction a mistake here fails in.** In
-    `charter handoff beta && bash <<'EOF'` the heredoc is `bash`'s, its body is a script, and
-    removing it because the same line also names a handoff would hide a real read from the
-    one guard that runs in every directory. `cd x && charter handoff beta <<'BRIEF'` is not
-    treated as a brief either, so its body is read as commands: the cost is a false denial on
-    a brief that names a vault path, never a missed read. :func:`_reader_of` asks about the
-    whole line instead, and is not changed here.
+    Reuses the module's own lexer, so quoting is honoured rather than re-derived — a `;` or
+    `<<` inside quotes is a word here as it is to a shell. A **group, subshell or command
+    substitution** (`{ … }`, `( … )`, `$( … )`) returns ``None`` rather than a guess: their
+    output can be re-piped (`{ cat <<X; } | bash`), so mis-reading the boundary would strip a
+    body a shell runs. ``None`` means the caller strips nothing on the line, which keeps every
+    body visible — the safe direction.
     """
-    segments = _segment_argv(head)
-    if len(segments) != 1:
+    try:
+        toks = _split_punctuation(_lex(line))
+    except ValueError:
+        return None
+    pipelines: list = []
+    current: list[list[str]] = [[]]        # commands of the pipeline being built
+    for t in toks:
+        if not t.bare:
+            current[-1].append(t.text)
+        elif t.text in _GROUPING:
+            return None                    # a group/subshell/substitution — do not guess
+        elif t.text in ("|", "|&"):
+            current.append([])
+        elif t.text in _CONTROL_OPERATORS:
+            pipelines.append(current)
+            current = [[]]
+        else:
+            current[-1].append(t.text)
+    pipelines.append(current)
+    out = []
+    for cmds in pipelines:
+        progs = [_split_env(c)[0] for c in cmds]
+        hcounts = [sum(1 for tk in c if tk == "<<") for c in cmds]
+        executor = any(_is_executor(c[0]) or _is_executor(p)
+                       for c, p in zip(cmds, progs) if c)
+        out.append((progs, executor, hcounts))
+    return out
+
+
+def _brief_heredocs(line: str) -> set[int]:
+    """The heredocs on *line*, by position in :data:`_HEREDOC_RE`'s order, whose opener command
+    is one bare `charter handoff` — the ones whose body is a BRIEF (chat handoff).
+
+    A brief is charter's stdin: the text it sends a new chat as a first message, which no shell
+    ever runs. Read as commands, every line of it reaches the leak guard, and a brief that names
+    a vault path in prose — or carries a single apostrophe — is refused as a read of it. That is
+    #258's shape, arriving through the one command whose whole input is prose.
+
+    **The exact spelling, and that command alone.** `charter handoff b && bash <<'EOF'` opens
+    `bash`'s heredoc, not a brief, and `python3 -m charter handoff` is a spelling A7 refuses
+    outright, so neither is treated as data. Both fall through to "not a brief", which only ever
+    shows the guard more text. The count bail is :func:`_heredoc_strip_plan`'s, for its reason: an
+    index space the lexer and the regex disagree about is one no caller can act on.
+    """
+    headers = list(_HEREDOC_RE.finditer(line))
+    if not headers:
+        return set()
+    try:
+        toks = _split_punctuation(_lex(line))
+    except ValueError:
+        return set()
+    if sum(1 for t in toks if t.is_op("<<")) != len(headers):
+        return set()
+    briefs: set[int] = set()
+    k = 0
+    for seg, _before in _segments_of(toks):
+        opened = sum(1 for t in seg if t.is_op("<<"))
+        if (opened and len(seg) >= 2 and seg[0].bare and seg[1].bare
+                and [seg[0].text, seg[1].text] == ["charter", "handoff"]):
+            briefs.update(range(k, k + opened))
+        k += opened
+    return briefs
+
+
+def _heredoc_strip_plan(line: str):
+    """``[(delimiter, strip?)]`` for the heredocs opened on *line*, in the order their bodies
+    follow — or ``None`` when nothing on the line may be stripped.
+
+    A body is stdin DATA (strip) only when a **quoted** heredoc feeds a **reader** whose
+    **pipeline runs no executor**. Each clause earns its place:
+
+    * *quoted* — an unquoted `<<EOF` is expanded before the reader sees it, so a `$( … )` in
+      the body RUNS (`cat <<EOF\\n$(cat <vault>)\\nEOF`). Only `<<'EOF'` / `<<"EOF"` are inert.
+    * *reader* — the program that OPENS the `<<` (its segment's, via :func:`_split_env`), so
+      `env cat <<'X'` is a reader behind a wrapper and its body is still data.
+    * *no executor in the pipeline* — the defect this replaces (#973): the old pre-pass asked
+      only whether the LINE began with a reader, so `cat x && bash <<'EOF'`, `… | bash`,
+      `… || bash`, `… & bash` and `cat x; bash <<'EOF'` each dropped a body a shell ran.
+
+    Attribution comes from :func:`_line_pipelines`; the delimiters and their order come from
+    :data:`_HEREDOC_RE`. When the two disagree on how many heredocs the line opens — a
+    here-string `<<<x`, a `<<` inside quotes or a comment, which the regex counts and the
+    lexer does not — the answer is ``None``: the line is not one this pre-pass can take
+    apart, so it strips nothing and the bodies stay visible for the guard to read.
+
+    A **brief** is data by the other route: :func:`_brief_heredocs` names the heredocs whose
+    opener command is one bare `charter handoff`, and charter reads that body as stdin rather
+    than running it. A dropped brief is why the header facts below are carried — its body must
+    end where BASH ends it, or the drop runs past the heredoc and takes real commands with it.
+
+    Each entry is ``(delimiter, drop, header, executor)``. The first two are what this pre-pass
+    acts on: `delimiter` is :data:`_HEREDOC_RE`'s reading, which is what
+    :func:`_strip_reader_heredocs` matches terminator lines against for a body it KEEPS, and
+    `drop` is the verdict above. `executor` says whether a program in this body's pipeline runs
+    text, which is what A7 asks before it reads a body as commands. **`header` decides nothing
+    here** — it is :func:`_heredoc_header`'s answer for the same `<<`,
+    ``(delimiter after bash's quote removal, expands, the `<<-` flag, index past the
+    header)`` or ``None``, carried so a second caller has the bash-accurate facts without
+    re-parsing the line. The two delimiters differ where quoting splits a word: for
+    `<<EO'F'` the regex reads `EO` while bash reads `EOF`. Acting on the regex's shorter
+    reading is the safe direction *here* — a terminator that is never found keeps the body
+    visible — so the verdicts stay keyed on it; a caller that would DROP a body on this plan
+    must use `header` instead. A spelling the regex does not match at all (`<<\\EOF`) yields
+    no entry, so there is nothing to carry facts on.
+    """
+    headers = list(_HEREDOC_RE.finditer(line))
+    if not headers:
+        return []
+    pipelines = _line_pipelines(line)
+    if pipelines is None:
+        return None
+    if sum(hc for _progs, _ex, hcounts in pipelines for hc in hcounts) != len(headers):
+        return None
+    briefs = _brief_heredocs(line)
+    plan: list[tuple[str, bool, tuple | None, bool]] = []
+    k = 0
+    for progs, executor, hcounts in pipelines:
+        for prog, hc in zip(progs, hcounts):
+            reader = os.path.basename(prog).lower() in _READERS
+            for _ in range(hc):
+                m = headers[k]
+                quoted = bool(m.group("q"))
+                # A brief is data for the same reason a reader's body is, and by a different
+                # route: nobody runs it, because it is charter's stdin (:func:`_brief_heredocs`).
+                data = (reader and quoted and not executor) or k in briefs
+                plan.append((m.group("delim"), data,
+                             _heredoc_header(line, m.start()), executor))
+                k += 1
+    return plan
+
+
+def _ends_in_line_continuation(line: str) -> bool:
+    """A bare trailing backslash: bash splices this line with the next BEFORE tokenizing, so
+    `cat <<'EOF' \\` then `| bash` is the one command `cat <<'EOF' | bash`, and the heredoc
+    body follows the spliced whole. An even run of trailing backslashes is a literal `\\`,
+    not a continuation."""
+    return line.endswith("\\") and (len(line) - len(line.rstrip("\\"))) % 2 == 1
+
+
+def _pipeline_continues(line: str) -> bool:
+    """A trailing bare `|` or `|&` pipes this command's output into the next command line —
+    which, unlike a backslash splice, sits AFTER the heredoc bodies this line opened.
+    Measured on bash, zsh and dash: `cat <<'EOF' |` then a body then `EOF` then `bash` feeds
+    that body to `bash`, which runs it. A per-physical-line plan cannot see that `bash`, so
+    the pipeline is reassembled before attribution (#973 review round 1).
+
+    `&&`, `||`, `&`, `;` are NOT this: measured, the heredoc stays with its own segment's
+    program and is not piped downstream, so a per-line plan already attributes them and they
+    are left alone. Quoting is honoured (`echo 'a |'` does not continue) and a `#` comment's
+    `|` is not a token.
+    """
+    try:
+        toks = _split_punctuation(_lex(line))
+    except ValueError:
         return False
-    prog, _env, argv = _split_env(segments[0])
-    return _runs_handoff(prog, argv)
+    return bool(toks) and toks[-1].bare and toks[-1].text in ("|", "|&")
 
 
 def _strip_reader_heredocs(cmd: str) -> str:
-    """Remove heredoc BODIES fed to a reader — they are stdin data, never arguments.
+    """Remove heredoc BODIES that are stdin DATA — never the ones a command runs.
 
     `_segment_argv` shlex-splits the whole command string, so `cat > file <<'DOC' … DOC`
     hands the body to the leak check as `cat`'s argv, and a document *describing* charter's
     own layout is refused as a *read* of it (#258). Documentation about charter is exactly
     the text most likely to name these paths.
 
-    Only a reader's heredoc — and a `charter handoff`'s, whose body is its brief
-    (:func:`_feeds_a_handoff`). A body fed to `bash`/`python` is a script, not data, and
-    removing it would hide commands from a guard rather than prose — a distinction worth
-    the extra condition even though this guard does not scan such bodies today.
+    A body is dropped only when :func:`_heredoc_strip_plan` calls it data — a quoted heredoc
+    fed to a reader with no executor in its pipeline. A body fed to `bash`/`python`, or to a
+    reader whose output pipes into one, is a SCRIPT: dropping it would hide the very commands
+    the guard exists to read, so it is kept, and this guard's newline-segmentation then reads
+    each of its lines as the command it is.
 
-    The terminator is matched by ``lines[i].strip() == delim``, which can only end a body
-    EARLIER than bash would (bash wants the line exactly). Earlier is the direction that
-    hands more text back to the guard, never less.
+    **A pipeline can span physical lines**, and the executor can be on the continuation line
+    (`cat <<'EOF' |` … `EOF` … `bash`). So this works on the LOGICAL command, folding two
+    kinds of continuation in the order bash applies them:
+
+    * a **backslash-newline** splices before tokenizing, so it is folded into the command
+      line *before* that line's heredoc bodies are read;
+    * a trailing **`|`/`|&`** continues the pipeline onto the next command line, which sits
+      *after* the bodies — so those are read first, then the continuation is folded in.
+
+    The whole folded pipeline goes to :func:`_heredoc_strip_plan`, so a downstream executor is
+    attributed to the pipeline the body belongs to. Bodies are buffered as chunks and emitted
+    in place once the plan is known, because a body physically precedes the continuation that
+    decides its fate. A body line is never itself read as a continuation, even when it ends in
+    `|`.
+
+    The terminator is matched EXACTLY as bash does — a line equal to the delimiter, a `<<-`
+    ignoring only leading tabs. An earlier `.strip()`-lenient match looked safe (it hands the
+    guard more text) but was not: ending a KEPT shell body early spills its real read into the
+    next heredoc, whose reader body is then stripped and the read hidden. Bash's own boundary
+    is the one that attributes each line to the command that actually runs it.
     """
     if "<<" not in cmd:
         return cmd
+    return "\n".join(text for text, _body, drop, _executed in _heredoc_layout(cmd) if not drop)
+
+
+def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
+    """Every line of *cmd* as ``(text, is a heredoc body, drop it, an executor runs it)``.
+
+    The walk :func:`_strip_reader_heredocs` used to be, answering both of its callers' questions
+    in one pass: the leak guard keeps every line that is not dropped, and A7 reads the lines a
+    shell would run. One walk, because two would come to disagree about where a body ends, which
+    is the defect this area keeps producing.
+
+    Bodies are buffered and judged once the logical command is assembled, exactly as before — a
+    pipeline can span physical lines, and the executor can be on the continuation. Two things are
+    new, and both are about a body that gets DROPPED:
+
+    * it ends where BASH ends it, at :func:`_heredoc_header`'s delimiter rather than
+      :data:`_HEREDOC_RE`'s. For `<<BRIEF'X'` bash's terminator is `BRIEFX`; dropping on `BRIEF`
+      finds no terminator, runs to the end of the input, and takes the commands after the heredoc
+      with it — a vault read among them (review round 3, the Critical).
+    * a brief whose terminator never arrives is **not dropped at all**. Bash reads an unterminated
+      body to the end of the input, so a drop there would hide everything after it. Keeping it
+      shows the guard more text, which is the direction this file errs in.
+    """
     lines = cmd.split("\n")
-    out: list[str] = []
+    layout: list[tuple[str, bool, bool, bool]] = []
     i = 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        m = _HEREDOC_RE.search(line)
-        if m and (_reader_of(line) or _feeds_a_handoff(line[:m.start()])):
-            delim = m.group(2)
-            i += 1
-            while i < len(lines) and lines[i].strip() != delim:
-                i += 1  # drop the body
-            i += 1       # and the terminator
-            continue
-        i += 1
-    return "\n".join(out)
+    n = len(lines)
+    while i < n:
+        # One LOGICAL command: command-text lines folded for the plan, heredoc bodies
+        # buffered as chunks so their fate is decided once the whole pipeline is assembled.
+        # (body index, text); a command line carries -1, which is never a key of `drop`.
+        chunks: list[tuple[int, str]] = []
+        ended: dict[int, bool] = {}
+        briefs: set[int] = set()
+        body_count = 0
+        plan_text = ""
+        join = ""                                 # separator carried from the previous stage
+        while i < n:
+            # A command line, with any backslash-newline splices folded in first — bash does
+            # this before it looks for heredoc bodies, so the bodies follow the folded whole.
+            folded = ""
+            while i < n:
+                line = lines[i]
+                chunks.append((-1, line))
+                i += 1
+                if _ends_in_line_continuation(line):
+                    folded += line[:-1]
+                    continue
+                folded += line
+                break
+            plan_text = folded if not plan_text else plan_text + join + folded
+            # This command line's heredoc bodies follow, in order; buffer each.
+            brief_here = _brief_heredocs(folded)
+            for h, m in enumerate(_HEREDOC_RE.finditer(folded)):
+                header = _heredoc_header(folded, m.start())
+                idx = body_count
+                body_count += 1
+                if h in brief_here and header is not None:
+                    briefs.add(idx)
+                    delim, expands, dash = header[0], header[1], header[2]
+                else:
+                    delim = m.group("delim")
+                    dash = bool(m.group("dash"))
+                    expands = not m.group("q")
+                # Bash ends the body on a line EQUAL to the delimiter — a `<<-` ignoring only
+                # leading TABS. Not `.strip()`: a lenient match ends a KEPT (shell) body early,
+                # and the real read that spills past it is then read as the next heredoc's body
+                # and, if that one is a reader's, stripped away (measured regression). In an
+                # UNQUOTED body a trailing backslash splices the next line, so that line cannot
+                # be the terminator — bash runs the body on past it (measured on bash/zsh/dash),
+                # which likewise keeps a kept shell body from ending early into a reader's.
+                spliced = False
+                found = False
+                while i < n:
+                    body_line = lines[i]
+                    is_terminator = not spliced and (
+                        (body_line.lstrip("\t") if dash else body_line) == delim)
+                    if is_terminator:
+                        found = True
+                        break
+                    chunks.append((idx, body_line))
+                    spliced = expands and _ends_in_line_continuation(body_line)
+                    i += 1
+                ended[idx] = found
+                if i < n:                          # the terminator line itself
+                    chunks.append((idx, lines[i]))
+                    i += 1
+            if not _pipeline_continues(folded):
+                break
+            join = " "                             # the next stage joins onto the same pipe
+        plan = _heredoc_strip_plan(plan_text)
+        drop: dict[int, bool] = {}
+        executed: dict[int, bool] = {}
+        if plan is not None:
+            drop = {idx: d for idx, (_delim, d, _head, _ex) in enumerate(plan)}
+            executed = {idx: ex for idx, (_delim, _d, _head, ex) in enumerate(plan)}
+        for idx, text in chunks:
+            unterminated_brief = idx in briefs and not ended.get(idx, True)
+            layout.append((text, idx >= 0,
+                           drop.get(idx, False) and not unterminated_brief,
+                           executed.get(idx, False)))
+    return layout
+
+
+def _lines_a_command_could_run(cmd: str) -> list[tuple[str, bool]]:
+    """The lines of *cmd* a shell would run, each with whether a heredoc body an EXECUTOR
+    receives is what holds it: the command text, plus those bodies, and nothing else.
+
+    What A7 reads. A body nobody executes is data — a brief, a commit message, a document — and
+    reading it as commands refused real work: a `git commit -F - <<'EOF'` whose message names
+    `charter handoff` in backticks was refused as a handoff, and this repository's own history
+    is written that way (review round 3, finding 3). A body a shell DOES run is the opposite
+    case: the host's rule sees only `bash`, so a handoff in there gets no prompt at all.
+    """
+    if "<<" not in cmd:
+        return [(line, False) for line in cmd.split("\n")]
+    return [(text, executed) for text, body, _drop, executed in _heredoc_layout(cmd)
+            if not body or executed]
 
 
 #: Readers whose FIRST non-flag operand is a program or pattern rather than a file, and the
@@ -4331,11 +4624,12 @@ _HANDOFF_SPELLING = (
     "can recognise; it reads a command's words and is not a shell. Spell it exactly "
     "`charter handoff <workspace> <<'BRIEF'`.")
 _HANDOFF_SHELL_STRING = (
-    "`charter handoff` is refused inside a string a shell runs (`eval`, or `bash -c` and its "
-    "kin). The permission rule that asks the operator first is `Bash(charter handoff *)`, and "
-    "it reads the outer command — on Claude Code 2.1.268 a handoff inside `eval` or `bash -c` "
-    "ran with no prompt. This guard looks one level into such a string and no deeper. Run it "
-    "directly instead, spelled exactly `charter handoff <workspace> <<'BRIEF'`.")
+    "`charter handoff` is refused inside a string or a heredoc a shell runs (`eval`, "
+    "`bash -c '…'`, `bash <<'EOF'`). The permission rule that asks the operator first is "
+    "`Bash(charter handoff *)`, and it reads the outer command — on Claude Code 2.1.268 a "
+    "handoff inside `eval` or `bash -c` ran with no prompt. This guard looks one level in and "
+    "no deeper. Run it directly instead, spelled exactly "
+    "`charter handoff <workspace> <<'BRIEF'`.")
 _HANDOFF_SOURCE = (
     "`charter handoff` takes its brief from a QUOTED heredoc in the same call — <<'BRIEF' — "
     "so the permission prompt shows exactly the text the new chat is sent. This call feeds it "
@@ -4438,6 +4732,11 @@ def _shell_string_handoff(cmd: str) -> bool:
     heredoc fed to a shell (`bash <<'EOF'`) is not either.
     """
     try:
+        # The STRIPPED text, not A7's line view: a quoted string that spans lines carries a `<<`
+        # the header regex counts and the lexer cannot, so its lines are filed as a body nobody
+        # executes and A7 skips them — which is right for a commit message and would hide the
+        # very string this looks into (`eval "charter handoff b <<'BRIEF'` …). Nothing is dropped
+        # from that text when the plan is unknown, so the whole call is here to lex.
         toks = _split_punctuation(_lex(_strip_reader_heredocs(cmd)))
     except ValueError:
         return False
@@ -4466,29 +4765,31 @@ def _handoff_segment(toks: list[_Tok]) -> tuple[list[_Tok] | None, bool]:
     return None, False
 
 
-def _handoff_line(cmd: str) -> str | None:
-    """The first line of *cmd* that runs `charter handoff`, as its SOURCE is written — or
-    ``None``.
+def _handoff_line(cmd: str) -> tuple[str, bool] | None:
+    """The first line of *cmd* that runs `charter handoff`, as its SOURCE is written, paired
+    with whether a shell RUNS that line from a heredoc body — or ``None``.
 
-    Heredoc bodies opened on earlier lines are skipped the way the leak guard skips them
-    (:func:`_strip_reader_heredocs`), so a document being written that shows the command is
-    prose rather than a handoff. A line ending in an odd number of backslashes is joined to
-    the next, because bash removes that backslash-newline and runs the two as one command.
+    Which bodies those are comes from :func:`_lines_a_command_could_run`, and so from the one
+    heredoc plan the leak guard uses: a body fed to a reader (`charter handoff`'s own brief,
+    `git commit -F -`) is data and is not searched, while a body fed to a shell is searched and
+    flagged, because the host's rule only ever saw the `bash` that opened it. A line ending in
+    an odd number of backslashes is joined to the next, because bash removes that
+    backslash-newline and runs the two as one command.
 
     The handoff is LOOKED FOR with the continuation removed and every whitespace character
     read as a space, so `charter` and `handoff` split across a continuation or joined by a
     non-breaking space (one word to the tokenizer, and to bash) are still found. What comes
     back is the line as written, because A7 judges the spelling, and those are spellings.
     """
-    lines = _strip_reader_heredocs(cmd).split("\n")
+    rows = _lines_a_command_could_run(cmd)
     i = 0
-    while i < len(lines):
-        line = lines[i]
-        while (len(line) - len(line.rstrip("\\"))) % 2 and i + 1 < len(lines):
+    while i < len(rows):
+        line, in_a_shells_body = rows[i]
+        while (len(line) - len(line.rstrip("\\"))) % 2 and i + 1 < len(rows):
             i += 1
-            line += "\n" + lines[i]
+            line += "\n" + rows[i][0]
         if _is_handoff(_as_the_shell_reads(line)) or _disguised_handoff(line):
-            return line
+            return line, in_a_shells_body
         i += 1
     return None
 
@@ -4508,7 +4809,8 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
       harness nobody measured is not read as one.
     * ``handoff-unattended`` — ``permission_mode: bypassPermissions`` (:func:`_unattended`).
     * ``handoff-shell-string`` — a handoff inside a string a shell runs, one level deep
-      (:func:`_shell_string_handoff`); the host's rule reads only the outer command.
+      (:func:`_shell_string_handoff`), or inside a heredoc body a shell runs
+      (:func:`_lines_a_command_could_run`); the host's rule reads only the outer command.
     * ``handoff-spelling`` — a spelling of a handoff this guard can recognise that is not
       `charter handoff` as the SOURCE spells it: two bare words (no quote or escape in either),
       one ASCII space apart and one before whatever follows — a backslash-newline there is not
@@ -4534,9 +4836,9 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
     misled by a quoted `"<<"` earlier on the line.
     `TheQuotingJudgementIsTheSubstitutionGuards` holds the two to one answer.
     """
-    line = _handoff_line(cmd)
+    found = _handoff_line(cmd)
     in_a_string = _shell_string_handoff(cmd)
-    if line is None and not in_a_string:
+    if found is None and not in_a_string:
         return None
     from .harness import claude_code, codex
     if data.get("agent_id") and os.environ.get("CHARTER_HARNESS") in (claude_code.NAME,
@@ -4544,8 +4846,11 @@ def _handoff_refusal(cmd: str, data: dict) -> tuple[str, str] | None:
         return "handoff-subagent", _HANDOFF_SUBAGENT
     if _unattended(data):
         return "handoff-unattended", _HANDOFF_UNATTENDED
-    if in_a_string:
+    if in_a_string or found[1]:
+        # A handoff a shell runs — from a `-c` string or from a heredoc body it executes — is
+        # one the host's rule never sees, because the command it matches is `bash`.
         return "handoff-shell-string", _HANDOFF_SHELL_STRING
+    line = found[0]
     try:
         toks = _split_punctuation(_lex(line))
     except ValueError:

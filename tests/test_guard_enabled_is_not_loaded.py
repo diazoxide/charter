@@ -147,7 +147,10 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
         """Recorded before this field existed. Unknown provenance is not evidence of a
         problem, and inventing one would be the same overreach in the other direction."""
         guardseen.path().parent.mkdir(parents=True, exist_ok=True)
-        guardseen.path().write_text('{"ts": "2026-08-18T00:00:00+00:00", "harness": "x"}')
+        # A registered harness that is not Claude Code, because the point here is the missing
+        # `source`. A name charter has no record of is unknown for a different reason and is
+        # never green (#969), so a placeholder name would be testing that instead.
+        guardseen.path().write_text('{"ts": "2026-08-18T00:00:00+00:00", "harness": "opencode"}')
         with self.not_running_under_plugin():
             r = doctor.check_guard_seen()
         self.assertEqual(r.status, doctor.OK)

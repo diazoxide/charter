@@ -42,6 +42,44 @@ HEREDOC = "charter handoff beta <<'BRIEF'\nFix the widget.\nBRIEF"
 #: rule G1 measured.
 RULE = "Bash(charter handoff *)"
 
+#: Two real commit messages from this branch, as `git log` prints them. Both name the command
+#: in prose and in backticks, which is the shape review round 3 found refused: a commit message
+#: is nobody's script, and charter's own repository writes them by heredoc.
+PHASE1_MESSAGE = """A handoff waits for your yes, bypassPermissions included, and a sub-agent or an unattended run cannot propose one (chat handoff, task 4, phase 1)
+
+A handoff's brief becomes a new chat's first message and runs with the
+operator's authority, and nothing on main stood in front of one.
+
+- `charter init` writes the `ask` rule for `charter handoff *` through
+  `commands.ensure_handoff_gate` (`_guard_apply` with the pattern fixed);
+  `charter guard handoff` is the same rule for a news `adopt:` line, which
+  cannot carry quotes.
+- A7 in `hooks.pretooluse` (plane-gated): refuses a handoff from a sub-agent
+  (`agent_id`, Claude Code and Codex), an unattended run, any spelling but
+  `charter handoff …`, and a stdin other than one quoted heredoc.
+  `hooks._is_handoff` is introduced here.
+- The leak guard skips the body of a heredoc on a handoff's own segment.
+
+Part of #956."""
+
+ROUND1_MESSAGE = """A handoff spelled with a quote, an escape or odd spacing is refused, judged on the source (chat handoff, task 4, review round 1)
+
+A7 compared the unquoted token texts, so `charter 'handoff'`, `\\charter handoff`
+and `charter  handoff` passed as the exact form. Measured on Claude Code 2.1.268,
+`Bash(charter handoff *)` does not match a quoted or split second word:
+`charter 'handoff'`, `charter "handoff"` and `charter h""andoff` ran a handoff
+with no prompt.
+
+- A7 refuses unless the handoff segment's first two tokens are bare, read
+  `charter` and `handoff`, and stand one ASCII space apart in the raw line.
+- `_handoff_line` finds the handoff with bash's backslash-newline removed and
+  every whitespace read as a space, so a continuation or a U+00A0 between the
+  words is found and refused.
+- The refusal names its fix: spell it exactly
+  `charter handoff <workspace> <<'BRIEF'`.
+
+Part of #956."""
+
 
 def _reason(r) -> str | None:
     out = (r or {}).get("hookSpecificOutput") or {}
@@ -226,16 +264,16 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
 
     def test_a_handoff_inside_eval_is_refused(self):
         r = self._decide("eval \"charter handoff b <<'BRIEF'\nFix it.\nBRIEF\"")
-        self.assertIn("inside a string a shell runs", _reason(r) or "")
+        self.assertIn("a shell runs", _reason(r) or "")
 
     def test_a_handoff_inside_bash_dash_c_is_refused(self):
         r = self._decide("bash -c 'charter handoff b <<BRIEF\nx y\nBRIEF'")
-        self.assertIn("inside a string a shell runs", _reason(r) or "")
+        self.assertIn("a shell runs", _reason(r) or "")
 
     def test_a_handoff_inside_a_login_shells_dash_c_is_refused(self):
         """`-lc` is `-l` and `-c` in one cluster, and it is the spelling agents reach for."""
         r = self._decide("bash -lc 'charter handoff b <<BRIEF\nx y\nBRIEF'")
-        self.assertIn("inside a string a shell runs", _reason(r) or "")
+        self.assertIn("a shell runs", _reason(r) or "")
 
     def test_a_shell_string_that_only_searches_for_the_word_is_not_refused(self):
         self.assertIsNone(_reason(self._decide("bash -c 'grep handoff x'")))
@@ -258,7 +296,7 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
 
     def _refused_in_shell(self, shell: str) -> None:
         r = self._decide(f"{shell} -c 'charter handoff b'")
-        self.assertIn("inside a string a shell runs", _reason(r) or "", shell)
+        self.assertIn("a shell runs", _reason(r) or "", shell)
 
     def test_a_longer_word_beginning_handoff_is_not_a_spelling_of_it(self):
         """Without the "does this word carry a shell character at all" precheck, `handoffs`
@@ -270,7 +308,7 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
     def test_a_disguised_handoff_inside_a_shell_string_is_refused(self):
         """The string is read by BOTH readers: the plain one and the disguise reader."""
         r = self._decide("bash -c 'charter {handoff,} b'")
-        self.assertIn("inside a string a shell runs", _reason(r) or "")
+        self.assertIn("a shell runs", _reason(r) or "")
 
     def test_a_handoff_inside_sh_dash_c_is_refused(self):
         self._refused_in_shell("sh")
@@ -293,7 +331,7 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
         """bash removes the backslash-newline inside the string before running it, so the
         string has to be read that way too — `char\\<newline>ter handoff b` is a handoff."""
         r = self._decide("bash -c 'char\\\nter handoff b'")
-        self.assertIn("inside a string a shell runs", _reason(r) or "")
+        self.assertIn("a shell runs", _reason(r) or "")
 
     def test_the_exact_spelling_after_indentation_and_another_command_is_allowed(self):
         self.assertIsNone(_reason(self._decide(
@@ -430,6 +468,105 @@ class TheGuardRefusesWhatThePromptCannotCover(PlaneIso):
         ]
         self.assertNotIn(None, reasons)
         self.assertEqual(len(set(reasons)), len(reasons), reasons)
+
+
+class TheBriefIsDataWhereverBashEndsIt(PlaneIso):
+    """Review round 3, part B. The brief is dropped from the leak guard's view through #974's
+    heredoc plan, so its body ends where BASH ends it — and a body nobody executes is not read
+    as commands at all."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enterContext(mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"},
+                                          clear=True))
+        workspace.ensure("alpha")
+
+    def _decide(self, command, **payload):
+        return run_hook(hooks.pretooluse, {"tool_input": {"command": command}, "session_id": "s",
+                                           "cwd": str(workspace.workspace_dir("alpha")),
+                                           **payload})
+
+    def _read_refused(self, cmd: str) -> None:
+        self.assertIn(hooks._READ_REASON, _reason(self._decide(cmd)) or "", cmd)
+
+    def test_a_brief_delimiter_split_by_quotes_does_not_hide_a_later_read(self):
+        """bash ends this brief at `BRIEFX`. A regex reads the delimiter as `BRIEF`, never finds
+        it, and drops to the end of the input — taking the `bash` body, and the read in it."""
+        self._read_refused("charter handoff b <<BRIEF'X' && bash <<'A'\n"
+                           "Fix the widget.\nBRIEFX\ncat .charter/vaults/dev.json\nA")
+
+    def test_a_brief_delimiter_with_a_quoted_head_does_not_hide_a_later_read(self):
+        self._read_refused('charter handoff b <<"BRIEF"X && bash <<\'A\'\n'
+                           "Fix the widget.\nBRIEFX\ncat .charter/vaults/dev.json\nA")
+
+    def test_a_quoted_heredoc_operator_in_the_handoffs_own_argument_hides_nothing(self):
+        """`--vision '<<X'` is an argument, not a heredoc. Counting it as one shifts every
+        delimiter after it, and the brief then ends on the wrong line."""
+        self._read_refused("charter handoff b --vision '<<X' <<'BRIEF'; bash <<'A'\n"
+                           "Fix the widget.\nBRIEF\ncat .charter/vaults/dev.json\nX\nA")
+
+    def test_a_brief_whose_terminator_never_arrives_is_not_dropped(self):
+        """bash reads an unterminated body to the end of the input, so dropping it would take
+        every command after it with it. Nothing is dropped and the read stays visible."""
+        self._read_refused("charter handoff b <<'BRIEF'\ncat .charter/vaults/dev.json")
+
+    def test_the_exact_brief_is_still_data(self):
+        """The case E has always been about: prose in a brief is not a read (#258's shape)."""
+        self.assertIsNone(_reason(self._decide(
+            "charter handoff beta <<'BRIEF'\nThe token lives in .charter/vaults/dev.json; "
+            "don't print it.\nBRIEF")))
+
+    def test_a_commit_message_that_names_a_handoff_is_not_one(self):
+        """`git` runs no body, so a commit message is data however many handoffs it describes.
+        Both shapes are how this branch's own commits were written."""
+        for name, msg in (("phase 1", PHASE1_MESSAGE), ("round 1", ROUND1_MESSAGE)):
+            for how, cmd in (("-F -", f"git commit -F - <<'EOF'\n{msg}\nEOF"),
+                             ("-m $(cat …)",
+                              f'git commit -m "$(cat <<\'EOF\'\n{msg}\nEOF\n)"')):
+                with self.subTest(message=name, how=how):
+                    self.assertIsNone(_reason(self._decide(cmd)))
+
+    def test_a_handoff_inside_a_heredoc_a_shell_runs_is_refused(self):
+        """The host sees `bash`, so no prompt stands in front of the handoff in its body."""
+        r = self._decide("bash <<'EOF'\ncharter handoff beta <<'BRIEF'\nFix it.\nBRIEF\nEOF")
+        self.assertIn("a shell runs", _reason(r) or "")
+
+    def test_a_read_the_brief_swallows_is_data_and_the_same_read_in_bashs_body_is_not(self):
+        """Where a brief ENDS decides who runs the line after it, so each pair below differs by
+        one line. In the first of each, `bash` never reaches the read: ` BRIEF` is not a
+        terminator (`<<` wants the delimiter alone on the line) and a trailing backslash in an
+        UNQUOTED body continues the line, so `BRIEF` is eaten by the continuation. Both were
+        measured under bash 3.2.57 and zsh 5.9: the read runs in the `-in-A` rows only.
+
+        Ending the brief anywhere but where bash ends it breaks one half or the other — too
+        early hides a real read, too late refuses a brief that only talks about one.
+        """
+        for name, brief, in_a in (
+            ("a line that only looks like the terminator",
+             "charter handoff b <<'BRIEF' && bash <<'A'\nFix the widget.\n BRIEF\n"
+             "cat .charter/vaults/dev.json\nBRIEF\necho in-a\nA",
+             "charter handoff b <<'BRIEF' && bash <<'A'\nFix the widget.\n BRIEF\nBRIEF\n"
+             "cat .charter/vaults/dev.json\nA"),
+            ("a terminator eaten by a line continuation",
+             "charter handoff b <<BRIEF && bash <<'A'\nFix the widget. \\\nBRIEF\n"
+             "cat .charter/vaults/dev.json\nBRIEF\necho in-a\nA",
+             "charter handoff b <<BRIEF && bash <<'A'\nFix the widget. \\\nBRIEF\nBRIEF\n"
+             "cat .charter/vaults/dev.json\nA"),
+        ):
+            with self.subTest(shape=name, whose_body="the brief's"):
+                # Not `assertIsNone`: the second shape's brief is an UNQUOTED heredoc, which the
+                # handoff gate refuses on its own terms. The claim here is only about the leak
+                # guard — it is shown no read, because bash runs none.
+                self.assertNotIn(hooks._READ_REASON, _reason(self._decide(brief)) or "")
+            with self.subTest(shape=name, whose_body="bash's"):
+                self._read_refused(in_a)
+
+    def test_the_quoted_shape_of_that_pair_is_allowed_outright(self):
+        """The row above proves no READ is seen; this one proves nothing else refuses it either,
+        so a brief that quotes a vault path really does reach the prompt."""
+        self.assertIsNone(_reason(self._decide(
+            "charter handoff b <<'BRIEF' && bash <<'A'\nFix the widget.\n BRIEF\n"
+            "cat .charter/vaults/dev.json\nBRIEF\necho in-a\nA")))
 
 
 class TheQuotingJudgementIsTheSubstitutionGuards(PlaneIso):

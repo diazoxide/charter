@@ -81,8 +81,18 @@ rule while one who reads a bare refusal files an issue.
   argument and not a boundary (`cat \) <vault>` reads the vault), and the `&` inside the
   redirection `>&` is not the control operator `&` (`cat 2>&1 <vault>` is one command);
   while a newline *is* a boundary exactly as `;` is — every line of a multi-line command is
-  its own command, `bash <<'EOF'` bodies included — and `#` starts a comment only where a
-  word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
+  its own command. A **heredoc body** reaches the guard as those commands whenever something
+  runs it: a shell that opens the `<<` (`bash <<'EOF'`), or one anywhere in the opener's
+  pipeline (`cat x && bash <<'EOF'`, `cat <<'EOF' | bash`), so a vault read on any of its
+  lines is denied wherever the reader on the line stands — it is the command that opens the
+  `<<`, and its pipeline, that decide, not the first word. **The pipeline is followed across
+  lines**: a trailing `|` continues onto the command after the heredoc body (`cat <<'EOF' |`
+  … `EOF` … `bash`), and a backslash-newline splices before it, so the downstream shell is
+  seen either way. A **quoted** heredoc fed only to a
+  reader (`cat <<'EOF'`) is stdin data: its body is dropped, so a document naming these paths
+  is not refused as a read of them ([#258](https://github.com/diazoxide/charter/issues/258)).
+  An *unquoted* body stays visible instead, because the shell expands it before the reader
+  sees it and a `$( … )` in it would run. And `#` starts a comment only where a word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
   plain arguments anywhere but command position and `cat { <vault>` is one command that
   reads the vault. Beyond that: an unparseable quote does not hide the commands after it,
   an **unquoted** `$( … )` substitution is read both as the command it runs and as the word
@@ -362,7 +372,7 @@ rule while one who reads a bare refusal files an issue.
   | a call from a **sub-agent**: the payload carries `agent_id` | You are talking to the parent chat, and what the sub-agent found goes back there anyway. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
   | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `charter ws todo` as the way to keep the work. |
   | a **spelling** of `charter handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word that still reads `charter` or `handoff` once its quoting, expansion and glob characters are removed (`$'handoff'`, `${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a gap other than one ASCII space before or after `handoff`, a line continuation included | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to charter, `charter 'handoff'`, `charter $'handoff'`, `charter {handoff,}` and `charter hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `charter`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them — which is also why a brace split inside a word (`{hand,}off`), an ANSI-C escape (`$'\x68andoff'`) and a parameter default split across one (`hand${x:-}off`) are not recognised; the first two of those ran with no prompt too. |
-  | a handoff **inside a string a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'` or `bash -c '…'` ran with no prompt. The refusal says to run it directly. |
+  | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'`, `bash -c '…'` or a `bash <<'EOF'` body ran with no prompt. The refusal says to run it directly. Which heredoc bodies a shell runs is [#974](https://github.com/diazoxide/charter/pull/974)'s answer, the same one the leak guard uses, so a brief is never one of them. |
   | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before charter reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
 
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
@@ -381,13 +391,11 @@ rule while one who reads a bare refusal files an issue.
 
   **What it does not see, on any harness.** It refuses the spellings of a handoff it can
   recognise, so a chat working in good faith keeps the prompt in front of its handoff; it reads a
-  command's words and is not a shell. A handoff run by an interpreter (`python3 -c`, `node -e`),
+  command's words and is not a shell. A handoff run by an interpreter (`python3 -c`, `node -e`, or
+  `os.system` inside a `python3 - <<'PY'` body),
   through a variable, from a script file, behind an expansion that does not leave the word whole
-  (`{hand,}off`, `$'\x68andoff'`, `hand${x:-}off`), more than one string deep, or inside a heredoc
-  fed to a shell (`bash <<'EOF'`, until a follow-up change) is not seen, and a `<<` inside a comment
-  or quotes earlier in the call hides every later line from it (heredoc detection is being reworked
-  under issue #973). The look inside `eval` and `sh -c` strings reads the whole call at once, so a
-  single apostrophe in an earlier heredoc body that is not a reader's or a handoff's stops it. Claude Code says the same of its rule:
+  (`{hand,}off`, `$'\x68andoff'`, `hand${x:-}off`), or more than one string deep is not seen.
+  Claude Code says the same of its rule:
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
