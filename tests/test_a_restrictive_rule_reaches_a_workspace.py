@@ -2401,7 +2401,8 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
         self.assertTrue(r.hint.startswith(f"{self.ws}/refs cannot be checked"), r.hint)
 
     def test_a_drifted_repo_with_nothing_unchecked_is_advised_in_that_sentence_alone(self):
-        """`doctor.py`'s `… if unseen else ""`, which CI's sweep of 4e5fb9c found nothing killing.
+        """`doctor.py`'s `… if unseen else ""`, the one survivor of CI's `deletion sweep` run
+        34630146591 on 4e5fb9c.
         The drifted-repo hint ENDS with this value, so dropping the arm ships `charter git-policy
         --apply   .` — three spaces and a bare dot — as the advice.
 
@@ -3179,8 +3180,14 @@ class WhatGitListsDecidesNothingItCannotBackUp(PlaneWithRestrictions):
 
 
 class TheTwoSurvivorsCIsSweepNamed(PlaneWithRestrictions):
-    """CI's sweep of c76ce74 named two lines nothing killed. Each is pinned here by the input the
-    line exists for — and neither input is a mock, so what is pinned is the behaviour."""
+    """CI's `deletion sweep` run 34595647442, which swept c76ce74 (as the merge commit c114395):
+    **2 survivors**, `commands_workspace.py:1593` and `workspace.py:2254`, both pinned here — each
+    by the input the line exists for, and neither by a mock, so what is pinned is the behaviour.
+
+    A later run on a later head is a different measurement and says so itself: run 34630146591 on
+    4e5fb9c named **1 survivor**, `doctor.py:231-233`, pinned by
+    `ARefsDirectoryAtModeZeroIsNamedNotRaised.test_a_drifted_repo_with_nothing_unchecked_is_advised_in_that_sentence_alone`.
+    No count here stands for the branch — each names its run and the head it swept."""
 
     def test_a_manifest_behind_a_symlink_loop_is_named_as_uncheckable_not_missed(self):
         """`commands_workspace.py`'s `if there is None:`. Disabling the branch left the suite green
