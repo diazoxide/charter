@@ -1506,8 +1506,7 @@ def cmd_workspace_reinit(args) -> int:
         # return anything at all.
         for rel, did in before["layer"]:
             inside = workspace.checkout_row(n, rel)
-            if did in ("foreign", "blocked", "withheld", "harness-behind", "unreadable",
-                       "unrecorded"):
+            if did in ("foreign", "blocked", "harness-behind", "unreadable", "unrecorded"):
                 unresolved.add(n)
             if did == "foreign" and inside:
                 # Never "remove it" in a checkout (review round 5, R2 and R5): the file is
@@ -1560,7 +1559,7 @@ def cmd_workspace_reinit(args) -> int:
                 # Ruling H (#942 review round 4): a write charter could not record first is not
                 # made, and the lines stay. Not `blocked`: nothing is in the way at that path. With
                 # the errno the publish failed with (review round 5, R5).
-                refused = workspace.unrecorded_fix(inside[0], "that checkout") if inside else ""
+                refused = workspace.unrecorded_fix(inside[0], "that checkout")
                 util.warn(f"'{n}': {rel} — charter could not publish its record there first, so "
                           f"it wrote nothing and kept every exclude line it had"
                           f"{f'; {refused}' if refused else ''}.")

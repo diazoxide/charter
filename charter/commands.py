@@ -1804,7 +1804,7 @@ def _mirror_into_workspaces() -> None:
             elif status == "unrecorded":
                 unrecorded.append(where)
                 row = workspace.checkout_row(ws, rel)
-                if row and workspace.unrecorded_fix(row[0], "that checkout"):
+                if workspace.unrecorded_fix(row[0], "that checkout"):
                     refusals[workspace.unrecorded_fix(row[0], "that checkout")] = None
             elif status == "withheld":
                 withheld.append(where)

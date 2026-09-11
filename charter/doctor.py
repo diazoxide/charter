@@ -2096,9 +2096,13 @@ def _workspace_harness_result(_config, _workspace) -> Result:
     # when it is what clears them all: a hint that leads with a command that changes nothing is
     # the tick that stops a reader. It clears a missing, stale or unwanted file — but not one in a
     # checkout whose record cannot be published, where it writes nothing either.
-    stuck = {(ws, rel.partition("/")[0]) for ws, rel, status in findings if status == "unrecorded"}
-    reinit_clears = any(status in ("missing", "stale", "unwanted")
-                        and (ws, rel.partition("/")[0]) not in stuck
+    def tree_of(ws: str, rel: str) -> tuple[str, str]:
+        # One split for both sets. On an `unrecorded` row — always `<tree>/.charter-generated` —
+        # `partition` and `rpartition` agree, so a spelling of its own there could not be pinned.
+        return ws, rel.partition("/")[0]
+
+    stuck = {tree_of(ws, rel) for ws, rel, status in findings if status == "unrecorded"}
+    reinit_clears = any(status in ("missing", "stale", "unwanted") and tree_of(ws, rel) not in stuck
                         for ws, rel, status in findings)
     first: list[str] = []
     if "unrecorded" in statuses:
@@ -2108,10 +2112,9 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         # What clears it follows that errno (#942 final review): a full disk or a read-only mount
         # has no write access to restore.
         refused = dict.fromkeys(
-            f"{ws}/{row[0].name}: "
-            f"{_workspace.unrecorded_fix(row[0], 'that checkout') or 'no errno on record'}"
+            f"{ws}/{row[0].name}: {_workspace.unrecorded_fix(row[0], 'that checkout')}"
             for ws, rel, status in findings if status == "unrecorded"
-            for row in [_workspace.checkout_row(ws, rel)] if row)
+            for row in [_workspace.checkout_row(ws, rel)])
         first.append("An 'unrecorded' marker is one charter could not publish, so it writes "
                      "nothing there it could not record first and keeps every exclude line it "
                      "had. What clears it: " + "; ".join(refused) + ".")

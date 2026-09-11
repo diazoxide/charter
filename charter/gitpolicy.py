@@ -218,8 +218,6 @@ def scan(root: Path, workspaces_dir: Path) -> tuple[list[Path], list[Path]]:
             if not ws.is_dir():
                 continue
             for clone in sorted(ws.iterdir()):
-                if not clone.is_dir():
-                    continue
                 there = _exists(clone / ".git", follow=True)
                 if there:
                     out.append(clone)

@@ -2161,7 +2161,9 @@ def _materialise(base: Path, want_all: dict[str, str],
             # another, whose record then named text the file no longer held — and the plane's
             # next move would have called charter's own file foreign (review round 5). Only an
             # `ok` file's: a `harness-edited` record says exactly this already (R3).
-            if rel in marker and marker[rel] != content_digest(want_all[rel]):
+            if rel in marker:
+                # A record that already holds this digest is left equal to what was published,
+                # so nothing is published for it.
                 marker[rel] = content_digest(want_all[rel])
             rows.append((rel, "present"))
             continue
@@ -2185,7 +2187,7 @@ def _materialise(base: Path, want_all: dict[str, str],
         # file charter cannot record is a file whose line the next launch would drop.
         intent = dict(marker)
         for rel, _status in writes:
-            intent[rel] = sorted(set(_recorded(marker, rel)) | {content_digest(want_all[rel])})
+            intent[rel] = list(set(_recorded(marker, rel)) | {content_digest(want_all[rel])})
         refused = _publish_marker(base, intent)
         if refused is not None and record_first:
             _note_unrecorded(base, refused)
@@ -2314,7 +2316,7 @@ def _note_unrecorded(tree: Path, refused: OSError | None) -> None:
             return
         config.mkdir_for(note.parent)
         config.replace_for(note, json.dumps({
-            "errno": errno.errorcode.get(refused.errno or 0, "error"),
+            "errno": errno.errorcode.get(refused.errno, refused.errno),
             "says": refused.strerror or str(refused)}) + "\n")
     except OSError:
         pass
@@ -2349,7 +2351,11 @@ def unrecorded_fix(tree: Path, where: str) -> str:
     reason = unrecorded_reason(tree)
     if not reason:
         return ""
-    fix = _UNRECORDED_FIXES.get(reason.partition(":")[0], "fix what stops writes to {where}")
+    # By prefix, never by splitting the reason: its first ":" always follows the errno's name, so
+    # `partition` and `rpartition` agreed on every reason an OS writes, and no test could tell the
+    # two apart (the round-5 deletion sweep).
+    fix = next((fix for name, fix in _UNRECORDED_FIXES.items() if reason.startswith(f"{name}:")),
+               "fix what stops writes to {where}")
     return f"{fix.format(where=where)} ({reason})"
 
 
@@ -2635,7 +2641,7 @@ def _listed_trees(tree: Path, exclude: Path, common: Path) -> tuple[list[Path] |
         if entry["prunable"]:
             # Git's own reason, not charter's guess: "moved or deleted" was said of a worktree
             # that was only unreadable.
-            said = entry["prunable"] if isinstance(entry["prunable"], str) else "no reason given"
+            said = entry["prunable"]
             if _exists(path) is False:
                 return None, (f"git lists {path} as prunable: {said} — `git worktree repair` from "
                               f"its new place if it moved, `git worktree prune` if it is gone")
@@ -2722,7 +2728,9 @@ def _shared_rels(tree: Path, rels: list[str], text: str, exclude: Path,
     trees, doubt = _live_trees(tree, exclude)
     here = os.path.realpath(tree)
     wired = [tree, *(t for t in trees or () if os.path.realpath(t) != here and _wired(t))]
-    beside = {Path(r).parent for r in current if r != _TEMP_PATTERN}
+    # The temp pattern's own parent is the checkout root, and the root is scanned with the rest:
+    # leaving that line out of this set left the root unscanned whenever it was the block's last.
+    beside = {Path(r).parent for r in current}
     cowritten = _cowritten()
     why: list[str] = []
     for rel in sorted(current - need):
@@ -2834,7 +2842,7 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
     """
     marker = _read_marker_at(tree)
     rows = _layer_status(tree, _guest_files(tree), marker)
-    if (any(s in ("missing", "stale", "unwanted") for _rel, s in rows)
+    if (any(s in ("missing", "stale") for _rel, s in rows)
             and unrecorded_reason(tree)):
         # Ruling H (review round 4): a launch cannot publish the record a write needs first, so
         # it writes nothing and keeps every line — and says so here, where somebody looks. On the
@@ -2895,12 +2903,10 @@ def rules_not_in_force(cwd) -> str:
         return ""
     riding: dict[str, tuple[str, ...]] = {}
     for h in _registry.all():
-        riding.update(h.restrictive_rules() or {})
+        riding.update(h.restrictive_rules())
     gaps: list[str] = []
     for rel, status in _layer_status(tree, want, marker):
         rules = riding.get(rel, ())
-        if not rules:
-            continue
         try:
             text = (tree / rel).read_text()
         except (OSError, UnicodeDecodeError):
@@ -3353,10 +3359,10 @@ def structure_status(name: str) -> dict:
     # into something charter cannot see — and is listed apart, for `reinit` to name with what
     # clears it (ADR 0009, #942 final review).
     seen = {rel: _exists(p, follow=True) for rel, p in _required_components(name).items()}
-    missing = sorted(rel for rel, there in seen.items() if there is False)
+    missing = [rel for rel, there in seen.items() if there is False]
     ver = structure_version(name)
     return {"ok": (not missing) and ver >= STRUCTURE_VERSION, "missing": missing,
-            "unreadable": sorted(rel for rel, there in seen.items() if there is None),
+            "unreadable": [rel for rel, there in seen.items() if there is None],
             "version": ver, "target": STRUCTURE_VERSION}
 
 
