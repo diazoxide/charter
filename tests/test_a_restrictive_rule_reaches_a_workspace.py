@@ -1488,6 +1488,26 @@ class ALostMarkerCannotUnhideTheLocalFile(PlaneWithRestrictions):
         self.assertEqual(_status(self.clone), "")
         self.assertIn(f"{self.ws}/api/.git/info/exclude (unaccounted)", r.detail)
         self.assertIn(f"{SHARED} is there and nothing charter recorded accounts for it", r.hint)
+        # Once, not once per finding in that checkout: its local file is `harness-behind` too,
+        # and asking every finding's checkout printed the same reason twice (the round-3 sweep
+        # found the `unaccounted` filter deciding exactly that).
+        self.assertEqual(
+            r.hint.count(f"{SHARED} is there and nothing charter recorded accounts for it"), 1)
+
+    def test_what_could_not_be_accounted_for_comes_back_in_path_order(self):
+        """Doctor prints these, and a report that reshuffles from run to run cannot be diffed.
+        Eight kept paths, so a set iterating in path order by luck is a 1-in-40,320 accident
+        rather than a coin toss — the round-3 sweep charged `sorted` here."""
+        agents = config.ROOT / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        for name in ("zulu", "yankee", "xray", "whiskey", "victor", "uniform", "tango"):
+            (agents / f"{name}.md").write_text(f"# {name}\n")
+        self.launch()
+        self.marker.unlink()
+        self.launch()
+        said = workspace.unaccounted(self.clone)
+        self.assertEqual(len(said), 8, said)
+        self.assertEqual(said, sorted(said))
 
     def test_a_path_that_cannot_be_checked_keeps_its_line_and_says_so(self):
         """Ruling G(e): absence is proved by `FileNotFoundError` or `NotADirectoryError`, and
@@ -1792,6 +1812,10 @@ class WhatGitListsDecidesNothingItCannotBackUp(PlaneWithRestrictions):
         self.assertFalse((wt / LOCAL).exists(), "fixture: the worktree's copy was not withdrawn")
         self.assertEqual(_status(clone), "")
         self.assertIn("not a checkout", " ".join(workspace.unaccounted(wt)))
+        # The clone's own record names every line in the block, so git's doubt keeps nothing
+        # there and doctor has nothing to say about it — a reason printed over a block that is
+        # fully accounted for is the cry-wolf the round-3 sweep found in `current - need`.
+        self.assertEqual(workspace.unaccounted(clone), [])
 
     def test_a_worktree_git_lists_as_prunable_takes_no_line_away(self):
         clone = self.checkout("api", real=True)
