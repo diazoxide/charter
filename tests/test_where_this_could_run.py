@@ -235,11 +235,18 @@ class TheBlockOnAWorkShapedPrompt(PlaneIso):
         """Best-effort, like `_roster_block` beside it. This block leads the commitment
         gate, and the gate is caught as a whole in `userpromptsubmit` — so a raise here
         would take the scout-first directive down with it, on every work-shaped prompt, on
-        whatever plane made `resolve` unhappy."""
+        whatever plane made `resolve` unhappy.
+
+        The gate's message has to START where it always did, too. `_commitment_nudge` joins
+        the block on with a blank line between them, so a block that came back empty and
+        was joined anyway puts two blank lines in front of the directive, with nothing on
+        screen to say which signal produced them. That is the `else` half of one line, and
+        an `assertNotIn` alone cannot see it.
+        """
         with mock.patch("charter.workspace.resolve", side_effect=OSError):
             ctx = self.ctx()
         self.assertNotIn("Where this could run", ctx)
-        self.assertIn("Commitment point", ctx)
+        self.assertTrue(ctx.startswith("⬢ **Commitment point**"), repr(ctx[:90]))
 
     def test_the_block_names_the_chats_own_workspace_inside_a_frame(self):
         """#936, at the one surface whose whole subject is "does the ask serve THIS

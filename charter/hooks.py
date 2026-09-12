@@ -7742,8 +7742,11 @@ def _where_this_could_run(sid: str | None, unattended: bool = False) -> str:
         # whose whole subject is whether the ask serves THIS workspace's vision.
         ws = workspace.resolve(session_id=_chat_id() or sid)
         try:
-            first = next((ln for ln in (workspace.read_vision(ws) or "").splitlines()
-                          if ln.strip()), "")
+            # The first line plainly. `workspace.read_vision` returns a `str` for every
+            # input and `.strip()`s the body, so there is no `None` to fall back from and
+            # no leading blank line to filter out — three guards the deletion sweep called
+            # survivors, in the same words `commands_workspace._vision_cell` records.
+            first = next(iter(workspace.read_vision(ws).splitlines()), "")
         except Exception:
             # A vision charter cannot read costs the QUOTE, not the block. The two tests
             # above are still true for a workspace whose `workspace.md` is a symlink.

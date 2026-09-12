@@ -176,6 +176,17 @@ class TheMarkerCostsNothingItCannotWrite(PersonaIso):
         raising into a SessionStart hook."""
         self.assertFalse(state.brief_owed("a/b"))
 
+    def test_the_marker_is_called_brief_owed(self):
+        """The NAME, because it is a durable on-disk fact and not an implementation
+        detail: it sits in the chat's own directory beside `cwd`, `closed` and `brief`,
+        where an operator reading `.charter/frame/<id>/` and a later charter both meet it.
+        `test_a_quit_records_the_plane_before_it_kills` pins `cwd` and `closed` the same
+        way, and for the same reason — the deletion sweep asks of every such literal
+        whether any spelling would do, and for these the answer is no.
+        """
+        state.owe_brief("beta.1")
+        self.assertTrue((state.frame_dir("beta.1") / "brief.owed").is_file())
+
     def test_a_filesystem_that_refuses_the_marker_costs_the_marker(self):
         state.frame_dir("beta.1", create=True)
         with mock.patch("charter.config.write_for", side_effect=OSError("full")):

@@ -38,6 +38,15 @@ def _vision_cell(name: str) -> str:
     "Where this could run" block — is its first line, and three surfaces disagreeing about
     what a workspace is for is worse than any of them being terse.
 
+    **And the first line plainly, with no `or ""`, no blank-line filter and no strip** —
+    three guards the deletion sweep called survivors and was right to. `workspace.read_vision`
+    returns a `str` for every input (``""`` for unset, for a placeholder and for a charter
+    with no such section) and `.strip()`s the body it returns, so there is no ``None`` to
+    fall back from, no leading blank line to skip and no leading space to take. A trailing
+    one cannot show either: this is the row's last field and `cmd_workspace_list` rstrips
+    the line. Three guards nothing can turn red, and "equivalent mutant" and "dead code" are
+    the same finding.
+
     **Escaped at the render, and NOT clipped.** A vision is committed text a teammate wrote
     and this is a table on a terminal: a newline in one forges a row, and an ANSI sequence
     redraws the screen somebody is reading the table on. `contain.one_line` is charter's
@@ -50,11 +59,10 @@ def _vision_cell(name: str) -> str:
     listing.
     """
     try:
-        first = next((ln for ln in (workspace.read_vision(name) or "").splitlines()
-                      if ln.strip()), "")
+        first = next(iter(workspace.read_vision(name).splitlines()), "")
     except Exception:
         return NO_VISION
-    return contain.one_line(first.strip(), limit=contain.NO_CLIP) if first else NO_VISION
+    return contain.one_line(first, limit=contain.NO_CLIP) if first else NO_VISION
 
 
 def cmd_workspace_list(args) -> int:
