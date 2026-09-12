@@ -180,6 +180,23 @@ class TestADuplicateJudgedByTitle(PersonaIso):
             todos.duplicate_of("alpha", "Fix the widget" + self.TAIL, by_title=True),
             "Fix the widget")
 
+    def test_the_stored_side_is_its_title_and_not_its_body_either(self):
+        """**Both sides**, and this is the case that says so. Every other case here either
+        stores a bare title — where the body IS the title, so reading one for the other
+        changes nothing — or compares titles that are identical, which the identity fallback
+        answers before the overlap is read. So neither reddens if the stored side quietly
+        goes back to `title + body`.
+
+        This pair does: two real handoff todos, each carrying the provenance tail, whose
+        titles overlap on three words at 0.750. Read as titles they are one todo; read with
+        the tail on the stored side the union grows by nine boilerplate words, the score
+        falls under the threshold, and a genuine duplicate is recorded twice."""
+        todos.add("alpha", "Rotate the staging tokens" + self.TAIL)
+        self.assertEqual(
+            todos.duplicate_of("alpha", "Rotate the staging tokens again" + self.TAIL,
+                               by_title=True),
+            "Rotate the staging tokens")
+
 
 class TestAnOverlapTooThinToBeEvidence(PersonaIso):
     """`todos._MIN_SHARED_WORDS`, on the `by_title` path — where below it the ratio is
