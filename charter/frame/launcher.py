@@ -631,6 +631,53 @@ def _picked(fid: str | None, p: profiles.Profile) -> Callable[[], None]:
     return undo
 
 
+def _close_the_cancelled_chat(fid: str | None) -> None:
+    """Close this pane's own window, because the operator cancelled — do not wait for
+    `pane-died` to notice.
+
+    **Measured, and the reason this exists at all.** On a Linux CI runner a chat pane that
+    exits at the selector is marked dead by tmux with BOTH `#{pane_dead_status}` and
+    `#{pane_dead_signal}` EMPTY, and the window is still listed a minute later — with
+    `remain-on-exit on` and both hooks read back present, `pane-died[0]` (the exit write)
+    and `pane-died[1] kill-window`. The same code on macOS takes the window and the session
+    with it, and a hand probe there fires that hook for a pane killed with `SIGKILL` and
+    fires it even when `pane-died[0]` fails. Two hypotheses fit — tmux declining to fire for
+    a pane it can name neither a code nor a signal for, and a launcher not exiting cleanly
+    from raw mode there (ruling 42's signature a third time) — and neither is settleable
+    from the machine this was written on.
+
+    **So charter stops depending on which is true.** Esc is charter's own keystroke on
+    charter's own surface in a pane no harness has ever run in: it knows the chat was
+    cancelled and does not need tmux to infer it. The hook is untouched and still the answer
+    for a harness that dies — this narrows nothing about it.
+
+    `tests/test_a_new_chat_starts_at_the_profile_selector` is the only case in the suite that
+    has ever watched a chat's session end after its pane died on a real server, which is why
+    this went unseen: every other real-tmux case asks whether a pane is alive, and a harness
+    that exits gives tmux a status to fire on.
+
+    `kill-window` with `-t <pane>` resolves to that pane's own window, and killing a
+    session's last window destroys the session — the frame's rule for its last chat, and
+    `commands_frame._pane_died_teardown_hook_argv` measures both. Best effort: a tmux that
+    will not answer leaves the window standing, which is where this started.
+    """
+    if fid is None:
+        return
+    from ..commands_frame import SOCKET
+
+    # `state.harness_pane` first, `$TMUX_PANE` second: the record is what the LAUNCH wrote
+    # down for this chat, and the variable is what tmux put in this process. They agree,
+    # and the fallback is for a chat whose record was lost — the same pair `cmd_new_chat`
+    # reads for the same reason.
+    pane = state.harness_pane(fid) or os.environ.get("TMUX_PANE", "")
+    if not pane:
+        return
+    tmuxctl.run("closing the chat the operator cancelled",
+                tmuxctl.server_argv(state.frame_server(fid) or SOCKET,
+                                    "kill-window", "-t", pane),
+                report=False)
+
+
 def _select_in_pane(args, fid: str | None) -> int:
     """Draw the selector in this pane until a profile starts, or Esc closes the chat.
 
@@ -655,10 +702,14 @@ def _select_in_pane(args, fid: str | None) -> int:
             choice = selector.pick(cwd=Path(os.getcwd()), root=Path(config.ROOT),
                                    start=start, after=after)
             if choice is None:
-                # Esc, or a stdin that ended. Nothing was started, the pane is still
-                # waiting, and the window dies on this number — taking the session with it
-                # when it was the workspace's only one, which is the frame's own rule for
-                # its last chat.
+                # Esc, or a stdin that ended. Nothing was started and the pane is still
+                # waiting — that marker stays, so a quit does not record this chat and
+                # `_launch` says nothing about an early death or a recorded plane.
+                #
+                # The window is closed HERE rather than left to the `pane-died` hook, which
+                # is measured not to fire for this pane on every platform — see
+                # `_close_the_cancelled_chat`. Charter knows the operator cancelled.
+                _close_the_cancelled_chat(fid)
                 return selector.CANCELLED_EXIT
             start = choice.profile
             p, why = resolve(choice.profile)

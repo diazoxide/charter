@@ -156,7 +156,9 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
     identity, no resume id and nothing to bring back. Recording it would reopen a question
     rather than a chat. Its TAB is not this function's to remove, and `chats._by_workspace`
     deliberately does not read the marker: a pane you can leave and come back to is exactly
-    what a tab is for. Everything else this includes on the restoring side: a chat with no `exit` file
+    what a tab is for. **Nothing opens one yet** — `frame/selector.py` exists and the launch
+    paths that reach it do not, so this filter is written for the release that adds them and
+    fires for nobody until then. Everything else this includes on the restoring side: a chat with no `exit` file
     is recorded because *nothing means we do not know it stopped* (`state.was_closed`'s own
     note), a chat whose workspace has gone is recorded and flagged rather than dropped
     (§4j: re-homing is forbidden and #789 removed the last of it), and a chat with an

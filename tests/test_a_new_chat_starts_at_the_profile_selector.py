@@ -380,6 +380,102 @@ class TheConfirmAsksInPlace(_APickedSelector, unittest.TestCase):
         self.assertIn("could not write it", self.surfaces[2].footer)
 
 
+class NothingTheOperatorMustReadIsCutWithoutAWord(_APlaneWithProfiles, unittest.TestCase):
+    """Ruling 35's clipping clause, on the three surfaces that carry profile-derived text.
+
+    An ellipsis marks a cut and not its size, and on all three the size is the question: a
+    refusal's reason appears in the footer and NOWHERE else on this surface, and an approval
+    prompt holds the very command a `y` is about to run.
+    """
+
+    #: A command far wider than any pane, and printable so nothing else clips it first.
+    LONG = "x" * 400
+
+    def test_a_footer_too_wide_for_the_pane_says_how_much_it_hid(self):
+        line = selector.Selector(catalogue=self._rows(),
+                                 footer="  " + self.LONG).render(70, 8)[-1]
+        self.assertIn("not shown", line)
+        self.assertLessEqual(len(line.replace("\x1b[2m", "").replace("\x1b[0m", "")), 70)
+
+    def test_a_footer_that_fits_says_nothing_about_hiding(self):
+        line = selector.Selector(catalogue=self._rows(), footer="  short").render(70, 8)[-1]
+        self.assertNotIn("not shown", line)
+        self.assertIn("short", line)
+
+    def test_the_number_it_says_is_the_characters_it_took(self):
+        """Characters and not cells, because that is what an operator would have to go and
+        read somewhere else — `charter harness list` prints the same sentence unclipped."""
+        text = "  " + self.LONG
+        line = overlay._clipped(text, 70)
+        kept = line.split("…")[0]
+        self.assertIn(f"+{len(text) - len(kept)} not shown", line)
+
+    def test_an_approval_prompt_past_one_pane_says_how_much_it_hid(self):
+        """F4: a `y` given to a silently cut prompt approves a command the operator did not
+        see the end of."""
+        head = selector.Confirm(
+            heading=selector.CONFIRM.format(shown=self.LONG)).render(70, 8)[0]
+        self.assertIn("not shown", head)
+        self.assertIn("run this?", head)
+
+    def test_an_approval_prompt_never_says_how_many_rows_it_has(self):
+        """It asks one question. `· 1 to choose from` after a command describes the widget
+        rather than the thing being approved."""
+        head = selector.Confirm(heading="run this? claude --foo").render(120, 8)[0]
+        self.assertNotIn("to choose from", head)
+
+    def test_a_list_still_says_how_many_rows_it_has(self):
+        """The control: the count is right for a surface somebody is choosing FROM, and
+        `Confirm` opting out must not take it from the selector."""
+        self.assertIn("to choose from",
+                      selector.Selector(catalogue=self._rows()).render(120, 8)[0])
+
+
+class EveryFooterSaysHowToLeave(_APickedSelector, unittest.TestCase):
+    """F5 and F6. Esc is the whole of the way out of this pane — and in the one state where
+    it is the ONLY thing that works, a footer that dropped the hint to make room for a
+    sentence would be describing a dead end without naming the door."""
+
+    def test_the_ordinary_footer_names_esc(self):
+        self.assertIn(selector.ESC_HINT, selector.FOOTER)
+
+    def test_a_footer_carrying_a_refusal_still_names_esc(self):
+        self._queue(None)
+        self._pick(after=selector.Refused(WORK, "why not"))
+        self.assertIn(selector.ESC_HINT, self.surfaces[0].footer)
+        self.assertIn("why not", self.surfaces[0].footer)
+
+    def test_a_footer_saying_nothing_can_start_still_names_esc(self):
+        self.which.side_effect = lambda cmd, **kw: None
+        self._queue()
+        self._pick()
+        self.assertIn(selector.ESC_HINT, self.surfaces[0].footer)
+        self.assertIn("no profile can start here", self.surfaces[0].footer)
+
+    def test_the_confirms_footer_names_esc_too(self):
+        self.assertIn(selector.ESC_HINT, selector.CONFIRM_FOOTER)
+
+    def test_the_esc_hint_survives_a_reason_too_wide_for_the_pane(self):
+        """Which is why the hint goes FIRST when there is a reason: whatever is last is what
+        a narrow pane takes, and this is the half that must not be taken."""
+        line = selector.Selector(
+            catalogue=self._rows(),
+            footer=selector._footer((), selector.Refused(WORK, "y" * 400))).render(70, 8)[-1]
+        self.assertIn(selector.ESC_HINT, line)
+        self.assertIn("not shown", line)
+
+    def test_a_refused_row_in_an_all_refused_list_shows_its_own_reason(self):
+        """F6, and it is ruling 30 read exactly: Enter on a refused row shows THAT row's
+        reason. Checked the other way round, the one state where the operator most needs the
+        row's own sentence is the one that answers with the summary."""
+        self.which.side_effect = lambda cmd, **kw: None
+        rows = self._rows()
+        self.assertTrue(all(r.refused for r in rows), self._names(rows))
+        foot = selector._footer(rows, selector.Refused(WORK, "not on PATH: claude"))
+        self.assertIn("not on PATH: claude", foot)
+        self.assertNotIn("no profile can start here", foot)
+
+
 class TheSweepsOwnFindings(_APlaneWithProfiles, unittest.TestCase):
     """The lines CI's deletion sweep reported as survivors on this branch's first run, each
     with the case that goes red when it changes.
@@ -505,6 +601,58 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
         self.assertEqual(state.profile("beta.1"), WORK)
         self.assertFalse(state.is_waiting("beta.1"))
         self.assertEqual(self.execs[0][0], "claude")
+
+    def test_escape_closes_this_chats_own_window_rather_than_waiting_for_a_hook(self):
+        """**Charter knows the operator cancelled**, so it does not ask tmux to infer it.
+
+        Measured on a Linux CI runner: a chat pane that exits at the selector comes back
+        dead with BOTH `#{pane_dead_status}` and `#{pane_dead_signal}` empty, and the window
+        is still listed a minute later — with `remain-on-exit on` and both hooks present.
+        The `pane-died` hook is untouched and is still the answer for a harness that dies;
+        Esc is charter's own keystroke on charter's own surface in a pane no harness has
+        ever run in, and it closes its own window.
+        """
+        state.record_harness_pane("beta.1", "%7")
+        state.record_server("beta.1", "some-socket")
+        killed: list = []
+        with mock.patch.object(launcher.tmuxctl, "run",
+                               side_effect=lambda a, argv, **kw: killed.append(argv)):
+            self.assertEqual(self._run(), selector.CANCELLED_EXIT)
+        self.assertEqual(len(killed), 1, killed)
+        self.assertEqual(killed[0][-3:], ["kill-window", "-t", "%7"])
+        self.assertIn("some-socket", killed[0],
+                      "the chat's own server, never charter's default")
+
+    def test_a_pick_closes_no_window(self):
+        """The control. Only a cancel closes anything — a pick hands the pane to the
+        harness, which is the one thing that must still be running in it."""
+        killed: list = []
+        with mock.patch.object(launcher.tmuxctl, "run",
+                               side_effect=lambda a, argv, **kw: killed.append(argv)):
+            self.assertEqual(self._run(selector.Choice(WORK)), 0)
+        self.assertEqual(killed, [])
+
+    def test_a_cancel_with_no_frame_to_close_closes_nothing(self):
+        """A `charter frame-launch --select` run by hand proves no chat (rulings 29 and 33),
+        so there is no window of charter's to take — and taking one by `$TMUX_PANE` alone
+        would be this launch closing a pane it could not prove was its own."""
+        killed: list = []
+        with mock.patch.object(launcher, "framed_chat", return_value=None), \
+                mock.patch.object(launcher.tmuxctl, "run",
+                                  side_effect=lambda a, argv, **kw: killed.append(argv)):
+            self.assertEqual(self._run(), selector.CANCELLED_EXIT)
+        self.assertEqual(killed, [])
+
+    def test_a_chat_with_no_pane_recorded_falls_back_to_the_one_tmux_named(self):
+        """The migration case, and the same pair `cmd_new_chat` reads: the record is what
+        the LAUNCH wrote down, and `$TMUX_PANE` is what tmux put in this process."""
+        state.record_harness_pane("beta.1", "")
+        killed: list = []
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%3"}), \
+                mock.patch.object(launcher.tmuxctl, "run",
+                                  side_effect=lambda a, argv, **kw: killed.append(argv)):
+            self._run()
+        self.assertEqual(killed[0][-3:], ["kill-window", "-t", "%3"])
 
     def test_escape_exits_130_and_leaves_it_waiting(self):
         self.assertEqual(self._run(), selector.CANCELLED_EXIT)

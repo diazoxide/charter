@@ -39,17 +39,6 @@ the profile it runs: the `+`, a workspace tab and a chat handed off by another c
 open on that same profile rather than merely on the same kind of harness, because two chats
 of one harness may be two accounts.
 
-**And that pane can now ask which profile to start.** Before any harness has run in it, a
-chat's pane draws the **profile selector** — the `F2` palette's own picker, so you type to
-narrow it and press Enter to start. Every profile you declared is a row; a built-in is a row
-where its program is installed; a profile that cannot start is listed with the reason on it,
-and Enter there shows the reason and leaves the list open rather than closing the chat. A new
-or changed profile shows its command and asks in place. Esc closes that chat having started
-nothing — a pane at the selector has a tab, but it is not a chat: `charter: quit` does not
-record it and `charter reopen` never brings it back. It always shows, even where one profile
-can run: one profile costs one Enter, and skipping it would bring back the harness nobody
-picked.
-
 `charter reopen` brings each chat back on its own profile, and a chat whose profile is gone
 is **skipped by name** rather than moved onto another one — another profile may be another
 account, where that conversation does not exist. It stays in the record, so declaring the

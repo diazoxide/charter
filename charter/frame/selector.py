@@ -51,9 +51,14 @@ ROW_PREFIX = "profile:"
 
 LABEL = "charter · which profile?"
 
+#: The one key that always works here, and the one this surface may never clip away: at the
+#: selector Esc is the whole of the way out, and it is the ONLY thing that still works in a
+#: list where every row is refused.
+ESC_HINT = "esc close this chat"
+
 #: `enter start`, not `enter choose`, and no `F12`: there is no harness in this pane yet to
 #: go back to, and Esc here closes the chat rather than an overlay over one.
-FOOTER = "  up/down move   enter start   esc close this chat"
+FOOTER = f"  up/down move   enter start   {ESC_HINT}"
 
 NOTHING_TO_PICK = ("charter: no profile can start here — every row above says why. Nothing "
                    "was started; fix one of them and open a chat again.")
@@ -68,7 +73,7 @@ CONFIRM = "run this? {shown}"
 CONFIRM_ROW = overlay.Row(id="confirm:yes", title="y   run it",
                           note="any other key goes back to the list")
 
-CONFIRM_FOOTER = "  y run it   any other key goes back   esc close this chat"
+CONFIRM_FOOTER = f"  y run it   any other key goes back   {ESC_HINT}"
 
 
 class Choice(NamedTuple):
@@ -160,7 +165,7 @@ def read(root: Path) -> profiles.ProfileSet:
     return profiles.with_ignore_check(profiles.current(), profiles.ignore_check(root))
 
 
-def rows(read: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
+def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
          after: Refused | None = None) -> tuple[overlay.Row, ...]:
     """One row per profile, in `charter harness list`'s order, with its state on it.
 
@@ -172,8 +177,8 @@ def rows(read: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
     about).
 
     **A refused profile is a row too.** `profiles.current` drops a profile it refused into
-    `refused`, and `with_ignore_check` moves every declared one there when git would carry
-    the file — so those names would otherwise simply not appear, which is the one thing
+    `have.refused`, and `with_ignore_check` moves every declared one there when git would
+    carry the file — so those names would otherwise simply not appear, which is the one thing
     #512 refuses. A whole-FILE refusal has no name and no row; it is `doctor`'s and
     `charter harness list`'s to report.
 
@@ -183,7 +188,7 @@ def rows(read: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
     State                            refused   Note
     ===============================  ========  ==================================
     the launch just refused it       yes       the refusal (ruling 30)
-    `read.refused` holds the name    yes       the reason, the file's or git's
+    `have.refused` holds the name    yes       the reason, the file's or git's
     the command is not on `PATH`     yes       ``not on PATH: <cmd>``
     :func:`pending` has an answer    its own   its own
     otherwise                        no        ``<kind> · <env and command>``
@@ -202,7 +207,7 @@ def rows(read: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
         return (name not in order, order.index(name) if name in order else 0, name)
 
     out: list[tuple[tuple[int, int, str], overlay.Row]] = []
-    for p in read.profiles.values():
+    for p in have.profiles.values():
         program = profiles.expanded_command(p)[0]
         installed = shutil.which(program) is not None
         if p.source == profiles.BUILTIN and not installed:
@@ -218,9 +223,16 @@ def rows(read: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
         out.append((place(p.name),
                     overlay.Row(id=ROW_PREFIX + p.name, title=contain.readable(p.name),
                                 note=note, mark=p.name == start, refused=refused)))
-    for r in read.refused:
+    for r in have.refused:
         if not r.name:
             continue
+        # **These ids carry a CONTAINED name where a profile row's carries the raw one**,
+        # and the asymmetry is stated rather than tidied away because it cannot be tidied:
+        # `profiles.Refused.name` is `contain.readable`'s answer and the original is not
+        # kept, so there is nothing raw to put here. What it costs is exact and bounded: a
+        # refused name holding a byte `contain.readable` escapes never equals `p.name`
+        # above, so the `after` branch cannot match one. It does not need to — `after` is a
+        # profile the LAUNCH resolved, and a name `read` refused never reaches a launch.
         out.append((place(r.name),
                     overlay.Row(id=ROW_PREFIX + r.name, title=r.name, note=r.reason,
                                 refused=True)))
@@ -232,7 +244,6 @@ class Selector(palette.Palette):
     """The palette over profile rows, with the selector's own label and bottom line."""
 
     label: str = LABEL
-    footer: str | None = FOOTER
 
     #: The profile the cursor OPENS on, or ``""`` for `palette.aim`'s own answer.
     #:
@@ -275,6 +286,11 @@ class Confirm(overlay.Surface):
 
     rows: tuple[overlay.Row, ...] = (CONFIRM_ROW,)
     footer: str | None = CONFIRM_FOOTER
+    #: No `· 1 to choose from` after the command: this surface asks one question, and the
+    #: count would describe the widget rather than the thing being approved. What it shows
+    #: instead, where a command is wider than the pane, is how much it hid
+    #: (`overlay._clipped`) — a `y` must never approve a command cut without a word.
+    counted: bool = False
 
     def handle(self, ev: overlay.Event, height: int) -> str | None:
         if ev.kind != overlay.KEY:
@@ -298,18 +314,25 @@ def opens_on(listed: tuple[overlay.Row, ...], start: str | None) -> str:
 
 
 def _footer(listed: tuple[overlay.Row, ...], after: Refused | None) -> str:
-    """The bottom line: what nothing can start, else what the last Enter refused, else the
-    keys.
+    """The bottom line: what the last Enter refused, else that nothing can start, else the
+    keys — and :data:`ESC_HINT` in every one of them.
 
-    :data:`NOTHING_TO_PICK` outranks a single row's reason, and it is shown from the FIRST
-    paint rather than only after an Enter: a list where nothing can run says so while it is
-    being read, and every row's own reason is already on the row.
+    **The reason for what the operator just pressed outranks the summary**, which is ruling
+    30 read exactly: Enter on a refused row shows THAT row's reason. Checked the other way
+    round, a refused Enter in an all-refused list would answer with the summary — the one
+    state where the operator most needs the row's own sentence. :data:`NOTHING_TO_PICK` is
+    the FIRST-paint answer for a list where nothing can run, which says so while it is being
+    read rather than only after an Enter has found out.
+
+    **The key hint comes first when a reason is present**, and that is a clipping decision
+    rather than a typographic one: a reason is arbitrary-length text out of the profile
+    file, so whatever is last is what a narrow pane cuts (`overlay._clipped` says how much
+    it took). Esc is the only thing that works in the state this footer describes, so it is
+    the half that must survive.
     """
-    if not any(not row.refused for row in listed):
-        return "  " + NOTHING_TO_PICK
-    if after is not None:
-        return "  " + after.why
-    return FOOTER
+    said = (after.why if after is not None
+            else (NOTHING_TO_PICK if not any(not r.refused for r in listed) else ""))
+    return f"  {ESC_HINT}   ·   {said}" if said else FOOTER
 
 
 def pick(*, cwd: Path, root: Path, start: str | None = None,

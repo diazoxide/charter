@@ -2446,6 +2446,11 @@ def record_picked_kind(fid: str, harness_name: str) -> None: ...
      `shutil.which(expanded_command(p)[0])`.
    - **Refused declared profiles** are listed too, with their reason.
    - **Each row** is `Row(id=f"profile:{name}", title=name, note=…, mark=(name == start), refused=…)`.
+   - *Amended in Task 5's own PR:* `start` MIGRATES. It opens as the presser's profile (or
+     `[harness] default`), and every round trip through the selector — a refused Enter, a
+     `no` at the confirm, a pick the launch refused — sets it to the row that was pressed.
+     The mark follows the operator rather than staying on the row they have already moved
+     off; the alternative is a marked row nobody is looking at any more.
 
    | State, first match | `refused` | Note |
    |---|---|---|
