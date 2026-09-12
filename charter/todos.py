@@ -39,15 +39,18 @@ _HEADER = (
 #: is identical in kind, and one threshold is easier to reason about than two.
 _DUPLICATE_THRESHOLD = 0.5
 
-#: The fewest words two todos must AGREE ON before that overlap is evidence about them.
+#: The fewest words two TITLES must AGREE ON before that overlap is evidence about them.
+#: :func:`_same_work` only — see :func:`duplicate_of` for why the whole-text path does not
+#: want it.
 #:
 #: **A rule about how much signal a comparison needs, not a second threshold.** Below it
-#: the ratio is arithmetic with nothing behind it, and it is wrong in both directions at
-#: once. `memstore.wordset` keeps only words longer than three characters, so `fix the bug`
-#: has NO comparable word at all: two of them agree on nothing, score nothing, and the same
-#: todo recorded twice was recorded twice with no notice. And one shared word out of two is
-#: 0.5 exactly, so `Fix the widget` and `Break the widget` — and `Update the README file`
-#: beside `Delete the README file`, two words out of four — collapsed into one.
+#: the ratio is arithmetic with nothing behind it, and on titles it is wrong in both
+#: directions at once. `memstore.wordset` keeps only words longer than three characters, so
+#: `fix the bug` has NO comparable word at all: two of them agree on nothing, score nothing,
+#: and the same handoff recorded twice was recorded twice with no notice. And one shared
+#: word out of two is 0.5 exactly, so `Fix the widget` and `Break the widget` — and `Update
+#: the README file` beside `Delete the README file`, two words out of four — collapsed into
+#: one, which for a handoff means a real todo silently dropped.
 #:
 #: Moving :data:`_DUPLICATE_THRESHOLD` to 0.51 answers the second pair and neither of the
 #: others, and is a number that will be wrong again on the next shape. Where the overlap
@@ -113,34 +116,74 @@ def duplicate_of(name: str, text: str, *, by_title: bool = False) -> str | None:
     `memstore.title_of` — the same rule `memstore.write` titled it by, asked rather than
     respelled.
 
-    **Where the word overlap has nothing to say, identity decides** — see
-    :data:`_MIN_SHARED_WORDS`, which is why. The one case that survives both rules: two
-    titles that differ only past `memstore.TITLE_MAX` are stored as the same 72 characters
-    and read as one todo. Said rather than engineered around; a todo whose first 72
-    characters are another's is one somebody has to read twice anyway.
+    **The two paths tolerate OPPOSITE errors, because their callers do** — which is why
+    :data:`_MIN_SHARED_WORDS` scopes to *by_title* and the whole-text path is untouched.
+    `charter ws todo` REFUSES on a duplicate, so a false one costs the operator a rephrase
+    while a missed one leaves two near-identical todos, and closing one of those leaves its
+    twin looking outstanding; it wants the catching rule. `charter handoff` RECORDS NOTHING
+    on a duplicate and opens the chat anyway, so a false one silently drops a real handoff's
+    todo and the work goes invisible; it wants the careful one. The same measurement served
+    both badly: applied to the whole text it turned five hand-written retitles — `Fix the
+    login bug` beside `Fix the login issue`, `Update the README` beside `Update the README
+    file` — from caught into missed. A tiny-set overlap cannot tell "retitled by a word"
+    from "different work sharing a word"; the caller can say which way to be wrong.
     """
     existing = memstore.entries(todos_dir(name))
     if not existing:
         return None
-    words = _words(memstore.title_of(text) if by_title else text)
-    mine = _normal(memstore.title_of(text))
+    if by_title:
+        return _same_work(memstore.title_of(text), existing)
+    return _same_text(text, existing)
+
+
+def _same_text(text: str, existing) -> str | None:
+    """The whole of *text* against the whole of each stored todo — `charter ws todo`'s rule.
+
+    Unchanged since before the handoff existed, deliberately: this is the path that REFUSES,
+    and its stated preference is to catch a near-duplicate at the cost of the occasional
+    false one (`commands_workspace.cmd_ws_todo`).
+    """
+    words = _words(text)
+    if not words:
+        return None
     for _p, title, body in existing:
-        other = _words(title if by_title else f"{title} {memstore.body(body)}")
-        shared = words & other
-        if len(shared) < _MIN_SHARED_WORDS:
-            # No signal — decided by identity rather than by arithmetic (see
-            # :data:`_MIN_SHARED_WORDS`). Two todos that read the same ARE the same todo
-            # however short their words; two that read differently are not. No emptiness
-            # guard in front of it: `memstore.entries` falls back to the filename stem, so
-            # a stored title is never empty, and a `mine` that is would be a todo nothing
-            # on either side of this call would write.
-            if mine == _normal(title):
-                return title
+        other = _words(f"{title} {memstore.body(body)}")
+        if not other:
             continue
         # Jaccard — intersection over UNION, the same metric `memstore.duplicates` uses.
         # Dividing by max(len) instead looks equivalent and is not: on text this short a
         # single shared word is half the content, so "first thing" and "second thing"
         # scored 0.5 and the second was refused as a duplicate of the first.
+        if len(words & other) / len(words | other) >= _DUPLICATE_THRESHOLD:
+            return title
+    return None
+
+
+def _same_work(subject: str, existing) -> str | None:
+    """*subject* — a todo's first line — against each stored todo's TITLE, `charter
+    handoff`'s rule.
+
+    **Where the word overlap has nothing to say, identity decides** (:data:`_MIN_SHARED_WORDS`).
+    The one case that survives both rules: two titles differing only past
+    `memstore.TITLE_MAX` are stored as the same 72 characters and read as one todo. Said
+    rather than engineered around; a todo whose first 72 characters are another's is one
+    somebody has to read twice anyway. Punctuation is not collapsed either, so `Fix the
+    widget!` is a second todo beside `Fix the widget`.
+    """
+    words = _words(subject)
+    mine = _normal(subject)
+    for _p, title, _body in existing:
+        other = _words(title)
+        shared = words & other
+        if len(shared) < _MIN_SHARED_WORDS:
+            # No signal — decided by identity rather than by arithmetic. Two todos that
+            # read the same ARE the same todo however short their words; two that read
+            # differently are not. No emptiness guard in front of it: `memstore.entries`
+            # falls back to the filename stem, so a stored title is never empty, and a
+            # `mine` that is would be a todo nothing on either side of this call writes.
+            if mine == _normal(title):
+                return title
+            continue
         if len(shared) / len(words | other) >= _DUPLICATE_THRESHOLD:
             return title
     return None

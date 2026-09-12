@@ -76,10 +76,16 @@ BRIEF
    on nothing, while one shared word out of two is 0.5 exactly and `Fix the widget` swallowed
    `Break the widget`. So an overlap of fewer than three shared words is not read as evidence in
    either direction — those are decided by whether the two first lines **are the same line**,
-   ignoring case and runs of spaces. `fix the bug` twice is one todo; `Fix the widget` and
-   `Break the widget` are two. The one case that survives both rules, stated rather than
-   engineered around: two first lines that differ only past the 72nd character are stored as the
-   same title and read as one todo.
+   ignoring case and runs of spaces but not punctuation. `fix the bug` twice is one todo;
+   `Fix the widget` and `Break the widget` are two, and so are `Fix the widget` and
+   `Fix the widget!`. Two first lines that differ only past the 72nd character are stored as
+   the same title and read as one todo — stated rather than engineered around.
+
+   **This is the handoff's rule and not `charter ws todo`'s**, which compares whole texts and
+   keeps catching a todo retitled by a word. The two want opposite errors: `ws todo` REFUSES on
+   a duplicate, so a false one costs you a rephrase while a missed one leaves two near-identical
+   todos on the list; a handoff records nothing and opens the chat anyway, so a false one drops
+   a real todo and the work goes invisible.
 3. Opens a chat in the target workspace **in the background**. No client moves, nothing
    attaches, and the chat you are on keeps its panels — measured on tmux 3.7c and at charter's
    3.2 floor, with real clients attached: the session's current window is the same one before

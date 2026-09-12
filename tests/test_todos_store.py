@@ -182,53 +182,123 @@ class TestADuplicateJudgedByTitle(PersonaIso):
 
 
 class TestAnOverlapTooThinToBeEvidence(PersonaIso):
-    """`todos._MIN_SHARED_WORDS`: below it the ratio is arithmetic with nothing behind it,
-    and it was wrong in both directions at once.
+    """`todos._MIN_SHARED_WORDS`, on the `by_title` path — where below it the ratio is
+    arithmetic with nothing behind it, and wrong in both directions at once.
 
     `memstore.wordset` keeps only words longer than three characters, so `fix the bug` has
-    no comparable word at all — two of them agreed on nothing and scored nothing, and the
-    same todo recorded twice went in twice. At the other end one shared word out of two is
-    0.5 exactly, so `Fix the widget` swallowed `Break the widget`. Where the overlap cannot
+    no comparable word at all — two of them agreed on nothing and scored nothing, so the
+    same handoff recorded twice went in twice. At the other end one shared word out of two
+    is 0.5 exactly, so `Fix the widget` swallowed `Break the widget`, and for a handoff a
+    false duplicate means a real todo silently dropped. Where the overlap cannot
     distinguish, identity decides, which needs no threshold.
+
+    **The whole-text path deliberately does NOT get this rule** —
+    `TestTheWholeTextPathStillCatchesARetitle` is the other half, and `duplicate_of`'s own
+    docstring is why.
     """
 
     def setUp(self) -> None:
         super().setUp()
         workspace.ensure("alpha")
 
+    def _dup(self, text):
+        return todos.duplicate_of("alpha", text, by_title=True)
+
     def test_two_titles_of_only_short_words_that_read_the_same_are_the_same_todo(self):
         todos.add("alpha", "fix the bug")
-        self.assertEqual(todos.duplicate_of("alpha", "fix the bug"), "fix the bug")
+        self.assertEqual(self._dup("fix the bug"), "fix the bug")
 
     def test_and_the_same_words_typed_differently_are_still_the_same_todo(self):
         """Case and runs of whitespace are not differences (`todos._normal`)."""
         todos.add("alpha", "fix the bug")
-        self.assertEqual(todos.duplicate_of("alpha", "Fix   THE bug"), "fix the bug")
+        self.assertEqual(self._dup("Fix   THE bug"), "fix the bug")
 
     def test_two_titles_of_only_short_words_that_read_differently_are_not(self):
         todos.add("alpha", "fix the bug")
-        self.assertIsNone(todos.duplicate_of("alpha", "ask the dev"))
+        self.assertIsNone(self._dup("ask the dev"))
 
     def test_one_shared_word_out_of_two_is_not_the_same_todo(self):
         todos.add("alpha", "Fix the widget")
-        self.assertIsNone(todos.duplicate_of("alpha", "Break the widget"))
+        self.assertIsNone(self._dup("Break the widget"))
 
     def test_two_shared_words_out_of_four_are_not_either(self):
         todos.add("alpha", "Update the README file")
-        self.assertIsNone(todos.duplicate_of("alpha", "Delete the README file"))
+        self.assertIsNone(self._dup("Delete the README file"))
+
+    def test_three_shared_words_are_evidence_and_the_metric_decides(self):
+        """**Three, spelled out rather than read off the constant** — an expectation
+        computed from the value it checks moves with that value and pins nothing, which is
+        how `TITLE_MAX` survived two mutations before its own number was written down.
+        These titles share exactly three words at 0.750, so at a floor of four they would
+        fall to identity, read as different lines, and be recorded twice."""
+        self.assertEqual(todos._MIN_SHARED_WORDS, 3)
+        todos.add("alpha", "Rotate the staging tokens")
+        self.assertEqual(len(memstore.wordset("Rotate the staging tokens")
+                             & memstore.wordset("Rotate the staging tokens again")), 3)
+        self.assertEqual(self._dup("Rotate the staging tokens again"),
+                         "Rotate the staging tokens")
 
     def test_a_real_overlap_is_still_read_as_one(self):
         """The rule narrows what counts as evidence; it does not switch the metric off."""
         todos.add("alpha", "prove the live gh issue create path works")
-        self.assertIsNotNone(
-            todos.duplicate_of("alpha", "prove the live gh issue create path also works"))
+        self.assertIsNotNone(self._dup("prove the live gh issue create path also works"))
 
-    def test_the_same_rule_holds_for_a_handoffs_titles(self):
+    def test_the_same_rule_holds_for_a_handoffs_whole_todo_text(self):
         tail = TestADuplicateJudgedByTitle.TAIL
         todos.add("alpha", "fix the bug" + tail)
-        self.assertEqual(todos.duplicate_of("alpha", "fix the bug" + tail, by_title=True),
-                         "fix the bug")
-        self.assertIsNone(todos.duplicate_of("alpha", "ask the dev" + tail, by_title=True))
+        self.assertEqual(self._dup("fix the bug" + tail), "fix the bug")
+        self.assertIsNone(self._dup("ask the dev" + tail))
+
+
+class TestTheWholeTextPathStillCatchesARetitle(PersonaIso):
+    """The other half of the split, and the reason for it: `charter ws todo` REFUSES on a
+    duplicate, so it wants the catching rule even at the cost of a false one.
+
+    Round 2 applied the no-signal rule to this path too. Measured on 20 hand-written pairs
+    it changed 12 verdicts, and five of them were one shape — a one-line todo retitled by a
+    word — turning from caught into missed, with `commands_workspace.cmd_ws_todo` still
+    carrying the comment that says why that is the worse error: *closing one of a
+    near-identical pair leaves its twin looking outstanding*.
+    """
+
+    RETITLES = (
+        ("Fix the login bug", "Fix the login issue"),
+        ("Update the README", "Update the README file"),
+        ("Review the backlog", "Review the backlog again"),
+        ("Rotate the staging tokens", "Rotate the staging token"),
+        ("Add a retry to the webhook sender", "Add retries to the webhook sender"),
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.ensure("alpha")
+
+    def test_a_one_line_todo_retitled_by_a_word_is_still_caught(self):
+        for first, second in self.RETITLES:
+            with self.subTest(first=first):
+                workspace.ensure("w")
+                todos.add("w", first)
+                self.assertEqual(todos.duplicate_of("w", second), first)
+                for p in memstore.files(todos.todos_dir("w")):
+                    p.unlink()
+
+    def test_and_the_by_title_path_reads_those_same_pairs_as_two_todos(self):
+        """Not a contradiction — the opposite error, chosen by the caller. A handoff that
+        refused one of these would drop a real todo and say only that it did not record it
+        twice."""
+        for first, second in self.RETITLES:
+            with self.subTest(first=first):
+                workspace.ensure("w")
+                todos.add("w", first)
+                self.assertIsNone(todos.duplicate_of("w", second, by_title=True))
+                for p in memstore.files(todos.todos_dir("w")):
+                    p.unlink()
+
+    def test_a_todo_of_only_short_words_is_still_not_compared_on_this_path(self):
+        """`memstore.wordset` has nothing to compare, and this path answers None rather than
+        falling back to identity — the behaviour `charter ws todo` had before this branch."""
+        todos.add("alpha", "fix the bug")
+        self.assertIsNone(todos.duplicate_of("alpha", "fix the bug"))
 
 
 if __name__ == "__main__":

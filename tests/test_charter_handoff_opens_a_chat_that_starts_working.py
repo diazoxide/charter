@@ -37,6 +37,22 @@ from tests.test_the_chat_bars_plus_makes_a_chat import _a_chat
 WHEN = datetime.datetime(2026, 9, 10, 14, 5)
 STAMP = "⟨handoff from chat alpha.1 · workspace alpha · 2026-09-10 14:05⟩"
 
+#: Every byte a handoff on :data:`BRIEF` commits, with only the recorded timestamp standing
+#: in for itself. **Spelled out rather than built from `handoff.todo_text`**: an expectation
+#: computed from the function under test moves with it, and an equality against a recomputed
+#: `todo_text` passed with the whole brief in the file. `It breaks on resize.` — the brief's
+#: second line — is the thing that must not be here, and it is not here in any shape.
+COMMITTED_TODO = (
+    "# Fix the widget\n"
+    "\n"
+    "<stamp>\n"
+    "\n"
+    "Fix the widget\n"
+    "\n"
+    "Handed off from chat alpha.1 · workspace alpha. The full brief is private to the "
+    "chat it opened.\n"
+)
+
 
 class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
     def setUp(self) -> None:
@@ -161,28 +177,27 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         """A LIVE workspace commits `todos/**`, and a brief may quote anything — a
         transcript, a customer's data, the text of a secret it is warning the next chat off.
 
-        **Equality, on the RAW files.** Read through `open_todos()["text"]`, which is
-        `memstore.body()` — stripped and lowercased — putting the WHOLE brief in the todo
-        left 807 tests green; and a substring check for one fixture line still passed while
-        `brief[:-2]`, 34 of its 36 characters, leaked. Every byte that gets committed is
-        named here, so anything extra fails whatever shape it arrives in. Only the recorded
-        timestamp is matched rather than spelled."""
+        **The expected file is written out, byte for byte.** Three weaker spellings of this
+        assertion each let a leak through: `open_todos()["text"]` reads `memstore.body()`,
+        stripped and lowercased, so the WHOLE brief in the todo left 807 tests green; a
+        substring check for one fixture line passed `brief[:-2]`, 34 of its 36 characters;
+        and an equality against `handoff.todo_text(BRIEF, …)` recomputed here passed both of
+        those, because it is the function under test and moves with it. The trap this branch
+        already named for `TITLE_MAX`: an expectation computed from the value it checks pins
+        nothing. Only the recorded timestamp is matched rather than spelled."""
         self._handoff("beta")
         files = [p for p in sorted(todos.todos_dir("beta").rglob("*")) if p.is_file()]
         index = todos.index("beta")
         [todo] = [p for p in files if p != index]
         self.assertEqual([p.name for p in files], sorted([index.name, todo.name]))
 
-        head, blank, stamp, blank2, *rest = todo.read_text().splitlines()
-        self.assertEqual(head, "# Fix the widget")
-        self.assertEqual([blank, blank2], ["", ""])
-        self.assertRegex(stamp, r"^_\d{4}-\d{2}-\d{2} \d{2}:\d{2} · persistent_$")
-        self.assertEqual("\n".join(rest), handoff.todo_text(
-            BRIEF, source_chat="alpha.1", source_workspace="alpha"))
+        lines = todo.read_text().splitlines(keepends=True)
+        self.assertRegex(lines[2], r"^_\d{4}-\d{2}-\d{2} \d{2}:\d{2} · persistent_\n$")
+        lines[2] = "<stamp>\n"
+        self.assertEqual("".join(lines), COMMITTED_TODO)
 
-        self.assertEqual(index.read_text(),
-                         todos._HEADER.format(name="beta")
-                         + f"- [Fix the widget]({todo.name})\n")
+        rows = [ln for ln in index.read_text().splitlines() if ln.startswith("- ")]
+        self.assertEqual(rows, [f"- [Fix the widget]({todo.name})"])
 
     # -- the private brief -----------------------------------------------------------------
 

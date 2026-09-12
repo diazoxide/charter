@@ -27,7 +27,10 @@ The brief becomes the new chat's first message. Your harness asks before the com
    handoff continues. "The same work" is asked over the first lines, because every handoff todo
    ends in the same provenance sentence and over the whole text that boilerplate read as
    agreement; and where fewer than three words overlap — too thin to be evidence in either
-   direction — it is decided by whether the two first lines are the same line.
+   direction — it is decided by whether the two first lines are the same line. That is the
+   handoff's rule, not `charter ws todo`'s: `ws todo` refuses on a duplicate, so it keeps
+   catching a todo retitled by a word, while a handoff that refused one would drop a real todo
+   and the work would go invisible.
 3. Opens a chat there in the background. No client moves, nothing attaches, and the chat you are
    on keeps its panels — measured on tmux 3.7c and at charter's 3.2 floor with real clients
    attached.
