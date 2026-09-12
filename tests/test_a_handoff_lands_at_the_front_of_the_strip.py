@@ -111,8 +111,17 @@ class TheArrivedTabIsDrawnInTheOkAccent(PersonaIso, unittest.TestCase):
             (config.WORKSPACES_DIR / n).mkdir(parents=True, exist_ok=True)
         slots.TABS.forget()
         self.addCleanup(slots.TABS.forget)
+        # **`statusline.accent("ok")` is a COLLABORATOR here, not the code under test**,
+        # which is the line between an indirection that is fine and the one that pins
+        # nothing: `slots._compose` is what these cases measure, and which SGR this plane
+        # draws `ok` in is `[frame] accents` — an operator's choice, so spelling the escape
+        # would pin a theme rather than the property. What the indirection could hide is an
+        # accent that is EMPTY, where every `assertIn` below passes on the empty string, so
+        # that one case is closed here and by the literal beside it.
         self.assertNotEqual(statusline.accent("ok"), "",
                             "this plane draws no ok accent, so nothing below is a test")
+        self.assertEqual(statusline.accent("ok"), "\x1b[32m",
+                         "the shipped `ok` accent moved; these rows are written for it")
 
     def _line(self, names, here, arrived=frozenset(), width=200):
         return slots._compose(names, here, width, arrived=arrived)[0][0]
@@ -138,7 +147,7 @@ class TheArrivedTabIsDrawnInTheOkAccent(PersonaIso, unittest.TestCase):
         """`panel._write` hands every row to `chrome.plain` under `NO_COLOR`. What is left
         of an arrived tab there is the glyph, and the tab you are on still has its `*`."""
         line = chrome.plain(self._line(["alpha", "beta"], "alpha", frozenset({"beta"})))
-        self.assertEqual(line, f"{slots._inset()}*alpha  {ARRIVED}beta")
+        self.assertEqual(line, "  *alpha  ✶beta")
 
     def test_the_accent_and_the_glyph_move_no_column(self):
         """The alignment measurement, at three widths and two row counts. The arrival
@@ -178,8 +187,7 @@ class TheArrivedTabIsDrawnInTheOkAccent(PersonaIso, unittest.TestCase):
         _a_chat("beta.1", ws="beta", pane="%1")
         workspace.record_arrival("beta.1")
         row = "".join(slots.chats_bar("beta.1", 200))
-        self.assertEqual(chrome.plain(row), f"{slots._inset()}*beta.1  {slots.ADD_CHAT} "
-                                            f"{slots.CLOSE_CHAT}")
+        self.assertEqual(chrome.plain(row), "  *beta.1  + -")
         self.assertEqual(row.count(statusline.accent("ok")), 0)
 
     def test_an_unreadable_arrivals_record_draws_a_plain_strip(self):
@@ -237,7 +245,9 @@ class TheArrivalsRecord(PersonaIso, unittest.TestCase):
         workspace.record_arrival("beta")
         d = workspace._arrivals_dir()
         self.assertTrue((d / "beta").is_file())
-        self.assertEqual(d.parent, workspace._tab_order_file().parent)
+        self.assertEqual(d, Path(config.STATE_DIR) / "workspace-arrivals")
+        self.assertEqual(d.parent, Path(config.STATE_DIR),
+                         "beside `workspace-tab-order`, which lives here too")
         mode = stat.S_IMODE((d / "beta").stat().st_mode)
         self.assertEqual(mode & 0o077, 0, f"the mark came out {mode:04o}")
         self.assertEqual(mode, config.STATE_FILE_MODE, f"the mark came out {mode:04o}")
@@ -255,7 +265,8 @@ class TheArrivalsRecord(PersonaIso, unittest.TestCase):
         workspace.record_arrival("beta")
         workspace.record_arrival("beta")
         self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
-        self.assertEqual(sorted(p.name for p in workspace._arrivals_dir().iterdir()),
+        self.assertEqual(sorted(q.name for q in
+                                (Path(config.STATE_DIR) / "workspace-arrivals").iterdir()),
                          ["beta"])
 
     def test_a_name_that_cannot_be_a_workspace_is_never_joined_onto_a_path(self):
@@ -802,9 +813,18 @@ class AHandoffArrives(_AHandoffFromAlpha):
         with mock.patch("charter.workspace.record_arrival", return_value=False):
             rc, out, err = self._handoff()
         self.assertEqual(rc, 0)
-        self.assertEqual(err.strip(), "! " + commands_handoff.UNMARKED.format(
-            ws="beta", chat="beta.1"),
-            "a handoff that opened a chat did not fail, so this is not a `✗`")
+        # **Spelled out, not `UNMARKED.format(...)`.** An expectation computed from the
+        # template under test moves with it: removing `{ws}` — the very thing this case
+        # exists to confirm — leaves both sides equal and the suite green, and so does
+        # inverting the sentence. The words are the property here, so the words are
+        # written down. The `! ` is `util.warn`'s marker and belongs in the same string:
+        # a handoff that opened a chat did not fail, so this is not a `✗`.
+        self.assertEqual(
+            err.strip(),
+            "! charter handoff: beta.1 is open in 'beta', but charter could not mark "
+            "that workspace's tab as arrived — its state directory refused the write. "
+            "Nothing on the strip will point at the new chat; its tab did move to the "
+            "front.")
         self.assertIn("opened chat beta.1 in workspace 'beta'", out)
         self.assertEqual(workspace.tab_order()[0], "beta")
         self.assertEqual(state.notice("alpha.1"),
