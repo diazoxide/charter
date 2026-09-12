@@ -30,7 +30,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import config, profiles, util
+from charter import config, contain, profiles, tui, util
 from charter.frame import chats, launcher, leave, overlay, palette, selector, state
 from tests import _gitguard
 from tests._isolation import PersonaIso, declare_profiles, make_plane
@@ -170,6 +170,19 @@ class TheRows(_APlaneWithProfiles, unittest.TestCase):
         surface.handle(overlay.Event(overlay.KEY, "c"), 24)
         self.assertIs(surface.selected, surface.rows[palette.aim(surface.rows)])
 
+    def test_no_start_row_aims_at_no_row_at_all(self):
+        """`Selector.on` is empty for a chat that named no profile, and empty must mean
+        *nothing to look for* rather than *look for the row with no name*. Two lines keep
+        that from opposite sides — this one, and `rows` refusing to build a row for a
+        refusal with no name — so the row id this asks about is one nothing can produce
+        today and the guard is what makes that safe to rely on.
+        """
+        listed = (overlay.Row(id=selector.ROW_PREFIX + WORK, title=WORK, note=""),
+                  overlay.Row(id=selector.ROW_PREFIX, title="", note=""))
+        surface = selector.Selector(catalogue=listed, on="")
+        self.assertEqual(surface.selected.id, selector.ROW_PREFIX + WORK)
+        self.assertIs(surface.selected, surface.rows[palette.aim(surface.rows)])
+
     def test_control_bytes_in_a_command_are_escaped_in_its_row(self):
         """Ruling 35: `charter.local.toml` is a file a chat can write, and a `\\r` or an ESC
         in a command could otherwise redraw the row to show a harmless command."""
@@ -190,6 +203,46 @@ class TheRows(_APlaneWithProfiles, unittest.TestCase):
         row = self._row(self._rows(), "w" * 200)
         self.assertTrue(row.title.endswith("..."))
         self.assertLess(len(row.title), 200)
+
+    def test_a_refusal_at_the_launch_marks_the_row_it_names_and_no_other(self):
+        """*after* is ONE profile's refusal — the one the launch just checked again. A list
+        that spread it over every row would tell an operator that the profile they did not
+        pick cannot start either, and Enter on that row would answer with somebody else's
+        sentence instead of starting a harness that was fine all along."""
+        rows = self._rows(after=selector.Refused(WORK, "the reason it gave"))
+        picked = self._row(rows, WORK)
+        self.assertTrue(picked.refused)
+        self.assertIn("the reason it gave", picked.note)
+        other = self._row(rows, "codex-pinned")
+        self.assertFalse(other.refused)
+        self.assertNotIn("the reason it gave", other.note)
+
+    def test_the_command_a_machine_lacks_is_named_escaped(self):
+        """Ruling 35 again, on the other sentence a row can carry: `not on PATH` quotes the
+        profile's own `command`, and `charter.local.toml` is a file a chat can write."""
+        self.local.write_text('[harness.sneaky]\nkind = "claude"\n'
+                              'command = ["cl\\u001b[2Kear"]\n')
+        self.which.side_effect = lambda cmd, **kw: None
+        note = self._row(self._rows(), "sneaky").note
+        self.assertIn("not on PATH", note)
+        self.assertNotIn("\x1b", note)
+        self.assertIn(contain.readable("cl\x1b[2Kear"), note)
+
+    def test_a_refusal_naming_the_whole_file_is_not_a_row(self):
+        """`profiles.Refused` spells a whole-file refusal with an EMPTY name — unreadable
+        TOML, or a `harness` key that is not a table — and there is no profile behind one to
+        start and no name to put in its title. A row for it is a blank line Enter cannot
+        act on, in a list whose every other row is a thing to run. The sentence is not
+        lost: `charter harness list` and `charter doctor` both print `r.name or r.source`,
+        so it reads as `charter.local.toml: <why>` where a reader whose file will not parse
+        is already going.
+        """
+        self.local.write_text('harness = "not a table"\n')
+        self.assertIn("", [r.name for r in self._read().refused])
+        rows = self._rows()
+        self.assertTrue(rows, "the built-ins are still listed")
+        self.assertNotIn(selector.ROW_PREFIX, [r.id for r in rows])
+        self.assertTrue(all(r.title for r in rows), self._names(rows))
 
 
 class TheSeamTasksThreeAndFourFill(_APlaneWithProfiles, unittest.TestCase):
@@ -371,6 +424,21 @@ class TheConfirmAsksInPlace(_APickedSelector, unittest.TestCase):
         self.assertTrue(selector.Confirm().rows)
         self.assertIsNotNone(selector.Confirm().selected)
 
+    def test_a_state_with_nothing_to_ask_is_not_asked_about(self):
+        """The `ask` half of the gate, and the two halves are different questions: `pending`
+        answers for every listed profile, and only a NEW or CHANGED one has anything to
+        approve. Task 4's answer for a wired profile that is already approved is a `Pending`
+        with a note and `ask=False`, and putting `run this?` in front of that is charter
+        asking an operator to approve what they approved last week.
+        """
+        with mock.patch.object(selector, "pending", return_value=selector.Pending(
+                refused=False, note="claude · claude", ask=False)):
+            self._queue(self._row_named(WORK))
+            self.assertEqual(self._pick(), selector.Choice(WORK))
+        self.assertEqual(self.approved, [])
+        self.assertEqual(len(self.surfaces), 1)
+        self.assertIsInstance(self.surfaces[0], selector.Selector)
+
     def test_an_approval_that_could_not_be_written_returns_to_the_selector(self):
         """The fourth review's nit: a launch record that fails to write refuses rather than
         re-asking, so `approve` answers the write error and the pick does not proceed."""
@@ -424,6 +492,28 @@ class NothingTheOperatorMustReadIsCutWithoutAWord(_APlaneWithProfiles, unittest.
         head = selector.Confirm(heading="run this? claude --foo").render(120, 8)[0]
         self.assertNotIn("to choose from", head)
 
+    def test_a_sentence_exactly_as_wide_as_the_pane_is_left_whole(self):
+        """The boundary, not just the direction: a line that FITS is not a line that was
+        cut, so it says nothing about hiding. One cell narrower is the other side of it."""
+        text = "x" * 70
+        self.assertEqual(overlay._clipped(text, 70), text)
+        self.assertIn("not shown", overlay._clipped(text, 69))
+
+    def test_the_cut_line_keeps_every_cell_the_pane_has(self):
+        """The search walks down from the end and stops at the FIRST length that fits, so
+        the answer is the longest line this pane can hold — one cell short would be one more
+        character of the operator's own sentence hidden, and the count would say so."""
+        line = overlay._clipped(self.LONG, 70)
+        self.assertEqual(tui.width(line), 70)
+        self.assertIn(f"+{len(self.LONG) - 54} not shown", line)
+
+    def test_a_pane_too_narrow_for_the_count_still_draws_a_line_that_fits(self):
+        """The heading's width is what is left after the `· n to choose from` suffix, and a
+        pane can be narrower than the suffix alone. Whatever that arithmetic answers, the
+        line that reaches the terminal is the pane's width and no wider."""
+        head = selector.Selector(catalogue=self._rows()).render(8, 8)[0]
+        self.assertLessEqual(tui.width(head), 8)
+
     def test_a_list_still_says_how_many_rows_it_has(self):
         """The control: the count is right for a surface somebody is choosing FROM, and
         `Confirm` opting out must not take it from the selector."""
@@ -463,6 +553,20 @@ class EveryFooterSaysHowToLeave(_APickedSelector, unittest.TestCase):
             footer=selector._footer((), selector.Refused(WORK, "y" * 400))).render(70, 8)[-1]
         self.assertIn(selector.ESC_HINT, line)
         self.assertIn("not shown", line)
+
+    def test_a_list_with_something_to_start_says_only_the_keys(self):
+        """The third state of this footer, and the one that says the other two are about
+        something. `NOTHING_TO_PICK` belongs to a list where NOTHING can run: over a list
+        holding one refused row among runnable ones — which is most lists — it is the
+        summary contradicting the rows, and it would be there from the first paint.
+        """
+        self.which.side_effect = lambda cmd, **kw: (None if cmd == "npx"
+                                                    else f"/usr/bin/{cmd}")
+        rows = self._rows()
+        self.assertTrue(any(r.refused for r in rows), self._names(rows))
+        self.assertTrue(any(not r.refused for r in rows), self._names(rows))
+        self.assertEqual(selector._footer(rows, None), selector.FOOTER)
+        self.assertNotIn("no profile can start here", selector.FOOTER)
 
     def test_a_refused_row_in_an_all_refused_list_shows_its_own_reason(self):
         """F6, and it is ruling 30 read exactly: Enter on a refused row shows THAT row's
@@ -538,6 +642,36 @@ class TheSweepsOwnFindings(_APlaneWithProfiles, unittest.TestCase):
         self.assertIsNone(state.record_waiting(""))
         self.assertFalse(state.is_waiting(""))
         self.assertIsNone(state.clear_waiting(""))
+
+    def test_the_marker_is_a_file_called_waiting_in_the_chats_own_directory(self):
+        """The name is on disk, which makes it an interface rather than a private spelling:
+        a frame started by one charter is read by whichever charter the operator upgrades
+        to, and `state.reap`, a quit and a reopen all meet this chat through its directory.
+        `closed` is pinned the same way, one marker over."""
+        state.record_waiting("beta.7")
+        self.assertTrue((state.frame_dir("beta.7") / "waiting").exists())
+        state.clear_waiting("beta.7")
+        self.assertFalse((state.frame_dir("beta.7") / "waiting").exists())
+
+    def test_marking_a_waiting_pane_survives_a_filesystem_that_refuses(self):
+        """`record_waiting`'s catch. It runs in `_launch`, before tmux is asked for
+        anything, so an `OSError` out of it would refuse to open the chat over a marker
+        whose failure costs exactly one uninvited tab — the trade its docstring states."""
+        with mock.patch.object(state.config, "write_for", side_effect=OSError(13, "denied")):
+            self.assertIsNone(state.record_waiting("beta.8"))
+        self.assertFalse(state.is_waiting("beta.8"))
+
+    def test_a_row_id_is_not_something_the_query_can_match(self):
+        """What the `profile:` in a row id is FOR, said where it can be seen. `palette
+        .matches` reads an id only when `component.usable_id` accepts it, and a colon is
+        what that refuses — so ids stay out of the filter and typing the prefix's own word
+        lists nothing. Ids spelled as bare names would be matched, and every row would
+        answer to the letters of a name the operator was not typing.
+        """
+        rows = self._rows()
+        self.assertTrue(all(r.id.startswith(selector.ROW_PREFIX) for r in rows))
+        self.assertEqual(palette.narrow(rows, "profile"), ())
+        self.assertTrue(palette.narrow(rows, WORK))
 
     def test_forgetting_a_waiting_pane_survives_a_filesystem_that_refuses(self):
         """`clear_waiting`'s catch. It runs at the pick, in the pane, one line before the
@@ -643,13 +777,32 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
     def test_a_cancel_with_no_frame_to_close_closes_nothing(self):
         """A `charter frame-launch --select` run by hand proves no chat (rulings 29 and 33),
         so there is no window of charter's to take — and taking one by `$TMUX_PANE` alone
-        would be this launch closing a pane it could not prove was its own."""
+        would be this launch closing a pane it could not prove was its own.
+
+        `$TMUX_PANE` is SET here, which is what makes that sentence a measurement: a hand
+        run inside somebody's own tmux has one, and it names a pane of theirs.
+        """
         killed: list = []
         with mock.patch.object(launcher, "framed_chat", return_value=None), \
+                mock.patch.dict(os.environ, {"TMUX_PANE": "%9"}), \
                 mock.patch.object(launcher.tmuxctl, "run",
                                   side_effect=lambda a, argv, **kw: killed.append(argv)):
             self.assertEqual(self._run(), selector.CANCELLED_EXIT)
         self.assertEqual(killed, [])
+
+    def test_a_launch_with_no_frame_proof_still_runs_what_was_picked(self):
+        """The pick's own writes, on the path where there is nothing to write them to.
+
+        `framed_chat` answering `None` is a `frame-launch` run by hand, and every one of the
+        three records the pick makes is then addressed to a chat that has no directory.
+        They answer for that rather than raising — which is what keeps a hand run from
+        dying one line above the `exec` it exists to reach.
+        """
+        with mock.patch.object(launcher, "framed_chat", return_value=None):
+            self.assertEqual(self._run(selector.Choice(WORK)), 0)
+        self.assertEqual(self.execs[0][0], "claude")
+        self.assertIsNone(state.profile("beta.1"))
+        self.assertTrue(state.is_waiting("beta.1"), "beta.1 was never this launch's chat")
 
     def test_a_pane_this_process_is_not_the_first_process_of_is_never_closed(self):
         """**The incident this rule exists for (2026-09-12).** A test run of this class from
@@ -783,6 +936,22 @@ class AWaitingPaneIsNotAChat(_APlaneWithProfiles, unittest.TestCase):
         state.record_waiting("beta.2")
         self.assertTrue(state.is_waiting("beta.2"))
 
+    def test_the_undo_puts_back_the_kind_the_launch_had_recorded(self):
+        """`_picked` reads the identity record's own `CHARTER_HARNESS` before it overwrites
+        it, so an `execvpe` that raises leaves the chat saying exactly what it said before
+        the pick. Reading any other name would put back a blank — which is what a pane that
+        is still at the selector says, and this one stopped being that at the pick.
+        """
+        state.record_identity("beta.2", {"CHARTER_SESSION_ID": "beta.2",
+                                         "CHARTER_HARNESS": "claude-code"})
+        p = self._read().profiles["codex-pinned"]
+        undo = launcher._picked("beta.2", p)
+        self.assertEqual(state.identity("beta.2")["CHARTER_HARNESS"], p.harness)
+        self.assertNotEqual(p.harness, "claude-code")
+        undo()
+        self.assertEqual(state.identity("beta.2")["CHARTER_HARNESS"], "claude-code")
+        self.assertTrue(state.is_waiting("beta.2"))
+
     def test_the_picked_kind_is_written_into_the_chats_identity(self):
         """`chats.harness_of`, `leave.plan` and the panels all read the kind off `identity`,
         so the pick writes it there rather than adding a second place to look."""
@@ -809,10 +978,19 @@ class TheSurfaceDrawsTheFooterItWasGiven(unittest.TestCase):
         self.assertNotIn("enter choose", line)
 
     def test_a_footer_is_contained_and_clipped_to_the_width(self):
+        """An SGR escape as well as the two control characters, because a `\\r` alone cannot
+        tell the containment apart from what happens without it: `tui.sanitize` drops a
+        carriage return whether the footer was contained or not, and deliberately passes
+        charter's own colour markup through untouched. SGR is therefore the one thing in
+        this line that reaches the terminal if nothing contained it — and a footer carries
+        a refusal, which quotes a profile's own command out of a file a chat can write.
+        """
         line = overlay.Surface(rows=(overlay.Row("a", "a"),),
-                               footer="a\rb\nc").render(120, 6)[-1]
+                               footer="a\rb\nc\x1b[31mred").render(120, 6)[-1]
         self.assertNotIn("\r", line)
         self.assertNotIn("\n", line)
+        self.assertNotIn("\x1b[31m", line)
+        self.assertIn(contain.one_line("\x1b[31m"), line)
 
 
 if __name__ == "__main__":

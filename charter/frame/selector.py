@@ -308,9 +308,9 @@ def opens_on(listed: tuple[overlay.Row, ...], start: str | None) -> str:
     can only say why, and *Enter must always do something* is the rule the cursor exists to
     keep. Both fall through to the palette's own answer, the first row that can run.
     """
-    wanted = ROW_PREFIX + (start or "")
-    return (start or "") if any(row.id == wanted and not row.refused
-                                for row in listed) else ""
+    name = start or ""
+    wanted = ROW_PREFIX + name
+    return name if any(row.id == wanted and not row.refused for row in listed) else ""
 
 
 def _footer(listed: tuple[overlay.Row, ...], after: Refused | None) -> str:
