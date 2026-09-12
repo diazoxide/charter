@@ -20,6 +20,14 @@ is that hazard as a test.
 The refusal cases assert the REASON, not merely that the value was not honoured: a
 `default` that came back `None` proves nothing on its own, because that is also what a
 plane declaring nothing gets — which is precisely the confusion `refused` exists to end.
+
+**Since the profile selector, bare `charter` starts no harness of its own.** It rewrites to
+`charter frame --select` and the harness starts in that chat's pane once a row is picked,
+so `[harness] default` chooses which ROW the cursor opens on and launches nothing. Two
+refusals went with that: a plane declaring nothing is no longer a usage error on a terminal,
+and a `default` naming a profile this machine lacks no longer stops the launch — it marks no
+row (ruling 18) and `doctor` is the reader that names it. The tty rule is unchanged and
+matters more, not less: a pipe has no terminal for a selector to be drawn in.
 """
 
 from __future__ import annotations
@@ -285,17 +293,22 @@ class _BareLaunchCase(PersonaIso):
         return "\n".join(str(c.args[0]) for c in self.err.call_args_list)
 
 
-class TheBareCommandLaunchesTheDeclaredHarness(_BareLaunchCase):
+class TheBareCommandOpensTheSelector(_BareLaunchCase):
+    """**Bare `charter` starts no harness of its own any more.** It opens a chat at the
+    profile selector, and the harness starts in that pane once somebody picks a row — which
+    is the whole feature: opening charter used to start `[harness] default` before anybody
+    had said which harness they wanted."""
 
-    def test_bare_charter_on_a_terminal_reaches_the_launcher(self):
+    def test_bare_charter_on_a_terminal_opens_the_selector(self):
         with self._declare(default="claude"), \
              mock.patch("sys.stdout.isatty", return_value=True):
             rc = cli.main([])
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.launch.calls), 1)
-        self.assertEqual(self.launch.calls[0].harness, "claude")
+        self.assertTrue(self.launch.calls[0].select)
+        self.assertEqual(self.launch.calls[0].harness, "")
 
-    def test_it_is_the_same_call_typing_the_harness_makes(self):
+    def test_it_is_the_same_call_typing_the_frame_makes(self):
         """The design in one assertion: bare `charter` is a REWRITE of argv, not a second
         route into `cmd_launch`. Anything the typed form settles — the workspace picker,
         `--probe`, `--no-frame`, `rest` — is settled identically here, because the same
@@ -303,19 +316,32 @@ class TheBareCommandLaunchesTheDeclaredHarness(_BareLaunchCase):
         with self._declare(default="claude"), \
              mock.patch("sys.stdout.isatty", return_value=True):
             cli.main([])
-            cli.main(["claude"])
+            cli.main(["frame", "--select"])
         bare, typed = self.launch.calls
         self.assertEqual(vars(bare), vars(typed))
 
-    def test_the_declared_harness_is_the_one_launched(self):
-        """Not "whatever is installed" and not "the one last used" — the plane's word."""
+    def test_it_names_no_harness_whatever_the_plane_declares(self):
+        """Not "whatever is installed", not "the one last used", and no longer "the plane's
+        word" either. The plane's `default` decides which ROW the selector opens on
+        (`commands_frame._selector_start`) and nothing else."""
         for name in ("claude", "opencode", "codex"):
             with self.subTest(name=name):
                 self.launch.calls.clear()
                 with self._declare(default=name), \
                      mock.patch("sys.stdout.isatty", return_value=True):
                     cli.main([])
-                self.assertEqual(self.launch.calls[0].harness, name)
+                self.assertTrue(self.launch.calls[0].select)
+                self.assertEqual(self.launch.calls[0].harness, "")
+
+    def test_the_flags_the_operator_typed_ride_along(self):
+        """`--fresh` is a launch flag with no harness name in front of it for it to belong
+        to, so the rewrite puts one there. `_split_frame_argv` reads charter's own flags
+        only in the run immediately after `charter <name>`, which is where they land."""
+        with self._declare(default="claude"), \
+             mock.patch("sys.stdout.isatty", return_value=True):
+            cli.main(["--fresh"])
+        self.assertTrue(self.launch.calls[0].select)
+        self.assertTrue(self.launch.calls[0].fresh)
 
 
 class TheNonTtyPathStartsNothing(_BareLaunchCase):
@@ -357,55 +383,59 @@ class TheNonTtyPathStartsNothing(_BareLaunchCase):
         self.assertEqual(len(self.launch.calls), 1)
 
 
-class APlaneThatDeclaredNothingKeepsTodaysUsage(_BareLaunchCase):
+class APlaneThatDeclaredNothingStillOpensTheSelector(_BareLaunchCase):
+    """**Charter still does not guess — it asks.** A plane with no `[harness] default` used
+    to get argparse's usage error, because charter would not pick a harness for somebody
+    who had not named one. The selector is how that question gets asked instead of
+    answered, so there is nothing left here to refuse."""
 
-    def test_bare_charter_on_a_terminal_still_prints_usage(self):
-        """The other half of the design: charter does not guess. A tty is present and a
-        harness is installed, and charter still refuses to pick one."""
+    def test_bare_charter_on_a_terminal_opens_the_selector_anyway(self):
         with self._declare(), mock.patch("sys.stdout.isatty", return_value=True):
+            rc = cli.main([])
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.launch.calls[0].select)
+        self.exec.assert_not_called()
+
+
+class ARefusedDefaultNoLongerStopsBareCharter(_BareLaunchCase):
+    """A committed `default = "clyde"` used to refuse bare `charter` outright, loudly,
+    because a default that degraded to nothing rendered as argparse's usage message —
+    byte-identical to what a plane declaring nothing gets, so the typo was invisible.
+
+    **The selector makes the value visible instead of the refusal** (ruling 18). The launch
+    opens the list of what this machine actually has, marks no row for a name it does not
+    have, and the cursor goes where `palette.aim` puts it — so Enter always does something.
+    `charter doctor` is where the typo is reported (`DoctorNamesASilentlyIgnoredDefault`
+    below), which is the reader that can say it without taking a launch away.
+    """
+
+    def test_bare_charter_opens_the_selector_and_says_nothing(self):
+        with self._declare(refused="clyde"), \
+             mock.patch("sys.stdout.isatty", return_value=True):
+            rc = cli.main([])
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.launch.calls[0].select)
+        self.assertEqual(self._messages(), "")
+
+    def test_it_marks_no_row(self):
+        """Ruling 18's own half of it, asked where the value is resolved: a `default` naming
+        a profile this machine lacks is no row for the cursor to open on."""
+        with self._declare(refused="clyde"):
+            self.assertIsNone(commands_frame._selector_start(
+                mock.Mock(spec=[])))
+
+    def test_a_default_this_machine_has_is_the_row_it_opens_on(self):
+        with self._declare(default="claude"):
+            self.assertEqual(commands_frame._selector_start(mock.Mock(spec=[])), "claude")
+
+    def test_it_is_not_reported_off_a_terminal_either(self):
+        """The piped path is unchanged and stays a free probe: argparse's usage error, exit
+        2, nothing started and nothing said about the plane's file."""
+        with self._declare(refused="clyde"), \
+             mock.patch("sys.stdout.isatty", return_value=False):
             with self.assertRaises(SystemExit) as caught:
                 cli.main([])
         self.assertEqual(caught.exception.code, 2)
-        self.assertEqual(self.launch.calls, [])
-        self.exec.assert_not_called()
-
-
-class ARefusedDefaultIsReportedNotSwallowed(_BareLaunchCase):
-    """The grill: a committed `default = "clyde"` must fail loudly.
-
-    It degrades to no default, and no default renders as argparse's usage message — which
-    is byte-identical to what a plane declaring nothing gets. So the operator who made the
-    typo would watch charter behave exactly as though their key were not there.
-    """
-
-    def test_the_refusal_is_printed_and_names_the_value(self):
-        with self._declare(refused="clyde"), \
-             mock.patch("sys.stdout.isatty", return_value=True):
-            rc = cli.main([])
-        self.assertEqual(rc, 2)
-        self.assertIn("clyde", self._messages())
-        self.assertEqual(self.launch.calls, [])
-        self.exec.assert_not_called()
-
-    def test_the_refusal_names_the_words_that_would_work(self):
-        """A refusal that does not say what to write instead sends somebody to the docs
-        for a list charter is already holding."""
-        with self._declare(refused="clyde"), \
-             mock.patch("sys.stdout.isatty", return_value=True):
-            cli.main([])
-        said = self._messages()
-        for name in instance.launchable_harnesses():
-            self.assertIn(name, said)
-
-    def test_it_is_reported_off_a_terminal_too(self):
-        """A committed file being wrong is not a fact about anybody's terminal, so the
-        refusal is checked before the tty rule. Still exit 2 and still nothing started,
-        which is what makes it safe to report on the piped path."""
-        with self._declare(refused="clyde"), \
-             mock.patch("sys.stdout.isatty", return_value=False):
-            rc = cli.main([])
-        self.assertEqual(rc, 2)
-        self.assertIn("clyde", self._messages())
         self.exec.assert_not_called()
 
     def test_a_typed_subcommand_is_not_blocked_by_a_broken_default(self):

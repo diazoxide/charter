@@ -3380,7 +3380,8 @@ def _say_why_the_harness_did_not_start(action: str, cmd: list[str],
 
 def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
                              argv: list[str], display: list[str], profile: str, h,
-                             v: tuple[int, int], picked: bool) -> int | None:
+                             v: tuple[int, int], picked: bool,
+                             selecting: bool = False) -> int | None:
     """Build the frame as a WINDOW in the tmux the operator is already in.
 
     The same layout as the private-server path — harness in the middle, charter's panels
@@ -3515,6 +3516,11 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     # And which profile — the same record the private-server path writes, and for the same
     # readers: `+`, a workspace tab and a reopen all ask a chat what it runs.
     state.record_profile(fid, profile)
+    # And that it has started nothing yet, before tmux — the private-server path's own call
+    # and its own reason: `leave.plan` passes over a waiting pane, so a quit landing between
+    # here and the pick does not record a chat that is a question on a screen.
+    if selecting:
+        state.record_waiting(fid)
     state.bump(fid)
     # And the record this process keeps, if it is keeping one (#845), now knows which chat
     # this terminal is on. This path is a frame process too — it stays awake for the life of
@@ -3527,6 +3533,10 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     _spawn_gather(fid, ws)
 
     env = _frame_env(fid, h)
+    # A selector launch records no kind, on this server too — see the private-server path's
+    # own note (review 12): `launcher._picked` writes it at the pick.
+    if selecting:
+        env["CHARTER_HARNESS"] = ""
     # The launcher is the only process that knows this frame's own charter identity —
     # see `state.record_identity` for the measurement. Written before any pane exists,
     # because a `run-shell` child fired later reads the SERVER's environment, not this
@@ -5220,6 +5230,45 @@ def _restore_the_plane(args) -> int | None:
     return None
 
 
+#: What charter names when a window that was showing the SELECTOR died early. Never the
+#: launcher's own argv, which is `python -P -m charter frame-launch --select` — true of
+#: every waiting pane and an answer to a question nobody asked
+#: (`launcher.display_command`'s rule, one launch over).
+SELECTOR_DISPLAY = "the profile selector"
+
+#: `charter frame --select --no-frame`, which is two launches asked for at once.
+NO_FRAME_TO_SELECT_IN = (
+    "charter frame --select opens a chat at the profile selector, and the selector is "
+    "drawn in that chat's own pane — so there is nothing for --no-frame to draw it in and "
+    "nothing was started. Name what to run instead: charter <profile> --no-frame.")
+
+#: `charter frame --select -- <cmd>`, which asks charter both to pick and to run.
+NOTHING_TO_SELECT_FOR = (
+    "charter frame --select opens a chat at the profile selector, so it starts whatever is "
+    "picked there and not {cmd} — nothing was started rather than one of the two silently. "
+    "Run the command with charter frame -- {cmd}, or open a chat with charter on its own.")
+
+
+def _selector_start(args) -> str | None:
+    """Which row a selector launch opens the cursor on and marks — ``None`` for no row.
+
+    Two sources and one order. A press carries its own answer: `+` and a workspace tab open
+    on the profile of the chat they were pressed in, which is the only thing the operator
+    has actually expressed (`_same_profile_as`, read by the caller and put on the
+    namespace). A bare `charter` has no press behind it, so it falls to the plane's
+    `[harness] default`.
+
+    ``None`` rather than `""` for "no row", because a `default` naming a profile this
+    machine lacks resolves to nothing at all (`ProfileSet.default` is `None`, and
+    `default_refused` holds what was named) — ruling 18: it marks no row, and the cursor
+    goes where the palette's own rule puts it. `charter doctor` is where that is reported;
+    a launch does not refuse over it.
+    """
+    from . import profiles
+
+    return getattr(args, "start", "") or profiles.current().default or None
+
+
 def _profile_name(p) -> str:
     """*p*'s name, or ``""`` for a launch that runs no profile at all.
 
@@ -5281,7 +5330,33 @@ def _launch(args) -> int:
     # Attended is somebody being in front of the pane this opens. A reopen and a background
     # open are not (review 3): they must never stop on a question nobody can see.
     attended = _reopening(args) is None and _opening(args) is None
-    if h is not None:
+    # **A selector launch names no profile at all, and that is the whole shape of it.** The
+    # window's first command is charter drawing the picker in the chat's own pane; which
+    # harness runs there is decided in that pane, minutes later, by the operator. So `p`
+    # stays `None` all the way down — nothing to resolve, no guards to run before tmux (the
+    # pane runs the whole chain for whatever is picked, fresh), and nothing to name when the
+    # command dies, because no command of the operator's has been chosen yet.
+    #
+    # **Never for an open nobody is at.** A reopen, a restored plane and a handoff all name
+    # their profile; `_selector_start` is only ever reached from bare `charter`, `+`, a
+    # workspace tab and the palette's new chat, each of which has somebody at the keyboard.
+    selecting = getattr(args, "select", False)
+    if selecting and rest:
+        # **A launcher that swallowed a command would be wrong in the one direction this
+        # module refuses everywhere else, silently** — the open-or-focus gate's own words,
+        # and the same hazard through the new flag. `charter frame -- <cmd>` is the escape
+        # hatch for a command charter has never met; a selector cannot run it and cannot
+        # ask about it, so asking for both is refused rather than resolved either way.
+        util.err("charter: " + NOTHING_TO_SELECT_FOR.format(
+            cmd=contain.readable(" ".join(rest))))
+        return 2
+    if selecting:
+        argv = launcher.argv_select(_selector_start(args))
+        # What charter SHOWS if this window dies early: the selector, not
+        # `python -P -m charter frame-launch --select`, which is an answer to a question
+        # nobody asked (`launcher.display_command`'s own rule, one launch over).
+        display = [SELECTOR_DISPLAY]
+    elif h is not None:
         name = getattr(args, "profile", None) or args.harness
         p, why = launcher.resolve(name)
         if p is None:
@@ -5317,6 +5392,14 @@ def _launch(args) -> int:
     # `/dev/null`: no frame, no session, no switch, no exit code, and no surface left to
     # report any of it on. That, and not the `attach` the old refusal named, is what
     # actually stopped a detached process opening a workspace.
+    if selecting and args.no_frame:
+        # Asked before the bypass below, because that is the branch this would fall into:
+        # `p is None` for a selector launch, so `bypass` would `os.execvp` the launcher —
+        # which would draw a whole modal surface over the operator's own terminal and then
+        # exec a harness with no frame around it. Two launches asked for at once, and the
+        # honest answer is to say so rather than to pick one of them.
+        util.err(f"charter: {NO_FRAME_TO_SELECT_IN}")
+        return 2
     if args.no_frame or (not sys.stdout.isatty() and _wants_attach(args)):
         if p is None:
             return bypass(argv)
@@ -5471,7 +5554,7 @@ def _launch(args) -> int:
     if inside is not None and tmuxctl.is_operator_socket(inside[0], own=SOCKET):
         rc = _launch_in_operator_tmux(inside[0], inside[1], ws=ws, argv=argv,
                                       display=display, profile=_profile_name(p),
-                                      h=h, v=v, picked=picked)
+                                      h=h, v=v, picked=picked, selecting=selecting)
         if rc is not None:
             return rc
 
@@ -5575,8 +5658,18 @@ def _launch(args) -> int:
     # failed: not a terminal`, and the `+` reported `the launcher returned 1` instead of
     # ever adding a chat. `_wants_attach` was unpicked from `_reopening(args) is None` for
     # exactly this reason and this site kept asking the old question.
+    #
+    # **And a SELECTOR launch attaches whether or not anybody is on it** (ruling 17). The
+    # rule above asks `_workspace_to_focus`, which answers ``None`` for a live workspace
+    # with no client attached — deliberately, because with nobody there to drag, a launch
+    # that names something SHOULD add its chat and run it. A bare `charter` names nothing:
+    # it means "put me in this plane", and the workspace already has chats running. Opening
+    # a second selector beside them would be charter adding a chat nobody asked for, which
+    # is the whole defect this feature exists to close, arriving through the door it opened.
+    # `+` is how you add one.
     if not rest and _wants_attach(args):
-        focus = _workspace_to_focus(SOCKET, ws=ws)
+        focus = (_plane_session(SOCKET, ws=ws) if selecting
+                 else _workspace_to_focus(SOCKET, ws=ws))
         if focus is not None:
             return _focus_workspace(*focus, ws=ws, picked=picked)
 
@@ -5647,6 +5740,13 @@ def _launch(args) -> int:
     # resolved in the end. The escape hatch records the empty answer rather than a name it
     # does not have.
     state.record_profile(fid, _profile_name(p))
+    # **And that this chat has started nothing yet** — before tmux, because the window is
+    # about to exist and a quit landing between the two would record a chat that is a
+    # question on a screen. Cleared in the pane at the pick (`launcher._picked`); until
+    # then `leave.plan` passes over it, so `charter: quit` does not record it and
+    # `charter reopen` never brings it back.
+    if selecting:
+        state.record_waiting(fid)
     # And WHERE — see the identical call on the operator's-tmux path, and
     # `state.record_cwd` for why this fact could not ride in `identity`. Read once here
     # and used twice: recorded, and handed to `chat_window_argv` below.
@@ -5711,6 +5811,14 @@ def _launch(args) -> int:
 
     slots = _drawable_slots(cols, rows)
     env = _frame_env(fid, h)
+    # **A selector launch puts NO kind on the window** (review 12). `_frame_env` keeps
+    # `$CHARTER_HARNESS` from this process's own environment where no harness was resolved,
+    # and the process that presses `+` is a panel of a chat that HAS one — so the launching
+    # chat's kind would ride onto the new window's `-e`, into `state.record_identity`, and
+    # from there into `chats.harness_of`, the chat strip and `_same_profile_as`. A chat that
+    # has picked nothing records nothing, and `launcher._picked` writes the kind at the pick.
+    if selecting:
+        env["CHARTER_HARNESS"] = ""
     # Same as the operator's-tmux path above, and needed harder here: charter's private
     # server is SHARED, so a `run-shell` child on it reads whichever launcher's
     # environment started the server. See `state.record_identity`.
@@ -5971,12 +6079,33 @@ def _launch(args) -> int:
     refused = ""
     if code is None and p is not None and not attended:
         code, refused = _await_the_launcher(SOCKET, fid, harness_pane)
+    # **Esc at the profile selector is not a death, and this is how the two are told
+    # apart** — asked twice below, once for the early-death sentence and once for the
+    # recorded-plane one. The MARKER decides, never the number alone: a harness that exits
+    # 130 because the operator pressed Ctrl-C at its own prompt cleared `is_waiting` when it
+    # was picked, so it reads as the death it is.
+    def cancelled_at_the_selector(c) -> bool:
+        from .frame import selector
+
+        return c == selector.CANCELLED_EXIT and state.is_waiting(fid)
+
     if code is not None:
         state.record_exit(fid, code)
         if refused:
             # The launcher's own sentence, said where the operator is: this process has a
             # terminal (or a caller reading its stderr) and the pane no longer exists.
             util.err(f"charter: {refused}")
+        elif cancelled_at_the_selector(code):
+            # **Esc at the selector, and there is nothing to report about it.** The pane
+            # exited `CANCELLED_EXIT` having started nothing, and it is still `is_waiting` —
+            # so this is not an early death, it is the operator closing a chat they had not
+            # opened yet. `early_death_message` would name "the profile selector" as a
+            # command that died, and `_say_the_plane_is_recorded` below would offer
+            # `charter reopen` for a chat the record does not hold. Both are suppressed by
+            # the same reading, which is the chat's own marker rather than the number alone:
+            # a harness that genuinely exits 130 (Ctrl-C at its prompt) has long since
+            # cleared it.
+            pass
         elif code != 0:
             # The one path on which NOTHING is ever drawn (#384): no panels, no
             # `select-pane`, no `attach` — the whole `if code is None:` block below is
@@ -6150,7 +6279,12 @@ def _launch(args) -> int:
     # live harness would be told their plane was recorded and offered `charter reopen`, one
     # line above the launcher's own "detached — the harness is still running". `live_after`
     # is the same reading that decides which of those two lines is printed below.
-    if _wants_attach(args):
+    #
+    # **And never for a chat that was still at the selector.** Nothing was started in it and
+    # nothing recorded it (`leave.plan` passes over a waiting pane), so naming `charter
+    # reopen` would offer to bring back a chat the record does not hold. See
+    # `cancelled_at_the_selector` above for why this reads the marker and not the number.
+    if _wants_attach(args) and not cancelled_at_the_selector(code):
         _say_the_plane_is_recorded(fid, over=fid not in live_after)
     if code is not None:
         return code
@@ -8231,16 +8365,12 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
                             f"hand if it is yours: tmux -L {socket} attach -t "
                             f"{state.workspace_prefix(ws)}")
         return None
-    p, why = _same_profile_as(fid)
-    if p is None:
-        _say_on_screen(fid, f"cannot open '{ws}': {why}")
-        return None
-    # Attended, because this open ends with the operator's client switched onto the new
-    # window: somebody is in front of whatever it says.
-    refused = _launch_refusal(p, attended=True, cwd=_chat_dir_of(ws))
-    if refused:
-        _say_on_screen(fid, f"cannot open '{ws}': {refused}")
-        return None
+    # A tab whose workspace has no running chat opens a chat at the SELECTOR — see
+    # `cmd_new_chat`'s paragraph, which is this one word for word: the pressing chat's
+    # profile is the row the cursor opens on rather than the thing that gets launched, and
+    # a press charter cannot answer that for still opens a chat. Nothing is launched here,
+    # so there is no `_launch_refusal` to ask either.
+    p, _why = _same_profile_as(fid)
     from types import SimpleNamespace
     root = _launch_root(ws)
     # Every field `cmd_launch` and `_choose_workspace` read is named rather than left to a
@@ -8250,9 +8380,10 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
     # reason and for #518's pointer, `rest` is empty so §4k's open-or-focus gate stays
     # reachable and the harness starts at its own prompt with nothing sent to it, and
     # `attach` is the seam.
-    args = SimpleNamespace(harness=p.kind, profile=p.name, rest=[], no_frame=False,
-                           workspace=ws, pick=False, attach=False,
-                           size=_window_size(socket, window))
+    args = SimpleNamespace(harness="frame", profile=None, select=True,
+                           start=p.name if p is not None else "",
+                           rest=[], no_frame=False, workspace=ws, pick=False,
+                           attach=False, size=_window_size(socket, window))
     here_dir = os.getcwd()
     try:
         os.chdir(root)
@@ -11039,14 +11170,18 @@ def cmd_new_chat(args) -> int:
     written out rather than shared because a helper taking a flag for which way to point
     would be one function claiming to answer two questions.
 
-    **Four ways this stops, each with its own sentence on the frame's own attention row**
+    **Three ways this stops, each with its own sentence on the frame's own attention row**
     (:func:`_say_on_screen`), because this runs detached with its streams on `/dev/null`
     and has no other surface: a frame inside the operator's own tmux
     (:data:`NO_CHAT_HERE`), a session this plane cannot prove is its own
-    (:data:`NO_SESSION_HERE`), a chat recording no harness charter can launch, and a
-    workspace directory charter cannot enter. A `+` that silently did nothing is the
-    complaint this whole change is answering, so a `+` that silently fails would be the
-    same complaint one release later.
+    (:data:`NO_SESSION_HERE`), and a workspace directory charter cannot enter. A `+` that
+    silently did nothing is the complaint this whole change is answering, so a `+` that
+    silently fails would be the same complaint one release later.
+
+    **The fourth is gone**: a chat recording no profile charter can launch, and a plane
+    declaring no `[harness] default`, used to refuse the press by name. The new chat opens
+    at the profile selector, which lists what this machine has and says on each row why it
+    cannot start — so there is nothing left here that a `+` can fail to answer.
 
     **Always 0**, for `cmd_palette`'s reason: this is started by a click and by a palette
     row, never by a shell that reads its status, and the one caller that could see a code
@@ -11071,21 +11206,20 @@ def cmd_new_chat(args) -> int:
     if seat is None:
         _say_on_screen(fid, NO_SESSION_HERE)
         return 0
-    # Which harness, and it is the one question a `+` cannot carry — `_open_workspace`'s
-    # paragraph, unchanged: the chat the operator pressed FROM recorded its own
-    # (`state.record_identity`), and using it makes the click mean "another chat, same
-    # tool", which is the only answer available that they have actually expressed.
-    p, why = _same_profile_as(fid)
-    if p is None:
-        _say_on_screen(fid, f"cannot open another chat: {why}")
-        return 0
-    # The launcher's own chain, asked here so its refusal reaches the frame's attention row
-    # rather than `/dev/null` — see :func:`_launch_refusal`. Attended: the new window is
-    # selected, so the operator is looking at whatever it says.
-    refused = _launch_refusal(p, attended=True, cwd=_chat_dir_of(ws))
-    if refused:
-        _say_on_screen(fid, f"cannot open another chat: {refused}")
-        return 0
+    # **Which harness is no longer a question a `+` has to answer, and that is what the
+    # selector changed here.** The press used to resolve the pressing chat's profile and
+    # refuse when it could not — a chat whose profile the plane no longer declares, a chat
+    # from before profiles whose kind is gone, a plane with no `[harness] default` — and
+    # every one of those was a `+` that did nothing with a sentence on the attention row.
+    # The new chat opens at the selector instead, which lists what this machine has and
+    # says on each row why it cannot start. So the answer is now a preference and not a
+    # requirement: the pressing chat's profile is the row the cursor OPENS on, because
+    # "another chat, same tool" is the only thing the press actually expressed, and a press
+    # charter cannot answer that for still opens a chat.
+    p, _why = _same_profile_as(fid)
+    # And no `_launch_refusal` either: nothing is being launched. The pane runs the whole
+    # chain, fresh, for whichever profile is picked minutes from now — asking here would be
+    # asking about a profile nobody has chosen.
     from types import SimpleNamespace
     root = _launch_root(ws)
     # Every field `cmd_launch` and `_choose_workspace` read is named rather than left to a
@@ -11117,8 +11251,10 @@ def cmd_new_chat(args) -> int:
     # the value to `tmuxctl.PANE_ID_RE` — this is a `-t` target coming off disk, which is
     # #475's boundary exactly.
     pane = chats.pane_of(fid) or chats.pane_of(seat[1])
-    launch = SimpleNamespace(harness=p.kind, profile=p.name, rest=[], no_frame=False,
-                             workspace=ws, pick=False, attach=False,
+    launch = SimpleNamespace(harness="frame", profile=None, select=True,
+                             start=p.name if p is not None else "",
+                             rest=[], no_frame=False, workspace=ws, pick=False,
+                             attach=False,
                              size=_window_size(socket, pane) if pane else None)
     here_dir = os.getcwd()
     try:

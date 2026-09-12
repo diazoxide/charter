@@ -148,112 +148,88 @@ class _APressInAlpha(PersonaIso):
         return [c[0][1] for c in self.said.call_args_list]
 
 
-class ANewChatTakesThePressersProfile(_APressInAlpha, unittest.TestCase):
+class ANewChatStartsOnThePressersProfile(_APressInAlpha, unittest.TestCase):
+    """**A `+` opens a chat at the selector, and the pressing chat's profile is the row it
+    opens ON.** It used to launch that profile outright and refuse the press whenever it
+    could not resolve one, which is a `+` that does nothing with a sentence on the
+    attention row. The selector answers every one of those cases, so the rungs below are
+    about which ROW the cursor lands on — and a press charter cannot answer that for still
+    opens a chat.
+
+    `_same_profile_as`'s own refusals are unchanged and still tested where they are decided
+    (`tests/test_a_chat_carries_its_profile.AHandoffTakesTheCallingChatsProfile`, and the
+    reopen cases below): a handoff still names its profile, because nobody is at that one.
+    """
+
     def setUp(self) -> None:
         super().setUp()
         self._no_approval_needed()
-        # **The profile's command is on `PATH`, said rather than inherited.** These cases
-        # name `codex` as well as `claude`, and a press now runs the launcher's own checks
-        # before it launches — so on a machine without codex installed (CI is one; the
-        # machine this was written on is not) every one of them would be refused for a
-        # reason none of them is about. `charter.commands_frame.shutil` is the `shutil`
-        # module, so this is the answer the launcher's own check gets too.
-        self.enterContext(mock.patch("charter.commands_frame.shutil.which",
-                                     return_value="/nowhere/harness"))
 
-    def test_the_plus_launches_the_profile_this_chat_records(self):
+    def test_the_plus_starts_on_the_profile_this_chat_records(self):
         self._press()
         self.assertEqual(len(self.launched), 1, self._sentences())
-        self.assertEqual(self.launched[0].harness, "claude")
-        self.assertEqual(self.launched[0].profile, "claude-work")
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "claude-work")
 
-    def test_a_chat_from_before_profiles_takes_the_built_in_of_its_kind(self):
+    def test_a_chat_from_before_profiles_starts_on_the_built_in_of_its_kind(self):
         _a_chat(self.FID, ws="alpha", harness="codex")
         (config.STATE_DIR / "frame" / self.FID / "profile").unlink(missing_ok=True)
         self._press()
-        self.assertEqual(self.launched[0].profile, "codex")
+        self.assertEqual(self.launched[0].start, "codex")
 
-    def test_a_declared_replacement_of_the_built_in_is_what_that_chat_gets(self):
-        """A command that really resolves, because the launcher's PATH guard runs here for
-        real: a replacement pinning a path this machine does not have is a different case
-        (`…refused_before_tmux`), and it would pass this one for the wrong reason."""
-        self.local.write_text('[harness.codex]\nkind = "codex"\n'
-                              'command = ["/bin/sh"]\n')
-        _a_chat(self.FID, ws="alpha", harness="codex")
-        (config.STATE_DIR / "frame" / self.FID / "profile").unlink(missing_ok=True)
-        self._press()
-        self.assertEqual(self.launched[0].profile, "codex")
-        from charter import profiles
-        self.assertEqual(profiles.current().profiles["codex"].command, ("/bin/sh",))
-
-    def test_a_chat_whose_profile_is_gone_is_refused_not_given_the_default(self):
-        """Ruling 15's reason, one surface over: another profile may be another account."""
+    def test_a_chat_whose_profile_is_gone_starts_on_no_row_rather_than_the_default(self):
+        """Ruling 15's reason, one surface over: another profile may be another account, so
+        a profile the plane no longer declares is never silently swapped for the default.
+        What changed is that this is no longer a refusal — the chat opens, on no row, and
+        the selector lists what this machine actually has."""
         _a_chat(self.FID, ws="alpha", profile="gone")
         self.local.write_text(self.local.read_text()
                               + '\n[harness]\ndefault = "claude"\n')
         self._press()
-        self.assertEqual(self.launched, [])
-        self.assertTrue(any("no longer declares" in s for s in self._sentences()),
-                        self._sentences())
+        self.assertEqual(len(self.launched), 1, self._sentences())
+        self.assertEqual(self.launched[0].start, "")
+        self.assertEqual(self._sentences(), [], self._sentences())
 
-    def test_the_gone_profiles_name_is_repeated_back_escaped(self):
-        """The record is a file under `.charter/`, not something charter minted this run —
-        and this sentence goes to the frame, where an ESC would repaint the line around it.
-        (A `\\r` cannot make the trip: `read_text` translates it to `\\n` on the way back,
-        which is a fact about the record and not about the containment.)"""
-        _a_chat(self.FID, ws="alpha", profile="go\x1bne")
-        self._press()
-        self.assertEqual(self.launched, [])
-        self.assertTrue(any("\\u001b" in s for s in self._sentences()),
-                        self._sentences())
-
-    def test_a_chat_from_before_profiles_says_why_its_kinds_profile_was_refused(self):
-        """Rung 2, and ruling 37 on the way down it: the built-in named after this chat's
-        kind is one the file replaced and charter refused, so the press says THAT reason
-        rather than running the command the operator replaced. Losing the reason here is
-        the silent half — a `+` that does nothing, with nothing said about why."""
+    def test_a_refused_replacement_of_a_built_in_starts_on_no_row(self):
+        """Rung 2 and ruling 37: the built-in named after this chat's kind is one the file
+        replaced and charter refused, so the press never falls back to the command the
+        operator replaced. The row it would have opened on is simply not offered — and the
+        selector lists that name refused, with the file's own reason on it."""
         self.local.write_text('[harness.codex]\nkind = "codex"\ncommand = "codex --x"\n')
         _a_chat(self.FID, ws="alpha", harness="codex")
         (config.STATE_DIR / "frame" / self.FID / "profile").unlink(missing_ok=True)
         self._press()
-        self.assertEqual(self.launched, [])
-        self.assertTrue(any("never a shell string" in s for s in self._sentences()),
-                        self._sentences())
+        self.assertEqual(self.launched[0].start, "")
 
-    def test_with_no_record_and_no_default_the_press_is_refused_by_name(self):
+    def test_with_no_record_and_no_default_the_press_still_opens_a_chat(self):
         _a_chat(self.FID, ws="alpha", harness="zzz-nothing")
         (config.STATE_DIR / "frame" / self.FID / "profile").unlink(missing_ok=True)
         self.local.write_text("")
         self._press()
-        self.assertEqual(self.launched, [])
-        self.assertTrue(any("no profile" in s for s in self._sentences()),
-                        self._sentences())
+        self.assertEqual(len(self.launched), 1, self._sentences())
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "")
+        self.assertEqual(self._sentences(), [], self._sentences())
 
 
-class APressThatCannotLaunchSaysWhyOnTheFrame(_APressInAlpha, unittest.TestCase):
-    """`cmd_new_chat` runs detached with its three streams on `/dev/null`, so a refusal
-    `_launch` printed is read by nobody: without this the `+` would report only "the
-    launcher returned 3" for a profile the operator could have fixed in a line."""
+class APressRunsNoGuardForAProfileNobodyHasPicked(_APressInAlpha, unittest.TestCase):
+    """The `+` used to run the launcher's whole refusal chain before it launched, so its
+    reason could reach the frame's attention row rather than `/dev/null`. Nothing is being
+    launched now: the pane runs that chain, fresh, for whichever profile is picked minutes
+    from now — so asking here would be asking about a profile nobody has chosen.
 
-    def test_the_press_says_the_launchers_own_refusal(self):
-        self._no_approval_needed()
-        with mock.patch("charter.commands_frame.shutil.which", return_value=None):
-            self._press()
-        self.assertEqual(self.launched, [])
-        self.assertTrue(any("not on PATH" in s for s in self._sentences()),
-                        self._sentences())
+    Review B1 is what makes this visible: every declared profile is refused until Task 3,
+    and the press opens a chat regardless.
+    """
 
-    def test_a_press_defers_the_one_question_the_pane_can_ask_itself(self):
-        """N2a's nit, on the surface it matters on. A profile nobody has approved is not a
-        refusal a `+` reports — the pane it opens has a terminal on both ends and asks
-        there. Reported here instead, the press would say "charter asks before it runs a
-        command it has not been shown before" and open no chat at all."""
+    def test_the_press_opens_a_chat_over_a_profile_the_launcher_would_refuse(self):
         self._press()
         self.assertEqual(len(self.launched), 1, self._sentences())
-        self.assertEqual(self.launched[0].profile, "claude-work")
+        self.assertTrue(self.launched[0].select)
+        self.assertNotIn("cannot yet ask", " ".join(self._sentences()))
 
 
-class AWorkspaceTabOpensTheSameProfile(_APressInAlpha, unittest.TestCase):
+class AWorkspaceTabStartsOnTheSameProfile(_APressInAlpha, unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self._no_approval_needed()
@@ -273,11 +249,11 @@ class AWorkspaceTabOpensTheSameProfile(_APressInAlpha, unittest.TestCase):
                                                   socket=commands_frame.SOCKET,
                                                   window="@1")
 
-    def test_a_workspace_tab_opens_the_profile_the_presser_is_running(self):
+    def test_a_workspace_tab_starts_on_the_profile_the_presser_is_running(self):
         self._open()
         self.assertEqual(len(self.launched), 1, self._sentences())
-        self.assertEqual(self.launched[0].profile, "claude-work")
-        self.assertEqual(self.launched[0].harness, "claude")
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "claude-work")
 
 
 class AHandoffTakesTheCallingChatsProfile(_APressInAlpha, unittest.TestCase):
@@ -331,6 +307,21 @@ class AHandoffTakesTheCallingChatsProfile(_APressInAlpha, unittest.TestCase):
     def test_a_handoff_from_a_chat_whose_profile_is_gone_is_refused(self):
         _a_chat(self.FID, ws="alpha", profile="gone")
         self.assertIn("no longer declares", self._refusal())
+
+    def test_the_gone_profiles_name_is_repeated_back_escaped(self):
+        """Ruling 35. The record is a file under `.charter/`, not something charter minted
+        this run, and this sentence reaches a model's tool result — where an ESC would
+        repaint the line around it. (A `\\r` cannot make the trip: `read_text` translates it
+        to `\\n` on the way back, which is a fact about the record rather than about the
+        containment.)
+
+        Asked HERE rather than at the `+`, and that is where it moved to: a press no longer
+        surfaces this sentence at all, because it opens the selector instead of refusing.
+        A handoff still names its profile — nobody is at that open to be asked."""
+        _a_chat(self.FID, ws="alpha", profile="go\x1bne")
+        said = self._refusal()
+        self.assertIn("\\u001b", said)
+        self.assertNotIn("\x1b", said)
 
 
 class TheRecordCarriesTheProfile(PersonaIso, unittest.TestCase):

@@ -15,7 +15,7 @@ plane places it*, below). The middle pane is the harness's and charter draws not
 
     charter claude               # or codex, opencode
     charter claude-work          # any profile charter.local.toml declares
-    charter                      # the same thing, on a plane with [harness] default
+    charter                      # a chat at the profile selector — pick one, it starts
     charter frame -- <cmd>       # anything charter has never met
     charter claude --no-frame    # bare, no frame at all
 
@@ -28,13 +28,18 @@ changes — charter shows what it would run and asks `run this? [y/N]` before it
 ([control-plane.md](control-plane.md#a-new-or-changed-command-asks-once)). Built-ins never
 ask.
 
-`charter` on its own opens the frame once the plane says which harness it means —
-`[harness] default = "claude"` in `charter.toml`, documented in
-[control-plane.md](control-plane.md#default--bare-charter). It is a rewrite of the
-command rather than a route of its own: `charter` becomes `charter claude` and everything
-below applies to it unchanged. A plane that names no default keeps the usage list, and so
-does `charter` with its output piped or redirected — a script asking whether charter is
-installed must not get a harness session instead of an answer.
+`charter` on its own opens the frame at the **profile selector** and starts no harness
+until you pick a row (*No harness starts until you pick a profile*, below). It is a rewrite
+of the command rather than a route of its own: `charter` becomes `charter frame --select`
+and everything below applies to it unchanged. `[harness] default = "claude"` in
+`charter.toml` chooses which row the cursor opens on and launches nothing, documented in
+[control-plane.md](control-plane.md#default--bare-charter); a plane that names none simply
+opens on the first row that can run. `charter` with its output piped or redirected still
+keeps the usage list — a script asking whether charter is installed must not get a harness
+session instead of an answer, and a pipe is no place to draw a selector either.
+
+On a workspace whose chats are already running, bare `charter` **attaches** to them rather
+than opening another (*Opening a workspace you already have open*, below).
 
 `claude`, `codex` and `opencode` are top-level commands (`charter claude`), never nested
 under `frame` (`charter frame claude`) — `charter frame` is its own, separate escape hatch
@@ -498,8 +503,15 @@ chat — and a second launch that added a chat and selected it therefore pulled 
 already there off what they were reading. So it does not. `charter -w foo` from a second
 terminal, while somebody is attached to `foo`, **attaches you to what they are looking at**;
 nothing is started and nothing moves. Where nobody is attached — you closed the terminal, or
-never had one — the same command opens a chat exactly as before. It is `code <path>`'s
-behaviour: the flag means one thing whether or not the workspace happens to be running.
+never had one — a command that NAMES something opens a chat exactly as before. It is `code
+<path>`'s behaviour: the flag means one thing whether or not the workspace happens to be
+running.
+
+**A bare `charter` attaches either way**, and that is the one case where "nobody is
+attached" no longer opens a chat. It names nothing: it means *put me in this plane*, and the
+workspace already has chats running. Opening a second selector beside them would be charter
+adding a chat nobody asked for — which is the thing the selector exists to stop. `+` is how
+you add one, and `charter <profile>` or `charter frame -- <cmd>` still runs what it names.
 
 To open a *second* chat in a workspace you are already in, press the `+` at the end of the
 chat bar, or run `charter <harness>` from inside the frame. Both do the same thing: a new
@@ -855,12 +867,13 @@ one. There is no third answer available from a hook channel that reports prompts
 calls: charter can be late to stop claiming, or early, and it is set to be early.
 
 **The chat bar ends in a `+` and a `-`, and one of them is a button and one is a door.**
-Pressing the `+` opens another chat: same workspace, same **profile** you are already in —
-two chats of one harness may be two accounts, so the answer is the one in front of you —
-its id allocated for you, which is why it takes nothing and asks nothing. It runs `charter
-frame-new-chat`, which is `charter <harness>` in this workspace with one difference: it
-builds the frame without becoming your terminal, because the process behind a click is not
-one.
+Pressing the `+` opens another chat in this workspace, at the **profile selector**, with
+the **profile you are already in** as the row the cursor starts on — two chats of one
+harness may be two accounts, so the answer it offers is the one in front of you, and you
+press Enter or pick another. Its id is allocated for you, which is why the press itself
+takes nothing. It runs `charter frame-new-chat`, which is `charter frame --select` in this
+workspace with one difference: it builds the frame without becoming your terminal, because
+the process behind a click is not one.
 
 One thing it can still put to you, and it puts it **in the new chat's own pane**: a profile
 whose command is new or has changed asks `run this? [y/N]` there. The press has no terminal
@@ -891,13 +904,12 @@ nothing else read as a tool that would let you make chats and not get rid of the
 unadvertised way to create something costs you a feature; an unadvertised way to destroy
 something costs you the belief that it is there.
 
-It stops, and says why on the attention row, in four cases: your frame is a window in a
+It stops, and says why on the attention row, in three cases: your frame is a window in a
 tmux you already had (charter makes no chats for you there — `charter <harness>` in the
 workspace still does); charter cannot prove the workspace's tmux session is this plane's
-rather than another project's; this chat records no profile charter can launch and your
-plane declares no `[harness] default`; the profile it records cannot start, and the reason
-is the one the launch would have given you; or charter cannot enter the workspace's
-directory.
+rather than another project's; or charter cannot enter the workspace's directory. It no
+longer stops over the profile: a chat that records none, a plane that declares no default
+and a profile that cannot start are all things the selector says on a row.
 
 **The workspace bar has neither, deliberately.** A new chat is nothing but a press. A new
 workspace is a directory and a *name*, which is `charter workspace create` — and a picker
@@ -2938,10 +2950,11 @@ you have been in today are running. Clicking one starts it: a chat, a harness, t
 and then your terminal moves there. It is the same thing `charter <harness> --workspace
 <name>` does, which is what this used to print for you to go and type.
 
-The harness it opens with is **the one this chat is running**, because that is the only
-answer a tab can carry — a tab names a workspace and nothing else. If charter has no record
-of it, the plane's `[harness] default` is used, and with neither the click is refused by
-name rather than starting something you did not choose.
+It opens at the **profile selector**, on the profile **this chat is running** — the only
+answer a tab can carry, because a tab names a workspace and nothing else. If charter has no
+record of it, the plane's `[harness] default` is the row it starts on, and with neither the
+list simply opens on the first row that can run. Nothing you did not choose is started
+either way.
 
 What a click costs: one harness process at its own prompt with nothing sent to it, one chat
 directory, and a set of panels. Nothing is asked first, deliberately — the frame delivers no
@@ -3122,3 +3135,69 @@ straight in. And the prompt is reached only on the interactive path: `--no-frame
 redirected stdout and a stdin that is not a terminal each return before it — `charter
 claude` from a script or another agent cannot block on it. `--workspace <name>` names one
 outright and skips the picker; `--pick` asks even when something already chose.
+
+### No harness starts until you pick a profile
+
+A chat's window opens with the **profile selector** in its harness pane, and the harness
+starts in that pane once you choose a row. Opening charter used to start whatever
+`[harness] default` named; now nothing runs until somebody says what.
+
+```
+  charter · which profile? · 4 to choose from
+
+  >   claude          claude · claude
+    * claude-work     claude · CLAUDE_CONFIG_DIR=/Users/you/.claude-work claude
+      codex           codex · codex
+      codex-pinned    not on PATH: npx
+
+    up/down move   enter start   esc close this chat
+```
+
+**Where it appears:** bare `charter` on a workspace with no running chat; the `+` on the
+chat strip; the palette's `chat: new`; a workspace tab whose workspace has no running chat.
+**Where it does not:** `charter <profile>` names the profile, and so does every open nobody
+is at — `charter reopen`, a restored plane, and a chat handed off by another chat. A
+selector is a question, and those have nobody there to answer one.
+
+It is the `F2` palette's picker, so it behaves like one: type to narrow, up/down to move,
+Enter to start. **It always shows, even where one profile can run** — one profile costs one
+Enter, and skipping it would bring back the harness nobody picked on a machine with one
+harness.
+
+**Every profile you declared is a row.** A built-in — `claude`, `codex`, `opencode` — is a
+row only where its program is installed, because a harness this machine does not have is not
+an option you were offered. A profile that **cannot** start is still listed, with the reason
+on the row: its command is not on `PATH`, git would carry `charter.local.toml`, or
+`charter.local.toml` itself refused it. **Enter on such a row shows the reason in the footer
+and leaves the selector open.** The palette does the opposite — a refused Enter closes it —
+and that is right there, where the surface is a pane over a running harness. Here the
+surface is the chat, so closing it would close the chat.
+
+**The cursor opens on the row that can run.** `[harness] default` marks its row and the
+cursor starts there; a `default` naming a profile this machine does not have marks nothing,
+and the cursor goes where the palette's own rule puts it — the first row that can run, so
+Enter always does something. (`charter doctor` warns about a default nothing declares.)
+
+**Esc closes that chat, having started nothing.** No harness ran, no identity was recorded,
+and if it was the workspace's only window the session goes with it — the frame's own rule
+for its last chat. A pane sitting at the selector has a **tab**, so you can leave it and
+come back to it, but it is not a chat: `charter: quit` does not record it and `charter
+reopen` never brings it back. There is nothing to bring back, and restoring a question is
+not restoring a chat. Its harness and its profile are written down at the pick and not
+before.
+
+**A pick charter refuses comes straight back here.** The row you chose was drawn from what
+was true when the pane painted; the launch asks again, fresh, the instant before it runs
+anything — so a `.gitignore` edited or a binary uninstalled in between is a refusal, and the
+selector reopens with that row updated and the reason in the footer. Only Esc closes the
+window.
+
+**What it costs to open.** Measured on this machine with three declared profiles beside the
+installed built-ins, the list charter reads and lays out — the profiles, and the one
+`git status` that says whether `charter.local.toml` is ignored — takes a median of 13 ms
+cold. Nothing here runs a profile's own command.
+
+Charter drawing in a chat's pane at all is [ADR
+0018](adr/0018-charter-may-run-the-harness-but-never-draws-it.md) as its later amendments
+qualify it. Charter draws there only while **no harness has ever run in that pane**; the
+instant `exec` succeeds, the pane is the harness's for good.

@@ -86,8 +86,9 @@ its requirements against, the frame still starts. `charter opencode` and `charte
 need their own binaries the same way, and `charter claude --probe` says whether a frame can
 run here without starting one.
 
-`init` writes no `[harness] default`, because charter does not pick a harness for you. Add
-this to `charter.toml` and the command is `charter` on its own:
+`charter` on its own opens a chat at the **profile selector** and starts nothing until you
+pick a row — charter does not pick a harness for you, it asks. `init` writes no `[harness]
+default`; add one to `charter.toml` and it is the row the cursor starts on:
 
 ```toml
 [harness]
@@ -98,7 +99,7 @@ The value names a **profile** — `claude`, `codex` and `opencode` are the built
 harness, and `charter.local.toml` is where you declare your own (a pinned version, a second
 account); see [control-plane.md](docs/control-plane.md#harness--profiles-and-the-default).
 
-Piped anywhere, bare `charter` prints its usage instead of starting an agent.
+Piped anywhere, bare `charter` prints its usage instead of opening a frame.
 
 - **`charter init`** scaffolds `charter.toml`, the baseline directories (`personas/`,
   `inventory/`, `workspaces/`), a `.gitignore` tuned for the layout, and Claude Code's
@@ -115,9 +116,8 @@ Piped anywhere, bare `charter` prints its usage instead of starting an agent.
   CLI's token over HTTPS, already carrying the one-credential git policy below.
 - **`charter claude`** opens a chat in the frame. Closing the terminal detaches and leaves
   the harness running; `F2` → `charter: quit` stops every chat on the plane and records
-  them first, and `charter reopen` — or, on a plane with `[harness] default`, bare `charter`
-  when nothing is running — puts them back, resuming the conversation wherever Claude Code
-  recorded one.
+  them first, and `charter reopen` — or bare `charter` when nothing is running — puts them
+  back on their own profiles, resuming the conversation wherever Claude Code recorded one.
 
 ## You don't need charter if
 
