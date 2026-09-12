@@ -7,6 +7,7 @@ sub-agent dispatches.
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -87,6 +88,54 @@ class TestDispatchHook(PlaneIso):
         with mock.patch.object(dispatch, "record", side_effect=OSError("boom")):
             self.assertIsNone(self._run({"tool_name": "Task",
                                          "tool_input": {"subagent_type": "devops"}}))
+
+
+class TestAHandoffRowIsWrittenLikeEveryOtherRow(PersonaIso):
+    """`record_handoff`'s three writer guards — the ones this store has always had and
+    which `charter handoff` brought a fourth copy of (chat-handoff plan, Task 2).
+
+    A tally must never break a turn, and it must never be the thing that publishes
+    somewhere it was aimed at. Both are properties of the write, not of the row.
+    """
+
+    def _row(self):
+        rows = [o for o in dispatch._read_all() if o.get("event") == dispatch.HANDOFF]
+        return rows
+
+    def test_a_row_lands_and_says_only_the_four_things(self):
+        p = dispatch.record_handoff(placement="elsewhere", created=False)
+        self.assertIsNotNone(p)
+        self.assertEqual([set(o) for o in self._row()],
+                         [{"created", "event", "placement", "ts"}])
+
+    def test_the_month_file_is_written_at_0644(self):
+        """Committed and shared, so it is readable — and it is charter's to create, so the
+        umask does not get to decide. The same mode the other three writers here pass."""
+        p = dispatch.record_handoff(placement="here", created=True)
+        self.assertEqual(p.stat().st_mode & 0o777, 0o644)
+
+    def test_a_month_file_that_is_a_link_out_of_the_plane_is_refused(self):
+        """`contain.write_refusal`'s case, at a FIXED name an attacker needs no guess for:
+        the row would be appended wherever the link points, outside the plane."""
+        outside = Path(self.tmp).parent / "outside-the-plane.jsonl"
+        target = dispatch.path_for()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(outside)
+        self.addCleanup(lambda: outside.exists() and outside.unlink())
+
+        self.assertIsNone(dispatch.record_handoff(placement="here", created=False))
+        self.assertFalse(outside.exists(), "the row was written through the link")
+
+    def test_a_store_that_cannot_be_written_is_not_an_exception(self):
+        """The tally is bookkeeping: it may miss a row, it may not break the turn it is
+        counting. Measured by taking write permission off the directory it appends in."""
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so this says nothing about the guard")
+        d = dispatch._dir()
+        d.mkdir(parents=True, exist_ok=True)
+        d.chmod(0o500)
+        self.addCleanup(d.chmod, 0o700)
+        self.assertIsNone(dispatch.record_handoff(placement="here", created=False))
 
 
 class TestCommitDispatchPosture(unittest.TestCase):

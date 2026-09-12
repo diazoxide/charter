@@ -73,6 +73,10 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         self._handoff("beta")
         self.assertEqual(self.open.call_args.args, ("beta",))
         self.assertEqual(self.open.call_args.kwargs["caller"], "alpha.1")
+        # `""` and never `None`: the seam's contract is a string, and `Opening.persona`
+        # reaches `persona.set_active` — `--persona` simply absent is not a persona named
+        # `None`.
+        self.assertEqual(self.open.call_args.kwargs["persona"], "")
 
     def test_this_workspace_is_named_like_any_other(self):
         """A chat here and a chat elsewhere are one mechanism; only the workspace differs."""
@@ -126,6 +130,19 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         self.assertEqual(rc, 0)
         self.assertEqual(todos.count_open("beta"), 1)
         self.assertIn("not recorded twice", err)
+
+    def test_a_duplicate_notice_cannot_repaint_the_terminal_it_prints_on(self):
+        """The title in that notice is a brief's first line, which is whatever the operator
+        approved — arbitrary text, escape sequences included. charter's own lines are lines a
+        person reads, so the name goes through `contain.one_line` and an ESC arrives as its
+        own escape rather than as a command to the terminal."""
+        brief = "Fix \x1b[2Jthe widget\nIt breaks on resize.\n"
+        self._handoff("beta", brief=brief)
+        rc, _out, err = self._handoff("beta", brief=brief)
+        self.assertEqual(rc, 0)
+        self.assertIn("not recorded twice", err)
+        self.assertIn("\\x1b", err)
+        self.assertNotIn("\x1b[2J", err)
 
     def test_a_second_handoff_about_something_else_records_its_own_todo(self):
         """Every handoff todo ends in the same nine-word provenance sentence. Compared over
@@ -280,10 +297,13 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         self.assertEqual([o for o in dispatch._read_all() if o.get("event") == "handoff"], [])
 
     def test_a_created_workspace_that_got_no_chat_is_named_in_what_stayed(self):
+        """Both halves, joined as one sentence a person reads — the two things a failed
+        handoff left on disk, in the order it made them."""
         self.opened = commands_frame.Opened(False, "", "could not open a chat in 'gamma'")
         rc, _out, err = self._handoff("gamma", create=True, vision="Ship it")
         self.assertEqual(rc, 1)
-        self.assertIn("the workspace 'gamma' was created", err)
+        self.assertIn("What stays: the todo is recorded in 'gamma', and the workspace "
+                      "'gamma' was created. ", err)
 
     def test_what_stays_says_the_todo_was_already_there_when_it_was(self):
         """What stays has to be true of THIS call: a reader told "the todo is recorded" who
