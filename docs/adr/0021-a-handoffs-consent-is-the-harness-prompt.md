@@ -190,8 +190,9 @@ ambiguous.
   identity of the normalised first line decides.
 
 **What was measured, re-measured on this branch 2026-09-12.** Every handoff todo ends in the
-same provenance sentence — eight words the comparison can see, plus the source chat and
-workspace, which two handoffs out of one chat also share. Over whole texts,
+same 18-word provenance sentence, which `memstore.wordset` reduces to **nine** comparable
+words once it drops everything three characters or shorter — eight fixed, plus the source
+chat and workspace, which two handoffs out of one chat also share. Over whole texts,
 `Fix the widget` and `Ship the release` — briefs with no word in common — score **0.750**
 (0.769 when the source chat and workspace are different words), so the second handoff into a
 workspace recorded nothing at all, silently. Over first lines they score **0.000**. And the

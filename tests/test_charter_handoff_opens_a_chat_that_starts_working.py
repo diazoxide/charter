@@ -145,11 +145,12 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         self.assertNotIn("\x1b[2J", err)
 
     def test_a_second_handoff_about_something_else_records_its_own_todo(self):
-        """Every handoff todo ends in the same nine-word provenance sentence. Compared over
-        the whole text, that boilerplate read as agreement: `Fix the widget` and `Ship the
-        release` — no word in common — scored 0.750, so the SECOND handoff into a workspace
-        recorded nothing at all, silently, and any two titles of four or fewer distinct words
-        collided the same way. The comparison is over first lines now."""
+        """Every handoff todo ends in the same 18-word provenance sentence, nine of them
+        comparable once `memstore.wordset` drops the words of three characters or fewer.
+        Compared over the whole text, that boilerplate read as agreement: `Fix the widget`
+        and `Ship the release` — no word in common — scored 0.750, so the SECOND handoff
+        into a workspace recorded nothing at all, silently, and any two titles of four or
+        fewer distinct words collided the same way. The comparison is over first lines now."""
         self._handoff("beta", brief="Fix the widget\nIt breaks on resize.\n")
         self._handoff("beta", brief="Ship the release\nCut 0.61.0.\n")
         rc, _out, err = self._handoff("beta", brief="Rotate the token\nIt expires Friday.\n")

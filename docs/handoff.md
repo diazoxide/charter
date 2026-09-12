@@ -72,9 +72,10 @@ BRIEF
    be exactly what you approved.
 
    **"The same work" is asked over the first lines, and only where the words can answer it.**
-   Every handoff todo ends in the same provenance sentence — eight words the comparison can
-   see, plus the source chat and workspace, which two handoffs out of one chat also share — so
-   over the whole text that boilerplate reads as agreement: `Fix the widget` and `Ship the
+   Every handoff todo ends in the same 18-word provenance sentence, nine of them comparable
+   once words of three characters or fewer are dropped — eight fixed, plus the source chat and
+   workspace, which two handoffs out of one chat also share — so over the whole text that
+   boilerplate reads as agreement: `Fix the widget` and `Ship the
    release`, which share no word at all, scored 0.750 and the second was dropped. Over first
    lines they score 0.000. But
    an overlap can also be too thin to mean anything: word comparison keeps only words longer

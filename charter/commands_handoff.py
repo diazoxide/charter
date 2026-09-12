@@ -221,11 +221,12 @@ def cmd_handoff(args) -> int:
         workspace.ensure(ws)
         workspace.set_vision(ws, args.vision)
     text = handoff.todo_text(brief, source_chat=source_chat, source_workspace=source_ws)
-    # `by_title`, and it is not a tweak: every handoff todo ends in the same nine-word
-    # provenance sentence, and compared over the whole text that boilerplate reads as
-    # agreement — `Fix the widget` and `Ship the release` scored 0.750, so the second
-    # handoff into a workspace recorded nothing at all. What two todos are ABOUT is their
-    # first lines (`todos.duplicate_of`).
+    # `by_title`, and it is not a tweak: every handoff todo ends in the same 18-word
+    # provenance sentence, which `memstore.wordset` reduces to NINE comparable words once
+    # it drops everything three characters or shorter. Compared over the whole text that
+    # boilerplate reads as agreement — `Fix the widget` and `Ship the release` scored
+    # 0.750, so the second handoff into a workspace recorded nothing at all. What two todos
+    # are ABOUT is their first lines (`todos.duplicate_of`).
     dup = todos.duplicate_of(ws, text, by_title=True)
     if dup:
         # Reported and continued, not refused: a second chat on the same brief may be
