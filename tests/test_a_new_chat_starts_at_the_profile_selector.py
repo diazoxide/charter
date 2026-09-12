@@ -1517,6 +1517,28 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertNotIn("\x1b", said[0])
         self.assertIn("\\u000d", said[0])
 
+    def test_the_operators_own_tmux_records_the_same_two_things(self):
+        """The other launch path, and it needs its own case because it writes its own
+        records: a frame built as a window in the tmux the operator already had goes
+        through `_launch_in_operator_tmux`, not through the private-server branch above.
+        Both halves — the waiting marker before tmux, and no kind on the window — are what
+        `launcher._picked` fills in at the pick, so a path that skipped either would leave
+        a chat claiming a harness it has not started."""
+        def answer(cmd, **kw):
+            if not cmd or cmd[0] != "tmux":
+                return _completed(cmd, 0)
+            return _completed(cmd, 0, "%7\n")
+
+        with mock.patch("charter.commands_frame.subprocess.run", side_effect=answer), \
+                mock.patch.object(commands_frame, "_wait_for_harness", return_value=130), \
+                mock.patch.dict(os.environ, {"CHARTER_HARNESS": "codex"}):
+            commands_frame._launch_in_operator_tmux(
+                "op", "$1", ws="beta", argv=launcher.argv_select("claude"),
+                display=[commands_frame.SELECTOR_DISPLAY], profile="", h=None,
+                v=(3, 7), picked=False, selecting=True)
+        self.assertTrue(state.is_waiting("beta.2"))
+        self.assertEqual(state.identity("beta.2").get("CHARTER_HARNESS"), "")
+
     def test_a_reopen_never_opens_the_selector(self):
         """An open nobody is at names its profile: there is no one there to pick."""
         args = commands_frame._reopen_args(
