@@ -7,6 +7,8 @@ sub-agent dispatches.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -87,6 +89,93 @@ class TestDispatchHook(PlaneIso):
         with mock.patch.object(dispatch, "record", side_effect=OSError("boom")):
             self.assertIsNone(self._run({"tool_name": "Task",
                                          "tool_input": {"subagent_type": "devops"}}))
+
+
+class TestAHandoffRowIsWrittenLikeEveryOtherRow(PersonaIso):
+    """`record_handoff`'s three writer guards — the ones this store has always had and
+    which `charter handoff` brought a fourth copy of (chat-handoff plan, Task 2).
+
+    A tally must never break a turn, and it must never be the thing that publishes
+    somewhere it was aimed at. Both are properties of the write, not of the row.
+    """
+
+    def _row(self):
+        rows = [o for o in dispatch._read_all() if o.get("event") == dispatch.HANDOFF]
+        return rows
+
+    def test_a_row_lands_and_says_only_the_four_things(self):
+        p = dispatch.record_handoff(placement="elsewhere", created=False)
+        self.assertIsNotNone(p)
+        self.assertEqual([set(o) for o in self._row()],
+                         [{"created", "event", "placement", "ts"}])
+
+    def test_the_month_file_is_written_at_0644(self):
+        """Committed and shared, so it is readable — and it is charter's to create, so the
+        umask does not get to decide. The same mode the other three writers here pass.
+
+        **The umask is set to 0 for the duration, and that is the whole test.** At the
+        suite's own 022 this assertion passes under `0o644 → 0o666`: the umask masks the
+        group and other write bits back off on disk, so the file looks right whatever
+        charter asked for. On a box running at umask 000 — a daemon, a container — that
+        same code creates a world-writable committed tally and nothing here would have
+        said. Same family as `TITLE_MAX`: an expectation taken from the environment
+        instead of stated."""
+        was = os.umask(0)
+        self.addCleanup(os.umask, was)
+        p = dispatch.record_handoff(placement="here", created=True)
+        self.assertEqual(p.stat().st_mode & 0o777, 0o644)
+
+    def test_a_month_file_that_is_a_link_out_of_the_plane_is_refused(self):
+        """`contain.write_refusal`'s case, at a FIXED name an attacker needs no guess for:
+        the row would be appended wherever the link points, outside the plane."""
+        outside = Path(self.tmp).parent / "outside-the-plane.jsonl"
+        target = dispatch.path_for()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(outside)
+        self.addCleanup(lambda: outside.exists() and outside.unlink())
+
+        self.assertIsNone(dispatch.record_handoff(placement="here", created=False))
+        self.assertFalse(outside.exists(), "the row was written through the link")
+
+    def test_a_dispatch_directory_that_is_a_link_out_of_the_plane_is_refused(self):
+        """The shape `O_NOFOLLOW` cannot see, so this is what keeps `write_refusal` pinned:
+        the flag judges the FINAL component, and here it is the parent that leaves the
+        plane. `personas/_dispatch` is a fixed name too."""
+        outside = Path(self.tmp).parent / "outside-dispatch-dir"
+        outside.mkdir()
+        self.addCleanup(shutil.rmtree, outside, True)
+        d = dispatch._dir()
+        d.parent.mkdir(parents=True, exist_ok=True)
+        d.symlink_to(outside, target_is_directory=True)
+
+        self.assertIsNone(dispatch.record_handoff(placement="here", created=False))
+        self.assertEqual(list(outside.iterdir()), [], "a row landed outside the plane")
+
+    def test_a_link_planted_after_the_check_is_still_refused(self):
+        """`write_refusal` is check-then-open, and a link planted in the window between the
+        two is followed. `O_NOFOLLOW` closes that for the final component, atomically and
+        for free — measured by standing the check down, which is what losing the race
+        amounts to."""
+        outside = Path(self.tmp).parent / "outside-after-the-check.jsonl"
+        self.addCleanup(lambda: outside.exists() and outside.unlink())
+        target = dispatch.path_for()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(outside)
+
+        with mock.patch.object(dispatch.contain, "write_refusal", return_value=None):
+            self.assertIsNone(dispatch.record_handoff(placement="here", created=False))
+        self.assertFalse(outside.exists(), "the row was written through the link")
+
+    def test_a_store_that_cannot_be_written_is_not_an_exception(self):
+        """The tally is bookkeeping: it may miss a row, it may not break the turn it is
+        counting. Measured by taking write permission off the directory it appends in."""
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so this says nothing about the guard")
+        d = dispatch._dir()
+        d.mkdir(parents=True, exist_ok=True)
+        d.chmod(0o500)
+        self.addCleanup(d.chmod, 0o700)
+        self.assertIsNone(dispatch.record_handoff(placement="here", created=False))
 
 
 class TestCommitDispatchPosture(unittest.TestCase):

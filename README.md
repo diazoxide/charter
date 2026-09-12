@@ -451,6 +451,9 @@ copy wins, is compared to nothing, and drifts unwatched in both directions.
   what changes inside it (scrollback, mouse, the hotkey palette), the two tab strips, quit
   and `charter reopen`, how exit codes get out, what happens when the terminal is too
   small, and every `[frame]` setting.
+- [docs/handoff.md](docs/handoff.md) — `charter handoff`: when a request belongs in another
+  chat, opening one there on a brief you approved, what the command refuses before it changes
+  anything, and why the consent is your harness's own permission prompt.
 - [docs/git-policy.md](docs/git-policy.md) — the one-credential rule, and why a denial from
   the plugin's guard is the rule working rather than a bug.
 - [docs/hooks.md](docs/hooks.md) — everything the plugin does without being asked: what

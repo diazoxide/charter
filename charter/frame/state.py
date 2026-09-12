@@ -2071,6 +2071,64 @@ def chat_cwd(fid: str) -> str | None:
     return val if val and os.path.isabs(val) else None
 
 
+#: The brief a handoff opened this chat on — the whole context that chat started with
+#: (`charter/handoff.py`, `docs/handoff.md`).
+#:
+#: **Here rather than in the workspace, because a brief is never committed.** A LIVE
+#: workspace commits `todos/**` and `memory/**`; the todo a handoff records carries the
+#: brief's first line and its provenance, and this file carries the rest. It is per-chat,
+#: private to this developer's state directory, at the mode `config.open_for` gives
+#: everything under it.
+_BRIEF_FILE = "brief"
+
+
+def record_brief(fid: str, text: str) -> None:
+    """Write down the brief chat *fid* was opened on, verbatim.
+
+    :func:`record_cwd`'s shape and its reason: atomic, never raises, and deliberately NOT
+    deleted by :func:`clear_shape`. The four files that list argues about are *readings* —
+    a density somebody pressed, a pane map — and every one of them is wrong for the next
+    frame. A brief is what the chat was opened to do, which is the same kind of durable
+    per-chat fact as `workspace` and `cwd`.
+
+    **An empty brief writes no file**, because :func:`brief` already reads an empty one as
+    "no brief" — so the file would be one more thing in a chat directory that means
+    nothing. Every background open passes through here (`commands_frame.Opening.brief`),
+    and every one that is not a handoff carries none.
+    """
+    if not text:
+        return
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.replace_for(d / _BRIEF_FILE, text)
+    except OSError:
+        return
+
+
+def brief(fid: str) -> str | None:
+    """The brief recorded for *fid*, exactly as it was written, or ``None``.
+
+    **Verbatim, with no strip.** This is the text the new chat was sent, and a reader
+    showing it back — `charter reopen`'s SessionStart block (Task 5) — must show what was
+    approved rather than a tidied copy of it.
+
+    ``None`` for a chat opened by a charter that predates this, for a directory that is not
+    a chat's, for a file that cannot be read, and for an EMPTY file: every caller does the
+    same thing with all four — say nothing — and a chat shown an empty labelled block would
+    read it as "your brief was blank".
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        text = (d / _BRIEF_FILE).read_text()
+    except (OSError, ValueError):
+        return None
+    return text or None
+
+
 #: What :func:`record_closed` writes, and the whole difference between a chat the operator
 #: CLOSED and a chat that merely stopped (§4i, and the accepted cost in the reopen design).
 #:

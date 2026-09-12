@@ -1182,7 +1182,9 @@ def cmd_workspace_todo(args) -> int:
     # left. Warn and skip rather than merge, so the writer learns it is already there.
     dup = todos.duplicate_of(name, text)
     if dup:
-        util.err(f"already on the list: {dup}")
+        # Contained for `_list_todos`' reason, one surface over: the title named here is a
+        # stored one, and since `charter handoff` a stored title can be a model's prose.
+        util.err(f"already on the list: {contain.one_line(dup)}")
         util.info(f"  See it: charter ws todo --workspace {name}")
         return 1
 
@@ -1252,7 +1254,18 @@ def _close_todo(name: str, slug: str, *, journal: bool) -> int:
 
 
 def _list_todos(name: str, query: str | None) -> int:
-    """Open todos, oldest first — the ranking the whole feature uses."""
+    """Open todos, oldest first — the ranking the whole feature uses.
+
+    **Every title goes through `contain.one_line` on the way to the terminal**, both here
+    and on the `--query` path. These rows are ``  <slug>  <age>  <title>``, charter's own
+    format with structure in it, and a title carrying `\\n` writes a second row that looks
+    exactly as much like charter's output as the first (#453's mechanism).
+
+    Pre-existing rows, and what changed is who writes the title: until `charter handoff` a
+    todo's title was typed by the operator, and it is now the first line of a brief a MODEL
+    wrote. Escaped at the render and never on the way into storage — the file a person
+    opens must still hold the text they approved.
+    """
     from . import todos
     if query:
         hits = todos.search(name, query)
@@ -1260,7 +1273,7 @@ def _list_todos(name: str, query: str | None) -> int:
             util.info(f"No todos in '{name}' match {query!r}.")
             return 0
         for p, title, _score in hits:
-            print(f"  {p.stem}  {title}")
+            print(f"  {p.stem}  {contain.one_line(title)}")
         return 0
 
     open_ = todos.open_todos(name)
@@ -1270,7 +1283,7 @@ def _list_todos(name: str, query: str | None) -> int:
         return 0
 
     for t in open_:
-        print(f"  {t['slug']}  {t['age_days']}d  {t['title']}")
+        print(f"  {t['slug']}  {t['age_days']}d  {contain.one_line(t['title'])}")
     return 0
 
 

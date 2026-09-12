@@ -111,12 +111,13 @@ class _AChatInAlpha(PersonaIso, unittest.TestCase):
             args.opening.fid = self.gives_back
         return self.rc
 
-    def _open(self, ws="beta", text="fix the widget please", persona=""):
+    def _open(self, ws="beta", text="fix the widget please", persona="", brief=""):
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=self._tmux), \
                 mock.patch("charter.commands_frame.cmd_launch",
                            side_effect=self._fake_launch):
             return commands_frame.open_in_background(ws, caller=self.CALLER,
-                                                     first_message=text, persona=persona)
+                                                     first_message=text, persona=persona,
+                                                     brief=brief)
 
     def _refusal(self, ws="beta", text="fix the widget please"):
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=self._tmux):
@@ -148,12 +149,23 @@ class TheOpenRunsTheLauncherForTheNamedWorkspace(_AChatInAlpha):
     def test_the_opening_carries_the_new_chat_id_back(self):
         self.assertEqual(self._open(), commands_frame.Opened(True, "beta.1", ""))
 
-    def test_the_opening_carries_the_message_and_the_persona_it_was_given(self):
-        self._open(text="fix the widget please", persona="forge")
+    def test_the_opening_carries_the_message_the_persona_and_the_brief_it_was_given(self):
+        """All three, and the brief is the one whose absence nothing else can see. It is not
+        written here — `_launch` writes it, at id allocation — so if it stops being handed to
+        the `Opening` the file is simply never made, the handoff still reports success, and
+        the chat Task 5 reopens is shown nothing. The two tests either side of this one stand
+        around that join rather than on it: the handoff suite's stand-in seam records the
+        brief itself, and the `_launch` case builds its own `Opening`."""
+        self._open(text="fix the widget please", persona="forge", brief="fix it\nplease\n")
         opening = self.launched[0].opening
         self.assertIsInstance(opening, commands_frame.Opening)
         self.assertEqual(opening.first_message, "fix the widget please")
         self.assertEqual(opening.persona, "forge")
+        self.assertEqual(opening.brief, "fix it\nplease\n")
+
+    def test_an_open_given_no_brief_carries_none(self):
+        self._open()
+        self.assertEqual(self.launched[0].opening.brief, "")
 
     def test_it_is_sized_for_the_window_the_calling_chat_is_on(self):
         self._open()
@@ -426,6 +438,9 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
         self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
         self.make_persona("forge")
         self.argvs: list[list[str]] = []
+        #: ``(argv, the brief on disk for beta.1 at that moment)`` per tmux call, so a test
+        #: can ask what existed BEFORE the window that starts the harness was created.
+        self.brief_at: list[tuple[list[str], str | None]] = []
 
     def _launch(self, *, opening=None, attach=False, reopening=None):
         args = SimpleNamespace(harness="claude", rest=["fix it please"], no_frame=False,
@@ -439,6 +454,7 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
 
         def run(action, argv, **kw):
             self.argvs.append(list(argv))
+            self.brief_at.append((list(argv), state.brief("beta.1")))
             return subprocess.CompletedProcess(
                 argv, 0, "%9\n" if "new-window" in argv else "", "")
 
@@ -506,6 +522,22 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
     def test_an_opening_with_no_persona_writes_no_pointer(self):
         self._launch(opening=commands_frame.Opening("fix it please"))
         self.assertIsNone(persona.for_session("beta.1"))
+
+    def test_an_openings_brief_is_on_disk_before_the_window_that_starts_the_harness(self):
+        """The brief is what the new chat exists to read, and `charter reopen`'s SessionStart
+        block (Task 5) reads it as the harness starts. Written by the CALLER after
+        `cmd_launch` returned, it appeared only once the harness was already running — a race
+        that reproduces on nobody's machine. So it is written where the persona pointer is,
+        at id allocation, and the window that starts the harness comes after."""
+        self._launch(opening=commands_frame.Opening("fix it please", brief="fix it\nplease\n"))
+        made = [(argv, brief) for argv, brief in self.brief_at if "new-window" in argv]
+        self.assertTrue(made, self.argvs)
+        self.assertEqual(made[0][1], "fix it\nplease\n")
+
+    def test_an_opening_with_no_brief_leaves_no_brief_file(self):
+        self._launch(opening=commands_frame.Opening("fix it please"))
+        self.assertIsNone(state.brief("beta.1"))
+        self.assertFalse((config.STATE_DIR / "frame" / "beta.1" / "brief").exists())
 
     def test_an_ordinary_launch_still_selects_its_window(self):
         """The gate is an `and`, not a replacement: a launch with no opening, whose `attach`

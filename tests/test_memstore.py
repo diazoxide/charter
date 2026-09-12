@@ -91,6 +91,67 @@ class MemstoreCase(PersonaIso):
         self.assertFalse(memstore.forget(self.d, "nope"))
 
 
+class TheTitleAWriteDerivesIsAlsoWhatAReaderComputes(MemstoreCase):
+    """`title_of` is `write`'s own rule, lifted out so `todos.duplicate_of` can ask what a
+    stored title WILL be instead of respelling "the first line, stripped, capped" — two
+    spellings of it are how the writer and the reader come to disagree about which todos
+    are the same one."""
+
+    def test_a_title_is_the_first_line_and_nothing_after_it(self):
+        self.assertEqual(memstore.title_of("Fix the widget\nIt breaks on resize.\n"),
+                         "Fix the widget")
+
+    def test_the_blank_lines_and_the_padding_around_it_are_not_part_of_it(self):
+        self.assertEqual(memstore.title_of("\n\n  Fix the widget  \nmore\n"),
+                         "Fix the widget")
+
+    def test_a_body_with_nothing_in_it_has_no_title(self):
+        self.assertEqual(memstore.title_of("  \n\n "), "")
+
+    def test_no_body_at_all_has_no_title_either(self):
+        """Total, because a READER calls this: `todos.duplicate_of` asks it what a title
+        WILL be, and a store that answered `None` there would compare `None` against a
+        stored string and report every todo as new."""
+        self.assertEqual(memstore.title_of(None), "")
+
+    def test_a_long_first_line_is_capped_at_seventy_two_characters(self):
+        """**The number is spelled out here rather than read off the constant.** A test whose
+        expectation is computed from the value it is checking moves with that value and pins
+        nothing: widening `TITLE_MAX` to 4096, and retuning it by one, both stayed green
+        against `"x" * memstore.TITLE_MAX`.
+
+        72 is what a `# ` heading, an index row and a `slug` filename carry, and it is the
+        same cap on both sides of `todos.duplicate_of`'s comparison — a reader that stopped
+        one character later would compare 73 characters against the 72 `write` stored."""
+        self.assertEqual(memstore.TITLE_MAX, 72)
+        self.assertEqual(memstore.title_of("x" * 100), "x" * 72)
+
+    def test_a_title_handed_to_write_is_capped_and_stripped_the_same_way(self):
+        """A caller's own title goes through the same two rules as a derived one, so a
+        `# ` heading and an index row look the same whichever way the title arrived."""
+        for given, stored_as in (("y" * 100, "y" * 72), ("  Padded  ", "Padded")):
+            with self.subTest(title=given[:12]):
+                p = memstore.write(self.d, "a body", given)
+                [(_p, stored, _t)] = [e for e in memstore.entries(self.d) if e[0] == p]
+                self.assertEqual(stored, stored_as)
+                # The INDEX row too, and it is the reading that can see the strip:
+                # `entries` takes the title off the `# ` heading and strips it again on the
+                # way out, so padding left in by the writer is invisible there and visible
+                # here — in the file a person reads.
+                self.assertIn(f"- [{stored_as}]({p.name})\n",
+                              memstore.index_path(self.d).read_text())
+                p.unlink()
+
+    def test_what_a_write_stores_is_what_title_of_answers(self):
+        for text in ("Fix the widget\nIt breaks.\n", "  padded  \nmore\n",
+                     "y" * (memstore.TITLE_MAX + 5)):
+            with self.subTest(text=text[:20]):
+                p = memstore.write(self.d, text)
+                [(_p, stored, _t)] = [e for e in memstore.entries(self.d) if e[0] == p]
+                self.assertEqual(stored, memstore.title_of(text))
+                p.unlink()
+
+
 class TheIndexIsExactlyTheLinesThatSurvive(MemstoreCase):
     """Two one-line conditionals in `memstore`, neither of which had a case.
 

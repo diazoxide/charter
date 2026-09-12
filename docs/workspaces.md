@@ -363,5 +363,7 @@ skim the ones that matter.
 ## See also
 
 - [control-plane.md](control-plane.md) — `charter.toml`, and the plane's view of a workspace
+- [handoff.md](handoff.md) — `charter handoff`: opening a chat in another workspace on a brief
+  you approved, and why the consent is your harness's own prompt
 - [personas.md](personas.md) — the other memory base, and how a persona is dispatched
 - [adr/0010](adr/0010-the-manifest-is-a-snapshot-not-an-inventory.md) — why `workspace.json` is not an inventory

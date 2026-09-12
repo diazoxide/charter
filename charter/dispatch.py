@@ -160,6 +160,51 @@ def record_resume(agent: str, when: datetime | None = None) -> Path | None:
         return None
 
 
+#: Marks a row where a chat handed work to a NEW CHAT rather than to a sub-agent — a
+#: handoff (`charter/commands_handoff.py`, `docs/handoff.md`). Its own kind for `RESUME`'s
+#: reason: `tally()` answers "times dispatched as a sub-agent", and a handoff is the
+#: placement a chat chose INSTEAD of one.
+HANDOFF = "handoff"
+
+
+def record_handoff(*, placement: str, created: bool,
+                   when: datetime | None = None) -> Path | None:
+    """Append one handoff event: when, here-or-elsewhere, and whether it made the workspace.
+
+    **Four fields, and the three that are missing are the design.** No workspace name — a
+    LOCAL workspace's name must not reach a committed file, and this store is committed by
+    any plane whose `[memory].share` says so. No persona. No brief, and no part of one:
+    the brief is the operator's approved prose and never leaves the chat it opened (spec:
+    Limits). What is left answers the only question the tally exists to ask — how often the
+    model routes work to a new chat, and whether it reaches for a new workspace to do it.
+
+    Best-effort, like every writer in this module: a tally must never break a turn.
+    """
+    when = when or _now()
+    p = path_for(when)
+    if contain.write_refusal(p):
+        return None  # a committed link at this fixed name — see contain.write_refusal
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({"created": bool(created), "event": HANDOFF,
+                           "placement": placement,
+                           "ts": when.isoformat(timespec="seconds")}, sort_keys=True) + "\n"
+        # `O_NOFOLLOW` makes the line above ATOMIC for the one shape a flag can cover.
+        # `write_refusal` is check-then-open: a link planted in the window between the two
+        # is followed, and the row lands wherever it points. The check stays — it is what
+        # catches a FIFO, a directory, and a PARENT that is a link out of the plane, none
+        # of which this flag sees — and the flag closes the race on the final component
+        # for free. The three writers above predate it and keep their own shape.
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
+        try:
+            os.write(fd, line.encode())
+        finally:
+            os.close(fd)
+        return p
+    except OSError:
+        return None
+
+
 def resume_tally(days: int | None = None) -> int:
     rows = [o for o in _read_all() if o.get("event") == RESUME]
     if days is not None:

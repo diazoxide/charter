@@ -5001,7 +5001,7 @@ class Opening:
     one, which is what lets "no chat came back" be reported rather than inferred.
     """
 
-    def __init__(self, first_message: str, persona: str = "") -> None:
+    def __init__(self, first_message: str, persona: str = "", brief: str = "") -> None:
         #: The whole first message. It reaches the harness through the launch's `rest`
         #: (`harness.base.first_message_argv`); it is carried here so the driver's record of
         #: what it opened says what the chat was started on.
@@ -5009,6 +5009,13 @@ class Opening:
         #: The persona to point the new chat at before its harness starts, or ``""`` for
         #: whichever one a new chat in that workspace gets when nothing is pinned.
         self.persona = persona
+        #: The brief to keep in the new chat's private state, or ``""`` for a background
+        #: open that carries none. Here rather than written by the caller afterwards
+        #: because the caller cannot: the chat id is allocated inside `cmd_launch`, so the
+        #: earliest moment a per-chat file can be written at all is the same moment the
+        #: persona pointer is written — and for the same reason. A brief written after the
+        #: harness has started races the SessionStart that reads it.
+        self.brief = brief
         #: The chat id the launcher allocated, or ``""`` if it never got one.
         self.fid = ""
 
@@ -5637,6 +5644,12 @@ def _launch(args) -> int:
     opening = _opening(args)
     if opening is not None:
         opening.fid = fid
+        # The brief the chat was opened on, written here for the same two reasons and one
+        # more: it is the thing the new chat exists to read, and `charter reopen`'s
+        # SessionStart block reads it as the harness starts. Written by `cmd_handoff` after
+        # the launch returned, it existed only after the harness it is for was already
+        # running — a race that reproduces on nobody's machine.
+        state.record_brief(fid, opening.brief)
         if opening.persona:
             from . import persona as persona_mod
             persona_mod.set_active(opening.persona, session_id=fid, terminal_id="")
@@ -11040,7 +11053,7 @@ def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str)
 
 
 def open_in_background(ws: str, *, caller: str, first_message: str,
-                       persona: str = "") -> Opened:
+                       persona: str = "", brief: str = "") -> Opened:
     """Open a chat in workspace *ws*, started on *first_message*, and move nobody.
 
     **The seam `charter handoff` drives** (chat-handoff plan, Task 1): `cmd_launch` run for
@@ -11068,6 +11081,11 @@ def open_in_background(ws: str, *, caller: str, first_message: str,
 
     **Success is a chat id with a harness pane, never a return code**: a launcher that
     answered 0 and handed back no id has proved nothing exists.
+
+    *brief* is kept in the new chat's private state (`state.record_brief`) at the moment
+    the id is allocated, which is the earliest one there is and the last one before the
+    harness starts. A caller writing it afterwards would be writing the file the new chat's
+    SessionStart is already looking for.
     """
     refusal, p, h = _how_a_background_open_would_go(
         ws, caller=caller, first_message=first_message)
@@ -11086,7 +11104,7 @@ def open_in_background(ws: str, *, caller: str, first_message: str,
         return Opened(False, "", f"cannot open a chat in '{ws}': charter cannot enter its "
                                  "directory. Nothing was opened.")
     from types import SimpleNamespace
-    opening = Opening(first_message, persona)
+    opening = Opening(first_message, persona, brief)
     pins = {name: os.environ.get(name) for name in ("CHARTER_WORKSPACE", "CHARTER_PERSONA")}
     try:
         for name in pins:
