@@ -29,7 +29,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, hooks
+from charter import commands_frame, contain, hooks
 from charter.frame import leave
 from charter.frame import reopen as reopen_state
 from charter.frame import state
@@ -335,6 +335,37 @@ class SessionStartShowsAnOwedBrief(PlaneIso):
             with self.subTest(guess=guess):
                 self.assertLess(block.index(guess), block.rindex(self.CLOSE))
 
+    def test_a_line_past_the_report_budget_is_not_clipped(self):
+        """`contain.one_line`'s own budget is 160 characters, which is right for a report
+        row and wrong for every line of a brief: clipping would truncate PER LINE, so a
+        chat would work from most of its instructions and the ellipsis would be the only
+        sign. `NO_CLIP` is what stops that, and nothing here pinned it — content that fits
+        inside the budget is green under every value, which is `_WIDEST_ESCAPE`'s failure
+        on #983 exactly.
+        """
+        long_line = "requirement " * 40                    # 480 characters, one line
+        self.assertGreater(len(long_line), contain.DISPLAY_LIMIT,
+                           "fixture: shorter than the budget it is meant to exceed")
+        state.record_brief("beta.2", f"# Goal\n{long_line}\ntail")
+        state.owe_brief("beta.2")
+        body = hooks._brief_block("beta.2").split(self.OPEN + "\n", 1)[1]
+        self.assertEqual(body, f"# Goal\n{long_line}\ntail\n" + self.CLOSE)
+        self.assertNotIn("…", body)
+
+    def test_no_budget_is_asked_for_at_all(self):
+        """And the limit itself, because the case above is green for any clip WIDER than
+        its own fixture — 500 would pass it, which is the fixed-length-fixture trap one
+        level up. What has to hold is not "this line fits" but "no line is measured": a
+        brief is the whole context a chat has, and a budget is a number somebody later
+        tunes down. Asked of the call, so every finite value reddens rather than the ones
+        a fixture happens to exceed."""
+        seen = []
+        real = contain.one_line
+        with mock.patch.object(contain, "one_line",
+                               lambda v, **kw: seen.append(kw.get("limit")) or real(v, **kw)):
+            hooks._brief_quoted("a\nb")
+        self.assertEqual(seen, [contain.NO_CLIP, contain.NO_CLIP])
+
     def test_everything_but_the_newline_is_escaped_where_it_is_rendered(self):
         """The newline is the one invisible this render wants back; every other way to end
         a line is still taken, and so is every control character.
@@ -368,8 +399,43 @@ class TheMarkerIsTheFencesWholeDefence(PersonaIso):
     def test_the_marker_is_minted_per_render(self):
         """A constant marker, or one derived from the brief, is one the brief's author can
         carry inside the brief. Asked of the real generator — the class that renders blocks
-        stubs it, deliberately, so its own expectations are strings this file spells."""
+        stubs it, deliberately, so its own expectations are strings this file spells.
+
+        **Variability is the weaker half of the property and this is only that half** —
+        `random.getrandbits` passes it. The two cases below are the other half.
+        """
         self.assertNotEqual(hooks._brief_token(), hooks._brief_token())
+
+    def test_the_marker_is_not_drawn_from_a_seeded_generator(self):
+        """The property is UNPREDICTABILITY, and a per-process seed is how you lose it
+        while every variability test stays green.
+
+        `random` is seeded per process, so two draws after the same seed are the same
+        value, and a `fork` hands both sides the same stream — `config.temp_beside` argues
+        exactly this one module over, and it is the reason `os.urandom` was chosen here. A
+        marker a second process can reproduce is a marker the brief's author can be told,
+        and then the fence is decoration. Reseeding proves the draw does not come from
+        that stream at all, which `random.getrandbits`, `random.random` and every other
+        seeded spelling fail.
+        """
+        import random
+
+        state_before = random.getstate()
+        self.addCleanup(random.setstate, state_before)
+        random.seed(1234)
+        first = hooks._brief_token()
+        random.seed(1234)
+        self.assertNotEqual(first, hooks._brief_token())
+
+    def test_the_marker_comes_from_the_operating_systems_entropy(self):
+        """And the call itself, because "not seeded" is not the whole of it either: a
+        marker off the clock is unseeded and still predictable. `os.urandom` is the one
+        source charter already trusts for a tail nothing else can predict, and the width
+        it is asked for is the width the marker carries."""
+        with mock.patch("os.urandom", return_value=b"\x01\x02\x03\x04\x05\x06") as drawn:
+            tok = hooks._brief_token()
+        drawn.assert_called_once_with(hooks._BRIEF_TOKEN_BYTES)
+        self.assertEqual(tok, "010203040506")
 
     def test_the_marker_is_wide_enough_that_a_whole_brief_of_guesses_is_nothing(self):
         """The attacker gets no feedback, so every guess has to be written into the one

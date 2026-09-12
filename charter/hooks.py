@@ -6453,6 +6453,12 @@ def _brief_block(chat: str | None) -> str:
     restate what the second was about to say, and a guard nothing can turn red is the shape
     this repository deletes rather than documents twice.
 
+    **A brief of nothing but whitespace needs no test here, and adding one would be the
+    second.** `handoff.read_brief` refuses an empty brief on ``not text.split()``, which is
+    ``[]`` for ``"   "``, for ``"\\n\\n"`` and for ``" \\t \\n"`` — measured — so nothing
+    that reaches this file can render a fence around blank space. The check belongs at the
+    write, where the operator is still there to be told.
+
     **The label names the marker**, and that sentence is load-bearing rather than
     decoration: a fence a reader cannot identify is a fence that defends nothing, so the
     block says which token ends the quotation and that it was minted after the text it is
