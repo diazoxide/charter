@@ -2586,6 +2586,74 @@ def requirable(workflow: object) -> dict[str, str]:
     return out
 
 
+class TheMatrixRunsOncePerPullRequestAndOnceOnMain(unittest.TestCase):
+    """`test.yml`'s triggers, and the sentence in `sweep.yml`'s header that used to excuse
+    them.
+
+    That header argues at length that `push:` does not belong on the SWEEP, and every word
+    of that still stands — the two events sweep different trees, and a required check
+    satisfied by a push-scoped run stops proving the pull-request-scoped sweep happened.
+    One bullet of the argument was a concession rather than part of it: *"That workflow
+    carries both triggers, and every pull request there runs its matrix twice — once on the
+    head sha, once on the merge commit. Four cheap jobs, twice, is affordable."*
+
+    Affordable in what. The repository is public, so the runner minutes were never the
+    price — the wall clock is, and a duplicated matrix is not cheap in the only currency
+    being spent. Both runs test the same four interpreters, and the merge-commit run is the
+    one branch protection reads. So `push:` here is scoped to `main`, which is the branch
+    where a push is not also a pull request, and a branch with an open PR runs the matrix
+    once.
+
+    Three things have to hold together for that to be safe, and they are asserted rather
+    than argued:
+
+    * The four required contexts — `test (3.11)` … `test (3.14)` — are reported by a job
+      no trigger-shaped condition gates, so `pull_request` still produces every one of
+      them. A required context nothing reports blocks forever.
+    * `dev-install` asks for `refs/heads/main` by hand, and a `push:` narrowed to some
+      OTHER branch would leave that condition permanently false: a job that silently stops
+      running is the failure this whole file is about. So the branch the filter names and
+      the ref the condition demands are checked against each other.
+    * `pull_request` and `workflow_dispatch` stay. Narrowing the push trigger must not
+      become "the matrix runs on main only".
+    """
+
+    def workflow(self) -> dict:
+        return load((GITHUB / "workflows" / "test.yml").read_text())
+
+    def test_a_branch_with_an_open_pull_request_runs_the_matrix_once(self):
+        on = self.workflow()["on"]
+        self.assertEqual(set(on), {"push", "pull_request", "workflow_dispatch"})
+        self.assertEqual(on["push"], {"branches": ["main"]},
+                         "an unfiltered `push:` runs this matrix a second time on every "
+                         "pull request, on the head sha, and nothing reads that run")
+        self.assertIsNone(on["pull_request"],
+                          "the merge-commit run is the one branch protection reads")
+
+    def test_the_contexts_branch_protection_requires_are_reported_on_pull_requests(self):
+        """`test (3.11)`…`test (3.14)` come from the matrix job, and it carries no `if:`.
+
+        A condition here mentioning `github.event_name` would be the same defect from the
+        other side: the check would stop appearing on the trigger that still needs it, and
+        a required context that never reports does not pass — it blocks.
+        """
+        test = self.workflow()["jobs"]["test"]
+        self.assertNotIn("if", test)
+        self.assertEqual(test["strategy"]["matrix"]["python-version"],
+                         ["3.11", "3.12", "3.13", "3.14"])
+
+    def test_the_dev_install_smoke_test_still_has_a_push_that_can_reach_it(self):
+        """It runs on pushes to main and nowhere else, and it says so in an `if:` rather
+        than in the trigger — so narrowing the trigger past it would strand it."""
+        branches = self.workflow()["on"]["push"]["branches"]
+        guard = self.workflow()["jobs"]["dev-install"]["if"]
+        self.assertEqual(guard,
+                         "github.event_name == 'push' && github.ref == 'refs/heads/main'")
+        self.assertTrue(any(f"refs/heads/{b}" in guard for b in branches),
+                        f"`push:` fires on {branches}, and `dev-install` waits for a ref "
+                        "none of them produces — the job would never run again")
+
+
 class TheSweepsAbsenceIsSomethingOnlyARequiredCheckCanSay(unittest.TestCase):
     """#646 and #561 are one defect seen from two heights, and this holds the code half.
 

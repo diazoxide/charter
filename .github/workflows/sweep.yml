@@ -29,11 +29,18 @@ name: deletion sweep
 #     silently. The moment `push:` can also produce that check, its presence stops proving
 #     the pull-request-scoped sweep ran — a push-scoped run of a different tree satisfies it.
 #     The one-line fix reintroduces one level down the exact defect it was reached for.
-#   * **The cost is not the cost of `test.yml`.** That workflow carries both triggers, and
-#     every pull request there runs its matrix twice — once on the head sha, once on the
-#     merge commit. Four cheap jobs, twice, is affordable. This gate is eight parallel jobs
-#     and up to forty minutes on a large diff (#639: 443 mutations), and `push:` would spend
-#     that on every push of every branch, PR or not.
+#   * **The cost is not the cost of `test.yml`.** This bullet used to read "that workflow
+#     carries both triggers, and every pull request there runs its matrix twice — once on
+#     the head sha, once on the merge commit. Four cheap jobs, twice, is affordable." It no
+#     longer describes either workflow. `test.yml`'s `push:` is scoped to `main` now, so a
+#     branch with an open pull request runs that matrix once: cheap was being counted in
+#     runner-minutes, which a public repository is not billed for, and in wall clock — the
+#     thing actually being spent — a duplicate matrix was never cheap. The comparison it was
+#     making still holds and holds harder. This gate is up to SIXTEEN parallel jobs
+#     (`MAX_SHARDS`) of up to forty minutes each on a large diff (#639: 443 mutations), and
+#     `push:` would spend that on every push of every branch, PR or not — against an
+#     account-wide ceiling of 20 concurrent jobs, which those sixteen and `test.yml`'s four
+#     already exactly fill.
 #
 # `workflow_dispatch` stays. It has the same missing merge commit, and it is a hazard of
 # degree rather than of kind: somebody has to ask for it, once, on purpose — which is the

@@ -4040,7 +4040,7 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
             sweep.SHARD_FIXED = fixed
             self.assertEqual(sweep.per_shard_seconds(), 1, fixed)
             self.assertEqual(sweep.per_shard(), 1, fixed)
-            self.assertEqual(sweep.shards_for(self._costs(50)), 8, fixed)  # not a crash
+            self.assertEqual(sweep.shards_for(self._costs(50)), 16, fixed)  # not a crash
 
     def test_the_two_diffs_that_ran_out_of_time_now_fit(self):
         """#608's 62 mutations were cancelled twice and #626's 78 three times, at
@@ -4063,24 +4063,56 @@ class TheSweepIsSplitAcrossMachinesAndNothingIsDropped(unittest.TestCase):
         self.assertEqual(sweep.shards_for([]), 1)
 
     def test_the_fan_out_is_capped_and_the_sweep_is_not(self):
-        """`MAX_SHARDS` limits how much of the runner pool one branch may hold. It does
-        not limit what gets asked: past the ceiling the shards simply carry more."""
-        self.assertEqual(sweep.shards_for(self._costs(10_000)), 8)
+        """`MAX_SHARDS` limits how many machines one branch asks for at once. It does
+        not limit what gets asked: past the ceiling the shards simply carry more.
+
+        The cap was eight while it was read as a share of the runner pool. This repository
+        is public, so that pool is free and the scarce thing is the clock — hence sixteen.
+        The property under test is the one that did not change: a plan past the ceiling is
+        still dealt whole.
+        """
+        self.assertEqual(sweep.shards_for(self._costs(10_000)), 16)
         plan = self._plan(400)
-        dealt = [m for i in range(1, 9) for m in sweep.shard_of(plan, i, 8)]
+        dealt = [m for i in range(1, 17) for m in sweep.shard_of(plan, i, 16)]
         self.assertEqual(len(dealt), 400)
+
+    def test_doubling_the_fan_out_does_not_halve_the_wall_clock(self):
+        """The arithmetic `MAX_SHARDS`' comment states, held to the constants it states it
+        from — because a number a reader is shown is a number something should assert.
+
+        :data:`sweep.SHARD_FIXED` is paid **per shard** and not per plan: the checkout, the
+        selection map and the unmutated baseline are bought again by every machine. So the
+        half of a shard the fan-out divides is the mutation half only. Take the biggest plan
+        the old cap of eight fit — eight full hands — and the same plan on sixteen machines
+        is twelve minutes of fixed cost plus half of twenty-eight, which is twenty-six
+        minutes and not twenty. Raising the cap is worth doing and it is not worth
+        overselling, and the comment on the constant says so in these numbers.
+        """
+        self.assertEqual(sweep.MAX_SHARDS, 16)
+        half = sweep.MAX_SHARDS // 2
+        biggest = half * sweep.per_shard_seconds()       # what eight shards used to fit
+        at_half = sweep.SHARD_FIXED + biggest / half
+        at_full = sweep.SHARD_FIXED + biggest / sweep.MAX_SHARDS
+        self.assertEqual([round(at_half / 60), round(at_full / 60)], [40, 26])
+        self.assertGreater(at_full, at_half / 2,
+                           "the fixed cost is paid per shard, so twice the machines is "
+                           "less than half the wall clock — and the comment on MAX_SHARDS "
+                           "must not claim otherwise")
 
     def test_a_diff_past_the_ceiling_says_so_out_loud(self):
         """The spec is explicit that a cap the reader cannot see is worse than the cap.
 
-        224 and 225 are the same boundary this test held before #915 — eight shards of
-        twenty-eight *average* mutations — and it survives the change of unit intact,
-        because an unmeasured mutation is still priced at :data:`sweep.SECONDS_A_MUTATION`
-        and eight hands of 28 × 60 s are exactly the 1680 s a shard is sized for.
+        448 and 449 are the boundary 224 and 225 were before the cap went to sixteen, and
+        the boundary survived #915's change of unit before it survived this one: an
+        unmeasured mutation is still priced at :data:`sweep.SECONDS_A_MUTATION`, and a hand
+        of 28 × 60 s is exactly the 1680 s a shard is sized for, so the ceiling is
+        ``MAX_SHARDS`` such hands however many that is. Raising the cap moves where the
+        warning starts; it does not change what the warning is about, and a diff past
+        sixteen full shards still gets told so before a runner is spent.
         """
-        self.assertEqual(sweep.over_budget(self._costs(224)), "")
-        loud = sweep.over_budget(self._costs(225))
-        self.assertIn("225 mutations", loud)
+        self.assertEqual(sweep.over_budget(self._costs(448)), "")
+        loud = sweep.over_budget(self._costs(449))
+        self.assertIn("449 mutations", loud)
         self.assertIn("nothing here is dropped", loud.lower())
 
     def test_past_the_ceiling_the_warning_promises_a_short_answer_and_not_a_missing_one(
@@ -4561,9 +4593,17 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
     def test_a_diff_past_the_fan_out_ceiling_warns_on_the_pull_request(self):
         """A log line is not loud. `over_budget` reaching the plan's stdout as a workflow
         command is what puts it in the run's annotations instead of in a fold, and the
-        spec's rule is that a cap the reader cannot see is worse than the cap."""
+        spec's rule is that a cap the reader cannot see is worse than the cap.
+
+        The size of the plan is derived from `MAX_SHARDS` and not written as 300, which is
+        what it was while the cap was eight. A literal here is a claim about a particular
+        ceiling, and this test is not about where the ceiling is — it is about a diff on the
+        far side of it being *told so*, wherever it sits. Raising the cap to sixteen is what
+        found the literal, which is the argument for not writing another one.
+        """
+        past = sweep.MAX_SHARDS * sweep.per_shard() + 1
         plan = [sweep.Mutation("charter/m.py", n, n, "drop-if", "q?", "if x: pass",
-                               "", "f") for n in range(300)]
+                               "", "f") for n in range(past)]
         real = sweep.plan_for
         sweep.plan_for = lambda *a: (plan, {})
         self.addCleanup(lambda: setattr(sweep, "plan_for", real))
@@ -4573,10 +4613,10 @@ class TheWorkflowAsksTheToolAndNotTheOtherWayAround(unittest.TestCase):
         self.assertEqual(code, 0, said)
         self.assertIn("::warning title=The deletion sweep is over its budget::", said)
         self.assertIn("Nothing here is dropped", said)
-        # And it still asks about all three hundred, on the eight machines it is allowed.
-        self.assertEqual(self._read_outputs()["shards"], "8")
-        self.assertEqual(len([m for i in range(1, 9)
-                              for m in sweep.shard_of(plan, i, 8)]), 300)
+        # And it still asks about every one of them, on the machines it is allowed.
+        self.assertEqual(self._read_outputs()["shards"], str(sweep.MAX_SHARDS))
+        self.assertEqual(len([m for i in range(1, sweep.MAX_SHARDS + 1)
+                              for m in sweep.shard_of(plan, i, sweep.MAX_SHARDS)]), past)
 
     def test_a_diff_inside_the_ceiling_says_nothing_about_the_ceiling(self):
         code, said = self._cli("--plan", "--base", self.base,
@@ -6521,7 +6561,7 @@ class TheFanOutIsSizedAgainstTheHeaviestHandAndNotTheTotal(unittest.TestCase):
         self.assertLessEqual(sweep.heaviest_hand([heavy] * 3, 3),
                              sweep.per_shard_seconds())
 
-    def test_nothing_is_dropped_when_the_cost_wants_more_than_eight_shards(self):
+    def test_nothing_is_dropped_when_the_cost_wants_more_shards_than_the_cap(self):
         """The trade `MAX_SHARDS` forces, and the answer this file chose: **exceed the
         budget, loudly, and never drop.** A plan capped by dropping mutations would make
         the verdict's own name — `no survivors` — a claim about a sweep that never ran, and
@@ -6529,16 +6569,23 @@ class TheFanOutIsSizedAgainstTheHeaviestHandAndNotTheTotal(unittest.TestCase):
         still dealt, the shards carry more than they were sized for, they stop at
         `SHARD_REPORT_AT` and report what they measured, and `no verdict: N out of time`
         stays reachable and honest.
+
+        This used to say "more than eight shards" and to reach for it with a literal 9. The
+        cap is sixteen now, and 9 quietly became a plan that FITS — the assertion went on
+        passing for a while and then stopped meaning anything. So the one-past case is
+        derived from the constant below: the property is "one machine past the cap gets the
+        cap", and it is true of whatever the cap is.
         """
         costs = [float(sweep.per_shard_seconds())] * 40
         self.assertEqual(sweep.shards_for(costs), sweep.MAX_SHARDS)
-        # Nine mutations of exactly one budget each is the case that catches a fan-out
-        # allowed one machine past the cap: NINE shards would fit it perfectly, eight
-        # cannot fit it at all, and the answer has to be eight. `MAX_SHARDS` is a limit on
-        # how much of the runner pool one branch may hold, and a plan that wants more
-        # machines is exactly the plan that must not be given them.
-        self.assertEqual(sweep.shards_for([float(sweep.per_shard_seconds())] * 9),
-                         sweep.MAX_SHARDS)
+        # `MAX_SHARDS + 1` mutations of exactly one budget each is the case that catches a
+        # fan-out allowed one machine past the cap: that many shards would fit it perfectly,
+        # `MAX_SHARDS` cannot fit it at all, and the answer has to be `MAX_SHARDS`. A plan
+        # that wants one more machine than the ceiling allows is exactly the plan that must
+        # not be given it.
+        self.assertEqual(
+            sweep.shards_for([float(sweep.per_shard_seconds())] * (sweep.MAX_SHARDS + 1)),
+            sweep.MAX_SHARDS)
         plan = [_mutation("charter/m.py", n) for n in range(40)]
         dealt = [m for i in range(1, sweep.MAX_SHARDS + 1)
                  for m in sweep.shard_of(plan, i, sweep.MAX_SHARDS)]
@@ -6546,12 +6593,17 @@ class TheFanOutIsSizedAgainstTheHeaviestHandAndNotTheTotal(unittest.TestCase):
         self.assertEqual(sorted(m.line for m in dealt), sorted(m.line for m in plan))
 
     def test_the_warning_fires_on_the_heaviest_hand_and_not_on_a_count(self):
-        """The boundary again, on the other function that reads it. 224 average mutations
-        are eight hands of exactly 1680 s and say nothing; one more is 1740 s on the
-        heaviest hand and says so."""
+        """The boundary again, on the other function that reads it. `MAX_SHARDS` hands of
+        exactly 1680 s say nothing; one hand's worth more and the heaviest is 3360 s, which
+        says so.
+
+        Said in terms of the constant and not of 8 and 9. Those were the numbers while the
+        cap was eight, and the second of them turned into a plan that fits the moment the
+        cap moved — an assertion still green and no longer about anything.
+        """
         budget = float(sweep.per_shard_seconds())
         self.assertEqual(sweep.over_budget([budget / 8] * 8), "")
-        loud = sweep.over_budget([budget] * 9)
+        loud = sweep.over_budget([budget] * (sweep.MAX_SHARDS + 1))
         self.assertIn("PARTIAL answer", loud)
         self.assertIn(f"{sweep.per_shard_seconds()} s a shard is sized for", loud)
 
