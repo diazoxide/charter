@@ -22,10 +22,11 @@ plane places it*, below). The middle pane is the harness's and charter draws not
 `charter <profile>` names a **harness profile** — a kind, a command and an environment,
 declared in `charter.local.toml`
 ([control-plane.md](control-plane.md#harness--profiles-and-the-default)). `claude`, `codex`
-and `opencode` are themselves profiles, the built-in one per harness, and this release
-starts those. A profile the file declares does not run yet: it is refused with a sentence
-saying charter cannot yet ask before a declared command runs, because nothing stands for
-your approval of a command until the release that adds one.
+and `opencode` are themselves profiles, the built-in one per harness. The first time a
+profile the file declares is asked to run — and again whenever its command or environment
+changes — charter shows what it would run and asks `run this? [y/N]` before it does
+([control-plane.md](control-plane.md#a-new-or-changed-command-asks-once)). Built-ins never
+ask.
 
 `charter` on its own opens the frame once the plane says which harness it means —
 `[harness] default = "claude"` in `charter.toml`, documented in
@@ -861,6 +862,13 @@ frame-new-chat`, which is `charter <harness>` in this workspace with one differe
 builds the frame without becoming your terminal, because the process behind a click is not
 one.
 
+One thing it can still put to you, and it puts it **in the new chat's own pane**: a profile
+whose command is new or has changed asks `run this? [y/N]` there. The press has no terminal
+to ask on — that is what a click is — and the pane it opens has one on both ends, so the
+question goes where you can actually answer it. Answering no exits that chat and closes its
+window, exactly as any other exit does. A workspace tab opens a chat the same way and asks
+in the same place.
+
 **Pressing the `-` closes nothing.** It opens the menu about the chat you are in — the same
 one a right-click on that tab opens — whose `chat: close` row draws the warning naming the
 chat and what stopping it costs, and the keypress on *that* is what stops it. A pointer
@@ -1125,6 +1133,13 @@ caution: a profile can be a different account, where the conversation this chat 
 resume was never held and the workspace's code was never meant to go. Declaring it again
 and running `charter reopen` brings that chat back — which is what leaving it in the record
 is for.
+
+**A chat whose profile is new or has changed is skipped the same way, and for the same
+reason there is no substitute: a reopen has nobody to ask.** Charter shows a command and
+asks before it runs one — [*A new or changed command asks once*](control-plane.md#a-new-or-changed-command-asks-once)
+— and a restore is one command typed once for a plane-full of chats, with no moment in it
+to put a question. Run `charter <profile>` once yourself, answer it there, and
+`charter reopen` brings the chat back.
 
 **A chat comes back in its workspace, and is told when that is not where it had been.** The
 record stores the directory the harness was actually standing in; the restore lands in
@@ -1450,7 +1465,7 @@ directly. Only one reading differs, and nothing in charter reads it: until the `
 `#{pane_current_command}` names charter's interpreter rather than the harness.
 
 **A refusal in the pane waits for you.** A launcher that refuses — a command that is no
-longer on `PATH`, a profile this release cannot yet approve — prints its sentence in the
+longer on `PATH`, a local file git would now commit — prints its sentence in the
 pane and waits for you to press Enter, because a pane that printed and exited would have its window
 closed before anything could read it: measured, charter's own check for a chat that died
 early answers a few milliseconds before the launcher's first line has even run. A chat

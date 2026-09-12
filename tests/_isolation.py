@@ -390,6 +390,104 @@ def declare_profiles(case, text: str = DECLARED_PROFILES) -> Path:
     return local
 
 
+class Typed:
+    """A terminal somebody is sitting at, holding the lines they are about to type.
+
+    Replacing ``sys.stdin`` outright is how a test declares its terminal-ness to
+    `tests/_ttyguard` — the guard's own stream is not consulted at all — and it is the only
+    way to count the READS, which is what "asked exactly once" is an assertion about. A
+    read with nothing left is an error rather than an empty string, because a second
+    question is the failure two of those cases exist to catch.
+    """
+
+    def __init__(self, *lines: str) -> None:
+        self.lines = list(lines)
+        self.reads = 0
+
+    def isatty(self) -> bool:
+        return True
+
+    def readline(self) -> str:
+        self.reads += 1
+        if not self.lines:
+            raise AssertionError("nothing here was going to answer a second question")
+        return self.lines.pop(0)
+
+
+class APipe:
+    """The other end of the same question: not a terminal, and never read from or written
+    to — a read here is a launch waiting on something that cannot answer."""
+
+    def isatty(self) -> bool:
+        return False
+
+    def readline(self) -> str:
+        raise AssertionError("nobody is here to answer a question")
+
+    def write(self, text: str) -> None:
+        raise AssertionError("nothing may be asked of a stream that is not a terminal")
+
+
+class ATerminal(io.StringIO):
+    """A `StringIO` that says it is a terminal: the screen half of an ask, kept where a
+    test can read back what was drawn on it."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def approve_profile(case, name: str = "claude-work"):
+    """Seed *name*'s launch record, the way an operator who already said yes once has.
+
+    **A real-tmux test that launches a declared profile has to call this** (Global
+    Constraint, N6). `_launch` passes `--attended` for an open somebody is in front of,
+    and a real pane has a terminal on both of its ends — so a declared profile with no
+    record does exactly what it promises there: it prints its command and waits at
+    `run this? [y/N]` until the suite's own 600 s watchdog kills the run. A hang is not a
+    verdict, and this is the one line that keeps it from being one.
+
+    The profile, so a caller can assert about the very object the record was made from.
+    `profiletrust` is imported here rather than at the top for ruling 43's reason: this
+    module is imported by most of the suite, and profile code stays off that path.
+    """
+    from charter import profiles, profiletrust
+
+    p = profiles.current().profiles[name]
+    why = profiletrust.record_launched(p)
+    case.assertEqual(why, "", f"the launch record for '{name}' could not be written")
+    return p
+
+
+def approve_every_profile(case) -> None:
+    """:func:`approve_profile` for every profile this plane declares right now.
+
+    For a fixture whose cases are about something else entirely — which profile a `+`
+    carries, what a refusal says about `PATH` — where naming each one would be a list that
+    goes stale the next time the fixture grows a profile. Called AFTER a case rewrites
+    `charter.local.toml`, because it records what is declared at the moment it runs.
+    """
+    from charter import profiles
+
+    for name in profiles.current().profiles:
+        approve_profile(case, name)
+
+
+def assert_approved(name: str = "claude-work") -> None:
+    """Fail now, before tmux, if *name* has no launch record — :func:`approve_profile`'s
+    other half.
+
+    A missing record is a **hang** rather than a failure once a real pane is involved, and
+    a hang costs the whole run its verdict. Asked before the launch so the message names
+    the fixture's mistake instead of arriving as a watchdog kill fifteen minutes later.
+    """
+    from charter import profiles, profiletrust
+
+    p = profiles.current().profiles.get(name)
+    if p is None or profiletrust.approval_needed(p):
+        raise AssertionError(
+            f"no launch record for '{name}' — its pane would wait at run this? [y/N]")
+
+
 def isolate_state_dir(case) -> Path:
     """Point ``config.STATE_DIR`` at a throwaway dir for one test case, restoring after.
 

@@ -1549,6 +1549,16 @@ The measurement's L3 is not a test: nothing in `charter/` reads that format. Its
     and ask a second time (N2b nit).
   - With a terminal missing on either side it returns that refusal: its text is printed and
     `REFUSED_EXIT` returned (review 3).
+  - **As built, two additions the plan did not name.** A decline is its own kind,
+    `KIND_DECLINED`, carrying no text: `ask_in_terminal` has already said `charter: nothing
+    started.` on the terminal the question went to, so `start` and `cmd_frame_launch` both
+    stay quiet for it — repeating it under charter's red ✗ would report the operator's own
+    answer as a rule firing, and a pane must not wait for Enter under a question its operator
+    has just answered. And `_launch`'s `--no-frame` branch passes the OPEN's `attended`
+    rather than `sys.stdin.isatty() and sys.stdout.isatty()`, which Task 2 conflated: they
+    are different questions now that `can_ask` exists, and the old spelling made
+    `charter <profile> --no-frame > log` say "nobody is at this open" about a command
+    somebody had just typed instead of the `NEEDS_ASKING` this table's own row asks for.
 - `charter/commands_frame.py`:
   - `_launch`'s pre-tmux step 5: ask when `attended` and `profiletrust.can_ask(sys.stdin, sys.stdout)`. Defer to the pane
     only a `KIND_ASK` refusal, and only when attended with no terminal (`+`, a tab). Every other
@@ -1576,8 +1586,10 @@ def fingerprint(p: profiles.Profile) -> dict: ...
     # {"kind": p.kind, "command": list(p.command), "env": dict(p.env)} — as DECLARED, before
     # `~` expansion: the file is what an edit changes, and HOME is not something a chat moves
 def last_launched(name: str) -> dict | None: ...
-def record_launched(p: profiles.Profile) -> str: ...     # "" once written; the OSError's text otherwise. Never raises
-RECORD_NOT_WRITTEN = ("charter: you approved profile '{name}', but charter could not record that "
+def record_launched(p: profiles.Profile) -> str: ...     # "" once written; the OSError's own
+    # strerror otherwise, WITHOUT the path — every caller that quotes one already names it, so
+    # returning it here printed it twice (as built). Never raises
+RECORD_NOT_WRITTEN = ("you approved profile '{name}', but charter could not record that "
     "at {path} ({why}), so it will not start it — it would only ask you again. Nothing was "
     "started; fix that path and run it again.")
 def approval_needed(p: profiles.Profile) -> str: ...     # "" | "new" | "changed"; built-ins ""
@@ -1586,11 +1598,18 @@ def refusal(p: profiles.Profile, *, attended: bool) -> "launcher.Refusal | None"
     # attended — the caller asks if can_ask, and prints the text otherwise;
     # Refusal(KIND_UNATTENDED, UNATTENDED formatted, REFUSED_EXIT) when not. Callers branch
     # on kind, never on text (re-review N2)
-def ask_in_terminal(p: profiles.Profile, *, stdin, stdout) -> bool: ...
-    # prints the command and env, reads one line, True only for "y"/"yes"; records on True
-NEEDS_ASKING = ("charter: profile '{name}' is {state} since it last ran, and charter asks "
-    "before such a command runs — but there is no terminal here to ask in. Nothing was "
+class Answer(NamedTuple): yes: bool; why: str     # the fourth review's nit, as built: a yes
+    # has two outcomes and they are not the same launch — approved-and-recorded, and
+    # approved-and-NOT-recorded, which refuses (N2b). `why` is "" on every other path.
+def ask_in_terminal(p: profiles.Profile, *, stdin, stdout) -> Answer: ...
+    # prints the command and env, reads one line, yes only for "y"/"yes"; records on a yes,
+    # and says "charter: nothing started." on *stdout* for anything else — the terminal the
+    # question went to, in `_choose_workspace`'s own words for a cancel
+NEEDS_ASKING = ("profile '{name}' is {state}, and charter asks before it runs a command it "
+    "has not been shown before — but there is no terminal here to ask in, so nothing was "
     "started. Run it where you can answer: charter {name}")
+    # As built: "{state} since it last ran" read as false for the `new` state, which has
+    # never run at all. Same for UNATTENDED and REOPEN_UNAPPROVED below.
 def can_ask(stdin, stdout) -> bool: ...     # both isatty(); a terminal on one side only is not one
 ```
 

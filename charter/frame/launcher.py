@@ -36,11 +36,28 @@ chat passes it.
 **A refusal in the pane has to reach the operator without the dead pane** (ruling 42).
 Measured 2026-09-11: `_launch`'s eager dead-status ask completes 6-14 ms after the start
 while a Python launcher's first line runs at 19-22 ms, and on charter's server the teardown
-hook then kills the window (`_pane_last_words` answered `[]` in all 40 runs). So an
-**attended** launcher shows its refusal in the pane and waits for a key — the pane is
-charter's while no harness has run in it (ADR 0018, as the spec amends it) — and an
-**unattended** one records it under the chat, where the launch that opened the chat reads
-it back (`state.record_launch`, `commands_frame._await_the_launcher`).
+hook then kills the window (`_pane_last_words` answered `[]` in all 40 runs). So every
+refusal the pane SAYS is recorded under the chat, where the launch that opened it reads it
+back (`state.record_launch`, `commands_frame._await_the_launcher`) — and an **attended** one
+is also shown in the pane, which then waits for the operator to press **Enter**. (The one
+refusal the pane neither says nor records is a DECLINE: the operator answered that question
+here a moment ago and was told `charter: nothing started.` as they did, and a decline is
+reachable only from an attended open, which is exactly the open nobody reads the record for.
+:func:`already_said` is where that is decided.) Only the WAIT is conditional among the rest,
+and it is a LINE rather than a keystroke: reading one key means putting the
+pane's terminal into raw mode, and a `tcsetattr` from a pane on a Linux CI runner left the
+launcher killed by a signal with the refusal gone with its window
+(:func:`_wait_for_the_operator` records that measurement). The pane is charter's to write
+in while no harness has run in it (ADR 0018, as its 2026-09-12 amendment states).
+
+**And the same pane is where a new or changed profile is ASKED about** (Task 3). A profile
+with no launch record, or one that no longer matches it, is not refused where somebody is
+in front of it: :func:`answered` prints its command and its environment and reads one line,
+`run this? [y/N]` (`charter/profiletrust.py`). A no exits with the workspace picker's own
+cancel code and says nothing more — the operator has just answered. An open nobody is at
+gets a refusal in place of the question, and so does one with no terminal on both of its
+ends, because a question nobody can answer is a chat that never starts and never says why.
+**After a yes the whole chain runs again from the top** before the `exec` (ruling 27).
 
 **Nothing here is on the import path.** `cli` and `commands_frame` reach this module at call
 time, because every `charter hook …` process builds the parser and derives config, and
@@ -72,22 +89,39 @@ NOT_EXECUTABLE_EXIT = 126
 #: stops guarding on the day it does.
 KIND_IGNORED = "ignored"
 KIND_PATH = "path"
-KIND_NOT_YET = "not-yet"
+#: The one refusal that is a QUESTION rather than an answer: a caller with a terminal asks
+#: it (`profiletrust.ask_in_terminal`) and a caller with none prints its text. It is also
+#: the only kind `commands_frame._launch` defers to the pane (N2a's nit), which is why that
+#: branch is on the kind: a pane is where a press finds the terminal it did not have.
+KIND_ASK = "ask"
+#: The same profile, at an open nobody is at — a reopen, a restore, a handoff.
+KIND_UNATTENDED = "unattended"
+#: A yes charter could not write down (N2b's nit).
+KIND_RECORD = "record"
+#: A yes the record no longer backs: it moved between the write and the re-run (S1).
+KIND_MOVED = "moved"
+#: The operator read the command and said no. Not a rule firing: their own answer.
+KIND_DECLINED = "declined"
 KIND_EXEC = "exec"
 
 
 class Refusal(NamedTuple):
     """Why a profile did not start, and what a CLI returns for it."""
 
-    #: One of the KIND_* constants above. Task 2 reads it in tests and nowhere else; it is
-    #: here because Task 3 branches on it — `KIND_ASK` is the one refusal a pane defers to
-    #: rather than prints — and ruling 27 says that branch is on the kind, never on the
-    #: text, which gets reworded.
+    #: One of the KIND_* constants above, and the ONLY thing a caller branches on
+    #: (ruling 27): a sentence gets reworded, and a comparison against one is a guard that
+    #: stops guarding on the day it does. Two questions are asked of it often enough to
+    #: have one home each — :func:`is_a_question` and :func:`already_said`.
     kind: str
-    #: The sentence, without charter's own prefix: each caller says it its own way.
+    #: The sentence, without charter's own prefix: each caller says it its own way. **``""``
+    #: for a refusal whose sentence has already been said** — today that is `KIND_DECLINED`,
+    #: which `profiletrust.ask_in_terminal` answered on the terminal it asked on. Callers
+    #: ask :func:`already_said` rather than testing this for emptiness.
     text: str
-    #: What a CLI returns for it — MISSING_EXIT for KIND_PATH, its own number for
-    #: KIND_EXEC, REFUSED_EXIT otherwise.
+    #: What a CLI returns for it: `MISSING_EXIT` for `KIND_PATH`, its own number for
+    #: `KIND_EXEC`, `profiletrust.DECLINED_EXIT` for `KIND_DECLINED` — the workspace
+    #: picker's own cancel code, because a decline is a cancel — and `REFUSED_EXIT` for the
+    #: rest.
     exit: int
 
 
@@ -103,10 +137,6 @@ IGNORED = "profile '{name}' is refused — {why}"
 NOT_ON_PATH = ("profile '{name}' runs {cmd}, which is not on PATH — nothing was started. "
                "Install it, or give the profile a command with a full path in "
                "charter.local.toml.")
-DECLARED_NOT_YET = (
-    "profile '{name}' comes from charter.local.toml, and this charter cannot yet ask before "
-    "a declared command runs, so it runs none — nothing was started. Until it can, launch a "
-    "built-in the file does not replace: {builtins}.")
 EXEC_FAILED = ("profile '{name}' could not be started — {cmd} failed to run ({why}). Nothing "
                "is running here; fix the command in charter.local.toml.")
 UNPROVEN_CHAT = ("this launch was given chat '{chat}' but is not that chat's pane, so it "
@@ -116,6 +146,37 @@ UNPROVEN_CHAT = ("this launch was given chat '{chat}' but is not that chat's pan
 #: run in it, and the keypress is what keeps the window from closing over the sentence
 #: (ruling 42).
 PRESS_ENTER = "  press Enter to close this chat."
+
+
+def is_a_question(r: Refusal | None) -> bool:
+    """Is *r* the refusal that is a QUESTION rather than an answer?
+
+    One home for a test three callers make — :func:`attempt` to know what to ask,
+    `commands_frame._launch` and `_the_pane_will_ask` to know what a pane will ask instead —
+    because each of them means the same thing by it and a fourth kind of question would
+    otherwise have to find all three.
+    """
+    return r is not None and r.kind == KIND_ASK
+
+
+def already_said(r: Refusal) -> bool:
+    """Has *r*'s sentence already reached the operator, so that saying it again would be
+    charter repeating itself?
+
+    The other test three callers make — :func:`start`, :func:`cmd_frame_launch` and
+    `commands_frame._launch` — and it has one home for the same reason. Today exactly one
+    kind answers yes: a decline, which `profiletrust.ask_in_terminal` has already answered
+    with `charter: nothing started.` on the terminal it put the question on, and whose
+    `text` is `""` because of it. Printing it again under charter's red ✗ would report the
+    operator's own answer as a rule firing on them.
+    """
+    return r.kind in _ALREADY_SAID
+
+
+#: The kinds :func:`already_said` answers yes for. A set rather than an `==`, because it is
+#: the list that is the decision: a second such kind is one entry here rather than an edit
+#: at each of the three sites that ask.
+_ALREADY_SAID = frozenset({KIND_DECLINED})
 
 
 def _nothing() -> None:
@@ -216,8 +277,8 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
     decides nothing about it. A declared replacement of a built-in (`[harness.claude]`) is
     declared, so `charter claude` is refused with the rest and never falls back (ruling 19).
 
-    *attended* decides nothing here yet: Task 3's approval is what asks, and this is the seam
-    it fills (`_approval_refusal`).
+    *attended* decides what the last link answers: an open somebody is in front of gets the
+    question (`KIND_ASK`), and one nobody is at gets a refusal in its place.
     """
     if p.source != profiles.BUILTIN:
         why = profiles.ignored_refusal(root)
@@ -238,26 +299,83 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
 
 
 def _approval_refusal(p: profiles.Profile, *, attended: bool) -> Refusal | None:
-    """Task 2's B1 refusal: a declared profile does not run until something can ask first.
+    """The last link: has the operator seen this command? (`profiletrust`)
 
-    **`main` must never run an unapproved declared command between two merges.** Nothing
-    yet stands for the operator's approval of a `command` — Task 3's launch record is what
-    will — and `charter.local.toml` is a file a chat can write with no diff to show for it.
-    So every profile the file declares is refused here, a replacement of a built-in
-    included, through `charter <profile>`, `+`, a tab, reopen and a handoff alike; only the
-    built-ins no declared profile replaces launch.
+    **`main` never runs an unapproved declared command.** `charter.local.toml` is a file a
+    chat can write with no diff to show for it, and its `command` goes to tmux rather than
+    through a harness's own permission prompt — so a profile with no launch record, or one
+    that no longer matches it, is shown and asked about before it runs. A replacement of a
+    built-in (`[harness.claude]`) is a declaration and asks with the rest; a built-in the
+    file does not replace comes out of charter's own registry and never asks.
 
-    Task 3 replaces this body with `profiletrust.refusal(p, attended=attended)` and deletes
-    :data:`DECLARED_NOT_YET`, which is why *attended* is already the parameter it takes: an
-    open nobody is at refuses where it would have asked.
+    One line, because it is a seam rather than a rule: `profiletrust` owns the record, the
+    two sentences and the question, and this is where the chain reaches them.
     """
-    if p.source == profiles.BUILTIN:
-        return None
-    builtins = ", ".join(name for name, q in profiles.current().profiles.items()
-                         if q.source == profiles.BUILTIN)
-    return Refusal(KIND_NOT_YET,
-                   DECLARED_NOT_YET.format(name=contain.readable(p.name), builtins=builtins),
-                   REFUSED_EXIT)
+    from .. import profiletrust
+
+    return profiletrust.refusal(p, attended=attended)
+
+
+def answered(p: profiles.Profile, ask: Refusal, *,
+             again: Callable[[], Refusal | None]) -> Refusal | None:
+    """Put *ask*'s question to whoever is at this process's terminal, and on a yes run the
+    whole chain *again* before answering ``None``.
+
+    **One function because it is one rule**, and it had grown two homes — `attempt` for the
+    launcher's own chain and `commands_frame._asked_here` for the one before tmux. What
+    differs between them is only which chain to re-run, so that is the parameter and the
+    rest is here.
+
+    Four answers, and each is its own kind, because every caller of this branches on one
+    (ruling 27) and none of them may tell them apart by their text:
+
+    * **no terminal** — *ask* itself comes back, and its text is `NEEDS_ASKING`: somebody
+      typed this and there is nowhere to put the question (review 3). Nothing is read from
+      the stream, which is a stronger claim than "does not block": a read on a pipe returns
+      at once and looks exactly like a question that was answered.
+    * **a yes charter could not record** — `KIND_RECORD`, and *again* is NOT run (N2b's
+      nit). Going round would find no record and ask the identical question a second time,
+      which is the one thing an operator cannot fix by answering.
+    * **anything else** — `KIND_DECLINED`, with no text at all, because
+      `profiletrust.ask_in_terminal` has already said `charter: nothing started.` on the
+      terminal the question went to. The exit code is the workspace picker's cancel (130).
+    * **a yes whose chain still asks** — `KIND_MOVED` (S1). The record lives under
+      `.charter/`, which a chat can write (ruling 13), so *again* can come back holding the
+      very same question. Asking twice is N2b's case one race along, and the sentence that
+      used to come out of here was `NEEDS_ASKING` — *no terminal here to ask in* — said on a
+      terminal that plainly had one. It says what actually happened instead.
+
+    **The whole chain, from the top** (ruling 27). A yes answers the approval question and
+    nothing else: the plane can move while the operator is reading the prompt — a
+    `.gitignore` edited, the command uninstalled, and from Task 4 a profile that stops being
+    wired — and a yes that walked straight past the checks behind it would be the one place
+    in charter where saying yes to one question waives the rest.
+    """
+    from .. import profiletrust
+
+    if not profiletrust.can_ask(sys.stdin, sys.stdout):
+        return ask
+    said = profiletrust.ask_in_terminal(p, stdin=sys.stdin, stdout=sys.stdout)
+    if said.why:
+        return Refusal(KIND_RECORD,
+                       profiletrust.RECORD_NOT_WRITTEN.format(
+                           name=contain.readable(p.name),
+                           # The PATH limit and not the display one: this sentence ends in
+                           # "fix that path and run it again", and a path clipped at 160 is
+                           # one the reader cannot act on (`contain.PATH_DISPLAY_LIMIT`).
+                           path=contain.readable(config.STATE_DIR / profiletrust.RECORD,
+                                                 contain.PATH_DISPLAY_LIMIT),
+                           why=contain.readable(said.why)),
+                       REFUSED_EXIT)
+    if not said.yes:
+        return Refusal(KIND_DECLINED, "", profiletrust.DECLINED_EXIT)
+    left = again()
+    if is_a_question(left):
+        return Refusal(KIND_MOVED,
+                       profiletrust.CHANGED_WHILE_ASKING.format(
+                           name=contain.readable(p.name)),
+                       REFUSED_EXIT)
+    return left
 
 
 def _exec_exit(e: OSError) -> int:
@@ -280,9 +398,16 @@ def attempt(p: profiles.Profile, rest: list[str], *, fid: str | None, attended: 
     *on_exec* is what a caller records the moment the pane stops being charter's, and it
     returns the undo for it: an `execvpe` that raises after it leaves a pane running nothing
     at all, and a pane running nothing must not also claim to be a chat (N7's nit).
+
+    **The ask is here**, because this is the one function every path reaches — the pane,
+    `--no-frame`, and a launch whose output is a pipe — and a question asked in only some
+    of them is an approval that depends on how the harness was started.
     """
     env = environment(p, os.environ, framed=fid is not None)
     r = refusal(p, root=config.ROOT, attended=attended, env=env)
+    if is_a_question(r):
+        r = answered(p, r, again=lambda: refusal(p, root=config.ROOT, attended=attended,
+                                                 env=env))
     if r is not None:
         return r
     undo = on_exec()
@@ -305,12 +430,18 @@ def start(p: profiles.Profile, rest: list[str], *, fid: str | None, attended: bo
     """:func:`attempt`, with the refusal said on charter's own terms. The exit code.
 
     What `charter <profile> --no-frame` and a launch with no terminal run — the refusal is
-    printed where the operator is already looking, so nothing waits for a key there.
+    printed where the operator is already looking, so nothing here holds a pane open for
+    them to read it.
+
+    **A decline says nothing more.** `profiletrust.ask_in_terminal` has already answered it
+    on the terminal the question went to, and repeating it under charter's red ✗ would
+    report the operator's own answer as a rule firing.
     """
     r = attempt(p, rest, fid=fid, attended=attended)
     if r is None:
         return 0
-    util.err(f"charter: {r.text}")
+    if not already_said(r):
+        util.err(f"charter: {r.text}")
     return r.exit
 
 
@@ -391,9 +522,17 @@ def _handed_over(fid: str | None) -> Callable[[], None]:
 def _refused_in_pane(text: str, code: int, *, fid: str | None, attended: bool) -> int:
     """Say *text* in the pane the way somebody will actually read it, and return *code*.
 
-    Ruling 42, measured: printing and exiting is exactly what nobody reads. An attended pane
-    waits for a key; an unattended one leaves the sentence under the chat, because the
-    process that opened it is the one with a terminal.
+    Ruling 42, measured: printing and exiting is exactly what nobody reads. So the sentence
+    is left under the chat **on both paths this runs on** — the record is what an unattended
+    open reads back (`commands_frame._await_the_launcher`), and an attended one that the
+    operator closes before reading has left it somewhere all the same. A decline never
+    reaches here at all (:func:`cmd_frame_launch` returns on :func:`already_said` first), and
+    does not need to: it says nothing the operator has not just been told.
+
+    **Only the wait is conditional.** An attended pane holds itself open until the operator
+    presses Enter — a LINE and not a keystroke, for the reason
+    :func:`_wait_for_the_operator` measures — and a pane nobody is at never stops on
+    anything.
     """
     util.err(f"charter: {text}")
     if fid is not None:
@@ -429,4 +568,11 @@ def cmd_frame_launch(args) -> int:
                 on_exec=lambda: _handed_over(fid))
     if r is None:
         return 0
+    if already_said(r):
+        # **The one refusal a pane neither shows, records nor waits on.** The operator
+        # answered the question in this very pane a moment ago — there is nothing here they
+        # have not read, nothing for them to press, and nothing for another process to read
+        # back, because no other process is waiting on an attended open. The window closes
+        # the way it does for any other exit, on the picker's own cancel code.
+        return r.exit
     return _refused_in_pane(r.text, r.exit, fid=fid, attended=args.attended)

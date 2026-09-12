@@ -157,27 +157,35 @@ trimming afterwards: the bound belongs where the memory is. Verified on tmux 3.7
 Harness profiles put a charter process in the pane. `charter frame-launch --profile <name>`
 is what tmux now starts in every chat pane, and it becomes the harness by `os.execvpe`
 replacing itself with the profile's command (`charter/frame/launcher.py`). Before that
-happens, charter may write on that screen, and there are exactly two things it writes.
+happens, charter may write on that screen, and there are exactly three things it writes.
 
 **A refusal** — the local file became committable since the pre-tmux check, the command is
-not on `PATH`, the profile is declared and nothing can ask the operator's approval yet, the
-`execvpe` itself raised — goes into the pane, and where somebody is at the keyboard the
-launcher **holds the pane open until they press Enter.**
+not on `PATH`, the `execvpe` itself raised — goes into the pane, and where somebody is at
+the keyboard the launcher **holds the pane open until they press Enter.**
 
-**A claim to a chat that cannot be proven** is the second, and it is not a refusal: the
-launch goes ahead. `launcher.framed_chat()` asks tmux whether this process's own pid is the
-`#{pane_pid}` of a live pane belonging to the chat it was handed, because `$TMUX_PANE` and
-`$CHARTER_SESSION_ID` are inherited by a model's tool shell and prove nothing. A claim that
-does not check prints one line saying so and returns `None`, and the launcher then runs as a
-launch with **no frame** — it records nothing for that chat, which is the point of the
+**A question** is the second, and it is the only one of the three that READS from the pane
+as well as writing to it. A profile whose command or environment is new or has changed
+since it last ran is not refused where somebody is in front of it: the launcher prints what
+it would run and reads one line, `run this? [y/N]` (`charter/profiletrust.py`, and the
+plan's *A new or changed command asks once*). A no starts nothing and exits on the
+workspace picker's own cancel code, saying nothing more — the operator has just answered.
+Where the question cannot be answered it is a refusal instead, which is the bound below.
+
+**A claim to a chat that cannot be proven** is the third, and it is not a refusal either:
+the launch goes ahead. `launcher.framed_chat()` asks tmux whether this process's own pid is
+the `#{pane_pid}` of a live pane belonging to the chat it was handed, because `$TMUX_PANE`
+and `$CHARTER_SESSION_ID` are inherited by a model's tool shell and prove nothing. A claim
+that does not check prints one line saying so and returns `None`, and the launcher then runs
+as a launch with **no frame** — it records nothing for that chat, which is the point of the
 proof. Silently downgrading would cost a chat its session id and its resume id with nothing
 said, so the sentence goes where the person watching is: the pane the harness is about to
 take over.
 
-That is charter writing in a chat's pane, which the rule above says it never does. The rule
-is right and this is not an exception to it, because of *when*: **no harness has ever run in
-that pane.** The `exec` has not happened — or it was attempted and raised, which leaves the
-same pane with the same charter process in it and no harness either way — so there is no
+All three are charter writing in a chat's pane — and the question reads from it too — which
+the rule above says it never does. The rule is right and this is not an exception to it,
+because of *when*: **no harness has ever run in that pane.** The `exec` has not happened —
+or it was attempted and raised, which leaves the same pane with the same charter process in
+it and no harness either way — so there is no
 harness process, no output of its own on that screen, nothing to draw over and nothing to
 parse. Every failure this ADR was written against needs a harness on the other side of the
 pane to occur at all — owning a terminal parser, deciding what somebody else's cursor means,
@@ -210,25 +218,59 @@ record.
   attempted. Neither leaves a harness in the pane, which is why the rule survives both and
   the pair did not. The bound is checkable from outside because there is one moment it
   turns: `state.record_launch`, written the instant the pane stops being charter's.
-* **Two sentences, and charter wrote both.** A refusal, plus `press Enter to close this
-  chat.` where the pane waits; or the one line an unproven chat prints before launching
-  anyway. No escape sequences of charter's own, no panel, no layout, and never a third thing
-  later.
-* **Every refusal is recorded, and only the WAIT is conditional.** `_refused_in_pane` writes
-  the sentence into the chat's state directory on every path (`state.record_launch`), the
-  attended one included, where the launch that opened the chat reports it. What an attended
-  open adds is the wait — and that needs two conditions rather than one: the open must be
-  ATTENDED **and** the pane's stdin must be a terminal, because `_wait_for_the_operator`
-  returns at once when `sys.stdin.isatty()` is false. So an attended launcher run out of a
-  pipe prints and exits, and a reopen, a handoff or a background open never stops at all.
+* **Three kinds of line, and charter wrote every one.** A refusal, plus `press Enter to
+  close this chat.` where the pane waits; the approval prompt, which is the profile's
+  command and environment on rows of their own and then `run this? [y/N]`; or the one line
+  an unproven chat prints before launching anyway. No escape sequences of charter's own, no
+  panel, no layout, and never a fourth thing later.
+* **The prompt is escaped AND whole, and those are two promises.** Every byte of it outside
+  printable ASCII comes out as a reversible escape (`contain.escaped`, ruling 35), because
+  it comes from a file a chat can write and an ESC in it could redraw the question to show
+  one command while another is approved. And **nothing is clipped**: a sentence bounds what
+  it quotes, because a sentence ends in a remedy that a long value would push off the
+  screen, but a prompt exists to be read before it is answered, and a command approved with
+  its tail unseen is what the ask is against. It wraps. The refusal sentences are the other
+  kind of surface: they quote a profile's name only to say which one, and bound it with
+  `contain.readable`'s fixed `...` marker, as every refusal Task 2 shipped does. A row the
+  operator chooses or approves from — a selector row, a doctor row — says how much it kept
+  back; the prompt never has to.
+* **The question is asked only where it can be answered.** Both of the pane's ends must be a
+  terminal (`profiletrust.can_ask`), and the open must be an attended one. A pane that fails
+  either test is refused with a sentence rather than asked, because a question nobody can
+  answer is a chat that never starts and never says why — which is the same failure the wait
+  below is bounded against, one moment earlier.
+* **Every refusal the pane SAYS is recorded, and only the WAIT is conditional.**
+  `_refused_in_pane` writes the sentence into the chat's state directory on every path it
+  runs (`state.record_launch`), the attended one included, where the launch that opened the
+  chat reports it. What an attended open adds is the wait — and that needs two conditions
+  rather than one: the open must be ATTENDED **and** the pane's stdin must be a terminal,
+  because `_wait_for_the_operator` returns at once when `sys.stdin.isatty()` is false. So an
+  attended launcher run out of a pipe prints and exits, and a reopen, a handoff or a
+  background open never stops at all.
+* **A decline is the one exception, and it is not a hole.** `cmd_frame_launch` returns on it
+  before `_refused_in_pane` runs, so nothing is said in the pane and nothing is written under
+  the chat. Both are right: the operator answered this question themselves a moment ago and
+  was told `charter: nothing started.` as they did, so there is no sentence they have not
+  read. On charter's own server nobody reads the record for it either: a decline is
+  reachable only from an ATTENDED open, and `_await_the_launcher` is asked only by an
+  unattended one. **In an operator's tmux it reads worse, and says so here:**
+  `_launch_in_operator_tmux` reads the record whether or not the open was attended, so a
+  decline there that races the eager check, or a press whose streams are `/dev/null`,
+  reports the window gone with charter's unknown-death code rather than "nothing started".
+  That is a less exact sentence, not a hole — nothing ran, and the decline was answered on
+  the terminal that asked. A refusal charter decided still records; the one the operator
+  decided does not need to.
 * **A line, not a keystroke.** Waiting on one keypress means putting the pane's terminal
   into raw mode, and a `tcsetattr` from a pane on a Linux CI runner left the launcher killed
   by a signal — an empty `#{pane_dead_status}` — so the refusal went with the window after
   all. The pane's own line discipline does the waiting instead: no mode change, nothing to
   restore, nothing of the terminal's state for charter to get wrong.
-* **Reading is untouched.** This amendment adds a WRITE before the harness exists; the two
-  reads the 2026-09-01 amendment allows are unchanged, and charter still never reads this
-  pane to react to what a harness printed in it.
+* **Reading the harness is untouched.** This amendment adds a WRITE before the harness
+  exists, and one READ OF THE KEYBOARD — a line off the pane's stdin, through its own line
+  discipline — which is not a reading of the pane at all: there is no output on that screen
+  but charter's own, and nothing is parsed. The two reads of the harness's pane that the
+  2026-09-01 amendment allows are unchanged, and charter still never reads this pane to
+  react to what a harness printed in it.
 
 Recorded here rather than in the records task that closes this phase, because the code that
 relies on it shipped in the same pull request
@@ -238,7 +280,14 @@ Task 6): otherwise `main` carries an unqualified prohibition while the code cont
 it, and the only thing telling a reader otherwise is a spec they have no reason to open.
 
 *Corrected 2026-09-12 by that records task, against the shipped
-`charter/frame/launcher.py`: the unproven-chat line named as the second thing charter writes
-there, the `execvpe`-that-raised case covered, "only before the `exec`" replaced by the
-distinguishing question, the wait's two conditions both stated, the record separated from
-the wait, and the measurement cited where a reader can open it.*
+`charter/frame/launcher.py`: the unproven-chat line named as one of the things charter
+writes there, the `execvpe`-that-raised case covered, "only before the `exec`" replaced by
+the distinguishing question, the wait's two conditions both stated, the record separated
+from the wait, and the measurement cited where a reader can open it.*
+
+*Extended 2026-09-12 by the task that added the approval
+([#992](https://github.com/diazoxide/charter/pull/992)), under the same rule: the launcher
+now ASKS in that pane as well as writing in it, so the question is named as the second thing
+it writes, its containment and the two conditions for putting it are bounded, and the read
+it makes is distinguished from the two reads of a harness's pane the 2026-09-01 amendment
+allows.*

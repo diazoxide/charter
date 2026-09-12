@@ -73,8 +73,10 @@ git would commit the file.
 chat can run a command as easily as it can edit a file, so a command could never stand for
 your approval of what a profile runs; it would only save typing.
 
-Launching a profile arrives in a later release. Today the list is what charter read, and
-every launch is the one it always was.
+**What does stand for your approval is the launch itself.** The first time charter is asked
+to run a profile you declared — and again whenever its command or environment changes — it
+shows you what that is and asks `run this? [y/N]` before it runs it. Built-ins never ask.
+See [*A new or changed command asks once*](control-plane.md#a-new-or-changed-command-asks-once).
 
 ## What each harness lets charter offer
 

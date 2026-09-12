@@ -987,8 +987,12 @@ def profile(fid: str) -> str | None:
 #: completes 6-14 ms after the start while a Python launcher's first line runs at 19-22 ms,
 #: so a refusal the pane printed and exited on is never read off the pane: on charter's own
 #: server the teardown hook kills the window at once, and `_pane_last_words` answered `[]`
-#: in all 40 measured runs. An attended pane waits for a key instead; an unattended one —
-#: a reopen, a handoff — has nobody to wait for, so it leaves its answer here.
+#: in all 40 measured runs. So a pane that refuses leaves its answer here whoever is
+#: watching: an attended one also holds the sentence on screen until somebody presses Enter,
+#: and an unattended one — a reopen, a handoff — has nobody in front of it, so this record is
+#: the only copy the launch that opened the chat can read. The exception is the refusal the
+#: OPERATOR chose: a decline writes nothing, because they answered it themselves and only an
+#: unattended open ever reads this back (`launcher.already_said`).
 _LAUNCH_FILE = "launch"
 
 
