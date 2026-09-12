@@ -1960,7 +1960,14 @@ def _reinit_target(root: Path) -> str | None:
     """
     from . import workspace as _workspace
 
-    for name in _workspace.list_workspaces():
+    try:
+        names = _workspace.list_workspaces()
+    except OSError:
+        # The LISTING, guarded separately from each entry below. Its `try` sits inside the
+        # loop, so an unreadable `workspaces/` raised straight past it, out of this function
+        # and out of `charter doctor` — the whole command, not one row (#982 review round 2b).
+        return None
+    for name in names:
         try:
             if root == _workspace.workspace_dir(name).resolve():
                 return name
@@ -1991,21 +1998,43 @@ def _how_to_fix(missing: list, plane: dict) -> str:
     from . import config as _config
 
     root = session_root()
+    # The plane root is settled FIRST, and without reading `workspaces/` at all: `guard ask`
+    # writes here, so the answer cannot depend on whether some other directory is readable.
+    # Asked after the stale clause, an unreadable `workspaces/` decided it (#982 round 2b).
+    try:
+        at_plane_root = root == _config.ROOT.resolve()
+    except OSError:
+        # Cannot tell where this chat is standing, so take the answer that can only be
+        # USELESS and never WRONG. `guard ask` is the right advice at the plane root and
+        # merely inert elsewhere; the no-command sentence is false at the plane root, where
+        # `guard ask` works — and a false sentence is believed, while an inert one costs a
+        # minute (#982 review rounds 2 and 2b).
+        at_plane_root = True
+    if at_plane_root:
+        return "Add it: charter guard ask 'charter handoff *'"
     stale = _stale_layer_clause(missing, plane)
     if stale:
         return stale
-    try:
-        wired = root == _config.ROOT.resolve() or _reinit_target(root) is not None
-    except OSError:
-        wired = True                           # unreadable: keep the advice that can work
-    if wired:
+    if _reinit_target(root) is not None:
         return "Add it: charter guard ask 'charter handoff *'"
-    return ("It cannot be put in force for a chat rooted in this directory: charter writes "
-            "these settings at the plane root and at a workspace's or checkout's own root, and "
-            "a chat reads them from the directory it starts in. `charter guard ask` reaches "
-            "workspaces by mirroring into each one, not by writing where you are standing — so "
-            "start the chat in the plane root, a workspace, or a checkout, and it is gated "
-            "there")
+    # Unwired, and the two states read differently. A sentence here makes a claim about a
+    # DIFFERENT directory, so it may only say what is true in every state it can be read from
+    # — including a workspace whose own layer is behind, which is the state this whole row
+    # exists to surface (#982 review round 2). Hence no enumerated guarantee: from here
+    # charter cannot see which workspaces are current.
+    where = ("charter writes these settings at the plane root and at a workspace's or "
+             "checkout's own root, and a chat reads them from the directory it starts in")
+    if any(plane.get(h.name) == "present" for h in missing):
+        return ("It cannot be put in force for a chat rooted in this directory: " + where +
+                ". A chat started in the plane root is gated; charter gates a workspace or a "
+                "checkout once it has written the rule there, and this row says so in any "
+                "whose layer is behind")
+    # `guard ask` is NOT inert here: run from anywhere inside the plane it writes the plane's
+    # own settings, and the plane root and every workspace go clean afterwards — measured. It
+    # simply cannot gate a chat rooted HERE, which is what the second half says.
+    return ("Add it: charter guard ask 'charter handoff *' — that gates a chat started in the "
+            "plane root, and reaches workspaces and checkouts by mirroring into them. It "
+            "cannot gate a chat rooted in this directory: " + where)
 
 
 def _stale_layer_clause(missing: list, plane: dict) -> str:
