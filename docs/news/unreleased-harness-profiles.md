@@ -29,5 +29,20 @@ yours. While git tracks the file or would commit it, `charter harness list` show
 profile in it refused and names the fix, and `charter doctor` warns on its `harness profiles`
 row.
 
-This release does not launch a profile yet. `charter claude`, bare `charter` and every chat
-start exactly as they did.
+**Every chat now starts through charter's own launcher.** The first process in a chat's
+pane is charter, which checks the profile and then replaces itself with the harness — so a
+profile's environment reaches the harness without passing through tmux, and the pane, its
+exit code and everything charter reads off it stay exactly what they were. The chat records
+the profile it runs: the `+`, a workspace tab and a chat handed off by another chat all
+open on that same profile rather than merely on the same kind of harness, because two chats
+of one harness may be two accounts.
+
+`charter reopen` brings each chat back on its own profile, and a chat whose profile is gone
+is **skipped by name** rather than moved onto another one — another profile may be another
+account, where that conversation does not exist. It stays in the record, so declaring the
+profile again and running `charter reopen` brings it back.
+
+This release still does not launch a profile you declared: it is refused by name, with a
+sentence saying charter cannot yet ask before a declared command runs. Nothing a chat could
+have written into `charter.local.toml` runs until the release that adds the asking. The
+built-in profiles — `claude`, `codex`, `opencode` — start exactly as they did.

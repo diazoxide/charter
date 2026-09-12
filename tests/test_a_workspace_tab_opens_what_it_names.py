@@ -140,6 +140,15 @@ class _OpensBeta(PersonaIso, unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+        # **The profile's own guards, stood down for this class.** A click now runs them
+        # before it launches, so its refusal reaches the frame's attention row rather than
+        # `/dev/null` (`commands_frame._launch_refusal`) — and the first of them asks
+        # whether the command is on `PATH`, which would refuse every case here on a machine
+        # without `codex` installed. What these cases are about is which workspace and
+        # which profile a click opens; `tests/test_a_profile_launch_is_refused_before_tmux
+        # .py` is about the guards.
+        self.enterContext(mock.patch("charter.commands_frame._launch_refusal",
+                                     return_value=""))
         for n in ("alpha", "beta"):
             (config.WORKSPACES_DIR / n).mkdir(parents=True, exist_ok=True)
         _a_chat(self.FID, ws="alpha", pane="%1")
@@ -359,11 +368,16 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
     def test_a_chat_with_no_recorded_harness_falls_back_to_the_planes_default(self):
         """A chat launched by a charter that predates `state.record_identity`. The plane's
         `[harness] default` is a thing somebody chose, so it is a better answer than
-        refusing — and the fallback is named in `cmd_reopen`'s own words."""
+        refusing.
+
+        Declared in the FILE, not patched onto `config.HARNESS`: the effective default is
+        `profiles.current()`'s since ruling 43 — `charter.local.toml`'s where it names one
+        — and a patched setting would pin a value this path no longer reads."""
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
-        with mock.patch.dict(config.HARNESS, {"default": "codex"}):
-            self._run()
+        (config.ROOT / "charter.local.toml").write_text('[harness]\ndefault = "codex"\n')
+        self._run()
         self.assertEqual(self.launched[0].harness, "codex")
+        self.assertEqual(self.launched[0].profile, "codex")
 
     def test_the_launch_runs_in_the_workspaces_own_directory(self):
         """Where `charter --workspace beta` typed in it would have run, and what
@@ -474,22 +488,25 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
         self.assertEqual(os.getcwd(), was)
 
     def test_a_plane_whose_harness_table_is_missing_entirely_is_not_a_crash(self):
-        """`config.HARNESS` is ``None`` on a plane whose config has no `[harness]` table at
-        all — a different state from one that has the table with no `default` in it, and
-        the `or {}` is the only thing between the two and an `AttributeError` on the
-        detached side, where a traceback goes to `/dev/null` and the click does nothing."""
+        """`config.HARNESS` was read here through an `or {}`, because it is ``None`` on a
+        plane whose config has no `[harness]` table at all and `None.get` is an
+        `AttributeError` on the detached side, where a traceback goes to `/dev/null` and
+        the click does nothing.
+
+        That read is gone — the default is `profiles.current()`'s now (ruling 43) — so this
+        case holds the stronger promise in its place: the click reads that setting nowhere,
+        so whatever it holds, a chat with nothing recorded is refused by name."""
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
         with mock.patch.object(config, "HARNESS", None):
             self._run()
         self.assertEqual(self.launched, [])
-        self.assertIn("no harness", self.said.call_args[0][1])
+        self.assertIn("no profile", self.said.call_args[0][1])
 
     def test_with_neither_it_refuses_by_name_rather_than_guessing(self):
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
-        with mock.patch.dict(config.HARNESS, {"default": ""}):
-            self._run()
+        self._run()
         self.assertEqual(self.launched, [])
-        self.assertIn("no harness", self.said.call_args[0][1])
+        self.assertIn("no profile", self.said.call_args[0][1])
 
 
 class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestCase):
@@ -528,17 +545,24 @@ class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestC
 
     def test_a_launch_that_wants_a_terminal_is_still_bypassed_without_one(self):
         """The guard is opened for one case and left standing for every other: a piped
-        `charter claude > file` must still run the harness with no frame."""
+        `charter claude > file` must still run the harness with no frame.
+
+        Through the LAUNCHER since profiles, and that is the same promise one step along:
+        it runs the profile's own checks and `exec`s its command with its environment, so
+        `--no-frame` and a pipe are not ways past a guard. `bypass` is what a launch with
+        no profile — `charter frame -- <cmd>` — still reaches."""
         args = SimpleNamespace(harness="claude", rest=[], no_frame=False,
                                workspace=None, pick=False)
         with mock.patch("charter.commands_frame.sys.stdout") as out, \
+                mock.patch("sys.stdin.isatty", return_value=False), \
                 mock.patch("charter.commands_frame.shutil.which",
                            return_value="/nowhere/claude"), \
-                mock.patch("charter.commands_frame.bypass",
-                           return_value=0) as byp:
+                mock.patch("charter.frame.launcher.start", return_value=0) as started, \
+                mock.patch("charter.commands_frame.bypass", return_value=0) as byp:
             out.isatty.return_value = False
             commands_frame.cmd_launch(args)
-        byp.assert_called_once()
+        started.assert_called_once()
+        byp.assert_not_called()
 
     def test_a_size_that_is_not_two_positive_integers_is_measured_instead(self):
         """The handed-in size reaches `layout.session_argv` as `-x`/`-y`, where a
@@ -997,8 +1021,36 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
         fake = binroot / "codex"
         fake.write_text("#!/bin/sh\nexec sleep 300\n")
         fake.chmod(0o755)
-        self.enterContext(mock.patch.dict(
-            os.environ, {"PATH": f"{binroot}{os.pathsep}{os.environ.get('PATH', '')}"}))
+        # **The pane's first process is charter itself now**, not the harness: tmux starts
+        # `python -P -m charter frame-launch --profile <name> -- …`, which runs the
+        # profile's guards and `exec`s its command (`frame/launcher.py`). That child needs
+        # two things this fixture used not to owe it, and both are stated here because the
+        # tmux client is started with this process's environment (`_frame_env`):
+        #
+        # * `$PYTHONPATH` — `-P` keeps the child's own cwd off `sys.path` (#390), and the
+        #   cwd is a workspace directory rather than this checkout, so without it the
+        #   child cannot import the charter under test at all;
+        # * `$CHARTER_ROOT` — so the child resolves THIS throwaway plane rather than
+        #   walking up from a workspace directory to whatever plane contains it, which is
+        #   also what `tests/_planeguard` holds a charter child to before it may spawn.
+        self.enterContext(mock.patch.dict(os.environ, {
+            "PATH": f"{binroot}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CHARTER_ROOT": str(config.ROOT),
+            "PYTHONPATH": os.pathsep.join(
+                [str(Path(__file__).resolve().parents[1]),
+                 os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
+        }))
+        # **And the SERVER has to know it too.** A pane's environment comes from the tmux
+        # server, not from the client that asked for the pane — `$PATH` is the measured
+        # exception (`commands_frame._guest_harness_env`) and `$PYTHONPATH` is not one. This
+        # class holds one server across its tests (`_hold_the_server`), born before this
+        # test's own environment existed, so without this the pane's launcher cannot import
+        # the charter under test: it exits at once and takes its window, and the session, with
+        # it. Set rather than assumed, because that failure looks exactly like a launch that
+        # never happened.
+        pinned = self._tmux("set-environment", "-g", "PYTHONPATH",
+                            os.environ["PYTHONPATH"])
+        self.assertEqual(pinned.returncode, 0, pinned.stderr)
 
         for n in (self.HERE, self.THERE):
             (config.WORKSPACES_DIR / n).mkdir(parents=True, exist_ok=True)

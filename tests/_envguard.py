@@ -191,7 +191,15 @@ def _loud_names() -> frozenset[str]:
     finds nothing has asserted charter's documented default, which is a fixture like any
     other.
 
-    Derived, not spelled. `commands_frame._FRAME_IDENTITY` already exists to answer exactly
+    Derived, not spelled — with one name that cannot be. ``CHARTER_HARNESS_PROFILE`` is
+    which PROFILE a chat is running, and it is an identity by every test above: inside a
+    frame it is that chat's, and in CI it is unset. It is spelled here rather than derived
+    because `_FRAME_IDENTITY` is a promise about what reaches a tmux ``-e`` — world-readable
+    argv — and the profile deliberately never joins it: `frame/launcher.environment` sets it
+    at the `exec` instead. A variable guarded by a list it must never be on would be a
+    guard that quietly stopped guarding the day somebody honoured the promise.
+
+    `commands_frame._FRAME_IDENTITY` already exists to answer exactly
     "which variables must be THIS session's rather than whichever launcher happened to
     start the shared tmux server", and its own docstring commits the next such variable to
     that list — so a variable added there is guarded here on the same commit. The terminal
@@ -206,7 +214,7 @@ def _loud_names() -> frozenset[str]:
     from charter import commands_frame, session
     return frozenset(commands_frame._FRAME_IDENTITY
                      + session._PANE_ID_VARS + session._WINDOW_ID_VARS
-                     + ("TMUX", "CLAUDE_CODE_SESSION_ID"))
+                     + ("TMUX", "CLAUDE_CODE_SESSION_ID", "CHARTER_HARNESS_PROFILE"))
 
 
 _SCRUB_NAMES: frozenset[str] = frozenset()

@@ -151,3 +151,59 @@ back?* Two yeses is this amendment. Anything else is a new one.
 the capture asks tmux for the last N lines (`-S -2000`) rather than for everything and
 trimming afterwards: the bound belongs where the memory is. Verified on tmux 3.7c and at the
 3.2 floor.
+
+## Amendment, 2026-09-12: before the `exec`, that pane is charter's own
+
+Harness profiles put a charter process in the pane. `charter frame-launch --profile <name>`
+is what tmux now starts in every chat pane, and it becomes the harness by `os.execvpe`
+replacing itself with the profile's command (`charter/frame/launcher.py`). A launcher that
+refuses — the local file became committable since the pre-tmux check, the command is not on
+`PATH`, the profile is declared and nothing can ask the operator's approval yet — **prints
+that refusal in the pane and holds the pane open until somebody presses Enter.**
+
+That is charter drawing in a chat's pane, which the rule above says it never does. The rule
+is right and this is not an exception to it, because of *when*: **no harness has ever run in
+that pane.** The `exec` has not happened, so there is no harness process, no output of its
+own on that screen, nothing to draw over and nothing to parse. Every failure this ADR was
+written against needs a harness on the other side of the pane to occur at all — owning a
+terminal parser, deciding what somebody else's cursor means, painting over somebody else's
+frame — and none of them is reachable before the process that would produce them exists.
+
+**The distinguishing question, in the same shape as the one above:** *has a harness ever run
+in this pane, and is charter's own process still the one in it?* No and yes is this
+amendment. Anything else is the rule as written: the instant `execvpe` succeeds the pane is
+the harness's, `state.record_launch` says so, and nothing charter owns writes there again.
+
+**Why the refusal cannot simply be printed and exited on, which is the whole reason this is
+a decision and not a detail.** Measured 2026-09-11 on tmux 3.7c and at the 3.2 floor, 40
+runs, in `workspaces/harness-profiles/refs/task2-measure/`: `_launch`'s eager
+`#{pane_dead_status}` ask completes **6-14 ms** after the start while a Python launcher's
+first line runs at **19-22 ms**, so the ask is always too early to catch a refusal — and by
+the time anything else could look, the chat-teardown hook has killed the window.
+`_pane_last_words` answered `[]` in all 40 runs on charter's own server. A refusal printed
+and exited on is a refusal nobody reads: the window carrying it is gone before the sentence
+can be collected. So the pane has to hold it, and holding it is the part that needs this
+record.
+
+**Bounded, and each bound is checkable from outside.**
+
+* **Only a refusal, and only before the `exec`.** One sentence charter wrote, plus
+  `press Enter to close this chat.` — no escape sequences of charter's own, no panel, no
+  layout, and never a second thing later.
+* **Only where somebody is there to read it.** An ATTENDED open waits; a reopen, a handoff
+  and a background open write the same sentence into the chat's state directory instead
+  (`state.record_launch`), where the launch that opened the chat reports it. A pane nobody
+  is at never stops on anything.
+* **A line, not a keystroke.** Waiting on one keypress means putting the pane's terminal
+  into raw mode, and a `tcsetattr` from a pane on a Linux CI runner left the launcher killed
+  by a signal — an empty `#{pane_dead_status}` — so the refusal went with the window after
+  all. The pane's own line discipline does the waiting instead: no mode change, nothing to
+  restore, nothing of the terminal's state for charter to get wrong.
+* **Reading is untouched.** This amendment adds a WRITE before the harness exists; the two
+  reads the 2026-09-01 amendment allows are unchanged, and charter still never reads this
+  pane to react to what a harness printed in it.
+
+Recorded here rather than in the records task that closes this phase, because the code that
+relies on it ships in the same pull request (`workspaces/harness-profiles/workspace.md`,
+ruling 44): otherwise `main` carries an unqualified prohibition while the code contradicts
+it, and the only thing telling a reader otherwise is a spec they have no reason to open.

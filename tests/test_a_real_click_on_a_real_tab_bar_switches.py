@@ -83,7 +83,7 @@ def _NOT_OPEN(ws: str) -> str:
     the module under test would follow a reworded sentence silently, and the wording is
     the thing. It carries the name, so a click that landed on the wrong tab fails here.
     """
-    return f"cannot open '{ws}': this chat records no harness"
+    return f"cannot open '{ws}': this chat records no profile"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1082,7 +1082,7 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
     #: reworded sentence into a green run, which is the survivor this repository's sweep
     #: reports. Short enough to survive a rewording that keeps the meaning, specific enough
     #: that no other refusal on this path says it.
-    _NO_HARNESS = "records no harness this charter can launch"
+    _NO_HARNESS = "records no profile this charter can launch"
 
     def setUp(self) -> None:
         super().setUp()

@@ -338,7 +338,10 @@ def _note(noun: str, name: str) -> str:
     before `tui.width` sees it (#472), and a second call would be the masked line
     `builtin_actions._register_names` shipped and this module's docstring records.
     """
-    return chats.harness_of(name) if noun == CHAT else ""
+    # The PROFILE first, because that is what the operator named the way this chat runs —
+    # two chats of one kind may be two accounts. A chat from before profiles has only its
+    # harness, which is what it recorded.
+    return (chats.profile_of(name) or chats.harness_of(name)) if noun == CHAT else ""
 
 
 def labelled(roster: Roster, reason: str = "") -> tuple[overlay.Row, ...]:

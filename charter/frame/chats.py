@@ -389,6 +389,20 @@ def harness_of(fid: str) -> str:
     return state.identity(fid).get("CHARTER_HARNESS", "").strip()
 
 
+def profile_of(fid: str) -> str:
+    """The harness PROFILE recorded for chat *fid*, or ``""``.
+
+    :func:`harness_of`'s sibling and read the same way — off the chat's own record, never
+    out of this process's environment, because a palette and a panel are children of a tmux
+    server shared between every frame on the machine.
+
+    ``""`` for a chat launched before profiles existed and for `charter frame -- <cmd>`,
+    which runs no profile at all. Every caller pairs it with :func:`harness_of`, which is
+    what such a chat does record.
+    """
+    return state.profile(fid) or ""
+
+
 def pane_of(chat: str) -> str | None:
     """The tmux pane charter records for *chat*, held to tmux's own shape — or ``None``.
 

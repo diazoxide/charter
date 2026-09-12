@@ -578,23 +578,33 @@ class ReopeningOneChatSaysWhatItChanged(PersonaIso):
         return out, said, seen
 
     def test_a_plane_with_no_harness_table_at_all_is_not_a_crash(self):
-        """`(config.HARNESS or {}).get("default")` — a plane whose `charter.toml` declares
-        no `[harness]` section reads `None`, and `None.get` is the traceback this prevents.
-        Every fixture in the suite has a table."""
+        """`(config.HARNESS or {}).get("default")` ran here until the `[harness] default`
+        fallback was deleted (ruling 15), and `None.get` was the traceback it prevented.
+        The promise is stronger now and this case still holds it: a reopen reads that key
+        nowhere at all, so a plane whose `charter.toml` declares no `[harness]` section is
+        not a crash — it is a chat skipped by name."""
         out, said, seen = self._reopen(_chat(harness="a-harness-from-2019"),
                                        harness_table=None)
 
         self.assertIsNone(out)
         self.assertEqual(seen, [])
-        self.assertTrue(any("declares no `[harness] default`" in s for s in said))
+        self.assertTrue(any("a-harness-from-2019" in s for s in said), said)
 
-    def test_a_harness_charter_cannot_launch_falls_back_and_says_so(self):
+    def test_a_harness_charter_cannot_launch_is_skipped_rather_than_moved(self):
+        """**The branch that was taken until this task, and is now not taken at all.** A
+        chat recorded under a harness this charter no longer registers used to be reopened
+        under `[harness] default` and told so; it is skipped instead (ruling 15), because a
+        profile may be another account, where its conversation does not exist and its
+        workspace's code was never meant to go. The declared default changes nothing.
+
+        `tests/test_a_chat_carries_its_profile.py` holds the rest of that rule; what this
+        case is for is the sentence that must NOT come back."""
         out, said, seen = self._reopen(_chat(harness="a-harness-from-2019"),
                                        harness_default="claude")
 
-        self.assertIsNotNone(out)
-        self.assertEqual(seen[0].harness, "claude")
-        self.assertTrue(any("reopening it under claude" in s for s in said))
+        self.assertIsNone(out)
+        self.assertEqual(seen, [])
+        self.assertFalse([s for s in said if "reopening it under" in s], said)
 
     def test_a_directory_that_has_gone_is_named_beside_the_one_it_comes_back_in(self):
         """`_was_standing_in`'s middle branch — a cwd that was recorded and has since

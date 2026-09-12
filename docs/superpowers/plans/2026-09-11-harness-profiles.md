@@ -1150,9 +1150,24 @@ KIND_MISMATCH = ("charter: profile '{name}' is a {kind} profile, not a {asked} o
     window named like a chat or an `@charter_chat` set to one, passes this check. It is a guard
     rail against a model's accidental misuse, not a boundary.
 - `rest` loses a leading `--` the way `_launch` strips it (`:5105`).
-- Every failure prints to the pane's stdout/stderr and exits non-zero. `_launch`'s eager
-  `_query_pane_dead_status` then reports it with `_pane_last_words` (L4), so the operator reads
-  charter's own sentence.
+- **Every failure reaches the operator without the dead pane (ruling 42, measured — this
+  paragraph replaces what Task 2 was written with).** The claim here was that `_launch`'s
+  eager `_query_pane_dead_status` reports a pane's refusal with `_pane_last_words`, and the
+  measurement says it cannot: the eager ask completes 6-14 ms after the start while a
+  Python launcher's first line runs at 19-22 ms, so all 40 measured refusals were missed —
+  on charter's own server the teardown hook had already killed the window
+  (`_pane_last_words` → `[]`), and in the operator's tmux `_launch_in_operator_tmux` closes
+  it before reading. So:
+  - an **attended** launcher prints its refusal in the pane and **waits for Enter** before
+    exiting (`launcher._wait_for_the_operator` — a LINE and not a raw keystroke, because a
+    `tcsetattr` from a pane left the launcher killed by a signal on a Linux runner) — the pane is charter's while no harness has run in
+    it (ADR 0018 as the spec amends it, and ruling 30's spirit);
+  - an **unattended** one records the refusal and its exit code under the chat
+    (`state.record_launch`) and exits; the launch that opened the chat reads it back
+    (`commands_frame._await_the_launcher`, bounded by `_LAUNCHER_SECONDS`) and reports it,
+    which is what a reopen and a handoff have instead of somebody at the pane. The same
+    record carries the ordinary "the harness has the pane now" answer, so a chat that
+    started costs no wait at all.
 
 **`KNOWN` entry** (`tests/test_plane_spawn_guard.py`):
 
@@ -1247,17 +1262,25 @@ git repo with the ignore line. `mock.patch("charter.frame.launcher._approval_ref
 for every case that is not about approval; the three B1 cases run without it. Helper `_launch(**ns)` calls `commands_frame._launch(SimpleNamespace(harness="claude", rest=[], no_frame=False, workspace="beta", pick=False, size=(120, 40), **ns))`.
 Refusals:
 
+**Correction, Task 2 as built: the `rc 1` in three rows below is stale.** A launcher that
+refused returns `REFUSED_EXIT`, which this plan fixes at **3** (`:904`, `:1040`, `:1103`) and
+which every other mention of it agrees on; `1` is a leftover from a draft that predated the
+constant. The rows are corrected in place and the three cases assert `launcher.REFUSED_EXIT`,
+whose value is pinned to 3 by a test of its own — the number is what tells a refusal apart
+from 126/127 (the shell's own words for a command that could not run, and what `bypass`
+returns), from 2 (charter's usage error) and from 1 (a harness that ran and failed).
+
 | Case | Asserts |
 |---|---|
-| `test_every_declared_profile_is_refused_until_approval_exists` | no stand-in; `profile="claude-work"` → rc 1, `"cannot yet ask before a declared command runs"` in stderr, no tmux call, no chat directory, `launcher.os.execvpe` not called. Red when the B1 refusal is deleted; Task 3 rewrites it (review B1) |
+| `test_every_declared_profile_is_refused_until_approval_exists` | no stand-in; `profile="claude-work"` → rc `REFUSED_EXIT` (3), `"cannot yet ask before a declared command runs"` in stderr, no tmux call, no chat directory, `launcher.os.execvpe` not called. Red when the B1 refusal is deleted; Task 3 rewrites it (review B1) |
 | `test_a_declared_replacement_of_a_built_in_is_refused_until_approval_exists` | no stand-in; `[harness.claude] command = ["/opt/claude"]`, `harness="claude"` → the same words, no tmux call |
 | `test_a_built_in_the_file_does_not_replace_still_launches` | no stand-in; `harness="codex"` with `claude-work` declared → a `new-window` argv recorded |
 | `test_an_unknown_profile_is_refused_and_nothing_is_allocated` | `profile="nope"` → rc 2, `"no profile named 'nope'"` in stderr, no `tmuxctl.run` call, `workspaces/beta` has no chat directory under `config.STATE_DIR / "frame"` |
 | `test_a_refused_profile_says_its_own_reason` | a local profile with a string command → rc 2, `"never a shell string"` in stderr |
 | `test_a_profile_of_another_kind_is_refused_by_its_name` | `harness="claude", profile="codex-pinned"` → `"is a codex profile"` and `"charter codex-pinned"` |
-| `test_a_declared_profile_from_a_committable_file_is_refused` | remove the ignore line → rc 1, `"charter reinit adds"`, no tmux call |
+| `test_a_declared_profile_from_a_committable_file_is_refused` | remove the ignore line → rc `REFUSED_EXIT` (3), `"charter reinit adds"`, no tmux call |
 | `test_a_built_in_is_not_refused_over_the_local_file` | same repo state, `profile=None, harness="claude"` → launches (a `new-window` argv was recorded) |
-| `test_a_declared_replacement_of_a_built_in_in_a_committable_file_refuses_that_name` | `[harness.claude] command = ["/opt/claude"]`, no ignore line, `harness="claude"` → rc 1, `"charter reinit adds"` in stderr, no tmux call, and `launcher.os.execvpe` not called for `claude` or `/opt/claude` |
+| `test_a_declared_replacement_of_a_built_in_in_a_committable_file_refuses_that_name` | `[harness.claude] command = ["/opt/claude"]`, no ignore line, `harness="claude"` → rc `REFUSED_EXIT` (3), `"charter reinit adds"` in stderr, no tmux call, and `launcher.os.execvpe` not called for `claude` or `/opt/claude` |
 | `test_a_command_not_on_path_is_refused_by_profile_name` | `which` → `None` → rc 127, `"profile 'claude-work' runs claude, which is not on PATH"` |
 | `test_each_refusal_says_something_different` | the stderr texts above are pairwise distinct |
 
@@ -1382,9 +1405,15 @@ case, which seeds a launch record. The server env carries `CHARTER_ROOT`, so
   the recorder wrote.
 - `test_a_harness_exit_code_travels_as_it_did` (L2): recorder exits 7 →
   `state.exit_code(fid) == 7` after the hook fires; the window is gone.
-- `test_a_refusal_in_the_pane_is_what_the_operator_reads` (L4): the recorder removed from disk
-  after the pre-tmux check (patch `launcher.refusal` to `""` for the pre-tmux call only) →
-  `_launch` returns 127 and stderr contains `"not on PATH"`, read off the pane.
+- `test_an_attended_pane_holds_its_refusal_until_somebody_reads_it` and
+  `test_an_unattended_refusal_is_read_back_by_the_launch_that_opened_the_chat` (L4, as
+  ruling 42 rewrites it): the plane declares a profile and the pre-tmux `launcher.refusal`
+  is stood down in the launching process only, so the PANE's own launcher refuses (review
+  B1) — the state the two checks exist for. Attended: the refusal is on the pane and
+  `#{pane_dead}` is still `0` until a key is sent, then the chat's exit code is
+  `REFUSED_EXIT`. Unattended: `_launch` returns `REFUSED_EXIT` and says the pane's own
+  sentence. (The original — a recorder removed from disk, read back through
+  `_pane_last_words` — is the thing the measurement showed cannot work.)
 - `test_the_exec_env_reaches_the_harness_and_not_tmux` (L6): the recorder's env holds
   `CHARTER_HARNESS_PROFILE=claude`, and neither `show-environment -g` nor
   `show-environment -t <session>` holds that name.
@@ -2664,12 +2693,23 @@ what was considered.
 - If git tracks it, or would not ignore it, charter refuses its profiles rather than trusting the
   operator to notice.
 
-**ADR 0018 amendment.**
-- Charter draws in a pane only while no harness has ever run in it.
-- The selector is charter's, drawn before the pane's harness exists. Once a harness has run
-  there, the ADR holds unchanged, its two reading moments included.
-- On charter's own server the window's first command is the launcher. In an operator's tmux the
-  launcher is what `respawn-pane` starts after the placeholder (Ruling 4).
+**ADR 0018 amendment. WRITTEN IN TASK 2 (ruling 44) — this task REVIEWS it and adds the
+selector to it.** Task 2's launcher writes a refusal into a chat pane and holds it there, so
+the amendment shipped in that task's own PR: `main` must not carry an unqualified
+prohibition while the code contradicts it (CONTRIBUTING: docs move with the code). What it
+already says, and what is left here:
+- *(shipped in Task 2)* Charter draws in a pane only while no harness has ever run in it —
+  the distinguishing question stated as *has a harness ever run in this pane, and is
+  charter's own process still the one in it?*, the launcher's refusal as the moment it
+  answers, the measurement (`refs/task2-measure/`) for why the sentence has to be held
+  rather than printed and exited on, and the bounds: a refusal only, before the `exec` only,
+  a line read and not a raw keystroke, unattended opens recording instead of waiting.
+- *(here)* The selector is charter's, drawn before the pane's harness exists, and is the
+  second thing charter puts on that screen. Once a harness has run there, the ADR holds
+  unchanged, its two reading moments included.
+- *(here)* On charter's own server the window's first command is the launcher. In an
+  operator's tmux the launcher is what `respawn-pane` starts after the placeholder
+  (Ruling 4).
 
 **The phase-5 line.** Under "Two chats on the same harness share that harness's credentials.
 Charter cannot separate them and does not pretend to (§4).", add:

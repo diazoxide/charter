@@ -1170,10 +1170,14 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
         self.assertEqual(raw["at"], 1700000000)
         self.assertEqual(raw["focus"], "alpha")
         self.assertEqual(sorted(raw["frames"][0]), ["chats", "workspace"])
+        # `profile` joined them when a chat began recording which PROFILE it runs rather
+        # than only which harness — and it joined them without moving `version`, because a
+        # manifest one field older is the migration case the reader is built for: a missing
+        # key reads as `""`, which reopens the chat on the built-in of its kind.
         self.assertEqual(
             sorted(raw["frames"][0]["chats"][0]),
-            ["active", "chat", "cwd", "harness", "persona", "resume", "transcript",
-             "workspace"])
+            ["active", "chat", "cwd", "harness", "persona", "profile", "resume",
+             "transcript", "workspace"])
 
     def test_at_is_a_whole_number_of_seconds_and_defaults_to_now(self):
         # `int(...)`, so a float clock never reaches the file: `at` is read back through an

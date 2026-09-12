@@ -24,6 +24,7 @@ plane declaring nothing gets — which is precisely the confusion `refused` exis
 
 from __future__ import annotations
 
+import contextlib
 import io
 import sys
 import unittest
@@ -32,7 +33,7 @@ from unittest import mock
 
 from charter import cli, commands_frame, config, doctor, harness, instance
 from charter.harness.base import Harness
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, make_plane
 
 
 class TheSectionIsReadAtTheConfigBoundary(unittest.TestCase):
@@ -231,16 +232,25 @@ class _Recorder:
         return 0
 
 
-class _BareLaunchCase(unittest.TestCase):
+class _BareLaunchCase(PersonaIso):
     """Drives `cli.main`, with the launcher replaced and the plane's setting stated.
 
     Everything below goes through `cli.main` rather than `_bare_launch`, because the claim
     is about the COMMAND — that bare `charter` reaches the same handler `charter claude`
     reaches, having crossed the same three argv splitters. A test of the helper alone would
     still pass if `main` stopped calling it.
+
+    **`PersonaIso`, since bare `charter` resolves its default through `profiles.current()`**
+    (ruling 43): that reads `charter.toml` and `charter.local.toml` off the plane, and
+    `tests/_planeguard` refuses a read of the developer's own local file outright — this
+    machine's harness profiles are in no commit, so what a case asserted would depend on
+    whoever ran the suite. The plane here is a throwaway one, and :meth:`_declare` writes
+    the key into it the way an operator would.
     """
 
     def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
         # argparse writes its usage error straight to `sys.stderr`, and half the cases
         # below want that to happen — off a buffer it would land in the suite's own output.
         self.enterContext(redirect_stderr(io.StringIO()))
@@ -252,9 +262,24 @@ class _BareLaunchCase(unittest.TestCase):
             mock.patch("os.execvp", side_effect=AssertionError("charter exec'd a harness")))
         self.err = self.enterContext(mock.patch("charter.util.err"))
 
-    def _declare(self, **harness_setting):
-        return mock.patch.object(config, "HARNESS",
-                                 {"default": None, "refused": None, **harness_setting})
+    @contextlib.contextmanager
+    def _declare(self, *, default=None, refused=None):
+        """State the plane's `[harness] default` — in the FILE, the way an operator does.
+
+        It was `mock.patch.object(config, "HARNESS", …)`, and that stopped being the thing
+        under test when the launch began resolving its default through `profiles.current()`
+        (ruling 43): a patched setting would pin a value nothing reads any more.
+
+        *refused* is a value that names no profile this machine has, which is the only way
+        a default is refused now — a name charter cannot launch and a name charter could
+        launch are the same question once every launchable name is a profile.
+        """
+        name = default or refused
+        (config.ROOT / "charter.toml").write_text(
+            f"schema = {instance.SCHEMA}\n"
+            + (f'[harness]\ndefault = "{name}"\n' if name else ""))
+        config.use(config.ROOT)
+        yield
 
     def _messages(self) -> str:
         return "\n".join(str(c.args[0]) for c in self.err.call_args_list)

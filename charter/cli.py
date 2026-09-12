@@ -21,7 +21,6 @@ from . import (
     contain,
     harness,
     hooks,
-    instance,
     statusline,
     toolgate,
     util,
@@ -795,6 +794,12 @@ def _add_frame_parsers(sub) -> None:
         parser.add_argument("--fresh", action="store_true",
                             help="Do not restore the recorded plane, and do not record "
                                  "over it: start one chat and leave the record alone.")
+        # Which PROFILE of this kind to run — `charter claude --profile claude-work`, and
+        # what `_profile_launch` rewrites `charter claude-work` into. Suppressed from the
+        # help because an operator names a profile by typing it: the flag is the shape the
+        # rewrite produces, so every splitter and branch below runs on one set of tokens.
+        parser.add_argument("--profile", dest="profile", default=None,
+                            help=argparse.SUPPRESS)
         parser.set_defaults(harness=name, func=commands_frame.cmd_launch)
 
     # Snapshot, not a live read of `sub.choices` inside the loop — see this function's
@@ -823,7 +828,8 @@ def _add_frame_parsers(sub) -> None:
                                          "frame-resize", "frame-gather", "frame-switch",
                                          "frame-toggle", "frame-chrome", "frame-chat",
                                          "frame-new-chat", "frame-quit", "frame-close",
-                                         "frame-transcript", "frame-bar-rows"}
+                                         "frame-transcript", "frame-bar-rows",
+                                         "frame-launch"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -1105,6 +1111,23 @@ def _add_frame_parsers(sub) -> None:
     nc = sub.add_parser("frame-new-chat")
     nc.add_argument("--chat", dest="chat", default="")
     nc.set_defaults(func=commands_frame.cmd_new_chat)
+
+    # Internal: what tmux starts in every chat pane, where the harness's own argv used to go
+    # (`layout.session_argv`, `layout.chat_window_argv`, and `layout.respawn_argv` after the
+    # placeholder in an operator's own tmux). It runs the profile's guards in the pane and
+    # `exec`s the profile's command — `frame/launcher.py` is the whole of it. Never typed by
+    # an operator: `charter <profile>` is the spelling, and this is what it becomes.
+    #
+    # **`--attended` rather than `--unattended`**, because unattended is what a pane gets
+    # unless somebody is in front of it (review 3). A reopen, a handoff and a background
+    # open must never stop on a question nobody can see, and a flag they would have to
+    # remember to pass is a flag that gets forgotten — the failure would be a pane waiting
+    # forever on a keypress that is never coming.
+    fl = sub.add_parser("frame-launch")
+    fl.add_argument("--profile", dest="profile", required=True)
+    fl.add_argument("--attended", action="store_true")
+    fl.add_argument("rest", nargs=argparse.REMAINDER)
+    fl.set_defaults(func=_frame_launch)
 
     # §4i's quit. Started DETACHED by the palette's confirmation row
     # (`commands_frame._start_leaving`) and typeable by hand, which is why it warns on its
@@ -1769,7 +1792,7 @@ _BARE_FLAGS = ("--fresh",)
 #:
 #: `--workspace=<name>` needs no entry — it is a single token, so the leading-run scan
 #: below matches it by prefix and `argparse` splits it.
-_OWN_VALUE_FLAGS = ("--workspace",)
+_OWN_VALUE_FLAGS = ("--workspace", "--profile")
 
 
 def _split_frame_argv(argv: list[str]) -> tuple[list[str], list[str] | None]:
@@ -1905,8 +1928,9 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     `parse_args`, which is what `commands_update._handoff` reads back.
 
     *The plane declared a value charter cannot launch.* Reported here, loudly, naming the
-    value and the words that would work. `instance.harness_of` recorded it at the config
-    boundary; this is the reader that can say so on the command the key is *for*. Silence
+    value and the profiles that would work. `profiles.current()` resolves the default —
+    `charter.local.toml`'s where it names one, `charter.toml`'s otherwise — and this is the
+    reader that can say so on the command the key is *for*. Silence
     would be the whole defect: a refused default degrades to no default, which renders as
     argparse's usage message — byte-identical to what a plane that declared nothing gets,
     so the operator who committed ``default = "clyde"`` would watch charter behave exactly
@@ -1952,34 +1976,92 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
         util.err(refusal)
         return argv, 1
 
-    declared = config.HARNESS
-    # Truthiness, not `is not None`, and the same test `doctor` makes of the same key.
-    # `contain.readable` never returns a blank string, so on anything `harness_of` produced
-    # the two are the same question — but `config.HARNESS` is a module attribute anything
-    # in-process can assign, and a planted `{"refused": ""}` would otherwise print a
-    # refusal naming nothing at all instead of falling through to the usage message.
-    refused = declared.get("refused")
-    if refused:
-        util.err(f'charter: [harness] default = "{refused}" in '
-                 f'{util.short_path(config.ROOT / "charter.toml")} is not a harness '
-                 f'charter can launch — one of: '
-                 f'{", ".join(instance.launchable_harnesses())}. Nothing was started.')
+    # **The profiles, and not `config.HARNESS`** (ruling 43). The default a launch means is
+    # the one `charter.local.toml` names where it names one and `charter.toml`'s where it
+    # does not, and `profiles.current()` is the only thing that resolves that: `config`
+    # reads nothing from the local file, because every hook process derives config and a
+    # profile read there is the cost ruling 43 measured. A bare launch is a launch, which is
+    # exactly where the read belongs.
+    from . import profiles
+
+    read = profiles.current()
+    # Truthiness, not `is not None`, and the same test `doctor` makes of the same answer.
+    # `contain.readable` never returns a blank string, so on anything `derive` produced the
+    # two are the same question — but a planted empty value would otherwise print a refusal
+    # naming nothing at all instead of falling through to the usage message.
+    if read.default_refused:
+        util.err("charter: " + profiles.DEFAULT_REFUSED.format(
+            value=read.default_refused, names=", ".join(read.profiles)))
         return argv, 2
-    default = declared.get("default")
     # Two conditions, two statements, and deliberately not one `or`. They are different
-    # facts — a file that said nothing, and a terminal that is not one — with different
+    # facts — a plane that named nothing, and a terminal that is not one — with different
     # reasons in the docstring above, and an arm two inputs can both satisfy is an arm
     # neither of them ends up testing.
-    if not default:
+    if not read.default:
         return argv, None
     if not sys.stdout.isatty():
         return argv, None
-    # The flags the operator typed ride along, after the harness name rather than before
-    # it: `_split_frame_argv` recognises `_OWN_FLAGS` only in the run immediately following
+    # The flags the operator typed ride along, after the name rather than before it:
+    # `_split_frame_argv` recognises `_OWN_FLAGS` only in the run immediately following
     # `charter <name>`, which is the same position a typed `charter claude --fresh` puts
-    # them in. So the rewrite produces tokens indistinguishable from the typed form, which
-    # is this function's whole contract.
-    return [default, *argv], None
+    # them in. :func:`_profile_launch` then turns a declared profile's name into its kind's
+    # launcher, so what comes out is indistinguishable from the typed form either way —
+    # which is this function's whole contract.
+    return [read.default, *argv], None
+
+
+def _profile_launch(argv: list[str],
+                    parser: argparse.ArgumentParser) -> tuple[list[str], int | None]:
+    """`charter <profile>` → `charter <kind> --profile <profile>`, or *argv* untouched.
+
+    :func:`_bare_launch`'s own shape and for its own reason: a REWRITE rather than a route
+    of its own, so every splitter, flag and branch below it runs on the tokens a typed
+    `charter claude --profile <name>` produces. A second path into `cmd_launch` would be a
+    second set of answers about the workspace picker, `$CHARTER_HARNESS`, `--probe` and the
+    frame, all of which are settled for the typed form.
+
+    **A word charter already means is never a profile, and the parser is what says so.**
+    `charter doctor` is `doctor` whatever `charter.local.toml` declares, which is why
+    `profiles.current` refuses a clashing name outright — so a command reaches this and
+    leaves it without the profiles ever being read. Asked of the parser `main` has already
+    built, never of `command_words()`, which builds a SECOND one: ~10 ms measured on this
+    machine, in every `charter hook …` process, on hooks that fire on Bash, Read, Grep,
+    Write, Edit, Task, Skill and SendMessage.
+
+    **A built-in's name is left exactly as typed.** `charter claude` already parses and
+    `_launch` resolves `args.profile or args.harness`, so a declared profile that replaces a
+    built-in is reached without a rewrite.
+
+    A name the file declares and charter REFUSED says the rule instead of falling through to
+    argparse, which would call it an invalid choice and offer the gap reporter for a profile
+    the operator can see in their own file.
+    """
+    if not argv or argv[0].startswith("-") or argv[0] in _subcommand_names(parser):
+        return argv, None
+    from .frame import launcher
+
+    p, why = launcher.resolve(argv[0])
+    if p is not None:
+        # The resolved names and never the typed word — `instance.harness_of`'s rule for
+        # the same reason: what goes back onto a command line is charter's own string.
+        return [p.kind, "--profile", p.name, *argv[1:]], None
+    if why:
+        util.err(f"charter: {why}")
+        return argv, 2
+    return argv, None
+
+
+def _frame_launch(args) -> int:
+    """`charter frame-launch` — the launcher every chat pane's first process is.
+
+    A thunk rather than `func=launcher.cmd_frame_launch`, so `charter/frame/launcher.py` and
+    `charter/profiles.py` stay off the import path that every `charter hook …` process pays
+    for (ruling 43): this module is imported to build the parser, and the parser is built
+    per tool call.
+    """
+    from .frame import launcher
+
+    return launcher.cmd_frame_launch(args)
 
 
 #: The commands that still run on a plane charter has refused (`config.PLANE_REFUSAL`).
@@ -2033,10 +2115,19 @@ def main(argv=None) -> int:
     argv, rc = _bare_launch(argv)
     if rc is not None:
         return rc
+    # Built HERE rather than after the splitters, and handed to the rewrite below. The
+    # rewrite has to know which words are commands, and asking `command_words()` builds a
+    # second parser — ~10 ms, in every process, including the `charter hook …` ones that run
+    # per tool call. One parser answers both questions and then parses the result.
+    parser = build_parser()
+    # Directly after `_bare_launch`, so a profile named by a bare `charter`'s own default is
+    # rewritten by the same line a typed one is. See :func:`_profile_launch`.
+    argv, rc = _profile_launch(argv, parser)
+    if rc is not None:
+        return rc
     argv = _hoist_persona_memory(argv)
     argv, exec_command = _split_exec_command(argv)
     argv, frame_rest = _split_frame_argv(argv)
-    parser = build_parser()
     try:
         args = parser.parse_args(argv)
     except SystemExit:

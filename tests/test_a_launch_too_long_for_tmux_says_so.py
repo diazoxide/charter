@@ -27,7 +27,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter.frame import layout, tmuxctl
+from charter.frame import launcher, layout, tmuxctl
 
 from tests import _tmuxreap, _tmuxsocket
 from tests._isolation import PersonaIso
@@ -51,8 +51,21 @@ _LIMIT_ON_SCREEN = "16,364"
 #: so what tmux was sent is byte-for-byte what was typed.
 _PASTED = "fix it: " + "x" * 20000
 
-#: `_launch`'s harness is `claude`, so its arguments are that binary and the one above.
-_CARRIED = f"{len('claude') + len(_PASTED.encode()):,}"
+def _carried(rest: list[str]) -> str:
+    """The bytes tmux was really handed for a launch carrying *rest*, spelled as the
+    sentence spells them.
+
+    **Charter's own launcher argv, not the profile's command.** Since a chat pane starts as
+    `charter frame-launch --profile <name> -- …` (`frame/launcher.argv`), what tmux measured
+    against its limit is that list — and a number beside a limit has to be the number the
+    limit was applied to (ADR 0009). The command an operator is SHOWN is the profile's own,
+    which is a different list and would explain nothing about the refusal.
+    """
+    return f"{sum(len(os.fsencode(a)) for a in launcher.argv('claude', rest, attended=True)):,}"
+
+
+#: `_launch`'s harness is the built-in `claude` profile, and this is what starting it costs.
+_CARRIED = _carried([_PASTED])
 
 
 class TmuxsLengthRefusalIsRecognisedByItsExactWords(unittest.TestCase):
@@ -131,10 +144,9 @@ class ALaunchOnCharactersOwnServer(PersonaIso, unittest.TestCase):
                          rest=["fix é漢 \udcff " + "x" * 20000])
         self.assertEqual(rc, 1)
         self.assertEqual(len(said), 1, said)
-        # `claude`; then `fix `, é as C3 A9, 漢 as E6 BC A2, a space, the single byte 0xff,
-        # a space; then the padding.
-        carried = len(b"claude") + len(b"fix \xc3\xa9\xe6\xbc\xa2 \xff ") + 20000
-        self.assertIn(f"{carried:,}", said[0])
+        # The launcher argv, whose tail is that argument: `fix `, é as C3 A9, 漢 as
+        # E6 BC A2, a space, the single byte 0xff, a space, then the padding.
+        self.assertIn(_carried(["fix é漢 \udcff " + "x" * 20000]), said[0])
 
     def test_any_other_refusal_keeps_the_report_it_always_had(self):
         rc, said = self._launched(_RefusedStart(stderr="no space for a new pane\n"))

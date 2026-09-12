@@ -316,15 +316,17 @@ class AValueOffTheManifestCannotOwnTheLine(PersonaIso):
         self.assertContained(said[0])
 
     def test_a_hostile_harness_is_still_contained_when_the_plane_has_a_default(self):
-        """The SECOND `contain.readable(c.harness)`, on the branch this file's other case
-        cannot reach: with a `[harness] default` declared, the reopen falls back to it and
-        says so, and that is a different sentence with its own wrapper. Measured — without
-        this case, hand-mutating that line leaves the module green."""
+        """There was a SECOND `contain.readable(c.harness)` here, on the branch where a
+        `[harness] default` made the reopen fall back to it and say so. That fallback is
+        deleted (ruling 15) — a chat is never given another profile — so there is one
+        sentence and one wrapper, and this case now says the declared default changes
+        nothing about it rather than pinning a branch that no longer exists."""
         with mock.patch.object(config, "HARNESS", {"default": "claude"}):
             said = self._warnings(self._chat(harness=HOSTILE))
 
-        line = next(s for s in said if "reopening it under" in s)
-        self.assertContained(line)
+        self.assertTrue(said, "the skip warning is the surface under test")
+        self.assertContained(said[0])
+        self.assertFalse([s for s in said if "reopening it under" in s], said)
 
     def test_a_recorded_directory_that_has_gone_is_shown_not_executed(self):
         said = self._warnings(self._chat(cwd=HOSTILE))

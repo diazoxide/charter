@@ -879,6 +879,12 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
         "charter/commands_frame.py:execvp":
             "`bypass` hands this process to the HARNESS (`claude`), and replaces it. The "
             "thing that runs afterwards is not charter and has no plane to resolve.",
+        "charter/frame/launcher.py:execvpe":
+            "The launcher hands its pane — or, on `--no-frame`, this process — to a harness "
+            "profile's command and replaces itself. A profile whose command's first word is "
+            "charter is refused by `profiles.current` before any launch (Ruling 14), so what "
+            "runs afterwards is a harness and not charter. A wrapper script that execs "
+            "charter is the limit, and it is the operator's own to write.",
         "charter/commands_secrets.py:execvpe":
             "`secret exec` replaces this process with the operator's own command. If they "
             "type `charter`, the process that becomes charter is the one that was already "

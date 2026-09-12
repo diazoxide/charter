@@ -15,6 +15,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 
 from charter import cli
+from tests._isolation import PersonaIso
 
 
 def _run(argv) -> str:
@@ -27,7 +28,13 @@ def _run(argv) -> str:
     return err.getvalue()
 
 
-class TestUnknownSubcommandOffersToReportAGap(unittest.TestCase):
+class TestUnknownSubcommandOffersToReportAGap(PersonaIso, unittest.TestCase):
+    """`PersonaIso` because an unknown first word is exactly what a PROFILE name is: the
+    launch rewrite asks `profiles.current()` whether the plane declares one before argparse
+    ever sees it, and `tests/_planeguard` refuses a read of the developer's own
+    `charter.local.toml`. A throwaway plane declares none, so the word stays unknown and
+    the gap signal is what it was."""
+
     def test_an_unknown_command_points_at_gap_reporting(self):
         self.assertIn("charter report gap", _run(["frobnicate"]))
 

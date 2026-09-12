@@ -59,6 +59,16 @@ class _AChatInAlpha(PersonaIso, unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+        # **The profile's command is on `PATH`, said rather than inherited.** A handoff now
+        # runs the launcher's own checks before it writes anything (`background_refusal`),
+        # and the first of them asks `shutil.which`. This class clears the environment, and
+        # its cases run for `codex` and `opencode` as well as `claude`, so left to the real
+        # answer every one of them would be refused for a reason none of them is about —
+        # which profile a handoff takes, and what it refuses BEFORE anything is written.
+        # `charter.commands_frame.shutil` is the `shutil` module, so this is the answer the
+        # launcher gets too.
+        self.enterContext(mock.patch("charter.commands_frame.shutil.which",
+                                     return_value="/nowhere/harness"))
         for ws in ("alpha", "beta"):
             (config.WORKSPACES_DIR / ws).mkdir(parents=True, exist_ok=True)
         _a_chat(self.CALLER, ws="alpha")

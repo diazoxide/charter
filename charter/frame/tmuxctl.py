@@ -398,6 +398,71 @@ def server_argv(server: str, *args: str) -> list[str]:
     return ["tmux", "-S" if is_socket_path(server) else "-L", server, *args]
 
 
+#: What :func:`live_pane_by_pid` asks of every pane on a server, in ONE call: the pid that
+#: owns the pane, whether the pane is dead, and the three things that say which chat it is.
+#: The plan author read `#{@charter_chat}` and `#{pane_dead}` through this format on tmux
+#: 3.7c and at the 3.2 floor (`workspaces/harness-profiles/refs/task2-measure/`).
+_PANE_PID_FORMAT = ("#{pane_pid}\t#{pane_dead}\t#{pane_id}\t#{session_name}"
+                    "\t#{window_name}\t#{@charter_chat}")
+
+#: How many fields :data:`_PANE_PID_FORMAT` produces. A line with any other count is one
+#: this cannot read, and a pane charter cannot read is not a pane it will prove a chat with.
+_PANE_PID_FIELDS = 6
+
+
+class LivePane(NamedTuple):
+    """One live pane, as :func:`live_pane_by_pid` reads it off tmux.
+
+    A record rather than a bare tuple because its two proof fields are told apart by which
+    SERVER is being asked (ruling 33) — the window name on charter's own, the option in an
+    operator's — and a caller indexing `[2]` or `[3]` for that is a caller one edit away
+    from proving a chat by the wrong half.
+    """
+
+    pane: str       # `%N`
+    session: str
+    window: str     # the window's NAME, which is the proof on charter's own server
+    chat: str       # `@charter_chat`, which is the proof in an operator's tmux
+
+
+def live_pane_by_pid(server: str, pid: int) -> LivePane | None:
+    """The LIVE pane *pid* owns, as a :class:`LivePane`.
+
+    ``None`` when no live pane on *server* has that `#{pane_pid}` — a server that does not
+    answer at all included, which is an ordinary reading rather than a fault (the chat's
+    recorded server may be gone).
+
+    **Dead panes are filtered out, and that is ruling 33 rather than tidiness.** A pane kept
+    by `remain-on-exit` still reports the pid its program had, and the system is free to
+    hand that number to somebody else — so a dead pane's pid proves nothing about the
+    process asking.
+
+    One `list-panes -a`, addressed by socket through :func:`server_argv` and never through
+    `$TMUX`: which server a chat is on is the chat's own record, and `$TMUX` says only which
+    server the asking process is inside (#812).
+    """
+    out = run("asking tmux which pane this process is",
+              server_argv(server, "list-panes", "-a", "-F", _PANE_PID_FORMAT),
+              report=False)
+    if out.returncode != 0:
+        return None
+    # `out.stdout` and not `out.stdout or ""`: every one of :func:`run`'s three exits
+    # returns a string — the two it invents pass `stdout=""` explicitly — so the fallback
+    # was a line nothing could reach, which is what the deletion sweep reported it as.
+    for line in out.stdout.splitlines():
+        fields = line.split("\t")
+        # A window NAME may contain a tab and `list-panes` does not quote it, so a row can
+        # split into more fields than the format asks for. A row this cannot assign is one
+        # charter cannot read, and a pane charter cannot read is not a pane it will prove a
+        # chat with — skipped rather than unpacked, which would raise here.
+        if len(fields) != _PANE_PID_FIELDS:
+            continue
+        pane_pid, dead, pane, session, window, chat = fields
+        if pane_pid == str(pid) and dead == "0":
+            return LivePane(pane, session, window, chat)
+    return None
+
+
 def is_operator_socket(server: str | None, *, own: str | None = None) -> bool:
     """Is *server* a tmux charter did not start — one it is a guest on?
 

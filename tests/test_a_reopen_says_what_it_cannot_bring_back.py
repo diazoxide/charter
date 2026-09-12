@@ -537,12 +537,19 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.assertIsNotNone(reopen.read(), "left in place so it can be tried again")
 
-    def test_a_harness_this_charter_cannot_launch_falls_back_to_the_planes_default(self):
+    def test_a_harness_this_charter_cannot_launch_is_skipped_rather_than_moved(self):
+        """**The `[harness] default` fallback is deleted** (ruling 15). A chat recorded
+        under a harness this charter no longer registers used to come back under the
+        plane's default and be told so; it is skipped now, and stays in the record for a
+        retry — because a profile can be another account, where this chat's conversation
+        does not exist and its workspace's code was never meant to go. The declared default
+        changes nothing about that."""
         self._record(self._chat(harness="clyde"))
         with mock.patch.object(config, "HARNESS",
                                {"default": "claude", "refused": None}):
-            self.assertEqual(self._reopen(), 0)
-        self.assertEqual(self.calls[0].harness, "claude")
+            self.assertEqual(self._reopen(), 1)
+        self.assertEqual(self.calls, [])
+        self.assertIsNotNone(reopen.read(), "left in place so it can be tried again")
 
 
 class TheReopenPathSuppressesFourThingsInTheLauncher(PersonaIso, unittest.TestCase):
