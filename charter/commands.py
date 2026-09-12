@@ -2262,7 +2262,7 @@ def _wire_profiles(root: Path, *, install: bool) -> list[tuple[str, str]]:
                                   f"{contain.readable(p.name)}"))
             continue
         if install or p.harness == _opencode.NAME:
-            out += [(status, f"{label}: {detail}")
+            out += [(status, f"{label}: {contain.readable(detail)}")
                     for status, detail in wiring.install(p, root)]
             continue
         w = wiring.detect(p, cwd=root)

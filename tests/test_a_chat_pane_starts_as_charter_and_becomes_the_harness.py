@@ -162,7 +162,15 @@ class _ARealChatOnARealServer(PersonaIso):
             "    json.dump({'argv': sys.argv[1:], 'env': dict(os.environ),\n"
             "               'pid': os.getpid()}, f)\n"
             "os.replace(out + '.tmp', out)\n"
-            f"{'sys.exit(' + str(self.EXIT_WITH) + ')' if self.EXIT_WITH is not None else 'time.sleep(300)'}\n")
+            # A beat before the exit, and it is not decoration. `_launch` reports an EARLY
+            # DEATH — the harness's own code, rather than 0 — for a pane that dies while it
+            # is still setting the frame up, and a harness that exits the instant it is
+            # exec'd races that window. Measured on CI (3.12, 2026-09-12): the launch
+            # answered 7 instead of 0 on a loaded runner, having answered 0 on four
+            # interpreters an hour earlier. What this class is about is that the code
+            # TRAVELS, which the assertions below read off the chat's own state; whether it
+            # also arrives through the early-death path is a different test's subject.
+            f"{'time.sleep(1); sys.exit(' + str(self.EXIT_WITH) + ')' if self.EXIT_WITH is not None else 'time.sleep(300)'}\n")
         (bindir / "claude").chmod(0o755)
         self.enterContext(mock.patch.dict(os.environ, {
             # First on the client's `PATH`, ahead of `tests/_claudeguard`'s own fake: the

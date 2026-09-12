@@ -101,9 +101,15 @@ def _resolve(name: str):
         return found, ""
     h = registry.get(name)
     if h is not None:
-        by_kind = {p.harness: p for p in read.profiles.values()}
-        if h.name in by_kind:
-            return by_kind[h.name], ""
+        # The BUILT-IN of that kind, and not merely the last profile of it this plane
+        # declares: a registry name asks for the harness charter knows, and answering it
+        # with somebody's `codex-pinned` would wire a folder they did not name. A built-in
+        # is named after its kind, so this is `read.profiles[<kind>]` whenever a declared
+        # profile has not replaced it — and a replacement IS what that name runs, so it is
+        # the right answer when it has.
+        for q in read.profiles.values():
+            if q.harness == h.name and q.name == q.kind:
+                return q, ""
     shown = contain.readable(name)
     return None, next((r.reason for r in read.refused if r.name == shown), "")
 
@@ -159,6 +165,10 @@ def cmd_harness_install(args) -> int:
         return 1
 
     for status, detail in wiring.install(p, config.ROOT):
+        # Contained here rather than at every `return` inside the harnesses: a `detail` is a
+        # path built out of the profile's own `env`, which is a file a chat can write, and
+        # this line goes to a terminal (ruling 35).
+        detail = contain.readable(detail)
         if status == "malformed":
             util.err(f"{detail} is not valid TOML — left it completely untouched.")
             util.info("  Fix it by hand, then re-run. charter never repairs this file.")

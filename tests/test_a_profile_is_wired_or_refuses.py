@@ -223,6 +223,14 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
         self.assertEqual(w.state, wiring.UNWIRED)
         self.assertIn("local", w.detail)
 
+    def test_a_scope_charter_does_not_recognise_sorts_last_rather_than_raising(self):
+        """`_SCOPE_ORDER` is charter's reading of three scopes the CLI documents. A fourth
+        one — a newer Claude Code, a row charter has never seen — must not take the row down,
+        and must not outrank a scope charter does understand."""
+        with spawns([], listing(entry(scope="cowork", project=self.here, enabled=False),
+                                entry(scope="user", enabled=True))):
+            self.assertEqual(wiring.detect(self.p, cwd=self.here).state, wiring.WIRED)
+
     def test_a_project_enable_over_a_user_disable_is_wired(self):
         """The same pair in the other order, so the order of the list decides nothing."""
         with spawns([], listing(entry(scope="project", project=self.here, enabled=True),
@@ -363,6 +371,15 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         w = wiring.detect(self.p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNWIRED)
         self.assertIn("shell_environment_policy", w.detail)
+        # No table at all: charter writes the whole thing, so its own command IS the fix.
+        self.assertEqual(w.fix, "charter harness install codex-alt")
+
+    def test_a_policy_that_names_some_other_variable_is_not_charters(self):
+        self.write(codex_config(policy=False)
+                   + '\n[shell_environment_policy]\nset = { SOMETHING_ELSE = "codex" }\n')
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("CHARTER_HARNESS", w.detail)
 
     def test_untrusted_hooks_are_unwired(self):
         """Codex trusts hooks by hash, so a plugin nobody approved is installed and inert —
@@ -478,8 +495,41 @@ class OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase):
         self.assertEqual(calls[0].argv, ["opencode", "debug", "config"])
         self.assertEqual(calls[0].env["XDG_CONFIG_HOME"], str(self.xdg))
 
-    def test_no_shim_is_unwired(self):
+    def test_an_answer_that_names_no_plugin_is_unwired(self):
+        """The shim is on disk and is charter's, and nothing else is in the realm — so the
+        only mark that can speak is the one about what opencode actually LOADS. A shim
+        opencode does not load is a guard that does not run."""
+        self.shim()
         with spawns([], self.answer()):
+            w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("loads no plugin", w.detail)
+
+    def test_a_bare_string_is_a_plugin_list_of_one(self):
+        """opencode takes a bare string here as well as a list (`_configured_plugins` says
+        so about the other door into the same realm)."""
+        self.shim()
+        with spawns([], json.dumps({"plugin": self.named()})):
+            self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.WIRED)
+
+    def test_an_entry_that_is_not_a_file_uri_is_read_as_a_path(self):
+        self.shim()
+        with spawns([], self.answer(str(self.home / opencode.SHIM_PATH))):
+            self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.WIRED)
+
+    def test_an_entry_that_is_not_a_string_is_skipped_rather_than_raised_on(self):
+        self.shim()
+        with spawns([], self.answer(17, self.named())):
+            self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.WIRED)
+
+    def test_an_answer_that_is_not_an_object_is_unwired_rather_than_a_crash(self):
+        self.shim()
+        with spawns([], json.dumps(["not", "a", "config"])):
+            self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNWIRED)
+
+    def test_an_answer_with_no_plugin_key_is_unwired(self):
+        self.shim()
+        with spawns([], json.dumps({"plugin": None})):
             self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNWIRED)
 
     def test_a_plugin_entry_naming_a_missing_shim_is_unwired(self):
@@ -488,6 +538,7 @@ class OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase):
         with spawns([], self.answer(self.named())):
             w = wiring.detect(self.p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("cannot vouch", w.detail)
 
     def test_a_byte_perfect_shim_beside_a_foreign_plugin_is_not_wired(self):
         """The documented bypass, reproduced (ruling 26; `opencode.foreign_plugins`, ADR 0015).
@@ -509,6 +560,7 @@ class OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase):
         with spawns([], self.answer(self.named())):
             w = wiring.detect(self.p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("cannot vouch", w.detail)
 
     def test_an_opencode_probe_that_times_out_refuses(self):
         self.shim()
@@ -518,9 +570,12 @@ class OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase):
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.assertIn("could not ask", said)
 
-    def test_a_non_zero_probe_is_unknown(self):
+    def test_a_non_zero_probe_is_unknown_even_when_it_printed_an_answer(self):
+        """The exit code is the answer about whether there IS an answer. A `debug config`
+        that printed a wired-looking document and then failed has told charter nothing, and
+        reading the document anyway is how an unknown becomes a pass."""
         self.shim()
-        with spawns([], "", rc=2):
+        with spawns([], self.answer(self.named()), rc=2):
             self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state,
                              wiring.UNKNOWN_STATE)
 
@@ -949,6 +1004,15 @@ env = {{ CODEX_HOME = "{self.codex_home}" }}
         self.assertIn('set = { CHARTER_HARNESS = "codex" }', out)
         self.assertNotIn("charter harness install", out)
 
+    def test_a_shim_charter_cannot_vouch_for_is_a_warning_and_not_an_item(self):
+        """`Harness.wire` answers `unvouched` with a SENTENCE, not a path — #433's shape,
+        where a shim with every guard cut out of it was listed under "already present"."""
+        with mock.patch.object(wiring, "install",
+                               return_value=[("unvouched", "somebody else's plugin")]), \
+                spawns([], json.dumps({"plugin": []})):
+            out = self.said(lambda: self.run_install("oc-alt"))
+        self.assertRegex(out, r"!\s+somebody else's plugin")
+
     def test_a_registry_name_still_works_as_today(self):
         """`charter harness install codex` is what `docs/harnesses.md` tells people to run,
         and a profile-first lookup must not have taken it away (ruling 8). It writes the same
@@ -1174,6 +1238,261 @@ class DoctorHasARowPerProfile(PersonaIso, unittest.TestCase):
         self.assertIs(cli.build_parser().parse_args(["doctor", "--preflight"]).preflight,
                       True)
         self.assertIs(cli.build_parser().parse_args(["doctor"]).preflight, False)
+
+
+class EveryProfileDerivedTextIsShownEscaped(PersonaIso, unittest.TestCase):
+    """Ruling 35, surface by surface: nothing a chat can write into `charter.local.toml`
+    reaches a terminal as a control byte.
+
+    The values a profile carries into these sentences are its NAME, its KIND, its COMMAND,
+    its `env` values and — through those — the folder each probe asks about. Each is
+    interpolated in its own place, so each is asked its own question here: a `contain` that
+    went missing anywhere lets a `\r` redraw the line above it, which is how a refusal
+    becomes a sentence the operator never sees.
+    """
+
+    NASTY = "x\ry\x1b[2K"
+
+    def setUp(self):
+        super().setUp()
+        make_plane(self)
+        self.enterContext(approved())
+
+    def clean(self, *texts):
+        for t in texts:
+            self.assertNotIn("\r", t)
+            self.assertNotIn("\x1b", t)
+
+    def dirty_dir(self, name: str) -> Path:
+        d = self.tmp / f"d{self.NASTY}{name}"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_a_kind_charter_has_no_check_for_is_named_escaped(self):
+        """Unreachable through `profiles.current()`, which refuses a kind the registry does
+        not know — and reached the day a kind joins the registry without a wiring check,
+        which is exactly when nobody is looking."""
+        p = profiles.Profile(name=self.NASTY, kind=self.NASTY, harness=self.NASTY,
+                             command=(self.NASTY,), env=(), source=profiles.BUILTIN)
+        w = wiring.detect(p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.clean(w.detail, w.fix, wiring.refusal(p, cwd=self.tmp))
+
+    def test_an_unapproved_profile_is_named_escaped(self):
+        p = make_profile(self.NASTY)
+        with mock.patch.object(wiring, "approval_needed", lambda q: "not approved yet"):
+            answer = wiring.detect(p, cwd=self.tmp)
+        self.clean(answer.detail, answer.fix)
+
+    def test_the_claude_detail_names_its_folder_and_scope_escaped(self):
+        here = self.dirty_dir("cwd")
+        p = make_profile(self.NASTY, env=[("CLAUDE_CONFIG_DIR", str(self.dirty_dir("cc")))])
+        with spawns([], listing(entry(scope=self.NASTY, project=here, enabled=False))):
+            w = wiring.detect(p, cwd=here)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.clean(w.detail, w.fix, wiring.refusal(p, cwd=here))
+
+    def test_the_codex_detail_names_its_home_escaped(self):
+        home = self.dirty_dir("cx")
+        (home / "config.toml").write_text("[x")
+        p = make_profile(self.NASTY, kind="codex", env=[("CODEX_HOME", str(home))])
+        w = wiring.detect(p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.clean(w.detail, w.fix, wiring.refusal(p, cwd=self.tmp), wiring.by_hand(p))
+
+    def test_the_opencode_detail_names_its_probe_home_and_neighbours_escaped(self):
+        xdg = self.dirty_dir("xdg")
+        home = xdg / "opencode"
+        (home / "plugin").mkdir(parents=True)
+        opencode.refresh_shim(home)
+        (home / "plugin" / f"a{self.NASTY}.ts").write_text("Object.hasOwn = () => false;\n")
+        p = make_profile(self.NASTY, kind="opencode", command=[f"oc{self.NASTY}"],
+                         env=[("XDG_CONFIG_HOME", str(xdg))])
+        answer = json.dumps({"plugin": [f"file://{home / opencode.SHIM_PATH}"]})
+        with spawns([], answer):
+            w = wiring.detect(p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.clean(w.detail, w.fix)
+        with spawns([], raises=util.ProcTimeout(["oc"], 5.0)):
+            self.clean(wiring.refusal(p, cwd=self.tmp))
+
+    def test_the_install_and_the_wiring_report_name_it_escaped(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        p = make_profile(self.NASTY, kind="codex",
+                         env=[("CODEX_HOME", str(self.dirty_dir("cx2")))])
+        buf = io.StringIO()
+        with redirect_stderr(buf), redirect_stdout(buf), \
+                mock.patch.object(commands_harness, "_resolve", return_value=(p, "")), \
+                mock.patch.object(profiles, "ignored_refusal", return_value=""):
+            commands_harness.cmd_harness_install(SimpleNamespace(name=self.NASTY))
+        self.clean(buf.getvalue())
+
+    def test_the_init_report_names_a_skipped_profile_escaped(self):
+        import io
+        from contextlib import redirect_stderr
+
+        p = make_profile(self.NASTY)
+        read = profiles.ProfileSet(profiles={self.NASTY: p}, refused=(), default=None,
+                                  default_from=None, default_refused=None)
+        buf = io.StringIO()
+        with mock.patch.object(wiring, "approval_needed",
+                               return_value=wiring.NOT_APPROVED_YET), \
+                mock.patch.object(profiles, "current", return_value=read), \
+                redirect_stderr(buf):
+            commands._say_profile_wiring(commands._wire_profiles(config.ROOT, install=True))
+        self.clean(buf.getvalue())
+
+
+class TheSeamsTheSweepAsksAbout(PersonaIso, unittest.TestCase):
+    """One class for the lines a deletion sweep could not tell from their own absence.
+
+    Each of these is a guard, a fallback or a threaded argument that the behaviour tests
+    above reach only through a sibling that would have caught the same case. A sweep names
+    them; this is where each gets a test that goes red on its own.
+    """
+
+    def setUp(self):
+        super().setUp()
+        make_plane(self)
+        declare_profiles(self)
+        self.here = self.tmp / "here"
+        self.here.mkdir()
+
+    def test_a_codex_profiles_cache_is_stamped_with_its_own_config_file(self):
+        """`_stamp_paths` answers per kind, and a kind that fell through to `[]` would have
+        an empty stamp — which matches forever, so the selector would draw a row about a
+        Codex home somebody has since wired or unwired."""
+        home = self.tmp / "cx"
+        home.mkdir()
+        (home / "config.toml").write_text(codex_config())
+        p = make_profile("codex-alt", kind="codex", env=[("CODEX_HOME", str(home))])
+        w = wiring.Wiring(wiring.WIRED, "asked", "")
+        wiring.remember(p, cwd=self.here, w=w)
+        self.assertEqual(wiring.cached(p, cwd=self.here), w)
+        (home / "config.toml").write_text(codex_config(trust=False))
+        self.assertIsNone(wiring.cached(p, cwd=self.here))
+
+    def test_the_cache_file_is_the_one_the_docs_and_the_selector_name(self):
+        """A path a chat can write is a path the docs state at full volume (ruling 13), so
+        the spelling is a fact about this release rather than an internal detail."""
+        self.assertEqual(wiring.CACHE, "cache/harness-wiring.json")
+        p = profiles.current().profiles["claude"]
+        wiring.remember(p, cwd=self.here, w=wiring.Wiring(wiring.WIRED, "x", ""))
+        self.assertTrue((Path(config.STATE_DIR) / "cache" / "harness-wiring.json").is_file())
+
+    def test_a_cache_entry_missing_a_field_is_a_miss_rather_than_a_crash(self):
+        p = profiles.current().profiles["claude"]
+        wiring.remember(p, cwd=self.here, w=wiring.Wiring(wiring.WIRED, "x", ""))
+        path = Path(config.STATE_DIR) / wiring.CACHE
+        doc = json.loads(path.read_text())
+        for entry in doc.values():
+            entry.pop("fix", None)
+        path.write_text(json.dumps(doc))
+        self.assertIsNone(wiring.cached(p, cwd=self.here))
+
+    def test_cmd_doctor_passes_the_preflight_flag_through(self):
+        """The flag is the only thing that tells the SessionStart hook apart from a person
+        typing the same words, so a `cmd_doctor` that dropped it would put the probes back on
+        the hook path with nothing saying so."""
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with mock.patch.object(wiring, "detect",
+                               side_effect=AssertionError("probed on a hook path")), \
+                redirect_stdout(buf):
+            commands.cmd_doctor(SimpleNamespace(json=True, preflight=True))
+        names = [r["name"] for r in json.loads(buf.getvalue())]
+        self.assertNotIn("profile claude", names)
+        self.assertIn("harness profiles", names)
+
+    def test_a_doctor_row_shows_a_profile_name_escaped(self):
+        """Ruling 35 reaches the row NAMES too — and the name column is sized from them, so
+        a control byte there would move every other row as well as redraw the line."""
+        nasty = make_profile("cl\raude\x1b[2K", source=profiles.BUILTIN)
+        with mock.patch.object(wiring, "listed", return_value=[nasty]), \
+                mock.patch.object(wiring, "detect",
+                                  return_value=wiring.Wiring(wiring.WIRED, "ok", "")):
+            names = doctor.profile_row_names()
+            rows = doctor.check_profile_wiring()
+        for text in [*names, *(r.name for r in rows)]:
+            self.assertNotIn("\r", text)
+            self.assertNotIn("\x1b", text)
+
+    def test_the_launcher_asks_about_the_directory_it_was_given(self):
+        """`_launch` and the pane are already standing in the chat's directory; a `+`, a tab
+        and a handoff are not, and the answer is about THEIR directory."""
+        calls = []
+        with approved(), spawns(calls, listing()):
+            launcher.refusal(profiles.current().profiles["claude"], root=config.ROOT,
+                             attended=False, env=dict(os.environ), cwd=self.here)
+        self.assertEqual(str(calls[0].cwd), str(self.here))
+
+    def test_a_codex_probe_charter_cannot_read_names_the_file_to_open(self):
+        """Codex has no probe argv — its three marks are a file — so `{probe}` names the
+        file. A fall-through to an empty command would print `check by hand:` and stop."""
+        home = self.tmp / "cx2"
+        home.mkdir()
+        (home / "config.toml").write_text("[x")
+        p = make_profile("codex-alt", kind="codex", env=[("CODEX_HOME", str(home))])
+        said = wiring.refusal(p, cwd=self.tmp)
+        self.assertIn(str(home / "config.toml"), said)
+
+    def test_the_listing_is_built_ins_in_registry_order_then_the_rest_by_name(self):
+        """`charter harness list`'s order, so a doctor row lands where the operator already
+        reads that profile."""
+        names = [p.name for p in wiring.listed()]
+        built_in = [n for n in profiles.builtins() if n in names]
+        self.assertEqual(names[:len(built_in)], built_in)
+        self.assertEqual(names[len(built_in):], sorted(names[len(built_in):]))
+
+    def test_no_probe_is_spawned_for_a_command_that_is_not_on_path(self):
+        """`shutil.which` and the exec are two moments, and the read charter would make in
+        between is a spawn of something that is not there."""
+        asked = []
+
+        def available(command=("claude",)):
+            asked.append(tuple(command))
+            return False
+
+        with mock.patch.object(plugincache, "available", available), \
+                mock.patch.object(util, "run",
+                                  side_effect=AssertionError("spawned anyway")):
+            self.assertIsNone(plugincache._claude_json(["list"],
+                                                       command=["/nowhere/claude"]))
+        self.assertEqual(asked, [("/nowhere/claude",)])
+
+    def test_a_registry_name_resolves_to_the_built_in_of_that_kind(self):
+        """`charter harness install claude-code` — the NAME `$CHARTER_HARNESS` carries, which
+        is not the word typed after `charter`."""
+        p, why = commands_harness._resolve("claude-code")
+        self.assertIsNotNone(p, why)
+        self.assertEqual(p.name, "claude")
+
+    def test_a_gap_is_warned_about_and_a_write_is_only_noted(self):
+        """`init` and `reinit` do not fail over a profile's own account folder, so the only
+        thing separating "charter wrote this" from "you have something to do" is which
+        stream-level this line goes out at."""
+        import io
+        from contextlib import redirect_stderr
+
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            commands._say_profile_wiring([("skipped", "a"), ("created", "b"),
+                                          ("missing", "c"), ("opt-in", "d")])
+        lines = [l for l in buf.getvalue().splitlines() if l.strip()]
+        self.assertEqual([l[0] for l in lines], ["!", "•", "!", "!"])
+
+    def test_nothing_is_wired_while_git_would_carry_the_local_file(self):
+        """Every profile in it is refused, and `charter harness list` and doctor's
+        `harness profiles` row already say so with the fix. Wiring one anyway would act on a
+        declaration charter has just refused."""
+        (config.ROOT / ".gitignore").write_text("# nothing ignored\n")
+        with approved(), mock.patch.object(wiring, "install") as inst:
+            self.assertEqual(commands._wire_profiles(config.ROOT, install=True), [])
+        inst.assert_not_called()
 
 
 if __name__ == "__main__":
