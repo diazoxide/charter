@@ -15,8 +15,10 @@ A **harness profile** answers both: a name, a kind, a command and an environment
 the operator, and a chat that starts on the one somebody picked. This record holds the
 decisions that were expensive to reverse and the reason each rests on. The mechanics — every
 key of the table, every refusal and its fix — are in
-[`docs/control-plane.md`](../control-plane.md), and the grill that settled them, ruling by
-ruling, is `workspaces/harness-profiles/workspace.md` in the plane this was built on.
+[`docs/control-plane.md`](../control-plane.md). What the grill settled is
+`docs/superpowers/specs/2026-09-11-harness-profiles.md`, and the rulings taken on the way are
+that plan's own `## Controller rulings`
+(`docs/superpowers/plans/2026-09-11-harness-profiles.md`).
 
 Written while the feature lands in stages
 (`docs/superpowers/plans/2026-09-11-harness-profiles.md`): the decisions below are settled,

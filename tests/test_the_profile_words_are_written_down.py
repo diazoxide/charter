@@ -7,7 +7,7 @@ and the phase-5 spec's own credentials sentence, which profiles made false.
 
 The ADR is pinned **by slug, not by number**. The chat-handoff plan claims 0021 and pins
 that number in its own test, so whichever of the two merges first must not break the other
-(`workspaces/harness-profiles/workspace.md`, controller ruling 2).
+(`docs/superpowers/plans/2026-09-11-harness-profiles.md`, *Controller rulings* 2).
 
 These read files off the tree, never through `config`: a test that resolved the plane would
 be answering about whatever plane it ran in.
@@ -86,6 +86,23 @@ class TestTheDecisionsAreRecorded(unittest.TestCase):
         amendment turns on, which the profile selector rests on too."""
         text = (ADR / "0018-charter-may-run-the-harness-but-never-draws-it.md").read_text()
         self.assertIn("no harness has ever run", text)
+
+    def test_adr_0018_bounds_are_the_ones_the_launcher_keeps(self):
+        """The records task read that amendment against `charter/frame/launcher.py` and
+        found its bounds narrower than the code in two places and looser in two more. The
+        code was right and the record was corrected, so these pin the corrections:
+
+        * `framed_chat()` prints a line that is **not** a refusal and lets the launch go on;
+        * the wait needs a terminal as well as an attended open (`sys.stdin.isatty()`);
+        * `state.record_launch` runs on every refusal — only the wait is conditional.
+
+        Asked of the words rather than of the code because the code already behaves this
+        way; what drifted, and what would drift again, is the sentence describing it.
+        """
+        text = (ADR / "0018-charter-may-run-the-harness-but-never-draws-it.md").read_text()
+        for claim in ("unproven", "not a refusal", "isatty", "state.record_launch"):
+            self.assertIn(claim, text,
+                          f"0018's amendment no longer accounts for {claim!r}")
 
     def test_the_phase5_credentials_line_carries_its_supersession(self):
         """That spec is the record of what was decided in August, so the sentence stays

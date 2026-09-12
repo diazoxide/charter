@@ -156,18 +156,33 @@ trimming afterwards: the bound belongs where the memory is. Verified on tmux 3.7
 
 Harness profiles put a charter process in the pane. `charter frame-launch --profile <name>`
 is what tmux now starts in every chat pane, and it becomes the harness by `os.execvpe`
-replacing itself with the profile's command (`charter/frame/launcher.py`). A launcher that
-refuses — the local file became committable since the pre-tmux check, the command is not on
-`PATH`, the profile is declared and nothing can ask the operator's approval yet — **prints
-that refusal in the pane and holds the pane open until somebody presses Enter.**
+replacing itself with the profile's command (`charter/frame/launcher.py`). Before that
+happens, charter may write on that screen, and there are exactly two things it writes.
 
-That is charter drawing in a chat's pane, which the rule above says it never does. The rule
+**A refusal** — the local file became committable since the pre-tmux check, the command is
+not on `PATH`, the profile is declared and nothing can ask the operator's approval yet, the
+`execvpe` itself raised — goes into the pane, and where somebody is at the keyboard the
+launcher **holds the pane open until they press Enter.**
+
+**A claim to a chat that cannot be proven** is the second, and it is not a refusal: the
+launch goes ahead. `launcher.framed_chat()` asks tmux whether this process's own pid is the
+`#{pane_pid}` of a live pane belonging to the chat it was handed, because `$TMUX_PANE` and
+`$CHARTER_SESSION_ID` are inherited by a model's tool shell and prove nothing. A claim that
+does not check prints one line saying so and returns `None`, and the launcher then runs as a
+launch with **no frame** — it records nothing for that chat, which is the point of the
+proof. Silently downgrading would cost a chat its session id and its resume id with nothing
+said, so the sentence goes where the person watching is: the pane the harness is about to
+take over.
+
+That is charter writing in a chat's pane, which the rule above says it never does. The rule
 is right and this is not an exception to it, because of *when*: **no harness has ever run in
-that pane.** The `exec` has not happened, so there is no harness process, no output of its
-own on that screen, nothing to draw over and nothing to parse. Every failure this ADR was
-written against needs a harness on the other side of the pane to occur at all — owning a
-terminal parser, deciding what somebody else's cursor means, painting over somebody else's
-frame — and none of them is reachable before the process that would produce them exists.
+that pane.** The `exec` has not happened — or it was attempted and raised, which leaves the
+same pane with the same charter process in it and no harness either way — so there is no
+harness process, no output of its own on that screen, nothing to draw over and nothing to
+parse. Every failure this ADR was written against needs a harness on the other side of the
+pane to occur at all — owning a terminal parser, deciding what somebody else's cursor means,
+painting over somebody else's frame — and none of them is reachable before the process that
+would produce them exists.
 
 **The distinguishing question, in the same shape as the one above:** *has a harness ever run
 in this pane, and is charter's own process still the one in it?* No and yes is this
@@ -176,7 +191,8 @@ the harness's, `state.record_launch` says so, and nothing charter owns writes th
 
 **Why the refusal cannot simply be printed and exited on, which is the whole reason this is
 a decision and not a detail.** Measured 2026-09-11 on tmux 3.7c and at the 3.2 floor, 40
-runs, in `workspaces/harness-profiles/refs/task2-measure/`: `_launch`'s eager
+runs, in the pull request that shipped this launcher
+([#981](https://github.com/diazoxide/charter/pull/981)): `_launch`'s eager
 `#{pane_dead_status}` ask completes **6-14 ms** after the start while a Python launcher's
 first line runs at **19-22 ms**, so the ask is always too early to catch a refusal — and by
 the time anything else could look, the chat-teardown hook has killed the window.
@@ -187,13 +203,24 @@ record.
 
 **Bounded, and each bound is checkable from outside.**
 
-* **Only a refusal, and only before the `exec`.** One sentence charter wrote, plus
-  `press Enter to close this chat.` — no escape sequences of charter's own, no panel, no
-  layout, and never a second thing later.
-* **Only where somebody is there to read it.** An ATTENDED open waits; a reopen, a handoff
-  and a background open write the same sentence into the chat's state directory instead
-  (`state.record_launch`), where the launch that opened the chat reports it. A pane nobody
-  is at never stops on anything.
+* **Only while no harness has ever run in that pane** — the distinguishing question above,
+  and not the pair this amendment first wrote, *only a refusal, and only before the `exec`*.
+  Each half of that pair is wrong exactly once: an unproven chat prints a line that is **not
+  a refusal**, and an `execvpe` that RAISES prints its refusal **after** the exec was
+  attempted. Neither leaves a harness in the pane, which is why the rule survives both and
+  the pair did not. The bound is checkable from outside because there is one moment it
+  turns: `state.record_launch`, written the instant the pane stops being charter's.
+* **Two sentences, and charter wrote both.** A refusal, plus `press Enter to close this
+  chat.` where the pane waits; or the one line an unproven chat prints before launching
+  anyway. No escape sequences of charter's own, no panel, no layout, and never a third thing
+  later.
+* **Every refusal is recorded, and only the WAIT is conditional.** `_refused_in_pane` writes
+  the sentence into the chat's state directory on every path (`state.record_launch`), the
+  attended one included, where the launch that opened the chat reports it. What an attended
+  open adds is the wait — and that needs two conditions rather than one: the open must be
+  ATTENDED **and** the pane's stdin must be a terminal, because `_wait_for_the_operator`
+  returns at once when `sys.stdin.isatty()` is false. So an attended launcher run out of a
+  pipe prints and exits, and a reopen, a handoff or a background open never stops at all.
 * **A line, not a keystroke.** Waiting on one keypress means putting the pane's terminal
   into raw mode, and a `tcsetattr` from a pane on a Linux CI runner left the launcher killed
   by a signal — an empty `#{pane_dead_status}` — so the refusal went with the window after
@@ -204,6 +231,14 @@ record.
   pane to react to what a harness printed in it.
 
 Recorded here rather than in the records task that closes this phase, because the code that
-relies on it ships in the same pull request (`workspaces/harness-profiles/workspace.md`,
-ruling 44): otherwise `main` carries an unqualified prohibition while the code contradicts
+relies on it shipped in the same pull request
+([#981](https://github.com/diazoxide/charter/pull/981); the rule is *an ADR amendment ships
+with the code that first relies on it*, `docs/superpowers/plans/2026-09-11-harness-profiles.md`,
+Task 6): otherwise `main` carries an unqualified prohibition while the code contradicts
 it, and the only thing telling a reader otherwise is a spec they have no reason to open.
+
+*Corrected 2026-09-12 by that records task, against the shipped
+`charter/frame/launcher.py`: the unproven-chat line named as the second thing charter writes
+there, the `execvpe`-that-raised case covered, "only before the `exec`" replaced by the
+distinguishing question, the wait's two conditions both stated, the record separated from
+the wait, and the measurement cited where a reader can open it.*
