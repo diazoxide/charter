@@ -180,12 +180,55 @@ class TestADuplicateJudgedByTitle(PersonaIso):
             todos.duplicate_of("alpha", "Fix the widget" + self.TAIL, by_title=True),
             "Fix the widget")
 
-    def test_a_first_line_of_only_short_words_reports_nothing(self):
-        """`memstore.wordset` keeps words longer than three characters, and a comparison
-        with no words on one side is not a judgement — the same answer the whole-text
-        comparison gives for a todo with nothing comparable in it."""
-        self.assertIsNone(todos.duplicate_of("alpha", "fix the bug" + self.TAIL,
-                                             by_title=True))
+
+class TestAnOverlapTooThinToBeEvidence(PersonaIso):
+    """`todos._MIN_SHARED_WORDS`: below it the ratio is arithmetic with nothing behind it,
+    and it was wrong in both directions at once.
+
+    `memstore.wordset` keeps only words longer than three characters, so `fix the bug` has
+    no comparable word at all — two of them agreed on nothing and scored nothing, and the
+    same todo recorded twice went in twice. At the other end one shared word out of two is
+    0.5 exactly, so `Fix the widget` swallowed `Break the widget`. Where the overlap cannot
+    distinguish, identity decides, which needs no threshold.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.ensure("alpha")
+
+    def test_two_titles_of_only_short_words_that_read_the_same_are_the_same_todo(self):
+        todos.add("alpha", "fix the bug")
+        self.assertEqual(todos.duplicate_of("alpha", "fix the bug"), "fix the bug")
+
+    def test_and_the_same_words_typed_differently_are_still_the_same_todo(self):
+        """Case and runs of whitespace are not differences (`todos._normal`)."""
+        todos.add("alpha", "fix the bug")
+        self.assertEqual(todos.duplicate_of("alpha", "Fix   THE bug"), "fix the bug")
+
+    def test_two_titles_of_only_short_words_that_read_differently_are_not(self):
+        todos.add("alpha", "fix the bug")
+        self.assertIsNone(todos.duplicate_of("alpha", "ask the dev"))
+
+    def test_one_shared_word_out_of_two_is_not_the_same_todo(self):
+        todos.add("alpha", "Fix the widget")
+        self.assertIsNone(todos.duplicate_of("alpha", "Break the widget"))
+
+    def test_two_shared_words_out_of_four_are_not_either(self):
+        todos.add("alpha", "Update the README file")
+        self.assertIsNone(todos.duplicate_of("alpha", "Delete the README file"))
+
+    def test_a_real_overlap_is_still_read_as_one(self):
+        """The rule narrows what counts as evidence; it does not switch the metric off."""
+        todos.add("alpha", "prove the live gh issue create path works")
+        self.assertIsNotNone(
+            todos.duplicate_of("alpha", "prove the live gh issue create path also works"))
+
+    def test_the_same_rule_holds_for_a_handoffs_titles(self):
+        tail = TestADuplicateJudgedByTitle.TAIL
+        todos.add("alpha", "fix the bug" + tail)
+        self.assertEqual(todos.duplicate_of("alpha", "fix the bug" + tail, by_title=True),
+                         "fix the bug")
+        self.assertIsNone(todos.duplicate_of("alpha", "ask the dev" + tail, by_title=True))
 
 
 if __name__ == "__main__":

@@ -23,9 +23,11 @@ The brief becomes the new chat's first message. Your harness asks before the com
 1. With `--create`, makes the workspace (LOCAL) and records its vision.
 2. Records a todo in the target workspace, titled by the brief's first line, with one line of
    provenance under it — **never the brief**, because a LIVE workspace commits `todos/**`. A
-   todo already on that list that says the same work — the same word-overlap rule any todo
-   is checked against, asked over the first lines, because every handoff todo ends in the
-   same provenance sentence — is named and not recorded twice, and the handoff continues.
+   todo already on that list that says the same work is named and not recorded twice, and the
+   handoff continues. "The same work" is asked over the first lines, because every handoff todo
+   ends in the same provenance sentence and over the whole text that boilerplate read as
+   agreement; and where fewer than three words overlap — too thin to be evidence in either
+   direction — it is decided by whether the two first lines are the same line.
 3. Opens a chat there in the background. No client moves, nothing attaches, and the chat you are
    on keeps its panels — measured on tmux 3.7c and at charter's 3.2 floor with real clients
    attached.

@@ -39,6 +39,22 @@ _HEADER = (
 #: is identical in kind, and one threshold is easier to reason about than two.
 _DUPLICATE_THRESHOLD = 0.5
 
+#: The fewest words two todos must AGREE ON before that overlap is evidence about them.
+#:
+#: **A rule about how much signal a comparison needs, not a second threshold.** Below it
+#: the ratio is arithmetic with nothing behind it, and it is wrong in both directions at
+#: once. `memstore.wordset` keeps only words longer than three characters, so `fix the bug`
+#: has NO comparable word at all: two of them agree on nothing, score nothing, and the same
+#: todo recorded twice was recorded twice with no notice. And one shared word out of two is
+#: 0.5 exactly, so `Fix the widget` and `Break the widget` — and `Update the README file`
+#: beside `Delete the README file`, two words out of four — collapsed into one.
+#:
+#: Moving :data:`_DUPLICATE_THRESHOLD` to 0.51 answers the second pair and neither of the
+#: others, and is a number that will be wrong again on the next shape. Where the overlap
+#: cannot distinguish, the comparison falls back to whether the two titles ARE the same
+#: title (:func:`_normal`) — which needs no threshold and cannot be wrong about identity.
+_MIN_SHARED_WORDS = 3
+
 
 def todos_dir(name: str) -> Path:
     """``workspaces/<name>/todos/`` — a *sibling* of ``memory/``, never a child."""
@@ -96,24 +112,50 @@ def duplicate_of(name: str, text: str, *, by_title: bool = False) -> str | None:
     The stored side is `memstore.entries`' title, and the asking side is
     `memstore.title_of` — the same rule `memstore.write` titled it by, asked rather than
     respelled.
+
+    **Where the word overlap has nothing to say, identity decides** — see
+    :data:`_MIN_SHARED_WORDS`, which is why. The one case that survives both rules: two
+    titles that differ only past `memstore.TITLE_MAX` are stored as the same 72 characters
+    and read as one todo. Said rather than engineered around; a todo whose first 72
+    characters are another's is one somebody has to read twice anyway.
     """
     existing = memstore.entries(todos_dir(name))
     if not existing:
         return None
     words = _words(memstore.title_of(text) if by_title else text)
-    if not words:
-        return None
+    mine = _normal(memstore.title_of(text))
     for _p, title, body in existing:
         other = _words(title if by_title else f"{title} {memstore.body(body)}")
-        if not other:
+        shared = words & other
+        if len(shared) < _MIN_SHARED_WORDS:
+            # No signal — decided by identity rather than by arithmetic (see
+            # :data:`_MIN_SHARED_WORDS`). Two todos that read the same ARE the same todo
+            # however short their words; two that read differently are not. No emptiness
+            # guard in front of it: `memstore.entries` falls back to the filename stem, so
+            # a stored title is never empty, and a `mine` that is would be a todo nothing
+            # on either side of this call would write.
+            if mine == _normal(title):
+                return title
             continue
         # Jaccard — intersection over UNION, the same metric `memstore.duplicates` uses.
         # Dividing by max(len) instead looks equivalent and is not: on text this short a
         # single shared word is half the content, so "first thing" and "second thing"
         # scored 0.5 and the second was refused as a duplicate of the first.
-        if len(words & other) / len(words | other) >= _DUPLICATE_THRESHOLD:
+        if len(shared) / len(words | other) >= _DUPLICATE_THRESHOLD:
             return title
     return None
+
+
+def _normal(title: str) -> str:
+    """*title* with the differences that are not differences taken out — the case it was
+    typed in and the runs of whitespace between its words.
+
+    The identity test the no-signal fallback decides by, and deliberately not
+    `memstore.body`'s normalisation: that one strips headings and stamps out of a whole
+    memory to compare BODIES, and running it over a title would answer a different
+    question. `casefold` rather than `lower` because this is a comparison, not a display.
+    """
+    return " ".join((title or "").split()).casefold()
 
 
 def _words(text: str) -> set[str]:

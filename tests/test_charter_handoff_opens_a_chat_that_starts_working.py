@@ -134,18 +134,55 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         self.assertIn("not recorded twice", err)
         self.assertEqual([r["title"] for r in todos.open_todos("beta")], ["Fix the widget"])
 
-    def test_the_brief_itself_never_reaches_the_committed_todo(self):
+    def test_the_same_short_worded_brief_twice_still_collapses_to_one_todo(self):
+        """`memstore.wordset` keeps words longer than three characters, so `fix the bug` has
+        no comparable word at all and two of them agreed on NOTHING — the same brief handed
+        off three times recorded three identical todos with no notice. Where the overlap
+        cannot distinguish, identity decides (`todos._MIN_SHARED_WORDS`)."""
+        for _ in range(2):
+            self._handoff("beta", brief="fix the bug\nit is bad.\n")
+        rc, _out, err = self._handoff("beta", brief="fix the bug\nit is bad.\n")
+        self.assertEqual(rc, 0)
+        self.assertIn("not recorded twice", err)
+        self.assertEqual([r["title"] for r in todos.open_todos("beta")], ["fix the bug"])
+
+    def test_one_word_in_common_is_not_the_same_work(self):
+        """The other end of the same defect: one shared word out of two is 0.5 exactly, so
+        `Fix the widget` swallowed `Break the widget`. The answer is not a higher threshold —
+        an overlap this thin is not evidence either way."""
+        self._handoff("beta", brief="Fix the widget\nIt breaks on resize.\n")
+        rc, _out, err = self._handoff("beta", brief="Break the widget\nOn purpose.\n")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("not recorded twice", err)
+        self.assertEqual(sorted(r["title"] for r in todos.open_todos("beta")),
+                         ["Break the widget", "Fix the widget"])
+
+    def test_the_committed_todo_is_exactly_the_title_and_the_provenance(self):
         """A LIVE workspace commits `todos/**`, and a brief may quote anything — a
         transcript, a customer's data, the text of a secret it is warning the next chat off.
 
-        Asserted against the RAW files, before `memstore.body`'s strip-and-lowercase: read
-        through `open_todos()["text"]`, putting the WHOLE brief in the todo left 807 tests
-        green. The index file is read too, since it carries a row per todo."""
+        **Equality, on the RAW files.** Read through `open_todos()["text"]`, which is
+        `memstore.body()` — stripped and lowercased — putting the WHOLE brief in the todo
+        left 807 tests green; and a substring check for one fixture line still passed while
+        `brief[:-2]`, 34 of its 36 characters, leaked. Every byte that gets committed is
+        named here, so anything extra fails whatever shape it arrives in. Only the recorded
+        timestamp is matched rather than spelled."""
         self._handoff("beta")
-        written = "\n".join(p.read_text() for p in sorted(todos.todos_dir("beta").rglob("*"))
-                            if p.is_file())
-        self.assertIn("Fix the widget", written)
-        self.assertNotIn("It breaks on resize.", written)
+        files = [p for p in sorted(todos.todos_dir("beta").rglob("*")) if p.is_file()]
+        index = todos.index("beta")
+        [todo] = [p for p in files if p != index]
+        self.assertEqual([p.name for p in files], sorted([index.name, todo.name]))
+
+        head, blank, stamp, blank2, *rest = todo.read_text().splitlines()
+        self.assertEqual(head, "# Fix the widget")
+        self.assertEqual([blank, blank2], ["", ""])
+        self.assertRegex(stamp, r"^_\d{4}-\d{2}-\d{2} \d{2}:\d{2} · persistent_$")
+        self.assertEqual("\n".join(rest), handoff.todo_text(
+            BRIEF, source_chat="alpha.1", source_workspace="alpha"))
+
+        self.assertEqual(index.read_text(),
+                         todos._HEADER.format(name="beta")
+                         + f"- [Fix the widget]({todo.name})\n")
 
     # -- the private brief -----------------------------------------------------------------
 

@@ -65,12 +65,21 @@ BRIEF
    provenance under it. **Not the brief** — a LIVE workspace commits `todos/**`, and a brief
    never reaches a committed file. If a todo already on that workspace's list says the same
    work, charter names it, records nothing, and carries on: a second chat on the same work may
-   be exactly what you approved. "The same work" is the word-overlap rule any todo is checked
-   against (Jaccard ≥ 0.5), asked over the **first lines** — every handoff todo ends in the same
-   nine-word provenance sentence, and compared over the whole text that boilerplate reads as
-   agreement: `Fix the widget` and `Ship the release`, which share no word at all, scored 0.750
-   and the second was dropped as a duplicate of the first. Over first lines they score 0.000,
-   and two handoffs on the same brief still score 1.000.
+   be exactly what you approved.
+
+   **"The same work" is asked over the first lines, and only where the words can answer it.**
+   Every handoff todo ends in the same nine-word provenance sentence, so over the whole text
+   that boilerplate reads as agreement — `Fix the widget` and `Ship the release`, which share no
+   word at all, scored 0.750 and the second was dropped. Over first lines they score 0.000. But
+   an overlap can also be too thin to mean anything: word comparison keeps only words longer
+   than three characters, so `fix the bug` has no comparable word at all and two of them agree
+   on nothing, while one shared word out of two is 0.5 exactly and `Fix the widget` swallowed
+   `Break the widget`. So an overlap of fewer than three shared words is not read as evidence in
+   either direction — those are decided by whether the two first lines **are the same line**,
+   ignoring case and runs of spaces. `fix the bug` twice is one todo; `Fix the widget` and
+   `Break the widget` are two. The one case that survives both rules, stated rather than
+   engineered around: two first lines that differ only past the 72nd character are stored as the
+   same title and read as one todo.
 3. Opens a chat in the target workspace **in the background**. No client moves, nothing
    attaches, and the chat you are on keeps its panels — measured on tmux 3.7c and at charter's
    3.2 floor, with real clients attached: the session's current window is the same one before

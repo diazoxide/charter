@@ -101,12 +101,13 @@ class _AChatInAlpha(PersonaIso, unittest.TestCase):
             args.opening.fid = self.gives_back
         return self.rc
 
-    def _open(self, ws="beta", text="fix the widget please", persona=""):
+    def _open(self, ws="beta", text="fix the widget please", persona="", brief=""):
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=self._tmux), \
                 mock.patch("charter.commands_frame.cmd_launch",
                            side_effect=self._fake_launch):
             return commands_frame.open_in_background(ws, caller=self.CALLER,
-                                                     first_message=text, persona=persona)
+                                                     first_message=text, persona=persona,
+                                                     brief=brief)
 
     def _refusal(self, ws="beta", text="fix the widget please"):
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=self._tmux):
@@ -138,12 +139,23 @@ class TheOpenRunsTheLauncherForTheNamedWorkspace(_AChatInAlpha):
     def test_the_opening_carries_the_new_chat_id_back(self):
         self.assertEqual(self._open(), commands_frame.Opened(True, "beta.1", ""))
 
-    def test_the_opening_carries_the_message_and_the_persona_it_was_given(self):
-        self._open(text="fix the widget please", persona="forge")
+    def test_the_opening_carries_the_message_the_persona_and_the_brief_it_was_given(self):
+        """All three, and the brief is the one whose absence nothing else can see. It is not
+        written here — `_launch` writes it, at id allocation — so if it stops being handed to
+        the `Opening` the file is simply never made, the handoff still reports success, and
+        the chat Task 5 reopens is shown nothing. The two tests either side of this one stand
+        around that join rather than on it: the handoff suite's stand-in seam records the
+        brief itself, and the `_launch` case builds its own `Opening`."""
+        self._open(text="fix the widget please", persona="forge", brief="fix it\nplease\n")
         opening = self.launched[0].opening
         self.assertIsInstance(opening, commands_frame.Opening)
         self.assertEqual(opening.first_message, "fix the widget please")
         self.assertEqual(opening.persona, "forge")
+        self.assertEqual(opening.brief, "fix it\nplease\n")
+
+    def test_an_open_given_no_brief_carries_none(self):
+        self._open()
+        self.assertEqual(self.launched[0].opening.brief, "")
 
     def test_it_is_sized_for_the_window_the_calling_chat_is_on(self):
         self._open()
