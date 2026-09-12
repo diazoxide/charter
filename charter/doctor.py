@@ -1971,9 +1971,46 @@ def _reinit_target(root: Path) -> str | None:
     return None
 
 
-def _stale_layer_clause(missing: list, plane: dict) -> tuple[str, str]:
-    """``(command, sentence)`` naming `charter workspace reinit` when that is the command
-    that fixes this row — or ``("", "")``.
+def _how_to_fix(missing: list, plane: dict) -> str:
+    """The middle sentence of this row's hint: what would actually put the rule in force for a
+    chat rooted here. One of three, and the third names no command at all.
+
+    Charter writes these settings in exactly two kinds of place — the plane root, and a
+    workspace's or checkout's own root — while Claude Code reads them from the session's
+    EXACT directory (#855). So for a chat rooted anywhere else (`docs/`, `personas/<p>/`, a
+    deep directory inside a checkout) there is no command that puts the rule in force, and
+    `charter guard ask` is as inert there as `charter workspace reinit` was before round 1
+    stopped naming it: measured, all three rows unchanged after running it. The row is still
+    right to warn — the rule genuinely is not in force for that chat, which is what this row
+    exists to surface — so what changes is the advice. **A hint with no command beats a hint
+    with a command that does nothing** (#982 review round 2).
+
+    Charter is deliberately NOT made to write settings into arbitrary directories to rescue
+    the old advice: that is scope creep into directories charter does not manage.
+    """
+    from . import config as _config
+
+    root = session_root()
+    stale = _stale_layer_clause(missing, plane)
+    if stale:
+        return stale
+    try:
+        wired = root == _config.ROOT.resolve() or _reinit_target(root) is not None
+    except OSError:
+        wired = True                           # unreadable: keep the advice that can work
+    if wired:
+        return "Add it: charter guard ask 'charter handoff *'"
+    return ("It cannot be put in force for a chat rooted in this directory: charter writes "
+            "these settings at the plane root and at a workspace's or checkout's own root, and "
+            "a chat reads them from the directory it starts in. `charter guard ask` reaches "
+            "workspaces by mirroring into each one, not by writing where you are standing — so "
+            "start the chat in the plane root, a workspace, or a checkout, and it is gated "
+            "there")
+
+
+def _stale_layer_clause(missing: list, plane: dict) -> str:
+    """The sentence naming `charter workspace reinit` when that is the command that fixes this
+    row — or ``""``.
 
     A session standing in `workspaces/<ws>/` reads that directory's settings and nowhere else
     (#855), so the gate can be missing there while the plane holds it. That is not a plane
@@ -2010,15 +2047,15 @@ def _stale_layer_clause(missing: list, plane: dict) -> tuple[str, str]:
     """
     target = _reinit_target(session_root())
     if target is None:
-        return "", ""
+        return ""
     for h in missing:
         if not h.workspace_files():
             continue
         if plane.get(h.name) == "present":
-            return (f"charter workspace reinit {target}",
-                    f"The plane already holds it for {h.name}, so this directory's layer is "
-                    f"behind — nothing to add, only to refresh")
-    return "", ""
+            return (f"The plane already holds it for {h.name}, so this directory's layer is "
+                    f"behind — nothing to add, only to refresh: charter workspace "
+                    f"reinit {target}")
+    return ""
 
 
 def check_handoff_gate() -> Result:
@@ -2077,12 +2114,11 @@ def check_handoff_gate() -> Result:
                       hint=_NOT_CHECKED_HINT)
     missing = [h for h, status, _detail in rows if status == "added"]
     if missing:
-        command, why = _stale_layer_clause(missing, plane)
         # `reinit` INSTEAD of `guard ask`, never both: one sentence telling the operator to
-        # add a rule and then that they already have it is a sentence that cannot be acted
-        # on (#982 review round 1).
-        how = (f"{why}: {command}" if command
-               else "Add it: charter guard ask 'charter handoff *'")
+        # add a rule and then that they already have it is a sentence that cannot be acted on
+        # (#982 review round 1). And in a directory charter does not wire, neither — see
+        # :func:`_how_to_fix`.
+        how = _how_to_fix(missing, plane)
         return Result(name, WARN,
                       detail="no ask rule for `charter handoff` under "
                              f"{', '.join(h.name for h in missing)}",

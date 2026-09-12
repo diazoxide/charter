@@ -94,9 +94,17 @@ When the rule is missing in a chat whose plane *does* hold it, the row's hint na
 `charter workspace reinit <workspace>` instead of `charter guard ask`: nothing needs adding,
 the layer in that directory is behind. It says that only where `reinit` is the command that
 fixes it — in a workspace directory or a checkout inside one, for a harness whose layer
-`reinit` carries there. Anywhere else, and for a harness `reinit` writes nothing for, the hint
-says "add it" and names no command that cannot help. Whether the plane holds the rule is the
-row's own reading one directory over, so the two halves of this row cannot disagree.
+`reinit` carries there. Whether the plane holds the rule is the row's own reading one directory
+over, so the two halves of this row cannot disagree.
+
+**Where charter writes these settings, and where it does not.** The plane root, a workspace
+directory, and a checkout's own root — nowhere else. `charter guard ask` reaches workspaces by
+mirroring into each one, not by writing where you happen to be standing. So for a chat rooted
+in `docs/`, in `personas/<p>/`, or in a deep directory inside a checkout, **no command puts the
+rule in force**, and the row says exactly that rather than naming one: running `guard ask` from
+there leaves the row warning, measured. The warning itself is right — the rule really is not in
+force for that chat — and the answer is to start the chat in the plane root, a workspace or a
+checkout, where it is gated.
 
 ## What charter refuses that the prompt cannot cover
 

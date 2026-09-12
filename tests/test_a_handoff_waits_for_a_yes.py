@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import time
 import unittest
@@ -1362,6 +1363,15 @@ class DoctorNamesTheGate(SessionRootCase):
            "this rule is the prompt that asks you first, and on Claude Code it asks under "
            "bypassPermissions too. Add it: charter guard ask 'charter handoff *'. Removing it "
            "is your choice — this row says so, and charter does not put it back.")
+    NOWHERE = ("A handoff's brief becomes a new chat's first message and runs with your "
+               "authority; this rule is the prompt that asks you first, and on Claude Code it "
+               "asks under bypassPermissions too. It cannot be put in force for a chat rooted "
+               "in this directory: charter writes these settings at the plane root and at a "
+               "workspace's or checkout's own root, and a chat reads them from the directory "
+               "it starts in. `charter guard ask` reaches workspaces by mirroring into each "
+               "one, not by writing where you are standing — so start the chat in the plane "
+               "root, a workspace, or a checkout, and it is gated there. Removing it is your "
+               "choice — this row says so, and charter does not put it back.")
     REFRESH = ("A handoff's brief becomes a new chat's first message and runs with your "
                "authority; this rule is the prompt that asks you first, and on Claude Code it "
                "asks under bypassPermissions too. The plane already holds it for claude-code, "
@@ -1390,24 +1400,38 @@ class DoctorNamesTheGate(SessionRootCase):
         self.assertEqual(r.status, WARN, r)
         self.assertEqual(self.ADD, r.hint)
 
-    def test_only_a_directory_reinit_writes_is_sent_to_reinit(self):
-        """`reinit(name)` writes `workspaces/<name>` and the checkouts inside it, and nothing
-        else. Everywhere else it cannot clear this row, so naming it would send the operator to
-        run something that provably does not work — the plane root included, which needs no
-        guard of its own once the question is asked this way."""
+    def test_a_directory_charter_does_not_wire_is_given_no_command(self):
+        """Review round 2. Charter writes these settings at the plane root and at a workspace's
+        or checkout's own root; Claude Code reads them from the session's EXACT directory
+        (#855). So for a chat rooted anywhere else there is NO command that puts the rule in
+        force — `charter guard ask` is as inert there as `reinit` was before round 1 stopped
+        naming it, and all three of these rows were measured unchanged after running it.
+
+        The row still warns, because the rule really is not in force for that chat. What it
+        must not do is name a command that cannot work: a hint with no command beats a hint
+        with a command that does nothing."""
         self._claude_rule(config.ROOT)
         self._opencode_rule()
         deep = self.workspace / "repo" / "src" / "deep"
-        for name, where in (("the plane root", config.ROOT),
-                            ("docs/", config.ROOT / "docs"),
+        for name, where in (("docs/", config.ROOT / "docs"),
                             ("a persona directory", config.ROOT / "personas" / "x"),
                             ("a deep directory inside a checkout", deep)):
             with self.subTest(rooted_in=name):
                 where.mkdir(parents=True, exist_ok=True)
                 self.rooted_at(where.resolve())
                 r = doctor.check_handoff_gate()
-                if r.status == WARN:
-                    self.assertEqual(self.ADD, r.hint)
+                self.assertEqual(WARN, r.status, r)
+                self.assertEqual(self.NOWHERE, r.hint)
+
+    def test_the_plane_root_is_still_told_to_add_it(self):
+        """The plane root IS a directory charter writes, so `guard ask` works there and the row
+        keeps naming it — the no-command sentence is about directories charter does not wire,
+        not about everywhere that is not a workspace."""
+        self._opencode_rule()
+        self.rooted_at(config.ROOT.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.ADD, r.hint)
 
     def test_the_harness_that_is_missing_the_rule_is_the_one_named(self):
         """With only opencode lacking the rule, `reinit` copies nothing — opencode generates no
@@ -1420,6 +1444,48 @@ class DoctorNamesTheGate(SessionRootCase):
         self.assertEqual(r.status, WARN, r)
         self.assertIn("under opencode", r.detail)
         self.assertEqual(self.ADD, r.hint)
+
+    def test_a_chat_in_a_guest_checkout_is_sent_to_reinit(self):
+        """A checkout inside a workspace is a directory `reinit` writes, so the clause belongs
+        there too — and nothing pinned it. Deleting the guest-checkout match left the suite
+        green, because `charter guard ask` mirrors into guest checkouts as a side effect and
+        the row would still clear; only the HINT would be wrong, saying "Add it" where the
+        plane already holds the rule. That is the exact contradiction this PR fixed, restored
+        with every test passing (#982 review round 2), so this uses a real checkout."""
+        repo = self.workspace / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        # env=None: the suite has already redirected git's config, and building one by hand is
+        # what `tests/_planeguard.py` refuses (#641).
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.assertIn(repo.resolve(), [t.resolve() for t in workspace.guest_trees("fleet")])
+        self.rooted_at(repo.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.REFRESH, r.hint)
+
+    def test_one_unreadable_workspace_does_not_hide_the_rest(self):
+        """`_reinit_target`'s `except OSError: continue`. No plane builds a workspace whose path
+        raises, so this is a CONSTRUCTED shape — like the harness fail-safe above, read it as a
+        guard, not as coverage. It is kept rather than deleted because the alternative is an
+        `OSError` escaping into the preflight from a directory charter only wanted to compare
+        against, which would take the whole row down instead of skipping one workspace."""
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        real = workspace.workspace_dir
+
+        def one_raises(name):
+            if name == "boom":
+                raise OSError("stat: I/O error")
+            return real(name)
+
+        (config.ROOT / "workspaces" / "boom").mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(workspace, "workspace_dir", side_effect=one_raises):
+            r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.REFRESH, r.hint)
 
     def test_a_harness_reinit_writes_nothing_for_is_not_sent_to_reinit(self):
         """`reinit` can only fix a harness whose layer it carries into this directory.
