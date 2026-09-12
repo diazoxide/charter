@@ -1745,7 +1745,7 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         every claim here — the window went with it.
         """
         out = self._tmux("display-message", "-p", "-t", pane,
-                         "#{pane_dead}:#{pane_dead_status}")
+                         "#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}")
         return out.stdout.strip() if out.returncode == 0 else f"(gone: {out.stderr.strip()})"
 
     def _dead(self, pane: str) -> bool:
@@ -1754,7 +1754,9 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         Measured on the CI runner, 2026-09-12: a pane that exits out of raw mode on Linux
         comes back dead with an EMPTY status where the same pane on macOS carries the
         number (`commands_frame._UNKNOWN_DEATH_CODE`, and ruling 42). So the question is
-        whether the process ended, never what it ended with.
+        whether the process ended, never what it ended with — and `#{pane_dead_signal}` is
+        read into the message beside it, because an empty status is tmux's own spelling for
+        *killed by a signal* and the signal is the thing a reader would want next.
         """
         return self._status(pane).startswith(("1:", "(gone"))
 
@@ -1787,9 +1789,16 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         # `out == [0]` because a launch that will never attach returns as soon as the
         # window exists (`_wants_attach`) — long before anybody presses anything.
         self.assertEqual(out, [0])
+        # **A minute, and the number is measured rather than chosen.** What is left here is
+        # tmux's own work: charter's `pane-died[1] kill-window` is installed before the pane
+        # can die (the message below reads it back), and the window going is that hook
+        # firing. On CI the same commit was green on one Python and red at 30 s on another,
+        # with the hooks present, `remain-on-exit on` and the pane dead — a runner busy with
+        # six sweep shards, not a rule about the platform. Doubling the margin is the honest
+        # fix for a claim about somebody else's queue.
         self.assertTrue(
             _eventually(lambda: self.WS not in self._tmux("list-sessions").stdout,
-                        timeout=30.0),
+                        timeout=60.0),
             f"the cancelled chat's session outlived its only window: "
             f"windows {self._tmux('list-windows', '-a', '-F', '#{session_name}:#{window_id}').stdout!r}, "
             f"pane {self._status(pane)!r}, "
