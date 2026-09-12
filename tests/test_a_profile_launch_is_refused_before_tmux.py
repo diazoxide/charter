@@ -6,11 +6,12 @@ immediately before the exec, because the plane can move in between (spec, *What 
 launch*). This module is the first half: what `_launch` refuses, what it hands tmux when it
 does not, and what never crosses tmux at all.
 
-**Every declared profile is refused here** (review B1). Nothing yet stands for the
-operator's approval of a `command`, and `charter.local.toml` is a file a chat can write
-with no diff to show for it — so between this merge and Task 3's, `main` runs no command
-that file declares, through `charter <profile>`, `+`, a tab, reopen or a handoff. The three
-cases that say so run without the stand-in the rest of the module uses.
+**No declared profile runs here until somebody has seen its command** (review B1, and
+Task 3's ask in place of Task 2's flat refusal). `charter.local.toml` is a file a chat can
+write with no diff to show for it, so a profile with no launch record shows what it would
+run and asks first — through `charter <profile>`, `+`, a tab, reopen and a handoff alike.
+The three cases that say so run without the record the rest of the module seeds, and every
+other case here seeds one because it is about something else entirely.
 """
 
 from __future__ import annotations
@@ -24,10 +25,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config, contain
+from charter import commands_frame, config, contain, profiletrust
 from charter.frame import launcher, layout, reopen as reopen_state, state, tmuxctl
 from tests import _gitguard, _tmuxsocket
-from tests._isolation import PersonaIso, declare_profiles, make_plane
+from tests._isolation import (APipe as _APipe, ATerminal as _ATerminal, PersonaIso,
+                              Typed as _Typed, approve_every_profile, declare_profiles,
+                              make_plane)
 
 #: The operator's own tmux, as `tmuxctl.operator_server` reads it out of `$TMUX`: a socket
 #: PATH, which is what `is_operator_socket` tells from charter's own `-L charter` name.
@@ -56,11 +59,23 @@ class _ALaunchNamesAProfile(PersonaIso):
         self.enterContext(mock.patch.object(launcher.os, "execvpe",
                                             side_effect=lambda *a: self.execs.append(a)))
 
+    def _profile(self, name: str = "claude-work"):
+        from charter import profiles
+
+        return profiles.current().profiles[name]
+
     def _no_approval_needed(self) -> None:
-        """Task 2 refuses every declared profile (review B1). A case that is about something
-        else stands that one refusal down; the three that are about it do not."""
-        self.enterContext(mock.patch.object(launcher, "_approval_refusal",
-                                            return_value=None))
+        """Seed a launch record for every profile this plane declares.
+
+        A declared profile charter has never run shows its command and asks (Task 3), so a
+        case about something else — which argv crosses tmux, what a `PATH` refusal says —
+        would otherwise be measuring that one question. This is what an operator who
+        already said yes once leaves behind, which is the state those cases mean.
+
+        Called again by a case that REWRITES `charter.local.toml`, because it records what
+        is declared at the moment it runs.
+        """
+        approve_every_profile(self)
 
     def _tmux_answer(self, action, argv, **kw):
         self.argvs.append(list(argv))
@@ -70,7 +85,8 @@ class _ALaunchNamesAProfile(PersonaIso):
         return subprocess.CompletedProcess(argv, 0, out, "")
 
     def _launch(self, *, which: str | None = "/nowhere/claude", dead_status=None,
-                verdict: tuple = (None, ""), operator=None, **ns) -> int:
+                verdict: tuple = (None, ""), operator=None, stdin=None, stdout=None,
+                **ns) -> int:
         """The real `_launch` with tmux stood in — and every answer a case might care about
         as a PARAMETER rather than a patch applied inside here.
 
@@ -78,14 +94,24 @@ class _ALaunchNamesAProfile(PersonaIso):
         are entered inside this helper, so they override anything a case set up outside it,
         and the case about a missing binary was answered "installed" along with everything
         else. A knob a case can state is the only way that stays honest.
+
+        *stdin* and *stdout* are the same knob for the ask (Task 3): a stream given here
+        REPLACES the interpreter's, which is how a case declares its terminal-ness to
+        `tests/_ttyguard` and the only way to count what was read. Given neither, this is
+        the open a press makes — a terminal for output, nothing to read from — which is
+        what every case written before the ask existed assumed.
         """
         args = SimpleNamespace(**{"harness": "claude", "rest": [], "no_frame": False,
                                   "workspace": "beta", "pick": False, "size": (120, 40),
                                   **ns})
+        streams = [mock.patch("sys.stdin", stdin) if stdin is not None
+                   else mock.patch("sys.stdin.isatty", return_value=False),
+                   mock.patch("sys.stdout", stdout) if stdout is not None
+                   else mock.patch("sys.stdout.isatty", return_value=True)]
+        for s in streams:
+            self.enterContext(s)
         with mock.patch("charter.commands_frame.shutil.which", return_value=which), \
                 mock.patch.object(launcher.shutil, "which", return_value=which), \
-                mock.patch("sys.stdout.isatty", return_value=True), \
-                mock.patch("sys.stdin.isatty", return_value=False), \
                 mock.patch.object(tmuxctl, "version", return_value=(3, 7)), \
                 mock.patch.object(tmuxctl, "operator_server", return_value=operator), \
                 mock.patch.object(commands_frame, "_live_sessions", return_value={"beta"}), \
@@ -124,28 +150,35 @@ class _ALaunchNamesAProfile(PersonaIso):
         return any("new-window" in a or "new-session" in a for a in self.argvs)
 
 
-class EveryDeclaredProfileIsRefusedUntilApprovalExists(_ALaunchNamesAProfile,
-                                                       unittest.TestCase):
-    """Review B1, and the three cases that run WITHOUT the stand-in. Delete the refusal and
-    these go red: `main` would run whatever a chat wrote into `charter.local.toml`."""
+class ADeclaredProfileAsksBeforeItRuns(_ALaunchNamesAProfile, unittest.TestCase):
+    """Review B1, now that Task 3 has put the ask where Task 2's flat refusal stood: the
+    three cases that run WITHOUT a launch record. Nothing a chat wrote into
+    `charter.local.toml` starts until somebody at the keyboard has seen the command.
+    """
 
-    def test_every_declared_profile_is_refused_until_approval_exists(self):
-        rc, said = self._said(profile="claude-work")
-        self.assertEqual(rc, launcher.REFUSED_EXIT)
-        self.assertIn("cannot yet ask before a declared command runs", said)
+    def test_a_declared_profile_with_no_record_asks_before_it_runs(self):
+        typed = _Typed("n\n")
+        rc = self._launch(profile="claude-work", stdin=typed,
+                          stdout=(screen := _ATerminal()))
+        self.assertEqual(rc, profiletrust.DECLINED_EXIT)
+        self.assertIn("run this? [y/N]", screen.getvalue())
+        self.assertIn("command  claude", screen.getvalue())
+        self.assertEqual(typed.reads, 1)
         self.assertFalse(self._started(), self.argvs)
         self.assertEqual(self.execs, [])
 
-    def test_a_declared_replacement_of_a_built_in_is_refused_until_approval_exists(self):
+    def test_a_declared_replacement_of_a_built_in_asks_before_it_runs(self):
+        """`[harness.claude]` is the file speaking, whatever the name on the table is —
+        and the command on it is the file's, which is the whole question."""
         self.local.write_text('[harness.claude]\nkind = "claude"\n'
                               'command = ["/opt/claude"]\n')
-        rc, said = self._said()
-        self.assertEqual(rc, launcher.REFUSED_EXIT)
-        self.assertIn("cannot yet ask before a declared command runs", said)
+        rc = self._launch(stdin=_Typed("n\n"), stdout=(screen := _ATerminal()))
+        self.assertEqual(rc, profiletrust.DECLINED_EXIT)
+        self.assertIn("command  /opt/claude", screen.getvalue())
         self.assertFalse(self._started(), self.argvs)
 
     def test_a_built_in_the_file_does_not_replace_still_launches(self):
-        self.assertEqual(self._launch(harness="codex"), 0)
+        self.assertEqual(self._launch(harness="codex", stdin=_Typed()), 0)
         self.assertTrue(self._started(), self.argvs)
 
 
@@ -326,14 +359,26 @@ class ALaunchWithNoFrameExecsTheProfile(_ALaunchNamesAProfile, unittest.TestCase
         self.assertEqual(env["CHARTER_WORKSPACE"], "alpha")
         self.assertEqual(env["CHARTER_ROOT"], str(config.ROOT))
 
-    def test_a_no_frame_launch_of_a_declared_profile_is_refused_like_any_other(self):
+    def test_a_no_frame_launch_of_a_declared_profile_is_asked_about_like_any_other(self):
         """The `--no-frame` harness gets the same checks — no flag launches a profile
-        unguarded."""
-        with mock.patch.object(launcher, "_approval_refusal",
-                               return_value=launcher.Refusal(launcher.KIND_NOT_YET, "no",
-                                                             launcher.REFUSED_EXIT)):
-            rc = self._launch(profile="claude-work", no_frame=True)
+        unguarded — and here the question is put on this process's own terminal, because
+        this process is the one that becomes the harness."""
+        # The record seeded in `setUp` is what a case about something else wants; this one
+        # is about the ask, so it starts from a plane that has never run this profile.
+        (config.STATE_DIR / profiletrust.RECORD).unlink()
+        rc = self._launch(profile="claude-work", no_frame=True, stdin=_Typed("n\n"),
+                          stdout=_ATerminal())
+        self.assertEqual(rc, profiletrust.DECLINED_EXIT)
+        self.assertEqual(self.execs, [])
+
+    def test_a_no_frame_launch_with_nowhere_to_ask_refuses_and_reads_nothing(self):
+        """Review 3: `charter claude-work --no-frame > log` has somebody at the keyboard
+        and no terminal to put the question on. It says so — rather than reading a pipe,
+        which returns at once and looks exactly like a question that was answered."""
+        (config.STATE_DIR / profiletrust.RECORD).unlink()
+        rc, said = self._said(profile="claude-work", no_frame=True, stdin=_APipe())
         self.assertEqual(rc, launcher.REFUSED_EXIT)
+        self.assertIn("no terminal here to ask in", said)
         self.assertEqual(self.execs, [])
 
 

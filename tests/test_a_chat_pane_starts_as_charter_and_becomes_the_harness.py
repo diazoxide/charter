@@ -38,8 +38,9 @@ from charter import commands_frame, config
 from charter.frame import launcher, state, tmuxctl
 
 from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
-from tests._isolation import (PersonaIso, declare_profiles, make_plane,
-                              no_background_refresh, no_update_check_in)
+from tests._isolation import (PersonaIso, approve_profile, assert_approved,
+                              declare_profiles, make_plane, no_background_refresh,
+                              no_update_check_in)
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -56,14 +57,23 @@ _SERVERS = itertools.count()
 #: happened.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
-#: One declared profile whose command really resolves here: the recorder on this fixture's
-#: own `PATH` is `claude`, so what the pane refuses is the DECLARATION (review B1) rather
-#: than a command that was never going to run.
+#: One declared profile whose command really resolves here — the recorder on this fixture's
+#: own `PATH` is `claude` — so a pane that starts it really becomes it.
 _LOCAL = """
 [harness.claude-work]
 kind = "claude"
 command = ["claude"]
 env = { CLAUDE_CONFIG_DIR = "~/.cw" }
+"""
+
+#: And one whose command exists nowhere, for the pane that has to REFUSE. Since Task 3 an
+#: unapproved profile in an attended pane asks rather than refuses, so a refusal that
+#: reaches a real pane has to come from another link in the chain: this is `NOT_ON_PATH`,
+#: which is the one an operator actually meets (a harness uninstalled, a path typo).
+_NOWHERE = """
+[harness.claude-work]
+kind = "claude"
+command = ["charter-has-no-such-harness-here"]
 """
 
 
@@ -150,7 +160,20 @@ class _ARealChatOnARealServer(PersonaIso):
         return subprocess.run([self.tmux, "-L", self.socket, *args], capture_output=True,
                               text=True, timeout=20)
 
-    def _launch(self, **ns) -> int:
+    def _launch(self, *, unapproved: bool = False, **ns) -> int:
+        """The real `_launch`, against the real server this case started.
+
+        **A declared profile is checked for its launch record first** (Global Constraint,
+        N6): `_launch` passes `--attended` for an open somebody is in front of, and a real
+        pane has a terminal on both ends — so a profile with no record stops that pane at
+        `run this? [y/N]` and waits until the suite's own 600 s watchdog. That is a hang
+        rather than a failure, and a hang costs the whole run its verdict, so it is caught
+        here, before tmux, where it names the fixture's mistake. *unapproved* is how the
+        one case that is ABOUT that question says so.
+        """
+        name = ns.get("profile")
+        if name and not unapproved:
+            assert_approved(name)
         args = SimpleNamespace(**{"harness": "claude", "rest": [], "no_frame": False,
                                   "workspace": self.WS, "pick": False, "attach": False,
                                   "size": (120, 40), **ns})
@@ -237,6 +260,26 @@ class ThePaneCharterStartsIsThePaneTheHarnessRunsIn(_ARealChatOnARealServer,
             self.assertNotIn("CHARTER_HARNESS_PROFILE", said,
                              "the profile crossed tmux, where only its name may go")
 
+    def test_a_declared_profiles_env_reaches_the_harness_and_not_tmux(self):
+        """L6 for a profile the FILE declares, which is the case the constraint exists for:
+        `env` is set at the `exec` in the pane, so nothing of it joins `layout.CARRIABLE`
+        or crosses tmux's own argument parser — and tmux's environment holds no trace of
+        either the variable or its value."""
+        (self.tmp / "alt").mkdir()
+        declare_profiles(self, f'[harness.claude-work]\nkind = "claude"\n'
+                               f'command = ["claude"]\n'
+                               f'env = {{ CLAUDE_CONFIG_DIR = "{self.tmp / "alt"}" }}\n')
+        approve_profile(self)
+        self.assertEqual(self._launch(profile="claude-work"), 0)
+        harness = self._harness()
+        self.assertEqual(harness["env"].get("CLAUDE_CONFIG_DIR"), str(self.tmp / "alt"))
+        self.assertEqual(harness["env"].get("CHARTER_HARNESS_PROFILE"), "claude-work")
+        for scope in (("show-environment", "-g"),
+                      ("show-environment", "-t", state.workspace_prefix(self.WS))):
+            said = self._tmux(*scope).stdout
+            self.assertNotIn("CLAUDE_CONFIG_DIR", said)
+            self.assertNotIn(str(self.tmp / "alt"), said)
+
     def test_the_chat_is_framed_because_the_pane_proved_it(self):
         """Rulings 29 and 33 end to end: the launcher asked tmux whether its own pid was
         the `#{pane_pid}` of a live pane whose window is named for this chat, and kept the
@@ -270,9 +313,9 @@ class TheHarnessExitCodeTravelsAsItDid(_ARealChatOnARealServer, unittest.TestCas
 class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.TestCase):
     """Ruling 42, both halves, against a real pane.
 
-    The plane declares a profile, so the pane's own launcher refuses it (review B1) — while
-    the check this process makes before tmux is stood down, which is exactly the state the
-    two checks exist for: the plane can move between them.
+    The plane declares a profile whose command exists nowhere, so the pane's own launcher
+    refuses it — while the check this process makes before tmux is stood down, which is
+    exactly the state the two checks exist for: the plane can move between them.
     """
 
     SLUG = "pane-refusal"
@@ -283,7 +326,10 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
         # ceiling that stops git's walk above this throwaway plane. It carries
         # `tests._gitguard.environment()` into the git it runs, which is what every other
         # module here does and what `tests._planeguard.AmbientGitConfig` holds them to.
-        self.local = declare_profiles(self, _LOCAL)
+        self.local = declare_profiles(self, _NOWHERE)
+        # Approved, so what the pane refuses is the missing command rather than the
+        # question `ThePaneAsksBeforeItRunsANewCommand` below is about.
+        approve_profile(self)
         # Only the pre-tmux call, in THIS process. The pane's launcher is another process
         # and runs the whole chain for itself, which is the half under test.
         self.enterContext(mock.patch.object(launcher, "refusal", return_value=None))
@@ -293,7 +339,7 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
         fid = "beta.1"
         pane = state.harness_pane(fid)
         self.assertTrue(_eventually(
-            lambda: "cannot yet ask before a declared command runs" in self._pane_text(pane)),
+            lambda: "which is not on PATH" in self._pane_text(pane)),
             f"the pane never showed the refusal: {self._pane_text(pane)!r}")
         # **The property ruling 42 is about**: it is still there to be read. A launcher that
         # printed and exited would have had its window killed by the teardown hook 6-14 ms
@@ -334,10 +380,60 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
         with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
             rc = self._launch(profile="claude-work",
                               opening=commands_frame.Opening("fix the widget please"))
-        self.assertEqual(rc, launcher.REFUSED_EXIT)
-        self.assertTrue(
-            any("cannot yet ask before a declared command runs" in s for s in said),
-            f"the launch did not report what the pane refused: {said}")
+        # 127, the shell's own number for a command that is not there, and the launcher's
+        # for it — carried out of the pane by the record rather than reconstructed.
+        self.assertEqual(rc, launcher.MISSING_EXIT)
+        self.assertTrue(any("which is not on PATH" in s for s in said),
+                        f"the launch did not report what the pane refused: {said}")
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ThePaneAsksBeforeItRunsANewCommand(_ARealChatOnARealServer, unittest.TestCase):
+    """Task 3's question, in the place the plan says it is asked: the chat's own pane.
+
+    A `+`, a workspace tab and the palette's new chat are all a single press by a process
+    with `/dev/null` for streams, so charter cannot put the question where the press
+    happened — but the pane it opens has a terminal on both of its ends. This is that pane,
+    on a real server, with a real `y` sent to it.
+    """
+
+    SLUG = "pane-asks"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.local = declare_profiles(self, _LOCAL)
+        # No `approve_profile`: this is the one case that is ABOUT the missing record, and
+        # `_launch(unapproved=True)` is how it says so to the guard that would fail fast.
+        self.enterContext(mock.patch.object(launcher, "refusal", return_value=None))
+
+    def test_the_pane_shows_the_command_and_waits_for_an_answer(self):
+        self.assertEqual(self._launch(profile="claude-work", unapproved=True), 0)
+        pane = state.harness_pane("beta.1")
+        self.assertTrue(_eventually(lambda: "run this? [y/N]" in self._pane_text(pane)),
+                        f"the pane never asked: {self._pane_text(pane)!r}")
+        drawn = self._pane_text(pane)
+        self.assertIn("command  claude", drawn)
+        self.assertIn("CLAUDE_CONFIG_DIR=~/.cw", drawn)
+        self.assertFalse((self.records / "harness.json").is_file(),
+                         "the command ran before anybody answered the question")
+
+    def test_a_yes_starts_the_harness_and_is_not_asked_again(self):
+        """And the record it leaves is what makes it *once*: the second launch of the same
+        profile runs the command with nothing to answer, which is the whole promise of the
+        feature's own title."""
+        self.assertEqual(self._launch(profile="claude-work", unapproved=True), 0)
+        pane = state.harness_pane("beta.1")
+        self.assertTrue(_eventually(lambda: "run this? [y/N]" in self._pane_text(pane)),
+                        f"the pane never asked: {self._pane_text(pane)!r}")
+        sent = self._tmux("send-keys", "-t", pane, "y", "Enter")
+        self.assertEqual(sent.returncode, 0, sent.stderr)
+        harness = self._harness()
+        self.assertEqual(harness["env"].get("CHARTER_HARNESS_PROFILE"), "claude-work")
+        self.assertEqual(harness["env"].get("CLAUDE_CONFIG_DIR"),
+                         str(self.home / ".cw"))
+        # Written by the PANE's own process, into this plane's state directory — which is
+        # what `assert_approved` reads and what every later open of this profile finds.
+        assert_approved("claude-work")
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
@@ -360,7 +456,8 @@ class ARefusalInsideTheOperatorsOwnTmux(_ARealChatOnARealServer, unittest.TestCa
 
     def setUp(self) -> None:
         super().setUp()
-        self.local = declare_profiles(self, _LOCAL)
+        self.local = declare_profiles(self, _NOWHERE)
+        approve_profile(self)
         self.enterContext(mock.patch.object(launcher, "refusal", return_value=None))
         # An operator's own server: started by NAME so `tests._tmuxreap` can collect it,
         # and reached by PATH, which is what `tmuxctl.is_operator_socket` reads as "a tmux
@@ -390,13 +487,12 @@ class ARefusalInsideTheOperatorsOwnTmux(_ARealChatOnARealServer, unittest.TestCa
         with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
             rc = self._launch(profile="claude-work",
                               opening=commands_frame.Opening("fix the widget please"))
-        self.assertTrue(
-            any("cannot yet ask before a declared command runs" in s for s in said),
-            f"the launch did not say what the pane refused: {said}")
+        self.assertTrue(any("which is not on PATH" in s for s in said),
+                        f"the launch did not say what the pane refused: {said}")
         # The launcher's own number, not tmux's reading of a pane that is no longer there:
         # in somebody else's tmux `#{pane_dead_status}` is empty or absent for exactly this
         # pane, and both read as `_UNKNOWN_DEATH_CODE`.
-        self.assertEqual(rc, launcher.REFUSED_EXIT, said)
+        self.assertEqual(rc, launcher.MISSING_EXIT, said)
 
     def test_the_window_it_opened_is_taken_back(self):
         """A window the operator never asked for, holding a chat that never started, is not

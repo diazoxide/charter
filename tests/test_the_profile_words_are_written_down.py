@@ -124,11 +124,18 @@ class TestTheNewsEntryKeepsItsShape(unittest.TestCase):
     """
 
     #: `test_news_gate.test_no_test_opens_an_entry_by_its_staged_name` refuses a test that
-    #: hard-codes `unreleased-<slug>.md`, so the entry is found by its headline instead.
+    #: hard-codes `unreleased-<slug>.md`, so the entry is found by what it is ABOUT instead.
+    #:
+    #: **By the term and not by the headline**, which is the correction Task 3 made: this
+    #: looked for "harness profiles from charter.local.toml", a phrase out of the headline
+    #: Task 1 wrote — and the plan has Task 3 replace that headline, so the locator went
+    #: looking for words its own feature had moved on from and the class failed as "no news
+    #: entry announces harness profiles". The term this entry exists to introduce outlives
+    #: every task's rewrite of the sentence around it.
     def _entry_text(self) -> str:
         for path in sorted((ROOT / "docs" / "news").glob("*.md")):
             text = path.read_text()
-            if "harness profiles from charter.local.toml" in text:
+            if "harness profile" in text:
                 return text
         self.fail("no news entry announces harness profiles")
 

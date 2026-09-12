@@ -468,13 +468,11 @@ environment, declared in a file that stays on your machine. The decisions behind
 of this, and the reason each one rests on, are
 [ADR 0022](adr/0022-a-harness-profile-belongs-to-one-machine.md).
 
-**Every chat now starts through charter's own launcher, and launching a DECLARED profile
-arrives in a later release.** Charter reads the profiles, refuses the broken ones by name,
-and keeps the file out of git; `charter claude`, bare `charter`, the `+`, a workspace tab
-and a reopen all run the built-in profile of their harness and record it. A profile this
-file declares is refused, by name, with a sentence saying charter cannot yet ask before a
-declared command runs — the release that adds the asking is the one that lets it launch,
-because until then nothing stands for your approval of a command that runs on a click.
+**Every chat now starts through charter's own launcher.** Charter reads the profiles,
+refuses the broken ones by name, and keeps the file out of git; `charter claude-work`, bare
+`charter`, the `+`, a workspace tab and a reopen all run the profile they name and record
+it. A profile this file declares runs once you have seen its command and said so — see
+*A new or changed command asks once*, below.
 
 ### Profiles live in `charter.local.toml`, never in `charter.toml`
 
@@ -536,6 +534,71 @@ A broken profile is refused alone, by name, and every other profile still loads.
 | an `env` name containing `KEY`, `TOKEN`, `SECRET` or `PASSWORD` | a variable set on the harness reaches the model's shell, as the next section measures | log in inside the harness |
 | a key other than `kind`, `command` and `env` | a typo such as `enviroment` would drop `CLAUDE_CONFIG_DIR` and launch the default account without a word | remove or respell it |
 | a file that is not valid TOML | nothing in it can be read | fix the file; the built-ins still load |
+
+### A new or changed command asks once
+
+A profile's command runs on a click, and charter starts it with no shell and no harness
+permission prompt in between. So the first time charter is asked to run one it shows you
+what that is, and asks:
+
+```
+charter: profile 'claude-work' is new — it has not run on this machine before.
+  command  claude
+  env      CLAUDE_CONFIG_DIR=~/.claude-work
+run this? [y/N]
+```
+
+Anything but `y` or `yes` starts nothing and exits 130. A yes is written down — the profile's
+`kind`, `command` and `env`, exactly as the file spells them — and that profile then starts
+without a word until one of those three changes. A change asks again, with a `was` line
+showing what it ran last time:
+
+```
+charter: profile 'claude-work' has changed since it last ran.
+  command  /opt/claude-2.1/bin/claude
+  env      CLAUDE_CONFIG_DIR=~/.claude-work
+  was      CLAUDE_CONFIG_DIR=~/.claude-work claude
+run this? [y/N]
+```
+
+**Built-ins never ask.** `claude`, `codex` and `opencode` come out of charter's own
+registry rather than out of a file, so there is nothing about them a question could catch —
+and a question that never carries risk is one you learn to answer yes to without reading. A
+profile the file declares under a built-in's name (`[harness.claude]`) is a declaration, and
+asks with the rest.
+
+**Why ask at all**, when nothing else charter does stops to. Once `charter.local.toml` is
+ignored, an edit to it leaves no diff — no review, no `git status`, nothing on a branch for
+anybody to notice. Nothing stops a chat editing your plane's config, and a chat is an agent
+with a shell. And the command goes to tmux, so by the time a harness could ask about it,
+that harness *is* the command. Codex trusts its hooks by hash for the same reason.
+
+**Where it asks, and where it refuses instead.**
+
+| Opening a chat | What happens |
+|---|---|
+| `charter claude-work` at a terminal | asks before tmux: a no starts nothing, with no session and no window allocated |
+| `charter claude-work --no-frame` | asks on that same terminal, then becomes the harness |
+| `charter claude-work --no-frame > log` | refuses — there is nowhere to put the question, and it names the command to run where you can answer |
+| the `+`, a workspace tab, the palette's new chat | asks **in the chat's own pane**: the press itself has no terminal, and the pane has one on both ends. A no exits 130 and the window closes |
+| `charter reopen`, restoring a recorded plane | refuses that chat by name and leaves it in the record — a reopen has nobody to ask. Run it once yourself, then `charter reopen` again |
+| a chat handed off by another chat | refuses before anything is written: no chat directory, no window, no first message |
+
+**Saying yes answers this question and nothing else.** After a yes, every check runs again
+from the top before the harness starts — the file is still ignored, the command is still on
+`PATH`, the record now matches — and the pane runs all of them once more immediately before
+it becomes the harness. A yes is never a way past the check behind it.
+
+**The limit, said plainly.** The record lives in `.charter/harness-profiles-launched.json`,
+which is as writable by a chat as `charter.local.toml` is: both sit under paths no guard
+covers, and charter does not police paths (that is host policy). So this catches a command
+you did not change yourself **unless whatever changed it also forged the record**. It closes
+the accident and the careless edit, and it is the difference between a command that ran
+unseen and one that was read out loud first. It is not a boundary.
+
+If charter cannot write that record, the launch is refused rather than started: running it
+anyway would mean asking you the identical question at the next open, which is not something
+you can fix by answering.
 
 ### No credentials in a profile
 
@@ -603,10 +666,9 @@ of charter's own registry rather than a list in this page — or the name of a p
 `charter.local.toml` declares. A `default` in the local file wins over the committed one,
 which is how a machine chooses its own without touching what everybody else pulls.
 
-**A declared profile is a legal value here and does not launch yet**: bare `charter` on a
-plane whose default names one is refused with the launcher's own sentence — charter cannot
-yet ask before a declared command runs — rather than started. A built-in default starts
-exactly as it did.
+**A declared profile is a legal value here**: bare `charter` on a plane whose default names
+one is `charter <that profile>`, question and all — the first open shows its command and
+asks (*A new or changed command asks once*). A built-in default starts exactly as it did.
 
 **Charter does not pick one for you.** No default and you get the usage message, not
 "whatever is installed" (a machine with two of them has no answer, and the answer would

@@ -29,7 +29,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, contain, hooks
+from charter import commands_frame, contain, hooks, profiles
 from charter.frame import leave
 from charter.frame import reopen as reopen_state
 from charter.frame import state
@@ -148,7 +148,16 @@ class AReopenOwesTheBriefOnlyWhenTheConversationIsGone(PersonaIso):
         empty, and the chat then gets its brief on top of its own transcript.
         """
         from charter.frame import launcher
-        profile = SimpleNamespace(kind="claude", name="claude")
+
+        # **`source` as well as `kind` and `name`**, because `launcher.resolve` answers with
+        # a `profiles.Profile` and a stand-in for it owes every field a reader of one may
+        # read. `_reopen_one` reads this one: a reopen has nobody to ask, so it checks
+        # `profiletrust.approval_needed` before it starts anything, and that answers `""`
+        # for a built-in — which is what this stand-in is — by looking at exactly this
+        # field. Without it the reopen raised `AttributeError` instead of reaching the one
+        # question this case is about.
+        profile = SimpleNamespace(kind="claude", name="claude",
+                                  source=profiles.BUILTIN)
         with mock.patch("charter.commands_frame._resumes", return_value=False), \
                 mock.patch.object(launcher, "resolve", return_value=(profile, "")):
             with mock.patch("charter.commands_frame.cmd_launch",

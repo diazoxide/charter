@@ -25,9 +25,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config
-from charter.frame import chats, choose, launcher, leave, reopen as reopen_state, state
+from charter.frame import chats, choose, leave, reopen as reopen_state, state
 from tests import _gitguard
-from tests._isolation import PersonaIso, declare_profiles, make_plane
+from tests._isolation import (APipe as _APipe, PersonaIso,
+                              approve_every_profile, approve_profile,
+                              declare_profiles, make_plane)
 
 
 #: The real `subprocess.run`, captured before any fixture below patches the module
@@ -76,16 +78,23 @@ class _APressInAlpha(PersonaIso):
         for ws in ("alpha", "beta"):
             (config.WORKSPACES_DIR / ws).mkdir(parents=True, exist_ok=True)
         _a_chat(self.FID, ws="alpha", profile="claude-work")
+        # **A press has no terminal**, stated rather than inherited (`tests/_ttyguard`).
+        # `builtin_actions._spawn` runs `cmd_new_chat` detached with all three streams on
+        # `/dev/null`, which is what decides that the one question a profile can raise is
+        # deferred to the pane (`_the_pane_will_ask`) rather than asked here.
+        self.enterContext(mock.patch("sys.stdin", _APipe()))
         self.said = self.enterContext(
             mock.patch("charter.commands_frame._say_on_screen"))
         self.launched: list = []
 
     def _no_approval_needed(self) -> None:
-        """Task 2 refuses every declared profile (review B1), and these cases are about
-        which profile is CARRIED. The two that are about the refusal reaching the presser do
-        not stand it down."""
-        self.enterContext(mock.patch.object(launcher, "_approval_refusal",
-                                            return_value=None))
+        """Seed a launch record for every profile this plane declares.
+
+        These cases are about which profile is CARRIED by a press, a tab or a handoff, and
+        a profile charter has never run asks its own question first (Task 3). The cases
+        that are about that question do not seed one.
+        """
+        approve_every_profile(self)
 
     def _tmux(self, cmd, **kw):
         """Answer the two tmux questions a press asks, and let everything else through.
@@ -205,14 +214,24 @@ class ANewChatTakesThePressersProfile(_APressInAlpha, unittest.TestCase):
 class APressThatCannotLaunchSaysWhyOnTheFrame(_APressInAlpha, unittest.TestCase):
     """`cmd_new_chat` runs detached with its three streams on `/dev/null`, so a refusal
     `_launch` printed is read by nobody: without this the `+` would report only "the
-    launcher returned 3" for a profile the operator could have fixed. Review B1 makes this
-    reachable today — every declared profile is refused until Task 3."""
+    launcher returned 3" for a profile the operator could have fixed in a line."""
 
     def test_the_press_says_the_launchers_own_refusal(self):
-        self._press()
+        self._no_approval_needed()
+        with mock.patch("charter.commands_frame.shutil.which", return_value=None):
+            self._press()
         self.assertEqual(self.launched, [])
-        self.assertTrue(any("cannot yet ask before a declared command runs" in s
-                            for s in self._sentences()), self._sentences())
+        self.assertTrue(any("not on PATH" in s for s in self._sentences()),
+                        self._sentences())
+
+    def test_a_press_defers_the_one_question_the_pane_can_ask_itself(self):
+        """N2a's nit, on the surface it matters on. A profile nobody has approved is not a
+        refusal a `+` reports — the pane it opens has a terminal on both ends and asks
+        there. Reported here instead, the press would say "charter asks before it runs a
+        command it has not been shown before" and open no chat at all."""
+        self._press()
+        self.assertEqual(len(self.launched), 1, self._sentences())
+        self.assertEqual(self.launched[0].profile, "claude-work")
 
 
 class AWorkspaceTabOpensTheSameProfile(_APressInAlpha, unittest.TestCase):
@@ -266,10 +285,13 @@ class AHandoffTakesTheCallingChatsProfile(_APressInAlpha, unittest.TestCase):
         self.assertEqual(self.launched[0].profile, "claude-work")
         self.assertEqual(self.launched[0].harness, "claude")
 
-    def test_a_handoff_to_a_declared_profile_refuses_before_anything_is_written(self):
-        """Review B1: the refusal is the whole answer a handoff gets, before a chat
-        directory, a window or a first message exists anywhere."""
-        self.assertIn("cannot yet ask before a declared command runs", self._refusal())
+    def test_a_handoff_to_an_unapproved_profile_refuses_before_anything_is_written(self):
+        """Nobody is at a chat a handoff opens, so the question cannot be put and the
+        refusal is the whole answer — before a chat directory, a window or a first message
+        exists anywhere. It names the one command that would approve it."""
+        said = self._refusal()
+        self.assertIn("nobody is at this open to approve it", said)
+        self.assertIn("charter claude-work", said)
 
     def test_a_profile_whose_kind_this_charter_cannot_place_is_refused_not_raised(self):
         """The guard `_same_harness_as` carried before profiles, restored.
@@ -351,8 +373,9 @@ class AReopenNeverSubstitutes(PersonaIso, unittest.TestCase):
         self.local = declare_profiles(self)
         (config.WORKSPACES_DIR / "alpha").mkdir(parents=True, exist_ok=True)
         self.launched: list = []
-        self.enterContext(mock.patch.object(launcher, "_approval_refusal",
-                                            return_value=None))
+        # What an operator who has already run this profile once leaves behind: these cases
+        # are about which profile comes back, not about the question a new one asks.
+        approve_profile(self)
 
     def _chat(self, **kw):
         fields = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",

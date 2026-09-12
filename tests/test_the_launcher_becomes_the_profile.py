@@ -35,7 +35,10 @@ from unittest import mock
 from charter import commands_frame, config, profiles
 from charter.frame import launcher, state, tmuxctl
 from tests import _gitguard, _tmuxsocket
-from tests._isolation import PersonaIso, declare_profiles, make_plane
+from tests._isolation import (APipe as _APipe, ATerminal as _ATerminal,
+                              PersonaIso, Typed as _Typed,
+                              approve_every_profile, declare_profiles,
+                              make_plane)
 
 #: The `list-panes -a` row `tmuxctl.live_pane_by_pid` parses: pid, dead, pane, session,
 #: window, `@charter_chat`. Spelled here rather than built from the format, so a change to
@@ -65,19 +68,21 @@ class _AProfileAndAPlane(PersonaIso):
         return profiles.current().profiles[name]
 
     def _no_approval_needed(self) -> None:
-        """Stand in for Task 2's B1 refusal, for a case that is about something else.
+        """Seed a launch record for every profile this plane declares.
 
-        Task 2 refuses every declared profile (review B1), so without this every case below
-        would be measuring that one sentence. Task 3 replaces the body it stands in for.
+        A declared profile charter has never run shows its command and asks (Task 3), so
+        without this every case below would be measuring that one question instead of the
+        thing it is about. This is what an operator who already said yes once leaves
+        behind. Called again by a case that REWRITES `charter.local.toml`, because it
+        records what is declared at the moment it runs.
         """
-        self.enterContext(mock.patch.object(launcher, "_approval_refusal",
-                                            return_value=None))
+        approve_every_profile(self)
 
 
 class TheLauncherBecomesTheProfile(_AProfileAndAPlane, unittest.TestCase):
-    def test_the_pane_refuses_a_declared_profile_until_approval_exists(self):
-        """Review B1: `main` must never run an unapproved declared command between two
-        merges, so Task 2 refuses every declared profile and Task 3 lifts it."""
+    def test_the_pane_refuses_a_declared_profile_nobody_has_approved(self):
+        """`main` never runs an unapproved declared command. Unattended — a reopen's pane,
+        a handoff's — so there is nobody to put the question to and it refuses instead."""
         rc = launcher.start(self._profile(), [], fid="beta.1", attended=False)
         self.assertEqual(rc, launcher.REFUSED_EXIT)
         self.assertEqual(self.execs, [])
@@ -189,14 +194,19 @@ class TheLauncherBecomesTheProfile(_AProfileAndAPlane, unittest.TestCase):
 
     def test_the_kinds_are_a_written_down_vocabulary(self):
         """Ruling 27: a caller branches on the KIND and never on the text, so the kinds are
-        an interface — Task 3 matches `KIND_NOT_YET` to decide which refusal a pane defers
-        to instead of prints. Spelled out here so a rename is a red test rather than a
+        an interface — `is_a_question` matches `KIND_ASK` to decide what a pane will ask
+        instead of this process, and `already_said` matches `KIND_DECLINED` to keep an
+        operator's own "no" out of charter's red ✗. Each of those two questions has ONE
+        home, which is what makes a new kind like `KIND_MOVED` an entry here rather than an
+        edit at six call sites. Spelled out here so a rename is a
         branch that quietly stops matching, and asserted DISTINCT because two kinds that
         collided would make that branch answer for both.
         """
-        kinds = (launcher.KIND_IGNORED, launcher.KIND_PATH, launcher.KIND_NOT_YET,
-                 launcher.KIND_EXEC)
-        self.assertEqual(kinds, ("ignored", "path", "not-yet", "exec"))
+        kinds = (launcher.KIND_IGNORED, launcher.KIND_PATH, launcher.KIND_ASK,
+                 launcher.KIND_UNATTENDED, launcher.KIND_RECORD, launcher.KIND_MOVED,
+                 launcher.KIND_DECLINED, launcher.KIND_EXEC)
+        self.assertEqual(kinds, ("ignored", "path", "ask", "unattended", "record", "moved",
+                                 "declined", "exec"))
         self.assertEqual(len(set(kinds)), len(kinds))
 
     def test_the_path_the_exec_will_use_is_the_path_that_is_asked(self):
@@ -213,6 +223,9 @@ class TheLauncherBecomesTheProfile(_AProfileAndAPlane, unittest.TestCase):
         program.chmod(0o755)
         self.local.write_text('[harness.own-path]\nkind = "claude"\n'
                               'command = ["harness-only-here"]\n')
+        # The file was rewritten, so the record is seeded again: this case is about which
+        # `PATH` the check asks, and an unapproved profile would answer it a link earlier.
+        self._no_approval_needed()
         p = self._profile("own-path")
         self.assertIsNone(launcher.refusal(p, root=config.ROOT, attended=False,
                                            env={"PATH": str(elsewhere)}))
@@ -306,9 +319,9 @@ class ARefusalNamesTheProfileWithoutBecomingIt(_AProfileAndAPlane, unittest.Test
         return launcher.refusal(self._profile(LONG_NAME), root=config.ROOT,
                                 attended=False, env=dict(os.environ), **kw)
 
-    def test_the_not_yet_refusal_clips_it(self):
+    def test_the_ask_refusal_clips_it(self):
         r = self._refusal()
-        self.assertEqual(r.kind, launcher.KIND_NOT_YET)
+        self.assertEqual(r.kind, launcher.KIND_UNATTENDED)
         self.assertIn(self.CLIPPED, r.text)
         self.assertNotIn(LONG_NAME, r.text)
 
@@ -335,18 +348,18 @@ class ARefusalNamesTheProfileWithoutBecomingIt(_AProfileAndAPlane, unittest.Test
         self.assertIn(self.CLIPPED, r.text)
         self.assertNotIn(LONG_NAME, r.text)
 
-    def test_the_not_yet_refusal_offers_only_profiles_the_file_does_not_declare(self):
-        """The other half of :data:`launcher.DECLARED_NOT_YET`: it names what the operator
-        CAN launch, and a list that repeated the declared profiles back would name the very
-        commands this refusal exists to not run."""
-        self.local.write_text(f'[harness.{LONG_NAME}]\nkind = "claude"\n'
-                              'command = ["claude"]\n\n'
-                              '[harness.claude]\nkind = "claude"\ncommand = ["elsewhere"]\n')
-        offered = self._refusal().text.rsplit(": ", 1)[1].rstrip(".").split(", ")
-        read = profiles.current()
-        self.assertTrue(offered)
-        for name in offered:
-            self.assertEqual(read.profiles[name].source, profiles.BUILTIN, name)
+    def test_the_record_that_could_not_be_written_clips_it_too(self):
+        """The fourth sentence that quotes a name, and the one an operator meets while they
+        are already having a bad day — a full disk. It ends in "run it again", which is a
+        remedy a 200-character name in the middle would push off the screen."""
+        with mock.patch("sys.stdin", _Typed("y\n")), \
+                mock.patch("sys.stdout", _ATerminal()), \
+                mock.patch.object(launcher.config, "replace_for",
+                                  side_effect=OSError(28, "No space left on device")):
+            r = launcher.attempt(self._profile(LONG_NAME), [], fid=None, attended=True)
+        self.assertEqual(r.kind, launcher.KIND_RECORD)
+        self.assertIn(self.CLIPPED, r.text)
+        self.assertNotIn(LONG_NAME, r.text)
 
 
 class OnlyThePanesOwnFirstProcessIsFramed(_AProfileAndAPlane, unittest.TestCase):
@@ -597,6 +610,10 @@ class ARefusalInThePaneReachesTheOperator(_AProfileAndAPlane, unittest.TestCase)
         state.frame_dir("beta.1", create=True)
         self.enterContext(mock.patch.object(launcher, "framed_chat",
                                             return_value="beta.1"))
+        # No terminal to ask on, stated rather than inherited (`tests/_ttyguard`): these
+        # cases are about what a pane does with a refusal it already has, and a pane that
+        # could ask would answer its own question instead of producing one.
+        self.enterContext(mock.patch("sys.stdin", _APipe()))
 
     def test_an_attended_pane_waits_for_a_key_before_it_exits(self):
         waited: list[int] = []

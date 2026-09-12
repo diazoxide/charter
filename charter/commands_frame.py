@@ -5316,11 +5316,13 @@ def _launch(args) -> int:
         # `exec`s the profile's command with the profile's `env`. Unframed, so the
         # environment drops the inherited `CHARTER_SESSION_ID` and nothing else (review 8).
         #
-        # *attended* is what THIS process's own streams say rather than what the open was:
-        # the refusal lands in the terminal the operator is already looking at, and a
-        # question here would be asked of whoever typed the command.
-        return launcher.start(p, rest, fid=None,
-                              attended=sys.stdin.isatty() and sys.stdout.isatty())
+        # *attended* is the OPEN's own answer — somebody typed this — and not what these
+        # streams say. The two are different questions and Task 3 is what separates them:
+        # whether charter may ask at all is `profiletrust.can_ask`, asked inside the
+        # launcher, and an attended open with nowhere to put the question says exactly that
+        # ("no terminal here to ask in", review 3) rather than borrowing the sentence for a
+        # reopen, which is about nobody being there at all.
+        return launcher.start(p, rest, fid=None, attended=attended)
 
     # A REGISTERED harness whose binary is not installed never reaches tmux — and the
     # irony is worth recording, because it is what hid this for a whole review round:
@@ -5364,8 +5366,18 @@ def _launch(args) -> int:
     # for it, so `charter <profile> && …` behaves the way `<command> && …` would have.
     if p is not None:
         r = _profile_refusal(p, attended=attended)
+        if launcher.is_a_question(r):
+            # **The question is put HERE, before anything is allocated.** A no is a
+            # `return` with no session, no window and no chat directory to tear down —
+            # #518's own reason for putting the workspace picker in front of tmux rather
+            # than inside the frame. With no terminal to ask on it defers to the pane,
+            # which has one (`_the_pane_will_ask`); with nobody at the open at all this is
+            # not a `KIND_ASK` and never reaches here.
+            r = None if _the_pane_will_ask(r) else _asked_here(p, r, attended=attended)
         if r is not None:
-            util.err(f"charter: {r.text}")
+            if not launcher.already_said(r):
+                # A decline has already been answered on the terminal it was asked on.
+                util.err(f"charter: {r.text}")
             return r.exit
 
     # ONE call (correction 5): asking `tmux -V` twice on a path that branches on the
@@ -5937,9 +5949,10 @@ def _launch(args) -> int:
     # Measured 2026-09-11: the eager ask above completes 6-14 ms after the start while a
     # Python launcher's first line runs at 19-22 ms, so it never catches a launcher that
     # refused — and by the time anything else could look, the teardown hook has killed the
-    # window (`_pane_last_words` answered `[]` in all 40 runs). An ATTENDED pane holds its
-    # own refusal on screen and waits for a key, so only an unattended open — a reopen, a
-    # handoff, a background open — has nobody to read it and waits for the answer here.
+    # window (`_pane_last_words` answered `[]` in all 40 runs). EVERY pane records what it
+    # refused; what differs is who reads it. An attended pane also holds its own refusal on
+    # screen until somebody presses Enter, so only an unattended open — a reopen, a handoff,
+    # a background open — has nobody in front of it and waits for the answer here.
     refused = ""
     if code is None and p is not None and not attended:
         code, refused = _await_the_launcher(SOCKET, fid, harness_pane)
@@ -7969,6 +7982,46 @@ def _profile_refusal(p, *, attended: bool):
                             env=launcher.environment(p, os.environ, framed=True))
 
 
+def _asked_here(p, ask, *, attended: bool):
+    """Put *ask*'s question on this process's own terminal. The refusal left over, or
+    ``None`` when the launch may go ahead.
+
+    `launcher.answered` is the whole of it — the question, the four answers it can come
+    back with, and the re-run of the chain behind a yes — so there is one spelling of that
+    rule rather than two that would drift. What this call decides is only WHICH chain runs
+    again: this process's own, before tmux is asked for anything. The pane then runs it a
+    third time immediately before the `exec`, which is why there are two calls here and not
+    one — the plane can move in between.
+    """
+    from .frame import launcher
+
+    return launcher.answered(p, ask, again=lambda: _profile_refusal(p, attended=attended))
+
+
+def _the_pane_will_ask(r) -> bool:
+    """Is *r* the one refusal the PANE answers instead of this process? (N2a's nit)
+
+    Exactly one kind defers, and only from an open with no terminal of its own: the `+`, a
+    workspace tab, the palette's new chat. Those run detached with all three streams on
+    `/dev/null` (`builtin_actions._spawn`), so charter cannot put the question here — but
+    the pane they open has a terminal on both of its ends, and it runs the identical chain
+    immediately before the `exec`. `KIND_ASK` is minted only for an open somebody is in
+    front of (`profiletrust.refusal`), so an unattended open never reaches this at all.
+
+    **Only asking defers.** Every other refusal is answered before tmux, where it is a
+    `return` with nothing to tear down; carried into the pane instead, a `PATH` refusal
+    would open a window purely to say it in and close it again.
+    """
+    from . import profiletrust
+    from .frame import launcher
+
+    # No `r is not None` here: both callers have already established that — `_launch` in
+    # the condition that reaches this, `_launch_refusal` in the `or` in front of it — and a
+    # third check nothing can reach is a line the deletion sweep is right to call dead.
+    return (launcher.is_a_question(r)
+            and not profiletrust.can_ask(sys.stdin, sys.stdout))
+
+
 def _launch_refusal(p, *, attended: bool) -> str:
     """The launcher's own refusal for *p* as a sentence, or ``""`` when it may start.
 
@@ -7981,9 +8034,16 @@ def _launch_refusal(p, *, attended: bool) -> str:
 
     It costs what the chain costs — one `git status` for a declared profile — on a press,
     and nothing on a hook path: none of these callers is one.
+
+    **A press hands back nothing for the one question the pane is about to ask itself**
+    (:func:`_the_pane_will_ask`). Reporting it here would put "charter asks before it runs
+    a command it has not been shown before" on the attention row and open no chat — for a
+    profile the operator is one keypress away from approving in the pane.
     """
     r = _profile_refusal(p, attended=attended)
-    return r.text if r is not None else ""
+    if r is None or _the_pane_will_ask(r):
+        return ""
+    return r.text
 
 
 def _launch_root(ws: str):
@@ -10499,6 +10559,19 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
                 f"charter reopen: {c.chat} is not reopened — {why}" if why
                 else REOPEN_GONE.format(
                     chat=c.chat, name=contain.readable(name or c.harness or "nothing")))
+        return None
+    # **A reopen has nobody to ask** (Task 3). Said here, by name, rather than left to the
+    # pane: without this the chat is started, its launcher refuses, and the operator is told
+    # "did not come back (launcher returned 3)" for something one `charter <profile>` would
+    # fix. The chat stays in the manifest either way, so approving the profile once and
+    # running `charter reopen` again brings it back — which is what `_consume` is for.
+    from . import profiletrust
+
+    unapproved = profiletrust.approval_needed(p)
+    if unapproved:
+        _report(quiet, util.warn,
+                profiletrust.REOPEN_UNAPPROVED.format(
+                    chat=c.chat, name=contain.readable(p.name), state=unapproved))
         return None
     rest: list[str] = []
     if _resumes(c):

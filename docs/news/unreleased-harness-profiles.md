@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: Charter reads harness profiles from charter.local.toml, a file it keeps out of git
+headline: A chat starts on the harness profile you name — its own command and config folder, never through tmux
 adopt: reinit
 ---
 
@@ -44,7 +44,21 @@ is **skipped by name** rather than moved onto another one — another profile ma
 account, where that conversation does not exist. It stays in the record, so declaring the
 profile again and running `charter reopen` brings it back.
 
-This release still does not launch a profile you declared: it is refused by name, with a
-sentence saying charter cannot yet ask before a declared command runs. Nothing a chat could
-have written into `charter.local.toml` runs until the release that adds the asking. The
-built-in profiles — `claude`, `codex`, `opencode` — start exactly as they did.
+`charter claude-work` runs that profile's command with its env. A profile whose command or
+environment is new or has changed since it last ran shows it and asks `run this? [y/N]`
+once; a reopen, a handoff, or a launch with no terminal to ask in refuses it instead.
+
+```
+charter: profile 'claude-work' is new — it has not run on this machine before.
+  command  claude
+  env      CLAUDE_CONFIG_DIR=~/.claude-work
+run this? [y/N]
+```
+
+A yes is written down and that profile starts without a word until one of those three
+changes. The built-in profiles — `claude`, `codex`, `opencode` — never ask: their command
+comes out of charter's own registry rather than out of a file. `charter <profile>` asks
+before tmux; the `+` and a workspace tab ask in the new chat's own pane, because the press
+behind them has no terminal and the pane has one. The record lives under `.charter/`, which
+a chat can write as easily as it can write `charter.local.toml` — so this catches a command
+you did not change yourself unless whatever changed it also forged the record.
