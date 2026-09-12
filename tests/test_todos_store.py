@@ -180,6 +180,26 @@ class TestADuplicateJudgedByTitle(PersonaIso):
             todos.duplicate_of("alpha", "Fix the widget" + self.TAIL, by_title=True),
             "Fix the widget")
 
+    def test_a_score_of_exactly_the_threshold_is_still_the_same_todo(self):
+        """The boundary, on the side that matters. `_DUPLICATE_THRESHOLD` is the lowest score
+        that counts, so `>=` and not `>`: these two titles share three words out of a union of
+        six — 0.500 exactly — and under `>` they fall through to identity, read as different
+        lines, and the second handoff records a genuine duplicate. That is the failure this
+        whole rule exists to prevent, arriving at the one score a comparison can land on and
+        still be told it does not count."""
+        todos.add("alpha", "Rotate the staging tokens" + self.TAIL)
+        self.assertEqual(
+            len(memstore.wordset("Rotate the staging tokens")
+                & memstore.wordset("Rotate the staging tokens before Friday morning")), 3)
+        self.assertEqual(
+            len(memstore.wordset("Rotate the staging tokens")
+                | memstore.wordset("Rotate the staging tokens before Friday morning")), 6)
+        self.assertEqual(
+            todos.duplicate_of("alpha",
+                               "Rotate the staging tokens before Friday morning" + self.TAIL,
+                               by_title=True),
+            "Rotate the staging tokens")
+
     def test_the_stored_side_is_its_title_and_not_its_body_either(self):
         """**Both sides**, and this is the case that says so. Every other case here either
         stores a bare title — where the body IS the title, so reading one for the other
