@@ -2111,8 +2111,18 @@ def brief(fid: str) -> str | None:
     """The brief recorded for *fid*, exactly as it was written, or ``None``.
 
     **Verbatim, with no strip.** This is the text the new chat was sent, and a reader
-    showing it back — `charter reopen`'s SessionStart block (Task 5) — must show what was
-    approved rather than a tidied copy of it.
+    showing it back — `charter reopen`'s SessionStart block — must show what was approved
+    rather than a tidied copy of it.
+
+    **``newline=""``, and that is what makes "verbatim" true rather than nearly true.**
+    Python's default text mode is UNIVERSAL NEWLINES: it rewrites every ``\\r\\n`` and every
+    lone ``\\r`` in the file to ``\\n`` on the way out, silently. That was invisible while
+    the only reader escaped every newline anyway, and it stopped being invisible the moment
+    `hooks._brief_block` began keeping the brief's line structure — a ``\\r`` the operator
+    approved as one character would have arrived as a real line break, which is the brief's
+    author minting a line in charter's own rendering. Read faithfully, it is a ``\\r`` again
+    and the render escapes it with every other invisible. `Path.read_text` cannot say this
+    before 3.13 and charter's floor is 3.11, so the file is opened by hand.
 
     ``None`` for a chat opened by a charter that predates this, for a directory that is not
     a chat's, for a file that cannot be read, and for an EMPTY file: every caller does the
@@ -2123,7 +2133,8 @@ def brief(fid: str) -> str | None:
     if d is None:
         return None
     try:
-        text = (d / _BRIEF_FILE).read_text()
+        with (d / _BRIEF_FILE).open(newline="") as f:
+            text = f.read()
     except (OSError, ValueError):
         return None
     return text or None

@@ -704,9 +704,11 @@ since the session began.
 A chat that was opened by a **handoff** and reopened with no conversation is also shown the
 brief it was started with — once, as a quoted block labelled data, never re-sent as a
 message. The brief travels in the reopen manifest because the chat directory holding it is
-reaped on a restart; it is escaped where it is rendered, so nothing in it can close the
-block it is quoted in. opencode has no `SessionStart` at all, so an opencode chat that
-reopens empty is not shown it; `charter doctor` names that gap.
+reaped on a restart; it keeps the lines it was written with, and the fence around it carries
+a marker charter mints at the render — after the brief was written, so nothing inside it can
+close the quotation. Everything else with no glyph of its own is escaped there. opencode has
+no `SessionStart` at all, so an opencode chat that reopens empty is not shown it;
+`charter doctor` names that gap.
 
 The `UserPromptSubmit` gate is narrower than it sounds. It fires when a prompt asks for
 work *and* carries a real fork — open-ended, broad, destructive, or multi-part — and its

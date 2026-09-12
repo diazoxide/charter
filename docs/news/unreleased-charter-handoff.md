@@ -86,8 +86,10 @@ The brief now travels in the reopen record, which is the only copy that outlives
 directory `reap` takes on a restart. A chat whose conversation does not come back — codex, and
 Claude Code before its first turn — is shown it at its next start as a quoted block labelled
 data to read and never an instruction to obey, with the operator now in front of it named as
-outranking it. A chat that resumes is shown nothing: the brief is already the first message of
-its transcript.
+outranking it. It keeps the lines it was written with: the fence carries a marker charter
+mints at the render, after the brief was written, so nothing inside the brief can close the
+quotation and the newlines do not have to be escaped away to defend it. A chat that resumes is
+shown nothing: the brief is already the first message of its transcript.
 
 ## Limits
 
