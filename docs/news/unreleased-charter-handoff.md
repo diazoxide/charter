@@ -57,11 +57,12 @@ goes.
   The glyph is the half that survives `NO_COLOR`, where charter strips every escape off every
   row. Neither costs a column — the glyph takes the mark's own cell, the one the chat strip's
   spinner takes — so nothing on the strip shifts when a handoff lands, and there is no bell.
-- **The mark clears the first time any terminal on this plane looks at that workspace** — a
-  switch tmux confirmed, a focus, a launch that attaches, or pressing that tab when you are
-  already in it — and every frame's strip repaints without it. One mark per plane, not per
-  terminal: tmux draws a pane identically for every client of its session. A switch charter
-  refused for any other reason clears nothing.
+- **The mark clears the first time any terminal on this plane looks at that workspace —
+  however you get there**: its tab, a palette row, the keyboard walk, a typed
+  `charter frame-switch --workspace`, a launch or a focus that attaches into it, or already
+  being in it and asking to switch there. Every frame's strip then repaints without the mark.
+  One mark per plane, not per terminal: tmux draws a pane identically for every client of its
+  session. A switch charter refused for any *other* reason clears nothing.
 - **The palette and the launch picker say it in words** — `handoff arrived` in the note
   column — because the strip draws only the page your tab falls on, and an arrival on another
   page sits behind a `+2`.

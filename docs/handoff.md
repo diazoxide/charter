@@ -123,16 +123,18 @@ exactly where you were. So the last thing the command does is move where your ey
   way until somebody looks. The `✶` is what survives `NO_COLOR`, where charter strips every
   escape off every row and the accent is nothing to see. Neither costs a column — the glyph
   takes the mark's own cell — so nothing on the strip shifts when a handoff lands.
-- **The mark clears the first time any terminal on this plane looks at that workspace**: a
-  workspace switch tmux confirmed, a focus, a launch that attaches, or pressing that tab when
-  you are already in that workspace. Then every frame's strip repaints without it. It is
-  plane-wide and not per terminal, because tmux draws a pane identically for every client of
-  its session — a per-client mark is named as a limit below rather than pretended at. A switch
-  charter refused for any other reason clears nothing: you are still owed the look.
+- **The mark clears the first time any terminal on this plane looks at that workspace —
+  however you get there.** Pressing its tab, choosing it in the palette, walking to it with
+  the keyboard, typing `charter frame-switch --workspace`, a launch or a focus that attaches
+  into it, or already being in it and asking to switch there: one fact, and the fact is that
+  somebody is looking. Then every frame's strip repaints without the mark. It is plane-wide
+  and not per terminal, because tmux draws a pane identically for every client of its
+  session — a per-client mark is named as a limit below rather than pretended at. A switch
+  charter refused for any *other* reason clears nothing: you are still owed the look.
 - **The tab you are standing on shows the highlight rather than the mark.** There is one cell
   and `*` wins it, so the frame already in the arrived workspace is the one frame that does
-  not draw the mark, while every other frame on the plane does. Pressing that tab says
-  `already in workspace 'x'` and clears it for everyone.
+  not draw the mark, while every other frame on the plane does. Asking to switch there —
+  by any of the routes above — says `already in workspace 'x'` and clears it for everyone.
 - **Where to look when the strip has no room.** The bar draws the page your tab falls on, so
   an arrival on another page is inside a `+2` and at narrow widths the bar is down to `2/3`.
   The palette's workspace list says `handoff arrived` in its note column, at any width, and

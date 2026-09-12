@@ -37,7 +37,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, statusline, tui, workspace
-from charter.frame import choose, chrome, picker, slots, state, switch
+from charter.frame import (builtin_actions, choose, chrome, picker, slots,
+                           state, switch)
 
 from tests._isolation import PersonaIso
 from tests.test_a_chat_opens_in_the_background_with_its_first_message import (
@@ -454,6 +455,25 @@ class TheMarkClearsWhenSomeoneLooks(_OpensBeta):
         self.assertEqual(workspace.arrivals(), frozenset())
         self.said.assert_called_once()
         self.assertEqual(self.said.call_args.args[1], "already in workspace 'beta'")
+
+    def test_every_route_to_the_workspace_you_are_in_clears_it(self):
+        """The docs say the mark clears "however you get there", and every workspace-switch
+        surface on this plane ends at `cmd_switch` — a tab press, a palette row, the
+        keyboard walk and a typed command all spawn `frame-switch --workspace <name>`. So
+        the sentence is true for all four exactly if it is true for this one entry point,
+        and this drives it with the argv each of them builds."""
+        for spelling in (("frame-switch", "--workspace"),
+                         builtin_actions._STRIPS[1].command):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(spelling, ("frame-switch", "--workspace"))
+        for surface in ("tab", "palette row", "keyboard walk", "typed command"):
+            with self.subTest(surface=surface):
+                workspace.record_arrival("beta")
+                args = SimpleNamespace(workspace="beta", persona=None)
+                with mock.patch.dict(os.environ,
+                                     {"CHARTER_SESSION_ID": "beta.1"}, clear=True):
+                    self.assertEqual(commands_frame.cmd_switch(args), 0)
+                self.assertEqual(workspace.arrivals(), frozenset())
 
     def test_pressing_a_tab_that_is_refused_for_any_other_reason_keeps_the_mark(self):
         """`to_workspace` refuses three things and only one of them means "you are here".
