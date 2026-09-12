@@ -1791,7 +1791,11 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
             _eventually(lambda: self.WS not in self._tmux("list-sessions").stdout,
                         timeout=30.0),
             f"the cancelled chat's session outlived its only window: "
-            f"{self._tmux('list-windows', '-a', '-F', '#{session_name}:#{window_id}').stdout!r}")
+            f"windows {self._tmux('list-windows', '-a', '-F', '#{session_name}:#{window_id}').stdout!r}, "
+            f"pane {self._status(pane)!r}, "
+            f"remain-on-exit "
+            f"{self._tmux('show-options', '-g', 'remain-on-exit').stdout.strip()!r}, "
+            f"hooks {self._tmux('show-hooks', '-p', '-t', pane).stdout.strip()!r}")
         self.assertFalse((self.records / "harness.json").exists(),
                          "a cancelled selector started a harness")
         self.assertTrue(state.is_waiting("beta.1"),
