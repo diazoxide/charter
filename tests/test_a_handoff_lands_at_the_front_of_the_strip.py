@@ -424,6 +424,16 @@ class AHandoffArrives(_AHandoffFromAlpha):
         self.assertEqual(workspace.tab_order()[0], "alpha")
         self.assertEqual(workspace.arrivals(), frozenset())
 
+    def test_a_created_workspace_is_on_the_strip_and_at_the_front_of_it(self):
+        """`bring_to_front` moves nothing for a name the plane does not have, so a
+        `--create`d workspace has to be a workspace by the time it is asked — otherwise the
+        one handoff that most needs pointing at is the one that points at nothing."""
+        self.opened = commands_frame.Opened(True, "gamma.1", "")
+        self._handoff(ws="gamma", create=True, vision="Ship the thing.")
+        self.assertEqual(workspace.tab_order()[0], "gamma")
+        self.assertIn("gamma", switch.workspaces())
+        self.assertIn("gamma", workspace.arrivals())
+
     def test_the_calling_chats_attention_row_names_the_new_chat(self):
         self._handoff()
         self.assertEqual(state.notice("alpha.1"),
