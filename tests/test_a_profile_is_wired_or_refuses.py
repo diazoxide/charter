@@ -660,6 +660,33 @@ class TheLaunchRefusesAnUnwiredProfile(PersonaIso, unittest.TestCase):
             self.refuse(p)
         self.assertEqual(len(calls), 2)
 
+    def test_a_handoff_asks_about_the_workspace_the_chat_would_stand_in(self):
+        """Re-review N8: a handoff probes before it writes anything, and it probes the
+        TARGET workspace's directory. Claude Code resolves `enabledPlugins` at the session's
+        own directory and does not walk up (measured), and charter mirrors the plane's into
+        `workspaces/<ws>/` — so asking from the caller's directory would answer about the
+        wrong chat."""
+        from charter import commands_frame
+
+        ws = config.WORKSPACES_DIR / "beta"
+        ws.mkdir(parents=True)
+        seen = []
+        with approved(), mock.patch.object(
+                commands_frame, "_profile_refusal",
+                side_effect=lambda p, *, attended, cwd=None: seen.append(cwd)):
+            commands_frame._launch_refusal(profiles.current().profiles["claude"],
+                                           attended=False,
+                                           cwd=commands_frame._chat_dir_of("beta"))
+        self.assertEqual(seen, [ws])
+
+    def test_a_workspace_with_no_directory_yet_is_asked_about_at_the_plane(self):
+        """Before `--create` makes it there is nothing to read, and `workspace.ensure` is
+        not called here: a refusal that made a directory as a side effect of deciding not to
+        open a chat is the half-done open the check exists to prevent."""
+        from charter import commands_frame
+
+        self.assertEqual(commands_frame._chat_dir_of("never-made"), Path(config.ROOT))
+
     def test_wiring_is_the_last_check_so_a_refusal_behind_it_is_never_probed(self):
         """The order is the order the checks cost in, and a probe is the expensive one: a
         command that is not on `PATH` is answered without asking the harness anything."""

@@ -266,7 +266,7 @@ def display_command(p: profiles.Profile, rest: list[str]) -> list[str]:
 
 
 def refusal(p: profiles.Profile, *, root: Path, attended: bool,
-            env: Mapping[str, str]) -> Refusal | None:
+            env: Mapping[str, str], cwd: Path | None = None) -> Refusal | None:
     """Why *p* may not start, or ``None``.
 
     The spec's order, and it is the order the checks cost in: the file is ignored, the
@@ -308,10 +308,12 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
     asked = _approval_refusal(p, attended=attended)
     if asked is not None:
         return asked
-    # `Path.cwd()`: the directory `_launch` stands in before tmux, and the pane's own start
-    # directory after. Claude Code resolves `enabledPlugins` there, so it is the directory
-    # the question is actually about.
-    why = wiring.refusal(p, cwd=Path.cwd())
+    # The directory the CHAT will start in, because that is what the question is about:
+    # Claude Code resolves `enabledPlugins` at the session's own working directory and does
+    # not walk up (measured), and charter mirrors the plane's into `workspaces/<ws>/`. A
+    # caller that knows the workspace says so; the launcher in the pane, and `_launch`
+    # before tmux, are already standing there, which is what `Path.cwd()` means here.
+    why = wiring.refusal(p, cwd=Path.cwd() if cwd is None else cwd)
     if why:
         return Refusal(KIND_WIRING, why, REFUSED_EXIT)
     return None

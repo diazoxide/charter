@@ -7985,7 +7985,7 @@ def _harness_of(p):
     return next((x for x in harness.all() if x.name == p.harness), None)
 
 
-def _profile_refusal(p, *, attended: bool):
+def _profile_refusal(p, *, attended: bool, cwd=None):
     """The launcher's own chain for *p* as THIS process sees the world — the `Refusal`, or
     ``None`` when it may start.
 
@@ -7996,7 +7996,7 @@ def _profile_refusal(p, *, attended: bool):
     """
     from .frame import launcher
 
-    return launcher.refusal(p, root=config.ROOT, attended=attended,
+    return launcher.refusal(p, root=config.ROOT, attended=attended, cwd=cwd,
                             env=launcher.environment(p, os.environ, framed=True))
 
 
@@ -8039,7 +8039,7 @@ def _the_pane_will_ask(r) -> bool:
             and not profiletrust.can_ask(sys.stdin, sys.stdout))
 
 
-def _launch_refusal(p, *, attended: bool) -> str:
+def _launch_refusal(p, *, attended: bool, cwd=None) -> str:
     """The launcher's own refusal for *p* as a sentence, or ``""`` when it may start.
 
     **Asked by the presses, because a press has no other surface.** `_launch` runs this same
@@ -8057,10 +8057,27 @@ def _launch_refusal(p, *, attended: bool) -> str:
     a command it has not been shown before" on the attention row and open no chat — for a
     profile the operator is one keypress away from approving in the pane.
     """
-    r = _profile_refusal(p, attended=attended)
+    r = _profile_refusal(p, attended=attended, cwd=cwd)
     if r is None or _the_pane_will_ask(r):
         return ""
     return r.text
+
+
+def _chat_dir_of(ws: str):
+    """Where a chat opened in *ws* would stand, for a check that must write nothing.
+
+    NOT :func:`_launch_root`, which calls `workspace.ensure` and creates the directory:
+    these three callers are refusals asked before anything is written, and a handoff that
+    made a workspace directory as a side effect of deciding not to open a chat there would
+    be the half-done open `background_refusal` exists to prevent. A workspace that has no
+    directory yet also has no mirrored `enabledPlugins`, so the plane root is the honest
+    answer — it is what `workspace.ensure` will copy from a moment later.
+    """
+    from pathlib import Path
+    from . import workspace
+
+    d = workspace.workspace_dir(ws)
+    return d if d.is_dir() else Path(config.ROOT)
 
 
 def _launch_root(ws: str):
@@ -8199,7 +8216,7 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
         return None
     # Attended, because this open ends with the operator's client switched onto the new
     # window: somebody is in front of whatever it says.
-    refused = _launch_refusal(p, attended=True)
+    refused = _launch_refusal(p, attended=True, cwd=_chat_dir_of(ws))
     if refused:
         _say_on_screen(fid, f"cannot open '{ws}': {refused}")
         return None
@@ -11033,7 +11050,7 @@ def cmd_new_chat(args) -> int:
     # The launcher's own chain, asked here so its refusal reaches the frame's attention row
     # rather than `/dev/null` — see :func:`_launch_refusal`. Attended: the new window is
     # selected, so the operator is looking at whatever it says.
-    refused = _launch_refusal(p, attended=True)
+    refused = _launch_refusal(p, attended=True, cwd=_chat_dir_of(ws))
     if refused:
         _say_on_screen(fid, f"cannot open another chat: {refused}")
         return 0
@@ -11228,7 +11245,7 @@ def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str)
     # that cannot start is refused while there is still nothing to undo: no chat directory,
     # no window, no first message anywhere. Unattended, because nobody is in front of the
     # chat this would open: a check that would ask refuses here instead (review 3).
-    refused = _launch_refusal(p, attended=False)
+    refused = _launch_refusal(p, attended=False, cwd=_chat_dir_of(ws))
     if refused:
         return f"cannot open a chat in '{ws}': {refused}", None, None
     h = _harness_of(p)
