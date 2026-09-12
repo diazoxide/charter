@@ -994,7 +994,15 @@ def _heredoc_opener_words(line: str, start: int) -> list[str] | None:
     i = 0
     n = min(start, len(line))
     while i < n:
-        if _inside_quotes(line, i):
+        if line[i] == "\\":
+            i += 2                             # an escaped character is never a delimiter
+            continue
+        # A backtick is asked about BEFORE the quoted-skip, because `_quote_map` marks the
+        # OPENING backtick of a pair inside `"…"` as quoted and its closing partner as not —
+        # correct for that map, and half a pair here. Seeing one half toggled `btick` the wrong
+        # way and left `cmd` past the closing backtick, so `( tee "`date`" <<'EOF' )` came back
+        # with `['"']` for its opener words and was refused (review round 9, finding 1).
+        if line[i] != "`" and _inside_quotes(line, i):
             i += 1
             continue
         # `${…}` needs no case of its own: `{` saves the command start and `}` restores it, so

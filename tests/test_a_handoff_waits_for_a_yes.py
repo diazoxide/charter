@@ -885,8 +885,14 @@ class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
         """Review round 8, finding 1. The cut tracked `$( … )`, `( … )` and `{ … }` but not a
         backtick, so a separator INSIDE the backticks moved the command start past the real
         program: ``( bash `d; cat ` <<'EOF' )`` read its opener as `cat`. The `$( … )` spelling
-        of the same command refused it, so this was an arbitrary gap, not a limit — both shells
-        run the hidden handoff in every row here."""
+        of the same command refused it, so this was an arbitrary gap, not a limit.
+
+        Not every row here RUNS the handoff, and the difference is worth keeping straight. With
+        the stubs present, three do in both bash 3.2.57 and zsh 5.9 — the `;`, the `&&` and the
+        group row. `ssh` hands the body to a shell on another machine, so nothing runs locally;
+        the `echo a; true` and quoted-backtick rows exit 127, and the interpreter row exits 1.
+        The reason to refuse them all is the same either way: the opener is a shell, and which
+        of them happens to be installed is not what the guard decides on."""
         for name, cmd in (
             ("a `;` inside backticks", "( bash `d; cat ` <<'EOF' )"),
             ("an `&&` inside backticks", "( bash `d && tee ` <<'EOF' )"),
@@ -918,6 +924,84 @@ class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
             "x=1; ( bash <<'A' )", "x=1; ( bash <<'A' )".index("<<")))
         self.assertEqual(["cat"], hooks._heredoc_opener_words(
             "bash -c x; { cat <<'A' ; }", "bash -c x; { cat <<'A' ; }".index("<<")))
+
+    def test_a_backtick_pair_inside_double_quotes_is_seen_whole(self):
+        """Review round 9, finding 1 — round 8's backtick tracking biting back. `_quote_map`
+        marks the OPENING backtick of a pair inside `"…"` as quoted and its closing partner as
+        not, which is right for that map and half a pair here: the cut saw one end, toggled the
+        wrong way, and returned `['"']` for the opener words. Three of these four are the
+        backtick spellings of rows round 7 restored, and no shell runs anything in any of them.
+        """
+        prose = "charter handoff beta now asks first."
+        for name, cmd in (("tee", '( tee "`date`" <<\'EOF\' )'),
+                          ("cat with a redirect", '( cat > "`date +%F`.md" <<\'EOF\' )'),
+                          ("tee with mktemp", '( tee "`mktemp`" <<\'EOF\' )'),
+                          ("mail with a subject", '( mail -s "`subj`" me <<\'EOF\' )')):
+            with self.subTest(opener=name):
+                self.assertIsNone(_reason(self._decide(f"{cmd}\n{prose}\nEOF")))
+        with self.subTest(direction="a shell inside the quoted backticks still refuses"):
+            self.assertIn("a shell runs", _reason(self._decide(
+                f'( bash "`d; cat `" <<\'EOF\' )\n{HEREDOC}\nEOF')) or "")
+
+    def test_an_escaped_backtick_is_not_a_substitution(self):
+        """The other half of the same fix. Escaped backticks are literal, so `( bash a\\`d; cat
+        \\`b <<'EOF' )` really is two commands and the opener is `cat` — while the unescaped
+        spelling is one command whose opener is `bash`. The cut has to tell them apart."""
+        esc = "( bash a\\`d; cat \\`b <<'EOF' )"
+        self.assertEqual(["cat", "\\`b"], hooks._heredoc_opener_words(esc, esc.index("<<")))
+        unesc = "( bash a`d; cat `b <<'EOF' )"
+        self.assertEqual("bash", hooks._opener_program(
+            hooks._heredoc_opener_words(unesc, unesc.index("<<"))))
+
+    def test_a_dangling_quote_after_the_heredoc_does_not_reach_back(self):
+        """Review round 9. An unbalanced quote AFTER the `<<` leaves the tail of the line quoted,
+        and the opener cut walks only up to the `<<` — so the group it is inside must still be
+        seen. Miss it and the words come back with the `(` attached, which the round-8 pin below
+        did NOT catch: it used a line with no dangling quote, so it did not pin what it claimed.
+        """
+        for line in ("( tee n.md <<'EOF' ) '", '( tee n.md <<\'EOF\' ) "'):
+            with self.subTest(tail=line[-1]):
+                self.assertEqual(["tee", "n.md"],
+                                 hooks._heredoc_opener_words(line, line.index("<<")))
+
+    def test_an_unterminated_substitution_after_the_heredoc_is_not_the_opener(self):
+        """A trailing `$(` that never closes. The cut looks for where the command STARTS, which
+        is behind the `<<`; reading the line from the other end instead loses the program
+        entirely and every one of these becomes "cannot be named", which searches the body."""
+        for line, words, prog in (("( tee n.md <<'EOF' ) $(", ["tee", "n.md"], "tee"),
+                                  ("( bash <<'EOF' ) $(", ["bash"], "bash"),
+                                  ("cat <<'A' | bash $(", ["cat"], "cat")):
+            with self.subTest(line=line):
+                got = hooks._heredoc_opener_words(line, line.index("<<"))
+                self.assertEqual(words, got)
+                self.assertEqual(prog, hooks._opener_program(got))
+
+    def test_a_closed_group_earlier_on_the_line_does_not_end_the_substitution_scan(self):
+        """The depth counter in `_crowded_substitutions`. An unquoted `)` that closes something
+        else — a subshell, a `case` arm, a function definition — must not be mistaken for the
+        end of the substitution being counted. Mistake it and the conservative rule stops firing
+        after any earlier `)`, and both shells run the handoff in the body that follows."""
+        line = "( true ); x=$( cat <<'A' > n.md; bash <<'B' )"
+        self.assertEqual({0, 1}, hooks._crowded_substitutions(line))
+        self.assertIn("a shell runs", _reason(self._decide(
+            f"{line}\n{HEREDOC}\nA\necho hi\nB")) or "")
+
+    def test_an_unnameable_opener_among_crowded_heredocs_does_not_crash_the_hook(self):
+        """`_crowded_substitutions` asks whether any opener in the substitution is an executor,
+        and an opener that cannot be NAMED answers `None`. Feed that to the name check without a
+        fallback and the hook raises `TypeError` — a guard that raises is a guard that has
+        stopped guarding, on an ordinary shape."""
+        for line in ("x=$( ${RUNNER} <<'A'; cat <<'B' )", "x=$(<<'A'; bash <<'B')"):
+            with self.subTest(line=line):
+                hooks._crowded_substitutions(line)      # must not raise
+                self._decide(f"{line}\ncharter handoff beta now asks first.\nA\nx\nB")
+
+    def test_a_comment_after_a_brief_opener_adds_no_brief(self):
+        """`_brief_heredocs` counts the heredocs the LEXER sees against the ones the regex
+        finds, and bails when they disagree. `# <<'B'` is a comment the regex counts and the
+        lexer does not, so the line is not one this pass can take apart — and claiming the first
+        heredoc is a brief there would drop a body the leak guard should still read."""
+        self.assertEqual(set(), hooks._brief_heredocs("charter handoff b <<'A' # <<'B'"))
 
     def test_only_a_BARE_charter_handoff_opens_a_brief(self):
         """`_brief_heredocs` asks that both words be bare — unquoted and unescaped. A quoted or

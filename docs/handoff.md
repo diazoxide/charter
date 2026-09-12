@@ -180,8 +180,9 @@ The same rule costs something in the other direction, and it is the price of the
 **when the word that NAMES THE PROGRAM is itself a variable or a substitution, charter cannot
 name the program and treats that body as something that could run** — so a brief-shaped body is
 refused even when the program is your editor or your pager. An expansion elsewhere on the line
-does not do that: a redirect target or an argument (`( tee ${OUT} <<'EOF' )`,
-`( tee "$(mktemp)" <<'EOF' )`) leaves `tee` plainly named, and those are allowed.
+does not do that: a redirect target or an argument leaves the program plainly named, and those
+are allowed in all three spellings — `( tee ${OUT} <<'EOF' )`, `( tee "$(mktemp)" <<'EOF' )` and
+`( tee "`mktemp`" <<'EOF' )`, re-measured after the backtick fix rather than assumed.
 Measured examples of the costly shape: `( ${EDITOR} <<'EOF' )`,
 `( ${PAGER} <<'EOF' )`, `( ${GIT} commit -F - <<'EOF' )` and `( $(which tee) notes.md <<'EOF' )`,
 each with prose that names the handoff. charter cannot tell those from `( ${RUNNER} <<'EOF' )`,

@@ -433,8 +433,9 @@ rule while one who reads a bare refusal files an issue.
   the price of the fail-safe: **when the word that NAMES THE PROGRAM is itself a variable or a
   substitution** charter cannot name the program and treats that body as something that could
   run, so a brief-shaped body is refused even when the program is an editor or a pager. An
-  expansion elsewhere on the line — a redirect target, an argument — does not: `( tee ${OUT}
-  <<'EOF' )` and `( tee "$(mktemp)" <<'EOF' )` name `tee` and are allowed. Measured on
+  expansion elsewhere on the line — a redirect target, an argument — does not, in any of the
+  three spellings: `( tee ${OUT} <<'EOF' )`, `( tee "$(mktemp)" <<'EOF' )` and
+  `( tee "`mktemp`" <<'EOF' )` all name `tee` and are allowed. Measured on
   `( ${EDITOR} <<'EOF' )`, `( ${PAGER} <<'EOF' )`, `( ${GIT} commit -F - <<'EOF' )` and
   `( $(which tee) notes.md <<'EOF' )`. Those are the same shape as `( ${RUNNER} <<'EOF' )`,
   where the variable really is a shell, and the only thing that would separate them is the
