@@ -219,9 +219,15 @@ def first_advice() -> datetime | None:
     return min(stamps) if stamps else None
 
 
-def handoffs_since_first_advice() -> int:
+def routed_since_first_advice() -> int:
     """Dispatches recorded at or after the first advice — the only count that can honestly
     sit beside :func:`advice_tally`.
+
+    **Named for routing, not for handoffs**, because the word moved: a *handoff* is now
+    opening a chat (CONTEXT.md, *Chats*), and this counts sub-agent dispatches and resumes,
+    which are a different placement of the same question. The old name survived the feature
+    that took the word and would have read as "how many chats were handed off", which is
+    the one thing this number is not.
 
     The pair is meant to read as fired-vs-followed, and a dispatch that happened before the
     roster ever appeared cannot have followed it. Pairing advice against the LIFETIME total
@@ -234,9 +240,9 @@ def handoffs_since_first_advice() -> int:
     Still not proof of causation, and the report says "since" rather than "because" for
     that reason. It is a window in which the claim is at least possible.
 
-    Boundary, stated rather than hidden: rows are stamped to the second, so a handoff in
+    Boundary, stated rather than hidden: rows are stamped to the second, so a dispatch in
     the SAME second as the first advice counts as after it. It can only over-count, by at
-    most the handoffs sharing one second with the moment advice first appeared.
+    most the dispatches sharing one second with the moment advice first appeared.
     """
     since = first_advice()
     if since is None:

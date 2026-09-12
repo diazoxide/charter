@@ -67,16 +67,16 @@ class TestTheAdviceLineComparesLikeWithLike(StatsCase):
         the roster ever appeared cannot have followed it."""
         dispatch.record("forge", when=_ago(days=4))
         dispatch.record_advice(when=_ago(hours=1))
-        self.assertEqual(dispatch.handoffs_since_first_advice(), 0)
+        self.assertEqual(dispatch.routed_since_first_advice(), 0)
 
     def test_a_dispatch_after_the_first_advice_counts(self):
         dispatch.record_advice(when=_ago(hours=2))
         dispatch.record("forge", when=_ago(hours=1))
-        self.assertEqual(dispatch.handoffs_since_first_advice(), 1)
+        self.assertEqual(dispatch.routed_since_first_advice(), 1)
 
     def test_no_advice_means_nothing_to_compare(self):
         dispatch.record("forge")
-        self.assertEqual(dispatch.handoffs_since_first_advice(), 0)
+        self.assertEqual(dispatch.routed_since_first_advice(), 0)
 
     def test_the_report_uses_that_number_not_the_lifetime_total(self):
         self.persona("forge")

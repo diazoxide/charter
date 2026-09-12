@@ -154,8 +154,9 @@ class TestNearDuplicates(PersonaIso):
 class TestADuplicateJudgedByTitle(PersonaIso):
     """`by_title`, for a writer whose todos all end in the same sentence.
 
-    `charter handoff` is that writer. Scored over the whole text, its fixed nine-word
-    provenance tail read as agreement on both sides: two briefs with no word in common
+    `charter handoff` is that writer. Scored over the whole text, its fixed 18-word
+    provenance tail — nine words once `memstore.wordset` drops the short ones — read as
+    agreement on both sides: two briefs with no word in common
     scored 0.750 and the second was dropped, so the second handoff into a workspace recorded
     nothing at all.
     """

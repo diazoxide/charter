@@ -1400,7 +1400,7 @@ def cmd_persona_stats(args) -> int:
     advice = dispatch.advice_tally()
     if advice:
         since = dispatch.first_advice()
-        followed = dispatch.handoffs_since_first_advice()
+        followed = dispatch.routed_since_first_advice()
         # SINCE the first advice, never the lifetime total: a dispatch older than the
         # roster cannot have followed it, and pairing the two made this line claim five
         # dispatches followed one piece of advice — three of them four days its senior.

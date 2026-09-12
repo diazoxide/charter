@@ -102,8 +102,10 @@ def duplicate_of(name: str, text: str, *, by_title: bool = False) -> str | None:
 
     **`by_title` compares FIRST LINES, on both sides, and it exists because a writer whose
     todos all end in the same sentence otherwise reads as agreeing with itself.**
-    `charter handoff` is that writer: its todo is the brief's first line plus a nine-word
-    provenance sentence every handoff todo carries. Measured on the whole text, `Fix the
+    `charter handoff` is that writer: its todo is the brief's first line plus an 18-word
+    provenance sentence every handoff todo carries — nine comparable words once
+    :func:`memstore.wordset` drops everything three characters or shorter, and that is the
+    nine this comparison actually sees. Measured on the whole text, `Fix the
     widget` and `Ship the release` — briefs with no word in common — scored **0.750** and
     the second was refused as a duplicate of the first; any two handoff titles of four or
     fewer distinct words collided that way, so the second handoff into a workspace recorded

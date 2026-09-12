@@ -92,7 +92,7 @@ class TestTheFiredVsFollowedPairCountsIt(ResumeCase):
         dispatch.record_advice(when=_ago(hours=2))
         self.dispatched("release")
         self.resumed(AGENT_ID)
-        self.assertEqual(dispatch.handoffs_since_first_advice(), 2)
+        self.assertEqual(dispatch.routed_since_first_advice(), 2)
 
     def test_handoffs_before_the_advice_still_do_not_count(self):
         """Written with explicit times rather than back-to-back calls: the store stamps to
@@ -102,7 +102,7 @@ class TestTheFiredVsFollowedPairCountsIt(ResumeCase):
         dispatch.record("release", when=_ago(hours=3))
         dispatch.record_resume("release", when=_ago(hours=2))
         dispatch.record_advice(when=_ago(hours=1))
-        self.assertEqual(dispatch.handoffs_since_first_advice(), 0)
+        self.assertEqual(dispatch.routed_since_first_advice(), 0)
 
 
 class TestItNeverBreaksTheTurn(ResumeCase):
