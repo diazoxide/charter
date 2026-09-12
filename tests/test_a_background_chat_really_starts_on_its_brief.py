@@ -54,7 +54,26 @@ from charter.frame import layout, state, tmuxctl
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 from tests import _tmuxreap, _tmuxsocket
-from tests._isolation import PersonaIso, make_plane, no_update_check_in
+from tests._isolation import PersonaIso, make_plane, no_update_check_in, wired_as_today
+
+
+#: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
+#: launch, and that applies to the built-ins every launch test here starts. In-process the
+#: suite's `claude` guard makes detection read UNKNOWN, so every one of them would refuse
+#: over a fact none of them is about. One fixture for the module, because no test in it is
+#: about wiring; `tests/test_a_profile_is_wired_or_refuses.py` is where that is the subject.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -119,6 +138,15 @@ class _TwoChatsOnARealServer(PersonaIso):
         self.recorder.write_text(
             f"#!{sys.executable}\n"
             "import json, os, sys, time\n"
+            # **The wiring probe is answered first** (ruling 10): a pane's first process is
+            # charter's launcher, and it asks this very binary `plugin list --json` before
+            # it execs it. Falling through to the recording below would answer the probe
+            # with an argv dump, and the launch would refuse. One covering, ENABLED entry —
+            # `user` scope covers every directory (`plugincache.covers`).
+            "if sys.argv[1:3] == ['plugin', 'list']:\n"
+            "    json.dump([{'id': 'charter@charter', 'scope': 'user', 'enabled': True,\n"
+            "                'installedAt': '2026-09-12T00:00:00Z'}], sys.stdout)\n"
+            "    sys.exit(0)\n"
             "p = os.path.join(os.environ['RECORD_DIR'],\n"
             "                 os.environ['TMUX_PANE'].lstrip('%') + '.json')\n"
             "with open(p + '.tmp', 'w') as f:\n"

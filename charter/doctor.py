@@ -7,6 +7,7 @@ Nothing here changes the system.
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import json
 import os
 import platform
@@ -712,19 +713,19 @@ def check_plane_root() -> Result:
     )
 
 
-def check_harness_profiles() -> Result:
+def check_harness_profiles(*, preflight: bool = False) -> Result:
     """This machine's harness profiles, as `charter.local.toml` declares them now — and
     whether git would carry that file.
 
     Through `profiles.current()`, the one reader (ruling 43): it reads the file as it is now,
     and applies the refusals every surface sees, a name that clashes with a command included.
 
-    The git check lives here and not in `profiles.current()` because a person runs `doctor` —
-    though `charter doctor` is also what the SessionStart hook runs, so until doctor has a
-    preflight mode, a session start on a plane with the file pays this one lock-free
-    `git status`. `profiles.ignore_check` never raises, so one slow
-    git costs this row and nothing more: `_checks` builds every row in one list with no
-    per-check guard.
+    The git check lives here and not in `profiles.current()` because a person runs `doctor`.
+    **`charter doctor --preflight` — what the SessionStart hook runs — skips it** (re-review
+    N8): every git call on a hook path is paid at every session start, and what is left
+    costs one file read, so a refused profile and a missing `default` are still reported
+    there. `profiles.ignore_check` never raises, so one slow git costs this row and nothing
+    more: `_checks` builds every row in one list with no per-check guard.
 
     Each state's hint is that state's own fix (F3): `charter reinit` adds the ignore line, and
     that fixes a committable file only. WARN rather than FAIL even for a tracked file: its
@@ -738,7 +739,7 @@ def check_harness_profiles() -> Result:
     # committable file would be the one surface that reached the operator's own profiles with
     # no read the suite's guard could see (`tests/_planeguard`, ruling 43).
     profile_set = profiles.current()
-    check = profiles.ignore_check(_config.ROOT)
+    check = profiles.IgnoreCheck("", "") if preflight else profiles.ignore_check(_config.ROOT)
     if check.reason:
         return Result(name, WARN, detail=check.reason, hint=check.fix)
     names = ", ".join(profile_set.profiles)
@@ -754,6 +755,78 @@ def check_harness_profiles() -> Result:
                                                              names=names),
                       hint=profiles.DEFAULT_FIX.format(names=names))
     return Result(name, OK, detail=f"{len(profile_set.profiles)} profile(s): {names}")
+
+
+def check_profile_wiring(*, preflight: bool = False) -> list[Result]:
+    """One row per profile the selector would list: does charter's guard run in the folder
+    that profile names?
+
+    **No probe on a hook path** (ruling 11). `preflight=True` returns no rows and calls
+    nothing: a probe costs 137-718 ms per profile and writes into that profile's config
+    folder, and the SessionStart hook's whole budget is 20 s. Only a `charter doctor` a
+    person types probes.
+
+    **A profile whose command charter may not run yet is never probed** (ruling 1). Its row
+    says so and names what to run; asking the harness would mean running a command out of a
+    file a chat can write.
+
+    Concurrently, because the answers are independent and each is a subprocess: measured on
+    this plane, three declared profiles and three built-ins add well under the 2 s budget
+    ruling 11 sets. Each probe keeps its own `plugincache.LIST_TIMEOUT`.
+
+    **A row's exception costs that row, not the report** — `check_plugin_install`'s
+    catch-all shape. A `claude` that segfaults for one profile must not take the other rows,
+    or the checks after them, down with it.
+    """
+    from . import config as _config, profiles, wiring
+
+    if preflight:
+        return []
+    rows = wiring.listed()
+    out: list[Result] = []
+    with cf.ThreadPoolExecutor(max_workers=4) as pool:
+        answers = {p.name: pool.submit(_probe_one, wiring, p, _config.ROOT) for p in rows
+                   if not wiring.approval_needed(p)}
+        for p in rows:
+            name = f"profile {contain.readable(p.name)}"
+            why = wiring.approval_needed(p)
+            if why:
+                out.append(Result(name, WARN, detail=contain.readable(why),
+                                  hint=f"charter {contain.readable(p.name)}"))
+                continue
+            try:
+                w = answers[p.name].result()
+            except Exception as e:                      # noqa: BLE001 — one row, not the run
+                out.append(Result(name, WARN, detail=f"{type(e).__name__}: {e}",
+                                  hint=_NOT_CHECKED_HINT))
+                continue
+            if w.state == wiring.WIRED:
+                out.append(Result(name, OK, detail=w.detail))
+            elif w.state == wiring.UNWIRED:
+                out.append(Result(name, WARN, detail=w.detail, hint=w.fix))
+            else:
+                out.append(Result(name, WARN, detail=w.detail, hint=_NOT_CHECKED_HINT))
+    return out
+
+
+def _probe_one(wiring, p, root):
+    """One profile's probe, in its own thread. Separate so the executor holds a plain
+    callable and the loop above reads as the table it is."""
+    return wiring.detect(p, cwd=root)
+
+
+def profile_row_names(*, preflight: bool = False) -> list[str]:
+    """The names :func:`check_profile_wiring` will produce, without probing anything.
+
+    The same reader (`wiring.listed`), so `check_names` and `run_all` cannot disagree about
+    how many rows there are — the pin `_FIXED_CHECK_NAMES` already keeps for every other
+    check, applied to a list this plane's own `charter.local.toml` decides.
+    """
+    from . import profiles, wiring
+
+    if preflight:
+        return []
+    return [f"profile {contain.readable(p.name)}" for p in wiring.listed()]
 
 
 def check_index_lock() -> Result:
@@ -3769,7 +3842,7 @@ def check_mcp_launchers() -> Result:
 CHECK_TIMEOUT = 5.0
 
 
-def iter_all():
+def iter_all(*, preflight: bool = False):
     """Yield each :class:`Result` as it completes.
 
     A generator rather than a list because `cmd_doctor` collected everything before
@@ -3778,11 +3851,11 @@ def iter_all():
     "got as far as `vaults`, then stopped" — which names the culprit without charter
     having to guess at it.
     """
-    for r in _checks():
+    for r in _checks(preflight=preflight):
         yield r
 
 
-def _checks():
+def _checks(*, preflight: bool = False):
     """Order: cheap/local checks first, network checks last. The forge cli/auth pair is
     NOT fixed (it used to be exactly one hardcoded GitLab pair) — it's one pair PER
     FORGE this control plane actually declares (`declared_or_default_forges`), so a
@@ -3792,7 +3865,9 @@ def _checks():
     for forge in declared_or_default_forges():
         results.append(check_forge_cli(forge))
         results.append(check_forge_auth(forge))
-    results += [check_ssh(), check_control_plane_config(), check_harness_profiles(),
+    results += [check_ssh(), check_control_plane_config(),
+                check_harness_profiles(preflight=preflight),
+                *check_profile_wiring(preflight=preflight),
                 check_control_plane_schema(),
                 check_plane_root(), check_index_lock(),
                 check_session_root(), check_session_layer(),
@@ -3847,14 +3922,22 @@ _FIXED_CHECK_NAMES = (
     "credential paths", "mcp", "plugin install", "plugin", "plugin files",
 )
 
+#: The row the per-profile rows follow, in `_FIXED_CHECK_NAMES` and in `_checks`. A name
+#: rather than an index, so renaming the row above them moves them with it or fails loudly.
+_PROFILE_NAMES_AFTER = "harness profiles"
+
 #: Where the forge pair goes in `_FIXED_CHECK_NAMES` — after `git identity`, which is
 #: where `_checks` runs it. A number rather than a marker entry so the tuple holds only
 #: names and the pin below compares like with like.
 _FORGE_NAMES_AT = 3
 
 
-def check_names() -> list[str]:
+def check_names(*, preflight: bool = False) -> list[str]:
     """Every name this plane's preflight will print, **without running a single check**.
+
+    The profile rows are spliced after `harness profiles`, the forge pair's shape, because
+    which profiles this plane has is a property of one machine's `charter.local.toml` rather
+    than of this list — and `preflight` removes them, the way it removes them from the run.
 
     The forge pair is asked of `declared_or_default_forges` — the same call `_checks`
     makes, so the two cannot disagree about which forge this plane declares. A GitHub-only
@@ -3864,11 +3947,18 @@ def check_names() -> list[str]:
     pair = []
     for forge in declared_or_default_forges():
         pair += [forge.cli, f"{forge.cli} auth"]
-    return (list(_FIXED_CHECK_NAMES[:_FORGE_NAMES_AT]) + pair
-            + list(_FIXED_CHECK_NAMES[_FORGE_NAMES_AT:]))
+    names = (list(_FIXED_CHECK_NAMES[:_FORGE_NAMES_AT]) + pair
+             + list(_FIXED_CHECK_NAMES[_FORGE_NAMES_AT:]))
+    # `in` before `index`, because a test that stands in for `_FIXED_CHECK_NAMES` to prove
+    # the column is measured rather than guessed replaces the whole tuple — and a splice that
+    # raised there would take the width down over a row it was not asked about.
+    if _PROFILE_NAMES_AFTER not in names:
+        return names
+    at = names.index(_PROFILE_NAMES_AFTER) + 1
+    return names[:at] + profile_row_names(preflight=preflight) + names[at:]
 
 
-def name_width() -> int:
+def name_width(*, preflight: bool = False) -> int:
     """The NAME column of `charter doctor`, measured in cells from the names it holds.
 
     In cells rather than characters because cells are what a terminal lays out — the unit
@@ -3877,10 +3967,10 @@ def name_width() -> int:
     it is the same distinction that drew an 8-glyph CJK name 8 columns wide of every other
     row in `persona stats` (#508), and it is not something to get right later.
     """
-    return tui.column("", check_names())
+    return tui.column("", check_names(preflight=preflight))
 
 
-def run_all() -> list[Result]:
+def run_all(*, preflight: bool = False) -> list[Result]:
     """Every check, collected. Kept for callers that want them all at once (`--json`,
     tests); `iter_all` is what an interactive preflight should use."""
-    return list(iter_all())
+    return list(iter_all(preflight=preflight))

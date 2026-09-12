@@ -72,7 +72,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Mapping, NamedTuple
 
-from .. import config, contain, profiles, util
+from .. import config, contain, profiles, util, wiring
 from . import state, tmuxctl
 
 #: What a launcher that refused in the pane exits with, after printing why.
@@ -103,6 +103,9 @@ KIND_MOVED = "moved"
 #: The operator read the command and said no. Not a rule firing: their own answer.
 KIND_DECLINED = "declined"
 KIND_EXEC = "exec"
+#: `wiring.KIND_WIRING`, named here so a reader of this list sees every kind a launch can
+#: refuse with. The constant lives beside the check that produces it.
+KIND_WIRING = wiring.KIND_WIRING
 
 
 class Refusal(NamedTuple):
@@ -279,6 +282,13 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
 
     *attended* decides what the last link answers: an open somebody is in front of gets the
     question (`KIND_ASK`), and one nobody is at gets a refusal in its place.
+
+    **The wiring probe is last, and that is the order it costs in.** It runs the profile's
+    own command (137-718 ms measured) and writes into the folder it asks about, so a profile
+    refused for any earlier reason is never probed — and a profile whose command charter may
+    not run yet is never probed at all (ruling 1). Every call is a FRESH probe: a launch
+    never reads `wiring.cached`, because that file is as writable by a chat as
+    `charter.local.toml` is (ruling 21).
     """
     if p.source != profiles.BUILTIN:
         why = profiles.ignored_refusal(root)
@@ -295,7 +305,16 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
                        NOT_ON_PATH.format(name=contain.readable(p.name),
                                           cmd=contain.readable(program)),
                        MISSING_EXIT)
-    return _approval_refusal(p, attended=attended)
+    asked = _approval_refusal(p, attended=attended)
+    if asked is not None:
+        return asked
+    # `Path.cwd()`: the directory `_launch` stands in before tmux, and the pane's own start
+    # directory after. Claude Code resolves `enabledPlugins` there, so it is the directory
+    # the question is actually about.
+    why = wiring.refusal(p, cwd=Path.cwd())
+    if why:
+        return Refusal(KIND_WIRING, why, REFUSED_EXIT)
+    return None
 
 
 def _approval_refusal(p: profiles.Profile, *, attended: bool) -> Refusal | None:

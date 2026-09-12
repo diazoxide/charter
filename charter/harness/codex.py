@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from typing import Mapping
 
 from .base import WORKSPACE_SCOPE, Deficit, Harness
 
@@ -52,7 +53,7 @@ PLUGIN_UPDATE_CMD = ("codex plugin marketplace upgrade charter && "
                      "codex plugin add charter@charter")
 
 
-def config_path() -> Path:
+def config_path(env: Mapping[str, str] | None = None) -> Path:
     """Codex's config file. There is no project-level **config**: a `.codex/config.toml`
     or `codex.toml` planted in a project directory is ignored, checked by putting a
     deliberate type error in each and watching the config load anyway.
@@ -68,8 +69,13 @@ def config_path() -> Path:
     ``$CODEX_HOME`` is honoured — verified by pointing it at a throwaway directory and
     watching `codex mcp list` read that directory's config. Writing to `~/.codex`
     unconditionally would silently miss anyone who sets it.
+
+    *env* is the environment to resolve against, defaulting to this process's, so a harness
+    profile's own `$CODEX_HOME` is read and written by the same rule. **The home is the one
+    charter can SEE**: one a wrapper script exports on its way to `codex` is invisible here,
+    and `docs/harnesses.md` states that limit.
     """
-    home = os.environ.get("CODEX_HOME")
+    home = (os.environ if env is None else env).get("CODEX_HOME")
     return (Path(home) if home else Path.home() / ".codex") / "config.toml"
 
 
@@ -91,7 +97,7 @@ def _block() -> str:
         'set = { CHARTER_HARNESS = "codex" }', ""])
 
 
-def install() -> tuple[str, str]:
+def install(env: Mapping[str, str] | None = None) -> tuple[str, str]:
     """Arm charter's hooks in Codex's config. ``(status, detail)``.
 
     Not called by `init`, and that is the decision rather than an oversight: this file is
@@ -108,7 +114,7 @@ def install() -> tuple[str, str]:
     `trusted_hash`, and a `--dangerously-bypass-hook-trust` flag exist), so the caller is
     told to approve it rather than left believing the wiring is live.
     """
-    p = config_path()
+    p = config_path(env)
     raw = ""
     if p.exists():
         try:

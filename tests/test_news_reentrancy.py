@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands, commands_persona, config, doctor, news
+from tests._isolation import PersonaIso
 
 #: A `check:` a probe is allowed to run, standing in for whatever an entry names
 #: (#317: an entry picks from `news._PROBEABLE`, not from the whole CLI). Its
@@ -49,10 +50,17 @@ STAND_IN, STAND_IN_FN = "persona lint", "cmd_persona_lint"
 SWEEP_CAP = 6
 
 
-class NewsDir(unittest.TestCase):
-    """Entries read from a throwaway directory, so no test depends on what shipped."""
+class NewsDir(PersonaIso):
+    """Entries read from a throwaway directory, so no test depends on what shipped.
+
+    `PersonaIso` and not a bare `TestCase`: `charter doctor` builds its NAME column from
+    `doctor.check_names`, which now lists one row per harness profile — read off
+    `charter.local.toml`, which `tests/_planeguard` refuses for the real plane (ruling 43).
+    A throwaway plane is what that file is read from here.
+    """
 
     def setUp(self):
+        super().setUp()
         self.dir = Path(tempfile.mkdtemp())
         patch = mock.patch.object(news, "_PACKAGED", self.dir)
         patch.start()
@@ -77,7 +85,9 @@ class CheckDoctor(NewsDir):
         super().setUp()
         self.sweeps = 0
 
-        def sweep():
+        # `**kw` because `_checks` takes `preflight` now — what the SessionStart hook
+        # passes to leave the profile probes out.
+        def sweep(**kw):
             self.sweeps += 1
             if self.sweeps > SWEEP_CAP:
                 # Break the loop rather than recursing on. Without this an unguarded tree

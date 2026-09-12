@@ -58,6 +58,34 @@ sys.exit(0)
 '''
 
 
+#: A fake `opencode`, for the same reason and one release later.
+#:
+#: `doctor`'s per-profile wiring rows probe every LISTED profile, and a built-in is listed
+#: when its program is on `PATH` — so on a laptop with opencode installed, every module that
+#: reaches `doctor.run_all()` would spawn the real binary (measured: 631-718 ms a call).
+#: `[]` means *opencode is here and charter's shim is not*, which is the answer CI gives and
+#: the one every assertion in the suite was written against.
+_FAKE_OPENCODE = '''#!/usr/bin/env python3
+"""The test suite's `opencode`. See tests/_claudeguard.py — nothing here is real."""
+import json, os, sys
+from pathlib import Path
+
+if sys.argv[1:3] == ["debug", "config"]:
+    # The one thing the real binary does that any test could care about: it lists every
+    # plugin in `<XDG_CONFIG_HOME>/opencode/plugin/` as a `file://` URI, with the
+    # un-resolved spelling (measured against 1.18.23). Listing `[]` unconditionally would
+    # make `charter harness install opencode` report a shim it had just written as absent.
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    d = Path(xdg) / "opencode" / "plugin"
+    try:
+        here = sorted(p for p in d.iterdir() if p.suffix in (".ts", ".js"))
+    except OSError:
+        here = []
+    print(json.dumps({"plugin": [f"file://{p}" for p in here]}))
+sys.exit(0)
+'''
+
+
 def install() -> None:
     """Arm both halves. Idempotent, and called once from `tests/__init__.py`."""
     from charter import plugincache
@@ -66,13 +94,17 @@ def install() -> None:
     # every binary the suite looks up — `git`, `gh`, `tmux` — and this is a statement about
     # one of them. It is also the exact seam every existing opt-in already patches, so a
     # test that wants the other answer needs to know one name and not two.
-    plugincache.available = lambda: False
+    # `*a, **k`, not a zero-argument lambda: `available` takes the COMMAND to look up now,
+    # because a profile names its own (`["/opt/claude-wrap"]`), and the first call passing
+    # one would otherwise be a `TypeError` out of the guard rather than an answer.
+    plugincache.available = lambda *a, **k: False
 
     d = Path(tempfile.mkdtemp(prefix="charter-suite-claude-")) / "bin"
     d.mkdir(parents=True, exist_ok=True)
-    fake = d / "claude"
-    fake.write_text(_FAKE)
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    for name, body in (("claude", _FAKE), ("opencode", _FAKE_OPENCODE)):
+        fake = d / name
+        fake.write_text(body)
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     # PREPENDED, not appended: the operator's real `claude` is further down this same PATH
     # and appending would leave it winning. A child that spawns a grandchild inherits this
     # too, which is the point.

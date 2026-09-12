@@ -62,3 +62,26 @@ before tmux; the `+` and a workspace tab ask in the new chat's own pane, because
 behind them has no terminal and the pane has one. The record lives under `.charter/`, which
 a chat can write as easily as it can write `charter.local.toml` — so this catches a command
 you did not change yourself unless whatever changed it also forged the record.
+
+**A profile is wired, or it refuses to start.** Charter's guard lives in the harness's own
+config folder, and a profile names another one — so charter asks the harness, under that
+profile's own command and environment, whether its plugin or shim is actually there. A
+profile whose folder does not carry it refuses to launch, says what is missing and prints
+`charter harness install <profile>`, which wires that folder. A probe that cannot answer
+refuses too, and names the command to run by hand: an unknown is not a pass. `charter
+doctor` now shows a row per profile.
+
+**This includes the built-ins.** `charter codex` on a plane where nobody wired Codex, and
+`charter opencode` where `init` never wrote its shim, now refuse where they used to start. A
+chat that looks guarded and is not is the same failure whichever profile started it, and no
+flag starts one unguarded.
+
+`charter init` installs for each Claude Code and opencode profile you declared; `charter
+reinit` installs nothing, writing only the opencode shim and naming the install command for
+anything else; Codex stays opt-in through `charter harness install`, which prints the
+plugin and hook-approval steps Codex only accepts from you, with `CODEX_HOME=` in front.
+
+**Codex users: approve charter's SessionStart hook once more.** Its command gained
+`--preflight`, and Codex trusts a hook by the hash of its command. The flag is what keeps
+the probes off the hook path: `charter doctor --preflight` runs every other check and asks
+no harness anything.

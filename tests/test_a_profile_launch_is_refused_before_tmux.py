@@ -30,7 +30,27 @@ from charter.frame import launcher, layout, reopen as reopen_state, state, tmuxc
 from tests import _gitguard, _tmuxsocket
 from tests._isolation import (APipe as _APipe, ATerminal as _ATerminal, PersonaIso,
                               Typed as _Typed, approve_every_profile, declare_profiles,
-                              make_plane)
+                              make_plane, wired_as_today)
+
+
+#: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
+#: launch, and that applies to the built-ins every launch test here starts. In-process the
+#: suite's `claude` guard makes detection read UNKNOWN, so every one of them would refuse
+#: over a fact none of them is about. One fixture for the module, because no test in it is
+#: about wiring; `tests/test_a_profile_is_wired_or_refuses.py` is where that is the subject.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
+
 
 #: The operator's own tmux, as `tmuxctl.operator_server` reads it out of `$TMUX`: a socket
 #: PATH, which is what `is_operator_socket` tells from charter's own `-L charter` name.

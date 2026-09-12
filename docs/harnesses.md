@@ -196,6 +196,92 @@ is **capability** — agents, skills, commands — and three things are delibera
 - **`CLAUDE.md` or any equivalent**, because a guest hides its own files and does not
   narrate the host's.
 
+### Per profile — wired, or it refuses to start
+
+A profile points a harness at another config folder, and **every kind loses charter's wiring
+when its folder moves**. Measured in throwaway folders against claude 2.1.269, codex-cli
+0.147.0 and opencode 1.18.23: under an empty `$CLAUDE_CONFIG_DIR` charter's plugin is not
+merely disabled, it is unknown to that folder, because the marketplace is known only to the
+folder it was added in. Under an empty `$CODEX_HOME` there is no plugin, no hook trust and
+no `shell_environment_policy`. Under a throwaway `$XDG_CONFIG_HOME` opencode has no shim.
+
+So a chat started on such a profile would look guarded and not be, and charter refuses it:
+
+```
+charter: profile 'claude-alt' is not wired — charter@charter is not installed in
+/Users/you/.claude-alt for /plane/workspaces/w, so a chat on it would run without charter's
+guard. Nothing was started. Wire it: charter harness install claude-alt
+```
+
+**This includes the built-ins.** `charter codex` on a plane where nobody wired Codex, and
+`charter opencode` where `init` never wrote the shim, now refuse where they used to start:
+a chat that looks guarded and is not is the same failure whichever profile started it. No
+flag launches one unguarded.
+
+**Wiring is detected by asking the harness under the profile's own environment**, never
+inferred from the profile's variable names — one account can be reached through variables
+that do or do not move the plugin. `$XDG_DATA_HOME` moves opencode's login and leaves its
+plugins where they are; `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` move both.
+
+| kind | what charter asks | what "wired" means |
+|---|---|---|
+| Claude Code | `<command> plugin list --json`, run in the chat's own directory with the profile's `env` | an install record of `charter@charter` covering that directory or the plane, whose `enabled` is true |
+| Codex | reads `$CODEX_HOME/config.toml` — no subprocess | all three: `plugins."charter@charter".enabled`, `shell_environment_policy.set.CHARTER_HARNESS = "codex"`, and at least one trusted hook of charter's |
+| opencode | `<command> debug config` with the profile's `env` | all three: a `plugin` entry naming charter's shim, the shim byte-identical to what charter writes, and no other file in `plugin/` |
+
+Measured costs, five runs each: `claude plugin list --json` 137 ms against an empty folder
+and 178 ms against a full one; `opencode debug config` 631 ms and 718 ms; Codex parses one
+file. A launch pays it twice — once before tmux and once in the pane — and always freshly.
+
+Three details that decide answers, all measured on 2026-09-12:
+
+- **`enabled` is the effective setting at the directory charter asks from**, merged local >
+  project > user, and every listed entry of the plugin carries the same value. A disable
+  written only to `<dir>/.claude/settings.local.json` — or only to that directory's
+  `.claude/settings.json` — flips it, so charter reads no settings file of its own.
+- **An install covering the plane covers a chat in its workspace.** `charter init` installs
+  at `project` scope for the plane root, while a chat stands in `workspaces/<ws>/`; charter
+  mirrors the plane's `enabledPlugins` into that directory, so the record that covers the
+  plane is the one that answers there.
+- **Codex records hook trust lazily**, one entry per hook as each first fires — a machine
+  that has been running charter under Codex for weeks held 12 of the plugin's 18 keys — and
+  a `trusted_hash` cannot be recomputed from the plugin's `hooks/hooks.json`. So charter
+  asks whether charter's hooks were approved in that home *at all*, and an old entry
+  survives a change to a hook's command.
+
+**Charter cannot tell** — a probe that times out, exits non-zero or answers something
+unparseable — is also a refusal, with the probe to run by hand printed beside it. An unknown
+is not a pass.
+
+**What each command does per profile:**
+
+- `charter init` installs for every approved Claude Code and opencode profile, the same two
+  doors an install may come through. A Codex profile is reported as opt-in.
+- `charter reinit` installs nothing. It writes the opencode shim into each opencode
+  profile's own config home, and for a Claude Code profile it reports the gap and names
+  `charter harness install <name>`.
+- `charter harness install <name>` resolves a profile first and a registry name second, so
+  `charter harness install codex` still means what it always did. It wires that profile's
+  own folder and then asks the harness whether that worked — and exits non-zero when it did
+  not, which is the ordinary outcome for Codex, whose plugin install and hook approval are
+  Codex's own commands. Charter prints them with `CODEX_HOME=` in front.
+- `charter doctor` shows a row per profile and probes them concurrently.
+  `charter doctor --preflight`, which the SessionStart hook runs, probes nothing and shows
+  no profile row: a probe costs a subprocess and writes into somebody's account folder, and
+  a hook's whole budget is 20 seconds.
+
+**Limits, stated rather than designed around:**
+
+- `claude plugin list --json` **writes** `.claude.json` and a `backups/` directory into the
+  folder it asks about. Charter's probe is otherwise a read.
+- **Codex's home is the one charter can see.** One a wrapper script exports on its way to
+  `codex` is invisible here, and charter will report on the wrong file without knowing it.
+- `charter dispatch`'s transcript lookup and charter's persona skill lookup answer for the
+  **default** config folder, not for a profile's. Neither is about one chat.
+- The launch record and the wiring cache under `.charter/` are **as writable by a chat as
+  `charter.local.toml` is** — no path guard covers that directory. That is why a launch
+  never trusts the cache and always probes: the cache exists to draw the selector's rows.
+
 ## `charter statusline --watch`
 
 The one worth knowing. It repaints the plane state in place in any spare terminal — no
