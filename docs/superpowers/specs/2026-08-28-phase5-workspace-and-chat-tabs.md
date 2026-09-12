@@ -329,6 +329,15 @@ side.
 2. **The harness's auth.** Every harness authenticates itself, entirely outside the abstraction.
    Two chats on the same harness share that harness's credentials. Charter cannot separate them
    and does not pretend to (§4).
+
+   > *Superseded 2026-09-11 by harness profiles
+   > (`docs/superpowers/specs/2026-09-11-harness-profiles.md`,
+   > [ADR 0022](../../adr/0022-a-harness-profile-belongs-to-one-machine.md)): two profiles of
+   > one kind can hold two logins, because a profile carries the environment — a
+   > `CLAUDE_CONFIG_DIR`, a `CODEX_HOME` — that points the harness at another config folder.
+   > Charter still holds no credential of its own: the login is the harness's, made by running
+   > `/login` inside that folder. The sentence above stays because this spec is the record of
+   > what was decided in August.*
 3. **Anything drawn in the harness pane.** ADR 0018, enforced by construction: `_surface_argvs`
    never takes the harness pane as an argument.
 

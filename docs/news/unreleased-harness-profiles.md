@@ -21,7 +21,9 @@ named after it, and yours — with the file each came from and why any was refus
 charter cannot launch, a command written as a shell string, a name `charter` already uses, a
 variable named like a credential. Charter holds no credential in a profile, because anything
 set on the harness reaches the model's own shell; that refusal names the harness's own login
-instead.
+instead. It is a refusal to hold one and not a barrier against one: the pattern can catch an
+innocent name — `KEYBOARD_LAYOUT` contains `KEY` — and a wrapper script named in `command`
+can export whatever it likes.
 
 A profile's command will run on a click, so the file must never be committed. `charter init`
 writes `/charter.local.toml` into a new plane's `.gitignore` and `charter reinit` adds it to

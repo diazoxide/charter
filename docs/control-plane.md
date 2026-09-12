@@ -464,7 +464,9 @@ Two Claude Code accounts, work in one config folder and personal in another, or 
 pinned to an older release: charter ran one program per harness, one way, and had no way to
 be told otherwise. A shell alias does not help — charter runs the harness with no shell, so
 the alias never resolves. A **harness profile** is the way: a kind, a command and an
-environment, declared in a file that stays on your machine.
+environment, declared in a file that stays on your machine. The decisions behind the shape
+of this, and the reason each one rests on, are
+[ADR 0022](adr/0022-a-harness-profile-belongs-to-one-machine.md).
 
 **Every chat now starts through charter's own launcher, and launching a DECLARED profile
 arrives in a later release.** Charter reads the profiles, refuses the broken ones by name,
