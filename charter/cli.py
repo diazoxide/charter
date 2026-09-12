@@ -914,6 +914,7 @@ def _add_frame_parsers(sub) -> None:
     # listed in :data:`_OWN_FLAGS` so `_split_frame_argv` hands it to argparse instead of
     # grafting it onto the command's verbatim argv, and argparse then refuses it by name on
     # any parser but this one.
+    #
     # **No `--start` here**, and that asymmetry with `frame-launch` is deliberate. The row
     # the cursor opens on is a fact about the press — the profile of the chat `+` was
     # pressed in — and `cmd_new_chat` and `_open_workspace` call `cmd_launch` in-process
