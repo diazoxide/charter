@@ -3192,10 +3192,11 @@ anything — so a `.gitignore` edited or a binary uninstalled in between is a re
 selector reopens with that row updated and the reason in the footer. Only Esc closes the
 window.
 
-**What it costs to open.** Measured on this machine with three declared profiles beside the
-installed built-ins, the list charter reads and lays out — the profiles, and the one
+**What it costs to open.** Measured on this machine with three declared profiles beside
+the installed built-ins: the list charter reads and lays out — the profiles, and the one
 `git status` that says whether `charter.local.toml` is ignored — takes a median of 13 ms
-cold. Nothing here runs a profile's own command.
+with nothing cached and 11 ms with the read memoised. Nothing here runs a profile's own
+command.
 
 Charter drawing in a chat's pane at all is [ADR
 0018](adr/0018-charter-may-run-the-harness-but-never-draws-it.md) as its later amendments
