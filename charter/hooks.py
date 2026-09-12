@@ -6469,6 +6469,15 @@ def _brief_block(chat: str | None) -> str:
         if not frame_state.brief_owed(chat):
             return ""
         text = frame_state.brief(chat)
+        # **The sweep reports this line and it stays, which is a judgement rather than a
+        # suppression.** Deleting it hands `None` to `_brief_quoted`, which raises an
+        # `AttributeError` into this function's own `except` — measured — and that returns
+        # the same empty string, so nothing observable changes and the mutant survives. The
+        # two are not interchangeable to a reader: "this chat has no brief" is the ordinary
+        # state of a marker whose file could not be read, and routing it through an
+        # exception handler would make an expected answer indistinguishable from a defect.
+        # The `except` beside it is separately pinned, so this is a masked line rather than
+        # an unguarded one.
         if not text:
             return ""
         tok = _brief_token()

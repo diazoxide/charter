@@ -375,7 +375,14 @@ class TheMarkerIsTheFencesWholeDefence(PersonaIso):
         """The attacker gets no feedback, so every guess has to be written into the one
         brief `charter handoff` accepted — roughly a thousand of them at a dozen bytes
         each, against this many markers. Asserted as a width rather than a probability
-        because the width is the thing a later edit could quietly shrink."""
+        because the width is the thing a later edit could quietly shrink.
+
+        **A FLOOR, deliberately, and the sweep reports that as a survivor: widening the
+        constant leaves this green.** That is the assertion being right rather than weak.
+        The design needs *at least* this much entropy and has no interest in an upper
+        bound, so pinning equality would put a test in front of a deliberate widening and
+        call it a defect. Shrinking it is what must go red, and it does.
+        """
         self.assertEqual(len(hooks._brief_token()), 2 * hooks._BRIEF_TOKEN_BYTES)
         self.assertGreaterEqual(hooks._BRIEF_TOKEN_BYTES, 6)
 
