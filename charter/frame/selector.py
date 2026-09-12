@@ -247,11 +247,13 @@ class Selector(palette.Palette):
     on: str = ""
 
     def _refilter(self) -> None:
+        # No early return for an empty :attr:`on`, deliberately: `""` makes *wanted* a
+        # string no row id can equal (every one carries a name after the prefix), so the
+        # loop below is already the no-op an early return would have been — and a guard
+        # that only restates what the next line says is the shape this repository deletes
+        # (the sweep reported exactly that one as a survivor).
         super()._refilter()
-        if not self.on:
-            return
-        wanted = ROW_PREFIX + self.on
-        self.on = ""
+        wanted, self.on = (ROW_PREFIX + self.on if self.on else ""), ""
         for i, row in enumerate(self.rows):
             if row.id == wanted:
                 self._sel = i

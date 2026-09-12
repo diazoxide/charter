@@ -380,6 +380,79 @@ class TheConfirmAsksInPlace(_APickedSelector, unittest.TestCase):
         self.assertIn("could not write it", self.surfaces[2].footer)
 
 
+class TheSweepsOwnFindings(_APlaneWithProfiles, unittest.TestCase):
+    """The lines CI's deletion sweep reported as survivors on this branch's first run, each
+    with the case that goes red when it changes.
+
+    Nine of them, and they are here together rather than scattered because they are one
+    finding about one change: a surface, its argv, its two orderings and the three state
+    writers underneath it were all pinned by what they DID and not by what they SAID.
+    """
+
+    def test_the_launcher_refuses_a_launch_that_names_nothing_in_its_own_words(self):
+        """`launcher.NOTHING_NAMED`. The sentence is the whole of what this path produces —
+        it is reachable only by hand, so a number would tell nobody anything."""
+        said: list[str] = []
+        with mock.patch.object(launcher.util, "err", side_effect=said.append):
+            rc = launcher.cmd_frame_launch(
+                SimpleNamespace(select=False, start="", profile="", attended=False, rest=[]))
+        self.assertEqual(rc, 2)
+        self.assertIn("--select", said[0])
+        self.assertIn("charter <profile>", said[0])
+
+    def test_the_start_row_rides_the_launchers_argv_only_when_there_is_one(self):
+        """`argv_select`'s conditional. Always-`()` would make every selector open on
+        `palette.aim`'s row whatever the press expressed, which is a chat opening on
+        somebody else's account with nothing said."""
+        self.assertEqual(launcher.argv_select("claude-work")[-4:],
+                         ["--select", "--attended", "--start", "claude-work"])
+        self.assertEqual(launcher.argv_select(None)[-2:], ["--select", "--attended"])
+        self.assertNotIn("--start", launcher.argv_select(None))
+
+    def test_the_surface_says_what_it_is_for(self):
+        """`selector.LABEL` reaches the heading: the pane is a question, and a heading that
+        did not say which question is a modal surface with no subject."""
+        surface = selector.Selector(catalogue=self._rows())
+        self.assertEqual(surface.heading, selector.LABEL)
+        self.assertIn("which profile", surface.render(120, 8)[0])
+
+    def test_the_rows_are_built_ins_in_registry_order_then_declared_by_name(self):
+        """`place`'s index. Collapsed to a constant, every built-in sorts equal and the list
+        comes back alphabetical — so the row an operator reaches for moves the day charter
+        registers a harness, and `charter harness list` and this surface stop agreeing."""
+        order = list(profiles.builtins())
+        names = self._names(self._rows())
+        self.assertEqual(names[:len(order)], order)
+        self.assertEqual(names[len(order):], sorted(names[len(order):]))
+
+    def test_a_capital_y_is_a_yes_as_well(self):
+        """`Confirm` reads the key an operator with caps lock on pressed. Anything but a
+        yes goes back to the list, so a `Y` read as *anything else* is an approval an
+        operator gave and charter did not take."""
+        for key in ("y", "Y"):
+            with self.subTest(key=key):
+                self.assertEqual(
+                    selector.Confirm().handle(overlay.Event(overlay.KEY, key), 8),
+                    overlay.CHOOSE)
+
+    def test_the_waiting_marker_never_raises_over_a_chat_id_that_is_no_directory(self):
+        """All three writers, and the same shape `state.record_closed` has: `frame_dir`
+        REFUSES an id it cannot make a directory of rather than raising, so each of these
+        has to answer for that — two of them on a path a panel and a quit run."""
+        self.assertIsNone(state.record_waiting(""))
+        self.assertFalse(state.is_waiting(""))
+        self.assertIsNone(state.clear_waiting(""))
+
+    def test_forgetting_a_waiting_pane_survives_a_filesystem_that_refuses(self):
+        """`clear_waiting`'s catch. It runs at the pick, in the pane, one line before the
+        `exec` — so an `OSError` raised out of it would take down the launch that was about
+        to hand the pane to the harness, over a marker whose whole job is already done."""
+        state.record_waiting("beta.9")
+        with mock.patch.object(Path, "unlink", side_effect=OSError(13, "denied")):
+            self.assertIsNone(state.clear_waiting("beta.9"))
+        self.assertTrue(state.is_waiting("beta.9"))
+
+
 class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
     """`charter frame-launch --select` — what a new chat's window runs before any harness."""
 
