@@ -1315,7 +1315,11 @@ class _AServerWithOneWorkspaceRunning:
     asked and what charter did with the answer, not what a real server would do next.
     """
 
-    def __init__(self, *, clients=(), sessions=("beta",), chats=("beta.1",)):
+    def __init__(self, *, clients=(), sessions=("beta",), chats=("beta.1",), dead=None):
+        #: What `#{pane_dead}:#{pane_dead_status}` answers, or ``None`` for a pane that is
+        #: still running. The one tmux question whose answer decides what a launch SAYS
+        #: on its way out, which is why it is a knob rather than a constant.
+        self.dead = dead
         self.clients = list(clients)
         self.sessions = list(sessions)
         self.chats = list(chats)
@@ -1350,6 +1354,8 @@ class _AServerWithOneWorkspaceRunning:
             self.chats.append("beta.1")
             return _completed(cmd, 0, "%9\n")
         if "display-message" in cmd:
+            if "pane_dead" in cmd[-1] and self.dead is not None:
+                return _completed(cmd, 0, self.dead)
             return _completed(cmd, 0, "132:43")
         return _completed(cmd, 0)
 
@@ -1516,6 +1522,40 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertNotIn("\r", said[0])
         self.assertNotIn("\x1b", said[0])
         self.assertIn("\\u000d", said[0])
+
+    def _closing_pane(self, *, waiting: bool, code: int):
+        """A launch whose pane is already dead with *code*, said the way tmux says it.
+
+        The two sentences this is about are written after the pane has gone: charter asks
+        `#{pane_dead_status}` eagerly, kills the window and then reports. So the fixture
+        answers that question and lets `_launch` run to its end.
+        """
+        said: list[str] = []
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[], dead=f"1:{code}")
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append), \
+                mock.patch.object(commands_frame.util, "info", side_effect=said.append):
+            self._launch(fake, harness="" if waiting else "claude",
+                         select=waiting, profile=None if waiting else "claude")
+        return " ".join(said)
+
+    def test_a_cancelled_selector_says_nothing_about_a_death_or_a_recorded_plane(self):
+        """The pane started nothing, so neither sentence can be true of it: one names a
+        command that died and the other offers `charter reopen` for a chat the record does
+        not hold (`leave.plan` passes over a waiting pane)."""
+        said = self._closing_pane(waiting=True, code=selector.CANCELLED_EXIT)
+        self.assertNotIn("before the frame was drawn", said)
+        self.assertNotIn(commands_frame.SELECTOR_DISPLAY, said)
+        self.assertNotIn("reopen", said)
+
+    def test_a_pane_that_picked_and_then_died_still_says_so(self):
+        """The control, and the reason the suppression reads the marker rather than the
+        exit code: a harness that exits 130 because somebody pressed Ctrl-C at its own
+        prompt cleared the marker when it was picked, so it reads as the death it is —
+        the SAME number the case above suppresses, which is what makes this a control
+        rather than a second case about a different input."""
+        said = self._closing_pane(waiting=False, code=selector.CANCELLED_EXIT)
+        self.assertIn("before the frame was drawn", said)
+        self.assertIn("claude", said)
 
     def test_the_operators_own_tmux_records_the_same_two_things(self):
         """The other launch path, and it needs its own case because it writes its own
@@ -1706,17 +1746,18 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         self._tmux("send-keys", "-t", pane, "Escape")
         t.join(timeout=40)
         self.assertFalse(t.is_alive(), "the launch never returned")
-        # **The number is read off the chat's own record, not off this launch**, and that
-        # is a fact about the fixture rather than a weaker claim. A launch that will never
-        # attach returns as soon as the window exists (`_wants_attach`), so it is long gone
-        # by the time anybody presses anything; what waits for the pane is the `pane-died`
-        # hook, which writes the code the pane exited with. Reading it here is reading what
-        # the frame itself recorded.
+        # **The exit NUMBER is deliberately not asserted, and that is measured rather than
+        # conceded.** A pane that exits out of raw mode on the Linux runner comes back with
+        # an empty `#{pane_dead_status}` — `commands_frame._UNKNOWN_DEATH_CODE`'s own
+        # measurement, and ruling 42's — so 130 reaches the chat's `exit` record here and
+        # not there. What S2 is about survives that on both: the window went, the session
+        # went with it, nothing was started, and the pane is still a waiting one. It is
+        # also why `_launch` suppresses its early-death sentence on the MARKER rather than
+        # on the code (`nothing_ever_ran_here`).
+        #
+        # `out == [0]` because a launch that will never attach returns as soon as the
+        # window exists (`_wants_attach`) — long before anybody presses anything.
         self.assertEqual(out, [0])
-        self.assertTrue(
-            _eventually(lambda: state.exit_code("beta.1") == selector.CANCELLED_EXIT),
-            f"the cancelled pane recorded {state.exit_code('beta.1')!r}, not "
-            f"{selector.CANCELLED_EXIT}")
         self.assertTrue(
             _eventually(lambda: self.WS not in self._tmux("list-sessions").stdout),
             "the cancelled chat's session outlived its only window")

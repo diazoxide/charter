@@ -6079,15 +6079,26 @@ def _launch(args) -> int:
     refused = ""
     if code is None and p is not None and not attended:
         code, refused = _await_the_launcher(SOCKET, fid, harness_pane)
-    # **Esc at the profile selector is not a death, and this is how the two are told
-    # apart** — asked twice below, once for the early-death sentence and once for the
-    # recorded-plane one. The MARKER decides, never the number alone: a harness that exits
-    # 130 because the operator pressed Ctrl-C at its own prompt cleared `is_waiting` when it
-    # was picked, so it reads as the death it is.
-    def cancelled_at_the_selector(c) -> bool:
-        from .frame import selector
+    def nothing_ever_ran_here() -> bool:
+        """Whether this chat's pane is still the profile selector — asked twice below, once
+        for the early-death sentence and once for the recorded-plane one.
 
-        return c == selector.CANCELLED_EXIT and state.is_waiting(fid)
+        **The marker decides and the exit code decides nothing**, which is a correction
+        taken on evidence rather than a simplification. `state.is_waiting` IS "no harness
+        has ever run in this pane": both sentences below are about a harness — one names the
+        command that died, the other offers `charter reopen` for a chat the record does not
+        hold (`leave.plan` passes over a waiting pane) — so neither can be true here
+        whatever number comes back. A harness that exits 130 because somebody pressed Ctrl-C
+        at its own prompt cleared this marker when it was picked, so it still reads as the
+        death it is.
+
+        **Reading `CANCELLED_EXIT` instead was measured wrong on Linux.** A pane that exits
+        out of raw mode there comes back with an EMPTY `#{pane_dead_status}` —
+        :data:`_UNKNOWN_DEATH_CODE`'s own measurement, and ruling 42's — so a cancelled
+        selector arrived as code 1 and got `early_death_message` naming *the profile
+        selector* as a command that died. Measured on the 3.14 runner, 2026-09-12.
+        """
+        return state.is_waiting(fid)
 
     if code is not None:
         state.record_exit(fid, code)
@@ -6095,16 +6106,12 @@ def _launch(args) -> int:
             # The launcher's own sentence, said where the operator is: this process has a
             # terminal (or a caller reading its stderr) and the pane no longer exists.
             util.err(f"charter: {refused}")
-        elif cancelled_at_the_selector(code):
-            # **Esc at the selector, and there is nothing to report about it.** The pane
-            # exited `CANCELLED_EXIT` having started nothing, and it is still `is_waiting` —
-            # so this is not an early death, it is the operator closing a chat they had not
-            # opened yet. `early_death_message` would name "the profile selector" as a
-            # command that died, and `_say_the_plane_is_recorded` below would offer
-            # `charter reopen` for a chat the record does not hold. Both are suppressed by
-            # the same reading, which is the chat's own marker rather than the number alone:
-            # a harness that genuinely exits 130 (Ctrl-C at its prompt) has long since
-            # cleared it.
+        elif nothing_ever_ran_here():
+            # **The pane was still the selector, and there is nothing to report about
+            # it.** It started nothing, so this is not an early death — it is the operator
+            # closing a chat they had not opened yet, or a launcher that showed its own
+            # refusal on screen and waited for a key (ruling 42). See
+            # `nothing_ever_ran_here` for why the number is not read.
             pass
         elif code != 0:
             # The one path on which NOTHING is ever drawn (#384): no panels, no
@@ -6283,8 +6290,8 @@ def _launch(args) -> int:
     # **And never for a chat that was still at the selector.** Nothing was started in it and
     # nothing recorded it (`leave.plan` passes over a waiting pane), so naming `charter
     # reopen` would offer to bring back a chat the record does not hold. See
-    # `cancelled_at_the_selector` above for why this reads the marker and not the number.
-    if _wants_attach(args) and not cancelled_at_the_selector(code):
+    # `nothing_ever_ran_here` above for why this reads the marker and not the number.
+    if _wants_attach(args) and not nothing_ever_ran_here():
         _say_the_plane_is_recorded(fid, over=fid not in live_after)
     if code is not None:
         return code
