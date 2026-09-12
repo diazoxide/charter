@@ -3192,11 +3192,14 @@ anything — so a `.gitignore` edited or a binary uninstalled in between is a re
 selector reopens with that row updated and the reason in the footer. Only Esc closes the
 window.
 
-**What it costs to open.** Measured on this machine with three declared profiles beside
-the installed built-ins: the list charter reads and lays out — the profiles, and the one
-`git status` that says whether `charter.local.toml` is ignored — takes a median of 13 ms
-with nothing cached and 11 ms with the read memoised. Nothing here runs a profile's own
-command.
+**What it costs to open.** Measured end to end, from the launch to the first painted row,
+on a real server with three declared profiles beside the installed built-ins and again with
+none: **a median of 145 ms on tmux 3.7c and 137 ms at the 3.2 floor**, over 12 runs whose
+slowest was under a sixth of a second, with the count of declared profiles making no
+difference anybody could see. That is the
+whole open — the tmux session, the window, charter starting in the pane, the profiles read,
+the one `git status` that says whether `charter.local.toml` is ignored, and the paint.
+Nothing here runs a profile's own command.
 
 Charter drawing in a chat's pane at all is [ADR
 0018](adr/0018-charter-may-run-the-harness-but-never-draws-it.md) as its later amendments
