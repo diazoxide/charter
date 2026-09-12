@@ -370,7 +370,9 @@ def install(project, scope: str = INSTALL_SCOPE, *, env: dict | None = None,
     installing software because some unrelated command ran is #857's surprise, and the same
     reason charter refuses to write `~/.claude/settings.json` unasked.
     """
-    if not available(command):
+    # The PATH the steps below will run under, as `_claude_json` asks it (A2): a profile
+    # whose program lives only on its own `PATH` is installed for, not called unavailable.
+    if not available(command, path=(env or {}).get("PATH")):
         return "unavailable", (f"`{command[0]}` is not on PATH, so there is no Claude "
                                f"Code to install a plugin into")
     entry = installed_for(project, env=env, command=command)

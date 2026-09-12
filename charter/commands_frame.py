@@ -8060,7 +8060,7 @@ def _the_pane_will_ask(r) -> bool:
             and not profiletrust.can_ask(sys.stdin, sys.stdout))
 
 
-def _launch_refusal(p, *, attended: bool, cwd=None) -> str:
+def _launch_refusal(p, *, attended: bool, cwd=None, probe: bool = True) -> str:
     """The launcher's own refusal for *p* as a sentence, or ``""`` when it may start.
 
     **Asked by the presses, because a press has no other surface.** `_launch` runs this same
@@ -8078,7 +8078,7 @@ def _launch_refusal(p, *, attended: bool, cwd=None) -> str:
     a command it has not been shown before" on the attention row and open no chat — for a
     profile the operator is one keypress away from approving in the pane.
     """
-    r = _profile_refusal(p, attended=attended, cwd=cwd)
+    r = _profile_refusal(p, attended=attended, cwd=cwd, probe=probe)
     if r is None or _the_pane_will_ask(r):
         return ""
     return r.text
@@ -11242,7 +11242,8 @@ def background_refusal(ws: str, *, caller: str, first_message: str) -> str:
         ws, caller=caller, first_message=first_message)[0]
 
 
-def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str):
+def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str,
+                                    probe: bool = True):
     """``(refusal, profile, harness)`` — every reason an open would refuse, and what it
     resolved on the way to finding none.
 
@@ -11277,7 +11278,7 @@ def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str)
     # that cannot start is refused while there is still nothing to undo: no chat directory,
     # no window, no first message anywhere. Unattended, because nobody is in front of the
     # chat this would open: a check that would ask refuses here instead (review 3).
-    refused = _launch_refusal(p, attended=False, cwd=_chat_dir_of(ws))
+    refused = _launch_refusal(p, attended=False, cwd=_chat_dir_of(ws), probe=probe)
     if refused:
         return f"cannot open a chat in '{ws}': {refused}", None, None
     h = _harness_of(p)
@@ -11331,8 +11332,13 @@ def open_in_background(ws: str, *, caller: str, first_message: str,
     harness starts. A caller writing it afterwards would be writing the file the new chat's
     SessionStart is already looking for.
     """
+    # **Everything again but the wiring probe.** `charter handoff` — this seam's one caller
+    # — asked `background_refusal` a moment ago, probe included, so its refusal could be
+    # said before anything was written; the pane probes again before its `exec`. A third
+    # probe here bought nothing the pane's does not (A3: a start pays two). The cheap checks
+    # still run, for the race `background_refusal`'s docstring names.
     refusal, p, h = _how_a_background_open_would_go(
-        ws, caller=caller, first_message=first_message)
+        ws, caller=caller, first_message=first_message, probe=False)
     if refusal:
         return Opened(False, "", refusal)
     socket = state.frame_server(caller) or SOCKET

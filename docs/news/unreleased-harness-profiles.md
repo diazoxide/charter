@@ -86,4 +86,8 @@ only accepts from you, with `CODEX_HOME=` in front.
 **Codex users: approve charter's SessionStart hook once more.** Its command gained
 `--preflight`, and Codex trusts a hook by the hash of its command. The flag is what keeps
 the probes off the hook path: `charter doctor --preflight` runs every other check and asks
-no harness anything.
+no harness anything. The CLI and the plugin release together, and until the CLI is updated
+too, a session start with the new plugin runs **no preflight check at all**: the older CLI
+rejects the flag, the hook still exits 0, and the session opens with `charter preflight
+failed - fix before working:` over `charter: error: unrecognized arguments: --preflight`.
+`charter update` moves the CLI, and the line goes away.

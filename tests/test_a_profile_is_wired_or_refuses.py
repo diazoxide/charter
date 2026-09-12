@@ -304,6 +304,35 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
                           "claude", "plugin", "enable", plugincache.PLUGIN_ID,
                           "--scope", "local"])
 
+    def test_install_looks_the_command_up_on_the_profiles_own_path_too(self):
+        """A2, second pass: `charter harness install` and `init` reach `plugincache.install`,
+        which asked the process `PATH` and answered `unavailable` for a program that lives
+        only on the profile's own."""
+        bin_dir = self.tmp / "install-bin"
+        bin_dir.mkdir()
+        program = bin_dir / "claude-install-only-here"
+        program.write_text("#!/bin/sh\nexit 0\n")
+        program.chmod(0o755)
+        p = approve_profile(self, make_profile("claude-ipath",
+                                               command=["claude-install-only-here"],
+                                               env=[("PATH", str(bin_dir))]))
+        ran = []
+        real = util.run
+
+        def run(cmd, *a, **kw):
+            if list(cmd)[:1] == ["git"]:
+                return real(cmd, *a, **kw)
+            ran.append(list(cmd))
+            out = listing() if "list" in cmd else ""
+            return SimpleNamespace(returncode=0, stdout=out, stderr="")
+
+        with mock.patch.object(plugincache, "available", _claudeguard.REAL_AVAILABLE), \
+                mock.patch.object(util, "run", run):
+            got = wiring.install(p, self.here)
+        self.assertEqual([s for s, _l in got], ["installed"], got)
+        self.assertIn(["claude-install-only-here", "plugin", "install", plugincache.PLUGIN_ID,
+                       "--scope", plugincache.INSTALL_SCOPE, "-y"], ran)
+
     def test_a_fix_for_a_directory_with_a_space_can_still_be_pasted(self):
         """A11: every path and word is shell-quoted, so the line survives the paste."""
         here = self.tmp / "a dir; with parts"
@@ -474,6 +503,25 @@ TRUST_KEY = f"{plugincache.PLUGIN_ID}:hooks/hooks.json:pre_tool_use:0:0"
 NOT_A_GUARD_KEY = f"{plugincache.PLUGIN_ID}:hooks/hooks.json:session_start:0:0"
 
 
+#: A trust entry for charter's DISPATCH hook — `pretooluse-dispatch`, the `Task|Agent` group,
+#: which is a `pre_tool_use` hook and not the guard that refuses a shell command.
+DISPATCH_KEY = f"{plugincache.PLUGIN_ID}:hooks/hooks.json:pre_tool_use:2:0"
+
+
+def plugin_in_codex_cache(home: Path, hooks_doc: dict | None = None,
+                          version: str = "0.60.0") -> Path:
+    """The charter plugin as Codex installs it under *home*: its `hooks/hooks.json` at
+    `plugins/cache/<marketplace>/<plugin>/<version>/` (D4). The trust ledger's
+    `<event>:<group>:<hook>` positions are positions in THIS file, so it is where charter
+    reads which one is its guard. Given no *hooks_doc*, the repository's own."""
+    d = home / "plugins" / "cache" / "charter" / "charter" / version / "hooks"
+    d.mkdir(parents=True, exist_ok=True)
+    doc = hooks_doc if hooks_doc is not None else json.loads(
+        (REPO / "hooks" / "hooks.json").read_text())
+    (d / "hooks.json").write_text(json.dumps(doc))
+    return d / "hooks.json"
+
+
 def codex_config(*, plugin=True, policy=True, trust=True) -> str:
     doc = []
     if plugin:
@@ -497,6 +545,7 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         super().setUp()
         self.home = self.tmp / "codex-home"
         self.home.mkdir()
+        plugin_in_codex_cache(self.home)
         self.p = approve_profile(self, make_profile("codex-alt", kind="codex",
                                                     env=[("CODEX_HOME", str(self.home))]))
 
@@ -566,6 +615,67 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         self.assertEqual(w.state, wiring.UNWIRED)
         self.assertIn("no guard hook of charter's is trusted", w.detail)
 
+    def test_a_trusted_dispatch_hook_alone_is_not_wired(self):
+        """A5, second pass: charter's `Task|Agent` dispatch hook is ALSO a `pre_tool_use`
+        hook. Trusted alone, it reads like a guard to a rule keyed on the event, while the
+        Bash guard that actually refuses commands is untrusted."""
+        self.write(codex_config(trust=False)
+                   + f'\n[hooks.state."{DISPATCH_KEY}"]\ntrusted_hash = "sha256:abc"\n')
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("no guard hook of charter's is trusted", w.detail)
+
+    def test_the_guard_is_found_where_the_installed_plugin_puts_it(self):
+        """The position comes from the installed plugin's own `hooks.json`, not a
+        hard-coded index: move the Bash guard to group 1 and group 1's entry is the guard,
+        group 0's is not."""
+        doc = json.loads((REPO / "hooks" / "hooks.json").read_text())
+        pre = doc["hooks"]["PreToolUse"]
+        pre[0], pre[1] = pre[1], pre[0]
+        plugin_in_codex_cache(self.home, doc)
+        moved = TRUST_KEY.replace(":0:0", ":1:0")
+        self.write(codex_config(trust=False)
+                   + f'\n[hooks.state."{moved}"]\ntrusted_hash = "sha256:abc"\n')
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.WIRED)
+        self.write(codex_config())
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNWIRED)
+
+    def test_a_home_with_no_plugin_in_its_cache_has_no_guard_to_trust(self):
+        shutil.rmtree(self.home / "plugins")
+        self.write(codex_config())
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("plugins/cache", w.detail)
+
+    def test_two_installed_versions_must_agree_on_where_the_guard_is(self):
+        """Codex may keep an older version's cache beside the current one. A position is the
+        guard only if EVERY cached copy says so — the rule that fails closed."""
+        doc = json.loads((REPO / "hooks" / "hooks.json").read_text())
+        pre = doc["hooks"]["PreToolUse"]
+        pre[0], pre[2] = pre[2], pre[0]
+        plugin_in_codex_cache(self.home, doc, version="0.59.0")
+        self.write(codex_config())
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNWIRED)
+
+    def test_an_unreadable_plugin_hooks_file_is_unknown(self):
+        (self.home / "plugins" / "cache" / "charter" / "charter" / "0.60.0" / "hooks"
+         / "hooks.json").write_text("{nope")
+        self.write(codex_config())
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNKNOWN_STATE)
+
+    def test_the_guard_handler_is_the_one_charters_own_hooks_file_puts_on_bash(self):
+        """The constant the detection keys on, pinned to the source that ships it: the
+        repository's `hooks/hooks.json` runs exactly this handler for `Bash`, and it is a
+        handler the CLI dispatches."""
+        from charter import hooks
+
+        doc = json.loads((REPO / "hooks" / "hooks.json").read_text())
+        bash = [g for g in doc["hooks"]["PreToolUse"] if g.get("matcher") == "Bash"]
+        self.assertEqual(len(bash), 1)
+        self.assertEqual(hooks._HOOK_CMD_RE.findall(bash[0]["hooks"][0]["command"]),
+                         [wiring.CODEX_GUARD_HANDLER])
+        self.assertIn(wiring.CODEX_GUARD_HANDLER, hooks._HANDLERS)
+
     def test_a_config_in_a_shape_codex_never_writes_is_unknown_and_never_a_traceback(self):
         """A1. Each of these parses as TOML, and each is a line a chat can write: read
         without checking the shape first, every one of them was an `AttributeError` out of a
@@ -630,6 +740,7 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         home = self.tmp / "fakehome"
         (home / ".codex").mkdir(parents=True)
         (home / ".codex" / "config.toml").write_text(codex_config())
+        plugin_in_codex_cache(home / ".codex")
         p = make_profile("codex", kind="codex", source=profiles.BUILTIN)
         with mock.patch.dict(os.environ, {"HOME": str(home), "PATH": os.environ["PATH"]},
                              clear=True):
@@ -1174,7 +1285,7 @@ class TheLaunchRefusesAnUnwiredProfile(PersonaIso, unittest.TestCase):
         seen = []
         with mock.patch.object(
                 commands_frame, "_profile_refusal",
-                side_effect=lambda p, *, attended, cwd=None: seen.append(cwd)):
+                side_effect=lambda p, *, attended, cwd=None, probe=True: seen.append(cwd)):
             commands_frame._launch_refusal(profiles.current().profiles["claude"],
                                            attended=False,
                                            cwd=commands_frame._chat_dir_of("beta"))
@@ -1230,6 +1341,59 @@ class AStartPaysTheProbeTwice(_ALaunchNamesAProfile, unittest.TestCase):
         opening = commands_frame.Opening("hello there")
         self.assertEqual(self._launch(profile="claude-work", attach=False, opening=opening,
                                       rest=["hello there"], stdin=_APipe()), 0)
+        self.assertEqual(self.probed, [])
+
+    def test_a_handoff_end_to_end_probes_once_before_tmux_and_once_in_the_pane(self):
+        """A3, second pass: `charter handoff` asks `background_refusal`, then
+        `open_in_background` asks the same chain again, then `_launch` and the pane — and
+        the first two each probed. The handoff's refusal is said by the first; the pane's
+        probe covers what moved since. Two in all."""
+        from charter.frame import state
+        from tests.test_a_chat_carries_its_profile import _a_chat
+
+        _a_chat("alpha.1", ws="alpha", profile="claude-work")
+        said = "fix the widget please"
+        stood_in = [mock.patch.object(commands_frame, "_plane_session",
+                                      return_value=("$1", "beta.1")),
+                    mock.patch.object(commands_frame, "_window_size", return_value=(120, 40))]
+        for patch in stood_in:
+            self.enterContext(patch)
+        with mock.patch.object(commands_frame, "_live_sessions", return_value=set()):
+            self.assertEqual(commands_frame.background_refusal(
+                "beta", caller="alpha.1", first_message=said), "")
+        self.assertEqual(len(self.probed), 1, self.probed)
+        launched = []
+
+        def through_the_real_launch(args):
+            launched.append(args)
+            return self._launch(stdin=_APipe(), **vars(args))
+
+        with mock.patch.object(commands_frame, "cmd_launch",
+                               side_effect=through_the_real_launch):
+            commands_frame.open_in_background("beta", caller="alpha.1", first_message=said)
+        self.assertEqual(len(launched), 1)
+        self.assertEqual(len(self.probed), 1, "the open probed again before tmux")
+        self.assertEqual(launcher.start(self._profile(), launched[0].rest, fid=None,
+                                        attended=False), 0)
+        self.assertEqual(len(self.probed), 2, self.probed)
+        self.assertIsNotNone(state)
+
+    def test_the_open_after_a_handoffs_refusal_still_refuses_for_everything_else(self):
+        """Only the wiring link is left to the pane: an unapproved profile is still refused
+        by `open_in_background` itself, before anything is started."""
+        from tests.test_a_chat_carries_its_profile import _a_chat
+
+        _a_chat("alpha.1", ws="alpha", profile="claude-work")
+        (config.STATE_DIR / profiletrust.RECORD).write_text("{}")
+        with mock.patch.object(commands_frame, "_plane_session", return_value=("$1", "beta.1")), \
+                mock.patch.object(commands_frame, "_window_size", return_value=(120, 40)), \
+                mock.patch.object(commands_frame, "_live_sessions", return_value=set()), \
+                mock.patch.object(commands_frame, "cmd_launch",
+                                  side_effect=AssertionError("launched")):
+            opened = commands_frame.open_in_background("beta", caller="alpha.1",
+                                                       first_message="fix the widget please")
+        self.assertFalse(opened.ok)
+        self.assertIn("nobody is at this open", opened.message)
         self.assertEqual(self.probed, [])
 
     def test_skipping_it_skips_the_probe_and_nothing_else(self):

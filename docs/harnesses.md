@@ -226,7 +226,7 @@ plugins where they are; `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` move both.
 | kind | what charter asks | what "wired" means |
 |---|---|---|
 | Claude Code | `<command> plugin list --json`, run in the chat's own directory with the profile's `env` | an install record of `charter@charter` covering that directory or the plane, whose `enabled` is true |
-| Codex | reads `$CODEX_HOME/config.toml` — no subprocess | all three: `plugins."charter@charter".enabled`, `shell_environment_policy.set.CHARTER_HARNESS = "codex"`, and at least one trusted **guard** hook of charter's (`pre_tool_use`) |
+| Codex | reads `$CODEX_HOME/config.toml` — no subprocess | all three: `plugins."charter@charter".enabled`, `shell_environment_policy.set.CHARTER_HARNESS = "codex"`, and a trusted entry for charter's **guard** hook — `charter hook pretooluse`, at the position the installed plugin's `hooks.json` gives it |
 | opencode | `<command> debug config` with the profile's `env` | all three: a `plugin` entry naming charter's shim, the shim byte-identical to what charter writes, and no other file in `plugin/` |
 
 Measured costs, five runs each: `claude plugin list --json` 137 ms against an empty folder
@@ -253,10 +253,14 @@ Three details that decide answers, all measured on 2026-09-12:
 - **Codex records hook trust lazily**, one entry per hook as each first fires — a machine
   that has been running charter under Codex for weeks held 12 of the plugin's 18 keys — and
   a `trusted_hash` cannot be recomputed from the plugin's `hooks/hooks.json`. So charter
-  asks whether one of charter's **guard** hooks — a `pre_tool_use` entry — was approved in
-  that home at all. An approved SessionStart hook is not enough: Codex asks about each hook
-  on its own, and that one guards nothing. An old entry survives a change to a hook's
-  command.
+  asks whether charter's **guard** hook — `charter hook pretooluse`, the one on `Bash` that
+  refuses a command — was approved in that home at all. Neither an approved SessionStart
+  hook nor the approved `Task|Agent` dispatch hook is enough: Codex asks about each hook on
+  its own, and neither of those refuses a command. Codex numbers its trust entries by
+  position in the installed plugin's own `hooks/hooks.json`
+  (`$CODEX_HOME/plugins/cache/charter/charter/<version>/`), and those positions move between
+  releases, so charter reads the guard's position there; when two cached versions disagree,
+  it is not wired. An old entry survives a change to a hook's command.
 - **A disabled plugin's fix is `claude plugin enable charter@charter --scope local`, run in
   the chat's own directory**, and charter prints it with that `cd` in front. Measured on
   claude 2.1.270 (2026-09-13): it undid a disable in that directory's `settings.local.json`,

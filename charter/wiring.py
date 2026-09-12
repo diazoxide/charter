@@ -53,6 +53,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import time
@@ -82,12 +83,19 @@ MAX_AGE = 24 * 3600
 #: The key prefix Codex writes its hook-trust ledger under, per plugin.
 CODEX_TRUST_PREFIX = f"{plugincache.PLUGIN_ID}:hooks/hooks.json:"
 
-#: The Codex hook event every one of charter's guards is declared on. **A trusted hook is
-#: not a trusted guard**: Codex asks about each hook separately, and an approved
-#: `session_start` reconcile says nothing about whether `charter hook pretooluse` will run
-#: before a shell command (ruling 7 — "charter's guard actually runs"). Charter declares no
-#: other hook on this event, so a trusted entry under it is a trusted guard.
-CODEX_GUARD_EVENT = "pre_tool_use"
+#: The handler of charter's GUARD — `charter hook pretooluse`, the hook on `Bash` that
+#: refuses a command. **A trusted hook is not a trusted guard**: Codex asks about each hook
+#: separately, and neither an approved SessionStart reconcile nor an approved `Task|Agent`
+#: dispatch hook (`pretooluse-dispatch`, a `pre_tool_use` hook too) says anything about
+#: whether this one runs before a shell command (ruling 7 — "charter's guard actually
+#: runs"). Named by HANDLER and not by position: Codex keys trust by
+#: `<event>:<group>:<hook>` within the installed plugin's own `hooks/hooks.json`, and a
+#: position is a fact about one version of that file (:func:`_codex_guard_keys`).
+CODEX_GUARD_HANDLER = "pretooluse"
+
+#: Where Codex keeps an installed plugin, under its home: `plugins/cache/<marketplace>/
+#: <plugin>/<version>/` (D4, codex-cli 0.147.0).
+CODEX_PLUGIN_CACHE = Path("plugins") / "cache"
 
 #: How a Codex plugin is installed, pinned against codex-cli 0.147.0 by running it
 #: (D4, 2026-09-12): `codex plugin` has add / list / marketplace / remove and no `install`.
@@ -399,8 +407,9 @@ def _codex(p: profiles.Profile, cwd: Path, env: Mapping[str, str]) -> Wiring:
     against a real hash on 2026-09-12 and none matched. And Codex writes an entry per hook
     **lazily**, as each first fires — the operator's own wired home held 12 of the plugin's
     18 keys — so "an entry for every hook key" would call a wired machine unwired. What is
-    left is honest and weaker, and `docs/harnesses.md` says so: one of charter's GUARD hooks
-    (:data:`CODEX_GUARD_EVENT`) was approved in this home at least once.
+    left is honest and weaker, and `docs/harnesses.md` says so: charter's GUARD hook
+    (:data:`CODEX_GUARD_HANDLER`, at the position the installed plugin gives it) was
+    approved in this home at least once.
 
     The home is the one charter can see. One a wrapper script exports on its way to `codex`
     is invisible here, and the docs state that limit.
@@ -414,7 +423,10 @@ def _codex(p: profiles.Profile, cwd: Path, env: Mapping[str, str]) -> Wiring:
         doc = {}
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         return Wiring(UNKNOWN_STATE, f"{where} could not be read ({_whole(e)})", fix)
-    marks = _codex_marks(doc)
+    guards = _codex_guard_keys(path.parent)
+    if isinstance(guards, str):
+        return Wiring(UNKNOWN_STATE, guards, fix)
+    marks = _codex_marks(doc, guards)
     if isinstance(marks, str):
         return Wiring(UNKNOWN_STATE, CODEX_SHAPE.format(path=where, key=marks), fix)
     plugin, policy, trusted = marks
@@ -423,7 +435,11 @@ def _codex(p: profiles.Profile, cwd: Path, env: Mapping[str, str]) -> Wiring:
         missing.append(f"{plugincache.PLUGIN_ID} is not an enabled plugin")
     if policy.get("CHARTER_HARNESS") != codex.NAME:
         missing.append('shell_environment_policy.set has no CHARTER_HARNESS = "codex"')
-    if not trusted:
+    if not guards:
+        missing.append(f"no copy of {plugincache.PLUGIN_ID} under "
+                       f"{_whole(path.parent / CODEX_PLUGIN_CACHE)} places charter's guard "
+                       f"hook, so there is no guard to trust")
+    elif not trusted:
         missing.append("no guard hook of charter's is trusted — approve them in a codex "
                        "session")
     if not missing:
@@ -444,9 +460,70 @@ def _codex(p: profiles.Profile, cwd: Path, env: Mapping[str, str]) -> Wiring:
     return Wiring(UNWIRED, f"{where}: " + "; ".join(missing), fix)
 
 
-def _codex_marks(doc: dict):
+def _codex_guard_keys(home: Path):
+    """The trust-ledger keys that are charter's guard in *home* — or why charter could not
+    read where the guard is.
+
+    Read out of the INSTALLED plugin's `hooks/hooks.json`, because that file is what Codex
+    numbers its `<event>:<group>:<hook>` keys against: charter's own `hooks.json` has moved
+    groups between releases (0.42.0 had three `PreToolUse` groups, 0.60.0 has four), so a
+    hard-coded index is right for one version and silently names the dispatch hook in
+    another. A key is the guard when its hook runs :data:`CODEX_GUARD_HANDLER`.
+
+    Every cached version must agree, and a key only one of them calls the guard is not one:
+    Codex can keep an older copy beside the current one, and charter cannot tell which of
+    them it numbered the ledger by — so the rule is the one that fails closed. No copy at
+    all is an empty set, which reads as nothing to trust; a copy charter cannot read is an
+    UNKNOWN, because it may be the one that places the guard.
+    """
+    marketplace = plugincache.PLUGIN_ID.split("@", 1)[-1]
+    plugin = plugincache.PLUGIN_ID.split("@", 1)[0]
+    root = home / CODEX_PLUGIN_CACHE / marketplace / plugin
+    try:
+        versions = sorted(d for d in root.iterdir() if d.is_dir())
+    except (FileNotFoundError, NotADirectoryError):
+        return frozenset()
+    except (OSError, ValueError) as e:
+        return f"{_whole(root)} could not be read ({_whole(e)})"
+    found = []
+    for version in versions:
+        f = version / "hooks" / "hooks.json"
+        try:
+            doc = json.loads(f.read_text())
+        except FileNotFoundError:
+            found.append(frozenset())
+            continue
+        except (OSError, UnicodeDecodeError, ValueError) as e:
+            return f"{_whole(f)} could not be read ({_whole(e)})"
+        found.append(_guard_positions(doc))
+    return frozenset.intersection(*found) if found else frozenset()
+
+
+def _guard_positions(doc) -> frozenset:
+    """Every `<prefix><event>:<group>:<hook>` in a plugin `hooks.json` whose command runs
+    :data:`CODEX_GUARD_HANDLER`. Codex spells the event in snake case (`PreToolUse` →
+    `pre_tool_use`, measured on its ledger). Anything not in the file's documented shape
+    places no guard."""
+    from . import hooks
+
+    events = doc.get("hooks") if isinstance(doc, dict) else None
+    out = set()
+    for event, groups in (events.items() if isinstance(events, dict) else ()):
+        snake = re.sub(r"(?<!^)(?=[A-Z])", "_", str(event)).lower()
+        for g, group in enumerate(groups if isinstance(groups, list) else ()):
+            entries = group.get("hooks") if isinstance(group, dict) else None
+            for h, hook in enumerate(entries if isinstance(entries, list) else ()):
+                command = hook.get("command") if isinstance(hook, dict) else None
+                if (isinstance(command, str)
+                        and CODEX_GUARD_HANDLER in hooks._HOOK_CMD_RE.findall(command)):
+                    out.add(f"{CODEX_TRUST_PREFIX}{snake}:{g}:{h}")
+    return frozenset(out)
+
+
+def _codex_marks(doc: dict, guards: frozenset):
     """``(plugin table, policy set, trusted guard keys)`` out of *doc* — or the dotted KEY
-    that has a shape Codex never writes.
+    that has a shape Codex never writes. A trusted key counts only if it is one of
+    *guards*.
 
     Every level is checked for being a table before it is read, because each is a line a
     chat can write: `plugins."charter@charter" = true` parses, and so does a trust entry
@@ -481,8 +558,8 @@ def _codex_marks(doc: dict):
             continue
         if not isinstance(entry, dict):
             return f'hooks.state."{_whole(key)}"'
-        guard = str(key).startswith(f"{CODEX_TRUST_PREFIX}{CODEX_GUARD_EVENT}:")
-        if guard and isinstance(entry.get("trusted_hash"), str) and entry["trusted_hash"]:
+        if key in guards and isinstance(entry.get("trusted_hash"), str) \
+                and entry["trusted_hash"]:
             trusted.append(key)
     return plugin, policy, trusted
 
@@ -611,7 +688,11 @@ def _up_to_the_plane(cwd: Path) -> list[Path]:
 
 
 def _codex_stamps(env: Mapping[str, str], cwd: Path) -> list[Path]:
-    return [codex.config_path(env)]
+    """The config file, and the plugin cache directory whose versions place the guard."""
+    home = codex.config_path(env).parent
+    marketplace = plugincache.PLUGIN_ID.split("@", 1)[-1]
+    plugin = plugincache.PLUGIN_ID.split("@", 1)[0]
+    return [codex.config_path(env), home / CODEX_PLUGIN_CACHE / marketplace / plugin]
 
 
 def _opencode_stamps(env: Mapping[str, str], cwd: Path) -> list[Path]:
