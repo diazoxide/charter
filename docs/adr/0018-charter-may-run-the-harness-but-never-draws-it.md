@@ -291,3 +291,54 @@ now ASKS in that pane as well as writing in it, so the question is named as the 
 it writes, its containment and the two conditions for putting it are bounded, and the read
 it makes is distinguished from the two reads of a harness's pane the 2026-09-01 amendment
 allows.*
+
+## Amendment, 2026-09-12: that pane's first screen is a surface, not two sentences
+
+The amendment above bounded what charter writes in a chat's pane before the `exec` at *three
+kinds of line, and charter wrote every one* — a refusal, the approval prompt, or the line an
+unproven chat prints — and said *no escape sequences of charter's own, no panel, no layout,
+and never a fourth thing later*. The profile selector is the fourth thing, and it is none of
+those lines: it
+is a whole `frame/overlay.Surface`, painted over the alternate screen, with the pane's
+terminal in raw mode, for as long as somebody takes to choose (`charter/frame/selector.py`,
+`charter frame-launch --select`).
+
+**The distinguishing question does not move.** *Has a harness ever run in this pane, and is
+charter's own process still the one in it?* No and yes — the same answer the refusal gives,
+and for the stronger reason: at the selector nothing has been attempted at all. There is no
+harness process, no output of its own on that screen, nothing to draw over and nothing to
+parse, and every failure this ADR was written against needs a harness on the other side of
+the pane to occur.
+
+**What changes is the bound on the WRITE, and only that.** The old bound counted sentences
+because the only thing charter had to say there was a sentence. The bound is now what the
+pane is FOR before the `exec`:
+
+* **Charter's own surfaces only, and charter's own surface means `frame/overlay.py`.** The
+  selector is `palette.Palette` over profile rows, and the approval is an
+  `overlay.Surface` — the same modal loop, the same containment, the same one key that
+  always leaves, that `F2` and the tab menu run in a pane split off a harness. Nothing
+  else may be drawn here: not a panel, not a layout, not a second surface charter wrote
+  somewhere else to a different contract.
+* **It ends the moment a harness exists.** `os.execvpe` replaces this process, and from
+  that instant the pane is the harness's and the rule above is unqualified again. A pane
+  whose harness later EXITS closes as it always did and never comes back to the selector
+  — going back would be charter drawing in a pane a harness has run in, which is the rule
+  and not an exception to it.
+* **No escape hatch, because the thing it escapes to is not there.** `F12` hands the
+  keyboard back to the harness; in this pane there is no harness to hand it to, so the
+  selector's footer does not offer it and `Esc` closes the chat instead.
+* **Reading is still never.** This amendment, like the last, adds a WRITE before the
+  harness exists. Charter reads this pane at the two moments the 2026-09-01 amendment
+  allows and at no others, and it never reads it to react to what a harness printed.
+
+**The cost this takes on, stated rather than discovered.** `palette.own_the_tty` puts the
+pane's terminal into raw mode, which the previous amendment deliberately avoided: a
+`tcsetattr` from a launcher pane on a Linux CI runner was measured leaving the process
+killed by a signal, and that is why the refusal's wait is a line read rather than a
+keypress. The difference is what the pane is doing: the refusal's pane is one the chat
+teardown is already killing, and the selector's is a live chat window nothing is tearing
+down — the same arrangement `charter frame-palette --pane` has run in on every supported
+tmux since 0.52. It is measured on a real server by the pull request that reaches this pane
+from `+`, a tab and a bare `charter`, and if that measurement fails this amendment is what
+has to change rather than the surface being quietly weakened.

@@ -2259,6 +2259,85 @@ def was_closed(fid: str) -> bool:
     return (d / _CLOSED_FILE).exists()
 
 
+#: Whether this chat's pane is still at the profile selector, having started nothing.
+#:
+#: **A waiting pane is not a chat, and this is the one bit that says so.** It has a window
+#: and therefore a tab, so it can be left and come back to (`chats._by_workspace` does not
+#: read this); it is not in the quit manifest and is never reopened (`leave.plan` does).
+#: Nothing has run in it — no harness, no identity, no resume id — so there is nothing for
+#: a reopen to bring back, and bringing the SELECTOR back would be charter restoring a
+#: question rather than a chat.
+#:
+#: Written before tmux is asked for anything and cleared at the pick, which is the instant
+#: the pane stops being charter's (`frame/launcher._picked`). The undo for an `exec` that
+#: raised writes it again: a pane running nothing at all must not also claim to be a chat
+#: (N7's nit).
+#:
+#: In the chat's own directory, for :data:`_CLOSED_FILE`'s reason: the marker only has to
+#: outlive the pane, and `state.reap` takes the directory once the window is gone.
+_WAITING_FILE = "waiting"
+
+
+def record_waiting(fid: str) -> None:
+    """Mark *fid* as a pane that is still at the selector.
+
+    Never raises, like everything else here, and what a failed write costs is stated rather
+    than guarded against: the pane still draws the selector, and the only loss is that a
+    quit landing while it is up would put it in the manifest and a reopen would bring back
+    a chat that never started one. That is one uninvited tab, which `chat: close` closes.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.write_for(d / _WAITING_FILE, "1\n")
+    except OSError:
+        return
+
+
+def is_waiting(fid: str) -> bool:
+    """Whether *fid*'s pane has started nothing yet — one ``stat``, like :func:`was_closed`.
+
+    ``Path.exists`` answers ``False`` for a marker charter cannot stat as well as for one
+    that is not there, and here both fall on the *this is an ordinary chat* side — which is
+    the opposite direction from :func:`was_closed` and is right for the same reason it is
+    right there. Recording a chat that had not started costs one tab; NOT recording a chat
+    that had costs the chat.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    return (d / _WAITING_FILE).exists()
+
+
+def clear_waiting(fid: str) -> None:
+    """Forget that *fid* was waiting — it has picked a profile and is a chat now."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        (d / _WAITING_FILE).unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def record_picked_kind(fid: str, harness_name: str) -> None:
+    """Write the KIND the operator picked into *fid*'s identity record.
+
+    **Into `identity` rather than beside it**, because that is where every reader already
+    looks: `chats.harness_of`, `leave.plan`, the chat strip and `commands_frame
+    ._same_profile_as` all read `CHARTER_HARNESS` off this file. A selector launch puts an
+    EMPTY value there at creation — the launching shell's own kind would otherwise ride
+    onto the window and into this record — so until the pick the chat honestly records no
+    harness, and the pick is what fills it in.
+
+    Read-modify-write over :func:`identity`'s answer, so the other four names the launch
+    recorded survive it; an identity charter could not read comes back `{}` and this writes
+    the one fact it has, which is the same degradation :func:`identity` already promises.
+    """
+    record_identity(fid, {**identity(fid), "CHARTER_HARNESS": harness_name})
+
+
 #: The subdirectory :func:`respawn_attempt` counts in, named once so
 #: :func:`clear_respawn` cannot drift away from it — the two are only correct together.
 _RESPAWN_DIR = "respawn"

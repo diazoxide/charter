@@ -150,7 +150,13 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
     single-chat case would be a second answer to "what does stopping this cost".
 
     **A chat the operator CLOSED is not here**, and that is the one filter with a direction
-    to it. Everything else this includes on the restoring side: a chat with no `exit` file
+    to it. **Neither is a pane still at the profile selector** (`state.is_waiting`), and it
+    is the same direction for a different reason: a closed chat is one the operator ended,
+    while a waiting pane is one that never began — no harness ran in it, so there is no
+    identity, no resume id and nothing to bring back. Recording it would reopen a question
+    rather than a chat. Its TAB is not this function's to remove, and `chats._by_workspace`
+    deliberately does not read the marker: a pane you can leave and come back to is exactly
+    what a tab is for. Everything else this includes on the restoring side: a chat with no `exit` file
     is recorded because *nothing means we do not know it stopped* (`state.was_closed`'s own
     note), a chat whose workspace has gone is recorded and flagged rather than dropped
     (§4j: re-homing is forbidden and #789 removed the last of it), and a chat with an
@@ -165,7 +171,7 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
     for fid in plane_chats():
         if only and fid != only:
             continue
-        if state.was_closed(fid):
+        if state.was_closed(fid) or state.is_waiting(fid):
             continue
         ws = state.own_workspace(fid) or ""
         ident = state.identity(fid)

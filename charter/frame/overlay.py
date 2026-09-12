@@ -214,6 +214,15 @@ _HEADER_ROWS = 1
 _FOOTER_ROWS = 1
 _CHROME_ROWS = _HEADER_ROWS + _FOOTER_ROWS
 
+#: The bottom line every surface drew before :attr:`Surface.footer` existed, and still the
+#: answer for every surface that names none.
+#:
+#: ASCII, for `_MARK`'s reason: the arrows and the return symbol an overlay wants here
+#: (`↑↓`, `⏎`) are all East-Asian *Ambiguous*, which `statusline._persona_chips` records
+#: breaking a charter layout twice on a terminal that draws them two cells wide.
+_DEFAULT_FOOTER = (f"  up/down move   enter choose   esc cancel   "
+                   f"{HATCH_KEY} back to the harness")
+
 #: The two cells between the title column and the note column.
 _GAP = 2
 
@@ -676,6 +685,19 @@ class Surface:
     #: two, so the request and the handling cannot disagree.
     mouse: bool = False
 
+    #: The bottom line, in place of :data:`_DEFAULT_FOOTER`. ``None`` keeps that line,
+    #: which is what every surface on `main` wants.
+    #:
+    #: **A surface that is not reached BY the harness cannot promise a way back to it.**
+    #: The default line ends in `F12 back to the harness`, true of the palette and of the
+    #: tab menu because both are panes split off a running harness. `frame/selector.py` is
+    #: drawn in a chat's own pane before any harness has run in it, so that half of the
+    #: line names a key with nowhere to go — and the other half is where a refusal the
+    #: operator has to read goes, because closing the surface would close the chat
+    #: (ruling 30). One attribute rather than a `render` override per surface: the line is
+    #: this module's arithmetic, and a subclass rewriting it would be #749's shape.
+    footer: str | None = None
+
     _sel: int = field(default=0, init=False)
     _top: int = field(default=0, init=False)
 
@@ -739,13 +761,11 @@ class Surface:
             out.append(tui.truncate(f"{_REV}{body}{_R}" if on else body, width))
         while len(out) < height - _FOOTER_ROWS:
             out.append("")
-        # ASCII, for `_MARK`'s reason: the arrows and the return symbol an overlay wants
-        # here (`↑↓`, `⏎`) are all East-Asian *Ambiguous*, which `statusline
-        # ._persona_chips` records breaking a charter layout twice on a terminal that
-        # draws them two cells wide.
+        # Contained before `tui.width` sees it, for every other display string's reason
+        # (#472): a footer carries a refusal, and a refusal quotes a profile's own command.
         out.append(tui.truncate(
-            f"{_DIM}  up/down move   enter choose   esc cancel   "
-            f"{HATCH_KEY} back to the harness{_R}", width))
+            f"{_DIM}{contain.one_line(_DEFAULT_FOOTER if self.footer is None else self.footer)}"
+            f"{_R}", width))
         return out[:max(1, height)]
 
     def handle(self, ev: Event, height: int) -> str | None:

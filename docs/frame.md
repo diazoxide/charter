@@ -11,7 +11,9 @@ That is a real frame, captured off a real terminal — `docs/assets/capture-fram
 the plane and runs the thing. The two tab strips are on because that plane places them; on
 a plane that has not, the frame is the four panels around them (*Neither is drawn unless a
 plane places it*, below). The middle pane is the harness's and charter draws nothing in it
-(ADR 0018), so a capture with no agent to run has `charter status` in there.
+(ADR 0018), so a capture with no agent to run has `charter status` in there. Charter draws
+in that pane at one time only: before any harness has ever run in it, which is where the
+profile selector is (*No harness starts until you pick a profile*, below).
 
     charter claude               # or codex, opencode
     charter claude-work          # any profile charter.local.toml declares
@@ -3122,3 +3124,58 @@ straight in. And the prompt is reached only on the interactive path: `--no-frame
 redirected stdout and a stdin that is not a terminal each return before it — `charter
 claude` from a script or another agent cannot block on it. `--workspace <name>` names one
 outright and skips the picker; `--pick` asks even when something already chose.
+
+### No harness starts until you pick a profile
+
+A chat's window opens with the **profile selector** in its harness pane, and the harness
+starts in that pane once you choose a row. Opening charter used to start whatever
+`[harness] default` named; now nothing runs until somebody says what.
+
+```
+  charter · which profile? · 4 to choose from
+
+  >   claude          claude · claude
+    * claude-work     claude · CLAUDE_CONFIG_DIR=/Users/you/.claude-work claude
+      codex           codex · codex
+      codex-pinned    not on PATH: npx
+
+    up/down move   enter start   esc close this chat
+```
+
+It is the `F2` palette's picker, so it behaves like one: type to narrow, up/down to move,
+Enter to start. **It always shows, even where one profile can run** — one profile costs one
+Enter, and skipping it would bring back the harness nobody picked on a machine with one
+harness.
+
+**Every profile you declared is a row.** A built-in — `claude`, `codex`, `opencode` — is a
+row only where its program is installed, because a harness this machine does not have is not
+an option you were offered. A profile that **cannot** start is still listed, with the reason
+on the row: its command is not on `PATH`, git would carry `charter.local.toml`, or
+`charter.local.toml` itself refused it. **Enter on such a row shows the reason in the footer
+and leaves the selector open.** The palette does the opposite — a refused Enter closes it —
+and that is right there, where the surface is a pane over a running harness. Here the
+surface is the chat, so closing it would close the chat.
+
+**The cursor opens on the row that can run.** `[harness] default` marks its row and the
+cursor starts there; a `default` naming a profile this machine does not have marks nothing,
+and the cursor goes where the palette's own rule puts it — the first row that can run, so
+Enter always does something. (`charter doctor` warns about a default nothing declares.)
+
+**Esc closes that chat, having started nothing.** No harness ran, no identity was recorded,
+and if it was the workspace's only window the session goes with it — the frame's own rule
+for its last chat. A pane sitting at the selector has a **tab**, so you can leave it and
+come back to it, but it is not a chat: `charter: quit` does not record it and `charter
+reopen` never brings it back. There is nothing to bring back, and restoring a question is
+not restoring a chat. Its harness and its profile are written down at the pick and not
+before.
+
+**A pick charter refuses comes straight back here.** The row you chose was drawn from what
+was true when the pane painted; the launch asks again, fresh, the instant before it runs
+anything — so a `.gitignore` edited or a binary uninstalled in between is a refusal, and the
+selector reopens with that row updated and the reason in the footer. Only Esc closes the
+window.
+
+Charter drawing in a chat's pane at all is [ADR
+0018](adr/0018-charter-may-run-the-harness-but-never-draws-it.md) as its 2026-09-12
+amendments qualify it: charter draws there only while **no harness has ever run in that
+pane**, and the instant `exec` succeeds the pane is the harness's for good.
