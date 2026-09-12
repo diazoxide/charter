@@ -3176,6 +3176,6 @@ selector reopens with that row updated and the reason in the footer. Only Esc cl
 window.
 
 Charter drawing in a chat's pane at all is [ADR
-0018](adr/0018-charter-may-run-the-harness-but-never-draws-it.md) as its 2026-09-12
-amendments qualify it: charter draws there only while **no harness has ever run in that
-pane**, and the instant `exec` succeeds the pane is the harness's for good.
+0018](adr/0018-charter-may-run-the-harness-but-never-draws-it.md) as its later amendments
+qualify it. Charter draws there only while **no harness has ever run in that pane**; the
+instant `exec` succeeds, the pane is the harness's for good.
