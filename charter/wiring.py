@@ -480,7 +480,8 @@ def _codex_guard_keys(home: Path):
     plugin = plugincache.PLUGIN_ID.split("@", 1)[0]
     root = home / CODEX_PLUGIN_CACHE / marketplace / plugin
     try:
-        versions = sorted(d for d in root.iterdir() if d.is_dir())
+        # No `sorted`: the copies are intersected, and an intersection has no order.
+        versions = [d for d in root.iterdir() if d.is_dir()]
     except (FileNotFoundError, NotADirectoryError):
         return frozenset()
     except (OSError, ValueError) as e:
@@ -554,12 +555,15 @@ def _codex_marks(doc: dict, guards: frozenset):
         return ledger
     trusted = []
     for key, entry in ledger.items():
-        if not str(key).startswith(CODEX_TRUST_PREFIX):
+        # Only the guard's own entries are read. A prefix test used to stand here, and
+        # membership in *guards* implies it — every guard key is built on the prefix — so it
+        # was a second spelling of the same filter; another hook's entry, in any shape, says
+        # nothing about the guard.
+        if key not in guards:
             continue
         if not isinstance(entry, dict):
             return f'hooks.state."{_whole(key)}"'
-        if key in guards and isinstance(entry.get("trusted_hash"), str) \
-                and entry["trusted_hash"]:
+        if isinstance(entry.get("trusted_hash"), str) and entry["trusted_hash"]:
             trusted.append(key)
     return plugin, policy, trusted
 
@@ -677,13 +681,16 @@ def _claude_stamps(env: Mapping[str, str], cwd: Path) -> list[Path]:
 def _up_to_the_plane(cwd: Path) -> list[Path]:
     """*cwd*, then each parent up to and including `config.ROOT` — or *cwd* alone when it is
     not inside the plane. Resolved, because `os.getcwd()` answers `/private/var/…` for a
-    plane `config.ROOT` spells `/var/…` on macOS."""
+    plane `config.ROOT` spells `/var/…` on macOS.
+
+    One filter and no "outside the plane" branch: a parent is kept only when it IS the root
+    or lies below it, and no parent of a directory outside the plane — its own parent
+    included — is either. The branch that used to say so first answered the same list for
+    every input, and the sweep was right that nothing could tell it from its absence."""
     try:
         here, root = Path(os.path.realpath(cwd)), Path(os.path.realpath(config.ROOT))
     except ValueError:
         return [Path(cwd)]
-    if here != root and root not in here.parents:
-        return [here]
     return [here, *(d for d in here.parents if d == root or root in d.parents)]
 
 

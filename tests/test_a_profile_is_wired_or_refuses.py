@@ -380,10 +380,31 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
     def test_a_scope_charter_does_not_recognise_sorts_last_rather_than_raising(self):
         """`_SCOPE_ORDER` is charter's reading of three scopes the CLI documents. A fourth
         one — a newer Claude Code, a row charter has never seen — must not take the row down,
-        and must not outrank a scope charter does understand."""
-        with spawns([], listing(entry(scope="cowork", project=self.here, enabled=False),
-                                entry(scope="user", enabled=True))):
+        and must not outrank a scope charter does understand.
+
+        Handed to `_claude` at `plugincache.covering_entries`, the seam it reads: today
+        `plugincache._our_entries` drops a row whose scope is not one of `_SCOPES` before
+        wiring sees it, so a listing alone never reaches this rule — and the day
+        `_SCOPES` grows, this is what still holds."""
+        rows = [entry(scope="cowork", project=self.here, enabled=False),
+                entry(scope="user", enabled=True)]
+        with mock.patch.object(plugincache, "covering_entries", return_value=rows):
             self.assertEqual(wiring.detect(self.p, cwd=self.here).state, wiring.WIRED)
+        with mock.patch.object(plugincache, "covering_entries", return_value=rows[:1]):
+            w = wiring.detect(self.p, cwd=self.here)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("cowork", w.detail)
+
+    def test_a_typed_fix_with_no_directory_starts_with_the_variables(self):
+        """`_typed` without a *cwd* — the probe charter prints to run by hand — has no `cd`,
+        and lists the profile's variables in NAME order whatever order the profile holds
+        them in."""
+        p = profiles.Profile(name="claude-order", kind="claude", harness="claude-code",
+                             command=("claude",), source=profiles.LOCAL_FILE,
+                             env=(("ZED", "z"), ("CLAUDE_CONFIG_DIR", "/c"), ("ALPHA", "a")))
+        self.assertEqual(shlex.split(wiring.by_hand(p)),
+                         ["ALPHA=a", "CLAUDE_CONFIG_DIR=/c", "ZED=z",
+                          "claude", "plugin", "list", "--json"])
 
     def test_a_project_enable_over_a_user_disable_is_wired(self):
         """The same pair in the other order, so the order of the list decides nothing."""
@@ -657,11 +678,99 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         self.write(codex_config())
         self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNWIRED)
 
+    def cache(self) -> Path:
+        return self.home / "plugins" / "cache" / "charter" / "charter"
+
     def test_an_unreadable_plugin_hooks_file_is_unknown(self):
-        (self.home / "plugins" / "cache" / "charter" / "charter" / "0.60.0" / "hooks"
-         / "hooks.json").write_text("{nope")
+        f = self.cache() / "0.60.0" / "hooks" / "hooks.json"
+        f.write_text("{nope")
         self.write(codex_config())
-        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNKNOWN_STATE)
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.assertIn(f"{f} could not be read", w.detail)
+
+    def test_a_plugin_hooks_file_that_is_not_utf8_names_the_file(self):
+        f = self.cache() / "0.60.0" / "hooks" / "hooks.json"
+        f.write_bytes(b"\xff\xfe{}")
+        self.write(codex_config())
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.assertIn(f"{f} could not be read", w.detail)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 file")
+    def test_a_plugin_hooks_file_nobody_may_read_is_unknown_and_never_a_traceback(self):
+        f = self.cache() / "0.60.0" / "hooks" / "hooks.json"
+        f.chmod(0)
+        self.addCleanup(f.chmod, 0o600)
+        self.write(codex_config())
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.assertIn(f"{f} could not be read", w.detail)
+
+    @unittest.skipIf(os.geteuid() == 0, "root lists a mode-000 directory")
+    def test_a_plugin_cache_nobody_may_list_is_unknown_and_never_a_traceback(self):
+        self.cache().chmod(0)
+        self.addCleanup(self.cache().chmod, 0o700)
+        self.write(codex_config())
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.assertIn(f"{self.cache()} could not be read", w.detail)
+
+    def test_a_file_among_the_versions_is_not_a_version(self):
+        """Only a DIRECTORY under the plugin's cache is a cached copy: a stray file there
+        (`.DS_Store`, a download left half-way) has no `hooks/hooks.json` to read, and read
+        as a copy it would be an unreadable one."""
+        (self.cache() / ".DS_Store").write_text("x")
+        self.write(codex_config())
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.WIRED)
+
+    def test_an_empty_plugin_cache_has_no_guard_and_never_raises(self):
+        shutil.rmtree(self.cache() / "0.60.0")
+        self.write(codex_config())
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn("plugins/cache", w.detail)
+
+    def test_a_cached_version_with_no_hooks_file_places_no_guard(self):
+        """A copy with no `hooks.json` declares no hook at all, so it agrees with no other
+        copy about where the guard is — read as nothing to trust, not as unreadable."""
+        (self.cache() / "0.59.0").mkdir()
+        self.write(codex_config())
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+
+    def test_every_wrong_shape_of_the_plugin_hooks_file_places_no_guard(self):
+        """A1's rule for the file A5 reads: it sits in the profile's own home, which a chat
+        can write, so every shape is a hostile input. Each reads as no guard, and none
+        raises. Built so that reading past the missing check would raise, not pass."""
+        bash = {"type": "command", "command": "charter hook pretooluse --plugin-version 1"}
+        shapes = {
+            "doc is not an object": [],
+            "hooks is not an object": {"hooks": []},
+            "groups are not a list": {"hooks": {"PreToolUse": 5}},
+            "a group is not an object": {"hooks": {"PreToolUse": [["x"]]}},
+            "a group's hooks are not a list": {"hooks": {"PreToolUse": [{"hooks": 5}]}},
+            "a hook is not an object": {"hooks": {"PreToolUse": [{"hooks": ["x"]}]}},
+            "a command is not a string": {"hooks": {"PreToolUse": [{"hooks": [
+                {"type": "command", "command": 5}]}]}},
+        }
+        self.write(codex_config())
+        for label, doc in shapes.items():
+            with self.subTest(label):
+                plugin_in_codex_cache(self.home, doc)
+                w = wiring.detect(self.p, cwd=self.tmp)
+                self.assertEqual(w.state, wiring.UNWIRED, w.detail)
+                self.assertIn("no copy of", w.detail)
+        plugin_in_codex_cache(self.home, {"hooks": {"PreToolUse": [{"hooks": [bash]}]}})
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.WIRED)
+
+    def test_a_malformed_trust_entry_for_a_hook_that_is_not_the_guard_is_not_read(self):
+        """Only the guard's entries are read: another hook's, even charter's own dispatch
+        hook's, in a shape Codex never writes, says nothing about the guard."""
+        self.write(codex_config(trust=False)
+                   + f'\n[hooks.state]\n"{TRUST_KEY}" = {{ trusted_hash = "sha256:abc" }}\n'
+                   + f'"{DISPATCH_KEY}" = "yes"\n')
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.WIRED)
 
     def test_the_guard_handler_is_the_one_charters_own_hooks_file_puts_on_bash(self):
         """The constant the detection keys on, pinned to the source that ships it: the
@@ -718,6 +827,12 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         self.assertEqual(wiring.detect(p, cwd=self.tmp).state, wiring.UNKNOWN_STATE)
         self.assertIn("could not ask", wiring.refusal(p, cwd=self.tmp))
 
+    def test_the_step_no_command_can_take_is_said_in_these_words(self):
+        """Operator-facing, and the one step of the three that is a sentence: pinned here
+        so a reword is a decision rather than a drift."""
+        self.assertEqual(wiring.CODEX_APPROVE,
+                         "start codex once and approve charter's hooks when it asks")
+
     def test_the_codex_steps_are_a_list_each_pasteable_whatever_the_home_is_called(self):
         """A11: a home holding `; ` split a joined sentence in the wrong place, and a home
         with a space printed a `CODEX_HOME=` a shell would cut in two."""
@@ -750,7 +865,24 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         self.write("[x")
         w = wiring.detect(self.p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.assertIn(f"{self.home / 'config.toml'} could not be read", w.detail)
         self.assertIn("could not ask", wiring.refusal(self.p, cwd=self.tmp))
+
+    def test_a_config_that_is_not_utf8_names_the_file(self):
+        (self.home / "config.toml").write_bytes(b"\xff\xfe[plugins]\n")
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.assertIn(f"{self.home / 'config.toml'} could not be read", w.detail)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 file")
+    def test_a_config_nobody_may_read_is_unknown_and_never_a_traceback(self):
+        f = self.home / "config.toml"
+        f.write_text(codex_config())
+        f.chmod(0)
+        self.addCleanup(f.chmod, 0o600)
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNKNOWN_STATE)
+        self.assertIn(f"{f} could not be read", w.detail)
 
     def test_the_fix_once_charter_has_written_its_line_is_codexs_own_commands(self):
         """Review 7's objection, one mark further on. Once `shell_environment_policy` names
@@ -1026,6 +1158,10 @@ class NothingUnapprovedIsRun(PersonaIso, unittest.TestCase):
         self.assertEqual([s for s, _l in installed], ["refused"])
         self.assertEqual(rows["profile claude-work"].hint, profiles.FIX_NOT_IGNORED)
         self.assertIn("not probed", rows["profile claude-work"].detail)
+        # And a BUILT-IN's row is still the probe's answer: the file decides nothing about a
+        # command out of charter's own registry, so its row never says "not probed".
+        self.assertNotIn("not probed", rows["profile claude"].detail)
+        self.assertNotEqual(rows["profile claude"].hint, profiles.FIX_NOT_IGNORED)
 
     def test_doctor_does_not_probe_an_unapproved_profile(self):
         calls = []
@@ -1745,6 +1881,25 @@ env = {{ CODEX_HOME = "{self.codex_home}" }}
         self.assertIn("profile 'bad-one' is refused", out)
         self.assertNotIn("no harness or profile named", out)
 
+    def test_each_install_status_is_said_at_its_own_level_with_its_own_exit(self):
+        """`cmd_harness_install` per status: `refused` ends it (rc 1, no probe); a gap —
+        `unvouched`, `unavailable`, `unknown`, `failed` — is a warning and the probe still
+        decides; anything else is a note."""
+        for status, line, rc, probed in (
+                ("refused", "✗ charter: the detail", 1, False),
+                ("unvouched", "!   the detail", 0, True),
+                ("unavailable", "!   the detail", 0, True),
+                ("unknown", "!   the detail", 0, True),
+                ("failed", "!   the detail", 0, True),
+                ("installed", "•   installed: the detail", 0, True)):
+            with self.subTest(status), \
+                    mock.patch.object(wiring, "install", return_value=[(status, "the detail")]), \
+                    mock.patch.object(wiring, "detect", return_value=wiring.Wiring(
+                        wiring.WIRED, "ok", "")) as detected:
+                out = self.said(lambda: self.assertEqual(self.run_install("oc-alt"), rc))
+                self.assertIn(line, out.splitlines())
+                self.assertEqual(detected.called, probed)
+
     def test_a_long_name_is_bounded_where_install_repeats_it_back(self):
         """`commands_harness.py`'s `shown`: a refusal sentence bounds the name with contain's
         fixed marker (ruling 45), and a 161-character name is one past that bound."""
@@ -2299,6 +2454,64 @@ class TheSeamsTheSweepAsksAbout(PersonaIso, unittest.TestCase):
         names = [r["name"] for r in json.loads(buf.getvalue())]
         self.assertNotIn("profile claude", names)
         self.assertIn("harness profiles", names)
+
+    def test_an_unapproved_rows_hint_shows_a_declared_name_escaped(self):
+        """`doctor._not_probed`'s own `charter <name>`, which only a DECLARED profile reaches
+        — built by hand, past `NAME_RE`, as Task 3's prompt pin is."""
+        nasty = make_profile("cl\raude\x1b[2K")
+        with mock.patch.object(wiring, "listed", return_value=[nasty]), \
+                mock.patch.object(wiring, "detect", side_effect=AssertionError("probed")):
+            rows = doctor.check_profile_wiring()
+        self.assertEqual(rows[0].hint, "charter cl\\u000daude\\u001b[2K")
+
+    def test_a_doctor_field_exactly_at_the_limit_is_whole(self):
+        at = "x" * contain.DISPLAY_LIMIT
+        self.assertEqual(doctor._counted(at), at)
+        self.assertEqual(doctor._counted(at + "y"), at + "… +1 not shown")
+
+    def test_a_sentence_field_exactly_at_the_limit_is_whole(self):
+        at = "x" * wiring.SAID_LIMIT
+        self.assertEqual(wiring.said(at), at)
+        self.assertEqual(wiring.said(at + "y"), at + "...")
+
+    def test_a_refused_name_is_found_by_its_contained_spelling(self):
+        """`_resolve` looks a refused name up by the spelling `profiles` records it under —
+        contained — so a name with an ESC in it is told its own reason, not "no such
+        profile"."""
+        declare_profiles(self, '[harness."bad\\u001bname"]\nkind = "claude"\n'
+                               'command = ["claude"]\n')
+        p, why = commands_harness._resolve("bad\x1bname")
+        self.assertIsNone(p)
+        self.assertIn("bad\\u001bname", why)
+
+    def test_a_cwd_charter_cannot_resolve_stamps_only_itself(self):
+        """`_up_to_the_plane`'s `ValueError`: `realpath` refuses a NUL byte, and a stamp is
+        never worth a traceback."""
+        self.assertEqual(wiring._up_to_the_plane(Path("/tmp/a\x00b")), [Path("/tmp/a\x00b")])
+
+    def test_a_cwd_outside_the_plane_stamps_only_itself_even_above_it(self):
+        """Including the plane's own PARENT: its parents hold nothing of the plane's."""
+        parent = Path(os.path.realpath(config.ROOT)).parent
+        self.assertEqual(wiring._up_to_the_plane(parent), [parent])
+
+    def test_a_stamp_for_a_kind_charter_has_no_table_for_is_empty_and_never_raises(self):
+        """`profiles.current()` refuses a kind the registry does not know, so this is a
+        hand-built profile — the same one `detect` and `install` are pinned against, for the
+        day a kind joins the registry without a row in `wiring._KINDS`."""
+        p = profiles.Profile(name="odd", kind="odd", harness="odd", command=("odd",),
+                             env=(), source=profiles.BUILTIN)
+        self.assertEqual(wiring._stamp(p, self.here), {})
+        wiring.remember(p, cwd=self.here, w=wiring.Wiring(wiring.UNKNOWN_STATE, "x", "y"))
+        self.assertEqual(wiring.cached(p, cwd=self.here),
+                         wiring.Wiring(wiring.UNKNOWN_STATE, "x", "y"))
+
+    def test_an_install_under_an_environment_exec_refuses_is_failed_not_raised(self):
+        """`wiring.install`'s `ValueError`: a NUL byte in `CODEX_HOME` reaches `mkdir`."""
+        p = approve_profile(self, make_profile("codex-nul-install", kind="codex",
+                                               env=[("CODEX_HOME", "/tmp/a\x00b")]))
+        got = wiring.install(p, self.here)
+        self.assertEqual([s for s, _l in got], ["failed"])
+        self.assertIn("could not wire", got[0][1])
 
     def test_a_doctor_row_shows_a_profile_name_escaped(self):
         """Ruling 35 reaches the row NAMES too — and the name column is sized from them, so
