@@ -335,9 +335,14 @@ def check_control_plane_config() -> Result:
     # default at all (`instance.harness_of`) — and that renders as argparse's usage message,
     # which is exactly what a plane declaring nothing gets. So bare `charter` on a plane with
     # a typo behaves as though the key were absent, the same silently-ignored-setting shape
-    # the `[plane] worktrees` branch above is about. `cli.main` says so on the bare launch
-    # itself; this says so to anybody who runs `doctor` instead, and to every OTHER command,
-    # where nothing else would.
+    # the `[plane] worktrees` branch above is about.
+    #
+    # **And since the profile selector this is the ONLY reader that says so** (ruling 18).
+    # The bare launch used to refuse over the value; it now opens the selector, which lists
+    # what this machine actually has and marks no row — because taking a launch away over a
+    # name is worse than showing the list the name is missing from, and because a cursor on
+    # nothing would leave Enter with nothing to do. That moves the whole of the reporting
+    # here, to the command an operator runs when something reads as absent.
     #
     # Read from `instance.load` rather than `config.HARNESS`, the way the worktrees branch
     # reads `instance.worktrees_of`: this row is about the FILE, and `derive` already ran
@@ -356,10 +361,11 @@ def check_control_plane_config() -> Result:
             "charter.toml",
             WARN,
             detail=f'[harness] default = "{_refused}" is not a harness charter can launch',
-            hint=f"Bare `charter` prints the usage message until it names one of: "
-                 f"{', '.join(_instance.launchable_harnesses())} — which is also what a "
-                 f"plane that declares no default gets, so the key currently reads as "
-                 f"absent. `charter <harness>` is unaffected.",
+            hint=f"Bare `charter`'s profile selector marks no row for it and opens on the "
+                 f"first one that can run — which is also what a plane that declares no "
+                 f"default gets, so the key currently reads as absent. Name one of: "
+                 f"{', '.join(_instance.launchable_harnesses())}, or any profile "
+                 f"charter.local.toml declares. `charter <profile>` is unaffected.",
         )
     # A committed `[[frame.component]]` arrangement charter cannot draw is refused WHOLE
     # (`instance.component_arrangement`, #535) and degrades to the frame `[frame] slots`
