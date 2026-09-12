@@ -840,6 +840,151 @@ class AShellsHeredocIsSearchedWhenThePlanIsUnknown(PlaneIso):
             with self.subTest(opener=name):
                 self.assertIn("a shell runs", _reason(self._decide(cmd)) or "")
 
+    def test_the_pipeline_starts_after_the_command_before_it(self):
+        """`_pipeline_slice` finds where the opener's pipeline BEGINS, and the rows below are
+        what that boundary decides. Each has something ahead of the pipe on the same line — a
+        backtick command, a closed substitution, an ANSI-C word, another command in the group —
+        and the body still reaches `bash`, so it is still a script. Stop advancing the start and
+        all four go quiet."""
+        for name, cmd in (
+            ("after a backtick command", "`true`; cat <<'A' | bash"),
+            ("after a closed substitution", "x=$(cat <<'Q'\nhi\nQ\n); cat <<'A' | bash"),
+            ("after an ANSI-C word", "echo $'don\\'t' && cat <<'A' | bash"),
+            ("after another command in the group", "( echo hi; cat <<'A' | bash )"),
+        ):
+            with self.subTest(preceded_by=name):
+                self.assertIn("a shell runs", _reason(self._decide(
+                    f"{cmd}\n{HEREDOC}\nA")) or "")
+
+    def test_a_later_reader_in_a_group_keeps_its_own_body(self):
+        """The other direction of that boundary: `bash` runs FIRST here and `cat` writes the
+        second body to a file, so the handoff in `cat`'s body is data. Reading the pipeline from
+        the start of the line instead would hand `bash` both."""
+        self.assertIsNone(_reason(self._decide(
+            f"( bash <<'A'; cat <<'B' > n.md )\necho hi\nA\n{HEREDOC}\nB")))
+
+    def test_a_heredoc_operator_with_no_delimiter_is_still_not_a_quoted_brief(self):
+        """`charter handoff beta <<` opens a heredoc with no delimiter word at all. The slice
+        that asks whether the delimiter is bare is EMPTY, and empty is where `all` and `any`
+        part company — `all` says "treat it as unquoted" and refuses, `any` says nothing is
+        there and lets the call through. Malformed input still has to get an answer."""
+        r = self._decide("charter handoff beta <<")
+        self.assertIn("QUOTED heredoc", _reason(r) or "")
+
+    def test_a_punctuation_token_knows_where_it_ends(self):
+        """The lexer records where each token ENDS, and a punctuation run ends by the same rule
+        as a word — the spelling check reads the gap between tokens off those offsets. Take
+        punctuation out of that rule and its end comes back as -1, which reads as "one before
+        the start" and silently mismeasures every gap after it."""
+        for line, expected in (("a;b", ("a", 0, 1)), ("a;b", (";", 1, 2)), ("a;b", ("b", 2, 3))):
+            with self.subTest(token=expected[0]):
+                toks = hooks._split_punctuation(hooks._lex(line))
+                self.assertIn(expected, [(t.text, t.start, t.end) for t in toks])
+
+    def test_a_backtick_substitution_is_a_group_in_the_opener_cut_too(self):
+        """Review round 8, finding 1. The cut tracked `$( … )`, `( … )` and `{ … }` but not a
+        backtick, so a separator INSIDE the backticks moved the command start past the real
+        program: ``( bash `d; cat ` <<'EOF' )`` read its opener as `cat`. The `$( … )` spelling
+        of the same command refused it, so this was an arbitrary gap, not a limit — both shells
+        run the hidden handoff in every row here."""
+        for name, cmd in (
+            ("a `;` inside backticks", "( bash `d; cat ` <<'EOF' )"),
+            ("an `&&` inside backticks", "( bash `d && tee ` <<'EOF' )"),
+            ("ssh, not a local shell", "( ssh h `d; cat ` <<'EOF' )"),
+            ("inside a group", "{ bash `d; cat ` <<'EOF' ; }"),
+            ("a whole command inside", "( bash `echo a; true ` <<'EOF' )"),
+            ("backticks inside quotes", '( bash "`d; cat `" <<\'EOF\' )'),
+            ("an interpreter", "( python3 - `d; cat ` <<'EOF' )"),
+        ):
+            with self.subTest(shape=name):
+                self.assertIn("a shell runs", _reason(self._decide(
+                    f"{cmd}\n{HEREDOC}\nEOF")) or "")
+
+    def test_the_quote_map_opens_a_backtick_substitution_inside_double_quotes(self):
+        """`_quote_map`'s backtick arm, which survived the whole A7 file unpinned. A backtick
+        opens a substitution exactly as `$(` does, so what follows it is NOT quoted even inside
+        `"…"` — and the `<<` there is a real opener. Pinned on the contract, because the verdict
+        alone cannot see it: another guard refuses this line either way, which is precisely how
+        the arm went unnoticed."""
+        line = 'x="`bash <<EOF`"'
+        self.assertFalse(hooks._inside_quotes(line, line.index("<<")))
+        self.assertEqual(1, len(hooks._heredoc_openers(line)))
+
+    def test_a_group_opener_saves_the_command_start(self):
+        """The `c in "({"` push, also unpinned. `(` and `{` begin a command, so the opener words
+        start after them; stop pushing and the words are read from before the group, where the
+        program is something else entirely."""
+        self.assertEqual(["bash"], hooks._heredoc_opener_words(
+            "x=1; ( bash <<'A' )", "x=1; ( bash <<'A' )".index("<<")))
+        self.assertEqual(["cat"], hooks._heredoc_opener_words(
+            "bash -c x; { cat <<'A' ; }", "bash -c x; { cat <<'A' ; }".index("<<")))
+
+    def test_only_a_BARE_charter_handoff_opens_a_brief(self):
+        """`_brief_heredocs` asks that both words be bare — unquoted and unescaped. A quoted or
+        escaped spelling is one A7 refuses outright, so treating its body as a brief would drop
+        text the leak guard should still be reading. Neither spelling moves a verdict, because
+        the gate refuses them first; the contract is what holds them apart."""
+        for line in ("charter 'handoff' <<'BRIEF'", "\\charter handoff <<'BRIEF'"):
+            with self.subTest(spelling=line):
+                self.assertEqual(set(), hooks._brief_heredocs(line))
+        self.assertEqual({0}, hooks._brief_heredocs("charter handoff b <<'BRIEF'"))
+
+    def test_a_heredoc_with_nothing_before_it_names_no_program(self):
+        """`_heredoc_opener_words` returns None, not an empty list, when there is no command in
+        front of the `<<` — `_opener_program` reads None as "cannot be named", which is what
+        sends the body to be searched. An empty list would read as a program list that simply
+        has no entries."""
+        self.assertIsNone(hooks._heredoc_opener_words("<<'BRIEF'", 0))
+
+    def test_one_heredoc_in_a_substitution_is_not_a_crowd(self):
+        """The conservative substitution rule needs TWO or more heredocs before it fires. With
+        one, ordinary attribution decides — `x=$( bash <<'EOF' )` is already searched because
+        `bash` opened it, and forcing the whole substitution would be a different reason for the
+        same answer, hiding the case where the rule really is needed."""
+        self.assertEqual(set(), hooks._crowded_substitutions("x=$( bash <<'EOF' )"))
+        self.assertEqual({0, 1}, hooks._crowded_substitutions("x=$( cat <<'A'; bash <<'B' )"))
+
+    def test_the_opener_words_are_the_commands_own_words(self):
+        """A unit pin, because the decision alone cannot see this: `_split_env` happens to
+        filter a stray leading `(`, so a cut that keeps the bracket reaches the same verdict by
+        luck. The contract is the command's OWN words, and resting a guard on another
+        function's tolerance is how a defect hides until that function changes."""
+        for line in ("( cat <<'A' > n.md )", "{ cat <<'A' > n.md; }", "( ( cat <<'A' ) )"):
+            with self.subTest(line=line):
+                self.assertEqual(["cat"], hooks._heredoc_opener_words(line, line.index("<<")))
+
+    def test_a_substitution_that_closed_before_the_opener_is_behind_it(self):
+        """`x=$(cat <<'Q' … Q)` finishes before `bash <<'EOF'` starts, so the opener of the
+        second heredoc is `bash` and its body is a script. Lose the guard that knows the
+        substitution is behind the `<<` and the opener is read out of the wrong command."""
+        self.assertIn("a shell runs", _reason(self._decide(
+            f"x=$(cat <<'Q'\nhi\nQ\n); bash <<'EOF'\n{HEREDOC}\nEOF")) or "")
+
+    def test_two_separate_substitutions_are_not_one_crowded_one(self):
+        """The conservative substitution rule counts heredocs PER substitution. Here each `$( )`
+        holds one, so `cat`'s body stays data even though a shell opens the other — count them
+        across the line instead and this ordinary pair is refused."""
+        self.assertIsNone(_reason(self._decide(
+            f"x=$( cat <<'A' > n.md ); y=$( bash <<'B' )\n{HEREDOC}\nA\necho hi\nB")))
+
+    def test_a_heredoc_with_no_program_in_front_of_it_is_still_decided(self):
+        """`( <<'EOF' )` opens a heredoc with nothing before it, so the opener words come back
+        empty and no program can be named. The guard has to answer anyway — drop the empty
+        check and it raises `TypeError` inside the hook instead of deciding, which is a guard
+        that has stopped guarding."""
+        self.assertIn("a shell runs", _reason(self._decide(
+            f"( <<'EOF' )\n{HEREDOC}\nEOF")) or "")
+
+    def test_a_command_with_no_heredoc_never_builds_a_layout(self):
+        """The fast path in `_lines_a_command_could_run`, pinned by the work it avoids rather
+        than by a clock: every Bash call in the plane reaches this, and almost none of them open
+        a heredoc. Removing it sent a 52 KB ordinary command from 0.1 ms to 34 ms — measured,
+        and the reason the path is there."""
+        with mock.patch.object(hooks, "_heredoc_layout") as layout:
+            rows = hooks._lines_a_command_could_run("echo hi && git status")
+        layout.assert_not_called()
+        self.assertEqual([("echo hi && git status", False)], rows)
+
     def test_a_long_command_line_is_decided_in_linear_time(self):
         """Item 2, a fail-open in disguise. `_pipeline_slice` and `_crowded_substitutions` ask
         about every position on the line; re-scanning the quoting from the start each time made

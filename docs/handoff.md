@@ -137,6 +137,12 @@ prompt cannot see (the table and reasons are in [hooks.md](hooks.md), under *The
   bare `$` is a literal, so `$'` opens nothing there — `grep -v "^$" f` is a blank-line filter,
   not a quote.
 
+  **The scan does not honour `#` comments.** A `'` or `"` inside a comment still opens a quote
+  to it, so `echo #' && bash <<'ZZ'` reads the rest of the line as quoted and the real opener is
+  never seen — the handoff in that body runs with no prompt. Measured identical on this branch
+  and on 2b59d8a; it is the same shape as the comment case above, in the one place the scan
+  cannot ask the lexer.
+
   An ANSI-C word (`$'don\'t'`) is read correctly by this scan, but the shared lexer behind the
   secret-leak guard cannot parse one. A call carrying it keeps every heredoc body visible to
   *that* guard, so prose in a brief on such a line can be refused as a read — measured on this
@@ -171,9 +177,12 @@ opener reads as `r`, the body is treated as data, and the handoff in it runs —
 an interpreter or a script file, and evasion-shaped rather than a spelling a chat reaches for.
 
 The same rule costs something in the other direction, and it is the price of the fail-safe:
-**when charter cannot name the program that opens a heredoc, it treats that body as something
-that could run**, so a brief-shaped body behind `${VAR}` or `$( … )` is refused even when the
-program is your editor or your pager. Measured examples: `( ${EDITOR} <<'EOF' )`,
+**when the word that NAMES THE PROGRAM is itself a variable or a substitution, charter cannot
+name the program and treats that body as something that could run** — so a brief-shaped body is
+refused even when the program is your editor or your pager. An expansion elsewhere on the line
+does not do that: a redirect target or an argument (`( tee ${OUT} <<'EOF' )`,
+`( tee "$(mktemp)" <<'EOF' )`) leaves `tee` plainly named, and those are allowed.
+Measured examples of the costly shape: `( ${EDITOR} <<'EOF' )`,
 `( ${PAGER} <<'EOF' )`, `( ${GIT} commit -F - <<'EOF' )` and `( $(which tee) notes.md <<'EOF' )`,
 each with prose that names the handoff. charter cannot tell those from `( ${RUNNER} <<'EOF' )`,
 where the variable really is a shell — they are the same shape, and a fail-safe that switches

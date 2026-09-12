@@ -979,8 +979,17 @@ def _heredoc_opener_words(line: str, start: int) -> list[str] | None:
     ``None`` when the program word is not a name: `${RUNNER} <<'EOF'` is decided at runtime, and
     in `$(which bash) <<'EOF'` the substitution IS the program. Both keep review round 6's
     ruling 3 — an opener charter cannot name is a reason to search the body.
+
+    This used to end by rejecting any word containing `)` or a backtick. That guard was removed
+    in round 7 on the reasoning that it had become redundant, and the reasoning was WRONG:
+    restoring it moves twelve measured rows, two of them the very commands round 7 set out to
+    fix (`( cat > "$(date +%F).md" <<'EOF' )`, `( tee "$(mktemp)" <<'EOF' )`), because a CLOSED
+    substitution standing before the opener is an argument and its `)` says nothing about the
+    program. So it stays removed — but for that reason, not the one first given, and its
+    removal is what left backticks untracked in the loop below until round 8 (finding 1).
     """
     stack: list[int] = []                      # command starts saved across open groups
+    btick = False                              # inside a backtick substitution?
     cmd = 0
     i = 0
     n = min(start, len(line))
@@ -997,7 +1006,19 @@ def _heredoc_opener_words(line: str, start: int) -> list[str] | None:
             i += 2
             continue
         c = line[i]
-        if c in "({":
+        if c == "`":
+            # A backtick substitution is a group like `$( … )`, and needs saying separately
+            # because one character both opens and closes it. Without this, a separator INSIDE
+            # the backticks moved the command start past the real program: ``( bash `d; cat `
+            # <<'EOF' )`` read its opener as `cat` and called the body data, while the `$( … )`
+            # spelling of the same command refused it (review round 8, finding 1).
+            if btick:
+                cmd = stack.pop() if stack else 0
+            else:
+                stack.append(cmd)
+                cmd = i + 1
+            btick = not btick
+        elif c in "({":
             stack.append(cmd)
             cmd = i + 1
         elif c in ")}" and stack:

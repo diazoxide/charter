@@ -395,6 +395,11 @@ rule while one who reads a bare refusal files an issue.
   `git commit -m "$(cat <<'EOF' … EOF)"` depends on that. Inside `"…"` a bare `$` is a literal,
   so `$'` opens nothing there and `grep -v "^$" f` is a filter rather than a quote.
 
+  That scan does **not honour `#` comments**: a `'` or `"` inside one still opens a quote, so
+  `echo #' && bash <<'ZZ'` reads the rest of the line as quoted, the real opener is never seen,
+  and the handoff in that body runs with no prompt — measured identical on this branch and on
+  2b59d8a.
+
   An **ANSI-C word** (`$'don\'t'`) is read correctly by that scan, but the shared lexer cannot
   parse one, so a call carrying it keeps every heredoc body visible to the secret-leak guard and
   prose in a brief on such a line can be refused as a read — measured identical on this branch,
@@ -425,9 +430,11 @@ rule while one who reads a bare refusal files an issue.
   Nor is a shell behind a **name charter cannot know**: `r() { bash; }; r <<'EOF'` defines a
   function and calls it, so the opener reads as `r` and its body is treated as data — the same
   class as an interpreter or a script file. The same rule costs the other direction, which is
-  the price of the fail-safe: **when charter cannot name the program that opens a heredoc it
-  treats that body as something that could run**, so a brief-shaped body behind `${VAR}` or
-  `$( … )` is refused even when the program is an editor or a pager — measured on
+  the price of the fail-safe: **when the word that NAMES THE PROGRAM is itself a variable or a
+  substitution** charter cannot name the program and treats that body as something that could
+  run, so a brief-shaped body is refused even when the program is an editor or a pager. An
+  expansion elsewhere on the line — a redirect target, an argument — does not: `( tee ${OUT}
+  <<'EOF' )` and `( tee "$(mktemp)" <<'EOF' )` name `tee` and are allowed. Measured on
   `( ${EDITOR} <<'EOF' )`, `( ${PAGER} <<'EOF' )`, `( ${GIT} commit -F - <<'EOF' )` and
   `( $(which tee) notes.md <<'EOF' )`. Those are the same shape as `( ${RUNNER} <<'EOF' )`,
   where the variable really is a shell, and the only thing that would separate them is the
