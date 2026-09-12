@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 
 from . import config, contain, tui, util
-from .harness import codex, registry
+from .harness import registry
 
 
 def _list_profiles() -> None:
@@ -114,44 +114,32 @@ def _resolve(name: str):
     return None, next((r.reason for r in read.refused if r.name == shown), "")
 
 
-def _say_codex_steps(home) -> None:
-    """The Codex-side commands, with `CODEX_HOME=` in front of each (ruling 7).
-
-    Printed and never run: they install software into an account folder and end in a trust
-    prompt only a person can answer, and charter's own consent rule is that running the
-    command IS the consent. Pinned against codex-cli 0.147.0 by running them (D4,
-    2026-09-12) — `codex plugin` has add / list / marketplace / remove and no `install`.
-    """
-    from . import wiring
-
-    util.info("  Codex installs the plugin and trusts its hooks itself — charter writes "
-              "only the line that names the harness. The rest, in this profile's home:")
-    for step in wiring.codex_steps(home).split("; "):
-        util.info(f"      {step}")
-
-
 def cmd_harness_install(args) -> int:
     """Wire one profile's own config folder — the command every wiring refusal names.
 
     Five steps, and the order is what keeps charter from running something nobody approved:
-    resolve the name, refuse a declared profile git would carry, refuse one whose command
-    may not be run yet, wire it, then ASK whether that worked. The last step is why this
-    exits non-zero on a Codex profile it has just written to: charter can write the
-    `shell_environment_policy` line and nothing else, and a command that reports success
-    over a profile that will still refuse to launch is the "remedy that ends the
-    investigation" `opencode.unvouched` was written against.
+    resolve the name, refuse a declared profile git would carry, ASK before a command the
+    operator has not approved, wire it, then ask the harness whether that worked. The last
+    step is why this exits non-zero on a Codex profile it has just written to: charter can
+    write the `shell_environment_policy` line and nothing else, and a command that reports
+    success over a profile that will still refuse to launch is the "remedy that ends the
+    investigation" `opencode.unvouched` was written against. What is left for Codex is
+    Codex's own commands, and the refusal it ends on names them.
     """
-    from . import profiles, wiring
+    from . import profiles, profiletrust, wiring
+    from .frame import launcher
 
     name = (getattr(args, "name", "") or "").strip()
     p, refused = _resolve(name)
     if p is None:
-        known = ", ".join(profiles.current().profiles)
+        # Quoted by hand and not with `!r`: `contain.readable` has already escaped the name,
+        # and `repr` would escape its backslashes a second time (`\\u001b`).
+        shown = contain.readable(name)
         if refused:
-            util.err(f"profile {contain.readable(name)!r} is refused — {refused}")
+            util.err(f"profile '{shown}' is refused — {refused}")
         else:
-            util.err(f"no harness or profile named {contain.readable(name)!r} — have: "
-                     f"{known}")
+            known = ", ".join(profiles.current().profiles)
+            util.err(f"no harness or profile named '{shown}' — have: {known}")
         return 2
     shown = contain.readable(p.name)
     if p.source != profiles.BUILTIN:
@@ -159,16 +147,28 @@ def cmd_harness_install(args) -> int:
         if why:
             util.err(f"profile '{shown}' is refused — {why}")
             return 1
-    why = wiring.approval_needed(p)
-    if why:
-        util.err(f"profile '{shown}' is {why} — nothing was installed.")
-        return 1
+    state = profiletrust.approval_needed(p)
+    if state:
+        # **Installing runs the profile's own command** (`claude plugin install`), so it is
+        # asked about exactly as a launch is — Task 3's question and Task 3's sentences.
+        # With nobody at a terminal to ask, it is refused the way an open nobody is at is.
+        if not profiletrust.can_ask(sys.stdin, sys.stdout):
+            util.err(f"charter: {profiletrust.UNATTENDED.format(name=shown, state=state)}")
+            return 1
+        r = launcher.answered(p, profiletrust.refusal(p, attended=True),
+                              again=lambda: profiletrust.refusal(p, attended=True))
+        if r is not None:
+            # Branched on the KIND (ruling 27). A decline was answered on the terminal it
+            # was asked on, and exits with the picker's cancel code; a yes charter could not
+            # record (`KIND_RECORD`) or a record that moved under the question refuses.
+            if launcher.already_said(r):
+                return r.exit
+            util.err(f"charter: {r.text}")
+            return 1
 
     for status, detail in wiring.install(p, config.ROOT):
-        # Contained here rather than at every `return` inside the harnesses: a `detail` is a
-        # path built out of the profile's own `env`, which is a file a chat can write, and
-        # this line goes to a terminal (ruling 35).
-        detail = contain.readable(detail)
+        # Already contained by `wiring.install` — a label is a path built out of the
+        # profile's own `env`, which is a file a chat can write (ruling 35).
         if status == "malformed":
             util.err(f"{detail} is not valid TOML — left it completely untouched.")
             util.info("  Fix it by hand, then re-run. charter never repairs this file.")
@@ -179,16 +179,17 @@ def cmd_harness_install(args) -> int:
                       "SessionStart, UserPromptSubmit and Bash call. Nothing is wrong; "
                       "everything is doubled, which is harder to notice.")
             return 1
-        if status == "unvouched":
+        if status == "refused":
+            util.err(f"charter: {detail}")
+            return 1
+        if status in ("unvouched", "unavailable", "unknown", "failed"):
             util.warn(f"  {detail}")
         else:
             util.info(f"  {status}: {detail}")
 
     w = wiring.detect(p, cwd=config.ROOT)
     if w.state == wiring.WIRED:
-        util.ok(f"profile '{shown}' is wired — {w.detail}")
+        util.ok(f"profile '{shown}' is wired — {wiring.said(w.detail)}")
         return 0
-    if p.harness == codex.NAME:
-        _say_codex_steps(codex.config_path(wiring.environment(p)).parent)
-    util.err(f"charter: {wiring.refusal(p, cwd=config.ROOT)}")
+    util.err(f"charter: {wiring.sentence(p, w)}")
     return 1

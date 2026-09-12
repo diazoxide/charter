@@ -33,7 +33,8 @@ from charter import commands_frame, contain, hooks, profiles
 from charter.frame import leave
 from charter.frame import reopen as reopen_state
 from charter.frame import state
-from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
+from tests._isolation import (PersonaIso, PlaneIso, no_background_refresh, run_hook,
+                              wired_as_today)
 
 
 def doomed(chat: str, workspace: str, **over) -> leave.Doomed:
@@ -49,6 +50,25 @@ def doomed(chat: str, workspace: str, **over) -> leave.Doomed:
                   cwd_outside=False, profile="")
     fields.update(over)
     return leave.Doomed(**fields)
+
+
+#: Ruling 10: a reopen asks whether each chat's profile is wired before it starts it
+#: (`commands_frame._reopen_one`), and in-process the suite's `claude` guard makes that read
+#: as "could not tell" — a refusal no case here is about. One fixture for the module;
+#: `tests/test_a_profile_is_wired_or_refuses.py` is where a reopen of an unwired profile is
+#: the subject.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
 
 
 class TheRecordCarriesTheBrief(PersonaIso):

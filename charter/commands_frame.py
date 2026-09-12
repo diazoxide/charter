@@ -5374,7 +5374,12 @@ def _launch(args) -> int:
     # is the refusal's own — 127 for a command that is not on `PATH`, the shell's number
     # for it, so `charter <profile> && …` behaves the way `<command> && …` would have.
     if p is not None:
-        r = _profile_refusal(p, attended=attended)
+        # **The wiring probe is left to the pane for an open whose caller asked it already**
+        # — a `+`, a tab, a reopen, a handoff, each of which ran this chain for itself so its
+        # refusal had somewhere to be said (`_launch_refusal`, `_reopen_one`). Asked here
+        # too it was a THIRD probe for one start; the plan prices a start at two, one before
+        # tmux and one in the pane, and the pane's is never skipped.
+        r = _profile_refusal(p, attended=attended, probe=not _caller_asked(args))
         if launcher.is_a_question(r):
             # **The question is put HERE, before anything is allocated.** A no is a
             # `return` with no session, no window and no chat directory to tear down —
@@ -7985,22 +7990,35 @@ def _harness_of(p):
     return next((x for x in harness.all() if x.name == p.harness), None)
 
 
-def _profile_refusal(p, *, attended: bool, cwd=None):
+def _profile_refusal(p, *, attended: bool, cwd=None, probe: bool = True):
     """The launcher's own chain for *p* as THIS process sees the world — the `Refusal`, or
     ``None`` when it may start.
 
-    One spelling of its four arguments, because the two callers ask it identically: the
-    launch itself, before tmux, and a press that has a surface to say it on
+    One spelling of its arguments, because the two callers ask it identically: the launch
+    itself, before tmux, and a press that has a surface to say it on
     (:func:`_launch_refusal`). Two copies of a call whose `env` decides what `PATH` a
     command is looked up on is two answers waiting to drift.
     """
     from .frame import launcher
 
-    return launcher.refusal(p, root=config.ROOT, attended=attended, cwd=cwd,
+    return launcher.refusal(p, root=config.ROOT, attended=attended, cwd=cwd, probe=probe,
                             env=launcher.environment(p, os.environ, framed=True))
 
 
-def _asked_here(p, ask, *, attended: bool):
+def _caller_asked(args) -> bool:
+    """Did whoever built *args* run the launcher's chain — wiring probe included — for this
+    open already?
+
+    Every caller of `cmd_launch` that does not attach does: `_open_workspace` and
+    `cmd_new_chat` through :func:`_launch_refusal`, :func:`open_in_background` through
+    `background_refusal`, and :func:`_reopen_one` by name. They have to — each runs where
+    `_launch`'s own `util.err` reaches nobody. A launch that attaches is somebody at a
+    terminal, and that one is asked here.
+    """
+    return not _wants_attach(args)
+
+
+def _asked_here(p, ask, *, attended: bool, cwd=None):
     """Put *ask*'s question on this process's own terminal. The refusal left over, or
     ``None`` when the launch may go ahead.
 
@@ -8013,7 +8031,10 @@ def _asked_here(p, ask, *, attended: bool):
     """
     from .frame import launcher
 
-    return launcher.answered(p, ask, again=lambda: _profile_refusal(p, attended=attended))
+    # The WHOLE chain again, wiring probe included, and about the same directory the first
+    # pass asked about (ruling 27): a yes answers the approval question and no other.
+    return launcher.answered(p, ask, again=lambda: _profile_refusal(p, attended=attended,
+                                                                   cwd=cwd))
 
 
 def _the_pane_will_ask(r) -> bool:
@@ -10682,6 +10703,17 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     # every chat, and the only warning a deleted workspace gets would vanish silently.
     homeless = workspace.valid_name(c.workspace) and not workspace.exists(c.workspace)
     where = _restore_root(c)
+    # **Unwired, by name, for the approval check's reason** (ruling 10): without this the
+    # chat is started, its launcher refuses in a pane nobody is at, and the operator reads
+    # "did not come back (launcher returned 3)". Asked of the directory the chat comes back
+    # in, which is what Claude Code resolves `enabled` at. It stays in the manifest, so
+    # wiring the profile and running `charter reopen` again brings it back.
+    from . import wiring
+
+    unwired = wiring.refusal(p, cwd=where)
+    if unwired:
+        _report(quiet, util.warn, f"charter reopen: {c.chat} is not reopened — {unwired}")
+        return None
     if not _same_directory(where, c.cwd):
         # "its workspace directory" is a claim, so it is only made where it is true: the
         # branch of `_restore_root` that has no workspace to name lands somewhere for a

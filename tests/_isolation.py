@@ -436,8 +436,12 @@ class ATerminal(io.StringIO):
         return True
 
 
-def approve_profile(case, name: str = "claude-work"):
+def approve_profile(case, name="claude-work"):
     """Seed *name*'s launch record, the way an operator who already said yes once has.
+
+    *name* may also be a `profiles.Profile` built by hand, for a case whose subject is what
+    happens to a profile once it is approved and which never declares it in a file — the
+    record is keyed by the profile's name and holds what it runs, whichever way it was made.
 
     **A real-tmux test that launches a declared profile has to call this** (Global
     Constraint, N6). `_launch` passes `--attended` for an open somebody is in front of,
@@ -452,9 +456,9 @@ def approve_profile(case, name: str = "claude-work"):
     """
     from charter import profiles, profiletrust
 
-    p = profiles.current().profiles[name]
+    p = name if isinstance(name, profiles.Profile) else profiles.current().profiles[name]
     why = profiletrust.record_launched(p)
-    case.assertEqual(why, "", f"the launch record for '{name}' could not be written")
+    case.assertEqual(why, "", f"the launch record for '{p.name}' could not be written")
     return p
 
 

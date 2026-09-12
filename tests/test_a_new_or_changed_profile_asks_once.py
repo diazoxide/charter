@@ -38,8 +38,27 @@ from charter.frame import launcher, reopen as reopen_state, state
 from tests import _gitguard
 from tests._isolation import (APipe as _APipe, ATerminal as _ATerminal, PersonaIso,
                               Typed as _Typed, approve_profile, assert_approved,
-                              declare_profiles, make_plane)
+                              declare_profiles, make_plane, wired_as_today)
 from tests.test_a_profile_launch_is_refused_before_tmux import _ALaunchNamesAProfile
+
+
+#: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
+#: launch, and every launch here is an approved or built-in profile the suite's `claude`
+#: guard would otherwise read as unwired. This module is about the ASK; whether the ask's
+#: yes still meets the wiring refusal behind it is
+#: `tests/test_a_profile_is_wired_or_refuses.py`'s subject, where nothing stands in for it.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
 
 
 class _ADeclaringPlane(PersonaIso):
@@ -284,6 +303,17 @@ class TheAsk(_ADeclaringPlane, unittest.TestCase):
         self.assertNotIn("\x1b", said)
         # `contain.readable`'s own spelling for a byte that is not printable ASCII.
         self.assertIn("\\u000d", said)
+
+    def test_a_name_that_never_passed_the_name_rule_is_still_escaped_in_the_prompt(self):
+        """`_prompt` contains the NAME too, and every name that reaches it today passed
+        `profiles.NAME_RE` — so a sweep cannot tell that containment from its absence. It is
+        kept for ruling 35's reason (the prompt is the one line that must never be redrawn)
+        and pinned here with a `Profile` built by hand, past the rule that would refuse it."""
+        p = profiles.Profile(name="evil\x1b[2Kname", kind="claude", harness="claude-code",
+                             command=("claude",), env=(), source=profiles.LOCAL_FILE)
+        said = profiletrust._prompt(p, profiletrust.NEW, {})
+        self.assertNotIn("\x1b", said)
+        self.assertIn("evil\\u001b[2Kname", said)
 
     def test_a_control_byte_in_an_env_value_is_shown_escaped_too(self):
         """The `env` is on the prompt beside the command, and it comes out of the same

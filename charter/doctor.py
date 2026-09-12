@@ -766,9 +766,12 @@ def check_profile_wiring(*, preflight: bool = False) -> list[Result]:
     folder, and the SessionStart hook's whole budget is 20 s. Only a `charter doctor` a
     person types probes.
 
-    **A profile whose command charter may not run yet is never probed** (ruling 1). Its row
-    says so and names what to run; asking the harness would mean running a command out of a
-    file a chat can write.
+    **A profile charter may not run a command for is never probed** (ruling 1), and there
+    are two reasons it may not: git would carry `charter.local.toml` — the `harness profiles`
+    row above says why, with the fix — or the operator has not approved this command
+    (`profiletrust`). Its row says which and names what to run; asking the harness would
+    mean running a command out of a file a chat can write. `wiring.detect` keeps the same
+    gate for itself, so a row that forgot to ask would still not probe.
 
     Concurrently, because the answers are independent and each is a subprocess: measured on
     this plane, three declared profiles and three built-ins add well under the 2 s budget
@@ -777,42 +780,93 @@ def check_profile_wiring(*, preflight: bool = False) -> list[Result]:
     **A row's exception costs that row, not the report** — `check_plugin_install`'s
     catch-all shape. A `claude` that segfaults for one profile must not take the other rows,
     or the checks after them, down with it.
+
+    Every row is bounded by :func:`_counted` and never by a bare ``...`` (ruling 45): these
+    are rows an operator acts on, and a fix clipped without saying so reads as the whole fix.
     """
     from . import config as _config, profiles, wiring
 
     if preflight:
         return []
     rows = wiring.listed()
+    # ONE git call however many profiles are declared, and none for a plane that declares
+    # none — the same lock-free `git status` the `harness profiles` row makes.
+    ignored = (profiles.ignore_check(_config.ROOT)
+               if any(p.source != profiles.BUILTIN for p in rows)
+               else profiles.IgnoreCheck("", ""))
     out: list[Result] = []
     with cf.ThreadPoolExecutor(max_workers=4) as pool:
-        answers = {p.name: pool.submit(_probe_one, wiring, p, _config.ROOT) for p in rows
-                   if not wiring.approval_needed(p)}
+        held = {p.name: _not_probed(p, ignored) for p in rows}
+        answers = {p.name: pool.submit(wiring.detect, p, cwd=_config.ROOT)
+                   for p in rows if held[p.name] is None}
         for p in rows:
-            name = f"profile {contain.readable(p.name)}"
-            why = wiring.approval_needed(p)
-            if why:
-                out.append(Result(name, WARN, detail=contain.readable(why),
-                                  hint=f"charter {contain.readable(p.name)}"))
+            name = _profile_row_name(p)
+            if held[p.name] is not None:
+                detail, hint = held[p.name]
+                out.append(Result(name, WARN, detail=_counted(detail), hint=_counted(hint)))
                 continue
             try:
                 w = answers[p.name].result()
             except Exception as e:                      # noqa: BLE001 — one row, not the run
-                out.append(Result(name, WARN, detail=f"{type(e).__name__}: {e}",
-                                  hint=_NOT_CHECKED_HINT))
+                # Contained (ruling 35): an exception's text is whatever the code that raised
+                # it put there, and here that is a path or an argv built from the profile.
+                out.append(Result(name, WARN, detail=_counted(contain.readable(
+                    f"{type(e).__name__}: {e}", contain.NO_CLIP)), hint=_NOT_CHECKED_HINT))
                 continue
             if w.state == wiring.WIRED:
-                out.append(Result(name, OK, detail=w.detail))
+                out.append(Result(name, OK, detail=_counted(w.detail)))
             elif w.state == wiring.UNWIRED:
-                out.append(Result(name, WARN, detail=w.detail, hint=w.fix))
+                out.append(Result(name, WARN, detail=_counted(w.detail),
+                                  hint=_counted(w.fix)))
             else:
-                out.append(Result(name, WARN, detail=w.detail, hint=_NOT_CHECKED_HINT))
+                out.append(Result(name, WARN, detail=_counted(w.detail),
+                                  hint=_NOT_CHECKED_HINT))
     return out
 
 
-def _probe_one(wiring, p, root):
-    """One profile's probe, in its own thread. Separate so the executor holds a plain
-    callable and the loop above reads as the table it is."""
-    return wiring.detect(p, cwd=root)
+def _not_probed(p, ignored) -> tuple[str, str] | None:
+    """``(detail, hint)`` for a profile whose command charter may not run, else ``None``.
+
+    Both already escaped: the only profile-derived text in either is the name, contained
+    whole so :func:`_counted` can say how much of it a row hid.
+    """
+    from . import profiles, profiletrust
+
+    if p.source == profiles.BUILTIN:
+        return None
+    if ignored.reason:
+        return ("not probed — git would carry charter.local.toml, so every profile in it is "
+                "refused (the harness profiles row says why)", ignored.fix)
+    state = profiletrust.approval_needed(p)
+    if state:
+        return (f"{state}, and not approved yet — charter asks before it runs a command it "
+                f"has not been shown", f"charter {contain.readable(p.name, contain.NO_CLIP)}")
+    return None
+
+
+#: What a doctor row says about what it hid (ruling 45) — the selector's marker
+#: (`frame/overlay._HIDDEN`), because it is the same promise to the same operator. An
+#: ellipsis marks a cut and not its size, and on a row whose hint is a command to run, a
+#: reader cannot tell a clipped command from a whole one without the size.
+_HIDDEN = "… +{n} not shown"
+
+
+def _counted(text: str, limit: int = contain.DISPLAY_LIMIT) -> str:
+    """*text* — already escaped — within *limit* characters, saying how many it did not show.
+
+    Not `contain.readable`, which clips with a FIXED marker and would escape an escaped
+    value a second time: every caller here hands over text `contain` has already made safe
+    and left whole, so what is left to decide is only how much of it a row shows.
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + _HIDDEN.format(n=len(text) - limit)
+
+
+def _profile_row_name(p) -> str:
+    """A profile's row name — one spelling, because :func:`profile_row_names` sizes the
+    column from exactly these strings and a row whose name differed would push its own row."""
+    return f"profile {_counted(contain.readable(p.name, contain.NO_CLIP))}"
 
 
 def profile_row_names(*, preflight: bool = False) -> list[str]:
@@ -822,11 +876,11 @@ def profile_row_names(*, preflight: bool = False) -> list[str]:
     how many rows there are — the pin `_FIXED_CHECK_NAMES` already keeps for every other
     check, applied to a list this plane's own `charter.local.toml` decides.
     """
-    from . import profiles, wiring
+    from . import wiring
 
     if preflight:
         return []
-    return [f"profile {contain.readable(p.name)}" for p in wiring.listed()]
+    return [_profile_row_name(p) for p in wiring.listed()]
 
 
 def check_index_lock() -> Result:

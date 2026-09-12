@@ -137,11 +137,17 @@ INSTALL_SCOPE = "project"
 DEFAULT_COMMAND = ("claude",)
 
 
-def available(command: tuple[str, ...] | list[str] = DEFAULT_COMMAND) -> bool:
-    """True when *command*'s program is on PATH. False is an ordinary answer, not a fault —
-    charter supports opencode and Codex, and a plane on either has no Claude Code plugin
-    to be stale."""
-    return bool(shutil.which(command[0]))
+def available(command: tuple[str, ...] | list[str] = DEFAULT_COMMAND,
+              path: str | None = None) -> bool:
+    """True when *command*'s program is on *path* — this process's `PATH` when ``None``.
+    False is an ordinary answer, not a fault — charter supports opencode and Codex, and a
+    plane on either has no Claude Code plugin to be stale.
+
+    *path* is the `PATH` the command will actually be run under. A profile may set its own
+    in `env`, and the launcher looks its command up on that one (`launcher.refusal`); a
+    probe that looked on this process's instead would refuse a profile the launch would
+    have found, and call the harness "could not be asked" when it was never looked for."""
+    return bool(shutil.which(command[0], path=path))
 
 
 def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT, *,
@@ -161,20 +167,23 @@ def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT, *,
     **zero rows** and a scary line, which is the precise failure `iter_all`'s streaming and
     :data:`~charter.doctor.CHECK_TIMEOUT` were introduced to prevent.
 
-    Two exceptions get out of `util.run` and both are real:
+    Three exceptions get out of `util.run` and all are real:
 
     * `util.ProcTimeout` — a `claude` that hangs. `util.run` raises it regardless of
       ``check``, so ``check=False`` does not cover it.
     * `OSError` — `shutil.which` in :func:`available` and the exec here are two moments,
       and a `claude` removed between them is a `FileNotFoundError` that would otherwise
       reach the crash reporter.
+    * `ValueError` — below.
     """
-    if not available(command):
+    if not available(command, path=(env or {}).get("PATH")):
         return None
     try:
         proc = util.run([*command, "plugin", *args, "--json"], cwd=cwd, check=False,
                         timeout=timeout, env=env)
-    except (util.ProcTimeout, OSError):
+    except (util.ProcTimeout, OSError, ValueError):
+        # `ValueError` is a NUL byte in the argv, the cwd or an environment value, which
+        # `exec` refuses before anything runs — and a profile is a file a chat can write.
         return None
     if proc.returncode != 0:
         return None

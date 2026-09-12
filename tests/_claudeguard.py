@@ -86,6 +86,12 @@ sys.exit(0)
 '''
 
 
+#: `plugincache.available` as charter wrote it, kept before :func:`install` stands in for it
+#: — for the one kind of case that is ABOUT how a program is looked up (which `PATH`), and
+#: stubs `util.run` underneath so nothing it finds is ever spawned.
+REAL_AVAILABLE = None
+
+
 def install() -> None:
     """Arm both halves. Idempotent, and called once from `tests/__init__.py`."""
     from charter import plugincache
@@ -97,6 +103,9 @@ def install() -> None:
     # `*a, **k`, not a zero-argument lambda: `available` takes the COMMAND to look up now,
     # because a profile names its own (`["/opt/claude-wrap"]`), and the first call passing
     # one would otherwise be a `TypeError` out of the guard rather than an answer.
+    global REAL_AVAILABLE
+    if REAL_AVAILABLE is None:
+        REAL_AVAILABLE = plugincache.available
     plugincache.available = lambda *a, **k: False
 
     d = Path(tempfile.mkdtemp(prefix="charter-suite-claude-")) / "bin"

@@ -2222,7 +2222,8 @@ def _provision_harnesses(root: Path) -> list[tuple[str, str]]:
 
 
 def _wire_profiles(root: Path, *, install: bool) -> list[tuple[str, str]]:
-    """Wire each DECLARED profile's own config folder. ``(status, label)`` pairs.
+    """Wire each DECLARED profile's own config folder. ``(status, label)`` pairs, each label
+    already contained.
 
     Beside :func:`_wire_harnesses`, which writes the default folder's wiring, because a
     profile names another folder and every kind loses charter's wiring when its folder
@@ -2235,12 +2236,12 @@ def _wire_profiles(root: Path, *, install: bool) -> list[tuple[str, str]]:
     `charter harness install <profile>` are the two doors an install may come through
     (#881), and Codex stays opt-in through neither.
 
-    A profile charter may not yet run a command for is reported and not touched (ruling 1),
-    and while git would carry `charter.local.toml` nothing here runs at all — every profile
-    in it is refused, which `charter harness list` and `doctor`'s `harness profiles` row
-    already say with the fix.
+    A profile the operator has not approved is reported and not touched (ruling 1): nothing
+    here can ask, and wiring runs the profile's own command. While git would carry
+    `charter.local.toml` nothing here runs at all — every profile in it is refused, which
+    `charter harness list` and `doctor`'s `harness profiles` row already say with the fix.
     """
-    from . import profiles, wiring
+    from . import profiles, profiletrust, wiring
     from .harness import codex as _codex, opencode as _opencode
 
     if profiles.ignore_check(root).reason:
@@ -2249,37 +2250,42 @@ def _wire_profiles(root: Path, *, install: bool) -> list[tuple[str, str]]:
     for p in profiles.current().profiles.values():
         if p.source == profiles.BUILTIN:
             continue
-        label = f"profile '{contain.readable(p.name)}'"
-        why = wiring.approval_needed(p)
-        if why:
-            out.append(("skipped", f"{label} is {contain.readable(why)}"))
+        name = contain.readable(p.name)
+        label = f"profile '{name}'"
+        state = profiletrust.approval_needed(p)
+        if state:
+            out.append(("skipped", f"{label} is {state} and not approved yet — run charter "
+                                   f"{name} once to approve its command"))
             continue
         if p.harness == _codex.NAME:
             # The same restraint `cmd_harness_install`'s docstring states for Codex today:
             # its config file is machine-wide, so arming it reaches every repo on the
             # machine, and running that command IS the consent (ADR 0003's shape).
-            out.append(("opt-in", f"{label}: charter harness install "
-                                  f"{contain.readable(p.name)}"))
+            out.append(("opt-in", f"{label}: charter harness install {name}"))
             continue
         if install or p.harness == _opencode.NAME:
-            out += [(status, f"{label}: {contain.readable(detail)}")
-                    for status, detail in wiring.install(p, root)]
+            out += [(status, f"{label}: {detail}") for status, detail in wiring.install(p, root)]
             continue
         w = wiring.detect(p, cwd=root)
         if w.state != wiring.WIRED:
-            out.append(("missing", f"{label}: not wired — {w.detail}; {w.fix}"))
+            out.append(("missing", f"{label}: not wired — {wiring.said(w.detail)}; "
+                                   f"{wiring.said(w.fix)}"))
     return out
 
 
+#: The statuses that are charter reporting what it DID. Everything else — `missing`,
+#: `skipped`, `opt-in`, `unavailable`, `unknown`, `unvouched`, `failed`, `refused`, and any
+#: status a harness adds later — is something the operator has to act on, so it is a
+#: warning. Listed this way round so a new status fails loud rather than quiet.
+_WIRED_NOTES = frozenset({"created", "installed", "present", "refreshed", "current", "added"})
+
+
 def _say_profile_wiring(pairs: list[tuple[str, str]]) -> None:
-    """Print what :func:`_wire_profiles` did, one line each. A gap is a warning and the rest
-    are notes: nothing here fails `init` or `reinit`, because a profile's own account folder
+    """Print what :func:`_wire_profiles` did, one line each. A gap is a warning and a write
+    is a note: nothing here fails `init` or `reinit`, because a profile's own account folder
     is not what those two commands are for."""
     for status, label in pairs:
-        if status in ("skipped", "missing", "opt-in", "unvouched", "failed", "unknown"):
-            util.warn(f"  {label}")
-        else:
-            util.info(f"  {label}")
+        (util.info if status in _WIRED_NOTES else util.warn)(f"  {label}")
 
 
 # --------------------------------------------------------------------------- #
