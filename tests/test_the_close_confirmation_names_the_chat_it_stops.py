@@ -320,6 +320,11 @@ class AWindowOnANOTHERPlaneIsNotThisPlanesChat(PersonaIso, unittest.TestCase):
                           f"{tmuxctl.FLOOR[1]}; this machine has {v}")
         self.socket = _tmuxreap.name("twoplanes")
         self.addCleanup(lambda: self._tmux("kill-server"))
+        # `_plane_servers` always asks charter's OWN socket as well, and on a developer's
+        # machine that is their live frame: an unmarked session there holding a `default.1`
+        # is "this plane's" by the veto rule below, and `cmd_close` would kill it. So
+        # charter's socket is this test's server too (`tests._planeguard.RealTmuxReach`).
+        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
         self.plane = make_plane(self, "schema = 1\n")
         self.chat = f"{self.WS}.1"
 
