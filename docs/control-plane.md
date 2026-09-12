@@ -650,7 +650,9 @@ profile this machine has.
 
 Charter's guard lives in the harness's own config folder, and a profile names another one.
 **A profile whose folder does not carry charter's wiring refuses to launch**, prints what is
-missing and names the command that fixes it:
+missing and names the command that fixes it. Asking runs the profile's own command, so it
+is asked only once you have approved that command — a new `claude-alt` shows
+`run this? [y/N]` first, and a yes is followed by this, not by a chat:
 
 ```
 charter: profile 'claude-alt' is not wired — charter@charter is not installed in
@@ -666,9 +668,10 @@ profile started it.
 A probe that cannot answer — it timed out, exited non-zero, or said something charter could
 not read — refuses too, and prints the probe to run by hand. An unknown is not a pass.
 
-Every launch asks freshly, before tmux and again in the pane. It never reads the remembered
-answer under `.charter/`: that file is as writable by a chat as `charter.local.toml` is, and
-it exists to draw rows, not to start chats.
+Every launch asks freshly, before tmux and again in the pane — a `+`, a tab, `charter
+reopen` and a handoff ask before they open anything, and the pane asks again. It never
+reads the remembered answer under `.charter/`: that file is as writable by a chat as
+`charter.local.toml` is, and it exists to draw rows, not to start chats.
 
 What "wired" means per kind, what each of `init`, `reinit` and `charter harness install`
 does about it, and the measured cost of each probe are in

@@ -76,10 +76,12 @@ doctor` now shows a row per profile.
 chat that looks guarded and is not is the same failure whichever profile started it, and no
 flag starts one unguarded.
 
-`charter init` installs for each Claude Code and opencode profile you declared; `charter
-reinit` installs nothing, writing only the opencode shim and naming the install command for
-anything else; Codex stays opt-in through `charter harness install`, which prints the
-plugin and hook-approval steps Codex only accepts from you, with `CODEX_HOME=` in front.
+Nothing is asked of a profile before you have approved its command, because asking runs
+it. Once you have, `charter init` installs for each Claude Code and opencode profile you
+declared; `charter reinit` installs nothing, writing only the opencode shim and naming the
+install command for anything else; Codex stays opt-in through `charter harness install`,
+which asks first like a launch does and prints the plugin and hook-approval steps Codex
+only accepts from you, with `CODEX_HOME=` in front.
 
 **Codex users: approve charter's SessionStart hook once more.** Its command gained
 `--preflight`, and Codex trusts a hook by the hash of its command. The flag is what keeps

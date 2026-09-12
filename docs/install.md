@@ -108,7 +108,10 @@ every profile you declared, plus a built-in for each harness whose program is in
 answering whether charter's guard actually runs in the config folder that profile names.
 A yellow row names `charter harness install <name>`, which is the same command a refused
 launch prints. They are probed concurrently, each with its own timeout, and a probe that
-raises costs that row and nothing else.
+raises costs that row and nothing else. A profile you have not approved yet is not probed —
+its row says so and names `charter <name>`, which shows the command and asks — and neither
+is any profile while git would commit `charter.local.toml`. A row too long for the table
+says how much it left out (`… +12 not shown`) rather than stopping mid-word.
 
 **The SessionStart hook runs `charter doctor --preflight`**, which is the same preflight
 with two things left out: it probes no profile and makes no git call for one. A probe is a

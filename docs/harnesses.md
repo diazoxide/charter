@@ -226,12 +226,19 @@ plugins where they are; `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` move both.
 | kind | what charter asks | what "wired" means |
 |---|---|---|
 | Claude Code | `<command> plugin list --json`, run in the chat's own directory with the profile's `env` | an install record of `charter@charter` covering that directory or the plane, whose `enabled` is true |
-| Codex | reads `$CODEX_HOME/config.toml` — no subprocess | all three: `plugins."charter@charter".enabled`, `shell_environment_policy.set.CHARTER_HARNESS = "codex"`, and at least one trusted hook of charter's |
+| Codex | reads `$CODEX_HOME/config.toml` — no subprocess | all three: `plugins."charter@charter".enabled`, `shell_environment_policy.set.CHARTER_HARNESS = "codex"`, and at least one trusted **guard** hook of charter's (`pre_tool_use`) |
 | opencode | `<command> debug config` with the profile's `env` | all three: a `plugin` entry naming charter's shim, the shim byte-identical to what charter writes, and no other file in `plugin/` |
 
 Measured costs, five runs each: `claude plugin list --json` 137 ms against an empty folder
 and 178 ms against a full one; `opencode debug config` 631 ms and 718 ms; Codex parses one
 file. A launch pays it twice — once before tmux and once in the pane — and always freshly.
+The `+`, a workspace tab, `charter reopen` and a handoff ask before they open anything, so
+their refusal has somewhere to be said, and the pane asks again; nothing in between does.
+
+**Nothing is asked of a profile charter may not run.** A probe runs the profile's own
+command, so it waits for the same two things a launch does: git would not commit
+`charter.local.toml`, and you have approved that command (`run this? [y/N]`). Until then
+`charter doctor` says which of the two it is waiting for, and probes nothing.
 
 Three details that decide answers, all measured on 2026-09-12:
 
@@ -246,8 +253,16 @@ Three details that decide answers, all measured on 2026-09-12:
 - **Codex records hook trust lazily**, one entry per hook as each first fires — a machine
   that has been running charter under Codex for weeks held 12 of the plugin's 18 keys — and
   a `trusted_hash` cannot be recomputed from the plugin's `hooks/hooks.json`. So charter
-  asks whether charter's hooks were approved in that home *at all*, and an old entry
-  survives a change to a hook's command.
+  asks whether one of charter's **guard** hooks — a `pre_tool_use` entry — was approved in
+  that home at all. An approved SessionStart hook is not enough: Codex asks about each hook
+  on its own, and that one guards nothing. An old entry survives a change to a hook's
+  command.
+- **A disabled plugin's fix is `claude plugin enable charter@charter --scope local`, run in
+  the chat's own directory**, and charter prints it with that `cd` in front. Measured on
+  claude 2.1.270 (2026-09-13): it undid a disable in that directory's `settings.local.json`,
+  in its `settings.json`, and in a git plane root's `settings.local.json`, which reaches a
+  session below it. `--scope project` and `--scope user` each exited 1 over a local disable
+  and changed nothing.
 
 **Charter cannot tell** — a probe that times out, exits non-zero or answers something
 unparseable — is also a refusal, with the probe to run by hand printed beside it. An unknown
@@ -261,8 +276,10 @@ is not a pass.
   profile's own config home, and for a Claude Code profile it reports the gap and names
   `charter harness install <name>`.
 - `charter harness install <name>` resolves a profile first and a registry name second, so
-  `charter harness install codex` still means what it always did. It wires that profile's
-  own folder and then asks the harness whether that worked — and exits non-zero when it did
+  `charter harness install codex` still means what it always did. A profile you have not
+  approved is shown and asked about first, as a launch would ask, and refused where there is
+  no terminal to ask on. It wires that profile's own folder and then asks the harness
+  whether that worked — and exits non-zero when it did
   not, which is the ordinary outcome for Codex, whose plugin install and hook approval are
   Codex's own commands. Charter prints them with `CODEX_HOME=` in front.
 - `charter doctor` shows a row per profile and probes them concurrently.
@@ -281,6 +298,12 @@ is not a pass.
 - The launch record and the wiring cache under `.charter/` are **as writable by a chat as
   `charter.local.toml` is** — no path guard covers that directory. That is why a launch
   never trusts the cache and always probes: the cache exists to draw the selector's rows.
+  An entry is stamped with the config folder's two files and every `.claude/settings.json`
+  and `settings.local.json` from the chat's directory up to the plane root, and an entry
+  that is a day old or dated ahead is not used.
+- A config file a chat left in a shape the harness never writes — a `plugins."charter@charter"
+  = true`, a trust entry that is a string, a NUL byte in a profile's path — is **charter
+  could not tell**, and refuses like any other unknown.
 
 ## `charter statusline --watch`
 
