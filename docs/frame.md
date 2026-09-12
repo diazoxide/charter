@@ -645,9 +645,8 @@ it.
 ### A chat opened for you in the background
 
 **A chat that hands work to a new chat has to start that chat without taking your screen.**
-`charter handoff` — the next piece of the chat-handoff plan, not shipped yet — opens a chat in
-a workspace you name and starts it on a first message you approved. The opening underneath
-it exists now, and it is built so nothing you are looking at changes:
+[`charter handoff`](handoff.md) opens a chat in a workspace you name and starts it on a first
+message you approved. The opening underneath it is built so nothing you are looking at changes:
 
 - **No client moves.** The chat is a new window in the target workspace's session, created
   detached. It is not selected, nothing attaches, and the chat you are on keeps its panels.

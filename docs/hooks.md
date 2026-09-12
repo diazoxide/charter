@@ -712,7 +712,9 @@ never says which persona owns the prompt (ADR 0016); see `docs show personas`.
 
 At `routing: require` a second, quieter hook joins it: `PreToolUse` on `Write|Edit|MultiEdit`
 **asks** once when a turn edits after the roster fired and nothing was dispatched. It never
-denies, and a dispatch — or the next prompt — clears it.
+denies, and a dispatch, a `charter handoff` — opening a chat in a workspace *is* routing — or
+the next prompt clears it. A handoff the Bash guard refused opened nothing, so that one leaves
+the mark where it is.
 
 ## What gets counted
 
@@ -725,6 +727,11 @@ parallel-writer safe with the host in the filename so two engineers never confli
 - **Routing advice** (`personas/_dispatch/`, as `{"ts", "event": "advice"}` rows) — how
   often the roster was shown. Paired with dispatches in `charter persona stats`, it is the
   number that can say the block is not working.
+- **Handoffs** (`personas/_dispatch/`, as `{"ts", "event": "handoff", "placement", "created"}`
+  rows) — how often work went to a NEW CHAT rather than to a sub-agent, whether it went to this
+  workspace or another, and whether it made a workspace to go to. No workspace name, because a
+  LOCAL workspace's name must not reach a committed file; no persona; and no part of the brief.
+  It carries no agent, so it is not a dispatch and never moves a persona's counts.
 - **Skill invocations** (`personas/_skills/`) — a persona's declared `skills:` are preloaded
   into every dispatch of it, so declaring one is cheap to write and expensive to keep. This
   says whether the equipment was worth carrying.

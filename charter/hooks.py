@@ -5921,6 +5921,18 @@ def pretooluse() -> int:
         # deciding which part of it is safe.
         _trace("deny", sid, reason=reason)
         return rc
+    # A handoff that survived A7 IS the routing answer `routing: require` asked for — the
+    # same rule `pretooluse_dispatch` applies to a dispatch, for the same reason: the mark
+    # says "the roster fired and nothing was routed", and opening a chat in a workspace is
+    # routing. AFTER A7 on purpose (Task 4 dispatch ruling 2): a refused handoff opened
+    # nothing, so that turn still owes its answer, and
+    # `test_a_refused_handoff_leaves_the_routing_mark` returns above before reaching here.
+    #
+    # In the hook rather than in `cmd_handoff` because the mark is keyed on the PAYLOAD's
+    # session id, which the CLI knows only for Claude Code (`state.harness_session`) — so a
+    # handoff from opencode or Codex would otherwise clear nothing.
+    if plane and _is_handoff(cmd):
+        _route_mark_clear(sid)
     # B WAS HERE: the clone-commit nudge, removed in #371 — see the note where it lived.
     # Nothing on this handler asks any more; every remaining verdict is a deny or an allow.
     # fall through to the allow-only persona tool-gate

@@ -1,10 +1,190 @@
-# A handoff's brief runs with your authority, so your harness asks you first
+# You asked one chat for a second thing, and it did it there
+
+You are in a chat about the API and you ask about the deploy script. Three things happen
+today, and all three cost you:
+
+- the model does it here, so one workspace's todos, memory and branch now carry two tasks;
+- the model hands it to a sub-agent, and the answer you wanted to talk to comes back as a
+  paragraph folded into this conversation and is then gone;
+- the model tells you to open a chat yourself, and you retype the context it already had.
+
+The fourth way did not exist. `charter frame-new-chat` opens a chat only in the presser's own
+workspace, sends it nothing and moves the view; `charter claude …` run from an agent's Bash tool
+has no terminal, so it execs a bare harness inside that tool call. `charter handoff` is the one
+that does: a chat in a workspace you name, opened without taking your screen, already working on
+a brief you read and approved.
+
+## Three places a request can run, and the two questions that pick one
+
+1. **A sub-agent** — your harness's own. charter never gates, rewrites or converts an Agent
+   call; nothing on this page touches one.
+2. **A new chat in this workspace.**
+3. **A new chat in another workspace**, existing or new.
+
+2 and 3 are one mechanism — a **handoff** — because a chat belongs to its workspace for life.
+The only thing that differs is the workspace.
+
+**Sub-agent or chat: who reads the result?** If this chat needs the answer to continue, it is a
+sub-agent. If you will read it and talk to it, it is a chat. There is no report-back channel
+from a handed-off chat; a parent that needs the answer wanted a sub-agent.
+
+**This workspace or another: does the ask serve this workspace's vision?** Yes → a chat here.
+No → another workspace, matched against other workspaces' visions. charter supplies the facts
+and never names the answer (ADR 0016) — and these are rules for the *proposal*, not for the
+command. `charter handoff` refuses none of them, so a chat already in `default` can still hand
+off within it.
+
+## The command
+
+```bash
+charter handoff <workspace> [--create --vision "<vision>"] [--persona <name>] <<'BRIEF'
+<the brief>
+BRIEF
+```
+
+- **The workspace is always named**, the current one included. The permission prompt has to say
+  where the chat goes, and `.` says nothing.
+- **The brief arrives on stdin, as one quoted heredoc in the same call**, so the prompt shows
+  the exact text the new chat will be sent. There is no `--brief-file`: a prompt that shows a
+  path is an approval of a path. A brief may still *name* files, and naming them is what a good
+  brief does.
+- **The harness is this chat's.** There is no `--harness`: a handoff into a different harness is
+  #538's backlog. There is no `--repo` either — the brief says what to clone, and the new chat
+  owns its own setup.
+- `--persona` pins the new chat's persona, visibly in the prompt. Without it the chat gets
+  whatever a new chat in that workspace gets: the launch empties `$CHARTER_WORKSPACE` and
+  `$CHARTER_PERSONA`, so a pinned caller cannot file the new chat under its own workspace.
+- `--create` makes the workspace first, and needs `--vision`. A workspace with no vision is
+  never proposed as a handoff target, so one created without it would be created unfindable. A
+  workspace `--create` makes is LOCAL.
+
+## What a handoff does, in order
+
+1. With `--create`, creates the workspace and records its vision.
+2. Records a todo in the target workspace, titled by the brief's first line, with one line of
+   provenance under it. **Not the brief** — a LIVE workspace commits `todos/**`, and a brief
+   never reaches a committed file. If that todo is already on the list, charter records nothing,
+   says so, and carries on: a second chat on the same brief may be exactly what you approved.
+3. Opens a chat in the target workspace **in the background**. No client moves, nothing
+   attaches, and the chat you are on keeps its panels — measured on tmux 3.7c and at charter's
+   3.2 floor, with real clients attached: the session's current window is the same one before
+   and after. The new window still gets its panels before anyone looks at it, as a reopened chat
+   does.
+4. Sends it the first message: the stamp line, a blank line, then the brief verbatim. It rides
+   the harness's own argv (`claude "<message>"` on Claude Code 2.1.268, `codex "<message>"` on
+   codex-cli 0.147.0, `opencode --prompt "<message>"` on opencode 1.18.23, each read from that
+   version's `--help`), never typed into its pane.
+5. The chat is **born locked to its workspace** and asks no workspace question at session start.
+   That lock depends on the harness keeping the chat id charter starts it with, and two are
+   named as not doing that yet: opencode's plugin overwrites `$CHARTER_SESSION_ID` (#946), and
+   Codex gets no session id outside a frame (#954).
+6. Keeps the full brief in that chat's private state, under `.charter/`, never committed.
+7. Appends one row to the dispatch tally — `{"event": "handoff", "ts", "placement", "created"}`,
+   with no workspace name, no persona and no text — and clears `routing: require`'s pending mark
+   for the turn that ran it, on every harness. The handoff **is** the routing answer.
+8. Prints the new chat's id and its workspace.
+
+**What it does not do yet:** move the target workspace to the front of the tab strip, or mark
+that tab as arrived. Those are the next slice; today the new chat appears on the target
+workspace's chats strip and nothing on screen points at it.
+
+## The stamp
+
+```
+⟨handoff from chat <source-chat> · workspace <source-workspace> · <YYYY-MM-DD HH:MM>⟩
+```
+
+Facts charter can observe, and no instruction. The new chat — and whoever reads the transcript
+later — can tell the first message was not typed there. A handoff proposed from a shell with no
+`$CHARTER_SESSION_ID` stamps its source as `chat none`. Minutes, not seconds: the stamp is read
+by a person deciding whether this is the message they approved a moment ago.
+
+## What `charter handoff` refuses before it changes anything
+
+charter fails toward no change, so every one of these is asked **before the first write** —
+nothing is created, nothing is recorded, and no chat is opened.
+
+| The call | What it says |
+| --- | --- |
+| a name that cannot be a workspace | the name rule, and that nothing was opened |
+| `--vision` without `--create` | the command that sets an existing workspace's vision |
+| `--create` without `--vision` | that a visionless workspace would be created unfindable |
+| `--create` on a workspace that exists (`default` included) | to drop `--create` |
+| an unknown workspace without `--create` | the same call with `--create --vision` |
+| `--persona` naming one that does not exist | the personas there are |
+| stdin is a terminal — asked before any read, so it never blocks | the heredoc form |
+| an empty brief | the heredoc form |
+| bytes on stdin that are not UTF-8 | that they are not text |
+| a brief shaped like a credential | the KIND, never the value |
+| no frame here, or charter is a window in a tmux you already had | the exact command to run in a new terminal |
+| anything `commands_frame.background_refusal` refuses — an empty, flag-shaped, single-word, NUL-carrying or oversized first message | the seam's own sentence |
+
+**The byte cap is on the stamped message, not on your brief.** charter refuses a first message
+past 12,288 bytes, counted the way `exec` is handed them. That bound is charter's own policy,
+not tmux's: tmux refuses a command past 16,364 bytes (measured on 3.7c and at the 3.2 floor),
+and the command that starts a chat carries the chat's names, its directory and its identity
+beside the message. What is counted is the stamp line, a blank line and your brief, so a brief
+that fits on its own can be over once it is stamped — the refusal says how big the brief was, so
+the two numbers are both on screen. Name long material by its path instead of pasting it.
+
+**Outside a frame, charter prints the command instead of stopping.** A handoff needs charter's
+own tmux server, with a launcher that can go away once the chat exists; inside a tmux you
+started yourself, that launcher stays awake for the life of the harness it starts, so there is
+nothing to open a chat in the background *of*. Both cases print the equivalent
+`charter <harness> --workspace <ws> …` line, with the workspace creation in front of it when you
+asked for one and `CHARTER_PERSONA=` when you named a persona — every word quoted, the brief
+included. If nothing says which harness this is — no `$CHARTER_HARNESS`, no `[harness] default`
+— charter prints `<harness>` where the word goes and says it could not name one, rather than
+starting the wrong tool with your brief already in its argv.
+
+## Isolation and continuation
+
+- **The brief is the whole context.** No pointer to the parent's transcript, no forked
+  conversation. Everything the new chat needs is in the text you approved.
+- **A handed-off chat that will write claims its own piece** — `charter wt add <repo> <piece>` —
+  before it writes. The handoff never pre-creates a worktree: the claimant is the creator (ADR
+  0011). This holds wherever the chat lands; any workspace with other chats in it has the same
+  two-chats-one-clone risk.
+- **The chat opens in the workspace directory**, which is the directory `charter <harness>
+  --workspace <ws>` would have used.
+- **"Starts working" means the first message is sent.** Permission prompts in the new chat
+  behave exactly as they do in any chat.
+- A handed-off chat may propose a handoff of its own, under the same gate. There is no depth
+  limit, because every hop needs its own yes.
+
+## Limits
+
+- **A handed-off chat never reports back to the chat that opened it.** If you need the answer in
+  this conversation, you wanted a sub-agent.
+- **The same harness only.** A Claude Code chat hands off to a Claude Code chat (#538's
+  backlog).
+- **The brief is a command-line argument.** It reaches the harness as `claude "<brief>"`,
+  `codex "<brief>"` or `opencode --prompt "<brief>"`, so any process on this machine that can
+  list processes can read it while the harness starts. A brief never carries a secret, and a
+  credential-shaped one is refused by kind before anything opens.
+- **12,288 bytes for the stamped message**, above. The cost, stated: a brief between roughly
+  12,200 and 15,800 bytes is refused although tmux would take it.
+- **Nothing shows a reopened chat its brief yet.** A Claude Code chat reopens with its
+  conversation (`charter reopen`); one that reopens empty is not shown the brief it was opened
+  on. opencode has no SessionStart hook at all (`charter doctor` names that gap), so there is
+  nowhere to show it there.
+- **A handoff is not a dispatch.** Its tally row carries no agent, so `charter persona stats`'
+  dispatch column and "last worked" are untouched by one.
+
+## A brief runs with your authority, so your harness asks you first
 
 A handoff opens a chat, in this workspace or another, whose first message is a brief that the
 chat you are talking to wrote. A first message is not a suggestion: the new chat starts working
 on it with your authority, and nobody reads it again before it does. So the consent for a
 handoff cannot be the model's own proposal, however faithfully that proposal quotes the brief.
 It is your harness's permission prompt, showing the exact text, in front of `charter handoff`.
+
+**The prompt is the consent for ONE spelling, and charter refuses the rest.** The rule below was
+measured against `charter handoff …` as those two bare words; Claude Code says of its own Bash
+rules that one "isn't a security boundary around the program", and 2.1.268 ran `charter
+'handoff'`, `python3 -m charter handoff` and a path to charter with no prompt at all. So the ask
+rule is not the boundary — it is the prompt for the exact spelling, and charter's own hook
+refuses the spellings it can recognise that the rule was measured not to match.
 
 ## The prompt is the consent
 

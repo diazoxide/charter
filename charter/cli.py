@@ -12,6 +12,7 @@ from . import (
     commands,
     commands_change,
     commands_frame,
+    commands_handoff,
     commands_harness,
     commands_persona,
     commands_report,
@@ -227,6 +228,33 @@ def build_parser() -> argparse.ArgumentParser:
                           "date (2026-07-01). Undated memories are excluded and counted.")
     rcl.add_argument("--limit", type=int, default=8, help="Max results (0 = no cap).")
     rcl.set_defaults(func=commands.cmd_recall)
+
+    # Registered HERE, inside `build_parser` and therefore before `_add_frame_parsers`
+    # snapshots `sub.choices`, so `handoff` is a core command a harness registering
+    # `cli_name = "handoff"` would collide with loudly rather than silently take.
+    #
+    # The workspace is a positional and always named, the current one included: the
+    # permission prompt that is this command's consent has to say where the chat goes, and
+    # `.` says nothing (`docs/handoff.md`). There is no `--brief-file` — a prompt that
+    # shows a path is an approval of a path, not of the brief — no `--harness` (a handoff
+    # runs the calling chat's), and no `--repo` (the brief says what to clone, and the new
+    # chat owns its own setup).
+    hof = sub.add_parser(
+        "handoff",
+        help="Open a chat in a workspace you name, already working on a brief you pass as "
+             "a quoted heredoc on stdin. Your harness asks before it runs.")
+    hof.add_argument("workspace",
+                     help="Where the chat opens — an existing workspace, or a new one with "
+                          "--create. Always named, this workspace included.")
+    hof.add_argument("--create", action="store_true",
+                     help="Make the workspace first (LOCAL, never LIVE). Needs --vision.")
+    hof.add_argument("--vision",
+                     help="What the new workspace is for, one line. A workspace with no "
+                          "vision is never proposed as a handoff target.")
+    hof.add_argument("--persona",
+                     help="Pin the new chat's persona. Without it the chat gets whatever a "
+                          "new chat in that workspace gets.")
+    hof.set_defaults(func=commands_handoff.cmd_handoff)
 
     gp = sub.add_parser("git-policy",
                         help="Golden rule: one credential — check/apply token-only git auth "
