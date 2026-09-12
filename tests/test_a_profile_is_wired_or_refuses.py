@@ -407,6 +407,18 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.assertIn("could not ask", wiring.refusal(self.p, cwd=self.tmp))
 
+    def test_the_fix_once_charter_has_written_its_line_is_codexs_own_commands(self):
+        """Review 7's objection, one mark further on. Once `shell_environment_policy` names
+        the harness, `charter harness install` has done everything charter can do — the
+        plugin install and the hook approval are Codex's, and pointing back at charter's
+        command would print a fix that changes nothing."""
+        self.write(codex_config(plugin=False, trust=False))
+        w = wiring.detect(self.p, cwd=self.tmp)
+        self.assertEqual(w.state, wiring.UNWIRED)
+        self.assertIn(f"CODEX_HOME={self.home}", w.fix)
+        self.assertIn("codex plugin add", w.fix)
+        self.assertNotIn("charter harness install", w.fix)
+
     def test_the_fix_for_a_foreign_policy_table_is_the_line_not_the_command(self):
         """Review 7: `codex.install()` answers `present` for ANY `[shell_environment_policy]`,
         so naming `charter harness install` here would print a fix that changes nothing."""

@@ -340,12 +340,30 @@ def _codex(p: profiles.Profile, *, env: Mapping[str, str]) -> Wiring:
     if not missing:
         return Wiring(WIRED, f"{where}: plugin enabled, harness named, "
                              f"{len(trusted)} trusted hook(s)", "")
-    if ("shell_environment_policy" in doc
-            and policy.get("CHARTER_HARNESS") != codex.NAME):
+    if policy.get("CHARTER_HARNESS") == codex.NAME:
+        # Charter's own half is already written, so what is left is Codex's own commands and
+        # a trust prompt only a person can answer. Naming `charter harness install` here
+        # would name the command that has already done everything it can — review 7's
+        # objection is about a fix that changes nothing, and this is the same fix one mark
+        # further on.
+        fix = codex_steps(path.parent)
+    elif "shell_environment_policy" in doc:
         # `codex.install()` answers `present` for ANY `[shell_environment_policy]` table,
         # so `charter harness install` here would print a fix that changes nothing.
         fix = CODEX_POLICY_BY_HAND.format(path=where)
     return Wiring(UNWIRED, f"{where}: " + "; ".join(missing), fix)
+
+
+def codex_steps(home) -> str:
+    """:data:`CODEX_STEPS` with ``CODEX_HOME=`` in front of each command it can prefix.
+
+    Printed and never run: they install software into an account folder and end in a trust
+    prompt only a person can answer, and charter's own consent rule is that running the
+    command IS the consent.
+    """
+    where = contain.readable(str(home))
+    return "; ".join(f"CODEX_HOME={where} {step}" if step.startswith("codex ") else step
+                     for step in CODEX_STEPS)
 
 
 def _opencode(p: profiles.Profile, *, env: Mapping[str, str]) -> Wiring:

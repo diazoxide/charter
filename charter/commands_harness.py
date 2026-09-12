@@ -120,9 +120,8 @@ def _say_codex_steps(home) -> None:
 
     util.info("  Codex installs the plugin and trusts its hooks itself — charter writes "
               "only the line that names the harness. The rest, in this profile's home:")
-    for step in wiring.CODEX_STEPS:
-        util.info(f"      CODEX_HOME={contain.readable(str(home))} {step}"
-                  if step.startswith("codex ") else f"      {step}")
+    for step in wiring.codex_steps(home).split("; "):
+        util.info(f"      {step}")
 
 
 def cmd_harness_install(args) -> int:
