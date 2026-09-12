@@ -660,21 +660,27 @@ def _close_the_cancelled_chat(fid: str | None) -> None:
     session's last window destroys the session — the frame's rule for its last chat, and
     `commands_frame._pane_died_teardown_hook_argv` measures both. Best effort: a tmux that
     will not answer leaves the window standing, which is where this started.
+
+    **Only the window of a pane tmux proves is THIS process — nothing else, ever.** On
+    2026-09-12 an earlier shape of this function, which targeted `state.harness_pane` or
+    `$TMUX_PANE`, lost its empty-target guard in an unfinished edit, and a test run from
+    inside a live chat sent `kill-window` to charter's own server and closed the operator's
+    session. Measured on tmux 3.7c: `kill-window -t ''` exits 0 and kills the ACTIVE window.
+    A record and an inherited variable each name a pane; neither proves it is this one — a
+    chat's own shell inherits `$TMUX_PANE` from the harness pane it runs in. `#{pane_pid}`
+    equal to this pid does (the same proof `framed_chat` stands on), so that is the only
+    target, and an empty one closes nothing.
     """
     if fid is None:
         return
     from ..commands_frame import SOCKET
 
-    # `state.harness_pane` first, `$TMUX_PANE` second: the record is what the LAUNCH wrote
-    # down for this chat, and the variable is what tmux put in this process. They agree,
-    # and the fallback is for a chat whose record was lost — the same pair `cmd_new_chat`
-    # reads for the same reason.
-    pane = state.harness_pane(fid) or os.environ.get("TMUX_PANE", "")
-    if not pane:
+    server = state.frame_server(fid) or SOCKET
+    row = tmuxctl.live_pane_by_pid(server, os.getpid())
+    if row is None or not row.pane:
         return
     tmuxctl.run("closing the chat the operator cancelled",
-                tmuxctl.server_argv(state.frame_server(fid) or SOCKET,
-                                    "kill-window", "-t", pane),
+                tmuxctl.server_argv(server, "kill-window", "-t", row.pane),
                 report=False)
 
 

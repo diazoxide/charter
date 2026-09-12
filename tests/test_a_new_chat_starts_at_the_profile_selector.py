@@ -567,6 +567,11 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
             launcher.pane, "claim", side_effect=lambda: self.log.append("claim")))
         self.enterContext(mock.patch.object(launcher.pane, "release"))
         self.enterContext(mock.patch.object(launcher, "_wait_for_the_operator"))
+        # No case in this class may reach a real tmux server: a cancel asks tmux which pane
+        # this process is, and the default server is charter's own — the operator's (see
+        # `test_a_pane_this_process_is_not_the_first_process_of_is_never_closed`).
+        self.enterContext(mock.patch.object(launcher.tmuxctl, "live_pane_by_pid",
+                                            return_value=None))
         self.execs: list[tuple] = []
         self.exec = self.enterContext(mock.patch.object(
             launcher.os, "execvpe", side_effect=lambda *a: self.execs.append(a)))
@@ -610,18 +615,21 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
         is still listed a minute later — with `remain-on-exit on` and both hooks present.
         The `pane-died` hook is untouched and is still the answer for a harness that dies;
         Esc is charter's own keystroke on charter's own surface in a pane no harness has
-        ever run in, and it closes its own window.
+        ever run in, and it closes its own window — the one tmux says THIS process is the
+        first process of, and no other.
         """
-        state.record_harness_pane("beta.1", "%7")
         state.record_server("beta.1", "some-socket")
+        own = launcher.tmuxctl.LivePane("%7", "beta", "beta.1", "")
         killed: list = []
-        with mock.patch.object(launcher.tmuxctl, "run",
-                               side_effect=lambda a, argv, **kw: killed.append(argv)):
+        with mock.patch.object(launcher.tmuxctl, "live_pane_by_pid",
+                               return_value=own) as asked, \
+                mock.patch.object(launcher.tmuxctl, "run",
+                                  side_effect=lambda a, argv, **kw: killed.append(argv)):
             self.assertEqual(self._run(), selector.CANCELLED_EXIT)
+        asked.assert_called_once_with("some-socket", os.getpid())
         self.assertEqual(len(killed), 1, killed)
         self.assertEqual(killed[0][-3:], ["kill-window", "-t", "%7"])
-        self.assertIn("some-socket", killed[0],
-                      "the chat's own server, never charter's default")
+        self.assertIn("some-socket", killed[0], "the chat's own recorded server")
 
     def test_a_pick_closes_no_window(self):
         """The control. Only a cancel closes anything — a pick hands the pane to the
@@ -643,16 +651,46 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
             self.assertEqual(self._run(), selector.CANCELLED_EXIT)
         self.assertEqual(killed, [])
 
-    def test_a_chat_with_no_pane_recorded_falls_back_to_the_one_tmux_named(self):
-        """The migration case, and the same pair `cmd_new_chat` reads: the record is what
-        the LAUNCH wrote down, and `$TMUX_PANE` is what tmux put in this process."""
-        state.record_harness_pane("beta.1", "")
+    def test_a_pane_this_process_is_not_the_first_process_of_is_never_closed(self):
+        """**The incident this rule exists for (2026-09-12).** A test run of this class from
+        inside a live chat — with the empty-target guard deleted — sent `kill-window` to
+        charter's own server and closed the operator's session. A recorded pane and an
+        inherited `$TMUX_PANE` both name SOME pane; neither proves it is this process's, and
+        a chat's own shell inherits `$TMUX_PANE` from the harness pane it runs in. Only tmux
+        answering `#{pane_pid} == os.getpid()` proves that, and without it nothing closes."""
+        state.record_harness_pane("beta.1", "%7")
+        killed: list = []
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%3195"}), \
+                mock.patch.object(launcher.tmuxctl, "live_pane_by_pid", return_value=None), \
+                mock.patch.object(launcher.tmuxctl, "run",
+                                  side_effect=lambda a, argv, **kw: killed.append(argv)):
+            self.assertEqual(self._run(), selector.CANCELLED_EXIT)
+        self.assertEqual(killed, [])
+
+    def test_the_inherited_tmux_pane_is_never_the_target(self):
+        """Proof found, and the target is the pane tmux proved — not the record, not the
+        variable, even when both are present and disagree with it."""
+        state.record_harness_pane("beta.1", "%7")
+        own = launcher.tmuxctl.LivePane("%9", "beta", "beta.1", "")
         killed: list = []
         with mock.patch.dict(os.environ, {"TMUX_PANE": "%3"}), \
+                mock.patch.object(launcher.tmuxctl, "live_pane_by_pid", return_value=own), \
                 mock.patch.object(launcher.tmuxctl, "run",
                                   side_effect=lambda a, argv, **kw: killed.append(argv)):
             self._run()
-        self.assertEqual(killed[0][-3:], ["kill-window", "-t", "%3"])
+        self.assertEqual([argv[-3:] for argv in killed], [["kill-window", "-t", "%9"]])
+
+    def test_no_kill_is_ever_sent_with_an_empty_target(self):
+        """**Measured on tmux 3.7c, isolated socket, `$TMUX`/`$TMUX_PANE` unset:**
+        `kill-window -t ''` exits 0 and kills that server's ACTIVE window. An empty target is
+        not a no-op tmux refuses; it is the operator's current window."""
+        own = launcher.tmuxctl.LivePane("", "beta", "beta.1", "")
+        killed: list = []
+        with mock.patch.object(launcher.tmuxctl, "live_pane_by_pid", return_value=own), \
+                mock.patch.object(launcher.tmuxctl, "run",
+                                  side_effect=lambda a, argv, **kw: killed.append(argv)):
+            self.assertEqual(self._run(), selector.CANCELLED_EXIT)
+        self.assertEqual(killed, [])
 
     def test_escape_exits_130_and_leaves_it_waiting(self):
         self.assertEqual(self._run(), selector.CANCELLED_EXIT)
