@@ -729,6 +729,10 @@ class AmbientGitConfig(BaseException):
     """A test spawned a git that would read the operator's own ``~/.gitconfig``."""
 
 
+class RealTmuxReach(BaseException):
+    """A test started a tmux that would talk to the operator's own server."""
+
+
 class BackgroundCharterChild(BaseException):
     """A test forked a detached charter the test itself will never wait for."""
 
@@ -790,6 +794,80 @@ def _explain_forge(parts: list[str], name: str) -> str:
 #: ``git`` through the same program-name resolution as ``op`` and ``gh`` — a path, a
 #: symlink or a wrapper cannot walk past a basename compare here either.
 _GIT: frozenset[str] = frozenset({"git"})
+
+
+#: The program whose SERVER is the operator's: their own frame on charter's socket, their
+#: own tmux on ``default`` or on whatever ``$TMUX`` named when the suite started.
+_TMUX: frozenset[str] = frozenset({"tmux"})
+
+#: `commands_frame.SOCKET`, spelled here because this module is installed before charter's
+#: frame is safe to import; `test_no_test_reaches_the_operators_tmux` pins the two equal.
+_CHARTER_SOCKET = "charter"
+
+#: tmux's own option letters that take a value (`tmux.c`'s getopt string, ``2c:CDdf:lL:NqS:T:uUvV``).
+_TMUX_VALUED = frozenset("cfLST")
+
+#: The sockets no test may reach, resolved when the guard is installed — before any test has
+#: had the chance to move ``$TMUX_TMPDIR`` — from the environment the suite was started in.
+_OPERATOR_TMUX: frozenset[str] = frozenset()
+
+
+def _operator_tmux(env) -> frozenset[str]:
+    """The operator's three tmux sockets as paths, from *env* — the suite's own environment
+    with `_envguard`'s scrubbed ``$TMUX`` put back, because the scrub is what hides it."""
+    home = os.path.join(env.get("TMUX_TMPDIR") or "/tmp", f"tmux-{os.getuid()}")
+    found = {os.path.realpath(os.path.join(home, _CHARTER_SOCKET)),
+             os.path.realpath(os.path.join(home, "default"))}
+    if env.get("TMUX"):
+        found.add(os.path.realpath(env["TMUX"].split(",")[0]))
+    return frozenset(found)
+
+
+def _tmux_socket(argv: list[str], env) -> str | None:
+    """The socket the tmux command line *argv* connects to, or ``None`` for ``-V``.
+
+    tmux's own rule, in its order: ``-S`` wins whatever else is given; with no ``-L`` either,
+    ``$TMUX`` names the server the child is inside; otherwise the label (``default`` unless
+    ``-L`` says) under ``$TMUX_TMPDIR`` or ``/tmp``. Read from the CHILD's environment — its
+    ``env=`` when it has one — because a test that clears its environment is exactly the one
+    whose ``tmux -L charter`` lands in the operator's ``/tmp`` (2026-09-12).
+    """
+    env = os.environ if env is None else env
+    label = path = None
+    words = iter(argv[1:])
+    for word in words:
+        if not word.startswith("-"):
+            break
+        for i, letter in enumerate(word[1:], 1):
+            if letter == "V":
+                return None
+            if letter in _TMUX_VALUED:
+                value = word[i + 1:] or next(words, "")
+                if letter == "L":
+                    label = value
+                if letter == "S":
+                    path = value
+                break
+    if path is not None:
+        return os.path.realpath(path)
+    if label is None and env.get("TMUX"):
+        return os.path.realpath(env["TMUX"].split(",")[0])
+    return os.path.realpath(os.path.join(env.get("TMUX_TMPDIR") or "/tmp",
+                                         f"tmux-{os.getuid()}", label or "default"))
+
+
+def _explain_tmux(parts: list[str], socket: str) -> str:
+    return (
+        f"REFUSED: spawning `tmux` against the operator's own server\n"
+        f"{_current_test()} is about to run `{' '.join(parts)}`, which connects to "
+        f"`{socket}` — the socket the operator's live frame or their own tmux is on. That is "
+        f"not a fixture. On 2026-09-12 a test run from inside a live chat sent "
+        f"`kill-window -t ''` there and closed the operator's session: tmux 3.7c answers an "
+        f"empty target with its ACTIVE window and exit 0.\n"
+        f"  The way out is a server of the test's own: `-L charter-<something>-<pid>` as the "
+        f"real-tmux modules do, or a `$TMUX_TMPDIR` of its own in the child's `env=`. A unit "
+        f"test that only needs tmux's answer stubs the call (`tmuxctl.run`, "
+        f"`tmuxctl.live_pane_by_pid`) instead.")
 
 
 def _reads_the_operators_git_config(opts: dict) -> bool:
@@ -1713,12 +1791,14 @@ def _guard_spawns() -> None:
     a call to one of them that is not the two known non-charter uses. The day a charter
     spawn is written that way, that case turns red and this docstring is what it points at.
     """
-    global _SPAWN_GUARDED, _VAULT_CLIS, _FORGE_CLIS
+    global _SPAWN_GUARDED, _VAULT_CLIS, _FORGE_CLIS, _OPERATOR_TMUX
     if _SPAWN_GUARDED:
         return
     _SPAWN_GUARDED = True
     _VAULT_CLIS = _credential_clis()
     _FORGE_CLIS = _forge_clis()
+    from . import _envguard
+    _OPERATOR_TMUX = _operator_tmux({**os.environ, **_envguard.scrubbed()})
     original = subprocess.Popen.__init__
 
     def __init__(self, args=None, *rest, **kw):
@@ -1745,6 +1825,14 @@ def _guard_spawns() -> None:
         reached = _reaches_a_credential_cli(args, opts, _GIT)
         if reached is not None and _reads_the_operators_git_config(opts):
             raise AmbientGitConfig(_explain_git_config(*reached))
+        # And the one program that can END the operator's session rather than read their
+        # settings: a tmux addressed at their own server. Judged on the socket it would
+        # reach, not on the words, so a hand-built `env=` that drops `$TMUX_TMPDIR` counts.
+        reached = _reaches_a_credential_cli(args, opts, _TMUX)
+        if reached is not None:
+            socket = _tmux_socket(_launcher_argv(reached[0])[0], opts.get("env"))
+            if socket in _OPERATOR_TMUX:
+                raise RealTmuxReach(_explain_tmux(reached[0], socket))
         parts = _charter_argv(args, opts)
         if parts is not None:
             if _REAL_ROOT:

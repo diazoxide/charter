@@ -84,7 +84,12 @@ command.
   it when this one is killed before its cleanup runs — **every** socket it starts, including
   a second one, and never by decorating a name that helper already produced (#770). The slug
   is lowercase letters, digits and single hyphens; `name()` refuses anything else rather than
-  handing back a socket the reaper cannot see. **Nor does it spend a credential.**
+  handing back a socket the reaper cannot see. **And no tmux a test starts may reach
+  yours:** `tests._planeguard.RealTmuxReach` refuses a child whose socket is charter's
+  (`-L charter`), your `default` server, or the one `$TMUX` named when the suite started —
+  judged on the child's own `env=`, because a test that cleared its environment is the one
+  whose `kill-window` closed an operator's live session (2026-09-12). **Nor does it spend a
+  credential.**
   `doctor`'s preflight asks a forge whether your token is still good, and eighteen modules
   reach that line — 28 authenticated round trips to github.com and gitlab.com per run, and
   the sweep gate spends that again per mutation. `tests/_forgeprobe.py` answers the probe
