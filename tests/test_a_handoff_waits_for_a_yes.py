@@ -1499,6 +1499,68 @@ class DoctorNamesTheGate(SessionRootCase):
         self.assertIn("under opencode", r.detail)
         self.assertEqual(self.ADD, r.hint)
 
+    def _workspaces_through_a_symlink(self) -> None:
+        """Point charter's `workspaces/` at a SYMLINK to itself, so every path it builds from
+        that directory needs normalising before it can be compared with a session's cwd.
+
+        Built here rather than relied upon: `SessionRootCase` documents that macOS reaches its
+        temp directory through `/var` → `/private/var`, and that is exactly the accident these
+        two `.resolve()` calls were leaning on. On Linux there is no such symlink, so dropping
+        either `.resolve()` left CI's whole suite green while the same mutation died on a
+        developer's machine — a guard pinned by the platform and not by a test (#982's sweep,
+        `drop-normalise` at `_reinit_target`). A symlink the fixture makes itself pins them
+        everywhere.
+        """
+        real = (config.ROOT / "workspaces").resolve()
+        real.mkdir(parents=True, exist_ok=True)
+        link = config.ROOT / "workspaces-by-another-name"
+        if not link.is_symlink():
+            link.symlink_to(real, target_is_directory=True)
+        self.enterContext(mock.patch.object(config, "WORKSPACES_DIR", link))
+
+    def test_a_workspace_reached_through_a_symlink_is_still_this_workspace(self):
+        """The session stands at the workspace's REAL path; charter builds the same directory's
+        path through the symlink. They are one directory, and only normalising says so."""
+        self._workspaces_through_a_symlink()
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.REFRESH, r.hint)
+
+    def test_a_guest_checkout_reached_through_a_symlink_is_still_that_checkout(self):
+        """The same for the guest tree, whose path charter builds by walking the symlinked
+        workspace directory — a second `.resolve()`, and the sweep reads the pair together
+        because neither was pinned alone."""
+        self._workspaces_through_a_symlink()
+        repo = self.workspace / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        # env=None: the suite has already redirected git's config (#641).
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(repo.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.REFRESH, r.hint)
+
+    def test_one_harness_holding_the_rule_is_enough_to_call_the_layer_behind(self):
+        """`any`, not `all`, over the harnesses that are missing the rule. With two missing and
+        only one of them held by the plane, the two answers part company: `any` says the layer
+        here is behind — which it is, for Claude Code — while `all` says nothing is held and
+        offers `guard ask`. Every earlier test had a single missing harness, where the two
+        quantifiers agree, which is how this survived (#982's sweep, `swap-synonym`)."""
+        self._claude_rule(config.ROOT)          # the plane holds it for claude-code
+        # …and NOT for opencode, so both harnesses are missing here but only one is held.
+        docs = config.ROOT / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        self.rooted_at(docs.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertIn("opencode", r.detail)
+        self.assertEqual(self.NOWHERE, r.hint)
+
     def test_a_chat_in_a_guest_checkout_is_sent_to_reinit(self):
         """A checkout inside a workspace is a directory `reinit` writes, so the clause belongs
         there too — and nothing pinned it. Deleting the guest-checkout match left the suite
