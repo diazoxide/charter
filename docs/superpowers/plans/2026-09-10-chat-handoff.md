@@ -87,6 +87,14 @@ carries the rulings that touch it.
   `charter 'handoff'` — which Claude Code 2.1.268 runs with no prompt — is refused along with every
   other variant. Phase 2 (ruling 4's #948-path tests, ruling 5's `{stale}` hint) is split into a
   follow-up PR after #948 merges; Task 4's PR merges as Phase 1.
+- **Task 4 Phase 2 (2026-09-12), measured against #948 on main.** The `#948-path` test list above
+  predated #948 and disagreed with it on `deny`: #948 mirrors the plane's `ask` **and** `deny`
+  into every workspace document, and only `allow` never travels. Ruling 4 already governs — Task 4
+  "asserts nothing about `deny`" — so the deny test is dropped and the first test asserts the ask
+  rule's presence plus the absence of `allow` rather than equality on the whole `permissions`
+  object. The entries themselves are corrected below rather than left for the next reader to
+  re-derive. `{stale}` consumes `Harness.restrictive_rules` (#948's own surface), so "does the
+  plane hold this rule" has one answer, not two.
 - **Task 4 review round 2 (2026-09-11).** A7 guards a good-faith chat's spelling mistakes and
   names what it cannot see; it is not a shell parser, and it does not refuse every command that
   merely mentions a handoff. R2b: exactly one ASCII space after `handoff` too, or the end of the
@@ -1055,9 +1063,20 @@ a launch refreshing a workspace after the plane gains the rule, with no assertio
 stays out. First draft, for the record: the plane's `.claude/settings.json` holds
 `{"enabledPlugins": {"charter@charter": true}, "permissions": {"ask": ["Bash(charter handoff *)"], "allow": ["Bash(ls *)"], "deny": ["Bash(rm *)"]}}`.
 
-- `test_a_workspace_settings_document_carries_the_planes_asks` — `json.loads(ClaudeCodeHarness().workspace_files()[".claude/settings.json"])["permissions"] == {"ask": ["Bash(charter handoff *)"]}`.
-- `test_an_allow_rule_never_travels_into_a_workspace` — no `"allow"` anywhere in that document.
-- `test_a_deny_rule_does_not_travel_either` — no `"deny"`.
+- `test_a_workspace_settings_document_carries_the_planes_asks` — **corrected in Phase 2, measured
+  against #948 on main:** `"Bash(charter handoff *)" in permissions["ask"]` and no `"allow"` key.
+  The original said `permissions == {"ask": ["Bash(charter handoff *)"]}`, which is false on main:
+  #948 mirrors the plane's `deny` as well, so equality fails on any plane that has one, and it
+  would break again whenever a neighbouring feature legitimately adds a key.
+- `test_an_allow_rule_never_travels_into_a_workspace` — no `"allow"` anywhere in the generated
+  documents, reading `workspace_files()` **and** `checkout_files()`, since the plane's local
+  file rides only in the second. The security invariant from the angle equality cannot reach;
+  the local half is pinned for every plane by #948's own
+  `test_a_local_grant_does_not_travel_either`, and this holds the handoff-shaped plane to it.
+- ~~`test_a_deny_rule_does_not_travel_either`~~ — **dropped in Phase 2.** #948 mirrors `deny`
+  deliberately, so this asserted the opposite of shipped behaviour; task 4 ruling 4 already said
+  Task 4 "asserts nothing about `deny`, which #942 carries", and two suites pinning one behaviour
+  from different angles is how a guard ends up half-pinned.
 - `test_an_ask_bucket_of_the_wrong_shape_travels_as_nothing` — `"ask": "Bash(x)"` → no `"permissions"` key.
 - `test_a_rule_that_is_not_a_string_is_dropped` — `"ask": ["Bash(a *)", 3]` → `["Bash(a *)"]`.
 - `test_the_layer_row_still_judges_by_charters_own_keys` — `claude_code.WORKSPACE_KEYS == ("enabledPlugins", "env")`.

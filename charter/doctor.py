@@ -1951,6 +1951,150 @@ def check_ask_rules() -> Result:
                        "want — this names it so the prompts are not a mystery.")
 
 
+def _reinit_target(root: Path) -> str | None:
+    """The workspace `charter workspace reinit` would repair to fix *root*'s layer — or
+    ``None`` when no `reinit` writes this directory at all.
+
+    `reinit(name)` writes `workspaces/<name>` and each guest checkout inside it
+    (`workspace.wire_harnesses`), and nothing else. So a session in `docs/`, in
+    `personas/<p>/`, at the plane root, or in a deep directory *inside* a checkout is one
+    `reinit` cannot help — Claude Code reads settings from the session's own directory
+    (#855), and `reinit` does not write that directory. Naming the command there sends the
+    operator to run something that provably cannot clear the row.
+
+    This subsumes the plane-root case rather than guarding it separately: the plane root is
+    not a workspace directory, so it answers ``None`` by the same rule as every other
+    directory `reinit` does not write.
+    """
+    from . import workspace as _workspace
+
+    try:
+        names = _workspace.list_workspaces()
+    except OSError:
+        # The LISTING, guarded separately from each entry below. Its `try` sits inside the
+        # loop, so an unreadable `workspaces/` raised straight past it, out of this function
+        # and out of `charter doctor` — the whole command, not one row (#982 review round 2b).
+        return None
+    for name in names:
+        try:
+            if root == _workspace.workspace_dir(name).resolve():
+                return name
+            if any(root == tree.resolve() for tree in _workspace.guest_trees(name)):
+                return name
+        except OSError:
+            continue
+    return None
+
+
+def _how_to_fix(missing: list, plane: dict) -> str:
+    """The middle sentence of this row's hint: what would actually put the rule in force for a
+    chat rooted here. One of three, and the third names no command at all.
+
+    Charter writes these settings in exactly two kinds of place — the plane root, and a
+    workspace's or checkout's own root — while Claude Code reads them from the session's
+    EXACT directory (#855). So for a chat rooted anywhere else (`docs/`, `personas/<p>/`, a
+    deep directory inside a checkout) there is no command that puts the rule in force, and
+    `charter guard ask` is as inert there as `charter workspace reinit` was before round 1
+    stopped naming it: measured, all three rows unchanged after running it. The row is still
+    right to warn — the rule genuinely is not in force for that chat, which is what this row
+    exists to surface — so what changes is the advice. **A hint with no command beats a hint
+    with a command that does nothing** (#982 review round 2).
+
+    Charter is deliberately NOT made to write settings into arbitrary directories to rescue
+    the old advice: that is scope creep into directories charter does not manage.
+    """
+    from . import config as _config
+
+    root = session_root()
+    # The plane root is settled FIRST, and without reading `workspaces/` at all: `guard ask`
+    # writes here, so the answer cannot depend on whether some other directory is readable.
+    # Asked after the stale clause, an unreadable `workspaces/` decided it (#982 round 2b).
+    try:
+        at_plane_root = root == _config.ROOT.resolve()
+    except OSError:
+        # Cannot tell where this chat is standing, so take the answer that can only be
+        # USELESS and never WRONG. `guard ask` is the right advice at the plane root and
+        # merely inert elsewhere; the no-command sentence is false at the plane root, where
+        # `guard ask` works — and a false sentence is believed, while an inert one costs a
+        # minute (#982 review rounds 2 and 2b).
+        at_plane_root = True
+    if at_plane_root:
+        return "Add it: charter guard ask 'charter handoff *'"
+    stale = _stale_layer_clause(missing, plane)
+    if stale:
+        return stale
+    if _reinit_target(root) is not None:
+        return "Add it: charter guard ask 'charter handoff *'"
+    # Unwired, and the two states read differently. A sentence here makes a claim about a
+    # DIFFERENT directory, so it may only say what is true in every state it can be read from
+    # — including a workspace whose own layer is behind, which is the state this whole row
+    # exists to surface (#982 review round 2). Hence no enumerated guarantee: from here
+    # charter cannot see which workspaces are current.
+    where = ("charter writes these settings at the plane root and at a workspace's or "
+             "checkout's own root, and a chat reads them from the directory it starts in")
+    if any(plane.get(h.name) == "present" for h in missing):
+        return ("It cannot be put in force for a chat rooted in this directory: " + where +
+                ". A chat started in the plane root is gated; charter gates a workspace or a "
+                "checkout once it has written the rule there, and this row says so in any "
+                "whose layer is behind")
+    # `guard ask` is NOT inert here: run from anywhere inside the plane it writes the plane's
+    # own settings, and the plane root and every workspace go clean afterwards — measured. It
+    # simply cannot gate a chat rooted HERE, which is what the second half says.
+    return ("Add it: charter guard ask 'charter handoff *' — that gates a chat started in the "
+            "plane root, and reaches workspaces and checkouts by mirroring into them. It "
+            "cannot gate a chat rooted in this directory: " + where)
+
+
+def _stale_layer_clause(missing: list, plane: dict) -> str:
+    """The sentence naming `charter workspace reinit` when that is the command that fixes this
+    row — or ``""``.
+
+    A session standing in `workspaces/<ws>/` reads that directory's settings and nowhere else
+    (#855), so the gate can be missing there while the plane holds it. That is not a plane
+    with no rule: nothing needs adding, the layer here is behind, and telling the operator to
+    `charter guard ask` would have them write a rule the plane already has.
+
+    Three things must all hold, because each one on its own names a command that does not
+    work (#982 review round 1):
+
+    * `reinit` must write THIS directory — :func:`_reinit_target`;
+    * the harness actually MISSING the rule must be one whose layer `reinit` carries here. A
+      harness that generates no workspace files is one `reinit` copies nothing for, so with
+      only opencode lacking the rule the answer is silence, not a command that cannot help.
+
+      **No real plane reaches that branch today, and it is kept deliberately.** Every harness
+      but Claude Code is judged against `config.ROOT`, so "missing here" already implies
+      "missing at the plane" and the `present` test below has already said no. It is the code
+      form of the defect this round fixed — naming a command that does nothing for the harness
+      that is actually stale — and the day another harness generates workspace files, deleting
+      it turns the clause back into advice that cannot work with nobody left to remember why.
+      Its test reaches it with a CONSTRUCTED shape (a patched `workspace_files`), so a passing
+      test here is not evidence that any plane exercises it: read it as a fail-safe, not as
+      coverage, and do not let a deletion sweep nominate it (#982 review round 1);
+    * the plane must hold the rule **by the row's own test** — `apply_ask_rule` against
+      `config.ROOT`, the same reading, one root over. `restrictive_rules` was a second
+      predicate over `ask`+`deny` flattened, and it disagreed: a plane that DENIES
+      `charter handoff` held no ask rule and the clause fired anyway.
+
+    *plane* is that reading, taken in the row's own `try` so ONE `OSError` handler covers both
+    roots. There is deliberately no handler of its own here: a harness whose settings raise
+    takes the whole row to not-checked before this is reached, and the `except` that used to
+    sit here was measured dead — every harness answers `unsupported` or a status for an
+    unreadable or malformed file rather than raising (#982 review round 1).
+    """
+    target = _reinit_target(session_root())
+    if target is None:
+        return ""
+    for h in missing:
+        if not h.workspace_files():
+            continue
+        if plane.get(h.name) == "present":
+            return (f"The plane already holds it for {h.name}, so this directory's layer is "
+                    f"behind — nothing to add, only to refresh: charter workspace "
+                    f"reinit {target}")
+    return ""
+
+
 def check_handoff_gate() -> Result:
     """Does a `charter handoff` wait for the operator's yes here? (chat handoff)
 
@@ -1978,10 +2122,17 @@ def check_handoff_gate() -> Result:
 
     name = "handoff gate"
     rows = []
+    plane: dict[str, str] = {}
     for h in _harness.all():
         root = session_root() if h.name == _harness.CLAUDE_CODE else _config.ROOT
         try:
             status, detail = h.apply_ask_rule(root, HANDOFF_ASK_PATTERN, dry_run=True)
+            # The same reading one root over, for the stale-layer clause. Taken HERE so a
+            # single `except OSError` covers both roots: a second handler around a second
+            # call was measured dead, because every harness answers rather than raising for
+            # an unreadable or malformed file (#982 review round 1).
+            plane[h.name] = h.apply_ask_rule(
+                _config.ROOT, HANDOFF_ASK_PATTERN, dry_run=True)[0]
         except OSError as e:
             # The settings loaders test `Path.exists` outside their own `try`, and on a file
             # under a directory charter may not enter that raises on Python 3.11-3.13 (3.14
@@ -1998,15 +2149,21 @@ def check_handoff_gate() -> Result:
                       detail=f"{broken} is not valid — charter cannot tell whether "
                              f"`charter handoff` asks first",
                       hint=_NOT_CHECKED_HINT)
-    missing = [h.name for h, status, _detail in rows if status == "added"]
+    missing = [h for h, status, _detail in rows if status == "added"]
     if missing:
+        # `reinit` INSTEAD of `guard ask`, never both: one sentence telling the operator to
+        # add a rule and then that they already have it is a sentence that cannot be acted on
+        # (#982 review round 1). And in a directory charter does not wire, neither — see
+        # :func:`_how_to_fix`.
+        how = _how_to_fix(missing, plane)
         return Result(name, WARN,
-                      detail=f"no ask rule for `charter handoff` under {', '.join(missing)}",
+                      detail="no ask rule for `charter handoff` under "
+                             f"{', '.join(h.name for h in missing)}",
                       hint="A handoff's brief becomes a new chat's first message and runs with "
                            "your authority; this rule is the prompt that asks you first, and "
-                           "on Claude Code it asks under bypassPermissions too. Add it: charter "
-                           "guard ask 'charter handoff *'. Removing it is your choice — this "
-                           "row says so, and charter does not put it back.")
+                           f"on Claude Code it asks under bypassPermissions too. {how}. "
+                           "Removing it is your choice — this row says so, and charter does "
+                           "not put it back.")
     present = [h.name for h, status, _detail in rows if status == "present"]
     gaps = [f"        ↳ {h.name}: {d.detail}" for h, _status, _detail in rows
             for d in h.deficits if d.key == "handoff-gate"]

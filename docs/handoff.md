@@ -84,6 +84,38 @@ workspace's own file, it asked there too. A chat a frame opens stands in its wor
 directory, so that directory's file is the one that has to carry the rule. `charter doctor` run
 from such a chat reads that file, and its `handoff gate` row warns when the rule is not there.
 
+**How it gets there.** The plane's `ask` rules ride into every workspace's generated
+`.claude/settings.json` ([#948](https://github.com/diazoxide/charter/pull/948)), so the gate is
+in force in a workspace chat without anyone copying it by hand, and a workspace that already
+existed picks up a newly added rule the next time it is launched. An `allow` rule never travels
+— widening what a chat may do is the plane's own business.
+
+When the rule is missing in a chat whose plane *does* hold it, the row's hint names
+`charter workspace reinit <workspace>` instead of `charter guard ask`: nothing needs adding,
+the layer in that directory is behind. It says that only where `reinit` is the command that
+fixes it — in a workspace directory or a checkout inside one, for a harness whose layer
+`reinit` carries there. Whether the plane holds the rule is the row's own reading one directory
+over, so the two halves of this row cannot disagree.
+
+**Where charter writes these settings, and where it does not.** The plane root, a workspace
+directory, and a checkout's own root — nowhere else. `charter guard ask` reaches workspaces by
+mirroring into each one, not by writing where you happen to be standing. So for a chat rooted
+in `docs/`, in `personas/<p>/`, or in a deep directory inside a checkout, **nothing puts the
+rule in force for that chat**, and the row says so rather than pretending otherwise. The warning
+itself is right: the rule really is not in force there.
+
+What the row offers depends on whether the rule exists at all, because the two are different
+problems. If the plane already holds it, there is no command to give — a chat started in the
+plane root is gated, and charter gates a workspace or a checkout once it has written the rule
+there, which this row reports in any whose layer is behind. If nothing holds it yet, `charter
+guard ask 'charter handoff *'` is still worth running from where you are: it writes the plane's
+own settings wherever inside the plane you run it, and the plane root and every workspace are
+gated afterwards — measured. It simply cannot gate the chat you are in.
+
+A workspace whose layer is behind is *not* gated, which is why neither sentence promises that a
+chat started in "a workspace" is gated: from `docs/` charter cannot see which workspaces are
+current, and a hint must only claim what is true from everywhere it can be read.
+
 ## What charter refuses that the prompt cannot cover
 
 Inside a control plane, charter's Bash hook refuses a `charter handoff` in four situations the

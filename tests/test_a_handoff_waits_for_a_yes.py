@@ -21,11 +21,13 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import tempfile
 import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands, config, doctor, hooks, workspace
@@ -1355,6 +1357,271 @@ class DoctorNamesTheGate(SessionRootCase):
         self.rooted_at(self.workspace)
         self.assertEqual(doctor.check_handoff_gate().status, OK)
 
+    #: The two hints this row can give, asserted WHOLE. A fragment (`"reinit" in hint`) passes
+    #: while the sentence around it says something false — which is what it did: the hint told
+    #: the operator to add a rule and then that they already had it, in one breath.
+    ADD = ("A handoff's brief becomes a new chat's first message and runs with your authority; "
+           "this rule is the prompt that asks you first, and on Claude Code it asks under "
+           "bypassPermissions too. Add it: charter guard ask 'charter handoff *'. Removing it "
+           "is your choice — this row says so, and charter does not put it back.")
+    _LEAD = ("A handoff's brief becomes a new chat's first message and runs with your "
+             "authority; this rule is the prompt that asks you first, and on Claude Code it "
+             "asks under bypassPermissions too. ")
+    _TAIL = " Removing it is your choice — this row says so, and charter does not put it back."
+    _WHERE = ("charter writes these settings at the plane root and at a workspace's or "
+              "checkout's own root, and a chat reads them from the directory it starts in")
+    #: Unwired directory, plane HOLDS the rule: no command, and no guarantee it cannot make
+    #: from here — a workspace whose layer is behind is not gated, which is the state this row
+    #: exists to surface.
+    NOWHERE = (_LEAD + "It cannot be put in force for a chat rooted in this directory: " +
+               _WHERE + ". A chat started in the plane root is gated; charter gates a "
+               "workspace or a checkout once it has written the rule there, and this row says "
+               "so in any whose layer is behind." + _TAIL)
+    #: Unwired directory, NOTHING holds the rule: `guard ask` is not inert — run from here it
+    #: writes the plane's settings — so it is named, with what it cannot do said plainly.
+    NOWHERE_ADD = (_LEAD + "Add it: charter guard ask 'charter handoff *' — that gates a chat "
+                   "started in the plane root, and reaches workspaces and checkouts by "
+                   "mirroring into them. It cannot gate a chat rooted in this directory: " +
+                   _WHERE + "." + _TAIL)
+    REFRESH = ("A handoff's brief becomes a new chat's first message and runs with your "
+               "authority; this rule is the prompt that asks you first, and on Claude Code it "
+               "asks under bypassPermissions too. The plane already holds it for claude-code, "
+               "so this directory's layer is behind — nothing to add, only to refresh: charter "
+               "workspace reinit fleet. Removing it is your choice — this row says so, and "
+               "charter does not put it back.")
+
+    def test_a_session_rooted_in_a_stale_workspace_is_sent_to_reinit(self):
+        """The plane HOLDS the rule and this directory does not, which is a different problem
+        from never having written one: nothing needs adding, the layer here is behind. So the
+        hint names `charter workspace reinit` INSTEAD of `charter guard ask` — asserted whole,
+        because printed together the two halves contradict each other."""
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertEqual(self.REFRESH, r.hint)
+
+    def test_a_plane_that_never_had_the_rule_is_told_to_add_it(self):
+        """The other side, and the reason the clause is conditional: with no rule in the plane
+        either, `reinit` would copy nothing."""
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertEqual(self.ADD, r.hint)
+
+    def test_a_directory_charter_does_not_wire_is_given_no_command(self):
+        """Review round 2. Charter writes these settings at the plane root and at a workspace's
+        or checkout's own root; Claude Code reads them from the session's EXACT directory
+        (#855). So for a chat rooted anywhere else there is NO command that puts the rule in
+        force — `charter guard ask` is as inert there as `reinit` was before round 1 stopped
+        naming it, and all three of these rows were measured unchanged after running it.
+
+        The row still warns, because the rule really is not in force for that chat. What it
+        must not do is name a command that cannot work: a hint with no command beats a hint
+        with a command that does nothing."""
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        deep = self.workspace / "repo" / "src" / "deep"
+        for name, where in (("docs/", config.ROOT / "docs"),
+                            ("a persona directory", config.ROOT / "personas" / "x"),
+                            ("a deep directory inside a checkout", deep)):
+            with self.subTest(rooted_in=name):
+                where.mkdir(parents=True, exist_ok=True)
+                self.rooted_at(where.resolve())
+                r = doctor.check_handoff_gate()
+                self.assertEqual(WARN, r.status, r)
+                self.assertEqual(self.NOWHERE, r.hint)
+
+    def test_an_unwired_directory_with_no_rule_anywhere_still_names_guard_ask(self):
+        """The state round 2 got wrong: with NOTHING holding the rule, `charter guard ask` is
+        not inert here — run from `docs/` it writes the plane's own settings, and the plane root
+        and every workspace go clean afterwards. Round 2 suppressed a useful command along with
+        a useless one, because all three states it measured happened to hold the rule already.
+
+        The cross-directory walk is the evidence: run the command where the hint appears, then
+        stand in the directory the hint talks about and read the row there."""
+        docs = config.ROOT / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        self.rooted_at(docs.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.NOWHERE_ADD, r.hint)
+        commands.cmd_guard_ask(SimpleNamespace(pattern="charter handoff *", local=False,
+                                               dry_run=False, yes=True))
+        with self.subTest(then_standing_in="the plane root"):
+            self.rooted_at(config.ROOT.resolve())
+            self.assertEqual(OK, doctor.check_handoff_gate().status)
+        with self.subTest(then_standing_in="a workspace"):
+            self.rooted_at(self.workspace)
+            self.assertEqual(OK, doctor.check_handoff_gate().status)
+
+    def test_the_no_command_sentence_is_true_with_a_workspace_whose_layer_is_behind(self):
+        """State A's sentence claims something about OTHER directories, so it must stay true in
+        the worst of them: a workspace whose layer is behind is NOT gated, and that is the very
+        state this row exists to surface. So the sentence promises the plane root — measured —
+        and says of a workspace only that charter gates it once it has written there, and that
+        this row says so in any that is behind. Standing in `docs/`, charter cannot see which
+        workspaces are current, so it must not enumerate a guarantee."""
+        self._claude_rule(config.ROOT)        # the plane holds it
+        self._opencode_rule()                 # the workspace layer does NOT
+        docs = config.ROOT / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        self.rooted_at(docs.resolve())
+        self.assertEqual(self.NOWHERE, doctor.check_handoff_gate().hint)
+        with self.subTest(walked_to="the plane root — the one thing the sentence promises"):
+            self.rooted_at(config.ROOT.resolve())
+            self.assertEqual(OK, doctor.check_handoff_gate().status)
+        with self.subTest(walked_to="the stale workspace — which the sentence does NOT promise"):
+            self.rooted_at(self.workspace)
+            self.assertEqual(WARN, doctor.check_handoff_gate().status)
+
+    def test_the_plane_root_is_still_told_to_add_it(self):
+        """The plane root IS a directory charter writes, so `guard ask` works there and the row
+        keeps naming it — the no-command sentence is about directories charter does not wire,
+        not about everywhere that is not a workspace."""
+        self._opencode_rule()
+        self.rooted_at(config.ROOT.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.ADD, r.hint)
+
+    def test_the_harness_that_is_missing_the_rule_is_the_one_named(self):
+        """With only opencode lacking the rule, `reinit` copies nothing — opencode generates no
+        workspace files at all. Blaming a stale Claude Code layer there names a command that
+        cannot help, however true the row's WARN is."""
+        self._claude_rule(config.ROOT)
+        self._claude_rule(self.workspace)
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertIn("under opencode", r.detail)
+        self.assertEqual(self.ADD, r.hint)
+
+    def test_a_chat_in_a_guest_checkout_is_sent_to_reinit(self):
+        """A checkout inside a workspace is a directory `reinit` writes, so the clause belongs
+        there too — and nothing pinned it. Deleting the guest-checkout match left the suite
+        green, because `charter guard ask` mirrors into guest checkouts as a side effect and
+        the row would still clear; only the HINT would be wrong, saying "Add it" where the
+        plane already holds the rule. That is the exact contradiction this PR fixed, restored
+        with every test passing (#982 review round 2), so this uses a real checkout."""
+        repo = self.workspace / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        # env=None: the suite has already redirected git's config, and building one by hand is
+        # what `tests/_planeguard.py` refuses (#641).
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.assertIn(repo.resolve(), [t.resolve() for t in workspace.guest_trees("fleet")])
+        self.rooted_at(repo.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.REFRESH, r.hint)
+
+    def test_an_unreadable_workspaces_directory_cannot_decide_the_plane_root(self):
+        """`charter guard ask` writes at the plane root, so the advice there cannot depend on
+        whether some *other* directory is readable. Asked after the stale clause it did: the
+        clause reads `workspaces/` to find a reinit target, and an unreadable one reached the
+        answer — emitting "cannot be put in force" where `guard ask` genuinely works, a FALSE
+        sentence rather than an inert one (#982 review round 2b).
+
+        Worse than the wrong sentence, and why this is ordered rather than merely defaulted:
+        `list_workspaces` raising escaped `_reinit_target` entirely — its own `try` is inside
+        the loop — and took `charter doctor` down with it, the whole command, not this row."""
+        self._opencode_rule()
+        self.rooted_at(config.ROOT.resolve())
+        with mock.patch.object(workspace, "list_workspaces", side_effect=OSError("EACCES")):
+            r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.ADD, r.hint)
+
+    def test_when_charter_cannot_tell_where_it_stands_it_gives_the_useless_answer(self):
+        """The default when even the plane-root comparison raises. CONSTRUCTED — nothing makes
+        `Path.resolve` fail on a real plane — so read it as a guard, not as coverage.
+
+        It answers `guard ask` rather than the no-command sentence because the two fail
+        differently: `guard ask` is right at the plane root and merely inert elsewhere, while
+        "it cannot be put in force" is FALSE at the plane root, where `guard ask` works. An
+        inert hint costs a minute; a false one is believed."""
+        self._opencode_rule()
+        docs = config.ROOT / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        self.rooted_at(docs.resolve())
+        with mock.patch.object(type(config.ROOT), "resolve", side_effect=OSError("EIO")):
+            r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.ADD, r.hint)
+
+    def test_an_unreadable_workspaces_directory_still_answers_elsewhere(self):
+        """And away from the plane root it answers rather than raising: charter cannot tell
+        whether this directory is one it wires, so it says what is true of the rule itself."""
+        self._opencode_rule()
+        docs = config.ROOT / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        self.rooted_at(docs.resolve())
+        with mock.patch.object(workspace, "list_workspaces", side_effect=OSError("EACCES")):
+            r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.NOWHERE_ADD, r.hint)
+
+    def test_one_unreadable_workspace_does_not_hide_the_rest(self):
+        """`_reinit_target`'s `except OSError: continue`. No plane builds a workspace whose path
+        raises, so this is a CONSTRUCTED shape — like the harness fail-safe above, read it as a
+        guard, not as coverage. It is kept rather than deleted because the alternative is an
+        `OSError` escaping into the preflight from a directory charter only wanted to compare
+        against, which would take the whole row down instead of skipping one workspace."""
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        real = workspace.workspace_dir
+
+        def one_raises(name):
+            if name == "boom":
+                raise OSError("stat: I/O error")
+            return real(name)
+
+        (config.ROOT / "workspaces" / "boom").mkdir(parents=True, exist_ok=True)
+        with mock.patch.object(workspace, "workspace_dir", side_effect=one_raises):
+            r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.REFRESH, r.hint)
+
+    def test_a_harness_reinit_writes_nothing_for_is_not_sent_to_reinit(self):
+        """`reinit` can only fix a harness whose layer it carries into this directory.
+
+        **This test reaches a branch no real plane reaches**, and says so rather than reading
+        as coverage. Every harness but Claude Code is judged at the plane, so "missing here"
+        already implies "missing at the plane" and the clause has bowed out before this line
+        matters — which is why it had no red test. The shape below is CONSTRUCTED: Claude Code
+        with its `workspace_files` patched empty, which is a harness that is judged at the
+        session root and generates nothing there. Kept because it is the instruction in code
+        ("if nothing fixes it, say nothing rather than naming a command that will not work"),
+        and the day another harness generates workspace files its absence would be a defect
+        nobody could trace (#982 review round 1)."""
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        h = registry.get(registry.CLAUDE_CODE)
+        with mock.patch.object(type(h), "workspace_files", return_value={}):
+            r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertEqual(self.ADD, r.hint)
+
+    def test_a_plane_that_denies_the_handoff_holds_no_ask_rule(self):
+        """One notion of "the plane holds this rule", not two. The predicate is the row's own
+        `apply_ask_rule` reading one root over; a substring test over `ask` + `deny` flattened
+        said yes to a plane that DENIES `charter handoff`, which holds no ask rule at all."""
+        p = config.ROOT / ".claude" / "settings.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"permissions": {"deny": [RULE]}}))
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertEqual(self.ADD, r.hint)
+
+
     def test_a_malformed_settings_file_is_not_read_as_a_missing_rule(self):
         p = config.ROOT / ".claude" / "settings.json"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -1393,6 +1660,103 @@ class DoctorNamesTheGate(SessionRootCase):
 
     def test_the_row_is_in_the_preflight(self):
         self.assertIn("handoff gate", doctor.check_names())
+
+
+class TheAskRuleReachesAWorkspaceChat(PlaneIso):
+    """The gate's other half, which Phase 1 could only assert indirectly (chat handoff, task 4,
+    phase 2).
+
+    A chat launched in `workspaces/<ws>/` reads that directory's settings and nowhere else, so
+    the plane's `ask` rule is in force there only if it rides into the generated document. #942
+    (PR #948) built that path; these are the tests that the HANDOFF rule travels it — #948's own
+    suite never names `charter handoff`, so this is coverage rather than a second opinion.
+
+    What #948 mirrors is its business, and `deny` is asserted here nowhere: two suites pinning
+    one behaviour from different angles is how a guard ends up half-pinned.
+    """
+
+    PLUGINS = {"charter@charter": True}
+
+    def _plane(self, permissions: dict) -> dict:
+        """The plane's settings, as `charter init` leaves them plus *permissions*; returns the
+        generated workspace document."""
+        p = config.ROOT / ".claude"
+        p.mkdir(parents=True, exist_ok=True)
+        p.joinpath("settings.json").write_text(
+            json.dumps({"enabledPlugins": self.PLUGINS, "permissions": permissions}))
+        files = registry.get(registry.CLAUDE_CODE).workspace_files()
+        return json.loads(files[".claude/settings.json"]) if ".claude/settings.json" in files \
+            else {}
+
+    def test_a_workspace_settings_document_carries_the_planes_asks(self):
+        """The rule reaches the chat that runs the command. Asserted as membership plus the
+        `allow` invariant rather than equality on the whole `permissions` object: equality
+        breaks the moment a neighbouring feature legitimately adds a key, and this test should
+        fail only when the handoff gate stops travelling."""
+        perms = self._plane({"ask": [RULE], "allow": ["Bash(ls *)"]})["permissions"]
+        self.assertIn(RULE, perms["ask"])
+        self.assertNotIn("allow", perms)
+
+    def test_an_allow_rule_never_travels_into_a_workspace(self):
+        """The security invariant, from the angle the test above cannot reach: a permissive
+        rule must not appear ANYWHERE in the generated text, whichever plane file it came
+        from. `ask` and `deny` restrict; `allow` widens, and widening is the plane's own
+        business.
+
+        **Both generated sets, because they read different plane files.** The local file's
+        rules ride only in `checkout_files` (`.claude/settings.local.json`); iterating
+        `workspace_files` alone reads the shared document twice and never looks at the local
+        one — which is what the first version of this test did, while its name and this PR's
+        body both claimed otherwise. #948's own `test_a_local_grant_does_not_travel_either`
+        pins the local half; this one holds the handoff-shaped plane to the same line."""
+        p = config.ROOT / ".claude"
+        p.mkdir(parents=True, exist_ok=True)
+        p.joinpath("settings.json").write_text(json.dumps(
+            {"enabledPlugins": self.PLUGINS,
+             "permissions": {"ask": [RULE], "allow": ["Bash(ls *)"]}}))
+        p.joinpath("settings.local.json").write_text(json.dumps(
+            {"permissions": {"allow": ["Bash(curl *)"], "ask": ["Bash(local *)"]}}))
+        h = registry.get(registry.CLAUDE_CODE)
+        generated = {**h.workspace_files(), **h.checkout_files()}
+        self.assertIn(".claude/settings.local.json", generated, "the local file must be read")
+        for rel, text in generated.items():
+            with self.subTest(generated=rel):
+                self.assertNotIn("Bash(ls *)", text)
+                self.assertNotIn("Bash(curl *)", text)
+                self.assertNotIn('"allow"', text)
+
+    def test_an_ask_bucket_of_the_wrong_shape_travels_as_nothing(self):
+        """A string where a list belongs is a plane that declares no rules charter can read —
+        not a plane declaring one rule spelled oddly. Nothing travels, and the document is
+        still written for what it does carry."""
+        self.assertNotIn("permissions", self._plane({"ask": "Bash(x)"}))
+
+    def test_a_rule_that_is_not_a_string_is_dropped(self):
+        """One unusable entry costs itself, not the rules beside it: a handoff gate that
+        travels only when every neighbouring rule is well-formed is a gate that stops being
+        in force because of someone else's typo."""
+        self.assertEqual(["Bash(a *)"],
+                         self._plane({"ask": ["Bash(a *)", 3]})["permissions"]["ask"])
+
+    def test_the_layer_row_still_judges_by_charters_own_keys(self):
+        """`doctor`'s `workspace layer` row compares the keys charter authors. The rules ride
+        in the same document but are the plane's, not charter's, so they must not be added to
+        that list — a plane that changes an unrelated `ask` would otherwise read as charter's
+        layer having gone stale."""
+        from charter.harness import claude_code
+        self.assertEqual(("enabledPlugins", "env"), claude_code.WORKSPACE_KEYS)
+
+    def test_a_launch_refreshes_a_workspace_the_plane_gave_a_new_ask(self):
+        """The rule has to reach workspaces that already exist. A plane that adds the gate
+        after a workspace was made would otherwise leave that chat ungated until someone
+        happened to run `reinit`."""
+        self._plane({})
+        workspace.ensure("w")
+        settings = config.ROOT / "workspaces" / "w" / ".claude" / "settings.json"
+        self.assertNotIn("permissions", json.loads(settings.read_text()))
+        self._plane({"ask": [RULE]})
+        workspace.ensure("w")
+        self.assertIn(RULE, json.loads(settings.read_text())["permissions"]["ask"])
 
 
 class EveryHarnessSaysHowAHandoffIsGated(unittest.TestCase):
