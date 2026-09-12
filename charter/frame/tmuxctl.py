@@ -410,8 +410,23 @@ _PANE_PID_FORMAT = ("#{pane_pid}\t#{pane_dead}\t#{pane_id}\t#{session_name}"
 _PANE_PID_FIELDS = 6
 
 
-def live_pane_by_pid(server: str, pid: int) -> tuple[str, str, str, str] | None:
-    """``(pane id, session, window name, @charter_chat)`` of the LIVE pane *pid* owns.
+class LivePane(NamedTuple):
+    """One live pane, as :func:`live_pane_by_pid` reads it off tmux.
+
+    A record rather than a bare tuple because its two proof fields are told apart by which
+    SERVER is being asked (ruling 33) — the window name on charter's own, the option in an
+    operator's — and a caller indexing `[2]` or `[3]` for that is a caller one edit away
+    from proving a chat by the wrong half.
+    """
+
+    pane: str       # `%N`
+    session: str
+    window: str     # the window's NAME, which is the proof on charter's own server
+    chat: str       # `@charter_chat`, which is the proof in an operator's tmux
+
+
+def live_pane_by_pid(server: str, pid: int) -> LivePane | None:
+    """The LIVE pane *pid* owns, as a :class:`LivePane`.
 
     ``None`` when no live pane on *server* has that `#{pane_pid}` — a server that does not
     answer at all included, which is an ordinary reading rather than a fault (the chat's
@@ -437,7 +452,7 @@ def live_pane_by_pid(server: str, pid: int) -> tuple[str, str, str, str] | None:
             continue
         pane_pid, dead, pane, session, window, chat = fields
         if pane_pid == str(pid) and dead == "0":
-            return pane, session, window, chat
+            return LivePane(pane, session, window, chat)
     return None
 
 

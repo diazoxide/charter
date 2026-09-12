@@ -27,14 +27,7 @@ from unittest import mock
 from charter import commands_frame, config
 from charter.frame import chats, choose, launcher, leave, reopen as reopen_state, state
 from tests import _gitguard
-from tests._isolation import PersonaIso, make_plane
-
-_LOCAL = """
-[harness.claude-work]
-kind = "claude"
-command = ["claude"]
-env = { CLAUDE_CONFIG_DIR = "~/.cw" }
-"""
+from tests._isolation import PersonaIso, declare_profiles, make_plane
 
 
 #: The real `subprocess.run`, captured before any fixture below patches the module
@@ -77,11 +70,9 @@ class _APressInAlpha(PersonaIso):
             {"PATH": os.environ.get("PATH", ""),
              "GIT_CEILING_DIRECTORIES": str(self.tmp.resolve().parent),
              "CHARTER_ROOT": str(config.ROOT), **_gitguard.environment()}, clear=True))
-        self.local = config.ROOT / "charter.local.toml"
-        self.local.write_text(_LOCAL)
-        (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
-        subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
-                       capture_output=True, env={**os.environ, **_gitguard.environment()})
+        # After the clearing patch above, so its `$HOME` and `$GIT_CEILING_DIRECTORIES`
+        # survive: a declared profile's launch asks git whether this file is ignored.
+        self.local = declare_profiles(self)
         for ws in ("alpha", "beta"):
             (config.WORKSPACES_DIR / ws).mkdir(parents=True, exist_ok=True)
         _a_chat(self.FID, ws="alpha", profile="claude-work")
@@ -170,10 +161,35 @@ class ANewChatTakesThePressersProfile(_APressInAlpha, unittest.TestCase):
     def test_a_chat_whose_profile_is_gone_is_refused_not_given_the_default(self):
         """Ruling 15's reason, one surface over: another profile may be another account."""
         _a_chat(self.FID, ws="alpha", profile="gone")
-        self.local.write_text(_LOCAL + '\n[harness]\ndefault = "claude"\n')
+        self.local.write_text(self.local.read_text()
+                              + '\n[harness]\ndefault = "claude"\n')
         self._press()
         self.assertEqual(self.launched, [])
         self.assertTrue(any("no longer declares" in s for s in self._sentences()),
+                        self._sentences())
+
+    def test_the_gone_profiles_name_is_repeated_back_escaped(self):
+        """The record is a file under `.charter/`, not something charter minted this run —
+        and this sentence goes to the frame, where an ESC would repaint the line around it.
+        (A `\\r` cannot make the trip: `read_text` translates it to `\\n` on the way back,
+        which is a fact about the record and not about the containment.)"""
+        _a_chat(self.FID, ws="alpha", profile="go\x1bne")
+        self._press()
+        self.assertEqual(self.launched, [])
+        self.assertTrue(any("\\u001b" in s for s in self._sentences()),
+                        self._sentences())
+
+    def test_a_chat_from_before_profiles_says_why_its_kinds_profile_was_refused(self):
+        """Rung 2, and ruling 37 on the way down it: the built-in named after this chat's
+        kind is one the file replaced and charter refused, so the press says THAT reason
+        rather than running the command the operator replaced. Losing the reason here is
+        the silent half — a `+` that does nothing, with nothing said about why."""
+        self.local.write_text('[harness.codex]\nkind = "codex"\ncommand = "codex --x"\n')
+        _a_chat(self.FID, ws="alpha", harness="codex")
+        (config.STATE_DIR / "frame" / self.FID / "profile").unlink(missing_ok=True)
+        self._press()
+        self.assertEqual(self.launched, [])
+        self.assertTrue(any("never a shell string" in s for s in self._sentences()),
                         self._sentences())
 
     def test_with_no_record_and_no_default_the_press_is_refused_by_name(self):
@@ -255,6 +271,22 @@ class AHandoffTakesTheCallingChatsProfile(_APressInAlpha, unittest.TestCase):
         directory, a window or a first message exists anywhere."""
         self.assertIn("cannot yet ask before a declared command runs", self._refusal())
 
+    def test_a_profile_whose_kind_this_charter_cannot_place_is_refused_not_raised(self):
+        """The guard `_same_harness_as` carried before profiles, restored.
+
+        Every profile names a kind this charter registers, so nothing reachable produces
+        this — but `_harness_of` is typed `| None`, and what is on the other side of a
+        missing guard here is an `AttributeError` inside a process whose three streams are
+        `/dev/null`: a handoff that answers nothing at all, to a caller waiting for a
+        sentence. It fails closed, in the words this refusal already has."""
+        # Task 2's own B1 refusal comes earlier in the chain and would answer this case for
+        # a reason it is not about.
+        self._no_approval_needed()
+        with mock.patch.object(commands_frame, "_harness_of", return_value=None):
+            said = self._refusal()
+        self.assertIn("cannot open a chat in 'beta'", said)
+        self.assertIn("no profile this charter can launch", said)
+
     def test_a_handoff_from_a_chat_whose_profile_is_gone_is_refused(self):
         _a_chat(self.FID, ws="alpha", profile="gone")
         self.assertIn("no longer declares", self._refusal())
@@ -316,10 +348,7 @@ class AReopenNeverSubstitutes(PersonaIso, unittest.TestCase):
             {"PATH": os.environ.get("PATH", ""),
              "GIT_CEILING_DIRECTORIES": str(self.tmp.resolve().parent),
              "CHARTER_ROOT": str(config.ROOT), **_gitguard.environment()}, clear=True))
-        (config.ROOT / "charter.local.toml").write_text(_LOCAL)
-        (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
-        subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
-                       capture_output=True, env={**os.environ, **_gitguard.environment()})
+        self.local = declare_profiles(self)
         (config.WORKSPACES_DIR / "alpha").mkdir(parents=True, exist_ok=True)
         self.launched: list = []
         self.enterContext(mock.patch.object(launcher, "_approval_refusal",
@@ -368,12 +397,28 @@ class AReopenNeverSubstitutes(PersonaIso, unittest.TestCase):
     def test_a_chat_whose_kind_is_unregistered_is_skipped_not_moved_to_the_default(self):
         """This replaces the case that pinned the `[harness] default` fallback: a chat is
         never reopened under something nobody chose."""
-        (config.ROOT / "charter.local.toml").write_text(
-            _LOCAL + '\n[harness]\ndefault = "claude"\n')
+        self.local.write_text(self.local.read_text()
+                              + '\n[harness]\ndefault = "claude"\n')
         r, said = self._reopen(self._chat(harness="zzz", profile=""))
         self.assertIsNone(r)
         self.assertEqual(self.launched, [])
         self.assertNotIn("reopening it under", said)
+
+    def test_a_chat_with_no_profile_to_name_asks_the_file_nothing(self):
+        """A chat that never had a profile, whose kind nothing registers, has no NAME to
+        resolve — so the file is not asked, and this chat is skipped under its own kind.
+
+        `[harness.""]` is what makes that visible rather than merely tidy: TOML allows the
+        empty key, charter refuses it for its shape, and the refusal is filed under the
+        empty name. A resolve that ran anyway would find it and report somebody else's bad
+        line as the reason this chat did not come back — sending the operator to fix a
+        profile the manifest never mentions.
+        """
+        self.local.write_text('[harness.""]\nkind = "claude"\ncommand = ["claude"]\n')
+        r, said = self._reopen(self._chat(harness="zzz", profile=""))
+        self.assertIsNone(r)
+        self.assertEqual(self.launched, [])
+        self.assertIn("zzz", said)
 
     def test_a_chat_from_before_profiles_comes_back_on_its_kinds_built_in(self):
         r, _said = self._reopen(self._chat(profile=""))
@@ -392,6 +437,58 @@ class AReopenNeverSubstitutes(PersonaIso, unittest.TestCase):
         left = reopen_state.read().all_chats()
         self.assertEqual([c.chat for c in left], ["alpha.2"])
         self.assertEqual(left[0].profile, "gone")
+
+
+class TheTwoRecordsAChatsLauncherWrites(PersonaIso, unittest.TestCase):
+    """`state.record_profile` and `state.record_launch` — what the pane writes down, read
+    back by the launch that opened it and by every later `+`, tab, quit and reopen.
+
+    **A chat id is not charter's to trust.** It reaches these four functions from
+    `$CHARTER_SESSION_ID` as often as from `frame_id`, so `frame_dir` answers `None` for one
+    that names no directory under the state root — and `None` has to be handled here rather
+    than raised out of a hook that cannot afford it. A test that only ever passes a
+    well-formed id measures none of that: the writes are `try`-wrapped and would look
+    identical.
+    """
+
+    #: `contain.child` refuses it, so `frame_dir` has no directory to answer with. Written
+    #: as the id an inherited `$CHARTER_SESSION_ID` could really carry.
+    NOT_A_CHAT = "../elsewhere"
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+
+    def test_a_chat_id_that_names_no_directory_is_written_nowhere(self):
+        state.record_profile(self.NOT_A_CHAT, "claude-work")
+        state.record_launch(self.NOT_A_CHAT, 3, "refused")
+        self.assertIsNone(state.profile(self.NOT_A_CHAT))
+        self.assertIsNone(state.launch(self.NOT_A_CHAT))
+        # And nothing was written beside the state root under that name either.
+        self.assertEqual(list((config.STATE_DIR / "frame").glob("*elsewhere*")), [])
+
+    def test_a_refusal_of_several_lines_comes_back_whole(self):
+        """The record is `<code>\\n<text>`, and the text is a refusal that may carry its own
+        newline — `press Enter to close this chat.` is a second line of one. Only the FIRST
+        newline separates the two fields; every later one belongs to the sentence."""
+        state.record_launch("alpha.1", 3, "profile 'x' is refused\n  press Enter.\n")
+        self.assertEqual(state.launch("alpha.1"),
+                         (3, "profile 'x' is refused\n  press Enter.\n"))
+
+    def test_a_half_written_record_is_read_as_no_answer_yet(self):
+        """The launcher writes this file while the launch that opened the chat is reading
+        it, and a hand edit is always possible. A code that is not a number is not a
+        verdict — and "not yet" is the reading that lets the launch carry on."""
+        state.record_launch("alpha.1", 0, "")
+        d = state.frame_dir("alpha.1")
+        (d / "launch").write_text("not-a-number\nhalf a sentence")
+        self.assertIsNone(state.launch("alpha.1"))
+
+    def test_a_launch_that_has_not_answered_yet_says_so(self):
+        state.frame_dir("alpha.1", create=True)
+        self.assertIsNone(state.launch("alpha.1"))
+        state.record_launch("alpha.1")
+        self.assertEqual(state.launch("alpha.1"), (0, ""))
 
 
 class WhereTheHarnessWasShownTheProfileIs(PersonaIso, unittest.TestCase):

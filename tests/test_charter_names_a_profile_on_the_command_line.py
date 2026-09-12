@@ -25,7 +25,7 @@ from unittest import mock
 
 from charter import cli, commands_frame, config, doctor, profiles
 from charter.doctor import OK
-from tests._isolation import PersonaIso, make_plane
+from tests._isolation import PersonaIso, declare_profiles, make_plane
 
 _LOCAL = """
 [harness.claude-work]
@@ -43,8 +43,10 @@ class _APlaneWithProfiles(PersonaIso):
     def setUp(self) -> None:
         super().setUp()
         make_plane(self)
-        self.local = config.ROOT / "charter.local.toml"
-        self.local.write_text(_LOCAL)
+        # The shared fixture, for its `$GIT_CEILING_DIRECTORIES` as much as for its file:
+        # the doctor row below runs a real `git status`, and a temp plane inside somebody's
+        # own checkout would otherwise be answered for by THEIR repository.
+        self.local = declare_profiles(self, _LOCAL)
         config.use(config.ROOT)
         self.parser = cli.build_parser()
 
@@ -176,8 +178,6 @@ class ACharterTomlDefaultMayNameADeclaredProfile(_APlaneWithProfiles, unittest.T
         (config.ROOT / "charter.toml").write_text(
             'schema = 1\n[harness]\ndefault = "claude-work"\n')
         config.use(config.ROOT)
-        self.enterContext(mock.patch.dict(
-            os.environ, {"GIT_CEILING_DIRECTORIES": str(self.tmp.resolve().parent)}))
 
     def test_the_charter_toml_row_is_ok(self):
         row = doctor.check_control_plane_config()

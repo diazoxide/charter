@@ -12,6 +12,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ from unittest import mock
 
 from charter import config, instance, persona, root
 
-from . import _envguard
+from . import _envguard, _gitguard
 
 #: Snapshotted so a test can still hand-patch one value; `config.DERIVED` is the source
 #: of truth for WHICH values exist, so a setting added to `config.derive` is isolated the
@@ -335,6 +336,58 @@ def point_config_at(case, root: Path) -> Path:
     """
     case.addCleanup(config.restore, config.use(root))
     return root
+
+
+#: What most profile fixtures want in `charter.local.toml`: one profile whose `env` names a
+#: path under `~`, because expanding that at the `exec` is the launcher's own job, and one
+#: of another kind, because "a profile is a way to run ONE kind" is a rule with two sides.
+DECLARED_PROFILES = """
+[harness.claude-work]
+kind = "claude"
+command = ["claude"]
+env = { CLAUDE_CONFIG_DIR = "~/.cw" }
+
+[harness.codex-pinned]
+kind = "codex"
+command = ["npx", "-y", "@openai/codex@0.140.0"]
+"""
+
+
+def declare_profiles(case, text: str = DECLARED_PROFILES) -> Path:
+    """Give *case*'s throwaway plane a `charter.local.toml` git would not carry. Its path.
+
+    Four things a profile fixture needs, and every one of them is a trap by itself — which
+    is why they are one helper rather than four copies:
+
+    * **the file**, which is the only place a profile may be declared;
+    * **a real git repository with the ignore line**, because `profiles.ignore_check` makes
+      a real `git --no-optional-locks status` — the one subprocess profile code runs — and
+      a declared profile is refused wherever git would carry that file. A fixture that
+      skipped it would be testing the refusal, not the profile;
+    * **`$GIT_CEILING_DIRECTORIES`**, so that walk stops above the plane. A temp directory
+      inside somebody's own checkout otherwise answers for THEIR repository: green here,
+      red on the machine next door, which is the shape `CONTRIBUTING.md` calls "your
+      machine is not the runner";
+    * **`$HOME`**, so a test asserting where `CLAUDE_CONFIG_DIR = "~/.cw"` expanded to can
+      name the answer instead of running the same `expanduser` the code did and agreeing
+      with itself. It is `case.home` afterwards.
+
+    `make_plane(case)` first: profiles are read off a plane, and `instance.load` wants the
+    marker.
+    """
+    home = case.tmp / "home"
+    home.mkdir(exist_ok=True)
+    case.home = home
+    case.enterContext(mock.patch.dict(os.environ, {
+        "HOME": str(home),
+        "GIT_CEILING_DIRECTORIES": str(Path(case.tmp).resolve().parent),
+    }))
+    local = config.ROOT / "charter.local.toml"
+    local.write_text(text)
+    (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
+    subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
+                   capture_output=True, env={**os.environ, **_gitguard.environment()})
+    return local
 
 
 def isolate_state_dir(case) -> Path:

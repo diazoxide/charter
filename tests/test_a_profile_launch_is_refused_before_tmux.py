@@ -27,29 +27,13 @@ from unittest import mock
 from charter import commands_frame, config, contain
 from charter.frame import launcher, layout, reopen as reopen_state, state, tmuxctl
 from tests import _gitguard, _tmuxsocket
-from tests._isolation import PersonaIso, make_plane
-
-_LOCAL = """
-[harness.claude-work]
-kind = "claude"
-command = ["claude"]
-env = { CLAUDE_CONFIG_DIR = "~/.cw" }
-
-[harness.codex-pinned]
-kind = "codex"
-command = ["npx", "-y", "@openai/codex@0.140.0"]
-"""
+from tests._isolation import PersonaIso, declare_profiles, make_plane
 
 #: The operator's own tmux, as `tmuxctl.operator_server` reads it out of `$TMUX`: a socket
 #: PATH, which is what `is_operator_socket` tells from charter's own `-L charter` name.
 #: Computed the way tmux computes it (`tests/_tmuxsocket.py`) rather than written down —
 #: a literal uid in a socket path is one developer's machine baked into the suite.
 _OPERATOR = _tmuxsocket.OPERATOR_SOCKET
-
-
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
-                   env={**os.environ, **_gitguard.environment()})
 
 
 class _ALaunchNamesAProfile(PersonaIso):
@@ -59,16 +43,14 @@ class _ALaunchNamesAProfile(PersonaIso):
     def setUp(self) -> None:
         super().setUp()
         make_plane(self)
-        self.local = config.ROOT / "charter.local.toml"
-        self.local.write_text(_LOCAL)
-        (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
-        _git(config.ROOT, "init", "-q")
         (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
         self.enterContext(mock.patch.dict(
             os.environ,
             {"PATH": os.environ.get("PATH", ""),
-             "GIT_CEILING_DIRECTORIES": str(self.tmp.resolve().parent),
              "CHARTER_ROOT": str(config.ROOT), **_gitguard.environment()}, clear=True))
+        # AFTER the clearing patch, so its `$HOME` and `$GIT_CEILING_DIRECTORIES` survive:
+        # the ignore check is a real `git status`, and both decide what it answers.
+        self.local = declare_profiles(self)
         self.argvs: list[list[str]] = []
         self.execs: list[tuple] = []
         self.enterContext(mock.patch.object(launcher.os, "execvpe",
@@ -80,7 +62,7 @@ class _ALaunchNamesAProfile(PersonaIso):
         self.enterContext(mock.patch.object(launcher, "_approval_refusal",
                                             return_value=None))
 
-    def _run(self, action, argv, **kw):
+    def _tmux_answer(self, action, argv, **kw):
         self.argvs.append(list(argv))
         out = "%9\n"
         if "new-window" in argv and "-t" in argv and _OPERATOR in argv:
@@ -108,7 +90,7 @@ class _ALaunchNamesAProfile(PersonaIso):
                 mock.patch.object(tmuxctl, "operator_server", return_value=operator), \
                 mock.patch.object(commands_frame, "_live_sessions", return_value={"beta"}), \
                 mock.patch.object(commands_frame, "_live_chats", return_value=set()), \
-                mock.patch.object(tmuxctl, "run", side_effect=self._run), \
+                mock.patch.object(tmuxctl, "run", side_effect=self._tmux_answer), \
                 mock.patch.object(tmuxctl, "write_all",
                                   side_effect=lambda joint, writes, **kw: [
                                       subprocess.CompletedProcess(w.argv, 0, "", "")
@@ -191,6 +173,19 @@ class ALaunchRefusesBeforeTmux(_ALaunchNamesAProfile, unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("is a codex profile", said)
         self.assertIn("charter codex-pinned", said)
+
+    def test_the_name_that_refusal_repeats_back_is_bounded(self):
+        """`profiles.NAME_RE` bounds a declared name's shape and not its length, so this is
+        the one value in the sentence that arrives printable and as long as the file liked.
+        The sentence ends in the remedy — `Run it by its own name: charter <name>` — and an
+        unbounded name in the middle of it is a remedy nobody gets to."""
+        long_name = "c" * 200
+        self.local.write_text(f'[harness.{long_name}]\nkind = "codex"\n'
+                              'command = ["codex"]\n')
+        rc, said = self._said(profile=long_name)
+        self.assertEqual(rc, 2)
+        self.assertIn("c" * 160 + "...", said)
+        self.assertNotIn(long_name, said)
 
     def test_a_declared_profile_from_a_committable_file_is_refused(self):
         (config.ROOT / ".gitignore").write_text("")
@@ -357,7 +352,7 @@ class AnEarlyDeathNamesTheProfilesCommand(_ALaunchNamesAProfile, unittest.TestCa
         self.assertNotIn("frame-launch", said)
 
 
-class AnUnattendedLaunchReadsTheLauncherssVerdict(_ALaunchNamesAProfile, unittest.TestCase):
+class AnUnattendedLaunchReadsTheLaunchersVerdict(_ALaunchNamesAProfile, unittest.TestCase):
     """Ruling 42's second half. Nobody is at a reopened or handed-off chat to press a key,
     so the pane records what it did and the launch that opened it reports that."""
 
@@ -384,6 +379,31 @@ class AnUnattendedLaunchReadsTheLauncherssVerdict(_ALaunchNamesAProfile, unittes
                      opening=commands_frame.Opening("fix it please"))
         self.awaited.assert_called_once()
 
+    def test_a_pane_that_already_died_is_not_asked_a_second_time(self):
+        """Two answers about one pane, and the eager one is the answer: tmux itself reported
+        `#{pane_dead_status}`, so the harness RAN and then exited on that number. Reading a
+        launcher record over the top of it would report a refusal for a chat that started
+        perfectly well and failed afterwards — and on the wrong exit code."""
+        with mock.patch.object(commands_frame, "_pane_last_words", return_value=[]):
+            rc, said = self._said(profile="claude-work", attach=False,
+                                  opening=commands_frame.Opening("fix it please"),
+                                  dead_status=7,
+                                  verdict=(3, "a refusal from some other launch"))
+        self.assertEqual(rc, 7)
+        self.assertIn("7", said)
+        self.assertNotIn("some other launch", said)
+
+    def test_a_launch_with_no_profile_has_no_launcher_to_ask(self):
+        """`charter frame -- <cmd>` starts the command itself — no charter launcher runs in
+        that pane, so nothing there can have recorded a verdict. A record left under that
+        chat id by an earlier chat is not this launch's answer, and waiting for one would
+        cost the whole budget on every escape-hatch open."""
+        rc, said = self._said(harness="frame", rest=["--", "true"], attach=False,
+                              opening=commands_frame.Opening("fix it please"),
+                              verdict=(3, "a refusal from some other launch"))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("some other launch", said)
+
 
 class TheVerdictWaitStopsOnItsOwnTerms(PersonaIso, unittest.TestCase):
     """`_await_the_launcher` itself: it ends on the verdict, on the pane dying, or on its
@@ -395,24 +415,37 @@ class TheVerdictWaitStopsOnItsOwnTerms(PersonaIso, unittest.TestCase):
         state.frame_dir("beta.1", create=True)
         self.slept: list[float] = []
         self.enterContext(mock.patch.object(commands_frame.time, "sleep",
-                                            side_effect=self.slept.append))
+                                            side_effect=self._sleep))
 
-    def _await(self, alive: bool = True):
+    #: A bound rather than a recorder, because the failure this class is about is a WAIT
+    #: that does not end: a loop with its deadline gone would spin here forever and a
+    #: hanging test is not a verdict (`tests/_ttyguard.py` records the same lesson). Well
+    #: above what any case below asks for, so only a genuinely unbounded loop reaches it.
+    _POLL_CEILING = 100
+
+    def _sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        if len(self.slept) > self._POLL_CEILING:
+            raise AssertionError(
+                f"the wait polled {len(self.slept)} times: its budget is not bounding it")
+
+    def _verdict(self, alive: bool = True):
+        """What `_await_the_launcher` answers with the pane in the state named."""
         status = commands_frame._ALIVE if alive else commands_frame._GONE
         with mock.patch.object(commands_frame, "_pane_state", return_value=(status, None)):
             return commands_frame._await_the_launcher("sock", "beta.1", "%1")
 
     def test_a_launcher_that_handed_the_pane_over_is_not_waited_on(self):
         state.record_launch("beta.1")
-        self.assertEqual(self._await(), (None, ""))
+        self.assertEqual(self._verdict(), (None, ""))
         self.assertEqual(self.slept, [], "a chat that started fine must not cost a wait")
 
     def test_a_refusal_comes_back_with_its_own_exit_code(self):
         state.record_launch("beta.1", launcher.MISSING_EXIT, "not on PATH")
-        self.assertEqual(self._await(), (launcher.MISSING_EXIT, "not on PATH"))
+        self.assertEqual(self._verdict(), (launcher.MISSING_EXIT, "not on PATH"))
 
     def test_a_pane_that_died_without_a_verdict_is_not_waited_on_either(self):
-        self.assertEqual(self._await(alive=False), (None, ""))
+        self.assertEqual(self._verdict(alive=False), (None, ""))
         self.assertEqual(self.slept, [])
 
     def test_a_launcher_that_never_answers_is_given_up_on(self):
@@ -421,7 +454,20 @@ class TheVerdictWaitStopsOnItsOwnTerms(PersonaIso, unittest.TestCase):
         ticks = iter([0.0, 0.0, commands_frame._LAUNCHER_SECONDS + 1])
         with mock.patch.object(commands_frame.time, "monotonic",
                                side_effect=lambda: next(ticks)):
-            self.assertEqual(self._await(), (None, ""))
+            self.assertEqual(self._verdict(), (None, ""))
+
+    def test_the_budget_is_spent_at_the_deadline_and_not_one_poll_later(self):
+        """The clock is asked twice — once to set the deadline, once to find it reached —
+        and that second reading ends the wait, because the budget is spent AT it and not
+        after it. The third tick is left in the iterator on purpose: a wait that consumed
+        it polled a pane, and slept, on time it had already been told it did not have.
+        """
+        ticks = iter([0.0, float(commands_frame._LAUNCHER_SECONDS), 99.0])
+        with mock.patch.object(commands_frame.time, "monotonic",
+                               side_effect=lambda: next(ticks)):
+            self.assertEqual(self._verdict(), (None, ""))
+        self.assertEqual(next(ticks), 99.0)
+        self.assertEqual(self.slept, [])
 
 
 class TheOperatorsTmuxRespawnsTheLauncher(_ALaunchNamesAProfile, unittest.TestCase):
@@ -434,7 +480,7 @@ class TheOperatorsTmuxRespawnsTheLauncher(_ALaunchNamesAProfile, unittest.TestCa
         self._no_approval_needed()
         self.chat_option_rc = 0
 
-    def _run(self, action, argv, **kw):
+    def _tmux_answer(self, action, argv, **kw):
         self.argvs.append(list(argv))
         rc = 0
         if "set-option" in argv and commands_frame._CHAT_OPTION in argv:

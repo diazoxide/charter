@@ -2208,6 +2208,22 @@ def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
 _LAUNCHER_SECONDS = 5.0
 
 
+def _what_the_pane_said(socket: str, fid: str, harness_pane: str, profile: str) -> str:
+    """The refusal *fid*'s own launcher recorded, or ``""`` — ruling 42's only reader.
+
+    Through :func:`_await_the_launcher`, never `_pane_last_words`: the measurement is that
+    by the time anything asks, the window carrying the sentence is gone. It answers at once
+    wherever the pane has already stopped, because the loop it runs ends on a pane that is
+    not alive.
+
+    ``""`` for a launch with no profile (`charter frame -- <cmd>`), which has no launcher to
+    have recorded anything.
+    """
+    if not profile:
+        return ""
+    return _await_the_launcher(socket, fid, harness_pane)[1]
+
+
 def _await_the_launcher(socket: str, fid: str, harness_pane: str) -> tuple[int | None, str]:
     """What *fid*'s launcher did: ``(None, "")`` once the harness has the pane, and
     ``(exit code, refusal)`` when it refused instead.
@@ -3305,6 +3321,12 @@ def _panel_remain_on_exit_argv(*, socket: str, harness_pane: str) -> list[str]:
 #: included, and the one figure that explains the refusal was the one thing not on screen.
 #: *carried* is the harness's arguments alone: the rest of the limit is the window's own
 #: name, directory and identity, which is why a launch just under it can still be refused.
+TOO_LONG_FOR_TMUX = ("charter frame: tmux refused the command that starts this chat as too "
+                     "long — tmux takes at most {limit:,} bytes in one command, and the "
+                     "command charter handed it is {carried:,} bytes. Nothing was started; "
+                     "shorten what this launch carries, or put the long text in a file and "
+                     "pass its path instead.")
+
 #: What an operator's own tmux is told when it will not mark charter's window with the chat
 #: it is drawing. Its own sentence rather than a warning, because what is lost is not a
 #: convenience: the pane's launcher proves which chat it is by this option on this server
@@ -3316,16 +3338,10 @@ UNNAMED_CHAT_WINDOW = (
     "which chat it is in, and without it this chat would run with no frame and be recorded "
     "nowhere. Nothing was started, and the window has been closed.")
 
-TOO_LONG_FOR_TMUX = ("charter frame: tmux refused the command that starts this chat as too "
-                     "long — tmux takes at most {limit:,} bytes in one command, and this "
-                     "launch's harness arguments alone are {carried:,} bytes. Nothing was "
-                     "started; shorten them, or put the long text in a file and pass its "
-                     "path instead.")
-
 
 def _say_why_the_harness_did_not_start(action: str, cmd: list[str],
                                        proc: subprocess.CompletedProcess,
-                                       harness_argv: list[str]) -> None:
+                                       carried: list[str]) -> None:
     """Report a refused harness start: tmux's length refusal by what it was, and anything
     else exactly as `tmuxctl.report_failure` has always reported it.
 
@@ -3337,11 +3353,18 @@ def _say_why_the_harness_did_not_start(action: str, cmd: list[str],
     `os.fsencode` and not `str.encode`, because that is how the argument reached `exec`: a
     byte that is not UTF-8 arrives in `sys.argv` as a surrogate escape, and a strict encode
     of it would raise in the middle of a failure report.
+
+    ***carried* is the argv charter really handed tmux, never the one it SHOWS.** Since a
+    profile launch those are two different lists — tmux is handed
+    `python -P -m charter frame-launch --profile <name> -- …` and the operator is shown the
+    profile's own command — and only one of them explains a refusal about length (ADR 0009:
+    a number beside a limit has to be the number the limit was applied to). The sentence
+    the operator reads names the command charter handed tmux for exactly that reason.
     """
     if tmuxctl.refused_as_too_long(proc.stderr):
         util.err(TOO_LONG_FOR_TMUX.format(
             limit=tmuxctl.MESSAGE_LIMIT,
-            carried=sum(len(os.fsencode(a)) for a in harness_argv)))
+            carried=sum(len(os.fsencode(a)) for a in carried)))
         return
     tmuxctl.report_failure(action, cmd, proc)
 
@@ -3564,8 +3587,10 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
                                     env=_guest_harness_env(env), cwd=cwd, harness_argv=argv)
     started = tmuxctl.run("starting the harness in it", start_cmd, report=False)
     if started.returncode != 0:
+        # *argv*, not *display*: what tmux refused is the launcher argv, and the only
+        # number that explains a refusal about length is the one tmux measured.
         _say_why_the_harness_did_not_start("starting the harness in it", start_cmd,
-                                            started, display)
+                                            started, argv)
         # The placeholder is still running in a window the operator never asked for and
         # would never learn the purpose of. Take it back.
         _close_window()
@@ -3579,7 +3604,15 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     if status != _ALIVE:
         if code is not None:
             state.record_exit(fid, code)
-        if code is not None and code != 0:
+        # **Ruling 42 holds on this path too, and it is the path it holds HARDEST.** A
+        # launcher that refused printed into a window this function closes a few lines
+        # down, so `_pane_last_words` below is measured empty here — and the operator
+        # never saw the window at all, because nothing switches them to it. What the pane
+        # RECORDED is the only copy left (`_what_the_pane_said`).
+        refused = _what_the_pane_said(socket, fid, harness_pane, profile)
+        if refused:
+            util.err(f"charter: {refused}")
+        elif code is not None and code != 0:
             # #384 reaches THIS path too, and reaches it harder. Nothing below runs — no
             # panels, no `select-window` — so the operator is never switched to the
             # frame's window at all: it is created, filled with a corpse, and killed
@@ -3636,6 +3669,15 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         code = _UNKNOWN_DEATH_CODE
     else:
         state.record_exit(fid, code)
+        # **And the refusal a launcher recorded while this process was watching** (ruling
+        # 42). This path stays awake for the whole life of the frame, so a pane that
+        # refused after the checks above passed — the plane moved between them — ends up
+        # here: the window is about to be closed, and the sentence in it with it. An
+        # attended pane has already shown the operator this; saying it once more where
+        # their shell comes back costs a line and is the only copy that survives.
+        refused = _what_the_pane_said(socket, fid, harness_pane, profile)
+        if refused:
+            util.err(f"charter: {refused}")
         _close_window()
     # Given up before this path's own closing reap, for the reason `cmd_launch` gives at
     # its own (#685): the marker is held for the LAUNCH, and this launch is over.
@@ -5206,7 +5248,7 @@ def _launch(args) -> int:
             # A profile is a way to run ONE kind, and the kind decides the hooks, the
             # resume flag and how a first message is spelled — so this is refused rather
             # than resolved in either direction.
-            util.err("charter: " + launcher.KIND_MISMATCH.format(
+            util.err("charter: " + launcher.MISMATCHED_KIND.format(
                 name=contain.readable(p.name), kind=p.kind, asked=args.harness))
             return 2
         # Only the profile's NAME crosses tmux. Its command and its environment are read
@@ -5285,8 +5327,7 @@ def _launch(args) -> int:
     # is the refusal's own — 127 for a command that is not on `PATH`, the shell's number
     # for it, so `charter <profile> && …` behaves the way `<command> && …` would have.
     if p is not None:
-        r = launcher.refusal(p, root=config.ROOT, attended=attended,
-                             env=launcher.environment(p, os.environ, framed=True))
+        r = _profile_refusal(p, attended=attended)
         if r is not None:
             util.err(f"charter: {r.text}")
             return r.exit
@@ -5666,9 +5707,9 @@ def _launch(args) -> int:
     # length refusal in its own number, anything else as `report_failure` always said it.
     proc = tmuxctl.run(started_what, start_cmd, env=env, report=False)
     if proc.returncode != 0:
-        # *display*, never *argv*: what tmux refused is charter's own launcher, and naming
-        # it would tell the operator about a command they did not write.
-        _say_why_the_harness_did_not_start(started_what, start_cmd, proc, display)
+        # *argv*, not *display*: this reports what TMUX refused, and its one number is the
+        # size of the command charter handed tmux (see the function's own docstring).
+        _say_why_the_harness_did_not_start(started_what, start_cmd, proc, argv)
         return 1
     harness_pane = proc.stdout.strip()
     if not harness_pane:
@@ -7871,8 +7912,23 @@ def _harness_of(p):
     return next((x for x in harness.all() if x.name == p.harness), None)
 
 
+def _profile_refusal(p, *, attended: bool):
+    """The launcher's own chain for *p* as THIS process sees the world — the `Refusal`, or
+    ``None`` when it may start.
+
+    One spelling of its four arguments, because the two callers ask it identically: the
+    launch itself, before tmux, and a press that has a surface to say it on
+    (:func:`_launch_refusal`). Two copies of a call whose `env` decides what `PATH` a
+    command is looked up on is two answers waiting to drift.
+    """
+    from .frame import launcher
+
+    return launcher.refusal(p, root=config.ROOT, attended=attended,
+                            env=launcher.environment(p, os.environ, framed=True))
+
+
 def _launch_refusal(p, *, attended: bool) -> str:
-    """The launcher's own refusal for *p*, or ``""`` when it may start.
+    """The launcher's own refusal for *p* as a sentence, or ``""`` when it may start.
 
     **Asked by the presses, because a press has no other surface.** `_launch` runs this same
     chain before tmux, but `cmd_new_chat` and `_open_workspace` run detached with all three
@@ -7884,10 +7940,7 @@ def _launch_refusal(p, *, attended: bool) -> str:
     It costs what the chain costs — one `git status` for a declared profile — on a press,
     and nothing on a hook path: none of these callers is one.
     """
-    from .frame import launcher
-
-    r = launcher.refusal(p, root=config.ROOT, attended=attended,
-                         env=launcher.environment(p, os.environ, framed=True))
+    r = _profile_refusal(p, attended=attended)
     return r.text if r is not None else ""
 
 
@@ -10869,6 +10922,10 @@ class Opened(NamedTuple):
 def background_refusal(ws: str, *, caller: str, first_message: str) -> str:
     """Every reason :func:`open_in_background` would refuse, or ``""`` when it may open.
 
+    The sentence half of :func:`_how_a_background_open_would_go`, which is where the
+    reasons live: `charter handoff` asks this before any write of its own, and the open
+    asks the same function again rather than re-resolving what it already answered.
+
     **Asked before anything starts, and it writes nothing**, so `charter handoff` (Task 2)
     can ask it before any write of its own. :func:`open_in_background` asks it again because
     the plane may have moved in between — a race answered by refusing late, which is still a
@@ -10895,42 +10952,62 @@ def background_refusal(ws: str, *, caller: str, first_message: str) -> str:
        :func:`_open_workspace`'s guard and :data:`NO_SESSION_HERE` said once. A session this
        plane can prove is its own is joined, and a name no session holds is started.
     """
+    return _how_a_background_open_would_go(
+        ws, caller=caller, first_message=first_message)[0]
+
+
+def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str):
+    """``(refusal, profile, harness)`` — every reason an open would refuse, and what it
+    resolved on the way to finding none.
+
+    **One resolution, not two.** The refusal and the open are the same question asked a
+    moment apart, and answering it twice is not merely a second file read: an open that
+    re-resolved could act on a different profile from the one the refusal cleared, which is
+    the drift `_same_profile_as` exists to prevent one caller along.
+    """
     # Split once, on whitespace: no words is an empty message, and one word is a single word.
     # `split()` and never `strip()`, which the deletion sweep settled: `not text.strip()` and
     # `not text.lstrip()` answer alike for every string, so the strip was a line nothing
     # could pin, and the word it named could keep a trailing newline.
     words = first_message.split()
     if not words:
-        return EMPTY_FIRST_MESSAGE
+        return EMPTY_FIRST_MESSAGE, None, None
     if first_message.startswith("-"):
-        return FLAG_FIRST_MESSAGE
+        return FLAG_FIRST_MESSAGE, None, None
     if len(words) == 1:
-        return WORD_FIRST_MESSAGE.format(word=contain.one_line(words[0]))
+        return WORD_FIRST_MESSAGE.format(word=contain.one_line(words[0])), None, None
     if "\x00" in first_message:
-        return NUL_FIRST_MESSAGE
+        return NUL_FIRST_MESSAGE, None, None
     size = len(os.fsencode(first_message))
     if size > FIRST_MESSAGE_MAX_BYTES:
-        return LONG_FIRST_MESSAGE.format(n=size, max=FIRST_MESSAGE_MAX_BYTES)
+        return LONG_FIRST_MESSAGE.format(n=size, max=FIRST_MESSAGE_MAX_BYTES), None, None
     socket = state.frame_server(caller) or SOCKET
     if tmuxctl.is_operator_socket(socket, own=SOCKET):
-        return NO_BACKGROUND_CHAT_HERE
+        return NO_BACKGROUND_CHAT_HERE, None, None
     p, why = _same_profile_as(caller)
     if p is None:
-        return f"cannot open a chat in '{ws}': {why}"
+        return f"cannot open a chat in '{ws}': {why}", None, None
     # **The launcher's own chain, before anything is written** — so a handoff to a profile
     # that cannot start is refused while there is still nothing to undo: no chat directory,
     # no window, no first message anywhere. Unattended, because nobody is in front of the
     # chat this would open: a check that would ask refuses here instead (review 3).
     refused = _launch_refusal(p, attended=False)
     if refused:
-        return f"cannot open a chat in '{ws}': {refused}"
+        return f"cannot open a chat in '{ws}': {refused}", None, None
     h = _harness_of(p)
+    if h is None:
+        # Every profile names a kind this charter registers, so this is unreachable through
+        # a profile charter itself resolved — and it is guarded anyway, because
+        # `_harness_of` is typed `| None`, the press path carried this guard before
+        # profiles, and what is on the other side of it is an `AttributeError` in a process
+        # whose streams are `/dev/null`. Fails closed, in the sentence this already has.
+        return f"cannot open a chat in '{ws}': {NO_HARNESS}", None, None
     if h.first_message_argv("x y") is None:
-        return UNMEASURED_FIRST_MESSAGE.format(ws=ws, harness=h.name)
+        return UNMEASURED_FIRST_MESSAGE.format(ws=ws, harness=h.name), None, None
     prefix = state.workspace_prefix(ws)
     if _plane_session(socket, ws=ws) is None and prefix in _live_sessions(socket):
-        return NOT_THIS_PLANES_SESSION.format(ws=ws, socket=socket, prefix=prefix)
-    return ""
+        return NOT_THIS_PLANES_SESSION.format(ws=ws, socket=socket, prefix=prefix), None, None
+    return "", p, h
 
 
 def open_in_background(ws: str, *, caller: str, first_message: str,
@@ -10963,11 +11040,10 @@ def open_in_background(ws: str, *, caller: str, first_message: str,
     **Success is a chat id with a harness pane, never a return code**: a launcher that
     answered 0 and handed back no id has proved nothing exists.
     """
-    refusal = background_refusal(ws, caller=caller, first_message=first_message)
+    refusal, p, h = _how_a_background_open_would_go(
+        ws, caller=caller, first_message=first_message)
     if refusal:
         return Opened(False, "", refusal)
-    p, _why = _same_profile_as(caller)
-    h = _harness_of(p)
     socket = state.frame_server(caller) or SOCKET
     pane = chats.pane_of(caller)
     if pane is None:

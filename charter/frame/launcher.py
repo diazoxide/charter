@@ -53,9 +53,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Callable, Mapping
-
-from typing import NamedTuple
+from typing import Callable, Mapping, NamedTuple
 
 from .. import config, contain, profiles, util
 from . import state, tmuxctl
@@ -81,9 +79,16 @@ KIND_EXEC = "exec"
 class Refusal(NamedTuple):
     """Why a profile did not start, and what a CLI returns for it."""
 
-    kind: str      # one of the KIND_* constants above
-    text: str      # the sentence, without charter's own prefix — a caller says it its way
-    exit: int      # MISSING_EXIT for KIND_PATH, its own number for KIND_EXEC, else REFUSED_EXIT
+    #: One of the KIND_* constants above. Task 2 reads it in tests and nowhere else; it is
+    #: here because Task 3 branches on it — `KIND_ASK` is the one refusal a pane defers to
+    #: rather than prints — and ruling 27 says that branch is on the kind, never on the
+    #: text, which gets reworded.
+    kind: str
+    #: The sentence, without charter's own prefix: each caller says it its own way.
+    text: str
+    #: What a CLI returns for it — MISSING_EXIT for KIND_PATH, its own number for
+    #: KIND_EXEC, REFUSED_EXIT otherwise.
+    exit: int
 
 
 # Every sentence says the rule worked and names the fix in the same breath (CONTEXT.md,
@@ -92,7 +97,7 @@ class Refusal(NamedTuple):
 # command could otherwise redraw the line to show a harmless command while another one runs.
 UNKNOWN_PROFILE = ("no profile named '{name}' — have: {names}. Nothing was started. "
                    "charter harness list shows every profile and why any was refused.")
-KIND_MISMATCH = ("profile '{name}' is a {kind} profile, not a {asked} one — nothing was "
+MISMATCHED_KIND = ("profile '{name}' is a {kind} profile, not a {asked} one — nothing was "
                  "started. Run it by its own name: charter {name}")
 IGNORED = "profile '{name}' is refused — {why}"
 NOT_ON_PATH = ("profile '{name}' runs {cmd}, which is not on PATH — nothing was started. "
@@ -322,7 +327,10 @@ def framed_chat() -> str | None:
     chat whose window an operator's hook renamed would otherwise lose its session id and its
     resume id with no word said.
     """
-    chat = os.environ.get("CHARTER_SESSION_ID", "")
+    # No `, ""` default: the next line asks whether there is a chat at all, and `None`
+    # answers it exactly as `""` does — a fallback no test can tell apart from its absence
+    # is a line the deletion sweep reports, rightly.
+    chat = os.environ.get("CHARTER_SESSION_ID")
     if not chat:
         return None
     from ..commands_frame import SOCKET
@@ -330,10 +338,12 @@ def framed_chat() -> str | None:
     server = state.frame_server(chat) or SOCKET
     row = tmuxctl.live_pane_by_pid(server, os.getpid())
     if row is not None:
-        _pane, _session, window, option = row
         # The window NAME on charter's own server, the `@charter_chat` option on the
-        # operator's — where a name is only a label anything may rewrite (ruling 33).
-        if (option if tmuxctl.is_operator_socket(server, own=SOCKET) else window) == chat:
+        # operator's — where a name is only a label anything may rewrite (ruling 33). Read
+        # by name off `tmuxctl.LivePane`, because which of the two proves a chat is the one
+        # thing here it would be worst to get subtly wrong.
+        proof = row.chat if tmuxctl.is_operator_socket(server, own=SOCKET) else row.window
+        if proof == chat:
             return chat
     util.err(f"charter: {UNPROVEN_CHAT.format(chat=contain.readable(chat))}")
     return None
@@ -407,7 +417,9 @@ def cmd_frame_launch(args) -> int:
     if p is None:
         return _refused_in_pane(why or unknown_profile(args.profile), REFUSED_EXIT,
                                 fid=fid, attended=args.attended)
-    rest = list(args.rest or [])
+    # `list(args.rest)` and not `args.rest or []`: `nargs=REMAINDER` answers with a list on
+    # every path, `[]` included, so the fallback was a branch nothing could reach.
+    rest = list(args.rest)
     # `nargs=REMAINDER` keeps the `--` that told argparse to stop parsing; it is the
     # separator and not part of the harness's own argv (`commands_frame._launch` strips it
     # the same way).

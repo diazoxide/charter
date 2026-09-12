@@ -38,8 +38,8 @@ from charter import commands_frame, config
 from charter.frame import launcher, state, tmuxctl
 
 from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
-from tests._isolation import PersonaIso, make_plane, no_background_refresh, \
-    no_update_check_in
+from tests._isolation import (PersonaIso, declare_profiles, make_plane,
+                              no_background_refresh, no_update_check_in)
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -56,6 +56,9 @@ _SERVERS = itertools.count()
 #: happened.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
+#: One declared profile whose command really resolves here: the recorder on this fixture's
+#: own `PATH` is `claude`, so what the pane refuses is the DECLARATION (review B1) rather
+#: than a command that was never going to run.
 _LOCAL = """
 [harness.claude-work]
 kind = "claude"
@@ -64,7 +67,7 @@ env = { CLAUDE_CONFIG_DIR = "~/.cw" }
 """
 
 
-def _await(predicate, timeout: float = 15.0) -> bool:
+def _eventually(predicate, timeout: float = 15.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -156,7 +159,7 @@ class _ARealChatOnARealServer(PersonaIso):
     def _harness(self) -> dict:
         """What the exec'd harness wrote down, once it has run."""
         record = self.records / "harness.json"
-        self.assertTrue(_await(record.is_file),
+        self.assertTrue(_eventually(record.is_file),
                         f"the harness never ran in the pane: {self._pane_text()}")
         return json.loads(record.read_text())
 
@@ -216,7 +219,7 @@ class ThePaneCharterStartsIsThePaneTheHarnessRunsIn(_ARealChatOnARealServer,
         fid = "beta.1"
         harness = self._harness()
         self.assertEqual(harness["env"].get("TMUX_PANE"), state.harness_pane(fid))
-        self.assertTrue(_await(lambda: fid in (commands_frame._live_chats(self.socket)
+        self.assertTrue(_eventually(lambda: fid in (commands_frame._live_chats(self.socket)
                                                or set())),
                         "the chat is not in the server's liveness list")
 
@@ -255,10 +258,10 @@ class TheHarnessExitCodeTravelsAsItDid(_ARealChatOnARealServer, unittest.TestCas
     def test_a_harness_exit_code_travels_as_it_did(self):
         self.assertEqual(self._launch(), 0)
         fid = "beta.1"
-        self.assertTrue(_await(lambda: state.exit_code(fid) == 7),
+        self.assertTrue(_eventually(lambda: state.exit_code(fid) == 7),
                         f"the exit code did not reach the chat's state: "
                         f"{state.exit_code(fid)!r}")
-        self.assertTrue(_await(lambda: fid not in self._tmux(
+        self.assertTrue(_eventually(lambda: fid not in self._tmux(
             "list-windows", "-a", "-F", "#{window_name}").stdout.split()),
             "the teardown hook did not close the window of a chat that ended")
 
@@ -276,10 +279,11 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
 
     def setUp(self) -> None:
         super().setUp()
-        (config.ROOT / "charter.local.toml").write_text(_LOCAL)
-        (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
-        subprocess.run(["git", "-C", str(config.ROOT), "init", "-q"], check=True,
-                       capture_output=True, env=dict(os.environ))
+        # The shared fixture: the file, a repository that ignores it, `$HOME`, and the
+        # ceiling that stops git's walk above this throwaway plane. It carries
+        # `tests._gitguard.environment()` into the git it runs, which is what every other
+        # module here does and what `tests._planeguard.AmbientGitConfig` holds them to.
+        self.local = declare_profiles(self, _LOCAL)
         # Only the pre-tmux call, in THIS process. The pane's launcher is another process
         # and runs the whole chain for itself, which is the half under test.
         self.enterContext(mock.patch.object(launcher, "refusal", return_value=None))
@@ -288,7 +292,7 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
         self.assertEqual(self._launch(profile="claude-work"), 0)
         fid = "beta.1"
         pane = state.harness_pane(fid)
-        self.assertTrue(_await(
+        self.assertTrue(_eventually(
             lambda: "cannot yet ask before a declared command runs" in self._pane_text(pane)),
             f"the pane never showed the refusal: {self._pane_text(pane)!r}")
         # **The property ruling 42 is about**: it is still there to be read. A launcher that
@@ -299,7 +303,7 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
             "0", "the pane died with the refusal on it instead of waiting")
         sent = self._tmux("send-keys", "-t", pane, "Enter")
         self.assertEqual(sent.returncode, 0, sent.stderr)
-        self.assertTrue(_await(lambda: not self._alive(pane), 30),
+        self.assertTrue(_eventually(lambda: not self._alive(pane), 30),
                         f"the keypress did not let the launcher go: "
                         f"{self._pane_text(pane)!r}")
 
@@ -314,7 +318,7 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
         self.assertEqual(self._launch(profile="claude-work"), 0)
         pane = state.harness_pane("beta.1")
         self._tmux("send-keys", "-t", pane, "Enter")
-        self.assertTrue(_await(lambda: not self._alive(pane), 30),
+        self.assertTrue(_eventually(lambda: not self._alive(pane), 30),
                         f"the keypress was swallowed: {self._pane_text(pane)!r}")
 
     def test_an_unattended_refusal_is_read_back_by_the_launch_that_opened_the_chat(self):
@@ -334,6 +338,70 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
         self.assertTrue(
             any("cannot yet ask before a declared command runs" in s for s in said),
             f"the launch did not report what the pane refused: {said}")
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARefusalInsideTheOperatorsOwnTmux(_ARealChatOnARealServer, unittest.TestCase):
+    """Ruling 42 on the path that needs it most — a real window in a tmux charter does not
+    own, end to end.
+
+    **Nothing here ever looks at that pane.** Charter's launcher on this path stays awake
+    for the life of the frame and closes the window itself, and an open nobody is watching
+    is never switched to — so a refusal printed in the pane is gone with the window before
+    anything reads it, which is what `_pane_last_words` measured empty. The chat's own
+    record is the only copy, and the process holding the terminal is the one that must say
+    it.
+
+    The pre-tmux check is stood down in THIS process only: the pane's launcher is another
+    process and runs the whole chain for itself, which is the half under test.
+    """
+
+    SLUG = "pane-refusal-operator"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.local = declare_profiles(self, _LOCAL)
+        self.enterContext(mock.patch.object(launcher, "refusal", return_value=None))
+        # An operator's own server: started by NAME so `tests._tmuxreap` can collect it,
+        # and reached by PATH, which is what `tmuxctl.is_operator_socket` reads as "a tmux
+        # charter did not start" (#812 is what happens when those two are compared as
+        # strings). `test_frame_tmux_integration.OP_SOCKET_PATH` is the same pairing.
+        self.op_name = _tmuxreap.name(f"{self.SLUG}-{next(_SERVERS)}")
+        self.addCleanup(subprocess.run,
+                        [self.tmux, "-L", self.op_name, "kill-server"],
+                        capture_output=True, timeout=20)
+        started = subprocess.run(
+            [self.tmux, "-L", self.op_name, "-f", "/dev/null", "new-session", "-d",
+             "-s", "op", "-x", "120", "-y", "40", "--", "cat"],
+            capture_output=True, text=True, timeout=20, env=dict(os.environ))
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.op_path = _tmuxsocket.socket_path(self.op_name)
+        session = subprocess.run(
+            [self.tmux, "-L", self.op_name, "display-message", "-p", "#{session_id}"],
+            capture_output=True, text=True, timeout=20).stdout.strip()
+        self.enterContext(mock.patch.object(tmuxctl, "operator_server",
+                                            return_value=(self.op_path, session)))
+
+    def test_the_launch_says_what_the_pane_refused(self):
+        said: list[str] = []
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
+            rc = self._launch(profile="claude-work",
+                              opening=commands_frame.Opening("fix the widget please"))
+        self.assertEqual(rc, launcher.REFUSED_EXIT)
+        self.assertTrue(
+            any("cannot yet ask before a declared command runs" in s for s in said),
+            f"the launch did not say what the pane refused: {said}")
+
+    def test_the_window_it_opened_is_taken_back(self):
+        """A window the operator never asked for, holding a chat that never started, is not
+        theirs to close."""
+        with mock.patch.object(commands_frame.util, "err"):
+            self._launch(profile="claude-work",
+                         opening=commands_frame.Opening("fix the widget please"))
+        windows = subprocess.run(
+            [self.tmux, "-L", self.op_name, "list-windows", "-a", "-F", "#{window_name}"],
+            capture_output=True, text=True, timeout=20).stdout.split()
+        self.assertNotIn("beta.1", windows, f"the frame's window was left behind: {windows}")
 
 
 if __name__ == "__main__":

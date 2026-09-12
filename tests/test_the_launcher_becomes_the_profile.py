@@ -35,14 +35,7 @@ from unittest import mock
 from charter import commands_frame, config, profiles
 from charter.frame import launcher, state, tmuxctl
 from tests import _gitguard, _tmuxsocket
-from tests._isolation import PersonaIso, make_plane
-
-_LOCAL = """
-[harness.claude-work]
-kind = "claude"
-command = ["claude"]
-env = { CLAUDE_CONFIG_DIR = "~/.cw" }
-"""
+from tests._isolation import PersonaIso, declare_profiles, make_plane
 
 #: The `list-panes -a` row `tmuxctl.live_pane_by_pid` parses: pid, dead, pane, session,
 #: window, `@charter_chat`. Spelled here rather than built from the format, so a change to
@@ -50,11 +43,6 @@ env = { CLAUDE_CONFIG_DIR = "~/.cw" }
 def _row(pid: int, *, dead: str = "0", pane: str = "%1", session: str = "alpha",
          window: str = "alpha.1", chat: str = "alpha.1") -> str:
     return f"{pid}\t{dead}\t{pane}\t{session}\t{window}\t{chat}\n"
-
-
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
-                   env={**os.environ, **_gitguard.environment()})
 
 
 class _AProfileAndAPlane(PersonaIso):
@@ -68,12 +56,7 @@ class _AProfileAndAPlane(PersonaIso):
     def setUp(self) -> None:
         super().setUp()
         make_plane(self)
-        self.enterContext(mock.patch.dict(
-            os.environ, {"GIT_CEILING_DIRECTORIES": str(self.tmp.resolve().parent)}))
-        self.local = config.ROOT / "charter.local.toml"
-        self.local.write_text(_LOCAL)
-        (config.ROOT / ".gitignore").write_text("/charter.local.toml\n")
-        _git(config.ROOT, "init", "-q")
+        self.local = declare_profiles(self)
         self.execs: list[tuple] = []
         self.exec = self.enterContext(mock.patch.object(
             launcher.os, "execvpe", side_effect=lambda *a: self.execs.append(a)))
@@ -122,7 +105,7 @@ class TheLauncherBecomesTheProfile(_AProfileAndAPlane, unittest.TestCase):
         env = launcher.environment(self._profile(),
                                    {"PATH": "/x", "CLAUDE_CONFIG_DIR": "/old"}, framed=True)
         self.assertEqual(env["PATH"], "/x")
-        self.assertEqual(env["CLAUDE_CONFIG_DIR"], os.path.expanduser("~/.cw"))
+        self.assertEqual(env["CLAUDE_CONFIG_DIR"], str(self.home / ".cw"))
         self.assertEqual(env["CHARTER_HARNESS_PROFILE"], "claude-work")
 
     def test_the_profile_and_kind_ride_the_exec_not_tmux(self):
@@ -133,7 +116,7 @@ class TheLauncherBecomesTheProfile(_AProfileAndAPlane, unittest.TestCase):
         self.assertEqual(argv, ["claude", "--resume", "s1"])
         self.assertEqual(env["CHARTER_HARNESS_PROFILE"], "claude-work")
         self.assertEqual(env["CHARTER_HARNESS"], "claude-code")
-        self.assertEqual(env["CLAUDE_CONFIG_DIR"], os.path.expanduser("~/.cw"))
+        self.assertEqual(env["CLAUDE_CONFIG_DIR"], str(self.home / ".cw"))
         self.assertEqual(state.profile("beta.1"), "claude-work")
 
     def test_a_file_that_became_committable_since_tmux_is_refused_in_the_pane(self):
@@ -190,6 +173,55 @@ class TheLauncherBecomesTheProfile(_AProfileAndAPlane, unittest.TestCase):
         self.assertEqual(r.exit, launcher.REFUSED_EXIT)
         self.assertIn("Input/output error", r.text)
 
+    def test_a_refusal_exits_three_and_the_number_is_the_point(self):
+        """**3, written out**, because every neighbouring number already means something
+        else to whoever reads `$?`: 127 and 126 are the shell's own words for a command
+        that could not be found or could not be run (`MISSING_EXIT`, `NOT_EXECUTABLE_EXIT`,
+        and `bypass` returns those same two), 2 is charter's own usage error, 1 is a
+        harness that ran and failed, and 0 is a harness that ran and did not. A refusal
+        started nothing at all, and `charter <profile> || …` can only tell that apart if
+        the number is pinned rather than merely consistent with itself.
+        """
+        self.assertEqual(launcher.start(self._profile(), [], fid=None, attended=False), 3)
+        self.assertEqual(launcher.REFUSED_EXIT, 3)
+        self.assertEqual(launcher.MISSING_EXIT, 127)
+        self.assertEqual(launcher.NOT_EXECUTABLE_EXIT, 126)
+
+    def test_the_kinds_are_a_written_down_vocabulary(self):
+        """Ruling 27: a caller branches on the KIND and never on the text, so the kinds are
+        an interface — Task 3 matches `KIND_NOT_YET` to decide which refusal a pane defers
+        to instead of prints. Spelled out here so a rename is a red test rather than a
+        branch that quietly stops matching, and asserted DISTINCT because two kinds that
+        collided would make that branch answer for both.
+        """
+        kinds = (launcher.KIND_IGNORED, launcher.KIND_PATH, launcher.KIND_NOT_YET,
+                 launcher.KIND_EXEC)
+        self.assertEqual(kinds, ("ignored", "path", "not-yet", "exec"))
+        self.assertEqual(len(set(kinds)), len(kinds))
+
+    def test_the_path_the_exec_will_use_is_the_path_that_is_asked(self):
+        """**`env["PATH"]`, not this process's**, and the difference is a whole launch: a
+        profile whose `env` puts its own directory on `PATH` runs a command charter itself
+        cannot see. The command here exists ONLY in the profile's `PATH`, so a check asking
+        any other question refuses a profile that is about to start perfectly well.
+        """
+        self._no_approval_needed()
+        elsewhere = self.tmp / "bin"
+        elsewhere.mkdir()
+        program = elsewhere / "harness-only-here"
+        program.write_text("#!/bin/sh\nexit 0\n")
+        program.chmod(0o755)
+        self.local.write_text('[harness.own-path]\nkind = "claude"\n'
+                              'command = ["harness-only-here"]\n')
+        p = self._profile("own-path")
+        self.assertIsNone(launcher.refusal(p, root=config.ROOT, attended=False,
+                                           env={"PATH": str(elsewhere)}))
+        # And the other half of the same fact: with that directory gone from `PATH` the
+        # very same profile is refused, so the answer above came from the `env` asked for.
+        self.assertEqual(launcher.refusal(p, root=config.ROOT, attended=False,
+                                          env={"PATH": str(self.tmp)}).kind,
+                         launcher.KIND_PATH)
+
 
 class AQuotedCommandIsShownEscaped(_AProfileAndAPlane, unittest.TestCase):
     """Ruling 35, and the fourth review's nit: a refusal that quotes a command shows it
@@ -218,6 +250,103 @@ class AQuotedCommandIsShownEscaped(_AProfileAndAPlane, unittest.TestCase):
             r = launcher.attempt(self._profile("sneaky"), [], fid=None, attended=False)
         self.assertNotIn("\r", r.text)
         self.assertNotIn("\x1b", r.text)
+        self.assertIn("\\u000d", r.text)
+
+    def test_what_the_system_said_about_the_failure_is_escaped_too(self):
+        """The `strerror` is not charter's own words: it comes back from the kernel about a
+        path the FILE chose, and on a filesystem where that name is the error message it is
+        the file's text arriving on the operator's terminal by another route."""
+        self.exec.side_effect = OSError(5, "cannot run cl\raude\x1b[2K")
+        with mock.patch.object(launcher.shutil, "which", return_value="/nowhere"):
+            r = launcher.attempt(self._profile("sneaky"), [], fid=None, attended=False)
+        self.assertNotIn("\r", r.text)
+        self.assertNotIn("\x1b", r.text)
+        self.assertIn("\\u000d", r.text)
+
+    def test_the_command_charter_shows_for_a_launch_is_escaped(self):
+        """`display_command` is what an early death and a tmux that refused the argv both
+        quote back, so it is a third way the file's own bytes reach a terminal."""
+        shown = launcher.display_command(self._profile("sneaky"), ["--resume", "s1"])
+        self.assertEqual(shown[-2:], ["--resume", "s1"])
+        self.assertNotIn("\r", " ".join(shown))
+        self.assertNotIn("\x1b", " ".join(shown))
+        self.assertIn("\\u000d", shown[0])
+
+
+#: A name `profiles.NAME_RE` accepts and `contain.readable` still has work to do on. The
+#: regex bounds a profile name's SHAPE — ASCII letters, digits, `_` and `-` — and says
+#: nothing at all about its LENGTH, so a declared name is the one value in these sentences
+#: that arrives printable and unbounded. 200 is over `contain.DISPLAY_LIMIT` and under
+#: nothing in particular.
+LONG_NAME = "w" * 200
+
+
+class ARefusalNamesTheProfileWithoutBecomingIt(_AProfileAndAPlane, unittest.TestCase):
+    """Every refusal quotes the profile's name back, and the quote is BOUNDED.
+
+    `profiles.NAME_RE` is why this is about length rather than about escapes: a name with a
+    `\\r` in it never resolves at all, so what reaches these four sentences is always
+    printable — and always as long as the file cared to make it. A 200-character name
+    unbounded is a refusal that scrolls its own remedy off the screen, and each of these is
+    a sentence whose whole job is to be read to the end (CONTEXT.md, *A refusal is the rule
+    working*). One fixture, four sites, because it is one property.
+    """
+
+    #: What `contain.readable` leaves of :data:`LONG_NAME` — its own clip, spelled out
+    #: rather than recomputed, so this test disagrees with the code instead of agreeing
+    #: with whatever it happens to do.
+    CLIPPED = "w" * 160 + "..."
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.local.write_text(f'[harness.{LONG_NAME}]\nkind = "claude"\n'
+                              'command = ["claude"]\n')
+
+    def _refusal(self, **kw):
+        return launcher.refusal(self._profile(LONG_NAME), root=config.ROOT,
+                                attended=False, env=dict(os.environ), **kw)
+
+    def test_the_not_yet_refusal_clips_it(self):
+        r = self._refusal()
+        self.assertEqual(r.kind, launcher.KIND_NOT_YET)
+        self.assertIn(self.CLIPPED, r.text)
+        self.assertNotIn(LONG_NAME, r.text)
+
+    def test_the_ignored_refusal_clips_it(self):
+        (config.ROOT / ".gitignore").write_text("")
+        r = self._refusal()
+        self.assertEqual(r.kind, launcher.KIND_IGNORED)
+        self.assertIn(self.CLIPPED, r.text)
+        self.assertNotIn(LONG_NAME, r.text)
+
+    def test_the_not_on_path_refusal_clips_it(self):
+        self._no_approval_needed()
+        with mock.patch.object(launcher.shutil, "which", return_value=None):
+            r = self._refusal()
+        self.assertEqual(r.kind, launcher.KIND_PATH)
+        self.assertIn(self.CLIPPED, r.text)
+        self.assertNotIn(LONG_NAME, r.text)
+
+    def test_the_exec_that_failed_clips_it(self):
+        self._no_approval_needed()
+        self.exec.side_effect = FileNotFoundError(2, "No such file")
+        r = launcher.attempt(self._profile(LONG_NAME), [], fid=None, attended=False)
+        self.assertEqual(r.kind, launcher.KIND_EXEC)
+        self.assertIn(self.CLIPPED, r.text)
+        self.assertNotIn(LONG_NAME, r.text)
+
+    def test_the_not_yet_refusal_offers_only_profiles_the_file_does_not_declare(self):
+        """The other half of :data:`launcher.DECLARED_NOT_YET`: it names what the operator
+        CAN launch, and a list that repeated the declared profiles back would name the very
+        commands this refusal exists to not run."""
+        self.local.write_text(f'[harness.{LONG_NAME}]\nkind = "claude"\n'
+                              'command = ["claude"]\n\n'
+                              '[harness.claude]\nkind = "claude"\ncommand = ["elsewhere"]\n')
+        offered = self._refusal().text.rsplit(": ", 1)[1].rstrip(".").split(", ")
+        read = profiles.current()
+        self.assertTrue(offered)
+        for name in offered:
+            self.assertEqual(read.profiles[name].source, profiles.BUILTIN, name)
 
 
 class OnlyThePanesOwnFirstProcessIsFramed(_AProfileAndAPlane, unittest.TestCase):
@@ -283,6 +412,29 @@ class OnlyThePanesOwnFirstProcessIsFramed(_AProfileAndAPlane, unittest.TestCase)
                 [], 1, "", "no server running")), \
                 mock.patch.object(launcher.os, "getpid", return_value=53118):
             self.assertIsNone(launcher.framed_chat())
+
+    def test_a_tmux_that_failed_is_not_read_even_though_it_printed(self):
+        """A `list-panes` that exited non-zero listed SOME panes at best — a server shutting
+        down answers for the sessions it has left — and a partial listing is not evidence
+        about which pane this process is. The rows here would prove the chat if the code
+        read them, which is the whole point: what decides is the return code."""
+        with mock.patch.object(tmuxctl, "run", return_value=subprocess.CompletedProcess(
+                [], 1, _row(53118), "server exiting")), \
+                mock.patch.object(launcher.os, "getpid", return_value=53118):
+            self.assertIsNone(launcher.framed_chat())
+
+    def test_an_unprovable_chat_is_repeated_back_escaped(self):
+        """`$CHARTER_SESSION_ID` is inherited from whatever started this process, so it is
+        the one value in this sentence charter did not mint — and this sentence goes
+        straight to a terminal."""
+        said: list[str] = []
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "alpha\r.1"}), \
+                mock.patch.object(launcher.util, "err", side_effect=said.append), \
+                mock.patch.object(launcher.os, "getpid", return_value=4707):
+            self.assertIsNone(launcher.framed_chat())
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("\\u000d", said[0])
+        self.assertNotIn("\r", said[0])
 
     def test_a_claimed_chat_that_cannot_be_proven_says_so_in_one_line(self):
         said: list[str] = []
@@ -374,6 +526,27 @@ class ThePaneCommandResolvesTheProfileByName(_AProfileAndAPlane, unittest.TestCa
         self.assertEqual(rc, launcher.REFUSED_EXIT)
         self.assertTrue(any("never a shell string" in s for s in said), said)
 
+    def test_each_refused_profile_answers_with_its_own_reason(self):
+        """Two refused profiles, two different reasons: a resolve that handed back the
+        first refusal it found would tell an operator to fix the wrong line of their own
+        file. The refusals are a LIST, and which entry answers is the question here."""
+        self.local.write_text('[harness.bad-command]\nkind = "claude"\n'
+                              'command = "claude -x"\n\n'
+                              '[harness.bad-kind]\nkind = "nosuchharness"\n'
+                              'command = ["claude"]\n')
+        self.assertIn("never a shell string", launcher.resolve("bad-command")[1])
+        self.assertIn("nosuchharness", launcher.resolve("bad-kind")[1])
+
+    def test_a_refused_name_is_looked_up_the_way_it_was_written_down(self):
+        """`profiles` records a refused name CONTAINED, because a refusal quotes it; so the
+        lookup here has to ask the same question the record answered. A name with a `\\r` in
+        it is refused for its shape — and it is exactly the name whose reason goes missing
+        if the two halves stop agreeing, which is the silent failure, not a loud one."""
+        self.local.write_text('[harness."a\\rb"]\nkind = "claude"\ncommand = ["claude"]\n')
+        p, why = launcher.resolve("a\rb")
+        self.assertIsNone(p)
+        self.assertIn("\\u000d", why)
+
     def test_the_frame_proof_runs_before_anything_is_printed(self):
         """Ruling 35: `framed_chat()` is the first thing this does — before claiming,
         before drawing, before any output. The name proof holds only while the pane has
@@ -442,11 +615,52 @@ class ARefusalInThePaneReachesTheOperator(_AProfileAndAPlane, unittest.TestCase)
                                                   rest=[]))
         self.assertEqual(state.launch("beta.1"), (0, ""))
 
+    def test_the_attended_pane_names_the_key_it_actually_waits_for(self):
+        """Enter, spelled out, because it is the key the line read below really waits for:
+        `_wait_for_the_operator` reads a LINE rather than a keystroke (a `tcsetattr` from a
+        pane left the launcher killed by a signal on a Linux runner, and the refusal went
+        with the window — the one thing ruling 42 exists to prevent). "Press any key" under
+        a line read is a pane that looks hung."""
+        said: list[str] = []
+        with mock.patch.object(launcher, "_wait_for_the_operator"), \
+                mock.patch.object(launcher.util, "err", side_effect=said.append):
+            launcher.cmd_frame_launch(SimpleNamespace(
+                profile="claude-work", attended=True, rest=[]))
+        self.assertIn("  press Enter to close this chat.", said)
+
     def test_a_pane_with_nobody_at_its_keyboard_does_not_stop_to_ask(self):
         """`_wait_for_the_operator` is what an attended refusal ends on, and a pane whose
-        stdin is not a terminal has nobody to press anything — so it must not block."""
-        with mock.patch("sys.stdin.isatty", return_value=False):
+        stdin is not a terminal has nobody to press anything — so it must not READ, which
+        is a stronger claim than "does not block": the suite's own stdin is `/dev/null`,
+        where a read returns at once and a missing guard looks exactly like a present one.
+        """
+        class _APipe:
+            def isatty(self) -> bool:
+                return False
+
+            def readline(self) -> str:
+                raise AssertionError("nobody is here to press anything")
+
+        with mock.patch("sys.stdin", _APipe()):
             launcher._wait_for_the_operator()
+
+    def test_a_pane_with_somebody_at_its_keyboard_waits_for_their_line(self):
+        """And the other direction, which is what keeps the guard above honest."""
+        class _ATerminal:
+            def __init__(self) -> None:
+                self.lines = 0
+
+            def isatty(self) -> bool:
+                return True
+
+            def readline(self) -> str:
+                self.lines += 1
+                return "\n"
+
+        stdin = _ATerminal()
+        with mock.patch("sys.stdin", stdin):
+            launcher._wait_for_the_operator()
+        self.assertEqual(stdin.lines, 1)
 
 
 class TheLauncherIsWhatTmuxStarts(_AProfileAndAPlane, unittest.TestCase):
