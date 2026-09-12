@@ -332,13 +332,29 @@ class AHandoffRefusesBeforeItChangesAnything(_AHandoffFromAlpha):
     def test_a_long_brief_is_printed_whole_rather_than_clipped_to_a_report_line(self):
         """`contain.one_line`'s budget is 160 characters, which is right for a report row
         and wrong for a command whose point is that it can be pasted and run. The escape is
-        asked for without that clip (`handoff._WIDEST_ESCAPE`)."""
+        asked for without that clip (`handoff._NO_CLIP`)."""
         brief = "Fix the widget\n" + "x" * 4000 + "\n"
         with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"}, clear=True):
             rc, _out, err = self._handoff("beta", brief=brief)
         self.assertEqual(rc, 1)
         self.assertIn("x" * 4000, err)
         self.assertNotIn("…", err)
+
+    def test_a_brief_made_of_escaped_characters_is_printed_whole_too(self):
+        """The half the case above cannot see: its 4,000 characters need no escaping, so it
+        is green under ANY per-character budget, right or wrong. The budget WAS wrong — 6,
+        for the `\\uXXXX` form — while `contain.one_line` formats with `:04x`, a minimum
+        width, so a codepoint outside the BMP renders as seven characters. U+E0001 is the
+        Unicode language tag, invisible by category and exactly that shape, and a thousand
+        of them clipped the pasted line to `…`: the failure the escaping exists to
+        prevent, reintroduced by the arithmetic meant to avoid it."""
+        brief = "Fix the widget\n" + "\U000e0001" * 1000 + "\n"
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"}, clear=True):
+            rc, _out, err = self._handoff("beta", brief=brief)
+        self.assertEqual(rc, 1)
+        self.assertEqual(err.count("\\ue0001"), 1000)
+        self.assertNotIn("…", err)
+        self.assertNotIn("\U000e0001", err)
 
     def test_a_harness_nothing_names_leaves_the_word_to_fill_in(self):
         """No `$CHARTER_HARNESS` and no `[harness] default`: charter prints the command with

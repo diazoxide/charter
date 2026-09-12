@@ -16,14 +16,25 @@ from __future__ import annotations
 
 import datetime
 import shlex
+import sys
 
 from . import contain
 
-#: The most characters one codepoint can become in `contain.one_line`'s escaping — the
-#: `\\uXXXX` form. Used to ask that function for the escape WITHOUT its report clip: the
-#: printed command is not a report line, it is a line whose whole point is that it can be
-#: pasted and run, and `DISPLAY_LIMIT` would cut a 12 KB brief off after 160 characters.
-_WIDEST_ESCAPE = 6
+#: What :func:`_shown` passes as `contain.one_line`'s *limit* to mean **do not clip**. That
+#: function's own budget is 160 characters, which is right for a report row and wrong for a
+#: line whose whole point is that it can be pasted and run: a 12 KB brief would arrive
+#: ending in `…`.
+#:
+#: **A ceiling rather than a width computed per character, because the width was wrong.**
+#: The first spelling multiplied the input by the widest escape it believed in — 6, for the
+#: `\\uXXXX` form. `one_line` formats with `:04x`, which is a MINIMUM width, so a codepoint
+#: outside the BMP renders as SEVEN characters: `\\ue0001` for the language tag, and the
+#: same for the musical format controls. At about a thousand of those the budget
+#: under-shot, the helper clipped, and the pasted line ended in `…` — the exact failure
+#: this exists to prevent. Counting to seven instead would be the same mistake with a
+#: better number: it is a claim about which categories Unicode has assigned where, and
+#: `contain._INVISIBLE`'s own docstring is about why charter does not make those.
+_NO_CLIP = sys.maxsize
 
 #: The first line of every handoff's first message. Facts charter can observe and no
 #: instruction: where it came from, which workspace that was, and when. The new chat — and
@@ -217,5 +228,8 @@ def _shown(command: str) -> str:
     rather than as the character, so the chat that command opens is sent `\\x1b` as four
     characters. That is the right way round — a brief has nothing to say in ESC — and the
     operator can see on screen exactly what the command would send.
+
+    The escape is asked for without `one_line`'s report clip (:data:`_NO_CLIP`), because a
+    command cut off after 160 characters is not a command.
     """
-    return contain.one_line(command, limit=len(command) * _WIDEST_ESCAPE)
+    return contain.one_line(command, limit=_NO_CLIP)
