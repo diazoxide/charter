@@ -3242,9 +3242,48 @@ SECONDS_A_MUTATION_FIXED = 25
 SECONDS_A_SUITE_RUN = 960
 
 #: The most jobs one pull request may fan out to. Not a limit on what gets swept — every
-#: mutation is still dealt to a shard past this point, they just get more each — but a
-#: limit on how much of the runner pool one branch may hold at once.
-MAX_SHARDS = 8
+#: mutation is still dealt to a shard past this point, they just get more each.
+#:
+#: **It was eight, and what made eight the number has stopped being true.** That figure was
+#: written down as "a limit on how much of the runner pool one branch may hold at once",
+#: which prices a shard in runner-minutes and rations them. This repository is public, so
+#: GitHub bills nothing for standard runners: minutes were never the scarce thing here. The
+#: two things that are scarce are the wall clock a reviewer waits out on a pull request, and
+#: :data:`SHARD_TIMEOUT` — the hard hour past which a machine is cancelled, which is what
+#: turns a plan that is merely large into an answer that arrives PARTIAL.
+#:
+#: **The arithmetic, said out loud, because doubling the machines does not halve the wait.**
+#: :data:`SHARD_FIXED` is twelve minutes paid *per shard*, not per plan: the checkout, the
+#: selection map and the unmutated baseline are bought again by every machine that joins,
+#: and the sixteenth buys them too. Only the mutation half of a hand divides. So the biggest
+#: plan eight shards fit — eight full hands, 8 × :func:`per_shard_seconds` — costs
+#: 12 + 28 = 40 minutes on each of eight, and the very same plan on sixteen costs
+#: 12 + 14 = **26**. A third off the clock, not a half, and the fixed cost is why. Every
+#: further doubling buys less than the one before it, which is one of the two reasons the
+#: number below is sixteen and not thirty-two; the concurrency ceiling is the other.
+#:
+#: What it buys outright is the ceiling, and that is the half worth having: 16 × 1,680 s of
+#: predicted test time fits where 8 × 1,680 s did, so a diff that used to be told to expect
+#: a partial answer now gets a whole one. :func:`over_budget` still says so past even this.
+#:
+#: **Measured on a real plan and not on an example.** PR #981: 151 mutations, 203 minutes of
+#: predicted test time. At eight there was no fitting count at all — the heaviest of eight
+#: hands was 2,207 s against the 1,680 s a shard is sized for, `over_budget` said PARTIAL out
+#: loud before a runner was spent, and the run bore it out — 47 minutes on the slowest shard
+#: and a verdict of `no verdict: 2 not measured`. At sixteen the same plan sizes to
+#: **fourteen** shards with a heaviest hand of 1,597 s, inside the budget. Fourteen and not
+#: sixteen because :func:`shards_for` asks for the FEWEST that fit: raising this ceiling does
+#: not spend it. The answer goes from partial to complete, which is worth more than the ten
+#: minutes that come with it.
+#:
+#: **Two ceilings it must not be raised past without measuring again.** A job matrix may
+#: generate 256 jobs per run, which is not close. The binding one is account-wide: GitHub
+#: Free allows 20 concurrent jobs on standard runners, so sixteen shards plus `test.yml`'s
+#: four-version matrix is exactly 20 — and that fits only because `test.yml`'s `push:` is
+#: scoped to `main`, so a pull request runs that matrix once instead of twice. Past sixteen
+#: the shards start queueing on each other, which buys nothing and reports as a slow run
+#: rather than as a limit anybody can see.
+MAX_SHARDS = 16
 
 
 def per_shard_seconds() -> int:
@@ -3415,10 +3454,17 @@ def over_budget(costs: list[float]) -> str:
     **What it says the ceiling IS changed with #915.** It used to be a count — 224
     mutations, eight shards of twenty-eight — and a count is exactly the thing that could
     not see #914 coming: 22 mutations, comfortably inside 224, and five of them measured.
-    The ceiling is now the heaviest of the eight hands this plan would produce, in seconds
-    — the number that actually decides whether the answer arrives. Seconds and not minutes,
-    because #914 is 1707 against 1680 and rounding those to minutes prints "28 of 28",
-    which is a warning that reads like a fit.
+    The ceiling is now the heaviest of the :data:`MAX_SHARDS` hands this plan would
+    produce, in seconds — the number that actually decides whether the answer arrives.
+    Seconds and not minutes, because #914 is 1707 against 1680 and rounding those to
+    minutes prints "28 of 28", which is a warning that reads like a fit.
+
+    **Where the ceiling sits is a number this function reads and never one it argues.**
+    `MAX_SHARDS` went from eight to sixteen, so the diff that trips this is now about twice
+    the diff that used to — and the sentence below did not have to change a word, because
+    it was written against the constant rather than against 224. What did not move is what
+    happens past it: nothing is dropped, every mutation is still dealt, and a shard that
+    cannot finish reports what it measured.
     """
     heaviest = heaviest_hand(costs, MAX_SHARDS)
     if heaviest <= per_shard_seconds():

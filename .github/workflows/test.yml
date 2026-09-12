@@ -1,6 +1,27 @@
 name: tests
 on:
+  # **`main` only, and the branch filter is the whole of it.** An unfiltered `push:` beside
+  # `pull_request:` runs this matrix twice on every pull request — once on the head sha,
+  # once on the merge commit. `sweep.yml`'s header waved that through since 0.54.0 as "four
+  # cheap jobs, twice, is affordable", and cheap was true in the currency it was counting:
+  # this repository is public, so GitHub bills nothing for standard runners. It is not the
+  # currency being spent. What a duplicate matrix costs is the wall clock somebody waits
+  # out before merging, and there it costs full price — eight jobs queueing where four
+  # would do, against an account-wide ceiling of 20 concurrent jobs.
+  #
+  # The two runs were never two answers either. `pull_request` tests the merge commit —
+  # the tree that will land — and the push run tests the head sha, the same code without
+  # main's latest. Branch protection requires `test (3.11)` … `test (3.14)`, and those are
+  # satisfied by the merge-commit run; the push run was four jobs nobody read.
+  #
+  # Scoped rather than deleted, because two things need a push to main to exist:
+  # `dev-install` below runs on exactly that ref, and a merge should still say whether
+  # main itself is green instead of inheriting a tick from the pull request it came from.
+  # `tests/test_workflows.py` pins this trigger set and checks the branch named here
+  # against the ref `dev-install` waits for, so narrowing it further fails loudly rather
+  # than stranding that job.
   push:
+    branches: ["main"]
   pull_request:
   workflow_dispatch:      # lets CI be re-triggered without a noise commit
 
@@ -13,8 +34,9 @@ permissions:
 
 # Every `uses:` is pinned to a full commit SHA with its tag in a trailing comment, for the
 # reason `release.yml`'s header gives at length. It applies here too and for the same
-# reason: this workflow runs on every push and pull request, so a moved tag executes here
-# first and on the widest trigger — with a token that is read-only, which bounds the damage
+# reason: this workflow runs on every pull request and on every push to main, which is
+# still the widest trigger in this repository, so a moved tag executes here first — with a
+# token that is read-only, which bounds the damage
 # without removing it. Dependabot moves these (`.github/dependabot.yml`);
 # `tests/test_workflows.py` reads these files as YAML and refuses any ref written here that
 # is not a full commit SHA, an image digest, or a file tracked in this repository — a
@@ -40,6 +62,13 @@ jobs:
     # Push to main only. On a pull request the branch does not exist under that name yet,
     # so the install below would be testing whatever main already says — a green tick for
     # code this run never saw.
+    #
+    # **Still load-bearing now that `push:` above is itself scoped to main**, and not
+    # redundant with it: `workflow_dispatch` also runs from main and carries the same
+    # `github.ref`, so the `event_name` half is what keeps a manual re-run of the matrix
+    # from installing out of a branch nobody pushed. `tests/test_workflows.py` checks this
+    # condition against the branches the trigger names, because a job that quietly stops
+    # running is worse than one that fails.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # This job is the whole value of "publish on every commit", without publishing
