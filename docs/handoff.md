@@ -22,7 +22,11 @@ a brief you read and approved.
 3. **A new chat in another workspace**, existing or new.
 
 2 and 3 are one mechanism — a **handoff** — because a chat belongs to its workspace for life.
-The only thing that differs is the workspace.
+The only thing that differs is the workspace. A **chat**, a **handoff** and a **brief** are
+defined in [CONTEXT.md](../CONTEXT.md)'s *Chats* section, each with the words charter stops
+using for it — every one of them implies a child that reports back, and a handed-off chat is
+nobody's child: it has its own workspace, its own todos and no way to answer the chat that
+opened it.
 
 **Sub-agent or chat: who reads the result?** If this chat needs the answer to continue, it is a
 sub-agent. If you will read it and talk to it, it is a chat. There is no report-back channel
@@ -68,9 +72,11 @@ BRIEF
    be exactly what you approved.
 
    **"The same work" is asked over the first lines, and only where the words can answer it.**
-   Every handoff todo ends in the same nine-word provenance sentence, so over the whole text
-   that boilerplate reads as agreement — `Fix the widget` and `Ship the release`, which share no
-   word at all, scored 0.750 and the second was dropped. Over first lines they score 0.000. But
+   Every handoff todo ends in the same provenance sentence — eight words the comparison can
+   see, plus the source chat and workspace, which two handoffs out of one chat also share — so
+   over the whole text that boilerplate reads as agreement: `Fix the widget` and `Ship the
+   release`, which share no word at all, scored 0.750 and the second was dropped. Over first
+   lines they score 0.000. But
    an overlap can also be too thin to mean anything: word comparison keeps only words longer
    than three characters, so `fix the bug` has no comparable word at all and two of them agree
    on nothing, while one shared word out of two is 0.5 exactly and `Fix the widget` swallowed
@@ -333,6 +339,11 @@ rules that one "isn't a security boundary around the program", and 2.1.268 ran `
 'handoff'`, `python3 -m charter handoff` and a path to charter with no prompt at all. So the ask
 rule is not the boundary — it is the prompt for the exact spelling, and charter's own hook
 refuses the spellings it can recognise that the rule was measured not to match.
+
+Why the gate is the host's prompt rather than a charter-side ask, a quiz or a `--brief-file`,
+and what each of those decisions cost, is
+[ADR 0021](adr/0021-a-handoffs-consent-is-the-harness-prompt.md). This page is what happens;
+that one is why it is shaped this way and what to read before changing it.
 
 ## The prompt is the consent
 

@@ -78,6 +78,29 @@ and one with nothing to adopt is one line. Staged as `unreleased-<slug>.md` unti
 stamps it, so an entry never names a version that was not true.
 _Avoid_: changelog, release notes, announcement
 
+### Chats
+
+**Chat**:
+A frame tab: one harness conversation, in one workspace, for life. Its id
+(`<workspace>.<n>`) is allocated and never parsed for meaning, and its workspace is written
+by the launch that made it — so a chat cannot be moved to another workspace, only opened in
+one.
+_Avoid_: session, spawn, sub-session
+
+**Handoff**:
+Opening a chat, here or in another workspace, whose first message is a brief the operator
+approved at the harness's own permission prompt (ADR 0021). A handed-off chat never reports
+back to the chat that opened it: a caller that needs the answer wanted a sub-agent, which
+charter neither gates nor converts.
+_Avoid_: spawn, delegation, sub-session
+
+**Brief**:
+The self-contained message a handoff carries — the only context the new chat starts with.
+It travels as one command-line argument, so any process that can list processes can read it
+while the harness starts and it never carries a secret; charter keeps it in the chat's
+private state under `.charter/` and never in a committed file.
+_Avoid_: prompt, context, instructions
+
 ### Parallel work
 
 **Plan**:

@@ -449,6 +449,18 @@ rule while one who reads a bare refusal files an issue.
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
+- **A hand-written state file.** A `Write` or `Edit` whose path resolves inside charter's
+  state directory (`.charter/`, or `$CHARTER_HOME`): the vault files, the vault registry, the
+  active-persona pointer, the per-session pointers, the tool-gate's session ceiling. Three of
+  those decide what the persona tool-gate auto-approves, so a write there is a session
+  widening its own permissions — and asking the agent to approve that is no guard, which is
+  why this one denies where the routing nudge beside it only asks. Resolved with `realpath`,
+  so a symlink planted into the directory answers the same as naming it. The refusal names the
+  command that owns the file — `charter persona use`, `charter vault add`,
+  `charter secret set`. A persona's own `persona.md` is deliberately **not** covered: editing a
+  charter on request is ordinary work, and what made it dangerous was the tool-gate re-reading
+  it mid-session, which the session ceiling fixes at the reading end. Gated on a control plane.
+
 One more path is not a guard but an allowance: a program the **active persona** declares in
 `tools:` runs without a prompt while that persona is active, and only then. It approves the
 **program**, so every argument rides along — which is why seven things are not smoothed
@@ -636,7 +648,7 @@ the harness's tools — they govern what an agent does with your authority insid
 Your own shell is on the other side of that boundary and always was. Open a terminal and run
 it. Nothing is being worked around: the rule never applied to you.
 
-Five guards name a narrower move first, and it is usually the one you want:
+Six guards name a narrower move first, and it is usually the one you want:
 
 - **Forge body substitution** — `--body-file <path>`, or `--body-file -` with a quoted
   heredoc. This one is rarely wrong about the shape and often wrong about the intent: the
@@ -649,6 +661,13 @@ Five guards name a narrower move first, and it is usually the one you want:
   transport, which is what most denials of it are actually asking for.
 - **Plane-root history wipe** — `charter save`. The guard is measuring commits that exist
   nowhere else; push them and it stops firing, on that command and every other one.
+- **A handoff the prompt cannot stand in front of** — spell it `charter handoff <workspace>
+  <<'BRIEF'`, from the chat the operator is talking to, attended. Three of its four refusals
+  have that as the fix, and the fourth (a sub-agent's call) is answered by returning what the
+  sub-agent found to the parent chat, which can propose the handoff itself. Your own terminal
+  is the override here too, and it does something different: outside a frame `charter handoff`
+  prints the `charter <harness> --workspace <ws> …` line to run rather than opening a chat
+  ([handoff.md](handoff.md)).
 
 **If a guard is wrong about you *every time*, that is not an override problem.** It means
 charter is holding a policy your organisation does not — an org that mandates signed

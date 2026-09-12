@@ -26,9 +26,9 @@ the agent — and there is deliberately no switch charter can read. That is not 
 **Appended in `_deny`, not at the call sites**, which is the assertion with the most
 value here: the next guard added carries the override without anyone remembering to,
 and the trace tally keys — computed from the reason BEFORE it reaches `_deny` — cannot drift.
-That is not a hypothetical any more: #710 and #778 each added a guard without a row in
-`DENIALS` below, and each carried the note regardless. The rows were added afterwards, so
-the enumeration says what it claims to.
+That is not a hypothetical any more: #710, #778, the state-write guard and the chat handoff's
+own A7 each arrived without a row in `DENIALS` below, and each carried the note regardless.
+The rows were added afterwards, so the enumeration says what it claims to.
 """
 
 from __future__ import annotations
@@ -70,6 +70,19 @@ DENIALS = {
     "charter-substitution": (hooks.pretooluse,
                              {"tool_input": {"command":
                                              'charter persona remember "a `id -un` span"'}}),
+    # The handoff guard (A7), added by the chat handoff and enumerated here for the third
+    # time this docstring's story has repeated: it carried the note from `_deny` on the day
+    # it landed, and the row is what makes the enumeration say what it claims to. The
+    # spelling refusal is the cheapest of its four to reach — no `agent_id`, no mode, no
+    # stdin to arrange.
+    "handoff": (hooks.pretooluse,
+                {"tool_input": {"command": "python3 -m charter handoff beta"}}),
+    # The state-write guard, which denies on `Write`/`Edit` rather than on Bash and was
+    # missing here for the same reason the two above were: a row is remembered separately
+    # from the guard, and remembering is what fails.
+    "state-write": (hooks.pretooluse_edit,
+                    {"tool_name": "Write",
+                     "tool_input": {"file_path": ".charter/persona"}}),
 }
 
 
@@ -124,9 +137,9 @@ class DenialCase(InAControlPlane):
 
 
 class TestEveryDenialNamesTheOverride(DenialCase):
-    def test_all_eight_of_them(self):
-        """The precondition is the count: eight guards deny, and all eight must say it."""
-        self.assertEqual(8, len(DENIALS))
+    def test_all_ten_of_them(self):
+        """The precondition is the count: ten guards deny, and all ten must say it."""
+        self.assertEqual(10, len(DENIALS))
         for name in DENIALS:
             with self.subTest(guard=name):
                 self.assertIn(hooks._OVERRIDE_NOTE, self.reason(name))

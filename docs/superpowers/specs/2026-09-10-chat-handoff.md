@@ -92,7 +92,7 @@ BRIEF
 | a brief shaped like a credential — name the kind, never the value (the brief is world-readable argv while the harness starts) | the command (_ruling_) |
 | outside a frame, or inside the operator's own tmux | the command — prints the exact command to run in a new terminal |
 | unattended (`permission_mode: bypassPermissions`) | the PreToolUse guard |
-| called from a sub-agent (the payload carries `agent_id`) — Claude Code; Codex once measured | the PreToolUse guard |
+| called from a sub-agent (the payload carries `agent_id`) — Claude Code, and Codex once measured, which Task 4 did | the PreToolUse guard |
 | any spelling other than `charter handoff …`, e.g. `python3 -m charter handoff` — the host rule would not match it | the PreToolUse guard (_ruling_) |
 | a stdin that is not one quoted heredoc in the same call — the prompt would not show the text | the PreToolUse guard (_ruling_) |
 
@@ -202,8 +202,11 @@ So:
 - No "wants you" mark for a chat that stopped at a prompt after you visited it, and no
   per-client arrived mark — both are the next §4g slice.
 - The sub-agent and unattended refusals read the harness's hook payload. Claude Code carries
-  both; Codex's `agent_id` is unmeasured; where a harness does not expose them, `doctor` names
-  the gap rather than charter pretending to enforce it.
+  both; Codex's `agent_id` was unmeasured when this was agreed and **was measured in Task 4**
+  (codex-cli 0.147.0: none in the main conversation under any approval setting tried, one on a
+  sub-agent's Bash call), so the sub-agent refusal is in force there too. Where a harness does
+  not expose them — opencode, whose plugin payload carries neither — `doctor` names the gap
+  rather than charter pretending to enforce it.
 - An opencode chat that reopens empty is not shown its brief.
 - The brief reaches the harness as a command-line argument (`claude "<brief>"`,
   `codex "<brief>"`, `opencode --prompt "<brief>"`), so any process on this machine that can

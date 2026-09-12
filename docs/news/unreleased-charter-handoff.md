@@ -35,8 +35,9 @@ charter handoff <workspace> [--create --vision "<vision>"] [--persona <name>] <<
 BRIEF
 ```
 
-The brief becomes the new chat's first message. Your harness asks before the command runs — the
-`ask` rule the previous entry is about — and the prompt shows the exact text that will be sent.
+The brief becomes the new chat's first message. Your harness asks before the command runs —
+the `Bash(charter handoff *)` ask rule that `charter init` writes and `charter guard handoff`
+adds to a plane that already exists — and the prompt shows the exact text that will be sent.
 
 ## What one does
 
@@ -136,5 +137,18 @@ shown nothing: the brief is already the first message of its transcript.
   SessionStart hook at all. `charter doctor` names that gap.
 - **The arrived mark is per plane, not per terminal**, and there is no "wants you" mark yet
   for a chat that stopped at a prompt after you visited it. Both are the next slice.
+
+## The words, and why the consent is shaped this way
+
+Three terms are in `CONTEXT.md` now — **chat**, **handoff**, **brief** — with the words
+charter stops using for them, because "spawn" and "sub-session" both imply a child that
+reports back, and a handed-off chat is neither. The dispatch counter that used "handoff" to
+mean a sub-agent dispatch is `dispatch.routed_since_first_advice`; `charter persona stats`
+prints the same line it always did.
+
+`docs/adr/0021-a-handoffs-consent-is-the-harness-prompt.md` records why the gate is your
+harness's own prompt rather than a charter-side confirmation, a hook `ask` or a model quiz —
+and what each decision cost, including the spelling `CONTRIBUTING.md` uses being refused and
+the harnesses where nothing prompts at all.
 
 `charter docs show handoff` has the whole of it, including how the consent was measured.
