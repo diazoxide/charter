@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: `charter handoff` opens a chat in any workspace, already working on the brief you approved — and a work-shaped prompt is told where it could run
+headline: A chat hands work to a new chat in any workspace — told where it could run, gated by your yes, opened on the brief you approved, and marked on the strip until you look
 ---
 
 You are in a chat about one thing and you ask for another. Until now that ended one of three
@@ -8,6 +8,26 @@ ways: the model did it here, so one workspace's todos, memory and branch carried
 handed the work to a sub-agent, and the answer you wanted to talk to came back as a paragraph
 and was gone; or it told you to open a chat yourself, and you retyped the context it already
 had.
+
+## How a chat finds out it can
+
+On every work-shaped prompt, charter's prompt block now leads with **Where this could run**:
+the three placements (a sub-agent, a new chat here, a new chat in another workspace), the two
+tests that pick one, and this workspace's vision quoted from `workspace.md` as data. It no
+longer waits for the acting persona to declare `routing:` — the persona roster it embeds still
+does, because "who else exists" is a different question. It names no placement and no other
+workspace; the model matches the ask against the visions `charter workspace list` shows, which
+is why that listing grew a `VISION` column: the first line of each workspace's vision, as the
+trailing field, untruncated.
+
+On an unattended run the block says instead that `charter handoff` is refused there and names
+`charter ws todo --workspace`.
+
+**`charter:handoff`** ships as a skill: apply the two tests, find the workspace, write the brief
+from a template (goal, what is known with paths, done when, constraints, the claim-a-piece line),
+show it **in full** in a quiz, and run the command only on a yes.
+
+## The command it runs
 
 ```bash
 charter handoff <workspace> [--create --vision "<vision>"] [--persona <name>] <<'BRIEF'
@@ -42,8 +62,11 @@ The brief becomes the new chat's first message. Your harness asks before the com
 7. Tallies `{"event": "handoff", "ts", "placement", "created"}` — no workspace name, no persona,
    no text — and clears `routing: require`'s pending mark, because opening a chat in a workspace
    *is* routing.
-8. **Points at it.** See below.
+8. **Points at it** — the strip, and the attention row of the chat that asked. Below.
 9. Prints the chat and the workspace.
+
+The stamp is `⟨handoff from chat <chat> · workspace <ws> · <YYYY-MM-DD HH:MM>⟩`: facts charter
+can observe and no instruction, so the new chat can tell the message was not typed there.
 
 ## The strip says where it landed
 
@@ -74,9 +97,6 @@ goes.
 
 A handoff that did not open a chat moves no tab, marks nothing and says nothing.
 
-The stamp is `⟨handoff from chat <chat> · workspace <ws> · <YYYY-MM-DD HH:MM>⟩`: facts charter
-can observe and no instruction, so the new chat can tell the message was not typed there.
-
 ## It refuses before it changes anything
 
 Nothing is created, recorded or opened until every refusal has been asked: a name that cannot be
@@ -91,24 +111,6 @@ read while it starts.
 `charter <harness> --workspace <ws> …` command to run in a new terminal instead of stopping —
 with the workspace creation in front of it when you asked for one, `CHARTER_PERSONA=` when you
 named a persona, and every word quoted.
-
-## How a chat finds out it can
-
-On every work-shaped prompt, charter's prompt block now leads with **Where this could run**:
-the three placements (a sub-agent, a new chat here, a new chat in another workspace), the two
-tests that pick one, and this workspace's vision quoted from `workspace.md` as data. It no
-longer waits for the acting persona to declare `routing:` — the persona roster it embeds still
-does, because "who else exists" is a different question. It names no placement and no other
-workspace; the model matches the ask against the visions `charter workspace list` shows, which
-is why that listing grew a `VISION` column: the first line of each workspace's vision, as the
-trailing field, untruncated.
-
-On an unattended run the block says instead that `charter handoff` is refused there and names
-`charter ws todo --workspace`.
-
-**`charter:handoff`** ships as a skill: apply the two tests, find the workspace, write the brief
-from a template (goal, what is known with paths, done when, constraints, the claim-a-piece line),
-show it **in full** in a quiz, and run the command only on a yes.
 
 ## A chat that comes back empty is shown its brief
 
