@@ -167,6 +167,17 @@ class CodexHarness(Harness):
                 "`.codex/skills/` IS read; that is a skills surface, not config — charter "
                 "mirrors the plane's copy of it into a workspace's checkouts, which "
                 "carries capability there and still cannot make two workspaces differ."),
+        # No prompt, because Codex has no command-pattern permissions to put one in. What
+        # charter's hook can still read is the payload, measured on codex-cli 0.147.0 against
+        # a stand-in model server: no `agent_id` in the main conversation under any approval
+        # setting tried, one on a sub-agent's Bash call (`--enable multi_agent_v2`), and
+        # `permission_mode: bypassPermissions` from `codex exec` under every approval setting
+        # tried except the `--approve-for-me` flag, which sends `default`.
+        Deficit("handoff-gate",
+                "no command-pattern permissions, so no prompt stands in front of "
+                "`charter handoff`: charter's hook still refuses one from a sub-agent "
+                "(`agent_id`) or from a run that reports `permission_mode: "
+                "bypassPermissions`, and any other handoff runs without asking."),
     )
 
     #: Charter declares NO :class:`LayerPart` for Codex, so there is nothing for `doctor`'s

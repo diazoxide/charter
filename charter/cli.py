@@ -323,6 +323,12 @@ def build_parser() -> argparse.ArgumentParser:
                                     "unless it already names a tool.")
     ga.add_argument("--local", action="store_true", help="Write this machine's own file (`.claude/settings.local.json`, gitignored) instead of the plane's committed settings — the rule is yours alone.")
     ga.set_defaults(func=commands.cmd_guard_ask)
+    # `guard ask 'charter handoff *'` with the pattern fixed, because a news entry's `adopt:`
+    # line cannot carry the quotes that pattern needs (`news._tokens`).
+    gh = gsub.add_parser("handoff",
+                         help="Always prompt before `charter handoff` runs — the rule "
+                              "`charter init` writes on a new plane.")
+    gh.set_defaults(func=commands.cmd_guard_handoff)
     gl = gsub.add_parser("list", help="Show this plane's force-prompt rules.")
     gl.set_defaults(func=commands.cmd_guard_list)
 

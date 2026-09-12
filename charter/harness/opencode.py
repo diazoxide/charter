@@ -713,6 +713,17 @@ class OpenCodeHarness(Harness):
                 "not a repository root — every workspace under the plane resolves to the "
                 "plane's own root, so charter's layer is already live in all of them and "
                 "cannot be made to DIFFER between two."),
+        # The generated plugin builds the tool payload itself (`tool.execute.before`), from
+        # `sessionID`, the directory, the tool and its args — nothing that says who is asking
+        # or whether anybody is watching. So the hook's sub-agent and unattended refusals have
+        # nothing to read here, and opencode's own `ask` rule is all that stands in front of a
+        # handoff. Named, because a refusal that cannot fire looks exactly like one that did not
+        # need to.
+        Deficit("handoff-gate",
+                "a `charter handoff` from a sub-agent or an unattended run is not refused "
+                "here: the tool payload charter's plugin builds carries `session_id` and "
+                "neither `permission_mode` nor `agent_id`, so the ask rule in `opencode.json` "
+                "is the whole gate."),
     )
 
     #: Charter declares NO :class:`LayerPart` for opencode, so there is nothing for

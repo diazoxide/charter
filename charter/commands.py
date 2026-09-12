@@ -1312,6 +1312,13 @@ def _as_rule(pattern: str) -> str:
     return f"Bash({p})"
 
 
+#: The command a handoff's consent rule names (chat handoff). Spelled once, so `init` writes
+#: and `doctor` asks about the same rule. `_as_rule` makes it `Bash(charter handoff *)` — the
+#: rule measured on Claude Code 2.1.268 to ask before `charter handoff …`, a heredoc body
+#: included, in manual, acceptEdits, auto and bypassPermissions alike.
+HANDOFF_ASK_PATTERN = "charter handoff *"
+
+
 #: The one status in a `guard` result that no harness returns — charter's own word for a
 #: file that PASSED the check and then would not take the write. `Harness.apply_ask_rule`
 #: owns the other four; this one is produced by `_guard_apply` from an `OSError`, because
@@ -1631,8 +1638,14 @@ def add_permission_rule(root: Path, rule: str, bucket: str, local: bool = False,
     if dry_run:
         return "added", str(path)
     entries.append(rule)
+    # Through `_json_style`, like the file's other writers. `init` reaches this function now
+    # (the handoff's consent rule), and a plane whose settings are one compact line or
+    # indented by four would otherwise be re-dumped at two the moment `init` adds one rule —
+    # `TestSettingsFormattingPreserved` is the pin.
+    raw = path.read_text() if path.exists() else ""
+    indent, separators = _json_style(raw) if raw else ("  ", (",", ": "))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2) + "\n")
+    path.write_text(json.dumps(settings, indent=indent, separators=separators) + "\n")
     return "added", str(path)
 
 
@@ -1909,9 +1922,12 @@ def cmd_guard_ask(args) -> int:
     still prompts even when the hook returned `allow` or `ask`"*.
 
     `_ensure_guard_hook`'s docstring says settings.json holds keys "charter has no business
-    touching (``permissions``, …)". That still holds for `init`, which writes unasked. This
-    is the opposite: the operator named the rule and the command that writes it, so charter
-    is the editor rather than the author.
+    touching (``permissions``, …)". `init` kept to that until the chat handoff: it now writes
+    exactly one entry there, the `ask` rule for `charter handoff *` (:func:`ensure_handoff_gate`),
+    because a handoff's brief runs with the operator's authority and that rule is the prompt
+    that asks first. Every other rule is still the operator's to name, and this command is
+    where they name it — the operator named the rule and the command that writes it, so
+    charter is the editor rather than the author.
     """
     pattern = (getattr(args, "pattern", "") or "").strip()
     local = bool(getattr(args, "local", False))
@@ -1962,6 +1978,39 @@ def cmd_guard_ask(args) -> int:
     _say_where_it_cannot_reach(results)
     _say_if_uneven(wrote, rc == 1)
     return rc
+
+
+def ensure_handoff_gate(root: Path) -> tuple[list[tuple], bool]:
+    """Give every harness that can hold one the `ask` rule for `charter handoff *`.
+
+    `charter guard ask 'charter handoff *'` with the pattern fixed, and nothing more: the
+    same `_guard_apply` transaction, so `init` writes the rule exactly as the operator's
+    command would, blocks on the same malformed file, and cannot come to disagree with it
+    about what "present" means (ADR 0014: no second list).
+
+    **Written by `init` and by nothing that runs again.** A plane `init` did not make adopts
+    the rule through its news entry's `adopt:` line; `charter update` does not write it,
+    because removing the rule is the operator's choice, and a writer that ran on every
+    update would take that choice away. `doctor`'s `handoff gate` row names it missing.
+    """
+    return _guard_apply("apply_ask_rule", root, HANDOFF_ASK_PATTERN, local=False)
+
+
+def cmd_guard_handoff(args) -> int:
+    """`charter guard handoff` — `charter guard ask 'charter handoff *'`, with nothing to type.
+
+    It exists for one caller: the news entry that offers the rule to a plane `init` did not
+    make. An `adopt:` line is never a shell string — `news._tokens` refuses the quote
+    characters a pattern with spaces needs and splits the rest on whitespace — so the long
+    spelling cannot be an action charter runs, and a rule the update walk cannot offer is a
+    rule an existing plane never gets.
+
+    Delegates rather than repeats: the output, the exit codes and the all-or-nothing write are
+    `cmd_guard_ask`'s, so the two spellings cannot drift apart.
+    """
+    from types import SimpleNamespace
+
+    return cmd_guard_ask(SimpleNamespace(pattern=HANDOFF_ASK_PATTERN, local=False))
 
 
 #: The buckets `charter guard` writes, in the host's own evaluation order.
@@ -2536,6 +2585,26 @@ def cmd_init(args) -> int:
             unvouched.append(label)
         else:
             (created if status == "created" else present).append(label)
+
+    # The consent rule for `charter handoff` — the one entry `init` writes into `permissions`,
+    # because a handoff's brief becomes a new chat's first message and runs with the
+    # operator's authority, and this rule is the prompt that asks first. It changes no exit
+    # status: a `.claude/settings.json` that cannot be parsed already fails `init` below, at
+    # `_ensure_guard_hook`. Labelled by the file's path under the plane so it folds into the
+    # one line `init` prints per file (`_fold_entries`).
+    gate, gate_blocked = ensure_handoff_gate(root)
+    if gate_blocked:
+        bad = ", ".join(detail for _h, status, detail in gate if status == "malformed")
+        util.warn(f"the ask rule for `charter handoff` was not written anywhere — {bad} is not "
+                  f"valid, and `charter guard` writes every harness or none. Fix it, then: "
+                  f"charter guard ask 'charter handoff *'")
+    for h, status, detail in ([] if gate_blocked else gate):
+        if status == "added":
+            created.append(f"{Path(detail).relative_to(root)} (ask: charter handoff)")
+        elif status == "present":
+            present.append(f"{Path(detail).relative_to(root)} (ask: charter handoff)")
+        elif status == _UNWRITABLE:
+            _say_write_failed(h.name, detail)
 
     # BEFORE `_ensure_guard_hook`, and the order is load-bearing rather than tidy.
     #

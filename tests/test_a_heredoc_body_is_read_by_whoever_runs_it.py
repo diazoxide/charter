@@ -291,12 +291,23 @@ class ThePlanCarriesBashsOwnDelimiter(PlaneIso):
             with self.subTest(spelling=spell):
                 self.assertEqual(denied, _deny(cmd, str(self.tmp)), cmd)
 
-    def test_a_backslash_delimiter_has_no_entry_to_carry(self):
-        """`<<\\EOF` is not matched by the pre-pass's header regex at all, so there is no
-        entry — the bash-accurate fact is still one `_heredoc_header` call away, and nothing
-        is stripped, which is why the verdict above is a denial."""
+    def test_a_backslash_delimiter_gets_an_entry_that_is_still_never_stripped(self):
+        """`<<\\EOF` used to be invisible to the pre-pass's header regex, which made every plan
+        on its line unknown — the lexer counted a heredoc the regex did not — and let the body
+        be read as top-level commands (handoff gate, review round 4, finding 1). The regex now
+        matches it, so the counts agree and the line can be attributed.
+
+        Its body is still NOT stripped. Bash reads a backslash-quoted delimiter as literal, so
+        dropping it would be defensible, but `quoted` here deliberately stays keyed on the QUOTE
+        group: keeping a body only ever shows the guard more text, and #974's measured verdicts
+        for this spelling are preserved exactly (the row above still denies).
+        """
         header = "cat <<\\EOF"
-        self.assertEqual([], hooks._heredoc_strip_plan(header))
+        plan = hooks._heredoc_strip_plan(header)
+        self.assertEqual(1, len(plan), "the regex and the lexer now agree on the count")
+        self.assertEqual("EOF", plan[0][0], "the delimiter the pre-pass matches on")
+        self.assertIs(False, plan[0][1], "never stripped")
+        self.assertEqual("EOF", plan[0][2][0], "and bash's own reading is carried")
         self.assertEqual("EOF", hooks._heredoc_header(header, header.index("<<"))[0])
 
 
