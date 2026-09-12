@@ -256,13 +256,24 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
         with spawns([], listing(entry(scope="user", enabled=True))):
             self.assertEqual(wiring.detect(self.p, cwd=self.here).state, wiring.WIRED)
 
+    def probe_in(self, said: str) -> str:
+        """What `CANNOT_TELL` printed after `check by hand:` — the probe, and not the detail.
+
+        Asked apart from the sentence because the detail names the same command: an
+        assertion against the whole refusal passes while `{probe}` says something else
+        entirely, which is how a sentence that ends "check by hand:" and then names the wrong
+        file gets shipped.
+        """
+        self.assertIn("check by hand: ", said)
+        return said.split("check by hand: ", 1)[1]
+
     def test_an_unreadable_list_is_unknown_and_refuses(self):
         with spawns([], "", rc=1):
             w = wiring.detect(self.p, cwd=self.here)
             self.assertEqual(w.state, wiring.UNKNOWN_STATE)
             said = wiring.refusal(self.p, cwd=self.here)
         self.assertIn("could not ask", said)
-        self.assertIn("plugin list --json", said)
+        self.assertIn("claude plugin list --json", self.probe_in(said))
 
     def test_a_probe_that_times_out_refuses(self):
         """Ruling 12 and review 10: an unknown is not a pass, and nothing raises out of it."""
@@ -569,6 +580,8 @@ class OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase):
             said = wiring.refusal(self.p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.assertIn("could not ask", said)
+        self.assertIn("check by hand: ", said)
+        self.assertIn("opencode debug config", said.split("check by hand: ", 1)[1])
 
     def test_a_non_zero_probe_is_unknown_even_when_it_printed_an_answer(self):
         """The exit code is the answer about whether there IS an answer. A `debug config`
@@ -893,6 +906,15 @@ class TheCache(PersonaIso, unittest.TestCase):
         for e in doc.values():
             e["checked_at"] = time.time() + delta
         self.path().write_text(json.dumps(doc))
+
+    def test_a_cache_that_is_not_an_object_is_a_miss(self):
+        """A file a chat can write is a file that can hold a list, and `.get` on one is an
+        `AttributeError` in whatever was asking — a selector draw, or a `remember`."""
+        self.path().parent.mkdir(parents=True, exist_ok=True)
+        self.path().write_text("[1, 2, 3]")
+        self.assertIsNone(wiring.cached(self.p, cwd=self.here))
+        wiring.remember(self.p, cwd=self.here, w=self.w)
+        self.assertEqual(wiring.cached(self.p, cwd=self.here), self.w)
 
     def test_an_unreadable_cache_is_a_miss(self):
         self.path().parent.mkdir(parents=True, exist_ok=True)
@@ -1277,10 +1299,13 @@ class EveryProfileDerivedTextIsShownEscaped(PersonaIso, unittest.TestCase):
         w = wiring.detect(p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.clean(w.detail, w.fix, wiring.refusal(p, cwd=self.tmp))
+        self.clean(*(text for _status, text in wiring.install(p, self.tmp)))
 
-    def test_an_unapproved_profile_is_named_escaped(self):
+    def test_a_reason_charter_may_not_run_it_yet_is_shown_escaped(self):
+        """Today the reason is a constant. Task 3's record makes it a sentence about a
+        `command` the operator has not approved — which is the text a profile can write."""
         p = make_profile(self.NASTY)
-        with mock.patch.object(wiring, "approval_needed", lambda q: "not approved yet"):
+        with mock.patch.object(wiring, "approval_needed", lambda q: f"no: {self.NASTY}"):
             answer = wiring.detect(p, cwd=self.tmp)
         self.clean(answer.detail, answer.fix)
 
@@ -1438,7 +1463,8 @@ class TheSeamsTheSweepAsksAbout(PersonaIso, unittest.TestCase):
         (home / "config.toml").write_text("[x")
         p = make_profile("codex-alt", kind="codex", env=[("CODEX_HOME", str(home))])
         said = wiring.refusal(p, cwd=self.tmp)
-        self.assertIn(str(home / "config.toml"), said)
+        self.assertIn("check by hand: ", said)
+        self.assertIn(str(home / "config.toml"), said.split("check by hand: ", 1)[1])
 
     def test_the_listing_is_built_ins_in_registry_order_then_the_rest_by_name(self):
         """`charter harness list`'s order, so a doctor row lands where the operator already
