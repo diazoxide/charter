@@ -1738,6 +1738,26 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
     def _text(self, pane: str) -> str:
         return "".join(self._tmux("capture-pane", "-p", "-t", pane).stdout.splitlines())
 
+    def _status(self, pane: str) -> str:
+        """`#{pane_dead}:#{pane_dead_status}` for *pane*, or what tmux said instead.
+
+        A pane tmux no longer lists at all is gone, which is the same answer as dead for
+        every claim here — the window went with it.
+        """
+        out = self._tmux("display-message", "-p", "-t", pane,
+                         "#{pane_dead}:#{pane_dead_status}")
+        return out.stdout.strip() if out.returncode == 0 else f"(gone: {out.stderr.strip()})"
+
+    def _dead(self, pane: str) -> bool:
+        """Whether *pane*'s own process has ended — an empty `#{pane_dead_status}` included.
+
+        Measured on the CI runner, 2026-09-12: a pane that exits out of raw mode on Linux
+        comes back dead with an EMPTY status where the same pane on macOS carries the
+        number (`commands_frame._UNKNOWN_DEATH_CODE`, and ruling 42). So the question is
+        whether the process ended, never what it ended with.
+        """
+        return self._status(pane).startswith(("1:", "(gone"))
+
     def test_a_cancelled_only_window_takes_the_session_with_it(self):
         """S2, and the frame's own rule for its last chat: Esc closes that chat having
         started nothing, and the workspace's session goes with its last window."""
@@ -1746,6 +1766,15 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         self._tmux("send-keys", "-t", pane, "Escape")
         t.join(timeout=40)
         self.assertFalse(t.is_alive(), "the launch never returned")
+        # **The pane first, the session second**, so a failure says which link broke. A lone
+        # ESC is the one key `overlay.decode` cannot resolve from its own bytes — it waits
+        # for a tick with nothing behind it (`palette.TICK`) — so "the surface left" and
+        # "the window went" are two claims, and reading them as one would blame tmux for a
+        # keystroke that never arrived.
+        self.assertTrue(
+            _eventually(lambda: self._dead(pane), timeout=30.0),
+            f"the selector never left on Escape: pane {self._status(pane)}, "
+            f"screen {self._text(pane)!r}")
         # **The exit NUMBER is deliberately not asserted, and that is measured rather than
         # conceded.** A pane that exits out of raw mode on the Linux runner comes back with
         # an empty `#{pane_dead_status}` — `commands_frame._UNKNOWN_DEATH_CODE`'s own
@@ -1759,8 +1788,10 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         # window exists (`_wants_attach`) — long before anybody presses anything.
         self.assertEqual(out, [0])
         self.assertTrue(
-            _eventually(lambda: self.WS not in self._tmux("list-sessions").stdout),
-            "the cancelled chat's session outlived its only window")
+            _eventually(lambda: self.WS not in self._tmux("list-sessions").stdout,
+                        timeout=30.0),
+            f"the cancelled chat's session outlived its only window: "
+            f"{self._tmux('list-windows', '-a', '-F', '#{session_name}:#{window_id}').stdout!r}")
         self.assertFalse((self.records / "harness.json").exists(),
                          "a cancelled selector started a harness")
         self.assertTrue(state.is_waiting("beta.1"),
