@@ -5949,10 +5949,11 @@ def _launch(args) -> int:
     # Measured 2026-09-11: the eager ask above completes 6-14 ms after the start while a
     # Python launcher's first line runs at 19-22 ms, so it never catches a launcher that
     # refused — and by the time anything else could look, the teardown hook has killed the
-    # window (`_pane_last_words` answered `[]` in all 40 runs). EVERY pane records what it
-    # refused; what differs is who reads it. An attended pane also holds its own refusal on
-    # screen until somebody presses Enter, so only an unattended open — a reopen, a handoff,
-    # a background open — has nobody in front of it and waits for the answer here.
+    # window (`_pane_last_words` answered `[]` in all 40 runs). Every pane records what
+    # CHARTER refused — a decline, which the operator answered themselves, is the one thing
+    # it does not (ADR 0018) — and what differs is who reads it. An attended pane also holds
+    # its own refusal on screen until somebody presses Enter, so only an unattended open — a
+    # reopen, a handoff, a background open — has nobody in front of it and waits here.
     refused = ""
     if code is None and p is not None and not attended:
         code, refused = _await_the_launcher(SOCKET, fid, harness_pane)
@@ -8015,9 +8016,8 @@ def _the_pane_will_ask(r) -> bool:
     from . import profiletrust
     from .frame import launcher
 
-    # No `r is not None` here: both callers have already established that — `_launch` in
-    # the condition that reaches this, `_launch_refusal` in the `or` in front of it — and a
-    # third check nothing can reach is a line the deletion sweep is right to call dead.
+    # No `r is not None` of its own: `launcher.is_a_question` answers False for `None`, so
+    # "is there a refusal" and "is it the one that asks" are one question asked in one place.
     return (launcher.is_a_question(r)
             and not profiletrust.can_ask(sys.stdin, sys.stdout))
 

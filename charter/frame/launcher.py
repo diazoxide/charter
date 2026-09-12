@@ -52,7 +52,7 @@ in while no harness has run in it (ADR 0018, as its 2026-09-12 amendment states)
 
 **And the same pane is where a new or changed profile is ASKED about** (Task 3). A profile
 with no launch record, or one that no longer matches it, is not refused where somebody is
-in front of it: :func:`_answered` prints its command and its environment and reads one line,
+in front of it: :func:`answered` prints its command and its environment and reads one line,
 `run this? [y/N]` (`charter/profiletrust.py`). A no exits with the workspace picker's own
 cancel code and says nothing more — the operator has just answered. An open nobody is at
 gets a refusal in place of the question, and so does one with no terminal on both of its
@@ -373,8 +373,7 @@ def answered(p: profiles.Profile, ask: Refusal, *,
     if is_a_question(left):
         return Refusal(KIND_MOVED,
                        profiletrust.CHANGED_WHILE_ASKING.format(
-                           name=contain.readable(p.name),
-                           state=profiletrust.approval_needed(p)),
+                           name=contain.readable(p.name)),
                        REFUSED_EXIT)
     return left
 

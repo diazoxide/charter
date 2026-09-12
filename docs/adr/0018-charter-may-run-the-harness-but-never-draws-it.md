@@ -229,8 +229,11 @@ record.
   one command while another is approved. And **nothing is clipped**: a sentence bounds what
   it quotes, because a sentence ends in a remedy that a long value would push off the
   screen, but a prompt exists to be read before it is answered, and a command approved with
-  its tail unseen is what the ask is against. It wraps. A surface that must clip — a
-  selector row, a doctor row — says how much it kept back; this one never has to.
+  its tail unseen is what the ask is against. It wraps. The refusal sentences are the other
+  kind of surface: they quote a profile's name only to say which one, and bound it with
+  `contain.readable`'s fixed `...` marker, as every refusal Task 2 shipped does. A row the
+  operator chooses or approves from — a selector row, a doctor row — says how much it kept
+  back; the prompt never has to.
 * **The question is asked only where it can be answered.** Both of the pane's ends must be a
   terminal (`profiletrust.can_ask`), and the open must be an attended one. A pane that fails
   either test is refused with a sentence rather than asked, because a question nobody can
@@ -248,9 +251,15 @@ record.
   before `_refused_in_pane` runs, so nothing is said in the pane and nothing is written under
   the chat. Both are right: the operator answered this question themselves a moment ago and
   was told `charter: nothing started.` as they did, so there is no sentence they have not
-  read; and a decline is reachable only from an ATTENDED open, which is precisely the open
-  nobody is waiting on the record for — `_await_the_launcher` is asked by an unattended one.
-  A refusal charter decided still records; the one the operator decided does not need to.
+  read. On charter's own server nobody reads the record for it either: a decline is
+  reachable only from an ATTENDED open, and `_await_the_launcher` is asked only by an
+  unattended one. **In an operator's tmux it reads worse, and says so here:**
+  `_launch_in_operator_tmux` reads the record whether or not the open was attended, so a
+  decline there that races the eager check, or a press whose streams are `/dev/null`,
+  reports the window gone with charter's unknown-death code rather than "nothing started".
+  That is a less exact sentence, not a hole — nothing ran, and the decline was answered on
+  the terminal that asked. A refusal charter decided still records; the one the operator
+  decided does not need to.
 * **A line, not a keystroke.** Waiting on one keypress means putting the pane's terminal
   into raw mode, and a `tcsetattr` from a pane on a Linux CI runner left the launcher killed
   by a signal — an empty `#{pane_dead_status}` — so the refusal went with the window after

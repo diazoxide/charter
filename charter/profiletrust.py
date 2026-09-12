@@ -72,7 +72,7 @@ RECORD_NOT_WRITTEN = (
 #: than asking again — N2b's reason, one race along: a second question is one the operator
 #: cannot settle either, because whatever answered the first one can answer the next.
 CHANGED_WHILE_ASKING = (
-    "profile '{name}' is {state} again — it moved while that question was on screen, so "
+    "profile '{name}' moved while that question was on screen, so "
     "what you approved is not what would run now. Nothing was started; run it again and "
     "read the command it shows you: charter {name}")
 #: And the reopen's, which lives here beside its two siblings rather than in
@@ -216,35 +216,6 @@ def can_ask(stdin, stdout) -> bool:
     return stdin.isatty() and stdout.isatty()
 
 
-def _whole(text: str) -> str:
-    """*text* escaped to printable ASCII and **not clipped** — the prompt's containment.
-
-    **A sentence clips; a prompt does not**, and that is the difference between this and
-    `contain.readable`. A refusal is one line that ends in a remedy, so a 200-character
-    name in the middle of it pushes the remedy off the screen and `readable`'s 160-character
-    clip is right there. This prompt is the opposite surface: it exists so that somebody can
-    read the command before approving it, and a command approved with its tail hidden is
-    the one outcome the whole feature is against — `claude --settings <400 bytes of
-    somewhere else>` would be clipped to something that looks fine. It wraps instead.
-
-    `contain.escaped` for the escaping itself, so this shares one implementation of *what
-    may reach a terminal* with every other surface rather than growing a second: every byte
-    outside U+0020..U+007E comes out as a reversible escape, whatever its category. The
-    blankness rule is `readable`'s, for `readable`'s reason: after `escaped` the string is
-    printable ASCII, so "renders as nothing" is exactly "is spaces", and a word that renders
-    as nothing must not read as no word at all.
-
-    **Asked as a question about the whole string rather than as a strip**, which is the one
-    thing here that is not `readable`'s spelling. `shown.strip(" ")` and `shown.lstrip(" ")`
-    are equivalent for deciding this — either leaves nothing exactly when every character is
-    a space — so a sweep can never tell the two apart and the line comes back a survivor
-    that no test could have pinned. `set(shown) <= {" "}` IS the decision: every character is
-    a space, empty included, and there is no second spelling of it to drift to.
-    """
-    shown = contain.escaped(str(text))
-    return contain.BLANK if set(shown) <= {" "} else shown
-
-
 def _words(command: Iterable[str]) -> str:
     """A command as the prompt shows it, **contained word by word** (ruling 35), whole.
 
@@ -254,7 +225,7 @@ def _words(command: Iterable[str]) -> str:
     reason one level along: the record is under `.charter/`, which is as writable as the
     file (ruling 13).
     """
-    return " ".join(_whole(word) for word in command)
+    return " ".join(contain.readable(word, contain.NO_CLIP) for word in command)
 
 
 def _names(env: Iterable[tuple[str, str]]) -> str:
@@ -265,7 +236,8 @@ def _names(env: Iterable[tuple[str, str]]) -> str:
     `.charter/` is a `dict` whose `.items()` the caller sorts. Annotated as the pairs both
     of them are, so a third caller cannot quietly hand it a third shape.
     """
-    return " ".join(_whole(f"{name}={value}") for name, value in env)
+    return " ".join(contain.readable(f"{name}={value}", contain.NO_CLIP)
+                    for name, value in env)
 
 
 def _prompt(p: profiles.Profile, state: str, was: dict) -> str:
@@ -274,7 +246,7 @@ def _prompt(p: profiles.Profile, state: str, was: dict) -> str:
     The command and the environment on rows of their own, because they are two different
     decisions — which program, and which account — and a single line runs them together.
     """
-    lines = [HEADLINE[state].format(name=_whole(p.name)),
+    lines = [HEADLINE[state].format(name=contain.readable(p.name, contain.NO_CLIP)),
              f"  command  {_words(p.command)}"]
     if p.env:
         lines.append(f"  env      {_names(p.env)}")
