@@ -17,6 +17,14 @@ from __future__ import annotations
 import datetime
 import shlex
 
+from . import contain
+
+#: The most characters one codepoint can become in `contain.one_line`'s escaping — the
+#: `\\uXXXX` form. Used to ask that function for the escape WITHOUT its report clip: the
+#: printed command is not a report line, it is a line whose whole point is that it can be
+#: pasted and run, and `DISPLAY_LIMIT` would cut a 12 KB brief off after 160 characters.
+_WIDEST_ESCAPE = 6
+
 #: The first line of every handoff's first message. Facts charter can observe and no
 #: instruction: where it came from, which workspace that was, and when. The new chat — and
 #: whoever reads the transcript a month later — can tell this message was not typed there.
@@ -82,13 +90,25 @@ def first_message(stamp_line: str, brief: str) -> str:
 def title(brief: str) -> str:
     """*brief*'s first non-blank line, stripped — the todo's title and nothing else.
 
-    Non-blank rather than ``splitlines()[0]``: a heredoc written with the delimiter on its
-    own line often opens with a newline, and a todo titled by an empty string is one
+    Non-blank rather than ``[0]``: a heredoc written with the delimiter on its own line
+    often opens with a newline, and a todo titled by an empty string is one
     `memstore.write` refuses.
+
+    **Split on ``\\n`` and nothing else.** `str.splitlines` also breaks on ``\\r``,
+    ``\\x0b``, ``\\x0c``, ``\\x1c``–``\\x1e``, U+2028 and U+2085, so a brief whose first
+    line carried any of those was titled by a PREFIX of the line the operator wrote —
+    charter's "first line" and theirs meaning different things, silently. A shell heredoc
+    ends a line at ``\\n``, which is what the operator typed into. What a control character
+    then does on screen is a rendering question, answered where the rendering is
+    (`contain.one_line`), not by cutting the text short here.
     """
-    for line in brief.splitlines():
-        if line.strip():
-            return line.strip()
+    for line in brief.split("\n"):
+        # Stripped ONCE and bound: two `strip()` calls on one line are two places for the
+        # deletion sweep to ask whether `lstrip` would do, and only one of them can be
+        # answered — for a whitespace-only line the test above is the same either way.
+        stripped = line.strip()
+        if stripped:
+            return stripped
     return ""
 
 
@@ -120,7 +140,10 @@ def read_brief(stream, ws: str) -> tuple[str, str]:
         text = stream.buffer.read().decode("utf-8")
     except UnicodeDecodeError:
         return "", NOT_UTF8_BRIEF
-    if not text.strip():
+    # `split()` and never `strip()`, which `commands_frame.background_refusal` settled one
+    # seam over: `not text.strip()` and `not text.lstrip()` answer alike for every string,
+    # so the strip is a line nothing can turn red. No words is an empty brief.
+    if not text.split():
         return "", EMPTY_BRIEF.format(ws=ws)
     return text, ""
 
@@ -137,8 +160,8 @@ def todo_text(brief: str, *, source_chat: str, source_workspace: str) -> str:
             f"{source_workspace}. The full brief is private to the chat it opened.")
 
 
-def terminal_command(*, cli_name: str, workspace: str, extra: list[str], create: bool,
-                     vision: str | None, persona: str | None) -> str:
+def terminal_command(*, cli_name: str, workspace: str, extra: list[str],
+                     create_vision: str | None, persona: str | None) -> str:
     """The command to run in a new terminal, when there is no frame to open a chat in.
 
     A handoff needs a frame — charter's own tmux server, with a launcher that can go away
@@ -152,16 +175,47 @@ def terminal_command(*, cli_name: str, workspace: str, extra: list[str], create:
 
     *persona* rides as a ``CHARTER_PERSONA=`` prefix rather than a flag, because that
     variable is the pin `charter <harness>` already reads (plan Open question 12), and
-    *create* rides as a `charter workspace create … &&` in front, because the workspace has
-    to exist before the launcher resolves it.
+    *create_vision* rides as a `charter workspace create … &&` in front, because the
+    workspace has to exist before the launcher resolves it.
+
+    **One parameter for "create it, and this is its vision", not two.** `--create` without
+    `--vision` is refused before this is reached, so a `create` flag beside an optional
+    *vision* is a pair that can only be wrong together — and the `or ""` that stood in for
+    the impossible half was a fallback no input could reach (`shlex.quote(None)` answers
+    ``"''"`` anyway, so it could not even be seen). ``None`` means the workspace is there
+    already.
     """
     q = shlex.quote
     head = ""
-    if create:
-        head += f"charter workspace create {q(workspace)} --vision {q(vision or '')} && "
+    if create_vision is not None:
+        head += f"charter workspace create {q(workspace)} --vision {q(create_vision)} && "
     if persona:
         head += f"CHARTER_PERSONA={q(persona)} "
     # `cli_name` unquoted: it is a registered harness's own word, or the literal
     # `<harness>` placeholder, and quoting the placeholder would hide that it is one.
     words = [f"charter {cli_name}", "--workspace", q(workspace), *(q(a) for a in extra)]
-    return head + " ".join(words)
+    return _shown(head + " ".join(words))
+
+
+def _shown(command: str) -> str:
+    """*command*, safe to PRINT on the terminal charter is printing to.
+
+    **`shlex.quote` escapes nothing.** It wraps a word in single quotes, which is what the
+    SHELL needs and says nothing about what a terminal does with the bytes inside them —
+    measured: ESC, `\\r`, backspace and a bidirectional override all pass through it
+    untouched. And the word this line carries is the whole brief, which is arbitrary text
+    the operator approved for a model to read, not for a terminal to execute.
+
+    That matters most here of anywhere, because this is the one refusal that tells the
+    operator to **paste the line into a new terminal**: a brief opening
+    `\\r✓ opened chat beta.9` repaints charter's own refusal as a success, on the line the
+    operator is about to trust. `commands_handoff.BAD_NAME` has contained a workspace name
+    for the same reason since this command shipped; the brief is the same defect on a
+    surface a thousand times larger.
+
+    **The cost, stated:** a brief carrying a control character is pasted as its escape
+    rather than as the character, so the chat that command opens is sent `\\x1b` as four
+    characters. That is the right way round — a brief has nothing to say in ESC — and the
+    operator can see on screen exactly what the command would send.
+    """
+    return contain.one_line(command, limit=len(command) * _WIDEST_ESCAPE)

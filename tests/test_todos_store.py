@@ -8,9 +8,12 @@ docs/adr/0004, and `workspaces/todos/workspace.md` for the glossary.
 from __future__ import annotations
 
 import datetime
+import io
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from types import SimpleNamespace
 
-from charter import memstore, todos, workspace
+from charter import commands_workspace, memstore, todos, workspace
 from tests._isolation import PersonaIso
 
 
@@ -241,6 +244,12 @@ class TestAnOverlapTooThinToBeEvidence(PersonaIso):
     def _dup(self, text):
         return todos.duplicate_of("alpha", text, by_title=True)
 
+    def test_a_title_that_is_not_there_normalises_to_nothing(self):
+        """Total, because both sides of the identity test come off disk: `memstore.entries`
+        reads whatever the store holds, and `_normal` answering `None` would raise inside a
+        comparison whose job is to decide, not to fail."""
+        self.assertEqual(todos._normal(None), "")
+
     def test_two_titles_of_only_short_words_that_read_the_same_are_the_same_todo(self):
         todos.add("alpha", "fix the bug")
         self.assertEqual(self._dup("fix the bug"), "fix the bug")
@@ -285,6 +294,115 @@ class TestAnOverlapTooThinToBeEvidence(PersonaIso):
         todos.add("alpha", "fix the bug" + tail)
         self.assertEqual(self._dup("fix the bug" + tail), "fix the bug")
         self.assertIsNone(self._dup("ask the dev" + tail))
+
+
+class TestATodoTitleCannotOwnTheTerminalItIsPrintedOn(PersonaIso):
+    """A todo title used to be something the OPERATOR typed. Since `charter handoff` it is
+    the first line of a brief a model wrote, so every renderer that prints one back is
+    printing attacker-influenced text into a format with structure in it.
+
+    Escaped at the RENDER and never on the way into storage: the file a person opens has
+    to hold the text that was approved, and a store that escaped on write would hold a
+    different one (#453's own rule, one surface over).
+    """
+
+    #: The shapes that can REACH a stored title. `\\r` cannot: `memstore` ends a title at
+    #: every Unicode line boundary, so a title carrying one is stored cut at it and the
+    #: renderer never sees it — which is a fact about the store, not a defence, and is why
+    #: `handoff.terminal_command` (where the whole brief IS on the line) is asserted against
+    #: `\\r` as well.
+    HOSTILE = (
+        ("an ANSI erase", "\x1b[2J", "\\x1b"),
+        ("a run of backspaces", "gone\x08\x08\x08\x08", "\\x08"),
+        ("a bidi override", "\u202ederepo/\u202c", "\\u202e"),
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.ensure("alpha")
+
+    def _todo(self, ws, **flags):
+        """`charter ws todo` on *ws*, returning ``(stdout, stderr)``."""
+        out, err = io.StringIO(), io.StringIO()
+        args = SimpleNamespace(workspace=ws, text=flags.get("text", ""), slug=None,
+                               query=flags.get("query"))
+        with redirect_stdout(out), redirect_stderr(err):
+            commands_workspace.cmd_workspace_todo(args)
+        return out.getvalue(), err.getvalue()
+
+    def test_the_listing_escapes_what_a_terminal_would_act_on(self):
+        for name, raw, escaped in self.HOSTILE:
+            with self.subTest(name):
+                workspace.ensure("w")
+                todos.add("w", f"Fix {raw} the widget")
+                out, _err = self._todo("w")
+                self.assertIn(escaped, out)
+                self.assertNotIn(raw, out)
+                for f in memstore.files(todos.todos_dir("w")):
+                    f.unlink()
+
+    def test_the_query_path_escapes_the_same_way(self):
+        """A second renderer over the same titles — the half a fix reaching only the
+        listing would walk past."""
+        todos.add("alpha", "Fix \x1b[2J the widget")
+        out, _err = self._todo("alpha", query="widget")
+        self.assertIn("\\x1b", out)
+        self.assertNotIn("\x1b[2J", out)
+
+    def test_the_stored_file_still_holds_what_was_approved(self):
+        """The other direction: escaping belongs at the render, so the file a person opens
+        holds the text that was written, control characters and all."""
+        p = todos.add("alpha", "Fix \x1b[2J the widget")
+        self.assertIn("\x1b[2J", p.read_text())
+
+    def test_the_duplicate_refusal_escapes_the_title_it_names(self):
+        todos.add("alpha", "Fix \x1b[2J the widget please")
+        _out, err = self._todo("alpha", text="Fix \x1b[2J the widget please")
+        self.assertIn("already on the list", err)
+        self.assertIn("\\x1b", err)
+        self.assertNotIn("\x1b[2J", err)
+
+
+class TestTheFrameDrawsATodoTitleWithoutObeyingIt(PersonaIso):
+    """The other two readers of `open_todos()` titles — the frame's todo panel and the
+    palette row that reads them out. Both were measured rather than assumed, because a
+    handoff makes these titles a model's prose and neither surface had been driven with
+    one.
+
+    Both were already safe, and this records how: the panel escapes in `slots._todo_rows`,
+    and the palette row returns the title RAW from `builtin_actions._read_todo` and is
+    contained one layer later, where `Palette.report` composes the heading. These pin that
+    — a containment nobody can see is a containment somebody removes.
+    """
+
+    NASTY = "Fix \x1b[2Jthe \x08\x08\x08widget ‮reversed"
+
+    def test_the_frames_todo_panel_escapes_the_title_it_draws(self):
+        from charter.frame import slots
+        rows = slots._todo_rows({"todos": [{"title": self.NASTY}], "todo_count": 1}, 80, 6)
+        drawn = "\n".join(rows)
+        for escaped in ("\\x1b", "\\x08", "\\u202e"):
+            self.assertIn(escaped, drawn)
+        self.assertNotIn("\x1b[2J", drawn)
+
+    def test_the_palette_row_is_contained_where_it_is_composed(self):
+        """`_read_todo` answers raw on purpose — `Palette.report` is its only surface and
+        runs `contain.one_line` over it, and `frame/choose.py` records what a second
+        containment on the way in costs (a line no test can turn red). So the assertion is
+        on the heading, which is what reaches the terminal."""
+        from charter.frame import builtin_actions, palette
+
+        ctx = SimpleNamespace(todos=({"title": self.NASTY},),
+                              gather={"todos": [{"title": self.NASTY}], "todo_count": 1})
+        said = builtin_actions._read_todo(ctx, [0])
+        self.assertIn("\x1b[2J", said, "precondition: this layer answers raw")
+
+        p = palette.Palette.__new__(palette.Palette)
+        p.label, p.query, p.said = "F2", "", said
+        p._headline()
+        for escaped in ("\\x1b", "\\x08", "\\u202e"):
+            self.assertIn(escaped, p.heading)
+        self.assertNotIn("\x1b[2J", p.heading)
 
 
 class TestTheWholeTextPathStillCatchesARetitle(PersonaIso):

@@ -93,7 +93,7 @@ NOTHING_ELSE = (
 OPENED = "charter handoff: opened chat {chat} in workspace '{ws}', started on the brief"
 
 
-def _printed_command(*, ws: str, msg: str, create: bool, vision: str | None,
+def _printed_command(*, ws: str, msg: str, create_vision: str | None,
                      persona_name: str | None) -> tuple[str, bool]:
     """``(the command to run in a new terminal, whether a harness could be named)``.
 
@@ -116,7 +116,7 @@ def _printed_command(*, ws: str, msg: str, create: bool, vision: str | None,
     named = extra is not None
     return handoff.terminal_command(
         cli_name=h.cli_name if named else handoff.UNKNOWN_HARNESS, workspace=ws,
-        extra=extra if named else [msg], create=create, vision=vision,
+        extra=extra if named else [msg], create_vision=create_vision,
         persona=persona_name), named
 
 
@@ -175,8 +175,11 @@ def cmd_handoff(args) -> int:
     if not in_a_chat or tmuxctl.is_operator_socket(state.frame_server(fid)
                                                    or commands_frame.SOCKET,
                                                    own=commands_frame.SOCKET):
-        command, named = _printed_command(ws=ws, msg=msg, create=bool(args.create),
-                                          vision=args.vision, persona_name=args.persona)
+        # `--create` without `--vision` was refused above, so the vision is there whenever
+        # the workspace is being made, and `None` says it is not.
+        command, named = _printed_command(ws=ws, msg=msg,
+                                          create_vision=args.vision if args.create else None,
+                                          persona_name=args.persona)
         said = (NOT_IN_A_FRAME if not in_a_chat else YOUR_OWN_TMUX).format(command=command)
         if not named:
             said += "\n" + NO_HARNESS_NAMED.format(placeholder=handoff.UNKNOWN_HARNESS)

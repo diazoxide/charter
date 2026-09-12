@@ -43,9 +43,18 @@ def title_of(text: str) -> str:
     about which todos are the same one.
 
     ``""`` for a body with nothing in it; :func:`write` refuses such a body outright.
+
+    **One `strip`, on the line, rather than one on the body and one on the line.** The
+    outer one only ever skipped leading blank lines — its trailing half was redundant with
+    the inner one, so `strip` and `lstrip` answered alike there for every input and the
+    deletion sweep had a synonym nothing could settle. Written as the loop it is, "how
+    much" is asked once and a title with padding at either end pins it.
     """
-    body = (text or "").strip()
-    return body.splitlines()[0].strip()[:TITLE_MAX] if body else ""
+    for line in (text or "").splitlines():
+        title = line.strip()
+        if title:
+            return title[:TITLE_MAX]
+    return ""
 
 
 def index_path(mem_dir: Path) -> Path:

@@ -189,7 +189,13 @@ def record_handoff(*, placement: str, created: bool,
         line = json.dumps({"created": bool(created), "event": HANDOFF,
                            "placement": placement,
                            "ts": when.isoformat(timespec="seconds")}, sort_keys=True) + "\n"
-        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        # `O_NOFOLLOW` makes the line above ATOMIC for the one shape a flag can cover.
+        # `write_refusal` is check-then-open: a link planted in the window between the two
+        # is followed, and the row lands wherever it points. The check stays — it is what
+        # catches a FIFO, a directory, and a PARENT that is a link out of the plane, none
+        # of which this flag sees — and the flag closes the race on the final component
+        # for free. The three writers above predate it and keep their own shape.
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
         try:
             os.write(fd, line.encode())
         finally:

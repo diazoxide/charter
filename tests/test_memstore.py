@@ -108,6 +108,12 @@ class TheTitleAWriteDerivesIsAlsoWhatAReaderComputes(MemstoreCase):
     def test_a_body_with_nothing_in_it_has_no_title(self):
         self.assertEqual(memstore.title_of("  \n\n "), "")
 
+    def test_no_body_at_all_has_no_title_either(self):
+        """Total, because a READER calls this: `todos.duplicate_of` asks it what a title
+        WILL be, and a store that answered `None` there would compare `None` against a
+        stored string and report every todo as new."""
+        self.assertEqual(memstore.title_of(None), "")
+
     def test_a_long_first_line_is_capped_at_seventy_two_characters(self):
         """**The number is spelled out here rather than read off the constant.** A test whose
         expectation is computed from the value it is checking moves with that value and pins

@@ -43,6 +43,18 @@ BRIEF = "Fix the widget\nIt breaks on resize.\n"
 #: list is how the two come to disagree.
 AWS_KEY = "AKIAQ7VZ3RJHT2LMNPQR"
 
+#: Four ways a byte reaches a terminal and does something rather than showing something,
+#: as ``(name, the raw text, the escape it must arrive as)``. A brief is prose a MODEL
+#: wrote and charter prints it back — on the one line charter tells the operator to paste
+#: into a new terminal, which is why these are asserted both ways round: the escape is
+#: there AND the raw bytes are not.
+HOSTILE = (
+    ("an ANSI erase", "\x1b[2J", "\\x1b"),
+    ("a carriage return", "\r✓ opened chat beta.9", "\\x0d"),
+    ("a run of backspaces", "opened\x08\x08\x08\x08\x08\x08", "\\x08"),
+    ("a bidi override", "‮derepo/‬", "\\u202e"),
+)
+
 #: "`_handoff` was given no stdin to use", distinct from ``None``, which is a stdin a test
 #: is stating: Python hands `sys.stdin` as ``None`` in a process whose fd 0 is closed.
 _UNSET = object()
@@ -290,6 +302,43 @@ class AHandoffRefusesBeforeItChangesAnything(_AHandoffFromAlpha):
         self.assertEqual(rc, 1)
         self.assertIn("charter opencode --workspace beta --prompt", err)
         self._nothing_changed()
+
+    def test_the_command_it_tells_you_to_paste_carries_no_control_characters(self):
+        """`shlex.quote` wraps a word in single quotes and escapes NOTHING, which is what
+        the shell needs and says nothing about what a terminal does with the bytes inside
+        them. This line carries the whole brief — a model's prose — and it is the one
+        refusal charter tells the operator to paste into a new terminal, so a brief opening
+        `\\r✓ opened chat beta.9` would repaint charter's own refusal as a success."""
+        for name, raw, escaped in HOSTILE:
+            with self.subTest(name), \
+                    mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"},
+                                    clear=True):
+                rc, _out, err = self._handoff("beta", brief=f"Fix {raw} the widget\nmore\n")
+            self.assertEqual(rc, 1)
+            self.assertIn("Run this in a new terminal instead", err)
+            self.assertIn(escaped, err)
+            self.assertNotIn(raw, err)
+
+    def test_the_same_holds_for_the_command_printed_inside_your_own_tmux(self):
+        """The second surface with the same text on it. Two refusals print this command;
+        containing one of them would be a fix that half the callers walk past."""
+        state.record_server("alpha.1", _tmuxsocket.OPERATOR_SOCKET)
+        rc, _out, err = self._handoff("beta", brief="Fix \x1b[2J the widget\nmore\n")
+        self.assertEqual(rc, 1)
+        self.assertIn("a tmux you already had", err)
+        self.assertIn("\\x1b", err)
+        self.assertNotIn("\x1b[2J", err)
+
+    def test_a_long_brief_is_printed_whole_rather_than_clipped_to_a_report_line(self):
+        """`contain.one_line`'s budget is 160 characters, which is right for a report row
+        and wrong for a command whose point is that it can be pasted and run. The escape is
+        asked for without that clip (`handoff._WIDEST_ESCAPE`)."""
+        brief = "Fix the widget\n" + "x" * 4000 + "\n"
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"}, clear=True):
+            rc, _out, err = self._handoff("beta", brief=brief)
+        self.assertEqual(rc, 1)
+        self.assertIn("x" * 4000, err)
+        self.assertNotIn("…", err)
 
     def test_a_harness_nothing_names_leaves_the_word_to_fill_in(self):
         """No `$CHARTER_HARNESS` and no `[harness] default`: charter prints the command with

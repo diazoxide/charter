@@ -321,18 +321,48 @@ class TheFactsAHandoffIsMadeOf(PersonaIso):
     no plane, no workspace and no tmux — and `state.brief`'s four ways of saying nothing are
     one answer."""
 
+    def test_a_first_line_ends_where_the_operator_ended_it(self):
+        """`str.splitlines` breaks on `\\r`, `\\x0b`, `\\x0c`, `\\x1c`–`\\x1e` and U+2028
+        as well as `\\n`, so charter's "first line" was a PREFIX of the line the operator
+        typed whenever a brief carried one — two meanings for one phrase, silently. A shell
+        heredoc ends a line at `\\n`, which is what they typed into."""
+        for name, ch in (("a carriage return", "\r"), ("a vertical tab", "\x0b"),
+                         ("a form feed", "\x0c"), ("a line separator", " ")):
+            with self.subTest(name):
+                self.assertEqual(handoff.title(f"Fix{ch}the widget\nmore\n"),
+                                 f"Fix{ch}the widget")
+
     def test_a_brief_with_no_words_has_no_title(self):
         """Total, so the todo writer never sees `None`. A brief this empty is refused long
         before a todo is written; the answer still has to be a string."""
         self.assertEqual(handoff.title("\n  \n"), "")
 
-    def test_the_printed_command_survives_a_create_with_no_vision(self):
-        """`--create` without `--vision` is refused before this is reached, so the empty
-        vision is this function's total answer rather than a case the command can produce."""
+    def test_a_title_is_trimmed_at_both_ends(self):
+        """A heredoc line often carries the indentation it was written with, and the
+        trailing half is the one an `lstrip` would leave on — in a `# ` heading, an index
+        row and a filename slug."""
+        self.assertEqual(handoff.title("   Fix the widget   \nmore\n"), "Fix the widget")
+
+    def test_a_chat_whose_brief_cannot_be_read_has_none(self):
+        """Every reader under `state` answers "charter does not know" rather than raising
+        into whatever was drawing. A directory where the file should be is the cheapest way
+        to make the read fail that does not depend on who is running the suite."""
+        (state.frame_dir("beta.1", create=True) / "brief").mkdir()
+        self.assertIsNone(state.brief("beta.1"))
+
+    def test_a_workspace_that_is_already_there_gets_no_create_in_front(self):
+        """One parameter says both halves: `None` is "it exists", a string is "make it with
+        this vision". `--create` without `--vision` is refused long before this, so a
+        `create` flag beside an optional vision was a pair that could only be wrong
+        together — and the `or ""` standing in for the impossible half was unreachable."""
         self.assertEqual(
-            handoff.terminal_command(cli_name="claude", workspace="g", extra=[], create=True,
-                                     vision=None, persona=None),
-            "charter workspace create g --vision '' && charter claude --workspace g")
+            handoff.terminal_command(cli_name="claude", workspace="g", extra=[],
+                                     create_vision=None, persona=None),
+            "charter claude --workspace g")
+        self.assertEqual(
+            handoff.terminal_command(cli_name="claude", workspace="g", extra=[],
+                                     create_vision="a thing", persona=None),
+            "charter workspace create g --vision 'a thing' && charter claude --workspace g")
 
     def test_a_chat_charter_knows_nothing_about_has_no_brief(self):
         self.assertIsNone(state.brief("nobody.9"))
@@ -357,6 +387,19 @@ class TheFactsAHandoffIsMadeOf(PersonaIso):
         into whatever was calling it."""
         state.record_brief("../escape", "x")
         self.assertIsNone(state.brief("../escape"))
+
+    def test_a_brief_the_filesystem_refuses_is_not_an_exception_either(self):
+        """The other half of that promise, and the one a bad path cannot reach: the id is
+        fine and the WRITE fails. This one runs inside `commands_frame._launch`, a few lines
+        before the window that starts the harness — a raise here would take the launch down
+        over a file nothing has read yet."""
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so this says nothing about the guard")
+        d = state.frame_dir("beta.1", create=True)
+        d.chmod(0o500)
+        self.addCleanup(d.chmod, 0o700)
+        state.record_brief("beta.1", "fix it\n")     # must not raise
+        self.assertIsNone(state.brief("beta.1"))
 
 
 class TheHookClearsTheRoutingMark(PlaneIso):
