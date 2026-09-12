@@ -317,13 +317,44 @@ def roster(noun: str, fid: str) -> Roster:
     """
     names = tuple(names_of(noun, fid))
     now = current(noun, fid)
+    # Read ONCE for the whole roster rather than per row: `workspace.arrivals` is an
+    # `os.scandir`, and asking it forty times to build forty rows would be the per-name
+    # read `slots._workspace_counts` records paying for and then stopped paying.
+    arrived = arrivals_now() if noun == WORKSPACE else frozenset()
     rows = tuple(overlay.Row(id=NAME_ID.format(noun, i), title=n, mark=(n == now),
-                             note=_note(noun, n))
+                             note=_note(noun, n, arrived))
                  for i, n in enumerate(names))
     return Roster(noun=noun, rows=rows, names=names)
 
 
-def _note(noun: str, name: str) -> str:
+#: What a workspace row says when a handoff landed there and nobody has looked yet.
+#:
+#: **Words here, a glyph on the strip, and that is the surfaces differing rather than
+#: charter saying two things.** `slots._ARRIVED_MARK` spends one cell because a bar draws
+#: several names on one row and every column is contested; a picker draws one name per row
+#: and already has a note column, so it can say what it means. It is also the surface an
+#: operator reaches when the strip has run out of room — see `docs/frame.md` on an arrival
+#: behind the overflow count.
+ARRIVED_NOTE = "handoff arrived"
+
+
+def arrivals_now() -> frozenset[str]:
+    """The workspaces a handoff landed in that nobody has looked at yet — never raises.
+
+    `slots._arrived` one surface over, and a wrapper for its reason rather than a call this
+    module could make inline: the palette is drawn by a pane, and a readout that raised
+    would cost the operator the whole picker rather than one note. `workspace.arrivals`
+    already answers `frozenset()` for a record it cannot list, so what this catches is the
+    failure that is not about the directory.
+    """
+    from .. import workspace as ws_mod
+    try:
+        return ws_mod.arrivals()
+    except Exception:  # noqa: BLE001 - a readout must never cost a picker
+        return frozenset()
+
+
+def _note(noun: str, name: str, arrived=frozenset()) -> str:
     """What *name*'s row carries in its note column, or ``""``.
 
     One function rather than a branch inside :func:`roster`'s comprehension, so that
@@ -334,10 +365,21 @@ def _note(noun: str, name: str) -> str:
     `zeb-api` the workspace; inside a picker every row is the same noun and the heading
     already says which).
 
+    **A workspace now has something per-row to say**, and it passes the objection this
+    function's docstring makes about the launch pin: that one is the same sentence on every
+    row of a picker that cannot be opened while it is true, and this one is a fact about
+    ONE workspace that the operator is choosing between rows on. It is the whole reason the
+    picker is worth reaching when the strip has windowed the arrival behind a `+2`.
+
+    *arrived* is passed rather than read, so this stays a pure function of its arguments —
+    the picker's forty rows ask `workspace.arrivals` once, in :func:`roster`.
+
     Not contained here. `overlay.Surface.render` runs `contain.one_line` over every note
     before `tui.width` sees it (#472), and a second call would be the masked line
     `builtin_actions._register_names` shipped and this module's docstring records.
     """
+    if noun == WORKSPACE:
+        return ARRIVED_NOTE if name in arrived else ""
     # The PROFILE first, because that is what the operator named the way this chat runs —
     # two chats of one kind may be two accounts. A chat from before profiles has only its
     # harness, which is what it recorded.
@@ -378,9 +420,28 @@ def labelled(roster: Roster, reason: str = "") -> tuple[overlay.Row, ...]:
     ``_replace`` rather than a fresh `overlay.Row`, so the id and the mark are carried
     over untouched: the id is what :meth:`Roster.name_of` matches on, and a labelled row
     that minted its own would be a row that stands for no name.
+
+    **The arrived note is kept BESIDE the kind rather than displaced by it**, which is the
+    one place this function adds to a note instead of replacing it. The kind is what tells
+    `zeb` the persona from `zeb-api` the workspace and cannot go; the arrival is the reason
+    an operator is typing that name at all, and a top-level list that dropped it would say
+    less about a workspace than the picker one keypress further in. A *reason* still
+    displaces both, unchanged: a row that cannot run has one thing to say and it is why.
     """
-    return tuple(r._replace(note=reason or roster.noun, refused=bool(reason))
+    return tuple(r._replace(note=reason or _labelled_note(roster.noun, r.note),
+                            refused=bool(reason))
                  for r in roster.rows)
+
+
+def _labelled_note(noun: str, note: str) -> str:
+    """The kind, with whatever :func:`_note` already put on the row kept beside it.
+
+    Spelled as its own function so "what a top-level row says" is one expression a test can
+    ask about, rather than a conditional inside a comprehension that also carries the
+    refusal rule. `·` is the separator `_say_on_screen` and the stamp already use for two
+    facts on one line, so this invents no punctuation.
+    """
+    return f"{noun} · {note}" if note else noun
 
 
 def open_rows(fid: str) -> tuple[overlay.Row, ...]:

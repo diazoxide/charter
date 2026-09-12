@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: `charter handoff` opens a chat in any workspace, already working on the brief you approved — and a work-shaped prompt is told where it could run
+headline: A chat hands work to a new chat in any workspace — told where it could run, gated by your yes, opened on the brief you approved, and marked on the strip until you look
 ---
 
 You are in a chat about one thing and you ask for another. Until now that ended one of three
@@ -8,6 +8,26 @@ ways: the model did it here, so one workspace's todos, memory and branch carried
 handed the work to a sub-agent, and the answer you wanted to talk to came back as a paragraph
 and was gone; or it told you to open a chat yourself, and you retyped the context it already
 had.
+
+## How a chat finds out it can
+
+On every work-shaped prompt, charter's prompt block now leads with **Where this could run**:
+the three placements (a sub-agent, a new chat here, a new chat in another workspace), the two
+tests that pick one, and this workspace's vision quoted from `workspace.md` as data. It no
+longer waits for the acting persona to declare `routing:` — the persona roster it embeds still
+does, because "who else exists" is a different question. It names no placement and no other
+workspace; the model matches the ask against the visions `charter workspace list` shows, which
+is why that listing grew a `VISION` column: the first line of each workspace's vision, as the
+trailing field, untruncated.
+
+On an unattended run the block says instead that `charter handoff` is refused there and names
+`charter ws todo --workspace`.
+
+**`charter:handoff`** ships as a skill: apply the two tests, find the workspace, write the brief
+from a template (goal, what is known with paths, done when, constraints, the claim-a-piece line),
+show it **in full** in a quiz, and run the command only on a yes.
+
+## The command it runs
 
 ```bash
 charter handoff <workspace> [--create --vision "<vision>"] [--persona <name>] <<'BRIEF'
@@ -42,10 +62,40 @@ The brief becomes the new chat's first message. Your harness asks before the com
 7. Tallies `{"event": "handoff", "ts", "placement", "created"}` — no workspace name, no persona,
    no text — and clears `routing: require`'s pending mark, because opening a chat in a workspace
    *is* routing.
-8. Prints the chat and the workspace.
+8. **Points at it** — the strip, and the attention row of the chat that asked. Below.
+9. Prints the chat and the workspace.
 
 The stamp is `⟨handoff from chat <chat> · workspace <ws> · <YYYY-MM-DD HH:MM>⟩`: facts charter
 can observe and no instruction, so the new chat can tell the message was not typed there.
+
+## The strip says where it landed
+
+A handoff opens a chat nobody is looking at, so the last thing it does is move where your eye
+goes.
+
+- **The target workspace moves to the front of the workspaces strip.** It is the only thing
+  that moves a tab while a plane is up — a switch, a launch and a repaint all leave the order
+  where they found it, because a tab that moves under a press is a tab you press twice.
+- **That tab stays marked until you look**: the `ok` accent, and a `✶` where its `*` would be.
+  The glyph is the half that survives `NO_COLOR`, where charter strips every escape off every
+  row. Neither costs a column — the glyph takes the mark's own cell, the one the chat strip's
+  spinner takes — so nothing on the strip shifts when a handoff lands, and there is no bell.
+- **The mark clears the first time any terminal on this plane looks at that workspace —
+  however you get there**: its tab, a palette row, the keyboard walk, a typed
+  `charter frame-switch --workspace`, a launch or a focus that attaches into it, or already
+  being in it and asking to switch there. Every frame's strip then repaints without the mark.
+  One mark per plane, not per terminal: tmux draws a pane identically for every client of its
+  session. A switch charter refused for any *other* reason clears nothing.
+- **The palette and the launch picker say it in words** — `handoff arrived` in the note
+  column — because the strip draws only the page your tab falls on, and an arrival on another
+  page sits behind a `+2`. Narrow terminals cut that note rather than dropping it, so the row
+  still stands out at a width where the strip itself has given up.
+- **Your own chat's attention row names the new chat**, because the command's own output goes
+  to a tool call you may never read.
+- A handoff into the workspace you are already in moves its tab and marks nothing: you are
+  looking at it, and its chats strip already shows the new tab.
+
+A handoff that did not open a chat moves no tab, marks nothing and says nothing.
 
 ## It refuses before it changes anything
 
@@ -61,24 +111,6 @@ read while it starts.
 `charter <harness> --workspace <ws> …` command to run in a new terminal instead of stopping —
 with the workspace creation in front of it when you asked for one, `CHARTER_PERSONA=` when you
 named a persona, and every word quoted.
-
-## How a chat finds out it can
-
-On every work-shaped prompt, charter's prompt block now leads with **Where this could run**:
-the three placements (a sub-agent, a new chat here, a new chat in another workspace), the two
-tests that pick one, and this workspace's vision quoted from `workspace.md` as data. It no
-longer waits for the acting persona to declare `routing:` — the persona roster it embeds still
-does, because "who else exists" is a different question. It names no placement and no other
-workspace; the model matches the ask against the visions `charter workspace list` shows, which
-is why that listing grew a `VISION` column: the first line of each workspace's vision, as the
-trailing field, untruncated.
-
-On an unattended run the block says instead that `charter handoff` is refused there and names
-`charter ws todo --workspace`.
-
-**`charter:handoff`** ships as a skill: apply the two tests, find the workspace, write the brief
-from a template (goal, what is known with paths, done when, constraints, the claim-a-piece line),
-show it **in full** in a quiz, and run the command only on a yes.
 
 ## A chat that comes back empty is shown its brief
 
@@ -102,6 +134,7 @@ shown nothing: the brief is already the first message of its transcript.
 - **A brief never carries a secret.** It is argv while the harness starts.
 - **An opencode chat that reopens empty is not shown its brief**, because opencode has no
   SessionStart hook at all. `charter doctor` names that gap.
-- **The tab strip does not point at the arrival yet.** That is the next slice.
+- **The arrived mark is per plane, not per terminal**, and there is no "wants you" mark yet
+  for a chat that stopped at a prompt after you visited it. Both are the next slice.
 
 `charter docs show handoff` has the whole of it, including how the consent was measured.

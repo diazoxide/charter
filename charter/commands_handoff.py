@@ -22,7 +22,15 @@ The order is the spec's, and the order is the design:
 4. `commands_frame.background_refusal`, the seam's own answer, asked while it is still free.
 
 Then the writes: the workspace, the todo, then the chat — which carries the private brief in
-with it, so the file exists before the harness that reads it — then the tally and the line.
+with it, so the file exists before the harness that reads it — then the tally, the strip and
+the line.
+
+**The strip is what makes a background chat visible** (the spec's *The strip*). A handoff
+opens a window nobody is looking at, so the last thing this command does is move where the
+eye goes: the target workspace goes to the front of the plane's tab order, its tab is marked
+arrived until any terminal on this plane looks at it, and the calling chat's own attention
+row names the chat that was opened. All of it after the open, so a refused handoff points at
+nothing.
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ import sys
 
 from . import (commands_frame, config, contain, dispatch, handoff, harness, persona, todos,
                util, workspace)
-from .frame import chats, state, switch, tmuxctl
+from .frame import chats, notify, state, switch, tmuxctl
 
 BAD_NAME = ("charter handoff: '{ws}' cannot name a workspace — nothing was opened. A "
             "workspace name is letters, digits, '.', '_' and '-', and does not start with "
@@ -91,6 +99,14 @@ NOTHING_ELSE = (
     "charter handoff: {why}\n  What stays: {stays}. No chat opened, so the brief was sent "
     "to nobody and nothing is running.")
 OPENED = "charter handoff: opened chat {chat} in workspace '{ws}', started on the brief"
+#: Said when the chat opened and its workspace could not be marked arrived. The chat is
+#: real and is named; what is missing is the thing that would have pointed at it, so the
+#: line hands that job back to the operator rather than reporting a failure they cannot
+#: place. The workspace tab still moved to the front of the strip — that is a different
+#: record and it did not fail — so "look at it" is a thing they can act on now.
+UNMARKED = ("charter handoff: {chat} is open in '{ws}', but charter could not mark that "
+            "workspace's tab as arrived — its state directory refused the write. Nothing "
+            "on the strip will point at the new chat; its tab did move to the front.")
 
 
 def _printed_command(*, ws: str, msg: str, create_vision: str | None,
@@ -238,5 +254,40 @@ def cmd_handoff(args) -> int:
     # reach a committed file through the tally (plan Open question 16).
     dispatch.record_handoff(placement="here" if ws == source_ws else "elsewhere",
                             created=bool(args.create))
+    # **The strip, and every line of it is after the open** — a handoff that did not open
+    # returned above, so a refused one moves no tab, marks nothing and says nothing on the
+    # attention row. What is on screen is only ever a chat that exists.
+    #
+    # The move first and the mark second, which is the order they are read in: the tab goes
+    # to the front of the plane's order, and then it is marked as one nobody has looked at.
+    switch.bring_to_front(ws)
+    if ws != source_ws and not workspace.record_arrival(ws):
+        # **A handoff into the workspace you are IN marks nothing** (spec, step 8): you are
+        # looking at it, so there is no look still owed, and its chats strip already shows
+        # the new tab. The tab still MOVES — the plane's order is about where work is, and
+        # the workspace this chat just handed work to is where it is.
+        #
+        # **And a mark that could not be written is SAID rather than swallowed.** The chat
+        # is open either way — nothing below is conditional on this — but the strip is the
+        # only thing that was going to point at it, so a silent failure here is exactly the
+        # invisible work this command exists to end, arriving through the fix for it. The
+        # operator is told which workspace to go and look at, because that is the thing the
+        # mark would have done for them.
+        # `warn` and not `err`: the handoff DID what it was asked — the chat is open and
+        # started on the brief — and a `✗` would tell the operator the command failed
+        # when what failed is the pointing. `!` is the mark for "this worked and there
+        # is something you need to know", which is exactly this.
+        util.warn(UNMARKED.format(ws=ws, chat=opened.chat))
+    # The calling chat's own attention row, which is the only screen this command has: its
+    # stdout goes to a Bash tool call the operator may never read, and the chat it opened
+    # is somewhere else by construction.
+    commands_frame._say_on_screen(fid, f"handoff → {opened.chat} opened in workspace "
+                                       f"'{ws}'", ok=True)
+    # ONCE, at the end, for everything this command wrote — the todo, the tally, the order
+    # and the mark — which is `plane_changed_everywhere`'s own rule about being called at
+    # completion rather than per unit of work. The full fan-out and not `bump_everywhere`
+    # here: a handoff made a chat (and with `--create` a workspace), so the repo tables
+    # every frame on this plane draws have genuinely changed.
+    notify.plane_changed_everywhere()
     print(OPENED.format(chat=opened.chat, ws=ws))
     return 0

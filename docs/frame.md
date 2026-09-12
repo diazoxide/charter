@@ -723,6 +723,46 @@ hand you a differently-ordered strip after every switch, which is the shape this
 out in. It is decided again when you next launch the plane — still while you are looking
 at it, fresh when you come back.
 
+**One thing moves a tab while the plane is up, and it is a handoff.** `charter handoff`
+opens a chat in a workspace nobody is looking at, so the workspace it lands in goes to the
+front of the strip. Nothing else does: a switch, a launch and a repaint all leave the order
+exactly where they found it, which is what keeps the tab you just pressed the same tab a
+moment later. A handoff into the workspace you are already in moves its tab too — the order
+is about where work is.
+
+**And that tab stays green until you look at it.** The workspace a handoff landed in is
+drawn in the `ok` accent with a `✶` where the `*` would be, and the mark clears the first
+time *any* terminal on this plane **looks at that workspace — however you get there.**
+Pressing its tab, choosing it in the palette, walking to it with the keyboard, typing
+`charter frame-switch --workspace`, launching or attaching into it, or already being in it
+and pressing its tab: they are one fact, and the fact is that somebody is looking. Every
+frame's strip then repaints without the mark. It clears plane-wide rather than per terminal,
+because tmux draws
+a pane identically for every client of its session; there is no per-client mark and the
+strip's repaint path asks tmux nothing. The `✶` is the half that survives `NO_COLOR`, where
+charter strips every escape off every row and the accent is nothing. It costs no column — it
+is the mark's own cell, the one the chat strip's spinner takes — so a handoff landing never
+shifts a tab under your hand. There is no bell.
+
+**A tab you are standing on shows the highlight rather than the mark, and asking to switch
+to it is what clears it.** There is one cell and `*` wins it (below), so the frame *in* the
+arrived workspace is the one frame that cannot see the mark while every other frame on the
+plane draws it. Asking to switch there — the tab, a palette row, the keyboard walk, the
+typed command — answers `already in workspace 'x'` and clears the mark for everyone, which
+is right, because you are the person looking at it. A switch charter refused for any *other*
+reason clears nothing: you are still owed the look.
+
+**A mark the strip has windowed away is not shown, and the palette is where to look.** The
+bar draws the page your tab falls on; an arrival on another page is inside the `+2`, and at
+widths where the bar is down to `2/3` nothing is drawn at all. The counts are clickable and
+open the palette, whose workspace list carries `handoff arrived` in its note column for
+every workspace that has one — no page and no glyph. The launch picker (`charter <harness>`
+with no workspace) says it too, next to each workspace's clone count. Both are **cut to the
+terminal's width and never dropped**, so below about 30 columns the note reads
+`handoff a…` and below about 16 it is a stub — which still says a row has something the
+others do not, where the strip at those widths says nothing at all. Growing the strip with
+`F3` is the other answer where there are rows to be had.
+
 **Neither strip is labelled.** They used to open with the word `chats` or `workspaces`, and
 that cost 9 and 14 columns of the row the names are competing for. What tells them apart is
 where they are and what is on them: the strips are adjacent and always in the same order, the

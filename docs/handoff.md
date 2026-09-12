@@ -105,11 +105,55 @@ BRIEF
 7. Appends one row to the dispatch tally — `{"event": "handoff", "ts", "placement", "created"}`,
    with no workspace name, no persona and no text — and clears `routing: require`'s pending mark
    for the turn that ran it, on every harness. The handoff **is** the routing answer.
-8. Prints the new chat's id and its workspace.
+8. **Moves the target workspace to the front of the tab strip and marks it arrived**, and
+   names the new chat on the calling chat's own attention row. See *Where it shows up* below.
+9. Prints the new chat's id and its workspace.
 
-**What it does not do yet:** move the target workspace to the front of the tab strip, or mark
-that tab as arrived. Those are the next slice; today the new chat appears on the target
-workspace's chats strip and nothing on screen points at it.
+## Where it shows up
+
+A handoff opens a chat in the background: no client moves, nothing attaches, and you stay
+exactly where you were. So the last thing the command does is move where your eye goes.
+
+- **The target workspace goes to the front of the workspaces strip.** This is the only thing
+  that moves a tab while the plane is up — a switch, a launch and a repaint all leave the
+  order where they found it, because a tab that moves under a press is a tab you press twice.
+  A handoff into the workspace you are already in moves its tab too: the order is about where
+  work is.
+- **That tab is drawn in the `ok` accent with a `✶` where its `*` would be**, and stays that
+  way until somebody looks. The `✶` is what survives `NO_COLOR`, where charter strips every
+  escape off every row and the accent is nothing to see. Neither costs a column — the glyph
+  takes the mark's own cell — so nothing on the strip shifts when a handoff lands.
+- **The mark clears the first time any terminal on this plane looks at that workspace —
+  however you get there.** Pressing its tab, choosing it in the palette, walking to it with
+  the keyboard, typing `charter frame-switch --workspace`, a launch or a focus that attaches
+  into it, or already being in it and asking to switch there: one fact, and the fact is that
+  somebody is looking. Then every frame's strip repaints without the mark. It is plane-wide
+  and not per terminal, because tmux draws a pane identically for every client of its
+  session — a per-client mark is named as a limit below rather than pretended at. A switch
+  charter refused for any *other* reason clears nothing: you are still owed the look.
+- **The tab you are standing on shows the highlight rather than the mark.** There is one cell
+  and `*` wins it, so the frame already in the arrived workspace is the one frame that does
+  not draw the mark, while every other frame on the plane does. Asking to switch there —
+  by any of the routes above — says `already in workspace 'x'` and clears it for everyone.
+- **Where to look when the strip has no room.** The bar draws the page your tab falls on, so
+  an arrival on another page is inside a `+2` and at narrow widths the bar is down to `2/3`.
+  The palette's workspace list says `handoff arrived` in its note column, and so does the
+  launch picker beside each workspace's clone count. Both cut that note to the terminal's
+  width rather than dropping it — below about 30 columns it reads `handoff a…` — so the row
+  still says it has something the others do not.
+- **A handoff into the workspace you are in marks nothing.** You are looking at it, and its
+  chats strip already shows the new tab.
+- **A mark charter could not write is said out loud.** The chat is open either way — nothing
+  else depends on the mark — but the strip was the only thing that was going to point at it,
+  so charter names the workspace to go and look at rather than going quiet. That is the one
+  failure this whole mark exists to prevent, and a silent one would be it arriving through
+  its own fix.
+- **Your own chat's attention row says where it went** — `handoff → beta.1 opened in
+  workspace 'beta'` — because the command's own output goes to a tool call you may never read.
+- **No bell**, and nothing moves your terminal.
+
+None of this happens for a handoff that did not open a chat. Nothing on screen ever points at
+a chat that does not exist.
 
 ## The stamp
 
@@ -241,6 +285,13 @@ and the marker goes with the directory when that id is reaped.
   show it. Every other harness is covered — see *A reopened chat is shown its brief* above.
 - **A handoff is not a dispatch.** Its tally row carries no agent, so `charter persona stats`'
   dispatch column and "last worked" are untouched by one.
+- **The arrived mark is per plane, not per terminal.** Two terminals on one plane share one
+  mark: whichever of them looks first clears it for both. tmux draws a pane identically for
+  every client of its session, so a per-client mark would have to be a different mechanism,
+  and it is the next slice along with a "wants you" mark for a chat that stopped at a prompt.
+- **A plane that goes cold forgets its marks.** They live beside the strip's tab order, in
+  this developer's own state; when the last frame is reaped, both go. A chat a handoff opened
+  is still there when the plane comes back — nothing on the strip points at it any more.
 
 ## How a chat learns any of this exists
 

@@ -53,6 +53,15 @@ _MARK = ("*", " ")
 
 _R, _DIM, _BOLD = "\033[0m", "\033[2m", "\033[1m"
 
+#: What a row says when a handoff landed in that workspace and nobody has looked yet.
+#:
+#: **Words, like the palette's own note and unlike the strip's glyph** — see
+#: `frame/choose.ARRIVED_NOTE`. This list runs before tmux, in the operator's own terminal,
+#: at `tui.term_width()`; there is no column being competed for and nothing to abbreviate
+#: for. `tui.truncate` still holds the whole line to the width, so a very long workspace
+#: name costs this field rather than wrapping the terminal.
+ARRIVED = "handoff arrived"
+
 
 class Choice(NamedTuple):
     """What the operator decided. ``name`` is empty for :data:`CANCEL`."""
@@ -73,12 +82,23 @@ class Row(NamedTuple):
 
     name: str
     clones: int
+    #: Whether a handoff landed in this workspace and nobody has looked at it yet
+    #: (`workspace.arrivals`). Defaulted, because every existing caller of :func:`rows`
+    #: predates arrivals and a picker that cannot ask is a picker with none — never
+    #: `None`, so the renderer has a bool to test rather than three states.
+    arrived: bool = False
 
 
-def rows(names: list[str], count: Callable[[str], int]) -> list[Row]:
-    """*names* with their clone counts. ``count`` is injected so the renderer can be
-    exercised without a plane under it."""
-    return [Row(n, count(n)) for n in names]
+def rows(names: list[str], count: Callable[[str], int],
+         arrived=frozenset()) -> list[Row]:
+    """*names* with their clone counts, and which of them a handoff is waiting in.
+
+    ``count`` is injected so the renderer can be exercised without a plane under it.
+    *arrived* is passed as a SET rather than as a second callable for a different reason:
+    it is one `os.scandir` for the whole list where the count is one `iterdir` per name, so
+    a per-name callable would turn one read into N.
+    """
+    return [Row(n, count(n), n in arrived) for n in names]
 
 
 def render(rows_: list[Row], current: str, width: int) -> str:
@@ -95,8 +115,13 @@ def render(rows_: list[Row], current: str, width: int) -> str:
     for i, (name, r) in enumerate(shown, start=1):
         mark = on if r.name == current else off
         repos = "—" if not r.clones else f"{r.clones} repo" + ("s" if r.clones > 1 else "")
+        # **Not dim**, where the clone count is: the count is context for a choice and this
+        # is the reason to make one. It goes after the count rather than in `_MARK`'s cell,
+        # which answers a different question (*"which one would the launch have picked"*)
+        # and answers it for exactly one row — a second meaning in that column would make
+        # the mark ambiguous on the row where both are true.
         line = (f"    {_DIM}{i:>2}{_R}  {mark} {tui.pad(name, name_w)}  "
-                f"{_DIM}{repos}{_R}")
+                f"{_DIM}{repos}{_R}" + (f"  {ARRIVED}" if r.arrived else ""))
         out.append(tui.truncate(line, width))
     out.append(f"\n    {_DIM} n{_R}    create a new workspace")
     out.append(f"    {_DIM} q{_R}    cancel — start nothing\n\n")
