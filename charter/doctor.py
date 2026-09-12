@@ -1943,6 +1943,44 @@ def check_ask_rules() -> Result:
                        "want — this names it so the prompts are not a mystery.")
 
 
+def _stale_layer_clause() -> str:
+    """The clause that turns "add the rule" into "refresh this directory" — or ``""``.
+
+    A session standing in `workspaces/<ws>/` reads that directory's settings and nowhere else
+    (#855), so the gate can be missing there while the plane holds it. That is not a plane
+    with no rule: nothing needs adding, the layer here is simply behind, and the command that
+    fixes it is `charter workspace reinit`. Telling that operator to `charter guard ask` would
+    have them write a rule the plane already has.
+
+    **Whether the plane holds it is #948's answer** — `Harness.restrictive_rules`, the same
+    surface `workspace layer` counts (task 4 ruling 5). Read out of `.claude/settings.json`
+    here it would be a second notion of "the plane's policy", and which of the plane's policy
+    travels is a fact about a harness's own config format, not about this file.
+
+    Empty at the plane root, where there is no layer to refresh, and empty when no harness
+    holds the rule, where `reinit` would copy nothing. A harness that cannot answer costs the
+    clause and never the row — narrow, per :func:`_mirrored_restrictions`.
+    """
+    from . import config as _config
+    from .commands import HANDOFF_ASK_PATTERN
+    from .harness import registry as _harness
+
+    try:
+        if session_root().resolve() == _config.ROOT.resolve():
+            return ""
+    except OSError:
+        return ""
+    for h in _harness.all():
+        try:
+            rules = h.restrictive_rules() or {}
+        except (OSError, ValueError):
+            continue
+        if any(HANDOFF_ASK_PATTERN in rule for held in rules.values() for rule in held):
+            return (" — the plane already holds it, so this session's directory carries a "
+                    "stale layer: charter workspace reinit")
+    return ""
+
+
 def check_handoff_gate() -> Result:
     """Does a `charter handoff` wait for the operator's yes here? (chat handoff)
 
@@ -1997,8 +2035,9 @@ def check_handoff_gate() -> Result:
                       hint="A handoff's brief becomes a new chat's first message and runs with "
                            "your authority; this rule is the prompt that asks you first, and "
                            "on Claude Code it asks under bypassPermissions too. Add it: charter "
-                           "guard ask 'charter handoff *'. Removing it is your choice — this "
-                           "row says so, and charter does not put it back.")
+                           f"guard ask 'charter handoff *'{_stale_layer_clause()}. Removing it "
+                           "is your choice — this row says so, and charter does not put it "
+                           "back.")
     present = [h.name for h, status, _detail in rows if status == "present"]
     gaps = [f"        ↳ {h.name}: {d.detail}" for h, _status, _detail in rows
             for d in h.deficits if d.key == "handoff-gate"]

@@ -18,6 +18,13 @@ Code 2.1.268, that rule asks before `charter handoff … <<'BRIEF'` under `manua
 `charter update` writes nothing, because removing the rule is your choice, and
 `charter doctor`'s new `handoff gate` row names it when it is missing.
 
+The rule reaches the chat that runs the command. A chat launched in `workspaces/<ws>/` reads
+that directory's settings and nowhere else, so the gate is in force there because the plane's
+`ask` rules ride into each workspace's generated settings — and a workspace that already existed
+picks the rule up the next time it is launched. When the row finds the gate missing in a chat
+whose plane *does* hold it, it says so and names `charter workspace reinit` rather than telling
+you to add a rule you already have.
+
 ## What charter refuses that the prompt cannot cover
 
 Inside a control plane, charter's Bash hook refuses a `charter handoff`:

@@ -1355,6 +1355,42 @@ class DoctorNamesTheGate(SessionRootCase):
         self.rooted_at(self.workspace)
         self.assertEqual(doctor.check_handoff_gate().status, OK)
 
+    def test_a_session_rooted_in_a_stale_workspace_is_sent_to_reinit(self):
+        """The plane HOLDS the rule and this directory does not, which is a different problem
+        from never having written one: nothing needs adding, the layer here is simply behind.
+        So the hint names `charter workspace reinit` — the command that copies what the plane
+        already has — rather than sending the operator to add a rule twice.
+
+        Whether the plane holds it is #948's answer (`Harness.restrictive_rules`), not a
+        second reading of `.claude/settings.json` from in here."""
+        self._claude_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertIn("charter workspace reinit", r.hint)
+        self.assertIn("stale", r.hint)
+
+    def test_a_plane_that_never_had_the_rule_is_not_sent_to_reinit(self):
+        """The other side of that clause, and the reason it is conditional: with no rule in
+        the plane either, `reinit` would copy nothing. The hint has to say "add it" and stop.
+        """
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertIn("charter guard ask 'charter handoff *'", r.hint)
+        self.assertNotIn("reinit", r.hint)
+
+    def test_a_session_at_the_plane_itself_is_never_sent_to_reinit(self):
+        """`reinit` refreshes a workspace's layer. A session standing at the plane root has no
+        layer to refresh, so the clause must not appear there however the rule is missing."""
+        self._opencode_rule()
+        self.rooted_at(config.ROOT)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(r.status, WARN, r)
+        self.assertNotIn("reinit", r.hint)
+
     def test_a_malformed_settings_file_is_not_read_as_a_missing_rule(self):
         p = config.ROOT / ".claude" / "settings.json"
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -1393,6 +1429,93 @@ class DoctorNamesTheGate(SessionRootCase):
 
     def test_the_row_is_in_the_preflight(self):
         self.assertIn("handoff gate", doctor.check_names())
+
+
+class TheAskRuleReachesAWorkspaceChat(PlaneIso):
+    """The gate's other half, which Phase 1 could only assert indirectly (chat handoff, task 4,
+    phase 2).
+
+    A chat launched in `workspaces/<ws>/` reads that directory's settings and nowhere else, so
+    the plane's `ask` rule is in force there only if it rides into the generated document. #942
+    (PR #948) built that path; these are the tests that the HANDOFF rule travels it — #948's own
+    suite never names `charter handoff`, so this is coverage rather than a second opinion.
+
+    What #948 mirrors is its business, and `deny` is asserted here nowhere: two suites pinning
+    one behaviour from different angles is how a guard ends up half-pinned.
+    """
+
+    PLUGINS = {"charter@charter": True}
+
+    def _plane(self, permissions: dict) -> dict:
+        """The plane's settings, as `charter init` leaves them plus *permissions*; returns the
+        generated workspace document."""
+        p = config.ROOT / ".claude"
+        p.mkdir(parents=True, exist_ok=True)
+        p.joinpath("settings.json").write_text(
+            json.dumps({"enabledPlugins": self.PLUGINS, "permissions": permissions}))
+        files = registry.get(registry.CLAUDE_CODE).workspace_files()
+        return json.loads(files[".claude/settings.json"]) if ".claude/settings.json" in files \
+            else {}
+
+    def test_a_workspace_settings_document_carries_the_planes_asks(self):
+        """The rule reaches the chat that runs the command. Asserted as membership plus the
+        `allow` invariant rather than equality on the whole `permissions` object: equality
+        breaks the moment a neighbouring feature legitimately adds a key, and this test should
+        fail only when the handoff gate stops travelling."""
+        perms = self._plane({"ask": [RULE], "allow": ["Bash(ls *)"]})["permissions"]
+        self.assertIn(RULE, perms["ask"])
+        self.assertNotIn("allow", perms)
+
+    def test_an_allow_rule_never_travels_into_a_workspace(self):
+        """The security invariant, from the angle the test above cannot reach: a permissive
+        rule must not appear ANYWHERE in the generated text, whichever plane file it came
+        from. `ask` and `deny` restrict; `allow` widens, and widening is the plane's own
+        business."""
+        p = config.ROOT / ".claude"
+        p.mkdir(parents=True, exist_ok=True)
+        p.joinpath("settings.json").write_text(json.dumps(
+            {"enabledPlugins": self.PLUGINS,
+             "permissions": {"ask": [RULE], "allow": ["Bash(ls *)"]}}))
+        p.joinpath("settings.local.json").write_text(json.dumps(
+            {"permissions": {"allow": ["Bash(curl *)"]}}))
+        for rel, text in registry.get(registry.CLAUDE_CODE).workspace_files().items():
+            with self.subTest(generated=rel):
+                self.assertNotIn("Bash(ls *)", text)
+                self.assertNotIn("Bash(curl *)", text)
+                self.assertNotIn('"allow"', text)
+
+    def test_an_ask_bucket_of_the_wrong_shape_travels_as_nothing(self):
+        """A string where a list belongs is a plane that declares no rules charter can read —
+        not a plane declaring one rule spelled oddly. Nothing travels, and the document is
+        still written for what it does carry."""
+        self.assertNotIn("permissions", self._plane({"ask": "Bash(x)"}))
+
+    def test_a_rule_that_is_not_a_string_is_dropped(self):
+        """One unusable entry costs itself, not the rules beside it: a handoff gate that
+        travels only when every neighbouring rule is well-formed is a gate that stops being
+        in force because of someone else's typo."""
+        self.assertEqual(["Bash(a *)"],
+                         self._plane({"ask": ["Bash(a *)", 3]})["permissions"]["ask"])
+
+    def test_the_layer_row_still_judges_by_charters_own_keys(self):
+        """`doctor`'s `workspace layer` row compares the keys charter authors. The rules ride
+        in the same document but are the plane's, not charter's, so they must not be added to
+        that list — a plane that changes an unrelated `ask` would otherwise read as charter's
+        layer having gone stale."""
+        from charter.harness import claude_code
+        self.assertEqual(("enabledPlugins", "env"), claude_code.WORKSPACE_KEYS)
+
+    def test_a_launch_refreshes_a_workspace_the_plane_gave_a_new_ask(self):
+        """The rule has to reach workspaces that already exist. A plane that adds the gate
+        after a workspace was made would otherwise leave that chat ungated until someone
+        happened to run `reinit`."""
+        self._plane({})
+        workspace.ensure("w")
+        settings = config.ROOT / "workspaces" / "w" / ".claude" / "settings.json"
+        self.assertNotIn("permissions", json.loads(settings.read_text()))
+        self._plane({"ask": [RULE]})
+        workspace.ensure("w")
+        self.assertIn(RULE, json.loads(settings.read_text())["permissions"]["ask"])
 
 
 class EveryHarnessSaysHowAHandoffIsGated(unittest.TestCase):
