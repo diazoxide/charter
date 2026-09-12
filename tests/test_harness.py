@@ -36,8 +36,11 @@ class HarnessDeficits(unittest.TestCase):
         keys = {d.key for d in harness.deficits(harness.OPENCODE)}
         # `handoff-gate` (chat handoff): the plugin's payload carries neither `agent_id` nor
         # `permission_mode`, so the ask rule in `opencode.json` is a handoff's whole gate.
-        self.assertEqual(keys, {"status-bar", "prompt-hook", "ask-decisions",
-                                "workspace-scope", "handoff-gate"})
+        # `session-start`: opencode reads charter's context from a FILE charter wrote, so
+        # anything charter can only know at a start never arrives — today, the brief a
+        # reopened empty chat would otherwise be shown (`hooks._brief_block`).
+        self.assertEqual(keys, {"status-bar", "prompt-hook", "session-start",
+                                "ask-decisions", "workspace-scope", "handoff-gate"})
 
     def test_the_guards_that_refuse_are_not_a_ceiling(self):
         """`ask-decisions` is a narrow claim and must stay narrow. A DENY is carried in
