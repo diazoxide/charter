@@ -85,15 +85,18 @@ directory, so that directory's file is the one that has to carry the rule. `char
 from such a chat reads that file, and its `handoff gate` row warns when the rule is not there.
 
 **How it gets there.** The plane's `ask` rules ride into every workspace's generated
-`.claude/settings.json` ([#942](https://github.com/diazoxide/charter/pull/948)), so the gate is
+`.claude/settings.json` ([#948](https://github.com/diazoxide/charter/pull/948)), so the gate is
 in force in a workspace chat without anyone copying it by hand, and a workspace that already
 existed picks up a newly added rule the next time it is launched. An `allow` rule never travels
 — widening what a chat may do is the plane's own business.
 
 When the rule is missing in a chat whose plane *does* hold it, the row's hint names
-`charter workspace reinit` instead of `charter guard ask`: nothing needs adding, the layer in
-that directory is simply behind. Whether the plane holds it is read from the same place
-`doctor`'s `workspace layer` row reads it, so the two rows cannot disagree.
+`charter workspace reinit <workspace>` instead of `charter guard ask`: nothing needs adding,
+the layer in that directory is behind. It says that only where `reinit` is the command that
+fixes it — in a workspace directory or a checkout inside one, for a harness whose layer
+`reinit` carries there. Anywhere else, and for a harness `reinit` writes nothing for, the hint
+says "add it" and names no command that cannot help. Whether the plane holds the rule is the
+row's own reading one directory over, so the two halves of this row cannot disagree.
 
 ## What charter refuses that the prompt cannot cover
 
