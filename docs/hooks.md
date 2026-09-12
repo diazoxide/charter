@@ -701,14 +701,29 @@ persona's role, a digest of memory (a digest, not the corpus — recall is a sea
 preload), the workspace to confirm, and a warning when the plane's config has moved on
 since the session began.
 
+A chat that was opened by a **handoff** and reopened with no conversation is also shown the
+brief it was started with — once, as a quoted block labelled data, never re-sent as a
+message. The brief travels in the reopen manifest because the chat directory holding it is
+reaped on a restart; it keeps the lines it was written with, and the fence around it carries
+a marker charter mints at the render — after the brief was written, so nothing inside it can
+close the quotation. Everything else with no glyph of its own is escaped there. opencode has
+no `SessionStart` at all, so an opencode chat that reopens empty is not shown it;
+`charter doctor` names that gap.
+
 The `UserPromptSubmit` gate is narrower than it sounds. It fires when a prompt asks for
 work *and* carries a real fork — open-ended, broad, destructive, or multi-part — and its
 effect is to say: scout first, then ask, before dispatching or editing.
 
-When the acting persona declares `routing: advise` or `require`, the same message leads
-with the **roster** — who else exists, what each advertises, when each was last dispatched.
-One message, not two: two blocks on one prompt is how a nudge becomes wallpaper. charter
-never says which persona owns the prompt (ADR 0016); see `docs show personas`.
+That message leads with **Where this could run**: the three places a request can go (a
+sub-agent, a new chat in this workspace, a new chat in another one), the two tests that
+pick between them, this workspace's vision quoted as data, and the `charter:handoff` skill
+that does it. It fires on the gate's own trigger and cooldown, whatever the acting persona
+declares — on an unattended run it says instead that `charter handoff` is refused there and
+names `charter ws todo`. When the acting persona declares `routing: advise` or `require`,
+the **roster** rows join it inside the same block — who else exists, what each advertises,
+when each was last dispatched. One message, not two: two blocks on one prompt is how a
+nudge becomes wallpaper. charter never says which persona owns the prompt, and never names
+a workspace (ADR 0016); see `docs show personas` and `docs show handoff`.
 
 At `routing: require` a second, quieter hook joins it: `PreToolUse` on `Write|Edit|MultiEdit`
 **asks** once when a turn edits after the roster fired and nothing was dispatched. It never

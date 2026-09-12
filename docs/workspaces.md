@@ -360,6 +360,22 @@ ask yourself, knowing the workspace is there.
 Silent when the plane has one workspace: a signal that fires on no news teaches people to
 skim the ones that matter.
 
+`charter workspace list` shows the same line, on every workspace, in a `VISION` column:
+
+```
+  WORKSPACE  MODE   CLONES  REPOS          VISION
+* billing    local  2       api, webhooks  Bill every org correctly and on time
+  default    local  0       —              —
+  docs-site  local  1       site           —
+```
+
+That column is what a **handoff proposal is matched against** — the model reads these
+visions to decide which workspace an ask belongs in ([handoff.md](handoff.md)), which is
+why a workspace with no vision is never proposed and shows a dash instead. It is the
+trailing field and it is not truncated: matching an ask against half a sentence is matching
+against half the evidence. It is the vision's first line only, escaped, for the reason every
+committed value charter prints is — a newline in one would draw a row charter did not.
+
 ## See also
 
 - [control-plane.md](control-plane.md) — `charter.toml`, and the plane's view of a workspace

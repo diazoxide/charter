@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, persona, workspace
+from charter.frame import reopen as reopen_state
 from charter.frame import state
 from charter.harness import claude_code
 
@@ -549,8 +550,18 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
         """The `_reopening` half of the gate this change re-spelled — the deletion sweep
         showed nothing pinned it. A reopen builds several chats with nobody attached: a
         select would move a client that does not exist yet, and a teardown would strip the
-        panels off the sibling the same reopen had just drawn (`_reopening`)."""
-        recorded = SimpleNamespace(chat="beta.9", persona="")
+        panels off the sibling the same reopen had just drawn (`_reopening`).
+
+        **The record is a real `reopen.Chat` and not a `SimpleNamespace` of the two fields
+        this case cares about.** It was the latter, and it broke the day
+        `_restore_recorded_chat` learned to read a third — the brief a handoff opened the
+        chat on — with an `AttributeError` out of a launch, on a case about window
+        selection. A stand-in that carries only what today's reader happens to touch is a
+        fixture that goes red for the next field rather than for its own subject.
+        """
+        recorded = reopen_state.Chat(
+            chat="beta.9", workspace="beta", persona="", harness="claude-code", cwd="",
+            resume="", transcript="", active=False)
         self._launch(reopening=commands_frame.Reopening(recorded), attach=None)
         self.assertFalse([a for a in self.argvs if "select-window" in a], self.argvs)
         self.drop.assert_not_called()

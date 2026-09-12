@@ -22,6 +22,49 @@ from .commands import (_cred_flag, _git, _origin_https, cmd_clone, commit_memory
                        commit_push)
 
 
+#: What the VISION column shows for a workspace nobody has written one for. A dash rather
+#: than an empty cell for the reason every other `—` on this table is one: a blank reads as
+#: a rendering fault. It is also the answer a handoff proposal acts on — a workspace with no
+#: vision is never proposed as a target (`docs/handoff.md`), because there is nothing to
+#: match the ask against.
+NO_VISION = "—"
+
+
+def _vision_cell(name: str) -> str:
+    """*name*'s vision as one table cell: its first non-blank line, escaped, or a dash.
+
+    **The first line only.** `## Vision` is a section and this is a row; what the rest of
+    charter already treats as the vision LINE — SessionStart's neighbours digest, and the
+    "Where this could run" block — is its first line, and three surfaces disagreeing about
+    what a workspace is for is worse than any of them being terse.
+
+    **And the first line plainly, with no `or ""`, no blank-line filter and no strip** —
+    three guards the deletion sweep called survivors and was right to. `workspace.read_vision`
+    returns a `str` for every input (``""`` for unset, for a placeholder and for a charter
+    with no such section) and `.strip()`s the body it returns, so there is no ``None`` to
+    fall back from, no leading blank line to skip and no leading space to take. A trailing
+    one cannot show either: this is the row's last field and `cmd_workspace_list` rstrips
+    the line. Three guards nothing can turn red, and "equivalent mutant" and "dead code" are
+    the same finding.
+
+    **Escaped at the render, and NOT clipped.** A vision is committed text a teammate wrote
+    and this is a table on a terminal: a newline in one forges a row, and an ANSI sequence
+    redraws the screen somebody is reading the table on. `contain.one_line` is charter's
+    answer for exactly that shape of field. The clip is what is dropped
+    (`contain.NO_CLIP`): this is the trailing, unpadded field, so length costs the table
+    nothing — and a model matching an ask against half a sentence is matching against half
+    the evidence, which is the whole reason the column exists.
+
+    Never raises. A `workspace.md` charter cannot read costs its row a cell, not the
+    listing.
+    """
+    try:
+        first = next(iter(workspace.read_vision(name).splitlines()), "")
+    except Exception:
+        return NO_VISION
+    return contain.one_line(first, limit=contain.NO_CLIP) if first else NO_VISION
+
+
 def cmd_workspace_list(args) -> int:
     """Every workspace this plane offers, with the active one marked — #745.
 
@@ -52,8 +95,16 @@ def cmd_workspace_list(args) -> int:
     `workspace use`, `workspace create`) already calls `ensure`. A row costs nothing and
     cannot go stale; a directory named after last week's config can.
 
-    A row for it is honest about what it is: `local`, no clones, `—` for repos, which is
-    exactly what it holds.
+    A row for it is honest about what it is: `local`, no clones, `—` for repos and `—` for
+    a vision, which is exactly what it holds.
+
+    **VISION is the trailing field and REPOS joined the measured columns**, because this is
+    the listing a handoff proposal is matched against: the model reads these visions to
+    decide which workspace an ask belongs in (`docs/handoff.md`). Until it was here, the
+    command an agent is told to run said what each workspace HOLDS and nothing about what
+    any of them is FOR. It goes last and unclipped for the reason `_vision_cell` gives —
+    nothing after it needs the row to keep its shape, so leaving it whole costs alignment
+    nothing.
     """
     active = workspace.resolve()
     names = workspace.list_workspaces()
@@ -80,14 +131,15 @@ def cmd_workspace_list(args) -> int:
     #
     # Nothing here costs a subprocess: `clones` is a directory listing and `needs_reinit`
     # reads a file, so unlike `status` (#597) there is no reason to draw before measuring.
-    heads = ("WORKSPACE", "MODE", "CLONES")
+    heads = ("WORKSPACE", "MODE", "CLONES", "REPOS")
     body = []
     for n in names:
         cl = workspace.clones(n)
         stale = " ⚠" if workspace.needs_reinit(n) else ""
         body.append(("* " if n == active else "  ", n + stale,
                      "live" if n in live else "local", str(len(cl)),
-                     ", ".join(d.name for d in cl) if cl else "—"))
+                     ", ".join(d.name for d in cl) if cl else "—",
+                     _vision_cell(n)))
     widths = [tui.column(h, [row[i + 1] for row in body]) for i, h in enumerate(heads)]
 
     def line(mark, cells, last: str) -> str:
@@ -98,9 +150,9 @@ def cmd_workspace_list(args) -> int:
     # marker rather than a value measured from anything, which is how `frame.slots` and
     # `persona list` both spell theirs. One padder for the header and the rows, so the
     # two cannot disagree about a width the way a second format string would.
-    print(line("  ", heads, "REPOS"))
+    print(line("  ", heads, "VISION"))
     for row in body:
-        print(line(row[0], row[1:4], row[4]))
+        print(line(row[0], row[1:5], row[5]))
     stale_names = [n for n in names if workspace.needs_reinit(n)]
     if stale_names:
         util.warn(f"⚠ {len(stale_names)} workspace(s) need reinit ({', '.join(stale_names)}) — "

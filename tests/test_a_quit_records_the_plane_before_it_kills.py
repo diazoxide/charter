@@ -1174,9 +1174,14 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
         # than only which harness — and it joined them without moving `version`, because a
         # manifest one field older is the migration case the reader is built for: a missing
         # key reads as `""`, which reopens the chat on the built-in of its kind.
+        #
+        # `brief` joined them on the same terms, for a handoff's brief: the chat directory
+        # holding it is reaped when its launcher pid dies, so this file is the only copy
+        # that outlives a restart. Missing reads as `""`, which is every chat no handoff
+        # opened.
         self.assertEqual(
             sorted(raw["frames"][0]["chats"][0]),
-            ["active", "chat", "cwd", "harness", "persona", "profile", "resume",
+            ["active", "brief", "chat", "cwd", "harness", "persona", "profile", "resume",
              "transcript", "workspace"])
 
     def test_at_is_a_whole_number_of_seconds_and_defaults_to_now(self):
