@@ -1,0 +1,5 @@
+# A constant that is correct today but unkillable from above is a shape to
+
+_2026-09-12 15:01 · persistent_
+
+A constant that is correct today but unkillable from above is a shape to remove, not a number to retune. Measured on charter PR 983 (2026-09-12): a budget named the widest escape as 6 characters, and the true value was 7 because the formatter uses a minimum field width and non-BMP invisible characters need more. Setting it to 6 or to 3 both reddened tests; setting it to 7 stayed green, because no test can distinguish a correct width from a larger one - the mutant is unkillable from above by construction. The implementer did not change 6 to 7: it deleted the per-character width and passed sys.maxsize, because a per-character width is a claim about which categories Unicode has assigned where, and that claim is wrong in both directions at once - one too small silently clips the output, one too large is a mutant nothing can catch. The test that had missed the bug used ordinary characters needing no escaping at all, so it was green under every budget; the replacement sends a brief made OF escaped characters.

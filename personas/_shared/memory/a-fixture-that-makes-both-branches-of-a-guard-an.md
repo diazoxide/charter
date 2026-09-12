@@ -1,0 +1,5 @@
+# A fixture that makes both branches of a guard answer the same thing turn
+
+_2026-09-12 16:46 · persistent_
+
+A fixture that makes both branches of a guard answer the same thing turns its test green no matter what the guard does. Measured three times on charter this session (2026-09-12, PRs 983 and 990): a no-op guard tested against a plane with no state directory, where the missing-file error and the intended no-op both produce the same answer; a deliberately planted read error whose patch could be deleted entirely with the test still passing, because the fixture had no file to read either way; and a brief-privacy assertion computed from the function under test, where both sides moved together. Each was found by mutation rather than by reading, and each was invisible to the question 'is this test correct?' asked of the test alone. The question that finds them: what would this fixture answer if the code under test did nothing at all - and if that is the same answer the test expects, the test pins nothing.

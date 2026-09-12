@@ -1,0 +1,5 @@
+# A verification question scoped to the states you already suspect can onl
+
+_2026-09-12 10:51 · persistent_
+
+A verification question scoped to the states you already suspect can only confirm or deny those states. Measured on charter PR 982 (2026-09-12): the controller asked the implementer to verify every state where doctor's hint names 'reinit', and got a complete, correct, three-row table - every reinit row cleared by the command it named. A second gate was asked about nine states chosen without regard to which were suspected, and found that in three of them - docs/, personas/<p>/ and a deep directory inside a checkout - the hint names 'guard ask' and running it never clears the row, because no charter command writes a settings file into those directories while Claude Code reads settings from the session's exact directory. The earlier fix had stopped naming the wrong command there and left an equally inert one, so the defect moved rather than closed. When scoping a verification, enumerate the states from the code that decides them and ask about all of them, including the ones you are confident about.

@@ -1,0 +1,5 @@
+# Claude Code 2.1.268, rule Bash(charter handoff *) in place, manual mode,
+
+_2026-09-11 15:05 · persistent_
+
+Claude Code 2.1.268, rule Bash(charter handoff *) in place, manual mode, measured by the PR #972 round-1 review (2026-09-11, mock Messages API): a handoff behind a shell expansion ran with NO prompt — $'charter' handoff, charter $'handoff', charter ha$''ndoff, charter {handoff,}, charter ${x:-handoff}, charter hando?f beside a file named handoff — and so did one inside eval '...', bash -c '...' and a bash <<'EOF' heredoc body, and one on a line after a << hidden in a comment. It DID prompt for charter handoff<<'BRIEF' beta and two spaces after handoff. Claude Code's permissions docs (section 'What a Bash rule doesn't match', #bash-rule-limits) say a deny/ask rule covers the invocation Claude usually produces and isn't a security boundary around the program, and doesn't match the program inside sh -c. charter's A7 therefore guards a good-faith chat's spelling, one level into eval/sh -c strings, and documents what it cannot see.

@@ -1,0 +1,5 @@
+# When validating a test suite by mutation, the question that finds holes
+
+_2026-09-12 09:39 · persistent_
+
+When validating a test suite by mutation, the question that finds holes is 'what can I break with nothing noticing?', not 'which test notices this breakage?'. Measured on charter PR 982 (2026-09-12): the implementer ran the controller's three named breakages, noticed two of its own six tests were unexercised by them, added a breakage for each, and reported all of them caught - a true table. An independent reviewer instead searched for mutations that produce NO red test and found four the first method could not surface by construction: an allow rule travelling through the local-file path rather than the shared one, deleting a containment guard, deleting a pattern match, and deleting an except clause. Both derivations were correct; only the second was adversarial. A breakage list built from the tests you already wrote can only confirm those tests, because every entry starts from a behaviour someone already thought to name.

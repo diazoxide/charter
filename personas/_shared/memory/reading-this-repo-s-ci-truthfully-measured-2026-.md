@@ -1,0 +1,5 @@
+# Reading this repo's CI truthfully (measured 2026-09-11 on PR 966; extend
+
+_2026-09-11 08:02 · persistent_
+
+Reading this repo's CI truthfully (measured 2026-09-11 on PR 966; extends the MERGE GATE memory): (1) 'gh pr checks --watch' can exit 1 while every check is still pending, so never take its exit code as the result; poll 'gh pr checks' instead (it exits 8 while any check is pending, 0 when all pass, 1 when one failed; empty output means the call itself failed, so retry). (2) 'gh pr checks' lists fail-fast-CANCELLED matrix jobs as 'fail': '4 fail' was 1 real failure plus 3 cancellations. Before diagnosing, read each job's own conclusion with 'gh run view <run> --json jobs'. (3) 'gh run view <run> --log-failed' may hold only ONE failed job's log, so use 'gh run view --job <job_id> --log' per job to see which tests failed where; that is how an intermittent failure (one job only) was told apart from a deterministic one (every job). (4) The pull_request and push 'tests' runs both exist per head: if both fail the same test, the failure is the commit's; if only pull_request fails, main moved under the branch.

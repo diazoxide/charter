@@ -1,0 +1,5 @@
+# When one comparison serves two callers, the metric is shared but the cho
+
+_2026-09-12 11:52 · persistent_
+
+When one comparison serves two callers, the metric is shared but the choice of which error to prefer belongs to each caller. Measured on charter PR 983 (2026-09-12): a duplicate-detection rule was changed to fall back to title identity when the word overlap carries too little signal, and the controller ruled it be applied to every path because it is a property of the metric. On 20 realistic hand-written pairs that flipped 10 verdicts, 5 better and 5 worse - every regression being a one-line todo retitled by one word. The two callers want opposite errors: for the interactive todo command a duplicate is a refusal, so a false duplicate costs a rephrase while a missed one leaves two near-identical todos; for a handoff a false duplicate silently drops the todo and the work becomes invisible. Tiny-set overlap cannot distinguish 'retitled by a word' from 'different work sharing a word', so no better metric resolves it - the rule was scoped to the handoff path and the other caller's behaviour restored.

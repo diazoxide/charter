@@ -1,0 +1,5 @@
+# An equivalence claim for surviving mutants must be audited by someone wh
+
+_2026-09-12 07:14 · persistent_
+
+An equivalence claim for surviving mutants must be audited by someone who attacks the mutant's own line, not by replaying a corpus. Measured on charter PR 972 (2026-09-12): the implementer probed 37 surviving mutants against 485 distinct command lines through eleven internal contracts and reported that not one answer moved, so the controller ruled them equivalent rather than unpinned. An independent reviewer rebuilt all 65 of CI's unkilled mutants, applied them, and built two small corpora aimed at specific mutant LINES plus a token-span sweep: five moved a contract and three moved the hook's own answer, including one that made a whole rule stop firing after any unquoted close-paren (refuse to allow, with both shells running the payload) and one that crashed the hook with a TypeError on an ordinary command. The method's blind spot was that all 485 lines were REAL commands, while most movers needed a malformed or unusual one. A corpus of realistic inputs proves a mutant harmless on realistic inputs and nothing more.

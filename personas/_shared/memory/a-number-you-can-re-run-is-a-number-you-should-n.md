@@ -1,0 +1,5 @@
+# A number you can re-run is a number you should never carry on trust, abo
+
+_2026-09-12 23:25 · persistent_
+
+A number you can re-run is a number you should never carry on trust, above all in a document whose value is that a reader can check it. Observed on charter PR 999 (2026-09-12, the chat-handoff ADR): the controller's dispatch stated that the old arrivals record lost a mark in 399 of 400 rounds. The implementer re-measured before writing it down and got 400 of 400, saying so plainly - 'that measurement's neighbour, not what I got' - and an independent reviewer then got 400 of 400 on a harness written without seeing either. Its own reasoning is the rule: the arrivals number was the one measurement in the dispatch it could reproduce end to end in minutes, and an ADR's whole value is that a reader in a year can re-run its claims. A docs or ADR task that accepts the numbers it is handed is wrong exactly where nobody will re-check, and the person handing over the number is the last one who would catch it.

@@ -1,0 +1,5 @@
+# A test can be pinned by the platform rather than by the test, and CI is
+
+_2026-09-12 12:50 · persistent_
+
+A test can be pinned by the platform rather than by the test, and CI is where that shows. Measured on charter PR 989 (2026-09-12): two guards calling Path.resolve() died under mutation on macOS, where the temp directory is reached through a /var to /private/var symlink, and survived the entire suite on Linux CI, which has no such symlink - so the tests were leaning on an accident of the machine and the repo's own SessionRootCase documents that asymmetry in a comment. The fixture had to create its own symlink so the guard is pinned everywhere. The method note matters as much: the implementer first hand-wrote the three mutations from CI's warning text, all three died locally, and that contradicted CI. Instead of calling CI flaky it pulled CI's artifact and applied the mutations VERBATIM, which is what exposed the platform dependence - and one mutation's own record read 'red once, green on confirmation', the tell that would otherwise have been missed. A guessed mutation is a guessed pin.

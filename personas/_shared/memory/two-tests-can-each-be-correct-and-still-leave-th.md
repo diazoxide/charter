@@ -1,0 +1,5 @@
+# Two tests can each be correct and still leave the join between them unco
+
+_2026-09-12 11:23 · persistent_
+
+Two tests can each be correct and still leave the join between them uncovered. Measured on charter PR 983 (2026-09-12): the handoff command passes a brief through open_in_background into an Opening object, and the harness reads it at startup. One test used a stand-in for the opener that recorded the brief itself; another built the Opening object by hand with the brief already set. Both passed, and deleting the single word that passes the brief at the call site left thirteen test modules green while the real plane lost the brief entirely and the command still reported success. The repo's mutation sweep offered no operator on that line either, so nothing could have caught it. When a value crosses a seam, one of the tests has to exercise the real call on both sides of it: a stand-in on one side and a hand-built object on the other means every test stands AROUND the join rather than on it.

@@ -1,0 +1,5 @@
+# A kill loop that reaps more processes than it launched is matching somet
+
+_2026-09-12 12:43 · persistent_
+
+A kill loop that reaps more processes than it launched is matching something else, and the count is the tell. Measured on charter 2026-09-12: a reviewer ran ps -eo pid,command piped through grep and awk into kill, to stop the one CI watcher it had started; the output printed three killed PIDs. It read that output and did not ask why the count was wrong, and it did that three times, each time also killing the controller's own watcher for the same PR. That shape is pkill -f wearing a different coat. The rule that survives contact: capture a PID at launch, kill that PID, and never kill anything you did not start - including when you are confident it is yours, because that confidence is exactly what turned one launch into three kills. The same agent also found the mirror failure in itself: a watcher it started, whose log held a terminal verdict, which it never read before reporting the state as still pending. Apparatus that was killed and apparatus that was abandoned produce the same wrong answer.

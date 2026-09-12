@@ -57,3 +57,4 @@ Written by the persona as it learns; committed and shared.
 - [When a release branch is overtaken by a PR that EDITS the same docs/news](when-a-release-branch-is-overtaken-by-a-pr-that-.md)
 - [A news entry's headline: wrapped in YAML-style single quotes ships those](a-news-entry-s-headline-wrapped-in-yaml-style-si.md)
 - [Cutting a release: 'charter news stamp <X.Y.Z>' run from the release wor](cutting-a-release-charter-news-stamp-x-y-z-run-f.md)
+- [A news entry written between one tag and the next can credit its own rel](a-news-entry-written-between-one-tag-and-the-nex.md)

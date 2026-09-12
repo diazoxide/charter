@@ -1,0 +1,5 @@
+# The self-comparing test appeared four times in one session, in four unre
+
+_2026-09-12 18:48 · persistent_
+
+The self-comparing test appeared four times in one session, in four unrelated places, and always looked different. Measured on charter 2026-09-12 across PRs 983 and 990: a title-cap test that read the cap off the constant it guarded; a brief-privacy assertion comparing the committed file to the function that writes it, recomputed at assert time; a committed-todo body doing the same; and an operator sentence built as prefix plus TEMPLATE.format(...), where deleting the workspace placeholder from the template left the suite green - the exact property the test existed to confirm. In every case both sides of the comparison moved together, so the test could not fail; in every case the fix was the same, write the expected value out literally; and in every case the tell was the same, the expectation mentions the thing under test. It is worth grepping for that shape directly - an assertion whose expected side names the module, constant or function being asserted about - rather than waiting for mutation testing to find each instance.

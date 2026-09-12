@@ -1,0 +1,5 @@
+# git worktree list can EXIT 0 WITH AN INCOMPLETE LIST. Measured by PR 948
+
+_2026-09-11 11:55 · persistent_
+
+git worktree list can EXIT 0 WITH AN INCOMPLETE LIST. Measured by PR 948's implementer on git 2.50.1 (macOS, 2026-09-11): with a repo's .git/worktrees directory unreadable (chmod 000), git worktree list --porcelain exits 0 and prints only the main worktree, silently leaving out every linked worktree. So a successful exit is not proof that the list is complete. Code that makes a destructive or unhiding decision from that list (charter's exclude-block accounting, Ruling G on PR 948) must also READ the common dir's worktrees directory itself: os.scandir succeeding, or FileNotFoundError/NotADirectoryError meaning no linked worktrees, counts as certain; any other error (EACCES, EIO, ESTALE) means cannot account, so keep everything. lstat succeeding on that directory is not enough, because lstat needs no read permission on it. Measure the per-entry case (one worktrees/<name> unreadable) before trusting git there too.

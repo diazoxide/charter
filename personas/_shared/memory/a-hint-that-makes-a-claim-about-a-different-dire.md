@@ -1,0 +1,5 @@
+# A hint that makes a claim about a different directory is not verified un
+
+_2026-09-12 11:14 · persistent_
+
+A hint that makes a claim about a different directory is not verified until you stand in that directory and re-read the row. Measured on charter PR 982 (2026-09-12): doctor's advice for a directory charter does not wire ended 'start the chat in the plane root, a workspace, or a checkout, and it is gated there'. Checking it where the hint appears proves nothing about that claim. Walking to the plane root and re-reading showed it true when the plane holds the rule and FALSE when nothing holds it anywhere - the operator is told their chats are gated somewhere they are not. The same walk also showed the suppressed command was not inert in that state: run from the unwired directory it writes the rule into the plane, after which the plane root and workspaces pass. A further case has the same shape: a workspace whose layer is stale is not gated either, so any sentence enumerating where the rule IS in force can be false one directory over. An inert command wastes a minute; a false statement is believed.

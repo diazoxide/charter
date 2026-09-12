@@ -1,0 +1,5 @@
+# CORRECTION to the memory 'a constant that is correct today but unkillabl
+
+_2026-09-12 15:34 · persistent_
+
+CORRECTION to the memory 'a constant that is correct today but unkillable from above is a shape to remove': the order of inference and measurement was the other way round, and the order is the point. On charter PR 983 (2026-09-12) the implementer did not discover the constant was unkillable by mutating it. It inferred the true ceiling from the format string - the escape uses a minimum field width, so the widest escape is a fact about the maximum code point, not about which categories Unicode has assigned - and only then measured 6 red, 3 red, 7 green to CHECK that inference. Its own statement: if 7 had come back red it would still have deleted the constant, because a width that is right by survey is right only until the survey changes. So the rule is not 'delete a constant your mutation testing cannot kill'; it is 'do not encode a claim about an external standard's contents as a number, whatever the mutation result says' - and mutation testing then confirms or refutes the argument rather than producing it.

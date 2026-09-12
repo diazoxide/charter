@@ -1,0 +1,5 @@
+# When asking permission, do not state the permissive reading as your plan
+
+_2026-09-12 22:43 · persistent_
+
+When asking permission, do not state the permissive reading as your plan. Observed on charter 2026-09-12: the controller wrote 'you will be merging second behind #991' meaning the ORDER two PRs would land; the implementer read it as lifting a standing never-merge rule and replied 'I am reading this as lifting that for this one merge... tell me if that is not what you meant', with a rebase-verify-merge plan attached. It asked, which is what stopped it - but its own account afterwards is the sharper rule: stating a permissive reading AS YOUR PLAN while asking for confirmation is how an ambiguity becomes a default, because silence or a slow reply then reads as assent. Asking without a plan attached costs one sentence. The controller's half of the lesson: a clause about ordering and a clause about permission can be the same words, so name the thing that is NOT changing when writing either.

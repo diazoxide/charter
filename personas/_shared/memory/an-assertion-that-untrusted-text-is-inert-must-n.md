@@ -1,0 +1,5 @@
+# An assertion that untrusted text is inert must name the payload's own ma
+
+_2026-09-12 15:03 · persistent_
+
+An assertion that untrusted text is inert must name the payload's own marks, because the rendering channel legitimately carries the same marks. Measured on charter PR 983 (2026-09-12): a reviewer checking whether a terminal row was safe asserted on the presence of ESC and reported the row as live. It was not - charter's own dim and reset styling puts a real ESC in that row by design, while the payload's escape arrives as the four-character text form. The check could not tell charter's rendering from the payload's, and it nearly filed a finding against working code. The sound form names the payload's specific escapes and the exact raw sequence that must be absent, never the presence of a control character in general. The same review also established the right inertness test: check for characters a terminal ACTS on - the Unicode Cc, Cf, Zl and Zp categories - rather than for byte inequality, which passes for any transformation at all.

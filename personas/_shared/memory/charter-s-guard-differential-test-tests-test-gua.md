@@ -1,0 +1,5 @@
+# charter's guard differential test (tests/test_guard_differential.py) can
+
+_2026-09-11 15:56 · persistent_
+
+charter's guard differential test (tests/test_guard_differential.py) cannot catch a bypass that main ALSO allows. Its corpus, guard_denied_by_main.txt, holds only inputs main already denies, so 'zero rows weaker than main' proves the change didn't weaken an existing denial and says nothing about shapes both versions let through. Seen on PR 974 (the #973 heredoc fix, 2026-09-11): the differential was green while a pipeline split across lines (a cat heredoc line ending in a pipe, then the body, the terminator, and bash on the next line) leaked a planted secret through real bash, zsh and dash on both main and the branch. Mutation sweeps can't find it either, because they mutate existing lines and never invent a missing input shape. For any guard change: keep an explicit MUST-BE-DENIED corpus of attack shapes, including ones main allowed, have an adversarial reviewer build new shapes against real shells with a fake secret, and never rest a guard's coverage claim on the differential alone.

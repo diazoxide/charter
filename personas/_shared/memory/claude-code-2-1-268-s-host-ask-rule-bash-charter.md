@@ -1,0 +1,5 @@
+# Claude Code 2.1.268's host ask rule Bash(charter handoff *), measured 20
+
+_2026-09-11 12:05 · persistent_
+
+Claude Code 2.1.268's host ask rule Bash(charter handoff *), measured 2026-09-11 against a local mock Messages API with a throwaway HOME (scratchpad handoff-4, --bare, -p --permission-prompts none where a denial means 'would prompt', plus one interactive tmux run). In the session's OWN .claude/settings.json it asks in manual, default, acceptEdits, auto AND bypassPermissions (interactive bypass showed 'Permission rule Bash(charter handoff *) requires confirmation for this command'). It matches a quoted heredoc, an unquoted heredoc, a body holding $(x) and backticks, no heredoc, a FOO=1 prefix, an env wrapper and a segment after 'cd . &&'. It does NOT match 'python3 -m charter handoff' or an absolute path to charter: both ran unprompted in every mode. A no-rule control ran every shape. G2: the rule only in the plane's settings.json asks at the plane root but not in a session at workspaces/<ws>/ whose generated settings hold only env; adding permissions.ask to that workspace file makes it ask again.
