@@ -148,5 +148,45 @@ class TestNearDuplicates(PersonaIso):
         self.assertIsNone(todos.duplicate_of("alpha", "prove the live path"))
 
 
+class TestADuplicateJudgedByTitle(PersonaIso):
+    """`by_title`, for a writer whose todos all end in the same sentence.
+
+    `charter handoff` is that writer. Scored over the whole text, its fixed nine-word
+    provenance tail read as agreement on both sides: two briefs with no word in common
+    scored 0.750 and the second was dropped, so the second handoff into a workspace recorded
+    nothing at all.
+    """
+
+    TAIL = ("\n\nHanded off from chat alpha.1 · workspace alpha. The full brief is private "
+            "to the chat it opened.")
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.ensure("alpha")
+        todos.add("alpha", "Fix the widget" + self.TAIL)
+
+    def test_the_shared_tail_alone_used_to_make_two_todos_the_same_one(self):
+        """The measurement the flag exists for, kept as a test so it cannot quietly come
+        back: over the whole text these two are a duplicate pair."""
+        self.assertIsNotNone(todos.duplicate_of("alpha", "Ship the release" + self.TAIL))
+
+    def test_a_different_first_line_is_a_different_todo(self):
+        self.assertIsNone(
+            todos.duplicate_of("alpha", "Ship the release" + self.TAIL, by_title=True))
+
+    def test_the_same_first_line_is_still_the_same_todo(self):
+        """The other direction, or the flag is a way of never reporting a duplicate."""
+        self.assertEqual(
+            todos.duplicate_of("alpha", "Fix the widget" + self.TAIL, by_title=True),
+            "Fix the widget")
+
+    def test_a_first_line_of_only_short_words_reports_nothing(self):
+        """`memstore.wordset` keeps words longer than three characters, and a comparison
+        with no words on one side is not a judgement — the same answer the whole-text
+        comparison gives for a todo with nothing comparable in it."""
+        self.assertIsNone(todos.duplicate_of("alpha", "fix the bug" + self.TAIL,
+                                             by_title=True))
+
+
 if __name__ == "__main__":
     unittest.main()

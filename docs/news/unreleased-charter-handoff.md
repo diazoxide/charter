@@ -23,14 +23,17 @@ The brief becomes the new chat's first message. Your harness asks before the com
 1. With `--create`, makes the workspace (LOCAL) and records its vision.
 2. Records a todo in the target workspace, titled by the brief's first line, with one line of
    provenance under it — **never the brief**, because a LIVE workspace commits `todos/**`. A
-   todo already on the list is reported and not recorded twice, and the handoff continues.
+   todo already on that list that says the same work — the same word-overlap rule any todo
+   is checked against, asked over the first lines, because every handoff todo ends in the
+   same provenance sentence — is named and not recorded twice, and the handoff continues.
 3. Opens a chat there in the background. No client moves, nothing attaches, and the chat you are
    on keeps its panels — measured on tmux 3.7c and at charter's 3.2 floor with real clients
    attached.
 4. Sends the first message: a stamp line, a blank line, then the brief verbatim, on the
    harness's own argv (`claude "<msg>"`, `codex "<msg>"`, `opencode --prompt "<msg>"`).
 5. The chat is born locked to its workspace and asks no workspace question.
-6. Keeps the full brief in that chat's private state under `.charter/`, never committed.
+6. Keeps the full brief in that chat's private state under `.charter/`, never committed, and
+   written at the moment the chat id is allocated — before the harness it is for starts.
 7. Tallies `{"event": "handoff", "ts", "placement", "created"}` — no workspace name, no persona,
    no text — and clears `routing: require`'s pending mark, because opening a chat in a workspace
    *is* routing.
@@ -44,9 +47,10 @@ can observe and no instruction, so the new chat can tell the message was not typ
 Nothing is created, recorded or opened until every refusal has been asked: a name that cannot be
 a workspace, `--vision` without `--create` or the reverse, `--create` on a workspace that exists
 (`default` included), an unknown workspace without `--create`, a persona nobody has, a stdin
-that is a terminal (asked before any read, so it never blocks), a brief that is empty or not
-UTF-8, and a brief shaped like a credential — named by KIND, never by value, because the brief
-reaches the harness as a command-line argument any local process can read while it starts.
+that is a terminal (asked before any read, so it never blocks) or closed altogether, a brief
+that is empty or not UTF-8, and a brief shaped like a credential — named by KIND, never by
+value, because the brief reaches the harness as a command-line argument any local process can
+read while it starts.
 
 **Outside a frame, or inside a tmux you started yourself**, charter prints the exact
 `charter <harness> --workspace <ws> …` command to run in a new terminal instead of stopping —

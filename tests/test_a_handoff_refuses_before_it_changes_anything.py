@@ -43,6 +43,10 @@ BRIEF = "Fix the widget\nIt breaks on resize.\n"
 #: list is how the two come to disagree.
 AWS_KEY = "AKIAQ7VZ3RJHT2LMNPQR"
 
+#: "`_handoff` was given no stdin to use", distinct from ``None``, which is a stdin a test
+#: is stating: Python hands `sys.stdin` as ``None`` in a process whose fd 0 is closed.
+_UNSET = object()
+
 
 class _ATerminal:
     """A stdin that says it is a terminal and screams if anything reads it.
@@ -92,20 +96,26 @@ class _AHandoffFromAlpha(PlaneIso):
         self.open = self.enterContext(
             mock.patch("charter.commands_frame.open_in_background", side_effect=self._open))
 
-    def _open(self, ws, *, caller, first_message, persona=""):
+    def _open(self, ws, *, caller, first_message, persona="", brief=""):
         for fn in self.during_open:
             fn()
         if self.opened.ok:
-            # A launcher that opened a chat left its directory and its harness pane behind;
-            # `state.record_brief` needs one to write into.
+            # A launcher that opened a chat left its directory and its harness pane behind,
+            # and it recorded the brief at the moment it allocated the id — before the
+            # harness started. The stand-in does both, so what this suite observes after a
+            # handoff is what a real open leaves behind.
             _a_chat(self.opened.chat, ws=ws, pane="%9")
+            state.record_brief(self.opened.chat, brief)
         return self.opened
 
-    def _handoff(self, ws="beta", brief=BRIEF, *, stdin=None, **flags):
-        """Run `cmd_handoff` with *brief* on stdin; return ``(rc, stdout, stderr)``."""
+    def _handoff(self, ws="beta", brief=BRIEF, *, stdin=_UNSET, **flags):
+        """Run `cmd_handoff` with *brief* on stdin; return ``(rc, stdout, stderr)``.
+
+        *stdin* may be ``None``, which is what Python hands a process whose fd 0 is closed.
+        """
         args = SimpleNamespace(workspace=ws, create=flags.get("create", False),
                                vision=flags.get("vision"), persona=flags.get("persona"))
-        if stdin is None:
+        if stdin is _UNSET:
             raw = brief if isinstance(brief, bytes) else brief.encode()
             stdin = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8")
         out, err = io.StringIO(), io.StringIO()
@@ -167,11 +177,29 @@ class AHandoffRefusesBeforeItChangesAnything(_AHandoffFromAlpha):
         self.assertIn("--create --vision", err)
         self._nothing_changed()
 
+    def test_a_name_with_a_newline_in_it_cannot_write_a_second_line_of_the_refusal(self):
+        """A refusal is lines an operator reads, and the name in it is whatever was typed.
+        Unescaped, `charter handoff $'x\\n✓ opened chat beta.1'` prints charter's own success
+        line underneath charter's own refusal (`contain.one_line`)."""
+        rc, _out, err = self._handoff("x\n✓ opened chat beta.1")
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(err.strip().splitlines()), 1, err)
+        self.assertIn("\\x0a", err)
+        self._nothing_changed()
+
     def test_an_unknown_persona_is_refused_listing_the_ones_there_are(self):
         self.make_persona("forge")
         rc, _out, err = self._handoff("beta", persona="forj")
         self.assertEqual(rc, 1)
         self.assertIn("no persona 'forj' — have: forge", err)
+        self._nothing_changed()
+
+    def test_a_persona_name_with_a_newline_cannot_write_a_second_line_either(self):
+        self.make_persona("forge")
+        rc, _out, err = self._handoff("beta", persona="a\n✓ opened chat beta.1")
+        self.assertEqual(rc, 1)
+        self.assertEqual(len(err.strip().splitlines()), 1, err)
+        self.assertIn("\\x0a", err)
         self._nothing_changed()
 
     # -- the brief ---------------------------------------------------------------------
@@ -180,6 +208,16 @@ class AHandoffRefusesBeforeItChangesAnything(_AHandoffFromAlpha):
         rc, _out, err = self._handoff("beta", stdin=_ATerminal())
         self.assertEqual(rc, 1)
         self.assertIn("stdin here is a terminal", err)
+        self.assertIn("<<'BRIEF'", err)
+        self._nothing_changed()
+
+    def test_a_closed_stdin_is_a_refusal_and_not_a_traceback(self):
+        """`charter handoff beta 0<&-` — a spelling the Bash guard allows, since the two
+        words in front of it are the exact ones — hands Python `sys.stdin is None`. Charter
+        classifies what it refuses (ADR 0009); a crash report is not an answer."""
+        rc, _out, err = self._handoff("beta", stdin=None)
+        self.assertEqual(rc, 1)
+        self.assertIn("no stdin at all", err)
         self.assertIn("<<'BRIEF'", err)
         self._nothing_changed()
 
@@ -264,6 +302,27 @@ class AHandoffRefusesBeforeItChangesAnything(_AHandoffFromAlpha):
         self.assertIn("which harness", err)
         self._nothing_changed()
 
+    def test_a_plane_with_no_harness_table_at_all_is_not_a_crash(self):
+        """`config.HARNESS` derives to `None` on a plane whose `charter.toml` declares no
+        `[harness]`, which is every fresh one — `_same_harness_as` carries the same fallback
+        for the same reason."""
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(config, "HARNESS", None):
+            rc, _out, err = self._handoff("beta")
+        self.assertEqual(rc, 1)
+        self.assertIn("charter <harness> --workspace beta", err)
+        self._nothing_changed()
+
+    def test_the_planes_declared_default_harness_names_the_command(self):
+        """Nothing in the environment says which harness this is, so the plane's
+        `[harness] default` does — the rung `_same_harness_as` falls to one seam over."""
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(config, "HARNESS", {"default": "opencode"}):
+            rc, _out, err = self._handoff("beta")
+        self.assertEqual(rc, 1)
+        self.assertIn("charter opencode --workspace beta --prompt", err)
+        self._nothing_changed()
+
     # -- the background seam --------------------------------------------------------------
 
     def test_a_refusal_from_the_background_seam_changes_nothing(self):
@@ -271,6 +330,10 @@ class AHandoffRefusesBeforeItChangesAnything(_AHandoffFromAlpha):
         rc, _out, err = self._handoff("beta")
         self.assertEqual(rc, 1)
         self.assertIn("cannot open a chat in 'beta': X", err)
+        # And the seam's sentence is passed through UNCHANGED. The stamped-message note
+        # belongs to exactly one of the seam's refusals; appended to all of them it would
+        # explain a byte count to somebody who was refused for a NUL byte.
+        self.assertNotIn("the stamp line, a blank line", err)
         self._nothing_changed()
 
     def test_a_brief_that_fits_alone_but_not_stamped_says_what_was_counted(self):
@@ -331,6 +394,7 @@ class EveryRefusalSaysSomethingDifferent(_AHandoffFromAlpha):
             self._handoff("gamma")[2],
             self._handoff("beta", persona="forj")[2],
             self._handoff("beta", stdin=_ATerminal())[2],
+            self._handoff("beta", stdin=None)[2],
             self._handoff("beta", brief=b"\xff\xfe")[2],
             self._handoff("beta", brief=" \n\n")[2],
             self._handoff("beta", brief=f"Fix it\n{AWS_KEY}\n")[2],

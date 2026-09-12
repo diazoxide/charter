@@ -63,8 +63,14 @@ BRIEF
 1. With `--create`, creates the workspace and records its vision.
 2. Records a todo in the target workspace, titled by the brief's first line, with one line of
    provenance under it. **Not the brief** — a LIVE workspace commits `todos/**`, and a brief
-   never reaches a committed file. If that todo is already on the list, charter records nothing,
-   says so, and carries on: a second chat on the same brief may be exactly what you approved.
+   never reaches a committed file. If a todo already on that workspace's list says the same
+   work, charter names it, records nothing, and carries on: a second chat on the same work may
+   be exactly what you approved. "The same work" is the word-overlap rule any todo is checked
+   against (Jaccard ≥ 0.5), asked over the **first lines** — every handoff todo ends in the same
+   nine-word provenance sentence, and compared over the whole text that boilerplate reads as
+   agreement: `Fix the widget` and `Ship the release`, which share no word at all, scored 0.750
+   and the second was dropped as a duplicate of the first. Over first lines they score 0.000,
+   and two handoffs on the same brief still score 1.000.
 3. Opens a chat in the target workspace **in the background**. No client moves, nothing
    attaches, and the chat you are on keeps its panels — measured on tmux 3.7c and at charter's
    3.2 floor, with real clients attached: the session's current window is the same one before
@@ -78,7 +84,9 @@ BRIEF
    That lock depends on the harness keeping the chat id charter starts it with, and two are
    named as not doing that yet: opencode's plugin overwrites `$CHARTER_SESSION_ID` (#946), and
    Codex gets no session id outside a frame (#954).
-6. Keeps the full brief in that chat's private state, under `.charter/`, never committed.
+6. Keeps the full brief in that chat's private state, under `.charter/`, never committed —
+   written at the moment the chat id is allocated, which is before the window that starts the
+   harness, because the brief is the thing that chat exists to read.
 7. Appends one row to the dispatch tally — `{"event": "handoff", "ts", "placement", "created"}`,
    with no workspace name, no persona and no text — and clears `routing: require`'s pending mark
    for the turn that ran it, on every harness. The handoff **is** the routing answer.
@@ -115,9 +123,14 @@ nothing is created, nothing is recorded, and no chat is opened.
 | stdin is a terminal — asked before any read, so it never blocks | the heredoc form |
 | an empty brief | the heredoc form |
 | bytes on stdin that are not UTF-8 | that they are not text |
+| stdin closed altogether (`0<&-`) | that there is nothing to read, and the heredoc form |
 | a brief shaped like a credential | the KIND, never the value |
 | no frame here, or charter is a window in a tmux you already had | the exact command to run in a new terminal |
-| anything `commands_frame.background_refusal` refuses — an empty, flag-shaped, single-word, NUL-carrying or oversized first message | the seam's own sentence |
+| the background seam's own refusals: a NUL byte in the first message or one past the byte bound; a chat that records no harness charter can launch, or one charter has not measured the first message of; a session of the target workspace's name this plane cannot prove is its own | the seam's own sentence |
+
+The seam also refuses a first message that is empty, starts with `-`, or is a single word — and
+**a handoff cannot produce one**. The stamp goes in front, so every handoff's first message opens
+with `⟨` and runs to eleven words or more: a brief of `--help me now` opens a chat.
 
 **The byte cap is on the stamped message, not on your brief.** charter refuses a first message
 past 12,288 bytes, counted the way `exec` is handed them. That bound is charter's own policy,

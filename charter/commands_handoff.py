@@ -21,7 +21,8 @@ The order is the spec's, and the order is the design:
 3. the frame — this shell has to be a chat charter can open a background window beside;
 4. `commands_frame.background_refusal`, the seam's own answer, asked while it is still free.
 
-Then the writes: the workspace, the todo, the chat, the private brief, the tally, the line.
+Then the writes: the workspace, the todo, then the chat — which carries the private brief in
+with it, so the file exists before the harness that reads it — then the tally and the line.
 """
 
 from __future__ import annotations
@@ -81,8 +82,14 @@ STAMPED_MESSAGE = (
     "  The bytes counted are the message the new chat is sent: the stamp line, a blank "
     "line, then your brief, which is {n} bytes on its own. A brief that fits alone can be "
     "over once it is stamped.")
+#: What a partway failure says. It names what is left behind and then what did NOT happen,
+#: and it stops short of "nothing else was written": the launcher that failed had already
+#: claimed a chat directory and put this brief in it (`commands_frame.Opening.brief`), and
+#: that directory is the launcher's to leave and `state.reap`'s to clear. What the operator
+#: is actually asking is whether something is out there working on this.
 NOTHING_ELSE = (
-    "charter handoff: {why}\n  What stays: {stays}. Nothing else was written.")
+    "charter handoff: {why}\n  What stays: {stays}. No chat opened, so the brief was sent "
+    "to nobody and nothing is running.")
 OPENED = "charter handoff: opened chat {chat} in workspace '{ws}', started on the brief"
 
 
@@ -156,8 +163,14 @@ def cmd_handoff(args) -> int:
     # A chat of THIS plane whose harness pane is this process's: the two halves `state.is_live`
     # documents, because a frame id can be inherited by a shell that is not in the frame.
     in_a_chat = chats.is_chat(fid) and state.is_live(fid, pane=os.environ.get("TMUX_PANE"))
-    source_chat = fid if in_a_chat else (fid or handoff.NO_CHAT)
-    source_ws = state.workspace_for(fid) if in_a_chat else workspace.resolve()
+    # Neither stamp value asks `in_a_chat`, and the deletion sweep is what settled that.
+    # `chats.is_chat("")` is False, so a chat's id is never empty and `fid or NO_CHAT` is
+    # `fid` for every chat; and `state.workspace_for` ENDS in `workspace.resolve()` for an
+    # id it knows nothing about, so it already answers the outside-a-frame case. Two
+    # conditionals no input could make observable, which in this repository is the same
+    # finding as dead code.
+    source_chat = fid or handoff.NO_CHAT
+    source_ws = state.workspace_for(fid)
     msg = handoff.first_message(handoff.stamp(source_chat, source_ws), brief)
     if not in_a_chat or tmuxctl.is_operator_socket(state.frame_server(fid)
                                                    or commands_frame.SOCKET,
@@ -189,7 +202,12 @@ def cmd_handoff(args) -> int:
         workspace.ensure(ws)
         workspace.set_vision(ws, args.vision)
     text = handoff.todo_text(brief, source_chat=source_chat, source_workspace=source_ws)
-    dup = todos.duplicate_of(ws, text)
+    # `by_title`, and it is not a tweak: every handoff todo ends in the same nine-word
+    # provenance sentence, and compared over the whole text that boilerplate reads as
+    # agreement — `Fix the widget` and `Ship the release` scored 0.750, so the second
+    # handoff into a workspace recorded nothing at all. What two todos are ABOUT is their
+    # first lines (`todos.duplicate_of`).
+    dup = todos.duplicate_of(ws, text, by_title=True)
     if dup:
         # Reported and continued, not refused: a second chat on the same brief may be
         # exactly what was approved, and charter makes no judgement about the content of
@@ -197,8 +215,12 @@ def cmd_handoff(args) -> int:
         util.info(f"already on '{ws}'s list: {contain.one_line(dup)} — not recorded twice")
     else:
         todos.add(ws, text)
+    # The brief rides INTO the launch rather than being written after it: the chat id is
+    # allocated inside `cmd_launch`, so the earliest moment this file can exist is the
+    # moment the id does — and that is still before the harness, whose SessionStart is
+    # what reads it back (`commands_frame.Opening.brief`).
     opened = commands_frame.open_in_background(ws, caller=fid, first_message=msg,
-                                               persona=args.persona or "")
+                                               persona=args.persona or "", brief=brief)
     if not opened.ok:
         # What stays has to be TRUE, so the duplicate case says what actually happened:
         # a reader told "the todo is recorded" who then finds one older row would read the
@@ -209,9 +231,6 @@ def cmd_handoff(args) -> int:
             stays.append(f"the workspace '{ws}' was created")
         util.err(NOTHING_ELSE.format(why=opened.message, stays=", and ".join(stays)))
         return 1
-    # Private state, never committed and never listed by `clear_shape`: the brief is what
-    # the chat was opened to do, which is the same kind of durable fact as its workspace.
-    state.record_brief(opened.chat, brief)
     # No workspace name, no persona, no brief. A LOCAL workspace's name would otherwise
     # reach a committed file through the tally (plan Open question 16).
     dispatch.record_handoff(placement="here" if ws == source_ws else "elsewhere",

@@ -28,6 +28,26 @@ def slug(title: str) -> str:
     return s[:48] or "note"
 
 
+#: The longest a memory title may be. It becomes a `# ` heading, an index row and — through
+#: :func:`slug` — part of a filename, so it is one line and it is short.
+TITLE_MAX = 72
+
+
+def title_of(text: str) -> str:
+    """The title :func:`write` derives from a memory's body: its first line, capped.
+
+    **Its own function because a READER has to be able to compute the same string.**
+    `todos.duplicate_of` asks whether a todo it is about to write already exists, and one
+    side of that comparison is a title `write` derived this way — so a second spelling of
+    "the first line, stripped, capped" is how the writer and the reader come to disagree
+    about which todos are the same one.
+
+    ``""`` for a body with nothing in it; :func:`write` refuses such a body outright.
+    """
+    body = (text or "").strip()
+    return body.splitlines()[0].strip()[:TITLE_MAX] if body else ""
+
+
 def index_path(mem_dir: Path) -> Path:
     return mem_dir / "MEMORY.md"
 
@@ -75,7 +95,7 @@ def write(mem_dir: Path, text: str, title: str | None = None, *, timestamped: bo
     text = (text or "").strip()
     if not text:
         raise ValueError("empty memory")
-    title = (title or text.splitlines()[0]).strip()[:72]
+    title = title.strip()[:TITLE_MAX] if title else title_of(text)
     # Before the mkdir, and before a byte is written: both targets are checked up front so
     # a refusal leaves the store exactly as it was, rather than a memory file on disk that
     # nothing indexes.

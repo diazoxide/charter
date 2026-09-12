@@ -1995,7 +1995,14 @@ def record_brief(fid: str, text: str) -> None:
     a density somebody pressed, a pane map — and every one of them is wrong for the next
     frame. A brief is what the chat was opened to do, which is the same kind of durable
     per-chat fact as `workspace` and `cwd`.
+
+    **An empty brief writes no file**, because :func:`brief` already reads an empty one as
+    "no brief" — so the file would be one more thing in a chat directory that means
+    nothing. Every background open passes through here (`commands_frame.Opening.brief`),
+    and every one that is not a handoff carries none.
     """
+    if not text:
+        return
     d = frame_dir(fid, create=True)
     if d is None:
         return

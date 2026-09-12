@@ -74,21 +74,37 @@ def add(name: str, text: str, *, stamp: datetime.datetime | None = None) -> Path
     return memstore.write(todos_dir(name), text, timestamped=True, index=True, stamp=stamp)
 
 
-def duplicate_of(name: str, text: str) -> str | None:
+def duplicate_of(name: str, text: str, *, by_title: bool = False) -> str | None:
     """The title of an existing todo that already says this, or None.
 
     Deliberately a query rather than something :func:`add` enforces: the *policy* — warn
     and skip — belongs to the command, so the store stays a store. Scoped to one workspace,
     since an identical todo in another is a different task's business.
+
+    **`by_title` compares FIRST LINES, on both sides, and it exists because a writer whose
+    todos all end in the same sentence otherwise reads as agreeing with itself.**
+    `charter handoff` is that writer: its todo is the brief's first line plus a nine-word
+    provenance sentence every handoff todo carries. Measured on the whole text, `Fix the
+    widget` and `Ship the release` — briefs with no word in common — scored **0.750** and
+    the second was refused as a duplicate of the first; any two handoff titles of four or
+    fewer distinct words collided that way, so the second handoff into a workspace recorded
+    nothing. The threshold was not the defect and moving it would not have fixed it: the
+    boilerplate is not part of what makes two todos the same piece of work, so it does not
+    belong in the comparison. What the todos are ABOUT is their first lines, which is what
+    "already says this" was always meant to mean.
+
+    The stored side is `memstore.entries`' title, and the asking side is
+    `memstore.title_of` — the same rule `memstore.write` titled it by, asked rather than
+    respelled.
     """
     existing = memstore.entries(todos_dir(name))
     if not existing:
         return None
-    words = _words(text)
+    words = _words(memstore.title_of(text) if by_title else text)
     if not words:
         return None
     for _p, title, body in existing:
-        other = _words(f"{title} {memstore.body(body)}")
+        other = _words(title if by_title else f"{title} {memstore.body(body)}")
         if not other:
             continue
         # Jaccard — intersection over UNION, the same metric `memstore.duplicates` uses.

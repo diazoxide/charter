@@ -416,6 +416,9 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
         self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
         self.make_persona("forge")
         self.argvs: list[list[str]] = []
+        #: ``(argv, the brief on disk for beta.1 at that moment)`` per tmux call, so a test
+        #: can ask what existed BEFORE the window that starts the harness was created.
+        self.brief_at: list[tuple[list[str], str | None]] = []
 
     def _launch(self, *, opening=None, attach=False, reopening=None):
         args = SimpleNamespace(harness="claude", rest=["fix it please"], no_frame=False,
@@ -429,6 +432,7 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
 
         def run(action, argv, **kw):
             self.argvs.append(list(argv))
+            self.brief_at.append((list(argv), state.brief("beta.1")))
             return subprocess.CompletedProcess(
                 argv, 0, "%9\n" if "new-window" in argv else "", "")
 
@@ -496,6 +500,22 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
     def test_an_opening_with_no_persona_writes_no_pointer(self):
         self._launch(opening=commands_frame.Opening("fix it please"))
         self.assertIsNone(persona.for_session("beta.1"))
+
+    def test_an_openings_brief_is_on_disk_before_the_window_that_starts_the_harness(self):
+        """The brief is what the new chat exists to read, and `charter reopen`'s SessionStart
+        block (Task 5) reads it as the harness starts. Written by the CALLER after
+        `cmd_launch` returned, it appeared only once the harness was already running — a race
+        that reproduces on nobody's machine. So it is written where the persona pointer is,
+        at id allocation, and the window that starts the harness comes after."""
+        self._launch(opening=commands_frame.Opening("fix it please", brief="fix it\nplease\n"))
+        made = [(argv, brief) for argv, brief in self.brief_at if "new-window" in argv]
+        self.assertTrue(made, self.argvs)
+        self.assertEqual(made[0][1], "fix it\nplease\n")
+
+    def test_an_opening_with_no_brief_leaves_no_brief_file(self):
+        self._launch(opening=commands_frame.Opening("fix it please"))
+        self.assertIsNone(state.brief("beta.1"))
+        self.assertFalse((config.STATE_DIR / "frame" / "beta.1" / "brief").exists())
 
     def test_an_ordinary_launch_still_selects_its_window(self):
         """The gate is an `and`, not a replacement: a launch with no opening, whose `attach`

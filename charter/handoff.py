@@ -35,6 +35,11 @@ NO_CHAT = "none"
 #: already in its argv.
 UNKNOWN_HARNESS = "<harness>"
 
+NO_STDIN = (
+    "charter handoff: this shell has no stdin at all — the command was run with its input "
+    "closed, so there is nothing to read a brief from and nothing was opened. Pass the "
+    "brief as a quoted heredoc in the same call:\n"
+    "  charter handoff {ws} <<'BRIEF'\n  <the brief>\n  BRIEF")
 TTY_BRIEF = (
     "charter handoff: reads its brief from stdin, and stdin here is a terminal — nothing "
     "was opened. Pass the brief as a quoted heredoc in the same call:\n"
@@ -92,12 +97,20 @@ def read_brief(stream, ws: str) -> tuple[str, str]:
 
     **`isatty()` before any read, and that order is the whole function.** A read on a
     terminal blocks forever with nothing on screen to say why, which inside an agent's Bash
-    tool is a turn that never ends. The three refusals name the heredoc in the same breath,
+    tool is a turn that never ends. The refusals name the heredoc in the same breath,
     because a chat that reached here typed the command without one.
+
+    **A CLOSED stdin is a refusal, not a traceback.** Python hands `sys.stdin` as ``None``
+    when fd 0 is closed, so `charter handoff beta 0<&-` — a spelling the Bash guard allows,
+    because the two words in front of it are the exact ones — reached `isatty()` on
+    ``None`` and drafted a crash report. Charter classifies what it refuses (ADR 0009), and
+    nothing about this is a surprise to the process it happened in.
 
     The brief is kept **verbatim** — leading blank lines, trailing newline and all. It is
     what the new chat is sent, and a handoff that tidied it would send text nobody approved.
     """
+    if stream is None:
+        return "", NO_STDIN.format(ws=ws)
     if stream.isatty():
         return "", TTY_BRIEF.format(ws=ws)
     # `.buffer`, not `.read()`: the decision "is this UTF-8" has to be charter's, and a

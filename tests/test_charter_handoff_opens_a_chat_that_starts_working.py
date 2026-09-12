@@ -111,7 +111,50 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         self.assertEqual(todos.count_open("beta"), 1)
         self.assertIn("not recorded twice", err)
 
+    def test_a_second_handoff_about_something_else_records_its_own_todo(self):
+        """Every handoff todo ends in the same nine-word provenance sentence. Compared over
+        the whole text, that boilerplate read as agreement: `Fix the widget` and `Ship the
+        release` — no word in common — scored 0.750, so the SECOND handoff into a workspace
+        recorded nothing at all, silently, and any two titles of four or fewer distinct words
+        collided the same way. The comparison is over first lines now."""
+        self._handoff("beta", brief="Fix the widget\nIt breaks on resize.\n")
+        self._handoff("beta", brief="Ship the release\nCut 0.61.0.\n")
+        rc, _out, err = self._handoff("beta", brief="Rotate the token\nIt expires Friday.\n")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("not recorded twice", err)
+        self.assertEqual(sorted(r["title"] for r in todos.open_todos("beta")),
+                         ["Fix the widget", "Rotate the token", "Ship the release"])
+
+    def test_the_same_brief_twice_still_collapses_to_one_todo(self):
+        """The other direction, or the fix above is not pinned: a comparison loose enough to
+        let disjoint briefs through must still catch the brief that really is the same one."""
+        self._handoff("beta", brief=BRIEF)
+        rc, _out, err = self._handoff("beta", brief=BRIEF)
+        self.assertEqual(rc, 0)
+        self.assertIn("not recorded twice", err)
+        self.assertEqual([r["title"] for r in todos.open_todos("beta")], ["Fix the widget"])
+
+    def test_the_brief_itself_never_reaches_the_committed_todo(self):
+        """A LIVE workspace commits `todos/**`, and a brief may quote anything — a
+        transcript, a customer's data, the text of a secret it is warning the next chat off.
+
+        Asserted against the RAW files, before `memstore.body`'s strip-and-lowercase: read
+        through `open_todos()["text"]`, putting the WHOLE brief in the todo left 807 tests
+        green. The index file is read too, since it carries a row per todo."""
+        self._handoff("beta")
+        written = "\n".join(p.read_text() for p in sorted(todos.todos_dir("beta").rglob("*"))
+                            if p.is_file())
+        self.assertIn("Fix the widget", written)
+        self.assertNotIn("It breaks on resize.", written)
+
     # -- the private brief -----------------------------------------------------------------
+
+    def test_the_full_brief_goes_into_the_launch_that_records_it(self):
+        """Not written afterwards by this command: the chat id is allocated inside the
+        launch, so the earliest moment the file can exist is the moment the id does — and
+        that is still before the harness whose SessionStart reads it back."""
+        self._handoff("beta")
+        self.assertEqual(self.open.call_args.kwargs["brief"], BRIEF)
 
     def test_the_full_brief_is_kept_in_the_new_chats_private_state(self):
         self._handoff("beta")
@@ -119,6 +162,15 @@ class AHandoffOpensAChatThatStartsWorking(_AHandoffFromAlpha):
         p = state.frame_dir("beta.1") / "brief"
         self.assertTrue(p.is_relative_to(config.STATE_DIR), p)
         self.assertEqual(os.stat(p).st_mode & 0o077, 0)
+
+    def test_a_first_message_starting_with_a_dash_still_opens_a_chat(self):
+        """The seam refuses an empty, flag-shaped or single-word first message. A handoff
+        cannot produce one: the stamp goes in front, so every handoff's first message opens
+        with `⟨` and runs to eleven words or more. `docs/handoff.md` says so; this is why."""
+        rc, out, _err = self._handoff("beta", brief="--help me now\nand nothing else.\n")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.open.call_args.kwargs["first_message"].startswith("⟨"))
+        self.assertIn("opened chat beta.1", out)
 
     def test_a_new_frame_claiming_the_id_does_not_take_the_brief(self):
         """`clear_shape` forgets a previous frame's READINGS. A brief is what the chat was
@@ -213,9 +265,19 @@ class TheFactsAHandoffIsMadeOf(PersonaIso):
     def test_a_chat_charter_knows_nothing_about_has_no_brief(self):
         self.assertIsNone(state.brief("nobody.9"))
 
-    def test_an_empty_brief_file_is_no_brief(self):
-        """A chat shown an empty labelled block would read it as "your brief was blank"."""
+    def test_an_empty_brief_writes_no_file(self):
+        """Every background open passes a brief through, and every one that is not a handoff
+        passes none — a file that reads as "no brief" is one more thing in a chat directory
+        to explain."""
         state.record_brief("beta.1", "")
+        self.assertFalse((state.frame_dir("beta.1", create=True) / "brief").exists())
+
+    def test_a_brief_file_that_is_empty_is_no_brief(self):
+        """Written by hand, because `record_brief` refuses to make one: a truncated write or
+        an older charter can still leave one, and a chat shown an empty labelled block would
+        read it as "your brief was blank"."""
+        d = state.frame_dir("beta.1", create=True)
+        config.replace_for(d / "brief", "")
         self.assertIsNone(state.brief("beta.1"))
 
     def test_a_brief_charter_cannot_write_is_not_an_exception(self):
