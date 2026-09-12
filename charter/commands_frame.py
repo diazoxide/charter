@@ -9698,7 +9698,12 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
         entries[c.workspace].append(reopen_state.Chat(
             chat=c.chat, workspace=c.workspace, persona=c.persona, harness=c.harness,
             cwd=c.cwd, resume=c.resume, transcript=transcript,
-            active=c.chat in active, profile=c.profile))
+            active=c.chat in active, profile=c.profile,
+            # Read here rather than carried on `Doomed`: it is not something the quit's
+            # warning says anything about, and `leave.plan` reads one plane for the row an
+            # operator is shown. `or ""` because `state.brief` answers `None` for the chats
+            # that were not opened by a handoff, which is nearly all of them.
+            brief=state.brief(c.chat) or ""))
     for ws in order:
         frames.append(reopen_state.Frame(workspace=ws, chats=tuple(entries[ws])))
     if not reopen_state.write(frames, focus=focus):
@@ -10008,8 +10013,24 @@ def _forget_transcript(fid: str) -> None:
             at=0, focus="", frames=())).all_chats()})
 
 
+def _resumes(c) -> bool:
+    """Whether *c*'s conversation comes back — the ONE answer, asked in two places.
+
+    A reopen now asks this twice: `_reopen_one` to decide whether to hand the harness
+    `--resume`, and :func:`_restore_recorded_chat` to decide whether the chat is owed its
+    brief. A second spelling is how those two would come to disagree — one passing the flag
+    while the other decided the chat came back empty, and the chat then reading its brief on
+    top of the transcript that already holds it.
+
+    Two conditions and both are load-bearing: a recorded id (only a chat that took a turn
+    has one) and a harness that takes the flag (`leave.resumable_harness` — Claude Code
+    alone, asked of the registry).
+    """
+    return bool(c.resume) and leave.resumable_harness(c.harness)
+
+
 def _restore_recorded_chat(rec, fid: str) -> None:
-    """Move the two id-keyed things a recorded chat owns onto its new id *fid*.
+    """Move the id-keyed things a recorded chat owns onto its new id *fid*.
 
     **The persona pointer.** `state.identity`'s `CHARTER_PERSONA` is the launch PIN, which
     is empty for every chat that was not launched with one — so a chat's actual persona
@@ -10030,10 +10051,18 @@ def _restore_recorded_chat(rec, fid: str) -> None:
     to move — which is what the equality test says, and why it is an equality test rather
     than an `exists` check.
 
+    **The brief.** A handoff's brief is the whole context the chat has, and it lives under
+    the id that is about to stop existing — so it moves here like the other two. What is
+    decided here as well is whether the chat has ever SEEN it: a chat whose conversation
+    does not come back (:func:`_resumes`) reopens empty and is owed the brief at its next
+    SessionStart (`hooks._brief_block`); one that resumes already has it as the first
+    message of its own transcript.
+
     Never raises. A persona that could not be pointed at leaves the chat on the plane's
     default, which is visible on its own panel; a transcript that could not be moved leaves
-    the row with nothing to offer. Neither is worth failing a relaunch over, which is the
-    promise every writer in `frame/state.py` makes for the same reason.
+    the row with nothing to offer; a brief that could not be written leaves an empty chat as
+    empty as it was before any of this existed. None is worth failing a relaunch over, which
+    is the promise every writer in `frame/state.py` makes for the same reason.
     """
     from . import persona as persona_mod
     # `valid_name` alone, and the `rec.persona and` that used to stand in front of it is
@@ -10048,6 +10077,16 @@ def _restore_recorded_chat(rec, fid: str) -> None:
             persona_mod.set_active(rec.persona, session_id=fid, terminal_id="")
         except (OSError, ValueError):
             pass
+    if rec.brief:
+        # The brief moves onto the new id whichever way the conversation went: a chat that
+        # resumes still has to be recorded with its brief by the NEXT quit, and the old
+        # chat's directory is already gone.
+        state.record_brief(fid, rec.brief)
+        if not _resumes(rec):
+            # ...and only a chat that comes back EMPTY is owed it. One that resumes is
+            # reading the brief in its own transcript, where it arrived as the first
+            # message the operator approved.
+            state.owe_brief(fid)
     old = reopen_state.transcript_path(rec.chat)
     new = reopen_state.transcript_path(fid)
     if old is None or new is None or old == new:
@@ -10462,7 +10501,7 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
                     chat=c.chat, name=contain.readable(name or c.harness or "nothing")))
         return None
     rest: list[str] = []
-    if c.resume and leave.resumable_harness(c.harness):
+    if _resumes(c):
         rest = ["--resume", c.resume]
     # **Asked BEFORE `_restore_root`, which MAKES the workspace directory when it is gone**
     # (#867). The note below is about the plane the operator left, not about the one this

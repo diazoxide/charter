@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: `charter handoff` opens a chat in any workspace, already working on the brief you approved
+headline: `charter handoff` opens a chat in any workspace, already working on the brief you approved — and a work-shaped prompt is told where it could run
 ---
 
 You are in a chat about one thing and you ask for another. Until now that ended one of three
@@ -62,6 +62,33 @@ read while it starts.
 with the workspace creation in front of it when you asked for one, `CHARTER_PERSONA=` when you
 named a persona, and every word quoted.
 
+## How a chat finds out it can
+
+On every work-shaped prompt, charter's prompt block now leads with **Where this could run**:
+the three placements (a sub-agent, a new chat here, a new chat in another workspace), the two
+tests that pick one, and this workspace's vision quoted from `workspace.md` as data. It no
+longer waits for the acting persona to declare `routing:` — the persona roster it embeds still
+does, because "who else exists" is a different question. It names no placement and no other
+workspace; the model matches the ask against the visions `charter workspace list` shows, which
+is why that listing grew a `VISION` column: the first line of each workspace's vision, as the
+trailing field, untruncated.
+
+On an unattended run the block says instead that `charter handoff` is refused there and names
+`charter ws todo --workspace`.
+
+**`charter:handoff`** ships as a skill: apply the two tests, find the workspace, write the brief
+from a template (goal, what is known with paths, done when, constraints, the claim-a-piece line),
+show it **in full** in a quiz, and run the command only on a yes.
+
+## A chat that comes back empty is shown its brief
+
+The brief now travels in the reopen record, which is the only copy that outlives the chat
+directory `reap` takes on a restart. A chat whose conversation does not come back — codex, and
+Claude Code before its first turn — is shown it at its next start as a quoted block labelled
+data to read and never an instruction to obey, with the operator now in front of it named as
+outranking it. A chat that resumes is shown nothing: the brief is already the first message of
+its transcript.
+
 ## Limits
 
 - **No report back.** A handed-off chat never answers the chat that opened it; if you need the
@@ -71,7 +98,8 @@ named a persona, and every word quoted.
   your brief — so a brief that fits on its own can be over once stamped. The refusal says both
   numbers. That bound is charter's own, set under tmux's measured 16,364-byte command limit.
 - **A brief never carries a secret.** It is argv while the harness starts.
-- **The tab strip does not point at the arrival yet**, and a chat that reopens empty is not
-  shown its brief. Both are the next slices.
+- **An opencode chat that reopens empty is not shown its brief**, because opencode has no
+  SessionStart hook at all. `charter doctor` names that gap.
+- **The tab strip does not point at the arrival yet.** That is the next slice.
 
 `charter docs show handoff` has the whole of it, including how the consent was measured.

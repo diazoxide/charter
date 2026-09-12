@@ -90,6 +90,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 import unicodedata
 from pathlib import Path
 
@@ -167,6 +168,20 @@ def refusal(name: str) -> str:
 #: Wide enough for a server name or a short command, narrow enough that a committed value
 #: cannot own the terminal.
 DISPLAY_LIMIT = 160
+
+#: What a caller passes as :func:`one_line`'s *limit* to mean **do not clip** — for a field
+#: whose whole point is that the reader gets all of it: a command line meant to be pasted
+#: and run (`handoff._shown`), a workspace vision a proposal is matched against
+#: (`commands_workspace.cmd_workspace_list`), the brief a reopened chat is shown
+#: (`hooks._brief_block`). Those want the ESCAPING and not the budget above it.
+#:
+#: **A ceiling rather than a width computed per character**, and `charter/handoff.py`'s own
+#: note records why: the first spelling multiplied the input by the widest escape it
+#: believed in — 6, for the ``\\uXXXX`` form — and `one_line` formats with ``:04x``, a
+#: MINIMUM width, so a codepoint outside the BMP renders as seven characters and the budget
+#: under-shot. Counting to seven instead would be the same mistake with a better number: it
+#: is a claim about which categories Unicode has assigned where.
+NO_CLIP = sys.maxsize
 
 #: Unicode general categories with no glyph of their own, escaped by :func:`one_line`.
 #: Named by CATEGORY rather than by codepoint, because a list of bad codepoints is a list

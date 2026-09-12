@@ -1113,6 +1113,17 @@ workspace whose directory has been deleted is remade the same way, empty, and th
 line says so; its clones are still gone, and charter still never re-homes a chat into a
 workspace it did not name.
 
+**A chat opened by a handoff comes back with its brief, and is shown it when it comes back
+empty.** The brief is the whole context that chat has ([handoff.md](handoff.md)) and it
+lives in the chat's own private state, which is reaped along with the chat directory when
+the launcher pid that held it is dead — so it travels in the record instead. Where the
+conversation resumes, nothing is shown: the brief is the first message of that transcript
+already. Where it does not — codex and opencode always, Claude Code for a chat that never
+took a turn — the chat's next `SessionStart` quotes it as a labelled data block, saying
+plainly that the operator now in front of it outranks the text. **An opencode chat is not
+shown it**, because opencode has no `SessionStart` hook at all; `charter doctor` names that
+gap rather than charter pretending to fill it.
+
 Run it from an ordinary shell. **Inside a tmux you already have it refuses**, because charter
 builds a frame there as a window on your own server and that launcher stays awake for the
 life of each frame — so reopening several chats would stop at the first. It says so and
@@ -1133,7 +1144,9 @@ never comes back leaves a record of the chats you had, not a record of the last 
 quit.
 
 It writes exactly what a quit writes: which chats existed, in which workspace, with which
-harness, persona and directory, and which one was on screen. It does **not** capture
+harness, persona, profile and directory, which one was on screen, and — for a chat a
+handoff opened — the brief it was opened on. The record is plane-private state under
+`.charter/`, never committed, which is the bound a brief keeps everywhere. It does **not** capture
 scrollback — that is one `capture-pane` per chat and it is what a quit is for — but it does
 name a capture a quit already left behind, so a record taken while you are working never
 withdraws an offer a quit made.

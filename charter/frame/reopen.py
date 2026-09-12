@@ -127,6 +127,19 @@ class Chat(NamedTuple):
     #: Defaulted, because a manifest written one field ago is the migration case this whole
     #: reader is built to survive (:func:`_chat`), and `VERSION` stays 1 for it.
     profile: str = ""
+    #: The brief a handoff opened this chat on (`state.brief`), or ``""`` for every chat
+    #: that was not opened by one — which is almost all of them.
+    #:
+    #: **It rides here because nothing else outlives the chat directory.** The brief is
+    #: per-chat private state under `.charter/frame/<id>/`, and `reap` takes that directory
+    #: when the chat's launcher pid is dead — which after a restart is every launcher (see
+    #: the module docstring, which is the same argument for the harness session id). A
+    #: reopened chat whose conversation did not come back has nothing at all otherwise, and
+    #: the brief is the whole context it was opened with.
+    #:
+    #: **Never committed**, like the manifest it is in. `docs/handoff.md` states the bound:
+    #: a brief reaches no committed file, no tally row and no tmux option.
+    brief: str = ""
 
 
 class Frame(NamedTuple):
@@ -314,7 +327,7 @@ def _chat(raw) -> Chat | None:
         return None
     text = {k: (raw.get(k) if isinstance(raw.get(k), str) else "")
             for k in ("chat", "workspace", "persona", "harness", "cwd", "resume",
-                      "transcript", "profile")}
+                      "transcript", "profile", "brief")}
     return Chat(active=raw.get("active") is True, **text)
 
 

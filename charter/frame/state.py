@@ -2129,6 +2129,64 @@ def brief(fid: str) -> str | None:
     return text or None
 
 
+#: What :func:`owe_brief` writes: this chat's brief was never delivered as a message, so
+#: something has to show it.
+#:
+#: **A marker of its own, because "has a brief" and "has been told its brief" are different
+#: facts.** Every chat a handoff opens has a brief recorded (:func:`record_brief`) and got
+#: it as its first message; showing it again at every session start would be charter
+#: repeating, on its own authority, a message the operator approved once. The marker is
+#: written by exactly one caller — `commands_frame._restore_recorded_chat`, for a reopen
+#: whose conversation does not come back — so its presence means "this chat has never seen
+#: its brief".
+#:
+#: **Never cleared.** A chat reopened from a manifest is a FRESH id
+#: (`state.new_chat_id`), so the marker and the brief are both written under an id that has
+#: no history; `reap` takes the directory with both in it when the chat is gone. A clearing
+#: write would have to happen in a SessionStart hook, and a hook that deletes state on
+#: every start is one that deletes it the first time a harness starts twice.
+_BRIEF_OWED_FILE = "brief.owed"
+
+
+def owe_brief(fid: str) -> None:
+    """Mark *fid* as never having seen the brief it was opened on.
+
+    :func:`record_closed`'s shape and its promise: one byte through `config.write_for`, and
+    it never raises. What a failed write costs is one chat that came back empty and is not
+    shown what it was opened to do — which is exactly the state it was in before this
+    existed, recoverable by reading the workspace's todo list.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.write_for(d / _BRIEF_OWED_FILE, "1\n")
+    except OSError:
+        return
+
+
+def brief_owed(fid: str | None) -> bool:
+    """Whether *fid* is still owed its brief — one ``stat``, like :func:`was_closed`.
+
+    ``str | None`` where its siblings take ``str``, and the annotation is the contract
+    rather than looseness: its caller is `hooks._brief_block`, which asks this of
+    ``$CHARTER_SESSION_ID``, and outside a frame that is unset. :func:`frame_dir` answers
+    ``None`` for every value that cannot name a chat directory, so "there is no chat" and
+    "that chat owes nothing" reach the same ``False`` here — which is why the caller carries
+    no emptiness test of its own.
+
+    ``Path.exists`` answers ``False`` for a marker charter cannot stat as well as for one
+    that is not there, and here both fall on the SILENT side: an unreadable marker means
+    the chat is not shown a block. That is the opposite direction to :func:`was_closed`,
+    and deliberately so — the cost there is a tab the operator closes again, and the cost
+    here would be a brief injected into a conversation that already has it.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    return (d / _BRIEF_OWED_FILE).exists()
+
+
 #: What :func:`record_closed` writes, and the whole difference between a chat the operator
 #: CLOSED and a chat that merely stopped (§4i, and the accepted cost in the reopen design).
 #:

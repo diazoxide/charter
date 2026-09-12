@@ -1191,15 +1191,22 @@ class TestWorkspaceListColumnsLineUp(WorkspaceListCase):
         self.assertNotIn("live", self.row_for(rows, "alpha"))
 
     def test_the_repo_column_names_the_clones_and_a_dash_when_there_are_none(self):
-        """`", ".join(d.name for d in cl) if cl else "—"` — the last column, and both
-        halves of it were unpinned.
+        """`", ".join(d.name for d in cl) if cl else "—"` — and both halves of it were
+        unpinned.
 
         A workspace with no clones is the ordinary state of a freshly created one, and it
         is the case the `else` exists for; a workspace with two is what makes the join
         observable at all, since one clone joins to itself.
+
+        **Both workspaces are given a vision, and that is what keeps the dash assertions
+        about REPOS.** `VISION` took the trailing position and draws its own `—` for a
+        workspace nobody wrote one for, so a row-wide "no em dash here" would otherwise be
+        answered by a column this case says nothing about.
         """
         empty = "empty-ws"
         workspace.workspace_dir(empty).mkdir(parents=True, exist_ok=True)
+        workspace.set_vision("alpha", "Alpha has a vision")
+        workspace.set_vision(empty, "So does this one")
         for extra in ("second-clone", "third-clone"):
             (workspace.workspace_dir("alpha") / extra / ".git").mkdir(parents=True,
                                                                      exist_ok=True)

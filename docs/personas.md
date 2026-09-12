@@ -369,8 +369,16 @@ routes-to: forge, release
 | Level | What happens |
 | --- | --- |
 | `off` | nothing. The default when the key is absent. |
-| `advise` | on a work-shaped prompt, the commitment gate leads with the roster. |
+| `advise` | on a work-shaped prompt, the roster rows join the commitment gate's placement block. |
 | `require` | the same, plus an **ask** on the first edit of a turn where the roster fired and nothing was dispatched. |
+
+**The block those rows sit in fires whatever `routing:` says.** On every work-shaped prompt
+the commitment gate leads with **Where this could run** — the three placements (a
+sub-agent, a new chat here, a new chat in another workspace), the two tests that pick one,
+and this workspace's vision quoted as data. "Should this run here at all" precedes "who
+owns it", and a plane that never declared a routing posture still has chats doing two tasks
+at once. `routing:` governs the rows inside it, which are a different question: whether this
+persona wants to be told who ELSE exists. See [handoff.md](handoff.md).
 
 There is **no plane-level routing setting**. The level is only ever read from the one
 persona acting in a session, so a plane-wide floor would apply to personas that never asked
@@ -403,9 +411,15 @@ restriction would silently hide every persona created after the line was written
 
 ### When it stays quiet
 
+The **rows**:
+
 - the acting persona declares `off`, or declares nothing
 - there is no acting persona at all (`charter doctor` says so once, under `front door`)
 - the roster minus the acting persona is empty
+
+The **block around them** — "Where this could run" — keeps only the last of those
+conditions, which it shares with the gate it rides:
+
 - the prompt is a question, or the gate's cooldown is still running
 
 ### Whether it works

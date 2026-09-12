@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import datetime
 import shlex
-import sys
 
 from . import contain
 
@@ -34,7 +33,11 @@ from . import contain
 #: this exists to prevent. Counting to seven instead would be the same mistake with a
 #: better number: it is a claim about which categories Unicode has assigned where, and
 #: `contain._INVISIBLE`'s own docstring is about why charter does not make those.
-_NO_CLIP = sys.maxsize
+#:
+#: **The value lives in `contain`** (:data:`contain.NO_CLIP`) since the vision column and
+#: the reopened chat's brief block came to want the same thing. Two spellings of "do not
+#: clip" is two places to change the day `one_line` grows a second budget.
+_NO_CLIP = contain.NO_CLIP
 
 #: The first line of every handoff's first message. Facts charter can observe and no
 #: instruction: where it came from, which workspace that was, and when. The new chat — and
