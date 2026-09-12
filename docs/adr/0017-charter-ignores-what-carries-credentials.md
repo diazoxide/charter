@@ -72,3 +72,33 @@ but the missing reasoning.
 - This does not license charter to manage a plane's `.gitignore` generally. The trigger is
   narrow — charter's command created the path, and the path carries credentials. A path
   that fails either half gets a sentence, not a write.
+
+## Amendment, 2026-09-12: a file whose whole meaning is "not committed"
+
+`charter init` writes `/charter.local.toml` into a new plane's `.gitignore`, and
+`charter reinit` adds the line to a plane made before harness profiles existed. That file
+fails the second half of rule 1 as written: it holds `[harness]` tables — a kind, a command,
+an environment — and a variable named like a credential is **refused** in one, so by
+construction it carries none.
+
+The line is written anyway, because the trigger was never the word "credentials". It was
+*whether the plane has a defensible second posture*, and credential material was the only
+category where the answer had reliably been no. This file is the second: a harness profile
+is one machine's account and one machine's install path, and **the file exists only to hold
+what must not be shared** ([ADR 0022](0022-a-harness-profile-belongs-to-one-machine.md)).
+Committing it is not a choice with a cost on each side, the way committing
+`.claude/skills/playwright-cli/` is. It is the file's purpose, inverted.
+
+What is new, and what makes this worth recording rather than filing under "close enough":
+**charter does not trust the line it wrote.** A trace committed by accident is a disclosure —
+bad, and over. A profile in a committed file is a *command that runs on a click, on every
+machine that pulls it*, which is a failure with a future. So the line is a claim charter
+re-checks: while git tracks `charter.local.toml`, or would commit it, every profile declared
+there is refused by name with its own fix, and `charter doctor` warns. A plane that is no git
+repository has nothing to commit to and passes; any other answer git cannot give refuses too,
+because an unknown is not a pass ([ADR 0009](0009-errors-classify-they-do-not-guess.md)).
+
+The narrowness above survives intact, with the first half of the trigger unchanged and the
+second half stated as what it always meant: **charter's own command created the path, and the
+path has no posture but "untracked"**. A path a plane could reasonably commit still gets a
+sentence, not a write.

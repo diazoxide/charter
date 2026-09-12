@@ -20,6 +20,27 @@ same invariants on every harness; what differs is what it can *offer*, and `char
 names each gap rather than leaving it to be found (ADR 0015).
 _Avoid_: host, client, runner, IDE, platform
 
+**Harness profile**:
+A named way to launch one harness kind — its kind, its command, its environment — declared
+in the plane's `charter.local.toml`, which charter keeps out of git because a profile's
+command runs on a click with no permission prompt in between. Every registered kind is also
+a profile named after itself. Never an *alias*, which is a shell feature charter never sees,
+and not an *account*: a profile need not be a different one (ADR 0022).
+_Avoid_: alias, account
+
+**Kind**:
+Which harness program a profile launches, written as the word typed after `charter`:
+`claude`, `codex`, `opencode`. `$CHARTER_HARNESS` still holds the registry's name for it —
+`claude-code` — because hooks compare that value; the profile's own name rides beside it in
+`$CHARTER_HARNESS_PROFILE`.
+_Avoid_: type, flavour
+
+**Profile selector**:
+What a new chat's pane shows before any harness has run in it; the harness starts in that
+pane once a profile is picked. Not the workspace *picker*, which runs before tmux exists
+because a workspace is a tmux session and charter has to know which one first.
+_Avoid_: menu, dropdown, picker
+
 **Host**:
 A forge host — `github.com`, a self-hosted GitLab. Never the agent runtime: both senses of
 this word were load-bearing at once until ADR 0015 split them.
