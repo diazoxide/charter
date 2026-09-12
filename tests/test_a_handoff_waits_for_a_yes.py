@@ -1422,12 +1422,17 @@ class DoctorNamesTheGate(SessionRootCase):
         self.assertEqual(self.ADD, r.hint)
 
     def test_a_harness_reinit_writes_nothing_for_is_not_sent_to_reinit(self):
-        """`reinit` can only fix a harness whose layer it carries into this directory. Today
-        every harness but Claude Code is judged at the plane, so "missing here" already implies
-        "missing there" and this line cannot be reached by a real plane — which is why it had
-        no red test. It is the instruction in code all the same ("if nothing fixes it, say
-        nothing"), so it is pinned against the shape that would reach it: a session-rooted
-        harness that generates no workspace files."""
+        """`reinit` can only fix a harness whose layer it carries into this directory.
+
+        **This test reaches a branch no real plane reaches**, and says so rather than reading
+        as coverage. Every harness but Claude Code is judged at the plane, so "missing here"
+        already implies "missing at the plane" and the clause has bowed out before this line
+        matters — which is why it had no red test. The shape below is CONSTRUCTED: Claude Code
+        with its `workspace_files` patched empty, which is a harness that is judged at the
+        session root and generates nothing there. Kept because it is the instruction in code
+        ("if nothing fixes it, say nothing rather than naming a command that will not work"),
+        and the day another harness generates workspace files its absence would be a defect
+        nobody could trace (#982 review round 1)."""
         self._claude_rule(config.ROOT)
         self._opencode_rule()
         self.rooted_at(self.workspace)

@@ -1986,7 +1986,17 @@ def _stale_layer_clause(missing: list, plane: dict) -> tuple[str, str]:
     * `reinit` must write THIS directory — :func:`_reinit_target`;
     * the harness actually MISSING the rule must be one whose layer `reinit` carries here. A
       harness that generates no workspace files is one `reinit` copies nothing for, so with
-      only opencode lacking the rule the answer is silence, not a command that cannot help;
+      only opencode lacking the rule the answer is silence, not a command that cannot help.
+
+      **No real plane reaches that branch today, and it is kept deliberately.** Every harness
+      but Claude Code is judged against `config.ROOT`, so "missing here" already implies
+      "missing at the plane" and the `present` test below has already said no. It is the code
+      form of the defect this round fixed — naming a command that does nothing for the harness
+      that is actually stale — and the day another harness generates workspace files, deleting
+      it turns the clause back into advice that cannot work with nobody left to remember why.
+      Its test reaches it with a CONSTRUCTED shape (a patched `workspace_files`), so a passing
+      test here is not evidence that any plane exercises it: read it as a fail-safe, not as
+      coverage, and do not let a deletion sweep nominate it (#982 review round 1);
     * the plane must hold the rule **by the row's own test** — `apply_ask_rule` against
       `config.ROOT`, the same reading, one root over. `restrictive_rules` was a second
       predicate over `ask`+`deny` flattened, and it disagreed: a plane that DENIES
