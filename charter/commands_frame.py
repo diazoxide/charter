@@ -4810,7 +4810,12 @@ def _choose_workspace(args) -> tuple[str, int | None, bool]:
         sys.stdout.flush()
 
     got = picker.ask(
-        picker.rows(switch.workspaces(), lambda n: len(workspace.clones(n))),
+        # The arrivals ride the list the launch is choosing from, because this is the
+        # earliest surface that can say "there is work waiting in that one" — before tmux,
+        # before a frame, before any strip exists to draw a mark on. `frame_slots._arrived`
+        # is the same read behind the same never-raises guard.
+        picker.rows(switch.workspaces(), lambda n: len(workspace.clones(n)),
+                    frame_slots._arrived()),
         current, read=_read, write=_write, name_ok=workspace.valid_name,
         width=tui.term_width())
 
@@ -9209,6 +9214,23 @@ def cmd_switch(args) -> int:
         if out.ok:
             _switch_client(fid, ws, said=out.message)
             return 0
+        # **Pressing the tab for the workspace you are already in IS looking at it**, and
+        # without this line that is the one state where the mark can never be paid. The
+        # frame drawing `*gamma` gives the block the mark's cell (`slots._mark_cell`), so
+        # the operator sitting in the arrived workspace is the one operator who cannot see
+        # the mark — while every other frame on the plane draws `✶gamma` and goes on
+        # drawing it, because `to_workspace` refuses this switch and `_switch_client` never
+        # runs. `docs/frame.md` says the mark stays "until you look at it"; this is what
+        # makes that sentence true rather than nearly true.
+        #
+        # Asked as a FACT and not off the refusal's wording: `to_workspace` refuses for
+        # three reasons and only this one means "you are here", so reading it out of
+        # `out.message` would be a sentence two surfaces have to keep agreeing about.
+        # Every workspace switch on this plane — the tab, the palette row, the keyboard
+        # walk and a typed `charter frame-switch` — arrives at this one function, so one
+        # line covers all four.
+        if ws == switch.current_workspace(fid):
+            _looked_at(ws)
     elif persona_name:
         out = switch.to_persona(fid, persona_name)
     else:

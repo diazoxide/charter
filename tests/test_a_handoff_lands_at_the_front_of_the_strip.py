@@ -26,14 +26,18 @@ Three things, and each is pinned here on its own terms:
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
+import threading
 import unicodedata
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, statusline, tui, workspace
-from charter.frame import chrome, slots, state, switch
+from charter.frame import choose, chrome, picker, slots, state, switch
 
 from tests._isolation import PersonaIso
 from tests.test_a_chat_opens_in_the_background_with_its_first_message import (
@@ -195,17 +199,31 @@ class TheArrivedTabIsDrawnInTheOkAccent(PersonaIso, unittest.TestCase):
         self.assertEqual(slots.bar_rows_wanted("f1", "workspaces", pane_cols=40, cap=3),
                          before)
 
-    def test_a_hostile_line_in_the_record_reaches_no_row(self):
+    def test_a_hostile_name_in_the_record_reaches_no_row(self):
         """The record is charter's own private state, and it is still read with a name
-        check — the line goes on to a strip. Both ways round: the record answers only the
+        check — the name goes on to a strip. Both ways round: the record answers only the
         name that can be one, and the raw erase never reaches a row."""
         _a_chat("f1", ws="alpha", pane="%1")
-        workspace._arrivals_file().parent.mkdir(parents=True, exist_ok=True)
-        workspace._arrivals_file().write_text("beta\n\x1b[2Jgamma\n")
+        d = workspace._arrivals_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "beta").write_text("")
+        (d / "\x1b[2Jgamma").write_text("")
         self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
         row = slots.workspaces_bar("f1", 200)[0]
         self.assertNotIn("\x1b[2J", row)
         self.assertIn(f"{statusline.accent('ok')}{ARRIVED}beta", row)
+
+    def test_an_arrival_wins_the_mark_cell_from_a_spinner(self):
+        """The two can only meet if a caller hands both — no strip does — and the docstring
+        says which wins. Pinned so the order is a decision rather than the way the `if`s
+        happen to be stacked. The spinner frame is fixed here because it is a clock
+        reading, and `_ARRIVED_MARK` is itself one of its three glyphs."""
+        with mock.patch("charter.frame.slots.tab_spinner_frame", return_value="✢"):
+            line = slots._compose(["alpha", "beta"], "alpha", 200,
+                                  arrived=frozenset({"beta"}),
+                                  busy=("beta",))[0][0]
+        self.assertIn(f"{statusline.accent('ok')}{ARRIVED}beta", line)
+        self.assertNotIn("✢beta", line)
 
 
 class TheArrivalsRecord(PersonaIso, unittest.TestCase):
@@ -215,46 +233,74 @@ class TheArrivalsRecord(PersonaIso, unittest.TestCase):
         old = os.umask(0)
         self.addCleanup(os.umask, old)
         workspace.record_arrival("beta")
-        f = workspace._arrivals_file()
-        self.assertTrue(f.is_file())
-        self.assertEqual(f.parent, workspace._tab_order_file().parent)
-        mode = stat.S_IMODE(f.stat().st_mode)
-        self.assertEqual(mode & 0o077, 0, f"the record came out {mode:04o}")
-        self.assertEqual(mode, config.STATE_FILE_MODE, f"the record came out {mode:04o}")
-        self.assertNotIn(state._root(), f.parents)
+        d = workspace._arrivals_dir()
+        self.assertTrue((d / "beta").is_file())
+        self.assertEqual(d.parent, workspace._tab_order_file().parent)
+        mode = stat.S_IMODE((d / "beta").stat().st_mode)
+        self.assertEqual(mode & 0o077, 0, f"the mark came out {mode:04o}")
+        self.assertEqual(mode, config.STATE_FILE_MODE, f"the mark came out {mode:04o}")
+        dmode = stat.S_IMODE(d.stat().st_mode)
+        self.assertEqual(dmode & 0o077, 0, f"the record came out {dmode:04o}")
+        self.assertNotIn(state._root(), d.parents)
+
+    def test_the_mark_is_the_files_existence_and_carries_nothing_else(self):
+        """ADR 0011 said in bytes: nothing reads WHEN a workspace arrived, so there is
+        nowhere for a field nothing reads to go."""
+        workspace.record_arrival("beta")
+        self.assertEqual((workspace._arrivals_dir() / "beta").read_bytes(), b"")
 
     def test_a_name_is_recorded_once(self):
         workspace.record_arrival("beta")
         workspace.record_arrival("beta")
         self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
-        self.assertEqual(workspace._arrivals_file().read_text(), "beta\n")
+        self.assertEqual(sorted(p.name for p in workspace._arrivals_dir().iterdir()),
+                         ["beta"])
 
-    def test_a_line_that_cannot_name_a_workspace_is_not_read_back(self):
-        workspace._arrivals_file().parent.mkdir(parents=True, exist_ok=True)
-        workspace._arrivals_file().write_text("beta\n../x\n\n")
+    def test_a_name_that_cannot_be_a_workspace_is_never_joined_onto_a_path(self):
+        """The name check moved to the WRITE when the record grew a path per name. `..`
+        under `STATE_DIR` is #442 arriving through a record instead of a listing."""
+        workspace.record_arrival("../escaped")
+        self.assertEqual(workspace.arrivals(), frozenset())
+        self.assertFalse((Path(config.STATE_DIR).parent / "escaped").exists())
+        self.assertFalse(workspace._arrivals_dir().exists())
+
+    def test_a_name_that_cannot_name_a_workspace_is_not_read_back(self):
+        d = workspace._arrivals_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "beta").write_text("")
+        (d / ".DS_Store").write_text("")
         self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
 
-    def test_a_record_that_cannot_be_read_is_no_marks(self):
-        with mock.patch("pathlib.Path.read_text", side_effect=OSError):
+    def test_a_record_that_cannot_be_listed_is_no_marks(self):
+        """The fixture has a real mark in it, so the two branches answer differently: with
+        the guard `frozenset()`, without it a traceback out of a panel's render."""
+        workspace.record_arrival("beta")
+        self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
+        with mock.patch("os.listdir", side_effect=OSError):
             self.assertEqual(workspace.arrivals(), frozenset())
 
+    def test_a_plane_that_has_never_had_a_handoff_has_no_record_to_read(self):
+        """The ordinary answer, taken without a mock: the directory is simply not there."""
+        self.assertFalse(workspace._arrivals_dir().exists())
+        self.assertEqual(workspace.arrivals(), frozenset())
+
     def test_clearing_a_name_that_never_arrived_writes_nothing(self):
-        """Every switch on this plane calls this, and the ordinary plane HAS a record —
-        `config.replace_for` would rewrite it whole, moving its mtime on every switch
-        charter ever makes for no change at all. Asserted on the mtime as well as the
-        bytes, because identical bytes are exactly what a needless rewrite produces."""
+        """Every switch on this plane calls this. It must touch neither the record's own
+        directory nor another workspace's mark — asserted on the mtimes, because identical
+        bytes are exactly what a needless rewrite produces."""
         workspace.record_arrival("gamma")
-        f = workspace._arrivals_file()
-        before = (f.read_bytes(), f.stat().st_mtime_ns)
+        d = workspace._arrivals_dir()
+        before = (d.stat().st_mtime_ns, (d / "gamma").stat().st_mtime_ns)
         workspace.clear_arrival("beta")
-        self.assertEqual((f.read_bytes(), f.stat().st_mtime_ns), before)
+        self.assertEqual((d.stat().st_mtime_ns, (d / "gamma").stat().st_mtime_ns), before)
+        self.assertEqual(workspace.arrivals(), frozenset({"gamma"}))
 
     def test_clearing_on_a_plane_with_no_record_creates_none(self):
-        """The other half: a plane that has never had a handoff must not grow an empty
-        record the first time somebody switches workspace."""
-        config.private_mkdir(workspace._arrivals_file().parent)
+        """The other half: a plane that has never had a handoff must not grow a record the
+        first time somebody switches workspace."""
+        config.private_mkdir(Path(config.STATE_DIR))
         workspace.clear_arrival("beta")
-        self.assertFalse(workspace._arrivals_file().exists())
+        self.assertFalse(workspace._arrivals_dir().exists())
 
     def test_clearing_removes_only_that_name(self):
         workspace.record_arrival("beta")
@@ -267,6 +313,75 @@ class TheArrivalsRecord(PersonaIso, unittest.TestCase):
         workspace.forget_arrivals()
         self.assertEqual(workspace.arrivals(), frozenset())
         workspace.forget_arrivals()
+
+
+class TwoWritersNeverLoseAMark(PersonaIso, unittest.TestCase):
+    """**Real threads on real files, and the reason the record is a directory.**
+
+    The single-file shape was a read-modify-write over the whole set, and the plane runs
+    many charter processes at once: a handoff writing `gamma` read the set before a
+    concurrent handoff wrote `beta` and then wrote its own read back over it. Measured, all
+    three interleavings lost or resurrected a mark — and a lost mark is exactly the
+    invisibility this whole task exists to end.
+
+    Each case runs :data:`ROUNDS` times with a `threading.Barrier`, because a race is
+    pinned by repetition rather than by one lucky schedule: one round of the old shape
+    passed perhaps half the time, and this many rounds of it did not.
+    """
+
+    #: Enough rounds that the old read-modify-write loses on one of them with near
+    #: certainty, and few enough that the three cases together cost well under a second.
+    ROUNDS = 60
+
+    def _race(self, first, second):
+        """Run *first* and *second* on two real threads released together, and answer what
+        the record then holds. Exceptions are carried out rather than swallowed — a writer
+        that raised inside a thread would otherwise read as a passing round."""
+        raised: list = []
+
+        def run(fn):
+            gate.wait()
+            try:
+                fn()
+            except BaseException as e:  # noqa: BLE001 - re-raised on the main thread
+                raised.append(e)
+
+        gate = threading.Barrier(2)
+        threads = [threading.Thread(target=run, args=(fn,)) for fn in (first, second)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual([t for t in threads if t.is_alive()], [])
+        if raised:
+            raise raised[0]
+        return workspace.arrivals()
+
+    def test_two_handoffs_landing_together_keep_both_marks(self):
+        for _ in range(self.ROUNDS):
+            workspace.forget_arrivals()
+            got = self._race(lambda: workspace.record_arrival("beta"),
+                             lambda: workspace.record_arrival("gamma"))
+            self.assertEqual(got, frozenset({"beta", "gamma"}))
+
+    def test_a_handoff_landing_while_a_switch_clears_does_not_bring_it_back(self):
+        for _ in range(self.ROUNDS):
+            workspace.forget_arrivals()
+            workspace.record_arrival("beta")
+            got = self._race(lambda: workspace.record_arrival("gamma"),
+                             lambda: workspace.clear_arrival("beta"))
+            self.assertEqual(got, frozenset({"gamma"}))
+
+    def test_a_switch_clearing_while_a_handoff_lands_does_not_lose_it(self):
+        """The same two operations with the threads started the other way round. Not a
+        duplicate: which thread reads first is what decided the old shape's outcome, and
+        the two orders lost different marks."""
+        for _ in range(self.ROUNDS):
+            workspace.forget_arrivals()
+            workspace.record_arrival("beta")
+            got = self._race(lambda: workspace.clear_arrival("beta"),
+                             lambda: workspace.record_arrival("gamma"))
+            self.assertEqual(got, frozenset({"gamma"}))
 
 
 class TheMarkClearsWhenSomeoneLooks(_OpensBeta):
@@ -327,6 +442,32 @@ class TheMarkClearsWhenSomeoneLooks(_OpensBeta):
             commands_frame._switch_client("alpha.1", "beta", said="workspace → beta")
         fanout.assert_not_called()
         self.assertEqual(state.version("beta.1"), before["beta.1"])
+
+    def test_pressing_the_tab_you_are_already_on_clears_its_mark(self):
+        """The one state where the mark could never be paid. A frame in `beta` draws
+        `*beta` — the block takes the mark's cell, so that operator never sees the mark —
+        and `to_workspace` refuses the switch before `_switch_client` runs. They are the
+        person looking at it, so the look counts."""
+        args = SimpleNamespace(workspace="beta", persona=None)
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "beta.1"}, clear=True):
+            self.assertEqual(commands_frame.cmd_switch(args), 0)
+        self.assertEqual(workspace.arrivals(), frozenset())
+        self.said.assert_called_once()
+        self.assertEqual(self.said.call_args.args[1], "already in workspace 'beta'")
+
+    def test_pressing_a_tab_that_is_refused_for_any_other_reason_keeps_the_mark(self):
+        """`to_workspace` refuses three things and only one of them means "you are here".
+
+        The refusal has to name the MARKED workspace or the case proves nothing: a clear
+        for some other name is a no-op whether it is guarded or not. A workspace deleted
+        while its mark stands is the one state where a plane can refuse `beta` by name and
+        still hold `beta`'s mark — and that mark must survive, because nobody looked."""
+        shutil.rmtree(config.WORKSPACES_DIR / "beta")
+        args = SimpleNamespace(workspace="beta", persona=None)
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "alpha.1"}, clear=True):
+            self.assertEqual(commands_frame.cmd_switch(args), 0)
+        self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
+        self.assertIn("no workspace 'beta'", self.said.call_args.args[1])
 
     def test_a_focus_clears_the_mark_before_it_attaches(self):
         """`interact` IS the operator's terminal for as long as they stay, so a clear on
@@ -402,6 +543,88 @@ class APlaneThatGoesColdForgetsItsArrivals(PersonaIso, unittest.TestCase):
         _a_chat("alpha.1", ws="alpha", pane="%1")
         state.reap({"alpha.1"}, server=commands_frame.SOCKET)
         self.assertIn("beta", workspace.arrivals())
+
+
+class EverySurfaceThatListsWorkspacesSaysSo(PersonaIso, unittest.TestCase):
+    """**The strip is not the only place a workspace is named, and it is the one place with
+    no room.** At 24 columns an arrival can be behind a `+2` and at 12 the strip is `3/5`,
+    so the surfaces an operator reaches when the strip has run out of room have to carry the
+    fact too — and those have a note column and a whole terminal to draw in, so they say it
+    in words rather than in a glyph."""
+
+    def setUp(self):
+        super().setUp()
+        for n in ("alpha", "beta", "gamma"):
+            (config.WORKSPACES_DIR / n).mkdir(parents=True, exist_ok=True)
+        _a_chat("alpha.1", ws="alpha", pane="%1")
+        workspace.record_arrival("beta")
+
+    def _notes(self, rows):
+        return {r.title: r.note for r in rows}
+
+    def test_the_palettes_workspace_picker_names_the_arrival(self):
+        notes = self._notes(choose.roster(choose.WORKSPACE, "alpha.1").rows)
+        self.assertEqual(notes["beta"], "handoff arrived")
+        self.assertEqual(notes["gamma"], "")
+        self.assertEqual(notes["alpha"], "")
+
+    def test_the_palettes_typed_rows_keep_the_kind_and_the_arrival(self):
+        """A top-level row's note is the KIND, which tells `zeb` the persona from `zeb-api`
+        the workspace and cannot go. The arrival is why the operator is typing that name,
+        so it is kept beside it rather than displacing it or being displaced."""
+        roster = choose.roster(choose.WORKSPACE, "alpha.1")
+        notes = self._notes(choose.labelled(roster))
+        self.assertEqual(notes["beta"], "workspace · handoff arrived")
+        self.assertEqual(notes["gamma"], "workspace")
+
+    def test_a_reason_still_displaces_both(self):
+        """A row that cannot run has one thing to say and it is why."""
+        roster = choose.roster(choose.WORKSPACE, "alpha.1")
+        rows = choose.labelled(roster, "pinned by $CHARTER_WORKSPACE")
+        self.assertEqual(self._notes(rows)["beta"], "pinned by $CHARTER_WORKSPACE")
+        self.assertTrue(all(r.refused for r in rows))
+
+    def test_a_picker_charter_cannot_ask_draws_no_note_and_raises_nothing(self):
+        with mock.patch("charter.workspace.arrivals", side_effect=RuntimeError):
+            notes = self._notes(choose.roster(choose.WORKSPACE, "alpha.1").rows)
+        self.assertEqual(set(notes.values()), {""})
+
+    def test_the_chats_picker_still_says_which_harness(self):
+        """The workspace branch is new and must not have eaten the one note that was
+        already there."""
+        notes = self._notes(choose.roster(choose.CHAT, "alpha.1").rows)
+        self.assertEqual(notes["alpha.1"], "claude-code")
+
+    def test_the_launch_picker_names_the_arrival_beside_the_clone_count(self):
+        """The earliest surface that can say it: before tmux, before a frame, before any
+        strip exists to draw a mark on."""
+        rows = picker.rows(["alpha", "beta"], lambda n: 0, workspace.arrivals())
+        drawn = tui.strip_ansi(picker.render(rows, "alpha", 120))
+        self.assertIn("* alpha  —", drawn)
+        self.assertIn("  beta   —  handoff arrived", drawn)
+
+    def test_the_launch_asks_the_plane_for_its_arrivals(self):
+        """The wiring, not the renderer: a picker handed a renderer that can draw the mark
+        and an empty set would look right in every test of the renderer alone."""
+        seen: list = []
+
+        def ask(rows_, current, **kw):
+            seen.append(rows_)
+            return picker.Choice(picker.CANCEL)
+
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch("sys.stdin.isatty", return_value=True), \
+                mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("charter.frame.picker.ask", side_effect=ask):
+            commands_frame._choose_workspace(
+                SimpleNamespace(workspace=None, pick=True))
+        self.assertEqual([r.name for r in seen[0] if r.arrived], ["beta"])
+
+    def test_the_launch_picker_without_arrivals_draws_exactly_what_it_drew_before(self):
+        rows = picker.rows(["alpha", "beta"], lambda n: 0)
+        drawn = tui.strip_ansi(picker.render(rows, "alpha", 120))
+        self.assertNotIn("handoff", drawn)
+        self.assertIn("  beta   —", drawn)
 
 
 class AHandoffArrives(_AHandoffFromAlpha):

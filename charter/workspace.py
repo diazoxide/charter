@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import threading
 import time
@@ -989,9 +990,9 @@ def forget_tab_order() -> None:
         pass
 
 
-def _arrivals_file() -> Path:
+def _arrivals_dir() -> Path:
     """Where this plane records which workspaces a handoff landed in and nobody has looked
-    at yet.
+    at yet — **a directory, and one file per mark.**
 
     **Beside `workspace-tab-order`, for every one of :func:`_tab_order_file`'s reasons.**
     It is plane-scoped (every frame on the plane draws the same mark, and the mark clears
@@ -1000,34 +1001,65 @@ def _arrivals_file() -> Path:
     end long before the operator looks at what it opened, and a mark that died with it
     would be a workspace nothing points at.
 
+    **A directory rather than one file listing the names, and that is a concurrency fix
+    rather than a taste.** One file made every writer a read-modify-write over the whole
+    set, and the plane runs many charter processes at once: measured with two real threads,
+    two handoffs landing together left ONE mark, a handoff landing while a switch cleared
+    brought the cleared mark back, and a switch clearing while a handoff landed lost the
+    new one. A lost mark is precisely the invisibility this record exists to end.
+
+    The alternative was a lock, and it was refused: a plane is shared by many processes
+    that can be killed at any moment, so a stale lock file nothing clears is a worse
+    failure than the one it fixes — and it would still be a fix by timing. One file per
+    name makes recording and clearing **independent operations on different paths**, so
+    there is no interleaving to get wrong. The mark IS the file's existence; the file is
+    empty.
+
     **A set and not a log.** Nothing reads *when* a workspace arrived — the mark is drawn
-    or it is not — and a timestamp nothing reads is the field ADR 0011 refuses.
+    or it is not — and a timestamp nothing reads is the field ADR 0011 refuses. The empty
+    file says so: there is nowhere for a field nothing reads to go.
     """
     return Path(config.STATE_DIR) / "workspace-arrivals"
+
+
+def _arrival_mark(name: str) -> Path | None:
+    """The file whose existence IS *name*'s mark, or ``None`` for a name that cannot be
+    one.
+
+    **The name check is here and it is load-bearing**, which is the one thing the
+    single-file shape did not need: a name is now joined onto a path, so an unchecked one
+    is `..` or an absolute path reaching out of `STATE_DIR` — #442 exactly, arriving
+    through a record instead of through a directory listing. :func:`valid_name` is the same
+    rule the callers already hold their names to, asked again here because this is where
+    the join happens.
+    """
+    return _arrivals_dir() / name if valid_name(name) else None
 
 
 def record_arrival(name: str) -> None:
     """Mark *name* as a workspace a handoff landed in, until somebody looks at it.
 
-    :func:`record_tab_order`'s writer one file over: `private_mkdir` for a plane whose
-    `.charter/` may not exist yet, `config.replace_for` because this is read on a panel's
-    render path and inside the `frame-resize` child, and **never raises** — a full
-    filesystem costs the operator a green tab, not a traceback out of a strip.
+    One empty file, written with `config.replace_for` for its mode (0600) and its
+    atomicity: this is read on a panel's render path and inside the `frame-resize` child,
+    and a reader must never see a half-made mark. `private_mkdir` first, for
+    :func:`record_tab_order`'s reason — a plane whose `.charter/` does not exist yet.
 
-    Sorted, so the bytes are a function of the SET and not of the order the marks arrived
-    in: two planes holding the same marks hold the same file, and re-recording a name that
-    is already there rewrites the identical content rather than shuffling it.
+    **Touches no other name**, which is the whole of :func:`_arrivals_dir`'s concurrency
+    argument: a second handoff landing in the same millisecond writes a different path, and
+    a switch clearing another workspace unlinks a third. Re-recording a name that is
+    already marked rewrites the identical empty file.
 
-    No name check on the way IN. :func:`arrivals` checks on the way OUT, which is where
-    `tab_order` puts the same check and for its reason: the read is what joins a name onto
-    a path and onto a tab, so the floor belongs where the value is used. A caller reaches
-    this with a name `switch.to_workspace` or `commands_handoff` has already held to
-    :func:`valid_name`.
+    **Never raises** — a full filesystem costs the operator a green tab, not a traceback
+    out of a strip — and a name that cannot be a workspace marks nothing rather than
+    raising: this runs after `cmd_handoff` has already refused such a name, so it is a
+    floor and not the refusal.
     """
+    f = _arrival_mark(name)
+    if f is None:
+        return
     try:
-        f = _arrivals_file()
         config.private_mkdir(f.parent)
-        config.replace_for(f, "".join(f"{n}\n" for n in sorted(arrivals() | {name})))
+        config.replace_for(f, "")
     except OSError:
         return
 
@@ -1035,43 +1067,59 @@ def record_arrival(name: str) -> None:
 def arrivals() -> frozenset[str]:
     """The workspaces a handoff landed in that nobody has looked at yet.
 
-    `frozenset()` for a plane that has no record, one it cannot read, and one whose file is
-    not UTF-8 — :func:`tab_order`'s three cases and its degrade, which is the same degrade
-    for all of them because the caller's answer is the same: draw the strip with no marks.
-    A panel that threw out of `render` loses its pane.
+    `frozenset()` for a plane that has never had a handoff — the ordinary answer, and the
+    directory simply is not there — and for one whose record cannot be listed. One degrade
+    for both, because the caller's answer is the same either way: draw the strip with no
+    marks. A panel that threw out of `render` loses its pane.
 
-    **Name-checked on the way out**, exactly as :func:`tab_order` is. These names are
-    matched against the names the strip is drawing and go no further, but the check is the
-    floor that keeps that true: an unchecked line here is a string this plane's own state
-    put in front of :func:`slots._compose`, and #442 is what an unchecked name in that
-    position already cost. `valid_name("")` is already False, so a blank line is dropped on
-    that check's own terms and there is no `if line` in front of it.
+    **Name-checked on the way out as well as on the way in**, which is not the same check
+    twice: :func:`_arrival_mark` holds what charter WRITES, and this holds what is THERE —
+    a hand, an editor's backup file, or a `.DS_Store` can put a name in this directory that
+    charter never wrote, and these names go on to be matched against a strip.
+    `valid_name("")` is already False, so there is no separate emptiness test.
+
+    Only `OSError` is caught, and the absence of `ValueError` beside it is deliberate:
+    nothing here decodes a file. `os.listdir` answers names the OS gave, undecodable bytes
+    included, as surrogate-escaped `str` — which :func:`valid_name` refuses on its own
+    terms, the alphabet being ASCII.
+
+    **The listing is a local and the return is a set of NAMES, which is :func:`tab_order`'s
+    shape and not a style choice.** `tests/_statedirscan.py` reads a function's return
+    expression to decide whether that function hands back a PATH, and a one-liner
+    `frozenset(e.name for e in os.listdir(_arrivals_dir()))` says a state path outright —
+    so `arrivals` was classified as a state-path function, which taints every parameter its
+    result is passed into and, through `_choose_workspace`'s picker, reported four
+    unrelated `mkdir`s in this file as unrouted state writers. The scan was right about the
+    shape: what comes back here is names, and the text now says so.
     """
     try:
-        lines = _arrivals_file().read_text().splitlines()
-    except (OSError, ValueError):
+        found = os.listdir(_arrivals_dir())
+    except OSError:
         return frozenset()
-    return frozenset(n for n in (line.strip() for line in lines) if valid_name(n))
+    return frozenset(n for n in found if valid_name(n))
 
 
 def clear_arrival(name: str) -> None:
     """Drop *name*'s arrived mark — somebody has looked at that workspace.
 
-    **Writes nothing when the name is not marked**, and that is not an optimisation. This
-    runs on the switch, focus and attach paths, which is every time any terminal on this
-    plane arrives anywhere; rewriting the file for a workspace that never had a mark would
-    move its mtime on every switch a plane ever makes, for no change at all.
+    One `unlink`, and **it touches no other name**: a handoff landing in another workspace
+    at the same instant writes a different path and survives, where the single-file shape
+    would have had one of the two writers overwrite the other's set.
 
-    Missing record, unreadable record and unmarked name are one case here because
-    :func:`arrivals` already answers `frozenset()` for the first two, and a name is not in
-    an empty set.
+    **Writes nothing when the name is not marked**, and that is now a property of the
+    operation rather than a guard in front of it: `unlink` on a path that is not there
+    raises `FileNotFoundError` and changes nothing — not the directory, not another mark's
+    mtime. That matters because this runs on the switch, focus and attach paths, which is
+    every time any terminal on this plane arrives anywhere.
+
+    Missing directory, missing mark and a name that cannot be a workspace are one case for
+    the same reason: none of them is a mark to remove.
     """
-    marks = arrivals()
-    if name not in marks:
+    f = _arrival_mark(name)
+    if f is None:
         return
     try:
-        config.replace_for(_arrivals_file(),
-                           "".join(f"{n}\n" for n in sorted(marks - {name})))
+        f.unlink()
     except OSError:
         return
 
@@ -1083,12 +1131,9 @@ def forget_arrivals() -> None:
     A plane that goes cold has no frame left that could be drawing a mark, and the operator
     who comes back to it is not owed a look at something they can no longer see was ever
     marked. Missing is the ordinary case; never raises, for the reason
-    :func:`forget_tab_order` does not.
+    :func:`forget_tab_order` does not — `ignore_errors` is `rmtree`'s spelling of it.
     """
-    try:
-        _arrivals_file().unlink()
-    except OSError:
-        pass
+    shutil.rmtree(_arrivals_dir(), ignore_errors=True)
 
 
 def clones(name: str) -> list[Path]:
