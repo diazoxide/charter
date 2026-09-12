@@ -488,13 +488,16 @@ class TheOperatorsTmuxRespawnsTheLauncher(_ALaunchNamesAProfile, unittest.TestCa
         out = "@1 %9\n" if "new-window" in argv else "%9\n"
         return subprocess.CompletedProcess(argv, rc, out, "")
 
-    def _in_operator_tmux(self, *, harness_exit: int | None = 0, **ns) -> tuple[int, str]:
+    def _in_operator_tmux(self, *, harness_exit: int | None = 0,
+                          pane_state: tuple = (commands_frame._ALIVE, None),
+                          **ns) -> tuple[int, str]:
         """*harness_exit* is what `_wait_for_harness` answers — ``None`` for a pane that is
-        no longer there to be asked, which is a parameter rather than a patch for the
-        reason `_launch` gives about its own knobs."""
+        no longer there to be asked — and *pane_state* what the EAGER ask right after the
+        respawn finds. Parameters rather than patches applied inside here, for the reason
+        `_launch` gives about its own knobs: the two are different moments in this
+        function's life and a case has to be able to name which one it is about."""
         ns.setdefault("operator", (_OPERATOR, "$1"))
-        with mock.patch.object(commands_frame, "_pane_state",
-                                  return_value=(commands_frame._ALIVE, None)), \
+        with mock.patch.object(commands_frame, "_pane_state", return_value=pane_state), \
                 mock.patch.object(commands_frame, "_wait_for_harness",
                                   return_value=harness_exit), \
                 mock.patch.object(commands_frame, "_window_size", return_value=(120, 40)), \
@@ -530,6 +533,49 @@ class TheOperatorsTmuxRespawnsTheLauncher(_ALaunchNamesAProfile, unittest.TestCa
         self.assertEqual(rc, launcher.REFUSED_EXIT)
         self.assertIn("is refused — nope", said)
         self.assertNotIn("is not something charter can know", said)
+
+    def test_a_pane_already_dead_when_the_frame_is_built_reports_the_refusal(self):
+        """The EAGER ask, one moment after the respawn: a launcher fast enough to refuse
+        before this line runs leaves a pane that is already over, and nothing below this
+        branch ever runs — no panels, no `select-window`, so the operator is never switched
+        to the window at all. The chat's own record is the only copy of the sentence, and
+        the number the launcher exited with is the launch's."""
+        rc, said = self._in_operator_tmux(
+            profile="claude-work",
+            pane_state=(commands_frame._GONE, None),
+            verdict=(launcher.REFUSED_EXIT, "profile 'claude-work' is refused — nope"))
+        self.assertEqual(rc, launcher.REFUSED_EXIT)
+        self.assertIn("is refused — nope", said)
+
+    def test_a_pane_already_dead_with_no_refusal_keeps_tmuxs_own_number(self):
+        """And the other way down the same branch: a harness that RAN and failed has no
+        launcher record to prefer, so what tmux reported about the pane is the answer — and
+        the operator is told what died, because nothing else on this path will."""
+        with mock.patch.object(commands_frame, "_pane_last_words", return_value=[]):
+            rc, said = self._in_operator_tmux(profile="claude-work",
+                                              pane_state=(commands_frame._DEAD, 7))
+        self.assertEqual(rc, 7)
+        self.assertIn("7", said)
+
+    def test_a_pane_that_vanished_with_nothing_recorded_says_nothing_it_cannot_know(self):
+        """`code` is `None` and the launcher recorded nothing: charter knows the pane is
+        gone and knows nothing else. An early-death sentence built on that would name an
+        exit code nobody has — so the branch that writes one is asked whether there IS a
+        number first, and this path says nothing at all."""
+        rc, said = self._in_operator_tmux(profile="claude-work",
+                                          pane_state=(commands_frame._GONE, None))
+        self.assertEqual(rc, commands_frame._UNKNOWN_DEATH_CODE)
+        self.assertEqual(said, "")
+
+    def test_a_launch_with_no_profile_has_no_launcher_record_to_read_here_either(self):
+        """`charter frame -- <cmd>` starts the command itself on this path too: no charter
+        launcher runs in that pane, so a record left under that chat id by an earlier chat
+        is not this launch's verdict."""
+        rc, said = self._in_operator_tmux(
+            harness="frame", rest=["--", "true"], pane_state=(commands_frame._GONE, None),
+            verdict=(launcher.REFUSED_EXIT, "a refusal from some other launch"))
+        self.assertEqual(rc, commands_frame._UNKNOWN_DEATH_CODE)
+        self.assertNotIn("some other launch", said)
 
     def test_it_fails_closed_and_loudly_when_the_chat_option_does_not_take(self):
         """The launcher proves its chat by `@charter_chat` on this server (ruling 33). A

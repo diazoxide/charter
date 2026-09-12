@@ -423,6 +423,15 @@ class OnlyThePanesOwnFirstProcessIsFramed(_AProfileAndAPlane, unittest.TestCase)
                 mock.patch.object(launcher.os, "getpid", return_value=53118):
             self.assertIsNone(launcher.framed_chat())
 
+    def test_a_row_with_more_fields_than_the_format_is_not_read(self):
+        """A window NAME may hold a tab and `list-panes` does not quote it, so a row can
+        arrive with seven fields where the format asks for six. A row charter cannot assign
+        is not a pane it will prove a chat with — and unpacking it would raise inside the
+        one function whose whole job is to answer yes or no."""
+        self.rows = "53118\t0\t%1\talpha\talpha.1\tstray\talpha.1\n"
+        with mock.patch.object(launcher.os, "getpid", return_value=53118):
+            self.assertIsNone(launcher.framed_chat())
+
     def test_an_unprovable_chat_is_repeated_back_escaped(self):
         """`$CHARTER_SESSION_ID` is inherited from whatever started this process, so it is
         the one value in this sentence charter did not mint — and this sentence goes
@@ -509,6 +518,13 @@ class ThePaneCommandResolvesTheProfileByName(_AProfileAndAPlane, unittest.TestCa
         self.assertEqual(self._run(rest=["--", "-p", "x"]), 0)
         (_program, argv, _env), = self.execs
         self.assertEqual(argv, ["claude", "-p", "x"])
+
+    def test_a_name_nothing_declares_is_repeated_back_escaped(self):
+        """The name in this sentence came off a command line or out of a chat's own
+        record, and the sentence goes to a terminal (ruling 35)."""
+        said = launcher.unknown_profile("cl\raude")
+        self.assertIn("\\u000d", said)
+        self.assertNotIn("\r", said)
 
     def test_a_pane_asked_for_a_profile_that_is_gone_says_so(self):
         said: list[str] = []

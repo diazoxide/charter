@@ -446,8 +446,15 @@ def live_pane_by_pid(server: str, pid: int) -> LivePane | None:
               report=False)
     if out.returncode != 0:
         return None
-    for line in (out.stdout or "").splitlines():
+    # `out.stdout` and not `out.stdout or ""`: every one of :func:`run`'s three exits
+    # returns a string — the two it invents pass `stdout=""` explicitly — so the fallback
+    # was a line nothing could reach, which is what the deletion sweep reported it as.
+    for line in out.stdout.splitlines():
         fields = line.split("\t")
+        # A window NAME may contain a tab and `list-panes` does not quote it, so a row can
+        # split into more fields than the format asks for. A row this cannot assign is one
+        # charter cannot read, and a pane charter cannot read is not a pane it will prove a
+        # chat with — skipped rather than unpacked, which would raise here.
         if len(fields) != _PANE_PID_FIELDS:
             continue
         pane_pid, dead, pane, session, window, chat = fields

@@ -484,6 +484,20 @@ class TheTwoRecordsAChatsLauncherWrites(PersonaIso, unittest.TestCase):
         (d / "launch").write_text("not-a-number\nhalf a sentence")
         self.assertIsNone(state.launch("alpha.1"))
 
+    def test_a_record_that_cannot_be_written_is_not_raised_out_of_a_hook(self):
+        """**A disk that is full is not this function's to report.** Both writers are
+        reached from a launcher mid-`exec` and from hook paths that have nowhere to print,
+        and the caller's own answer to "the record is missing" is already "not yet" — which
+        is exactly what a write that failed leaves behind. So the failure is swallowed
+        HERE, and the reader above is what says so."""
+        state.frame_dir("alpha.1", create=True)
+        with mock.patch.object(state.config, "replace_for",
+                               side_effect=OSError(28, "No space left on device")):
+            state.record_profile("alpha.1", "claude-work")
+            state.record_launch("alpha.1", 3, "refused")
+        self.assertIsNone(state.profile("alpha.1"))
+        self.assertIsNone(state.launch("alpha.1"))
+
     def test_a_launch_that_has_not_answered_yet_says_so(self):
         state.frame_dir("alpha.1", create=True)
         self.assertIsNone(state.launch("alpha.1"))
