@@ -2208,20 +2208,29 @@ def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
 _LAUNCHER_SECONDS = 5.0
 
 
-def _what_the_pane_said(socket: str, fid: str, harness_pane: str, profile: str) -> str:
-    """The refusal *fid*'s own launcher recorded, or ``""`` — ruling 42's only reader.
+def _what_the_pane_recorded(socket: str, fid: str, harness_pane: str,
+                            profile: str) -> tuple[int | None, str]:
+    """``(exit code, refusal)`` *fid*'s own launcher recorded — ruling 42's only reader.
 
     Through :func:`_await_the_launcher`, never `_pane_last_words`: the measurement is that
     by the time anything asks, the window carrying the sentence is gone. It answers at once
     wherever the pane has already stopped, because the loop it runs ends on a pane that is
     not alive.
 
-    ``""`` for a launch with no profile (`charter frame -- <cmd>`), which has no launcher to
-    have recorded anything.
+    **The code as well as the sentence, because on an operator's server tmux often cannot
+    supply one.** Nothing sets `remain-on-exit` in somebody else's tmux, so a pane whose
+    launcher refused is simply gone — `#{pane_dead_status}` is not merely unknown, the pane
+    is not there to be asked — and the launch would otherwise report
+    `_UNKNOWN_DEATH_CODE` for a refusal that has a number of its own. Measured on a Linux
+    runner, where that path returned 1 while charter's own server returned 3 for the same
+    refusal.
+
+    ``(None, "")`` for a launch with no profile (`charter frame -- <cmd>`), which has no
+    launcher to have recorded anything.
     """
     if not profile:
-        return ""
-    return _await_the_launcher(socket, fid, harness_pane)[1]
+        return None, ""
+    return _await_the_launcher(socket, fid, harness_pane)
 
 
 def _await_the_launcher(socket: str, fid: str, harness_pane: str) -> tuple[int | None, str]:
@@ -3602,14 +3611,17 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     # them on a dead pane.
     status, code = _pane_state(socket, harness_pane)
     if status != _ALIVE:
-        if code is not None:
-            state.record_exit(fid, code)
         # **Ruling 42 holds on this path too, and it is the path it holds HARDEST.** A
         # launcher that refused printed into a window this function closes a few lines
         # down, so `_pane_last_words` below is measured empty here — and the operator
         # never saw the window at all, because nothing switches them to it. What the pane
-        # RECORDED is the only copy left (`_what_the_pane_said`).
-        refused = _what_the_pane_said(socket, fid, harness_pane, profile)
+        # RECORDED is the only copy left (`_what_the_pane_recorded`), its number included:
+        # a pane that is GONE has no `#{pane_dead_status}` to read.
+        recorded, refused = _what_the_pane_recorded(socket, fid, harness_pane, profile)
+        if recorded is not None:
+            code = recorded
+        if code is not None:
+            state.record_exit(fid, code)
         if refused:
             util.err(f"charter: {refused}")
         elif code is not None and code != 0:
@@ -3658,26 +3670,43 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         _drop_panels(socket, leaving)
 
     code = _wait_for_harness(socket, harness_pane)
+    # **And the refusal a launcher recorded while this process was watching** (ruling 42).
+    # This path stays awake for the whole life of the frame, so a pane that refused after
+    # the checks above passed — the plane moved between them — ends up here: the window is
+    # about to be closed, and the sentence in it with it. An attended pane has already
+    # shown the operator this; saying it once more where their shell comes back costs a
+    # line and is the only copy that survives.
+    #
+    # **Asked BEFORE the `code is None` branch below, and that is the whole fix.** A
+    # refusing launcher in somebody else's tmux is a pane that VANISHES — nothing sets
+    # `remain-on-exit` there — so `_wait_for_harness` answers `None` for it exactly as it
+    # does for a window the operator closed, and reading the record only on the other
+    # branch lost the sentence on the path that has no other copy of it.
+    # The pane is not there to be asked — the operator closed the window (their own
+    # `prefix-&`), the server went with it, or a launcher that refused exited before
+    # anything could arm `remain-on-exit` for it. There is nothing left to close either.
+    gone = code is None
+    recorded, refused = _what_the_pane_recorded(socket, fid, harness_pane, profile)
+    if recorded is not None:
+        # **The launcher's own number wins over tmux's reading of the pane.** It wrote
+        # down what it was exiting with BEFORE it exited; what tmux has afterwards is a
+        # `#{pane_dead_status}` that is empty for a pane killed by a signal and absent
+        # altogether for a pane that is gone — both of which read as
+        # `_UNKNOWN_DEATH_CODE`. Measured on a Linux runner: the same refusal that
+        # answers 3 on charter's own server answered 1 here.
+        code = recorded
     if code is None:
-        # The pane vanished rather than dying askably — the operator closed the window
-        # (their own `prefix-&`), or the server went with it. Nonzero and named: charter
-        # cannot know what the harness would have exited with, and reporting a killed
-        # agent as a clean 0 is the fabricated success this module refuses everywhere
-        # else. Nothing is killed here either; there is nothing left to kill.
+        # Nonzero and named: charter cannot know what the harness would have exited with,
+        # and reporting a killed agent as a clean 0 is the fabricated success this module
+        # refuses everywhere else. Nothing is killed here either.
         util.err("charter frame: the frame's window is gone — the harness's exit code "
                  "is not something charter can know now.")
         code = _UNKNOWN_DEATH_CODE
     else:
         state.record_exit(fid, code)
-        # **And the refusal a launcher recorded while this process was watching** (ruling
-        # 42). This path stays awake for the whole life of the frame, so a pane that
-        # refused after the checks above passed — the plane moved between them — ends up
-        # here: the window is about to be closed, and the sentence in it with it. An
-        # attended pane has already shown the operator this; saying it once more where
-        # their shell comes back costs a line and is the only copy that survives.
-        refused = _what_the_pane_said(socket, fid, harness_pane, profile)
-        if refused:
-            util.err(f"charter: {refused}")
+    if refused:
+        util.err(f"charter: {refused}")
+    if not gone:
         _close_window()
     # Given up before this path's own closing reap, for the reason `cmd_launch` gives at
     # its own (#685): the marker is held for the LAUNCH, and this launch is over.

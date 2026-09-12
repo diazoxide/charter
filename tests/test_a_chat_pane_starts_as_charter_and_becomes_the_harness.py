@@ -383,14 +383,20 @@ class ARefusalInsideTheOperatorsOwnTmux(_ARealChatOnARealServer, unittest.TestCa
                                             return_value=(self.op_path, session)))
 
     def test_the_launch_says_what_the_pane_refused(self):
+        """The sentence first, because it is the thing this path had no other copy of —
+        and the number second, with what was said in its message: the two halves fail for
+        different reasons, and a bare `1 != 3` said which half only by luck."""
         said: list[str] = []
         with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
             rc = self._launch(profile="claude-work",
                               opening=commands_frame.Opening("fix the widget please"))
-        self.assertEqual(rc, launcher.REFUSED_EXIT)
         self.assertTrue(
             any("cannot yet ask before a declared command runs" in s for s in said),
             f"the launch did not say what the pane refused: {said}")
+        # The launcher's own number, not tmux's reading of a pane that is no longer there:
+        # in somebody else's tmux `#{pane_dead_status}` is empty or absent for exactly this
+        # pane, and both read as `_UNKNOWN_DEATH_CODE`.
+        self.assertEqual(rc, launcher.REFUSED_EXIT, said)
 
     def test_the_window_it_opened_is_taken_back(self):
         """A window the operator never asked for, holding a chat that never started, is not

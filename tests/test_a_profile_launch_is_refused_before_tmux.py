@@ -488,11 +488,15 @@ class TheOperatorsTmuxRespawnsTheLauncher(_ALaunchNamesAProfile, unittest.TestCa
         out = "@1 %9\n" if "new-window" in argv else "%9\n"
         return subprocess.CompletedProcess(argv, rc, out, "")
 
-    def _in_operator_tmux(self, **ns) -> tuple[int, str]:
+    def _in_operator_tmux(self, *, harness_exit: int | None = 0, **ns) -> tuple[int, str]:
+        """*harness_exit* is what `_wait_for_harness` answers — ``None`` for a pane that is
+        no longer there to be asked, which is a parameter rather than a patch for the
+        reason `_launch` gives about its own knobs."""
         ns.setdefault("operator", (_OPERATOR, "$1"))
         with mock.patch.object(commands_frame, "_pane_state",
                                   return_value=(commands_frame._ALIVE, None)), \
-                mock.patch.object(commands_frame, "_wait_for_harness", return_value=0), \
+                mock.patch.object(commands_frame, "_wait_for_harness",
+                                  return_value=harness_exit), \
                 mock.patch.object(commands_frame, "_window_size", return_value=(120, 40)), \
                 mock.patch.object(commands_frame, "_reap_this_server"), \
                 mock.patch.object(commands_frame, "_live_windows", return_value=set()):
@@ -509,6 +513,23 @@ class TheOperatorsTmuxRespawnsTheLauncher(_ALaunchNamesAProfile, unittest.TestCa
         self.assertLess(self.argvs.index(next(a for a in self.argvs
                                               if "remain-on-exit" in a)),
                         self.argvs.index(respawned))
+
+    def test_a_pane_that_refused_and_vanished_still_reports_its_own_number(self):
+        """**The launcher's number, not tmux's reading of a pane that is not there.**
+        `remain-on-exit` is armed on this path, and nothing guarantees it took — a pane
+        that is gone answers no `#{pane_dead_status}` at all, and `_wait_for_harness`
+        reports that as `None` exactly as it does for a window the operator closed. The
+        launcher wrote down what it was exiting with BEFORE it exited, which is better
+        evidence than anything reconstructed afterwards. Measured on a Linux runner, where
+        this path answered `_UNKNOWN_DEATH_CODE` for the same refusal charter's own server
+        reported as 3 — and the sentence went with it.
+        """
+        rc, said = self._in_operator_tmux(
+            profile="claude-work", harness_exit=None,
+            verdict=(launcher.REFUSED_EXIT, "profile 'claude-work' is refused — nope"))
+        self.assertEqual(rc, launcher.REFUSED_EXIT)
+        self.assertIn("is refused — nope", said)
+        self.assertNotIn("is not something charter can know", said)
 
     def test_it_fails_closed_and_loudly_when_the_chat_option_does_not_take(self):
         """The launcher proves its chat by `@charter_chat` on this server (ruling 33). A
