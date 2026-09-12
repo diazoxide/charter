@@ -1118,11 +1118,12 @@ empty.** The brief is the whole context that chat has ([handoff.md](handoff.md))
 lives in the chat's own private state, which is reaped along with the chat directory when
 the launcher pid that held it is dead — so it travels in the record instead. Where the
 conversation resumes, nothing is shown: the brief is the first message of that transcript
-already. Where it does not — codex and opencode always, Claude Code for a chat that never
-took a turn — the chat's next `SessionStart` quotes it as a labelled data block, saying
-plainly that the operator now in front of it outranks the text. **An opencode chat is not
-shown it**, because opencode has no `SessionStart` hook at all; `charter doctor` names that
-gap rather than charter pretending to fill it.
+already. Where it does not — codex always, Claude Code for a chat that never took a turn —
+the chat's next `SessionStart` quotes it as a labelled data block, saying plainly that the
+operator now in front of it outranks the text. **An opencode chat is never shown it**, and
+that is the limit rather than an omission: opencode has no `SessionStart` hook at all, so
+there is no moment to show it in. `charter doctor` names that gap (`session-start`) rather
+than charter pretending to fill it.
 
 Run it from an ordinary shell. **Inside a tmux you already have it refuses**, because charter
 builds a frame there as a window on your own server and that launcher stays awake for the

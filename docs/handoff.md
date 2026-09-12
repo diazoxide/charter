@@ -225,8 +225,8 @@ and the marker goes with the directory when that id is reaped.
 - **12,288 bytes for the stamped message**, above. The cost, stated: a brief between roughly
   12,200 and 15,800 bytes is refused although tmux would take it.
 - **An opencode chat that reopens empty is not shown its brief.** opencode has no SessionStart
-  hook at all (`charter doctor` names that gap), so there is nowhere to show it. Every other
-  harness is covered — see *A reopened chat is shown its brief* below.
+  hook at all (`charter doctor` names that gap, as `session-start`), so there is nowhere to
+  show it. Every other harness is covered — see *A reopened chat is shown its brief* above.
 - **A handoff is not a dispatch.** Its tally row carries no agent, so `charter persona stats`'
   dispatch column and "last worked" are untouched by one.
 
