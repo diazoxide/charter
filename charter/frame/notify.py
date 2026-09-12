@@ -255,3 +255,34 @@ def plane_changed_everywhere() -> None:
             state.bump(fid)
     except Exception:
         return
+
+
+def bump_everywhere() -> None:
+    """Tell every frame on this plane to repaint, and gather NOTHING. Never raises.
+
+    :func:`plane_changed_everywhere` without the scan, for the changes that move no fact a
+    gather holds. Clearing a workspace's arrived mark is the first of them
+    (`workspace.clear_arrival`): the strip reads that record directly on its own render
+    path, so a repaint is the whole of what the other frames need — no repo is dirtier, no
+    branch has moved, and no CI run has finished.
+
+    **The scan is what makes this a different function rather than a flag**, and it is the
+    reason to have one at all. A cold `gather.scan()` costs ~35ms and three git
+    invocations, once per distinct workspace, and this runs on the SWITCH path — every time
+    any terminal on this plane arrives anywhere. `docs/frame.md` measures a whole workspace
+    switch at 142ms on tmux 3.7c; a fan-out that scanned would put a plane's worth of git
+    on top of that to clear one mark. What is left is one `stat`-and-write per frame
+    directory.
+
+    **Every frame, and no liveness check** — :func:`plane_changed_everywhere`'s rule
+    unchanged, for its reason: a bump into a dead frame is a few bytes `state.reap` will
+    remove, and `state.is_live` costs a tmux subprocess charter would be spending to save a
+    write. The whole body is one `try` for the same reason as well: a frame root that
+    cannot be listed is nothing to bump, and a repaint nobody asked for must never be the
+    thing that raises out of a switch.
+    """
+    try:
+        for e in os.scandir(state._root()):
+            state.bump(e.name)
+    except Exception:
+        return

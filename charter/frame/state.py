@@ -2767,4 +2767,10 @@ def reap(live: set[str], *, server: str) -> list[str]:
     if not len(entries) - len(removed):
         from .. import workspace as ws_mod
         ws_mod.forget_tab_order()
+        # **And the arrived marks with it**, in the same branch and for the same reason
+        # rather than for a second one: a mark is a thing an operator is owed a LOOK at,
+        # and a plane with no frame left has no strip for them to look at it on. Carrying
+        # it over would put a green tab on the first frame of the next launch, for a chat
+        # that ended with the plane that opened it.
+        ws_mod.forget_arrivals()
     return removed

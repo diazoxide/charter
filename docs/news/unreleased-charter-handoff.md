@@ -42,7 +42,31 @@ The brief becomes the new chat's first message. Your harness asks before the com
 7. Tallies `{"event": "handoff", "ts", "placement", "created"}` — no workspace name, no persona,
    no text — and clears `routing: require`'s pending mark, because opening a chat in a workspace
    *is* routing.
-8. Prints the chat and the workspace.
+8. **Points at it.** See below.
+9. Prints the chat and the workspace.
+
+## The strip says where it landed
+
+A handoff opens a chat nobody is looking at, so the last thing it does is move where your eye
+goes.
+
+- **The target workspace moves to the front of the workspaces strip.** It is the only thing
+  that moves a tab while a plane is up — a switch, a launch and a repaint all leave the order
+  where they found it, because a tab that moves under a press is a tab you press twice.
+- **That tab stays marked until you look**: the `ok` accent, and a `✶` where its `*` would be.
+  The glyph is the half that survives `NO_COLOR`, where charter strips every escape off every
+  row. Neither costs a column — the glyph takes the mark's own cell, the one the chat strip's
+  spinner takes — so nothing on the strip shifts when a handoff lands, and there is no bell.
+- **The mark clears the first time any terminal on this plane looks at that workspace** — a
+  switch tmux confirmed, a focus, or a launch that attaches — and every frame's strip repaints
+  without it. One mark per plane, not per terminal: tmux draws a pane identically for every
+  client of its session. A switch charter refused clears nothing.
+- **Your own chat's attention row names the new chat**, because the command's own output goes
+  to a tool call you may never read.
+- A handoff into the workspace you are already in moves its tab and marks nothing: you are
+  looking at it, and its chats strip already shows the new tab.
+
+A handoff that did not open a chat moves no tab, marks nothing and says nothing.
 
 The stamp is `⟨handoff from chat <chat> · workspace <ws> · <YYYY-MM-DD HH:MM>⟩`: facts charter
 can observe and no instruction, so the new chat can tell the message was not typed there.
@@ -102,6 +126,7 @@ shown nothing: the brief is already the first message of its transcript.
 - **A brief never carries a secret.** It is argv while the harness starts.
 - **An opencode chat that reopens empty is not shown its brief**, because opencode has no
   SessionStart hook at all. `charter doctor` names that gap.
-- **The tab strip does not point at the arrival yet.** That is the next slice.
+- **The arrived mark is per plane, not per terminal**, and there is no "wants you" mark yet
+  for a chat that stopped at a prompt after you visited it. Both are the next slice.
 
 `charter docs show handoff` has the whole of it, including how the consent was measured.

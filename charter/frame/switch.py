@@ -190,6 +190,36 @@ def _by_use(names: list[str]) -> list[str]:
     return kept + sorted(n for n in names if n not in seen)
 
 
+def bring_to_front(name: str) -> None:
+    """Move *name* to the head of the order this plane's workspaces strip draws.
+
+    **The ONE thing that moves a tab while a plane is up**, and it is deliberately a
+    handoff and nothing else. `_by_use` freezes the order on the first ask precisely so a
+    tab never moves under a press (#767) and every frame draws the same columns (#923); a
+    switch, a launch and a repaint all leave it exactly where it was. What earns the
+    exception is that a handoff PUT something there: a chat the operator approved is now
+    running in a workspace they are not looking at, and a strip that does not point at it
+    is `docs/frame.md`'s silence by construction.
+
+    **Through the recorded order, never around it.** `workspaces()` is asked first — not
+    `workspace.tab_order()` — because on a plane that has recorded nothing that call is
+    what decides and records the order (`_by_use`), and writing a one-name file here
+    instead would leave the plane's own order to be decided later, by a repaint, against a
+    record that already exists. So a handoff into a cold plane records the order the plane
+    would have had, with the target moved to the front of it.
+
+    A *name* this plane does not have moves nothing and writes nothing: `workspaces()` is
+    the roster, so a workspace that was deleted between the handoff's refusals and here is
+    a name with no tab, and recording it would put a line in the order file for a directory
+    that is gone (`record_tab_order`: an ORDER and never a roster).
+    """
+    from .. import workspace as ws_mod
+    order = workspaces()
+    if name not in order:
+        return
+    ws_mod.record_tab_order([name] + [n for n in order if n != name])
+
+
 def personas() -> list[str]:
     """Every persona a switcher may offer, name-checked on the way out and **ordered by
     use**: the plane's declared default first, then most-dispatched first, ties broken by

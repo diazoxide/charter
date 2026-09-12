@@ -30,7 +30,7 @@ from charter import (cli, commands_frame, commands_handoff, config, dispatch, to
 from charter.frame import state
 
 from tests import _tmuxsocket
-from tests._isolation import PlaneIso
+from tests._isolation import PlaneIso, no_background_refresh
 from tests.test_the_chat_bars_plus_makes_a_chat import _a_chat
 
 #: The brief every case sends unless it says otherwise. Two lines, because the first line
@@ -90,6 +90,12 @@ class _AHandoffFromAlpha(PlaneIso):
 
     def setUp(self) -> None:
         super().setUp()
+        # A handoff that opens ends in `notify.plane_changed_everywhere`, which gathers —
+        # and a gather on a fresh temp plane has no cooldown to hold it back, so every case
+        # here would fork a `_version-check` child nothing waits for (`tests._planeguard`).
+        # Stopped at the spawner rather than at the fan-out, so what these cases observe is
+        # the real one running.
+        no_background_refresh(self)
         self.enterContext(mock.patch.dict(os.environ, {
             "CHARTER_SESSION_ID": "alpha.1", "TMUX_PANE": "%1",
             "CHARTER_HARNESS": "claude-code"}, clear=True))

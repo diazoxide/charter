@@ -3320,6 +3320,45 @@ _BAR_MARK = ("*", " ")
 #: worth a repaint) is about `panel.TICK` and is the same argument here.
 TAB_SPINNER = "✢✶✻✶"
 
+#: What a workspace tab a handoff landed in carries until somebody looks at it (the
+#: chat-handoff spec, *The strip*).
+#:
+#: **The cell is :data:`_BAR_MARK`'s, taken the way the spinner takes it** — the mark's own
+#: one cell, never a cell beside the name — so the ladder above cannot see the difference:
+#: every field is the width it was, :func:`_cuts` cuts where it always cut,
+#: :func:`bar_rows_wanted` composes the rows the renderer will draw, and the column an
+#: operator is aiming at holds the same workspace a moment later. A mark drawn beside a
+#: name instead would shift every tab right of it the moment a handoff landed, which is the
+#: double-press #767 exists to stop arriving through a notification.
+#:
+#: **A glyph AND an accent, and the glyph is the half that survives `NO_COLOR`.** The
+#: accent (`statusline.accent("ok")`, painted in :func:`_compose`) is what reads at a
+#: glance on a colour terminal; `panel._write` strips every escape from every row under
+#: `NO_COLOR` (`chrome.plain`), which is exactly what left `_BAR_MARK`'s `*` in place when
+#: #903 asked for it to go. A mark that was only a colour would be invisible to precisely
+#: the reader who has nothing else. So the mark degrades to a character, the paint degrades
+#: to nothing, and no tab moves either way.
+#:
+#: **One of :data:`TAB_SPINNER`'s own three glyphs, and that is the point rather than a
+#: coincidence.** The requirement is a glyph this strip already renders at width 1, and the
+#: table above :data:`TAB_SPINNER` is this project's measurement of exactly that question:
+#: `✶` (U+2736) is East-Asian *Neutral*, so no terminal draws it two cells wide — the
+#: failure `_BAR_RULE` is ASCII to avoid and the one `statusline._persona_chips` records
+#: breaking this layout twice — and it carries no emoji presentation to be widened by a
+#: fallback font. Reusing a measured glyph rather than choosing a fourth is `choose.MARK`'s
+#: discipline: a new glyph is a new measurement, and the two that shipped broken here were
+#: both chosen without one.
+#:
+#: **The two marks cannot appear on one strip.** Only `chats` passes *busy* (that strip is
+#: a strip of chats, and a workspace has no harness to be working) and only `workspaces`
+#: passes *arrived* (a handoff lands in a workspace, not in a chat), so within either strip
+#: this glyph has exactly one meaning. Where a caller did hand both, the ARRIVAL wins, and
+#: that is :data:`_BAR_MARK`'s own argument one step down: of the two facts competing for
+#: the cell, the spinner has another way to be seen — it comes back on the next tick and
+#: the chat it is about is one an operator can watch — and an arrival has none. It is the
+#: fact that persists until somebody looks, so it is the one the cell is spent on.
+_ARRIVED_MARK = "✶"
+
 #: Columns a bar spends between two names. Two, so a name reads as one name — a single
 #: space runs `api.1 api.2` together at the widths where this matters most.
 #:
@@ -3880,9 +3919,32 @@ def _affordances(note: str, close: str) -> str:
     return _NOTE_GAP.join(f for f in (note, close) if f)
 
 
+
+def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str) -> str:
+    """The one cell in front of a tab's name, for the four things it can say.
+
+    `*` for the tab you are ON first and unconditionally (:data:`_BAR_MARK`), because under
+    `NO_COLOR` it is the only thing on the row answering "which tab am I on" and the other
+    two both have somewhere else to be read. Then the arrival, then the spinner, then a
+    blank — see :data:`_ARRIVED_MARK` for why that order and why no strip can ask for the
+    last two at once.
+
+    A function rather than a conditional expression inside the comprehension that calls it:
+    the precedence IS the decision here, and one buried in a nested ternary is one the next
+    reader re-derives from the parentheses.
+    """
+    if active:
+        return _BAR_MARK[0]
+    if arrived:
+        return _ARRIVED_MARK
+    if busy:
+        return frame
+    return _BAR_MARK[1]
+
+
 def _bar(names: list[str], here: str, width: int, *,
          note: str = "", close: str = "", rows: int = 1, busy=(),
-         counts=None) -> list[str]:
+         counts=None, arrived=frozenset()) -> list[str]:
     """One bar: *names* with *here* marked, in *rows* x *width* cells.
 
     :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
@@ -3893,16 +3955,19 @@ def _bar(names: list[str], here: str, width: int, *,
     the launcher's answer overwrite the panel's — a map describing a strip nobody is
     looking at.
 
-    *busy* and *counts* are :func:`_compose`'s and are passed straight through — see there.
+    *busy*, *counts* and *arrived* are :func:`_compose`'s and are passed straight through —
+    see there.
     """
     lines, cols, more, add, close_cells = _compose(
-        names, here, width, note=note, close=close, rows=rows, busy=busy, counts=counts)
+        names, here, width, note=note, close=close, rows=rows, busy=busy, counts=counts,
+        arrived=arrived)
     TABS.publish(cols, here, more, add, close_cells)
     return lines
 
 
 def _compose(names: list[str], here: str, width: int, *,
-             note: str = "", close: str = "", rows: int = 1, busy=(), counts=None):
+             note: str = "", close: str = "", rows: int = 1, busy=(), counts=None,
+             arrived=frozenset()):
     """The strip *names*/*here* composes to, and the cells its tabs landed in.
 
     Answers ``(lines, columns, more, add, close)`` — the rows to draw, the ``(row, col)``
@@ -4012,6 +4077,19 @@ def _compose(names: list[str], here: str, width: int, *,
     Empty for the `workspaces` strip, which is not a strip of chats and has no harness to
     be working.
 
+    *arrived* is the names a handoff landed in that nobody has looked at yet
+    (`workspace.arrivals`, through :func:`_arrived`) — the `workspaces` strip's half of
+    what *busy* is to the chats strip, and it rides the identical cell for the identical
+    reason: see :data:`_ARRIVED_MARK`. Each one gets a glyph in the mark's cell AND the
+    `ok` accent around the whole field, so the mark reads at a glance on a colour terminal
+    and still says something under `NO_COLOR`, where `panel._write` strips the accent away.
+    The accent is a paint and costs no cell (`tui.width` counts no SGR), and the glyph is
+    the same one cell a blank was, so the ladder above cannot see either of them — which is
+    why :func:`bar_rows_wanted` passes none and still measures the rows this will draw.
+
+    Empty for the `chats` strip, which is a strip of chats and is not what a handoff lands
+    in.
+
     **Every rung answers with its own cell map**, which is what makes the bar clickable at
     all and is the same discipline `_repos` keeps for the table's rows: the handler
     resolves a click against WHAT WAS DRAWN rather than against what it thinks would have
@@ -4036,6 +4114,7 @@ def _compose(names: list[str], here: str, width: int, *,
     # could make the mutation differ. The NAMES are contained, below, which is where the
     # open alphabet actually is. (`head` said the same thing beside it until #880 removed
     # the heading it named.)
+    from .. import statusline as sl
     from . import chrome
     # **Every row of the strip starts at the same column, and that column is the frame's
     # own left edge and nothing more** (#880). It used to carry the strip's heading —
@@ -4135,21 +4214,23 @@ def _compose(names: list[str], here: str, width: int, *,
     # the field, or the first chat to open would re-cut it.
     if counts is not None:
         shown = [n + _tab_count(counts.get(raw, 0)) for raw, n in zip(names, shown)]
-    # **The mark's cell carries the spinner too, and it is decided on the RAW name for the
-    # reason the paragraph above gives about the index**: `busy` holds chat ids off disk,
-    # `shown` holds text `contain.one_line` may have repaired, and matching a mark against
-    # the repaired form would follow the repair rather than the identity.
+    # **The mark's cell carries the spinner and the arrival too, and BOTH are decided on
+    # the RAW name for the reason the paragraph above gives about the index**: `busy` holds
+    # chat ids off disk and `arrived` holds workspace names off disk, `shown` holds text
+    # `contain.one_line` may have repaired, and matching a mark against the repaired form
+    # would follow the repair rather than the identity.
     #
-    # `i != at` before the membership test, so the active tab keeps its `*` — see
-    # :data:`TAB_SPINNER` for why that one cell goes to the mark rather than to the
-    # spinner, and :data:`_BAR_MARK` for why #903 left it there after asking. Read once,
+    # `i == at` is asked first inside :func:`_mark_cell`, so the active tab keeps its `*` —
+    # see :data:`TAB_SPINNER` for why that one cell goes to the mark rather than to the
+    # spinner, :data:`_ARRIVED_MARK` for the same question asked of the arrival, and
+    # :data:`_BAR_MARK` for why #903 left it there after asking. Read once,
     # outside the comprehension: every tab on a strip shows the same frame
     # (`tab_spinner_frame`), and reading the clock per name would let a wide strip start a
     # row on one frame and finish it on the next. Read unconditionally, too: an `if busy`
     # in front of it would change no output at all, only one `time.monotonic()`, which is
     # the equivalent mutant this repository deletes rather than documents.
     frame = tab_spinner_frame()
-    marked = [f"{_BAR_MARK[0] if i == at else (frame if names[i] in busy else _BAR_MARK[1])}{n}"
+    marked = [f"{_mark_cell(i == at, names[i] in arrived, names[i] in busy, frame)}{n}"
               for i, n in enumerate(shown)]
     # **The same fields twice: one set to MEASURE and one set to DRAW.** `chrome.block`
     # adds no cell — `tui.width` counts no SGR — so the two are the same width by
@@ -4168,7 +4249,18 @@ def _compose(names: list[str], here: str, width: int, *,
     # an edge is what a tab has where a band is what a highlighted word has, and it costs
     # the row nothing. Under `NO_COLOR` `panel._write` strips both and the `*` is still
     # there, which is why the mark stays and was not replaced by the highlight.
-    painted = [chrome.block(f) if i == at else f for i, f in enumerate(marked)]
+    #
+    # **An arrived tab is accented and the tab you are ON is not, whichever it is**, which
+    # is one `elif` and is the whole of the interaction between the two: you cannot be owed
+    # a look at the workspace you are looking at, so a tab that is both is a mark this
+    # frame is about to clear (`commands_frame._switch_client`) and drawing the block for
+    # it is what the operator's eye is actually asking about. The accent is a SGR pair
+    # around the field, so it adds no cell either — `marked` and `painted` stay the same
+    # width by construction, and `marked` is still the honest one for the ladder to
+    # measure.
+    painted = [chrome.block(f) if i == at
+               else (f"{sl.accent('ok')}{f}{sl._R}" if names[i] in arrived else f)
+               for i, f in enumerate(marked)]
     room = width - tui.width(lead)
     joined = gap.join(marked)
     # **One field, measured once**, and that is what makes `+` and `-` inseparable rather
@@ -4541,6 +4633,30 @@ def _workspace_counts() -> dict:
         return {}
 
 
+def _arrived() -> frozenset:
+    """Which workspaces a handoff landed in that nobody has looked at yet.
+
+    `workspace.arrivals` behind a guard, and a wrapper for :func:`_workspace_counts`'
+    reason, which is this module's rule for every read on the repaint path: **never
+    raises.** `arrivals` already answers `frozenset()` for a record it cannot read, so what
+    this catches is the failure that is not about the file — and the degrade is the same
+    one: a plane charter cannot ask about arrivals draws a strip with no marks, which is
+    exactly the strip it drew before there were any.
+
+    **It puts the strip on no clock**, :data:`BAR_ANIMATED`'s question and the same answer
+    :func:`_workspace_counts` gives: a mark appears when a handoff lands and goes when
+    somebody looks, both of which are things that happen to the PLANE and not to the clock.
+    Each is a `charter` command that ends in a fan-out (`notify.plane_changed_everywhere`,
+    `notify.bump_everywhere`), so the mark rides the repaint the strip already had —
+    `state.version`, one `stat`.
+    """
+    from .. import workspace as ws_mod
+    try:
+        return ws_mod.arrivals()
+    except Exception:  # noqa: BLE001 - a readout must never cost a pane
+        return frozenset()
+
+
 def _workspaces_strip(fid: str):
     """:func:`_chats_strip` one noun over. The name is the FRAME's
     (`switch.current_workspace` → `state.workspace_for`), never one this pane resolved for
@@ -4696,9 +4812,18 @@ def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
 
     :func:`chats_bar`'s rules and its ladder, one noun over — see :func:`_workspaces_strip`
     for what it draws and why it draws no `+`.
+
+    **The one field on this strip that a command somewhere else can change**: a workspace a
+    handoff landed in is drawn with :data:`_ARRIVED_MARK` and the `ok` accent until any
+    terminal on this plane looks at it. It is read here rather than inside :func:`_compose`
+    for the reason *busy* is read in :func:`chats_bar` — the sizer
+    (:func:`bar_rows_wanted`) composes the same ladder and must not read it, because
+    nothing in the LAUNCHER knows or should know which workspace a chat was handed to, and
+    a mark that changed the row count would resize a pane every time one landed.
     """
     names, here, note, close, counts = _workspaces_strip(fid)
-    return _bar(names, here, width, note=note, close=close, rows=rows, counts=counts)
+    return _bar(names, here, width, note=note, close=close, rows=rows, counts=counts,
+                arrived=_arrived())
 
 
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no

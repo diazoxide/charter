@@ -723,6 +723,23 @@ hand you a differently-ordered strip after every switch, which is the shape this
 out in. It is decided again when you next launch the plane — still while you are looking
 at it, fresh when you come back.
 
+**One thing moves a tab while the plane is up, and it is a handoff.** `charter handoff`
+opens a chat in a workspace nobody is looking at, so the workspace it lands in goes to the
+front of the strip. Nothing else does: a switch, a launch and a repaint all leave the order
+exactly where they found it, which is what keeps the tab you just pressed the same tab a
+moment later. A handoff into the workspace you are already in moves its tab too — the order
+is about where work is.
+
+**And that tab stays green until you look at it.** The workspace a handoff landed in is
+drawn in the `ok` accent with a `✶` where the `*` would be, and the mark clears the first
+time *any* terminal on this plane switches into that workspace, focuses it, or attaches to
+it — every frame's strip then repaints without it. It clears plane-wide rather than per
+terminal, because tmux draws a pane identically for every client of its session; there is no
+per-client mark and the strip's repaint path asks tmux nothing. The `✶` is the half that
+survives `NO_COLOR`, where charter strips every escape off every row and the accent is
+nothing. It costs no column — it is the mark's own cell, the one the chat strip's spinner
+takes — so a handoff landing never shifts a tab under your hand. There is no bell.
+
 **Neither strip is labelled.** They used to open with the word `chats` or `workspaces`, and
 that cost 9 and 14 columns of the row the names are competing for. What tells them apart is
 where they are and what is on them: the strips are adjacent and always in the same order, the

@@ -989,6 +989,108 @@ def forget_tab_order() -> None:
         pass
 
 
+def _arrivals_file() -> Path:
+    """Where this plane records which workspaces a handoff landed in and nobody has looked
+    at yet.
+
+    **Beside `workspace-tab-order`, for every one of :func:`_tab_order_file`'s reasons.**
+    It is plane-scoped (every frame on the plane draws the same mark, and the mark clears
+    for all of them at once — `commands_frame._switch_client`), per developer, gitignored,
+    machine-written, and it outlives any one chat: the chat that ran `charter handoff` may
+    end long before the operator looks at what it opened, and a mark that died with it
+    would be a workspace nothing points at.
+
+    **A set and not a log.** Nothing reads *when* a workspace arrived — the mark is drawn
+    or it is not — and a timestamp nothing reads is the field ADR 0011 refuses.
+    """
+    return Path(config.STATE_DIR) / "workspace-arrivals"
+
+
+def record_arrival(name: str) -> None:
+    """Mark *name* as a workspace a handoff landed in, until somebody looks at it.
+
+    :func:`record_tab_order`'s writer one file over: `private_mkdir` for a plane whose
+    `.charter/` may not exist yet, `config.replace_for` because this is read on a panel's
+    render path and inside the `frame-resize` child, and **never raises** — a full
+    filesystem costs the operator a green tab, not a traceback out of a strip.
+
+    Sorted, so the bytes are a function of the SET and not of the order the marks arrived
+    in: two planes holding the same marks hold the same file, and re-recording a name that
+    is already there rewrites the identical content rather than shuffling it.
+
+    No name check on the way IN. :func:`arrivals` checks on the way OUT, which is where
+    `tab_order` puts the same check and for its reason: the read is what joins a name onto
+    a path and onto a tab, so the floor belongs where the value is used. A caller reaches
+    this with a name `switch.to_workspace` or `commands_handoff` has already held to
+    :func:`valid_name`.
+    """
+    try:
+        f = _arrivals_file()
+        config.private_mkdir(f.parent)
+        config.replace_for(f, "".join(f"{n}\n" for n in sorted(arrivals() | {name})))
+    except OSError:
+        return
+
+
+def arrivals() -> frozenset[str]:
+    """The workspaces a handoff landed in that nobody has looked at yet.
+
+    `frozenset()` for a plane that has no record, one it cannot read, and one whose file is
+    not UTF-8 — :func:`tab_order`'s three cases and its degrade, which is the same degrade
+    for all of them because the caller's answer is the same: draw the strip with no marks.
+    A panel that threw out of `render` loses its pane.
+
+    **Name-checked on the way out**, exactly as :func:`tab_order` is. These names are
+    matched against the names the strip is drawing and go no further, but the check is the
+    floor that keeps that true: an unchecked line here is a string this plane's own state
+    put in front of :func:`slots._compose`, and #442 is what an unchecked name in that
+    position already cost. `valid_name("")` is already False, so a blank line is dropped on
+    that check's own terms and there is no `if line` in front of it.
+    """
+    try:
+        lines = _arrivals_file().read_text().splitlines()
+    except (OSError, ValueError):
+        return frozenset()
+    return frozenset(n for n in (line.strip() for line in lines) if valid_name(n))
+
+
+def clear_arrival(name: str) -> None:
+    """Drop *name*'s arrived mark — somebody has looked at that workspace.
+
+    **Writes nothing when the name is not marked**, and that is not an optimisation. This
+    runs on the switch, focus and attach paths, which is every time any terminal on this
+    plane arrives anywhere; rewriting the file for a workspace that never had a mark would
+    move its mtime on every switch a plane ever makes, for no change at all.
+
+    Missing record, unreadable record and unmarked name are one case here because
+    :func:`arrivals` already answers `frozenset()` for the first two, and a name is not in
+    an empty set.
+    """
+    marks = arrivals()
+    if name not in marks:
+        return
+    try:
+        config.replace_for(_arrivals_file(),
+                           "".join(f"{n}\n" for n in sorted(marks - {name})))
+    except OSError:
+        return
+
+
+def forget_arrivals() -> None:
+    """Drop every arrived mark — :func:`forget_tab_order` one file over, and called from
+    the same branch of `frame.state.reap`.
+
+    A plane that goes cold has no frame left that could be drawing a mark, and the operator
+    who comes back to it is not owed a look at something they can no longer see was ever
+    marked. Missing is the ordinary case; never raises, for the reason
+    :func:`forget_tab_order` does not.
+    """
+    try:
+        _arrivals_file().unlink()
+    except OSError:
+        pass
+
+
 def clones(name: str) -> list[Path]:
     """The repo clones inside a workspace (``memory/`` and ``refs/`` are not clones —
     they have no ``.git`` — so this naturally excludes them)."""

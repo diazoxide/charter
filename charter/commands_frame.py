@@ -4930,6 +4930,10 @@ def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> in
     # A focus opens nothing, so this is the only place its answer can come from — without
     # it a focused launch would record the plane with no focus at all.
     record.focus_on(chat)
+    # Before the attach and not after it: `interact` IS this terminal for as long as the
+    # operator stays, so a clear on the far side of it would leave the workspace marked for
+    # the whole time they were reading it and drop the mark as they left.
+    _looked_at(ws)
     attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", session_id)
     attached = tmuxctl.interact(attach_cmd)
     if attached.returncode != 0:
@@ -6067,6 +6071,14 @@ def _launch(args) -> int:
             # attach": `attach` stays ``None``, `code` stays ``None``, and the tail reports
             # a detached chat, which is precisely what this is.
             if _wants_attach(args):
+                # This terminal is about to be looking at *ws*, so the workspace's arrived
+                # mark is paid — :func:`_focus_workspace`'s reason for the placement, and
+                # gated on `_wants_attach` for the reason that gate exists at all: a launch
+                # that never becomes anybody's terminal (a background open, a reopen
+                # building chats nobody has seen) has looked at nothing. A handoff's own
+                # `open_in_background` is exactly such a launch, so the chat it opens
+                # cannot clear the mark it is the reason for.
+                _looked_at(ws)
                 # `tmuxctl.interact`, not `tmuxctl.run`: no capture and no timeout — this
                 # IS the operator's own terminal for as long as the harness runs, not an
                 # admin command whose output (or lifetime) charter should own.
@@ -8164,6 +8176,43 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
     return opened
 
 
+def _looked_at(ws: str) -> None:
+    """A terminal on this plane is now looking at workspace *ws*: drop its arrived mark and
+    tell every frame to repaint without it.
+
+    **One function for the three arrivals, not three pairs of lines.** A switch
+    (:func:`_switch_client`), a focus (:func:`_focus_workspace`) and a launch that attaches
+    (:func:`_launch`) are the three ways a terminal comes to be looking at a workspace, and
+    the clear must mean the same thing at all three — a mark cleared on two of them is a
+    tab that stays green for an operator who is reading it, which is the readout lying.
+
+    **The bump is the other half and is not optional.** A panel polls `state.version` and
+    then reads its own facts; clearing the record without moving the version would leave
+    every OTHER frame on the plane drawing the mark until something unrelated bumped it.
+    `notify.bump_everywhere` rather than `plane_changed_everywhere` for the reason that
+    function carries: a cleared mark moves no fact a gather holds, and this is the switch
+    path.
+
+    **A workspace with no mark costs nothing**, which is `workspace.clear_arrival`'s own
+    no-op rule said one level up, where the expensive half is. Every switch, focus and
+    attach on this plane reaches here, and almost none of them follows a handoff: an
+    unconditional fan-out would bump every frame directory on the plane — and repaint every
+    background frame's panels — on every workspace switch an operator ever makes, to say
+    that nothing changed. The ask is one read of a file under `STATE_DIR`; the alternative
+    is N writes and N repaints. `arrivals()` answers `frozenset()` for a plane that has
+    never had a handoff, so that plane pays exactly one `stat`.
+
+    Imported here rather than at module scope: `frame.notify` imports `frame.gather`, which
+    is the heaviest thing in the frame package, and this module is imported by the CLI's
+    own dispatch table on every `charter` command.
+    """
+    from .frame import notify
+    if ws not in workspace.arrivals():
+        return
+    workspace.clear_arrival(ws)
+    notify.bump_everywhere()
+
+
 def _switch_client(fid: str, ws: str, *, said: str) -> None:
     """Move the client(s) reading chat *fid* to this plane's workspace *ws* — §4b.
 
@@ -8328,6 +8377,18 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
         _say_on_screen(fid, "cannot switch: tmux did not move this terminal to "
                             f"'{ws}', so this chat keeps its panels")
         return
+    # **Somebody is now looking at *ws*, so its arrived mark has been paid.** Here and not
+    # a line earlier: every refusal above leaves the operator still owed the look, and a
+    # mark cleared by a switch that tmux then refused would lose the only thing pointing at
+    # a chat a handoff opened.
+    #
+    # **Plane-wide, not per client.** A pane draws the same bytes for every client of its
+    # session (§2.10) and the strip's repaint path asks tmux nothing, so there is no
+    # per-client mark to clear even if charter wanted one — the spec states that as a limit
+    # rather than pretending otherwise. `bump_everywhere` and not
+    # `plane_changed_everywhere`: a cleared mark moves no fact a gather holds, and a scan
+    # per workspace on the switch path would cost more than the switch does.
+    _looked_at(ws)
     landed = _chat_showing(_window_seats(socket, "finding the chat this switch landed on"),
                            there[0])
     # **The ARRIVAL first, and the departure tidied behind it** — `cmd_chat`'s ordering
