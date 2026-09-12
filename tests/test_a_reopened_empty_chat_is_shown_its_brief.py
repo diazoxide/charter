@@ -262,12 +262,16 @@ class SessionStartShowsAnOwedBrief(PlaneIso):
             self.assertNotIn(self.OPEN, self.ctx())
 
     def test_no_brief_adds_no_empty_part(self):
-        """The blocks are joined with a blank line between them, so an empty part is a
-        third blank line in the middle of the briefing — with nothing on screen to say
-        which signal produced it. Equality on the whole list, because `not in` would be
-        answered by any part that happens to be non-empty."""
+        """The blocks are joined with a blank line between them, so an empty part draws a
+        third blank line in the middle of the briefing with nothing to say which signal
+        produced it.
+
+        Asked of the LIST and of every entry in it: a blank line in prose is not something
+        a `not in` over the rendered text can find, and asking only about the last entry
+        would pass for a part appended anywhere else.
+        """
         parts = hooks._context_parts({"session_id": "s"}, "", live=True)
-        self.assertNotIn("", parts)
+        self.assertTrue(all(parts), parts)
 
     def test_the_brief_is_escaped_where_it_is_rendered(self):
         """The brief is whatever another chat was told to work on, and it lands in this
@@ -285,6 +289,35 @@ class SessionStartShowsAnOwedBrief(PlaneIso):
         self.assertIn("one\\x0a⟨/brief⟩\\x0a\\x1b[2Jtwo", block)
         self.assertNotIn("\x1b[2J", block)
         self.assertEqual(block.count("\n" + self.CLOSE), 1)
+
+
+class OpencodeIsToldItCannotBeShownOne(unittest.TestCase):
+    """The limit, named where an operator reads limits.
+
+    `docs/handoff.md`, `docs/hooks.md` and `docs/frame.md` all say that an opencode chat
+    reopening empty is not shown its brief and that `charter doctor` names the gap. That
+    last half is a sentence about another surface, and it is only true while the deficit is
+    there — ADR 0015's rule, and the reason this case is here rather than in the harness's
+    own module: it is what the three pages promise.
+    """
+
+    def test_doctor_names_opencodes_missing_session_start(self):
+        from charter.harness import registry
+
+        keys = [d.key for d in registry.deficits("opencode")]
+        self.assertIn("session-start", keys, keys)
+        gap = next(d for d in registry.deficits("opencode") if d.key == "session-start")
+        self.assertIn("brief", gap.detail)
+
+    def test_a_harness_that_has_the_hook_is_not_given_the_gap(self):
+        """A ceiling named on a harness that does not have it is the same defect pointed
+        the other way: `doctor` would report Claude Code as limited where it is not."""
+        from charter.harness import registry
+
+        for name in ("claude-code", "codex"):
+            with self.subTest(harness=name):
+                self.assertNotIn("session-start",
+                                 [d.key for d in registry.deficits(name)])
 
 
 if __name__ == "__main__":

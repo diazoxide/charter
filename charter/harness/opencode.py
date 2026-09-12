@@ -672,6 +672,17 @@ class OpenCodeHarness(Harness):
         Deficit("prompt-hook",
                 "no per-turn prompt hook: charter's mid-session nudges ride the output of "
                 "effectful tools (write/edit/bash) instead of arriving beside them."),
+        # Named for the same reason `prompt-hook` is, one event earlier: the ceiling is
+        # real, charter has no answer for it, and a limit nobody states is one the operator
+        # discovers as a feature that quietly does nothing. The concrete cost today is the
+        # handoff brief — `hooks._brief_block` is computed AT a start, from state a reopen
+        # has just written, and a file charter wrote beforehand cannot carry it.
+        Deficit("session-start",
+                f"no session-start hook: charter's context reaches an opencode chat as "
+                f"`{CONTEXT_PATH}` in the tree, written when charter last wrote it, so "
+                f"anything charter can only know at a start never arrives — a chat that "
+                f"`charter reopen` brings back without its conversation is not shown the "
+                f"brief its handoff opened it on."),
         # DENIES are carried in full — `tool.execute.before` throwing is what denial IS,
         # and that is the half the vault guard and the one-credential rule use. What has
         # no spelling here is the middle answer: a hook that returns `ask` gets a decision

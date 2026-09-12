@@ -117,6 +117,11 @@ refuses every shape that prompt cannot stand in front of. Each one is the rule w
 | outside a frame, or inside a tmux you started yourself | nothing can open a chat in the background there — charter prints the command to run in a new terminal instead |
 | an empty brief, a brief that is not UTF-8, one past the size bound, one shaped like a credential | the command, before it changes anything |
 
+The sub-agent and unattended refusals read the harness's own hook payload, and not every
+harness sends one: opencode's carries neither `agent_id` nor `permission_mode`, so neither
+is refused there. `charter doctor` names that gap rather than charter pretending to enforce
+it. `charter docs show handoff` has the measurements, per harness.
+
 ## Limits, and say them
 
 - **No report back.** The new chat never answers this one.
