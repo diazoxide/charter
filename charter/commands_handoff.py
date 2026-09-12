@@ -99,6 +99,14 @@ NOTHING_ELSE = (
     "charter handoff: {why}\n  What stays: {stays}. No chat opened, so the brief was sent "
     "to nobody and nothing is running.")
 OPENED = "charter handoff: opened chat {chat} in workspace '{ws}', started on the brief"
+#: Said when the chat opened and its workspace could not be marked arrived. The chat is
+#: real and is named; what is missing is the thing that would have pointed at it, so the
+#: line hands that job back to the operator rather than reporting a failure they cannot
+#: place. The workspace tab still moved to the front of the strip — that is a different
+#: record and it did not fail — so "look at it" is a thing they can act on now.
+UNMARKED = ("charter handoff: {chat} is open in '{ws}', but charter could not mark that "
+            "workspace's tab as arrived — its state directory refused the write. Nothing "
+            "on the strip will point at the new chat; its tab did move to the front.")
 
 
 def _printed_command(*, ws: str, msg: str, create_vision: str | None,
@@ -253,12 +261,23 @@ def cmd_handoff(args) -> int:
     # The move first and the mark second, which is the order they are read in: the tab goes
     # to the front of the plane's order, and then it is marked as one nobody has looked at.
     switch.bring_to_front(ws)
-    if ws != source_ws:
+    if ws != source_ws and not workspace.record_arrival(ws):
         # **A handoff into the workspace you are IN marks nothing** (spec, step 8): you are
         # looking at it, so there is no look still owed, and its chats strip already shows
         # the new tab. The tab still MOVES — the plane's order is about where work is, and
         # the workspace this chat just handed work to is where it is.
-        workspace.record_arrival(ws)
+        #
+        # **And a mark that could not be written is SAID rather than swallowed.** The chat
+        # is open either way — nothing below is conditional on this — but the strip is the
+        # only thing that was going to point at it, so a silent failure here is exactly the
+        # invisible work this command exists to end, arriving through the fix for it. The
+        # operator is told which workspace to go and look at, because that is the thing the
+        # mark would have done for them.
+        # `warn` and not `err`: the handoff DID what it was asked — the chat is open and
+        # started on the brief — and a `✗` would tell the operator the command failed
+        # when what failed is the pointing. `!` is the mark for "this worked and there
+        # is something you need to know", which is exactly this.
+        util.warn(UNMARKED.format(ws=ws, chat=opened.chat))
     # The calling chat's own attention row, which is the only screen this command has: its
     # stdout goes to a Bash tool call the operator may never read, and the chat it opened
     # is somewhere else by construction.

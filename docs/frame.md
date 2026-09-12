@@ -756,9 +756,12 @@ reason clears nothing: you are still owed the look.
 bar draws the page your tab falls on; an arrival on another page is inside the `+2`, and at
 widths where the bar is down to `2/3` nothing is drawn at all. The counts are clickable and
 open the palette, whose workspace list carries `handoff arrived` in its note column for
-every workspace that has one — no page, no width, no glyph. The launch picker
-(`charter <harness>` with no workspace) says it too, next to each workspace's clone count.
-Growing the strip with `F3` is the other answer where there are rows to be had.
+every workspace that has one — no page and no glyph. The launch picker (`charter <harness>`
+with no workspace) says it too, next to each workspace's clone count. Both are **cut to the
+terminal's width and never dropped**, so below about 30 columns the note reads
+`handoff a…` and below about 16 it is a stub — which still says a row has something the
+others do not, where the strip at those widths says nothing at all. Growing the strip with
+`F3` is the other answer where there are rows to be had.
 
 **Neither strip is labelled.** They used to open with the word `chats` or `workspaces`, and
 that cost 9 and 14 columns of the row the names are competing for. What tells them apart is

@@ -137,10 +137,17 @@ exactly where you were. So the last thing the command does is move where your ey
   by any of the routes above — says `already in workspace 'x'` and clears it for everyone.
 - **Where to look when the strip has no room.** The bar draws the page your tab falls on, so
   an arrival on another page is inside a `+2` and at narrow widths the bar is down to `2/3`.
-  The palette's workspace list says `handoff arrived` in its note column, at any width, and
-  so does the launch picker beside each workspace's clone count.
+  The palette's workspace list says `handoff arrived` in its note column, and so does the
+  launch picker beside each workspace's clone count. Both cut that note to the terminal's
+  width rather than dropping it — below about 30 columns it reads `handoff a…` — so the row
+  still says it has something the others do not.
 - **A handoff into the workspace you are in marks nothing.** You are looking at it, and its
   chats strip already shows the new tab.
+- **A mark charter could not write is said out loud.** The chat is open either way — nothing
+  else depends on the mark — but the strip was the only thing that was going to point at it,
+  so charter names the workspace to go and look at rather than going quiet. That is the one
+  failure this whole mark exists to prevent, and a silent one would be it arriving through
+  its own fix.
 - **Your own chat's attention row says where it went** — `handoff → beta.1 opened in
   workspace 'beta'` — because the command's own output goes to a tool call you may never read.
 - **No bell**, and nothing moves your terminal.

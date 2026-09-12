@@ -65,7 +65,8 @@ goes.
   session. A switch charter refused for any *other* reason clears nothing.
 - **The palette and the launch picker say it in words** — `handoff arrived` in the note
   column — because the strip draws only the page your tab falls on, and an arrival on another
-  page sits behind a `+2`.
+  page sits behind a `+2`. Narrow terminals cut that note rather than dropping it, so the row
+  still stands out at a width where the strip itself has given up.
 - **Your own chat's attention row names the new chat**, because the command's own output goes
   to a tool call you may never read.
 - A handoff into the workspace you are already in moves its tab and marks nothing: you are

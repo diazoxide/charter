@@ -36,9 +36,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config, statusline, tui, workspace
-from charter.frame import (builtin_actions, choose, chrome, picker, slots,
-                           state, switch)
+from charter import (commands_frame, commands_handoff, config, statusline, tui,
+                     workspace)
+from charter.frame import (builtin_actions, builtins, choose, chrome, picker,
+                           notify, slots, state, switch)
 
 from tests._isolation import PersonaIso
 from tests.test_a_chat_opens_in_the_background_with_its_first_message import (
@@ -265,6 +266,46 @@ class TheArrivalsRecord(PersonaIso, unittest.TestCase):
         self.assertFalse((Path(config.STATE_DIR).parent / "escaped").exists())
         self.assertFalse(workspace._arrivals_dir().exists())
 
+    def test_clearing_a_name_that_cannot_be_a_workspace_deletes_nothing(self):
+        """**The guard with teeth, and it is the clear side.** `record_arrival`'s identical
+        check only ever fails to create a file; this one decides what `unlink` is aimed at,
+        and `../workspace-tab-order` under the arrivals directory is the plane's tab order.
+        Unreachable today — every caller name-checks first — which is exactly why it is
+        pinned here rather than left to the day one stops."""
+        workspace.record_tab_order(["alpha", "beta"])
+        workspace.record_arrival("beta")
+        order = workspace._tab_order_file()
+        before = order.read_bytes()
+        for escape in ("../workspace-tab-order", "..", "../..", "/etc/passwd", ""):
+            with self.subTest(escape=escape):
+                workspace.clear_arrival(escape)
+                self.assertTrue(order.is_file(), f"{escape!r} took the tab order")
+                self.assertEqual(order.read_bytes(), before)
+        self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
+
+    def test_a_mark_is_reported_when_it_could_not_be_written(self):
+        """A handoff that opened a chat nobody will be pointed at is the one outcome this
+        record exists to prevent, so a failed write answers `False` rather than going
+        quiet. The name-refused case answers `False` on the same terms: it marked nothing."""
+        self.assertTrue(workspace.record_arrival("beta"))
+        self.assertFalse(workspace.record_arrival("../escaped"))
+        with mock.patch("charter.config.touch_for", side_effect=OSError):
+            self.assertFalse(workspace.record_arrival("gamma"))
+        self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
+
+    def test_a_workspace_with_a_very_long_name_can_still_be_marked(self):
+        """**The ceiling `replace_for` put here, measured.** An atomic replace writes a
+        temp beside the target, so a name within a few characters of `NAME_MAX` made a temp
+        name past it — `ENAMETOOLONG`, swallowed, and a workspace that could be created and
+        never marked. A marker's content is its existence; there is no half-written empty
+        file to protect a reader from, so it is created directly and the ceiling is gone."""
+        name = "w" * 240
+        self.assertTrue(workspace.valid_name(name), "the plane would refuse this name")
+        self.assertTrue(workspace.record_arrival(name))
+        self.assertEqual(workspace.arrivals(), frozenset({name}))
+        workspace.clear_arrival(name)
+        self.assertEqual(workspace.arrivals(), frozenset())
+
     def test_a_name_that_cannot_name_a_workspace_is_not_read_back(self):
         d = workspace._arrivals_dir()
         d.mkdir(parents=True, exist_ok=True)
@@ -461,11 +502,33 @@ class TheMarkClearsWhenSomeoneLooks(_OpensBeta):
         surface on this plane ends at `cmd_switch` — a tab press, a palette row, the
         keyboard walk and a typed command all spawn `frame-switch --workspace <name>`. So
         the sentence is true for all four exactly if it is true for this one entry point,
-        and this drives it with the argv each of them builds."""
-        for spelling in (("frame-switch", "--workspace"),
-                         builtin_actions._STRIPS[1].command):
-            with self.subTest(spelling=spelling):
-                self.assertEqual(spelling, ("frame-switch", "--workspace"))
+        and this drives it with the argv each of them builds.
+
+        **The list of routes lives in TWO places and this is the other half.** The prose
+        one is `docs/frame.md`'s *"however you get there"* sentence (and its copies in
+        `docs/handoff.md` and the news entry); a route added to one belongs in both. The
+        argv assertion below is what keeps the claim honest as the code moves — a surface
+        given a spelling of its own stops reaching this clear, and nothing else in the
+        suite would notice that the sentence had silently become false for that route.
+        What it cannot do is notice a route added to the code and not to the prose, which
+        is why this paragraph is here rather than left to be re-derived.
+        """
+        # **Every surface's argv, held equal to the one this case then drives.** The three
+        # spellings are deliberately separate in the source — `frame/builtins.py` is a
+        # renderer a palette process has no reason to import, and `_start_workspace_switch`
+        # restates the pair rather than reaching for it — so the equality lives here, which
+        # is `tests/test_the_keyboard_walks_the_tab_strips.py`'s own arrangement. A surface
+        # given a spelling of its own stops reaching the clear below, and nothing else in
+        # the suite would notice that the docs had become false for that route.
+        spawned: list = []
+        with mock.patch("charter.frame.builtin_actions._spawn",
+                        side_effect=lambda argv, **kw: spawned.append(argv)):
+            commands_frame._start_workspace_switch("beta.1", "beta")
+        self.assertEqual(spawned[0][-2:], ["--workspace", "beta"],
+                         "the palette starts a switch nothing else spells")
+        self.assertEqual(builtin_actions._STRIPS[1].command,
+                         ("frame-switch", "--workspace"))
+        self.assertEqual(builtins._WORKSPACE_SWITCH, ("frame-switch", "--workspace"))
         for surface in ("tab", "palette row", "keyboard walk", "typed command"):
             with self.subTest(surface=surface):
                 workspace.record_arrival("beta")
@@ -488,6 +551,19 @@ class TheMarkClearsWhenSomeoneLooks(_OpensBeta):
             self.assertEqual(commands_frame.cmd_switch(args), 0)
         self.assertEqual(workspace.arrivals(), frozenset({"beta"}))
         self.assertIn("no workspace 'beta'", self.said.call_args.args[1])
+
+    def test_a_frame_root_that_cannot_be_listed_costs_the_switch_nothing(self):
+        """`bump_everywhere` runs on the switch path, so a repaint nobody asked for must
+        never be the thing that raises out of one. The sweep reported this catch unpinned:
+        without it the failure comes out of `_looked_at`, through `_switch_client`, and the
+        operator's switch dies for a notification."""
+        with mock.patch("charter.frame.state._root", side_effect=OSError):
+            self.assertIsNone(notify.bump_everywhere())
+            # And through the one function every clear site calls, which is where the
+            # failure would actually escape from: the mark is still paid, and the switch
+            # that paid it does not die because nobody could be told.
+            commands_frame._looked_at("beta")
+        self.assertEqual(workspace.arrivals(), frozenset())
 
     def test_a_focus_clears_the_mark_before_it_attaches(self):
         """`interact` IS the operator's terminal for as long as they stay, so a clear on
@@ -604,6 +680,19 @@ class EverySurfaceThatListsWorkspacesSaysSo(PersonaIso, unittest.TestCase):
         self.assertEqual(self._notes(rows)["beta"], "pinned by $CHARTER_WORKSPACE")
         self.assertTrue(all(r.refused for r in rows))
 
+    def test_only_the_workspace_picker_asks_the_plane_for_arrivals(self):
+        """The cost guard the sweep reported unpinned. Reading it for every noun would
+        change no output — a chat row's note is its harness and a persona row has none — so
+        nothing but this can see the difference: one `os.listdir` per picker open, on a
+        surface an operator reaches by keystroke, asking a question that noun cannot use."""
+        with mock.patch("charter.workspace.arrivals") as asked:
+            for noun in (choose.CHAT, choose.PERSONA, choose.CHANGE):
+                with self.subTest(noun=noun):
+                    choose.roster(noun, "alpha.1")
+                    asked.assert_not_called()
+            choose.roster(choose.WORKSPACE, "alpha.1")
+            self.assertEqual(asked.call_count, 1, "and exactly once for the whole roster")
+
     def test_a_picker_charter_cannot_ask_draws_no_note_and_raises_nothing(self):
         with mock.patch("charter.workspace.arrivals", side_effect=RuntimeError):
             notes = self._notes(choose.roster(choose.WORKSPACE, "alpha.1").rows)
@@ -619,9 +708,9 @@ class EverySurfaceThatListsWorkspacesSaysSo(PersonaIso, unittest.TestCase):
         """The earliest surface that can say it: before tmux, before a frame, before any
         strip exists to draw a mark on."""
         rows = picker.rows(["alpha", "beta"], lambda n: 0, workspace.arrivals())
-        drawn = tui.strip_ansi(picker.render(rows, "alpha", 120))
-        self.assertIn("* alpha  —", drawn)
-        self.assertIn("  beta   —  handoff arrived", drawn)
+        drawn = [tui.strip_ansi(ln) for ln in picker.render(rows, "alpha", 120).splitlines()]
+        self.assertIn("     1  * alpha  —", drawn)
+        self.assertIn("     2    beta   —  handoff arrived", drawn)
 
     def test_the_launch_asks_the_plane_for_its_arrivals(self):
         """The wiring, not the renderer: a picker handed a renderer that can draw the mark
@@ -640,11 +729,30 @@ class EverySurfaceThatListsWorkspacesSaysSo(PersonaIso, unittest.TestCase):
                 SimpleNamespace(workspace=None, pick=True))
         self.assertEqual([r.name for r in seen[0] if r.arrived], ["beta"])
 
+    def test_a_narrow_terminal_cuts_the_note_and_never_drops_it(self):
+        """`docs/frame.md` says cut, never dropped, and this is the measurement behind that
+        wording — it said "at any width" until the widths were asked. What the operator
+        keeps at 24 columns is a row that visibly carries something the others do not,
+        which is more than the strip has at that width."""
+        rows = picker.rows(["alpha", "beta"], lambda n: 0, frozenset({"beta"}))
+        for width, drawn in ((120, "     2    beta   —  handoff arrived"),
+                             (30, "     2    beta   —  handoff a…"),
+                             (24, "     2    beta   —  han…"),
+                             (16, "     2    beta …")):
+            with self.subTest(width=width):
+                # Split BEFORE stripping: `tui.strip_ansi` is asked about one row, and the
+                # render is several joined by newlines.
+                row = [tui.strip_ansi(ln)
+                       for ln in picker.render(rows, "alpha", width).splitlines()
+                       if "beta" in ln][0]
+                self.assertEqual(row, drawn)
+                self.assertLessEqual(tui.width(row), width)
+
     def test_the_launch_picker_without_arrivals_draws_exactly_what_it_drew_before(self):
         rows = picker.rows(["alpha", "beta"], lambda n: 0)
-        drawn = tui.strip_ansi(picker.render(rows, "alpha", 120))
-        self.assertNotIn("handoff", drawn)
-        self.assertIn("  beta   —", drawn)
+        drawn = [tui.strip_ansi(ln) for ln in picker.render(rows, "alpha", 120).splitlines()]
+        self.assertIn("     2    beta   —", drawn)
+        self.assertEqual([ln for ln in drawn if "handoff" in ln], [])
 
 
 class AHandoffArrives(_AHandoffFromAlpha):
@@ -685,6 +793,28 @@ class AHandoffArrives(_AHandoffFromAlpha):
     def test_every_frame_is_told_once(self):
         self._handoff()
         self.assertEqual(self.fanout.call_count, 1)
+
+    def test_a_mark_that_could_not_be_written_is_said_and_the_chat_still_opened(self):
+        """The one outcome this record exists to prevent, arriving through the record: a
+        chat is open and nothing on screen will point at it. So it is said — naming the
+        workspace, because going to look is the job the mark would have done — and nothing
+        after it is conditional on the mark, because the chat is real either way."""
+        with mock.patch("charter.workspace.record_arrival", return_value=False):
+            rc, out, err = self._handoff()
+        self.assertEqual(rc, 0)
+        self.assertEqual(err.strip(), "! " + commands_handoff.UNMARKED.format(
+            ws="beta", chat="beta.1"),
+            "a handoff that opened a chat did not fail, so this is not a `✗`")
+        self.assertIn("opened chat beta.1 in workspace 'beta'", out)
+        self.assertEqual(workspace.tab_order()[0], "beta")
+        self.assertEqual(state.notice("alpha.1"),
+                         "charter: handoff → beta.1 opened in workspace 'beta'")
+        self.assertEqual(self.fanout.call_count, 1)
+
+    def test_a_mark_that_was_written_says_nothing_extra(self):
+        """The other half, so the sentence above is a report and not decoration."""
+        rc, _out, err = self._handoff()
+        self.assertEqual((rc, err), (0, ""))
 
     def test_a_handoff_that_did_not_open_moves_no_tab_and_marks_nothing(self):
         """Nothing on screen may point at a chat that does not exist."""

@@ -1036,32 +1036,43 @@ def _arrival_mark(name: str) -> Path | None:
     return _arrivals_dir() / name if valid_name(name) else None
 
 
-def record_arrival(name: str) -> None:
+def record_arrival(name: str) -> bool:
     """Mark *name* as a workspace a handoff landed in, until somebody looks at it.
+    ``True`` when the mark is there afterwards.
 
-    One empty file, written with `config.replace_for` for its mode (0600) and its
-    atomicity: this is read on a panel's render path and inside the `frame-resize` child,
-    and a reader must never see a half-made mark. `private_mkdir` first, for
-    :func:`record_tab_order`'s reason — a plane whose `.charter/` does not exist yet.
+    One empty file, created with `config.touch_for` for its mode (0600). `private_mkdir`
+    first, for :func:`record_tab_order`'s reason — a plane whose `.charter/` does not exist
+    yet.
+
+    **`touch_for` and NOT `replace_for`, and the difference is a measured ceiling rather
+    than a preference.** An atomic replace writes a temp file beside the target and renames
+    it, and that temp name is the target's plus a suffix — so a workspace name within four
+    characters of `NAME_MAX` made a temp name past it, `ENAMETOOLONG`, and a workspace that
+    could be created and could never be marked. Nothing needs the atomicity here: the mark
+    IS the file's existence, its content is empty, and there is no half-written state of
+    nothing for a reader to catch. Creating it directly removes the temp name and the
+    ceiling with it.
 
     **Touches no other name**, which is the whole of :func:`_arrivals_dir`'s concurrency
     argument: a second handoff landing in the same millisecond writes a different path, and
     a switch clearing another workspace unlinks a third. Re-recording a name that is
-    already marked rewrites the identical empty file.
+    already marked touches the identical empty file.
 
-    **Never raises** — a full filesystem costs the operator a green tab, not a traceback
-    out of a strip — and a name that cannot be a workspace marks nothing rather than
-    raising: this runs after `cmd_handoff` has already refused such a name, so it is a
-    floor and not the refusal.
+    **It does not raise and it does not go quiet either.** A failure here is a handoff that
+    opened a chat nobody will be pointed at, which is the one outcome this whole record
+    exists to prevent, so the answer is reported back rather than swallowed —
+    `commands_handoff` says so on the operator's own screen. A name that cannot be a
+    workspace is `False` for the same reason it is refused at the join: it marks nothing.
     """
     f = _arrival_mark(name)
     if f is None:
-        return
+        return False
     try:
         config.private_mkdir(f.parent)
-        config.replace_for(f, "")
+        config.touch_for(f)
     except OSError:
-        return
+        return False
+    return True
 
 
 def arrivals() -> frozenset[str]:
