@@ -337,6 +337,16 @@ workspace has and no branches.
 A baseline path charter cannot check — a directory it may not read, a symlink loop — gets
 nothing written into it. `reinit` names it with what clears it, in the words `charter doctor`
 uses for the same path: restoring read access, or fixing the loop at the link that loops.
+The same holds for a workspace's `refs` that is there and is no directory: a symlink whose
+target is gone is named with "removing or repointing that link clears this", and a file is
+named with "moving it out of the way clears this". Charter never removes, repoints or moves
+either, `reinit` exits 0, and neither flags the workspace for a `reinit` that cannot add the
+file.
+
+A workspace directory that is itself a symlink loop is named the same way — "fix the symlink
+loop at" its path — by `reinit <name>`, which exits 1, and by `reinit --all`, which counts it
+in its closing line as "could not be checked" and never prints "Up to date" while one was
+left out.
 
 ## Moving a workspace around
 

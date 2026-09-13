@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import unittest
 from contextlib import redirect_stderr
@@ -286,6 +287,75 @@ class AWorkspaceCharterCouldNotRepairIsNotCurrent(BulkRepairCase):
         self.assertNotIn("Up to date", said)
         self.assertIn("Applied 0 repair(s) across 0 of 2 workspace(s); 2 could not be "
                       "repaired; the rest were current.", said)
+
+
+class AWorkspaceItCouldNotLookAtIsNamedNotCountedCurrent(BulkRepairCase):
+    """#1028: a workspace directory that is a symlink loop answers no `is_dir`, so
+    `list_workspaces` left it out and `--all` walked the rest and printed "Up to date — nothing
+    to do" — a success line about a workspace it never looked at (ADR 0013). Each one is named
+    with what clears it, in the sentence `reinit <name>` prints for the same directory, and the
+    closing line counts it as looked for and not looked at."""
+
+    def looped(self, name: str) -> Path:
+        wd = workspace.workspace_dir(name)
+        wd.parent.mkdir(parents=True, exist_ok=True)
+        wd.symlink_to(wd)
+        self.addCleanup(os.unlink, wd)
+        return wd
+
+    def sentence(self, name: str, wd: Path) -> str:
+        return (f"workspace '{name}' cannot be checked — charter changes nothing it cannot see; "
+                f"fix the symlink loop at {wd}.")
+
+    def test_a_loop_beside_a_current_workspace_is_named_and_up_to_date_is_not_said(self):
+        self.current("alpha")
+        wd = self.looped("beta")
+        said = self.reinit_all()
+        self.assertIn(self.sentence("beta", wd), said)
+        self.assertNotIn("Up to date", said)
+        self.assertIn("Applied 0 repair(s) across 0 of 2 workspace(s); 1 could not be checked; "
+                      "the rest were current.", said)
+        self.assertEqual(os.readlink(wd), str(wd), "charter touched the link")
+
+    def test_the_count_it_could_not_check_sits_beside_a_repair(self):
+        self.two_repairs("alpha")
+        self.looped("beta")
+        self.current("gamma")
+        self.assertIn("Applied 2 repair(s) across 1 of 3 workspace(s); 1 could not be checked; "
+                      "the rest were current.", self.reinit_all())
+
+    def test_a_plane_whose_only_workspace_is_a_loop_says_neither_up_to_date_nor_none(self):
+        """"No workspaces to reinitialize" is as false as "Up to date" here: there is one, and
+        the row above names it."""
+        wd = self.looped("alpha")
+        said = self.reinit_all()
+        self.assertIn(self.sentence("alpha", wd), said)
+        for claim in ("Up to date", "No workspaces", "Applied"):
+            self.assertNotIn(claim, said)
+
+    def test_a_name_that_is_no_workspace_is_not_called_uncheckable(self):
+        """Only a workspace the filesystem will not answer for is set apart. A stray file and a
+        link to nothing both answer — `reinit <name>` calls each "no workspace" — and a dot-name
+        is charter's own (`.worktrees/`) and never a workspace, loop or not. None of them is a
+        workspace `--all` failed to look at, so the plane is up to date."""
+        self.current("alpha")
+        (config.WORKSPACES_DIR / "notes.txt").write_text("not a workspace\n")
+        (config.WORKSPACES_DIR / "gone").symlink_to(self.tmp / "nowhere")
+        self.looped(".hidden")
+        said = self.reinit_all()
+        self.assertNotIn("cannot be checked", said)
+        self.assertIn(f"Up to date (structure v{workspace.STRUCTURE_VERSION}) — nothing to do.",
+                      said)
+
+    def test_a_plane_with_no_workspaces_directory_has_none_to_reinitialize(self):
+        """Nothing under `workspaces/` to look at, because there is no `workspaces/`: no
+        workspace went unchecked, and the listing of the ones that did is not asked to read a
+        directory that is not there."""
+        self.assertFalse(os.path.lexists(config.WORKSPACES_DIR), "fixture: the plane has one")
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = cw.cmd_workspace_reinit(SimpleNamespace(name=None, all=True))
+        self.assertEqual((rc, buf.getvalue()), (0, "• No workspaces to reinitialize.\n"))
 
 
 if __name__ == "__main__":

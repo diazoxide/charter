@@ -1929,6 +1929,22 @@ class ClassHitsInReinitSayWhatTheyCouldNotCheck(PlaneWithRestrictions):
         self.assertIn(f"workspace '{self.ws}' cannot be checked", said)
         self.assertNotIn("no workspace", said)
 
+    def test_a_workspace_directory_that_is_a_symlink_loop_is_told_to_fix_the_loop(self):
+        """#1028: the check above kept `_exists`'s answer and dropped the errno behind it, so this
+        sentence said "restoring read access … clears this" for every cause — and no permission
+        bit clears a loop. Worded by `uncheckable_fix`, which `doctor` and the baseline rows use."""
+        wd = workspace.workspace_dir(self.ws)
+        shutil.rmtree(wd)
+        wd.symlink_to(wd)
+        self.addCleanup(os.unlink, wd)
+        said: list[str] = []
+        with mock.patch.object(commands_workspace.util, "err", side_effect=said.append):
+            rc = commands_workspace.cmd_workspace_reinit(SimpleNamespace(name=self.ws, all=False))
+        self.assertEqual(rc, 1, said)
+        self.assertEqual(said, [f"workspace '{self.ws}' cannot be checked — charter changes nothing "
+                                f"it cannot see; fix the symlink loop at {wd}."])
+        self.assertEqual(os.readlink(wd), str(wd), "charter touched the link")
+
     def test_a_manifest_that_cannot_be_checked_is_not_called_unwritten(self):
         manifest = workspace.manifest_path(self.ws)
         with _refused(files=[manifest], calls=("lstat", "stat")):
@@ -2403,6 +2419,79 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
         for claim in ("read access", "Up to date", "Reinitialized"):
             self.assertNotIn(claim, said)
         self.assertEqual(os.readlink(refs), str(refs), "charter touched the link it cannot see")
+
+    def test_a_workspace_refs_that_is_a_symlink_to_nothing_is_named_with_the_link_to_fix(self):
+        """#1028: #1009 kept `scaffold`'s `mkdir` off a `refs/` the filesystem will not answer
+        for, and a link to a target that is gone DOES answer — "not there" — so the `mkdir` still
+        met a name that exists and is no directory, and `reinit` ended in a `FileExistsError`.
+
+        Not "added refs/README.md" either (ADR 0013): nothing can be created through a link to
+        nowhere, and charter does not create the target it points at. The sentence names the link
+        and the two things that clear it; the link is left pointing where it pointed."""
+        refs = workspace.refs_dir(self.ws)
+        shutil.rmtree(refs)
+        gone = refs.parent / "moved-away"
+        refs.symlink_to(gone)
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn(f"refs/README.md cannot be created — {refs} is a symlink whose target is "
+                      f"not there, and charter writes nothing through it; removing or repointing "
+                      f"that link clears this.", said)
+        for claim in ("Up to date", "Reinitialized", "cannot be checked"):
+            self.assertNotIn(claim, said)
+        self.assertEqual(os.readlink(refs), str(gone), "charter touched the link")
+        self.assertFalse(os.path.lexists(gone), "charter created what the link points at")
+
+    def test_a_file_where_the_workspace_refs_directory_goes_is_named_to_move_out_of_the_way(self):
+        """#1028's other shape: a plain file named `refs` is there and is no directory, so the
+        `mkdir` raised the same `FileExistsError`. Not the link's remedy — there is no link — and
+        never "remove it": the file is somebody's, and charter never deletes existing content."""
+        refs = workspace.refs_dir(self.ws)
+        shutil.rmtree(refs)
+        refs.write_text("somebody's notes\n")
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn(f"refs/README.md cannot be created — {refs} is not a directory, and charter "
+                      f"never moves existing content; moving it out of the way clears this.", said)
+        for claim in ("Up to date", "Reinitialized", "symlink", "cannot be checked"):
+            self.assertNotIn(claim, said)
+        self.assertEqual(refs.read_text(), "somebody's notes\n", "charter touched the file")
+
+    def test_a_workspace_whose_refs_is_in_the_way_is_not_flagged_for_a_reinit_that_cannot_add_it(self):
+        """Listed apart from `missing`, as the loop is: the status line's "needs reinit" sent the
+        operator to a command that cannot create the file, and the README must not be counted
+        missing by one reader and in the way by another."""
+        refs = workspace.refs_dir(self.ws)
+        shutil.rmtree(refs)
+        refs.write_text("somebody's notes\n")
+        status = workspace.structure_status(self.ws)
+        self.assertEqual(status["missing"], [])
+        self.assertEqual(status["in_the_way"], [("refs/README.md", refs, errno.ENOTDIR)])
+        self.assertFalse(workspace.needs_reinit(self.ws))
+
+    def test_a_refs_directory_that_is_only_gone_is_created_not_named_in_the_way(self):
+        """The other side of the split: with nothing at `refs` at all, the README is missing and
+        `reinit` adds it. Only a name that is there and is no directory is set apart."""
+        refs = workspace.refs_dir(self.ws)
+        shutil.rmtree(refs)
+        status = workspace.structure_status(self.ws)
+        self.assertEqual((status["missing"], status["in_the_way"]), (["refs/README.md"], []))
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn(f"Reinitialized '{self.ws}' → added refs/README.md.", said)
+        self.assertNotIn("cannot be created", said)
+        self.assertTrue((refs / "README.md").is_file())
+
+    def test_a_directory_the_filesystem_will_not_answer_for_is_never_called_in_the_way(self):
+        """`_in_the_way` answers only for what it measured. A loop above the path is the
+        uncheckable kind, which `_stopped_at` names with its own remedy, and neither "remove the
+        link" nor "move it out of the way" is what clears one — nor is raising. Its callers ask
+        about a loop only in a race today (`structure_status` for a rel that answered "gone",
+        `scaffold` behind `_exists`), so this is asked of the function directly."""
+        refs = workspace.refs_dir(self.ws)
+        shutil.rmtree(refs)
+        refs.symlink_to(refs)
+        self.assertIsNone(workspace._in_the_way(refs / "README.md"))
 
     def test_a_baseline_file_it_may_not_read_is_told_to_restore_read_access(self):
         """The other half of the same split, at mode 000 — a refusal, and read access is what
