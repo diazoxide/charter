@@ -334,6 +334,10 @@ additive: nothing you wrote is touched. `--all` is also the **backfill** for a s
 element that older workspaces predate — v5 is `workspace.json`, written with the repos the
 workspace has and no branches.
 
+A baseline path charter cannot check — a directory it may not read, a symlink loop — gets
+nothing written into it. `reinit` names it with what clears it, in the words `charter doctor`
+uses for the same path: restoring read access, or fixing the loop at the link that loops.
+
 ## Moving a workspace around
 
 - **`fork <src> <new>`** — a new workspace pre-loaded with the source's charter, manifest
