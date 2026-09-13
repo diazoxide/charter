@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
 import re
 from pathlib import Path
 
@@ -478,25 +479,42 @@ def _wire_clones(ws: str) -> None:
     can find when they want it gone. Silent when nothing was written, which is every
     re-clone into an already-wired workspace.
     """
-    for tree in workspace.guest_trees(ws):
-        rows = workspace.wire_guest(tree)
-        made = [rel for rel, status in rows if status in ("created", "refreshed")]
-        if made and (".git/info/exclude", "blocked") not in rows:
-            util.info(f"{tree.name}: charter's layer written ({len(made)} file(s)) and "
-                      f"hidden in that repo's .git/info/exclude — `git status` there is "
-                      f"unaffected, and nothing charter wrote can be committed.")
-        elif made:
-            # That sentence is two claims, and with the exclude unwritable neither holds.
-            util.warn(f"{tree.name}: charter's layer written ({len(made)} file(s)), but that "
-                      f"repo's .git/info/exclude could not be updated — those files show in "
-                      f"its `git status`.")
-        for rel, status in rows:
-            if status == "withheld":
-                # A sentence of its own (#942): the one file charter refused to write, and
-                # why — a machine-local rule it cannot hide would be committable there.
-                util.warn(f"{tree.name}/{rel} was not written: charter could not hide it in "
-                          f"that checkout's .git/info/exclude, and a machine-local rule it "
-                          f"cannot hide would be committable there.")
+    # One worktree listing per repository for the scan and every wire in it: the scan now lists a
+    # workspace's pieces too (#951), which is the same question each wire's exclude block asks.
+    with workspace.worktree_answers():
+        for tree in workspace.guest_trees(ws):
+            announce_layer(workspace.checkout_label(ws, tree), workspace.wire_guest(tree))
+
+
+def announce_layer(label: str, rows: list[tuple[str, str]]) -> None:
+    """Say what :func:`workspace.wire_guest` just did to the checkout *label* names — once, and
+    only when it wrote something. `_wire_clones`' sentences, and `charter wt add`'s (#951):
+    both have just written into a repository the operator owns, and one wording for the two is
+    what keeps a worktree's announcement from promising what a clone's does not."""
+    if (workspace.GENERATED_MARKER, "blocked") in rows:
+        # `wire_guest`'s refusal of the checkout as a whole (#1062): its root resolves outside the
+        # directory it belongs under, so nothing was written. Said, because the worker `wt add`
+        # sends into that directory would otherwise start a session there with no layer and no
+        # word about why (#951).
+        util.warn(f"{label}: charter's layer was not written — that checkout resolves outside "
+                  f"the directory it belongs under, and charter writes into none that does.")
+    made = [rel for rel, status in rows if status in ("created", "refreshed")]
+    if made and (".git/info/exclude", "blocked") not in rows:
+        util.info(f"{label}: charter's layer written ({len(made)} file(s)) and "
+                  f"hidden in that repo's .git/info/exclude — `git status` there is "
+                  f"unaffected, and nothing charter wrote can be committed.")
+    elif made:
+        # That sentence is two claims, and with the exclude unwritable neither holds.
+        util.warn(f"{label}: charter's layer written ({len(made)} file(s)), but that "
+                  f"repo's .git/info/exclude could not be updated — those files show in "
+                  f"its `git status`.")
+    for rel, status in rows:
+        if status == "withheld":
+            # A sentence of its own (#942): the one file charter refused to write, and
+            # why — a machine-local rule it cannot hide would be committable there.
+            util.warn(f"{label}/{rel} was not written: charter could not hide it in "
+                      f"that checkout's .git/info/exclude, and a machine-local rule it "
+                      f"cannot hide would be committable there.")
 
 
 #: Concurrent clones. The same number `_build_batch` uses for its API probes, so there is
@@ -1844,7 +1862,9 @@ def _mirror_into_workspaces() -> None:
                 continue
     for ws, rows in wired:
         for rel, status in rows:
-            where = f"{ws}/{rel}"
+            # Joined, not formatted: a piece under a relocated root is labelled by its absolute
+            # path (`workspace.checkout_label`), which `os.path.join` keeps whole.
+            where = os.path.join(ws, rel)
             if rel.endswith(".git/info/exclude"):
                 # Not a generated file, and never a rule out of force. The first version
                 # counted this row as a file and, when it was blocked, reported the rule
