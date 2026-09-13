@@ -218,3 +218,4 @@ Written by the persona as it learns; committed and shared.
 - [When asking permission, do not state the permissive reading as your plan](when-asking-permission-do-not-state-the-permissi.md)
 - [A number you can re-run is a number you should never carry on trust, abo](a-number-you-can-re-run-is-a-number-you-should-n.md)
 - [INCIDENT 2026-09-12, harness profiles Task 5 (PR 996): the operators liv](incident-2026-09-12-harness-profiles-task-5-pr-9.md)
+- [charter save commits whatever is pending in the plane's tree, not only m](charter-save-commits-whatever-is-pending-in-the-.md)
