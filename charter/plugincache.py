@@ -131,14 +131,27 @@ MARKETPLACE_SOURCE = "diazoxide/charter"
 INSTALL_SCOPE = "project"
 
 
-def available() -> bool:
-    """True when the `claude` CLI is on PATH. False is an ordinary answer, not a fault —
-    charter supports opencode and Codex, and a plane on either has no Claude Code plugin
-    to be stale."""
-    return bool(shutil.which("claude"))
+#: The program every read here runs, when the caller names none. A profile names its own
+#: (`["/opt/claude-wrap"]`, a pinned binary), and a wrapper script's answer is the one that
+#: matters for a chat that will be started through it.
+DEFAULT_COMMAND = ("claude",)
 
 
-def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT):
+def available(command: tuple[str, ...] | list[str] = DEFAULT_COMMAND,
+              path: str | None = None) -> bool:
+    """True when *command*'s program is on *path* — this process's `PATH` when ``None``.
+    False is an ordinary answer, not a fault — charter supports opencode and Codex, and a
+    plane on either has no Claude Code plugin to be stale.
+
+    *path* is the `PATH` the command will actually be run under. A profile may set its own
+    in `env`, and the launcher looks its command up on that one (`launcher.refusal`); a
+    probe that looked on this process's instead would refuse a profile the launch would
+    have found, and call the harness "could not be asked" when it was never looked for."""
+    return bool(shutil.which(command[0], path=path))
+
+
+def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT, *,
+                 env: dict | None = None, command=DEFAULT_COMMAND):
     """Run ``claude plugin <args> --json`` and parse it. ``None`` on any failure.
 
     ``None`` and ``[]`` are different answers and both are load-bearing downstream: "I
@@ -154,20 +167,23 @@ def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT):
     **zero rows** and a scary line, which is the precise failure `iter_all`'s streaming and
     :data:`~charter.doctor.CHECK_TIMEOUT` were introduced to prevent.
 
-    Two exceptions get out of `util.run` and both are real:
+    Three exceptions get out of `util.run` and all are real:
 
     * `util.ProcTimeout` — a `claude` that hangs. `util.run` raises it regardless of
       ``check``, so ``check=False`` does not cover it.
     * `OSError` — `shutil.which` in :func:`available` and the exec here are two moments,
       and a `claude` removed between them is a `FileNotFoundError` that would otherwise
       reach the crash reporter.
+    * `ValueError` — below.
     """
-    if not available():
+    if not available(command, path=(env or {}).get("PATH")):
         return None
     try:
-        proc = util.run(["claude", "plugin", *args, "--json"], cwd=cwd, check=False,
-                        timeout=timeout)
-    except (util.ProcTimeout, OSError):
+        proc = util.run([*command, "plugin", *args, "--json"], cwd=cwd, check=False,
+                        timeout=timeout, env=env)
+    except (util.ProcTimeout, OSError, ValueError):
+        # `ValueError` is a NUL byte in the argv, the cwd or an environment value, which
+        # `exec` refuses before anything runs — and a profile is a file a chat can write.
         return None
     if proc.returncode != 0:
         return None
@@ -177,15 +193,22 @@ def _claude_json(args: list[str], cwd=None, timeout: float = LIST_TIMEOUT):
         return None
 
 
-def _our_entries():
+def _our_entries(*, env: dict | None = None, command=DEFAULT_COMMAND, cwd=None):
     """Every ``claude plugin list`` row that IS charter's plugin, or :data:`UNKNOWN`.
+
+    *cwd* is not a nicety. Measured 2026-09-12 on 2.1.269: the rows are install records and
+    are listed whatever the directory, while each row's ``enabled`` is the EFFECTIVE
+    ``enabledPlugins`` value for the id resolved at the working directory — local over
+    project over user. So a caller that wants to know whether charter runs in a particular
+    directory has to ask from it. Today's callers pass none and keep this process's own,
+    which is what they have always asked.
 
     Split out of :func:`installed_charter_plugin` when :func:`installed_for` needed the
     same rows asked a different question. One reader, because two of them would eventually
     disagree about which rows count as charter's — and the id check below is the only thing
     standing between `charter doctor --fix` and a plugin that is not charter's to touch.
     """
-    entries = _claude_json(["list"])
+    entries = _claude_json(["list"], cwd=cwd, env=env, command=command)
     # ONE test, and it used to be two. `_claude_json` answers `None` for every way a read
     # can fail, and the line above it — `if entries is None: return UNKNOWN` — was carried
     # here from `installed_charter_plugin` and is strictly subsumed by this one: `None` is
@@ -245,7 +268,7 @@ def covers(entry: dict, project) -> bool:
     return _same_dir(entry.get("projectPath"), project)
 
 
-def installed_for(project):
+def installed_for(project, *, env: dict | None = None, command=DEFAULT_COMMAND):
     """The charter plugin install that covers *project* — or :data:`UNKNOWN`, or ``None``.
 
     :func:`installed_charter_plugin` answers a different question and keeps answering it:
@@ -253,7 +276,7 @@ def installed_for(project):
     same versioned cache directory, so any one of them will do. This one answers *is this
     plane covered*, where they are not interchangeable at all.
     """
-    ours = _our_entries()
+    ours = _our_entries(env=env, command=command)
     if ours is UNKNOWN:
         return UNKNOWN
     for e in ours:
@@ -262,8 +285,34 @@ def installed_for(project):
     return None
 
 
+def covering_entries(project, *, root=None, env: dict | None = None,
+                     command=DEFAULT_COMMAND):
+    """EVERY install of charter's plugin that applies to a session in *project*, asked from
+    *project* — or :data:`UNKNOWN`. Beside :func:`installed_for`, which answers with the
+    first one it finds.
+
+    Every one of them, because this machine lists user, project and local entries side by
+    side and the caller decides between them (review 6); the first that `covers` is an
+    arbitrary choice among answers that can disagree.
+
+    *root* is the PLANE, and it is why this is not `installed_for` with a loop.
+    `charter init` installs at project scope for the plane root, while a chat stands in
+    `workspaces/<ws>/` — a different `projectPath`, which `covers` alone reads as somebody
+    else's checkout. Charter mirrors the plane's `enabledPlugins` into that directory
+    (`claude_code.WORKSPACE_KEYS`), so the record that covers the plane is the one that
+    answers for the chat, and the `enabled` this returns was resolved by the binary in
+    *project* itself (D3, measured 2026-09-12).
+    """
+    ours = _our_entries(env=env, command=command, cwd=project)
+    if ours is UNKNOWN:
+        return UNKNOWN
+    return [e for e in ours
+            if covers(e, project) or (root is not None and covers(e, root))]
+
+
 def install_argvs(scope: str = INSTALL_SCOPE,
-                  source: str = MARKETPLACE_SOURCE) -> list[list[str]] | None:
+                  source: str = MARKETPLACE_SOURCE,
+                  *, command=DEFAULT_COMMAND) -> list[list[str]] | None:
     """The two commands that put charter's plugin on a machine, in order.
 
     ``None`` if *scope* is not one charter will install at, so a caller cannot run half a
@@ -283,16 +332,16 @@ def install_argvs(scope: str = INSTALL_SCOPE,
     if not isinstance(source, str) or not source or source.startswith("-"):
         return None
     return [
-        ["claude", "plugin", "marketplace", "add", source],
-        ["claude", "plugin", "install", PLUGIN_ID, "--scope", scope, "-y"],
+        [*command, "plugin", "marketplace", "add", source],
+        [*command, "plugin", "install", PLUGIN_ID, "--scope", scope, "-y"],
     ]
 
 
-def _step(argv: list[str], cwd) -> tuple[bool, str]:
+def _step(argv: list[str], cwd, *, env: dict | None = None) -> tuple[bool, str]:
     """Run one `claude plugin` step. ``(ok, why)``, never raising — same reasons as
     :func:`force_refresh`, which this sits beside."""
     try:
-        proc = util.run(argv, cwd=cwd, check=False, timeout=REFRESH_TIMEOUT)
+        proc = util.run(argv, cwd=cwd, check=False, timeout=REFRESH_TIMEOUT, env=env)
     except (util.ProcTimeout, OSError) as e:
         return False, str(e) or type(e).__name__
     if proc.returncode != 0:
@@ -301,7 +350,8 @@ def _step(argv: list[str], cwd) -> tuple[bool, str]:
     return True, ""
 
 
-def install(project, scope: str = INSTALL_SCOPE) -> tuple[str, str]:
+def install(project, scope: str = INSTALL_SCOPE, *, env: dict | None = None,
+            command=DEFAULT_COMMAND) -> tuple[str, str]:
     """Install charter's own Claude Code plugin for *project*. ``(status, detail)``.
 
     Five statuses, because five different things are true and only one of them is a fault:
@@ -320,23 +370,25 @@ def install(project, scope: str = INSTALL_SCOPE) -> tuple[str, str]:
     installing software because some unrelated command ran is #857's surprise, and the same
     reason charter refuses to write `~/.claude/settings.json` unasked.
     """
-    if not available():
-        return "unavailable", ("the `claude` CLI is not on PATH, so there is no Claude "
-                               "Code to install a plugin into")
-    entry = installed_for(project)
+    # The PATH the steps below will run under, as `_claude_json` asks it (A2): a profile
+    # whose program lives only on its own `PATH` is installed for, not called unavailable.
+    if not available(command, path=(env or {}).get("PATH")):
+        return "unavailable", (f"`{command[0]}` is not on PATH, so there is no Claude "
+                               f"Code to install a plugin into")
+    entry = installed_for(project, env=env, command=command)
     if entry is UNKNOWN:
         return "unknown", ("could not read `claude plugin list --json`, so charter does "
                            "not know what is installed and will not install over it")
     if entry is not None:
         return "present", (f"{entry.get('id')} is already installed "
                            f"({entry.get('scope')} scope)")
-    argvs = install_argvs(scope)
+    argvs = install_argvs(scope, command=command)
     if argvs is None:
         return "failed", f"{scope!r} is not a scope charter will install at"
     add, put = argvs
     cwd = str(project) if project is not None and Path(project).is_dir() else None
-    added, why_add = _step(add, cwd)
-    ok, why = _step(put, cwd)
+    added, why_add = _step(add, cwd, env=env)
+    ok, why = _step(put, cwd, env=env)
     if ok:
         return "installed", f"{PLUGIN_ID} installed at {scope} scope"
     # The marketplace step is allowed to fail and the install still to be attempted: a

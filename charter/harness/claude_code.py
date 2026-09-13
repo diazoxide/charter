@@ -11,6 +11,7 @@ import json
 import os
 import unicodedata
 from pathlib import Path
+from typing import Mapping
 
 from .base import Harness, LayerPart
 
@@ -188,7 +189,7 @@ def _restrictive(doc) -> dict[str, list[str]]:
     return {b: rules for b, rules in found.items() if rules}
 
 
-def config_home() -> Path:
+def config_home(env: Mapping[str, str] | None = None) -> Path:
     """The folder Claude Code keeps its user-level state in — ``settings.json`` and the
     ``plugins/`` manifest among it — resolved the way the binary resolves it (#969).
 
@@ -212,12 +213,12 @@ def config_home() -> Path:
     moves the plugin manifest out of this folder, and the cowork switch
     (`$CLAUDE_CODE_USE_COWORK_PLUGINS`) renames ``plugins/`` and ``settings.json`` inside it.
     """
-    named = os.environ.get("CLAUDE_CONFIG_DIR")
+    named = (os.environ if env is None else env).get("CLAUDE_CONFIG_DIR")
     raw = os.path.join(Path.home(), ".claude") if named is None else named
     return Path(unicodedata.normalize("NFC", raw))
 
 
-def global_config_file() -> Path:
+def global_config_file(env: Mapping[str, str] | None = None) -> Path:
     """Claude Code's ``.claude.json`` for the folder in use — where `mcpServers` live (#969).
 
     Its own rule, not :func:`config_home`'s, read off the same binary: a legacy
@@ -233,10 +234,11 @@ def global_config_file() -> Path:
 
     Not followed: `$CLAUDE_CODE_CUSTOM_OAUTH_URL` renames the file ``.claude-custom-oauth.json``.
     """
-    legacy = config_home() / ".config.json"
+    src = os.environ if env is None else env
+    legacy = config_home(env) / ".config.json"
     if os.path.exists(legacy):
         return legacy
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"
+    return Path(src.get("CLAUDE_CONFIG_DIR") or Path.home()) / ".claude.json"
 
 
 class ClaudeCodeHarness(Harness):

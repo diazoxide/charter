@@ -72,7 +72,7 @@ import sys
 from pathlib import Path
 from typing import Callable, Mapping, NamedTuple
 
-from .. import config, contain, profiles, util
+from .. import config, contain, profiles, util, wiring
 from . import state, tmuxctl
 
 #: What a launcher that refused in the pane exits with, after printing why.
@@ -103,6 +103,9 @@ KIND_MOVED = "moved"
 #: The operator read the command and said no. Not a rule firing: their own answer.
 KIND_DECLINED = "declined"
 KIND_EXEC = "exec"
+#: `wiring.KIND_WIRING`, named here so a reader of this list sees every kind a launch can
+#: refuse with. The constant lives beside the check that produces it.
+KIND_WIRING = wiring.KIND_WIRING
 
 
 class Refusal(NamedTuple):
@@ -263,7 +266,8 @@ def display_command(p: profiles.Profile, rest: list[str]) -> list[str]:
 
 
 def refusal(p: profiles.Profile, *, root: Path, attended: bool,
-            env: Mapping[str, str]) -> Refusal | None:
+            env: Mapping[str, str], cwd: Path | None = None,
+            probe: bool = True) -> Refusal | None:
     """Why *p* may not start, or ``None``.
 
     The spec's order, and it is the order the checks cost in: the file is ignored, the
@@ -277,8 +281,22 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
     decides nothing about it. A declared replacement of a built-in (`[harness.claude]`) is
     declared, so `charter claude` is refused with the rest and never falls back (ruling 19).
 
-    *attended* decides what the last link answers: an open somebody is in front of gets the
-    question (`KIND_ASK`), and one nobody is at gets a refusal in its place.
+    *attended* decides what the approval link answers: an open somebody is in front of gets
+    the question (`KIND_ASK`), and one nobody is at gets a refusal in its place.
+
+    **The wiring probe is last, and that is the order it costs in.** It runs the profile's
+    own command (137-718 ms measured) and writes into the folder it asks about, so a profile
+    refused for any earlier reason is never probed — and a profile whose command charter may
+    not run yet is never probed at all (ruling 1). Every call is a FRESH probe: a launch
+    never reads `wiring.cached`, because that file is as writable by a chat as
+    `charter.local.toml` is (ruling 21).
+
+    *probe* ``False`` leaves the wiring link off, and exactly one caller passes it:
+    `commands_frame._launch` for an open whose caller has just asked this whole chain for
+    itself — a `+`, a tab, a reopen, a handoff — so that a start pays the probe twice (once
+    before tmux, once in the pane), as the plan prices it, and not three times. It is never
+    a way past the check: the pane runs this chain with *probe* at its default before the
+    `exec`, whoever opened it.
     """
     if p.source != profiles.BUILTIN:
         why = profiles.ignored_refusal(root)
@@ -295,11 +313,26 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
                        NOT_ON_PATH.format(name=contain.readable(p.name),
                                           cmd=contain.readable(program)),
                        MISSING_EXIT)
-    return _approval_refusal(p, attended=attended)
+    asked = _approval_refusal(p, attended=attended)
+    if asked is not None or not probe:
+        return asked
+    # The directory the CHAT will start in, because that is what the question is about:
+    # Claude Code resolves `enabledPlugins` at the session's own working directory (and the
+    # git root's `settings.local.json` above it — measured), and charter mirrors the
+    # plane's into `workspaces/<ws>/`. A caller that knows the workspace says so; the
+    # launcher in the pane, and `_launch` before tmux, are already standing there, which is
+    # what `Path.cwd()` means here.
+    why = wiring.refusal(p, cwd=Path.cwd() if cwd is None else cwd)
+    if why:
+        return Refusal(KIND_WIRING, why, REFUSED_EXIT)
+    return None
 
 
 def _approval_refusal(p: profiles.Profile, *, attended: bool) -> Refusal | None:
-    """The last link: has the operator seen this command? (`profiletrust`)
+    """The approval link: has the operator seen this command? (`profiletrust`)
+
+    Before the wiring probe and never after it: the probe runs the profile's own command,
+    and only a yes here stands for the operator's approval of that command (ruling 1).
 
     **`main` never runs an unapproved declared command.** `charter.local.toml` is a file a
     chat can write with no diff to show for it, and its `command` goes to tmux rather than

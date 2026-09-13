@@ -40,7 +40,9 @@ REPO = Path(__file__).resolve().parents[1]
 @contextmanager
 def rows(entries):
     """Answer `claude plugin list --json` with *entries*, and every other read with ``[]``."""
-    def fake(args, cwd=None, timeout=None):
+    # `**kw` because `_claude_json` takes `env` and `command` now: a profile names its own
+    # `claude`, and the probe runs under the profile's environment.
+    def fake(args, cwd=None, timeout=None, **kw):
         return entries if args[:1] == ["list"] else []
 
     with mock.patch.object(plugincache, "available", return_value=True), \

@@ -2221,6 +2221,73 @@ def _provision_harnesses(root: Path) -> list[tuple[str, str]]:
     return out
 
 
+def _wire_profiles(root: Path, *, install: bool) -> list[tuple[str, str]]:
+    """Wire each DECLARED profile's own config folder. ``(status, label)`` pairs, each label
+    already contained.
+
+    Beside :func:`_wire_harnesses`, which writes the default folder's wiring, because a
+    profile names another folder and every kind loses charter's wiring when its folder
+    moves (measured; `charter/wiring.py`). Built-ins are skipped here: their folder is the
+    default one those two loops already cover.
+
+    **`reinit` installs no software** (ruling 9, `docs/harnesses.md`'s standing rule): with
+    ``install=False`` it wires the file-only kinds — opencode's shim — and for a Claude Code
+    profile it REPORTS the gap and names `charter harness install <name>`. `init` and
+    `charter harness install <profile>` are the two doors an install may come through
+    (#881), and Codex stays opt-in through neither.
+
+    A profile the operator has not approved is reported and not touched (ruling 1): nothing
+    here can ask, and wiring runs the profile's own command. While git would carry
+    `charter.local.toml` nothing here runs at all — every profile in it is refused, which
+    `charter harness list` and `doctor`'s `harness profiles` row already say with the fix.
+    """
+    from . import profiles, profiletrust, wiring
+    from .harness import codex as _codex, opencode as _opencode
+
+    if profiles.ignore_check(root).reason:
+        return []
+    out: list[tuple[str, str]] = []
+    for p in profiles.current().profiles.values():
+        if p.source == profiles.BUILTIN:
+            continue
+        name = contain.readable(p.name)
+        label = f"profile '{name}'"
+        state = profiletrust.approval_needed(p)
+        if state:
+            out.append(("skipped", f"{label} is {state} and not approved yet — run charter "
+                                   f"{name} once to approve its command"))
+            continue
+        if p.harness == _codex.NAME:
+            # The same restraint `cmd_harness_install`'s docstring states for Codex today:
+            # its config file is machine-wide, so arming it reaches every repo on the
+            # machine, and running that command IS the consent (ADR 0003's shape).
+            out.append(("opt-in", f"{label}: charter harness install {name}"))
+            continue
+        if install or p.harness == _opencode.NAME:
+            out += [(status, f"{label}: {detail}") for status, detail in wiring.install(p, root)]
+            continue
+        w = wiring.detect(p, cwd=root)
+        if w.state != wiring.WIRED:
+            out.append(("missing", f"{label}: not wired — {wiring.said(w.detail)}; "
+                                   f"{wiring.said(w.fix)}"))
+    return out
+
+
+#: The statuses that are charter reporting what it DID. Everything else — `missing`,
+#: `skipped`, `opt-in`, `unavailable`, `unknown`, `unvouched`, `failed`, `refused`, and any
+#: status a harness adds later — is something the operator has to act on, so it is a
+#: warning. Listed this way round so a new status fails loud rather than quiet.
+_WIRED_NOTES = frozenset({"created", "installed", "present", "refreshed", "current", "added"})
+
+
+def _say_profile_wiring(pairs: list[tuple[str, str]]) -> None:
+    """Print what :func:`_wire_profiles` did, one line each. A gap is a warning and a write
+    is a note: nothing here fails `init` or `reinit`, because a profile's own account folder
+    is not what those two commands are for."""
+    for status, label in pairs:
+        (util.info if status in _WIRED_NOTES else util.warn)(f"  {label}")
+
+
 # --------------------------------------------------------------------------- #
 # init's one offer: the repo you are standing in                               #
 #                                                                              #
@@ -2632,6 +2699,10 @@ def cmd_init(args) -> int:
         else:
             (created if status == "created" else present).append(label)
 
+    # After `_provision_harnesses`, which installs for the DEFAULT folder: a profile names
+    # another one, and every kind loses charter's wiring when its folder moves.
+    _say_profile_wiring(_wire_profiles(root, install=True))
+
     fd = _ensure_front_door(root, getattr(args, "front_door", None))
     if fd:
         created.append(fd[1])
@@ -2770,6 +2841,10 @@ def cmd_reinit(args) -> int:
         elif status == "unvouched":
             unvouched.append(label)
 
+    # `install=False` (ruling 9): `reinit` wires the file-only kinds per profile and names
+    # `charter harness install <name>` for a Claude Code plugin that is missing.
+    _say_profile_wiring(_wire_profiles(config.ROOT, install=False))
+
     gh_status, gh_detail = _ensure_guard_hook(config.ROOT)
     if gh_status == "created":
         created.append(".claude/settings.json (plane-root guard)")
@@ -2864,8 +2939,9 @@ def cmd_doctor(args) -> int:
     still naming what to do."""
     if getattr(args, "fix", False):
         _run_doctor_fix()
+    preflight = getattr(args, "preflight", False)
     if getattr(args, "json", False):
-        results = doctor.run_all()
+        results = doctor.run_all(preflight=preflight)
         print(json.dumps(
             [{"name": r.name, "status": r.status, "detail": r.detail, "hint": r.hint}
              for r in results],
@@ -2885,9 +2961,9 @@ def cmd_doctor(args) -> int:
         # report. (`doctor._checks` is an eager list today, so nothing actually streams
         # yet; sizing from the results would make that unfixable rather than merely
         # unfixed — see `_FIXED_CHECK_NAMES`.)
-        name_w = doctor.name_width()
+        name_w = doctor.name_width(preflight=preflight)
         results = []
-        for r in doctor.iter_all():
+        for r in doctor.iter_all(preflight=preflight):
             results.append(r)
             print(r.render(name_w), flush=True)
         print()

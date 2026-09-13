@@ -382,7 +382,14 @@ BACKFILL_SUFFIX = ".backfill.jsonl"
 
 def _transcript_dir() -> Path:
     """Claude Code stores a project's transcripts under ~/.claude/projects/<slug>, where
-    the slug is the project path with every separator replaced by '-'."""
+    the slug is the project path with every separator replaced by '-'.
+
+    **The DEFAULT config folder, and not a harness profile's** (ruling 16). A profile can
+    point Claude Code at another folder, which keeps its own `projects/`; this answers for
+    the plane rather than for one chat, so following one chat's folder would make the count
+    depend on which chat happened to ask. `~/.claude` and not `claude_code.config_home()`
+    for the same reason: this is a question about the machine's own Claude Code.
+    """
     slug = str(config.ROOT).replace("/", "-").replace("\\", "-")
     return Path.home() / ".claude" / "projects" / slug
 

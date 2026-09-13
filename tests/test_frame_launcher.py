@@ -39,11 +39,30 @@ from types import SimpleNamespace
 from unittest import mock
 
 from tests import _tmuxchain
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, wired_as_today
 from charter import commands_frame, config, instance, statusline, util
 from charter.frame import (builtin_actions, gather, layout, overlay, slots, state,
                            tmuxctl)
 from tests import _envguard, _tmuxsocket
+
+
+#: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
+#: launch, and that applies to the built-ins every launch test here starts. In-process the
+#: suite's `claude` guard makes detection read UNKNOWN, so every one of them would refuse
+#: over a fact none of them is about. One fixture for the module, because no test in it is
+#: about wiring; `tests/test_a_profile_is_wired_or_refuses.py` is where that is the subject.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
 
 #: The plane this test PROCESS was started in, captured at IMPORT — before any `setUp`
 #: has had a chance to repoint `config`, so it is unavoidably the developer's REAL

@@ -74,7 +74,7 @@ from charter import commands_frame, config, contain, util
 from charter import workspace as ws_mod
 from charter.frame import builtin_actions, component, leave, palette, reopen, state
 
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, wired_as_today
 
 SERVER = commands_frame.SOCKET
 
@@ -82,6 +82,25 @@ SERVER = commands_frame.SOCKET
 #: prints back. The escape is `ESC [ 2 J` — erase the whole display — because a report line
 #: that let it through would not merely look wrong, it would take the operator's screen.
 HOSTILE = "claude\x1b[2Jcode\nrm -rf /"
+
+
+#: Ruling 10: a reopen asks whether each chat's profile is wired before it starts it
+#: (`commands_frame._reopen_one`), and in-process the suite's `claude` guard makes that read
+#: as "could not tell" — a refusal no case here is about. One fixture for the module;
+#: `tests/test_a_profile_is_wired_or_refuses.py` is where a reopen of an unwired profile is
+#: the subject.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
 
 
 def _doomed(**kw):

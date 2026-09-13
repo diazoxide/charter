@@ -436,8 +436,12 @@ class ATerminal(io.StringIO):
         return True
 
 
-def approve_profile(case, name: str = "claude-work"):
+def approve_profile(case, name="claude-work"):
     """Seed *name*'s launch record, the way an operator who already said yes once has.
+
+    *name* may also be a `profiles.Profile` built by hand, for a case whose subject is what
+    happens to a profile once it is approved and which never declares it in a file — the
+    record is keyed by the profile's name and holds what it runs, whichever way it was made.
 
     **A real-tmux test that launches a declared profile has to call this** (Global
     Constraint, N6). `_launch` passes `--attended` for an open somebody is in front of,
@@ -452,9 +456,9 @@ def approve_profile(case, name: str = "claude-work"):
     """
     from charter import profiles, profiletrust
 
-    p = profiles.current().profiles[name]
+    p = name if isinstance(name, profiles.Profile) else profiles.current().profiles[name]
     why = profiletrust.record_launched(p)
-    case.assertEqual(why, "", f"the launch record for '{name}' could not be written")
+    case.assertEqual(why, "", f"the launch record for '{p.name}' could not be written")
     return p
 
 
@@ -486,6 +490,34 @@ def assert_approved(name: str = "claude-work") -> None:
     if p is None or profiletrust.approval_needed(p):
         raise AssertionError(
             f"no launch record for '{name}' — its pane would wait at run this? [y/N]")
+
+
+def wired_as_today(case=None):
+    """Let every profile launch, for a case whose subject is not wiring (ruling 10).
+
+    Task 4 refuses a profile whose config folder does not carry charter's guard, and that
+    applies to built-ins: a launch test would otherwise refuse where it used to start.
+    In-process the suite's own guard makes `plugincache.available` answer False, so
+    detection reads UNKNOWN and refuses; in a CHILD process its fake `claude` answers `[]`,
+    which reads as unwired. Either way the answer is "not wired", and a test about `+`,
+    tabs or reopen is not about that.
+
+    `wiring.refusal` and not `wiring.detect`, so the probe seam stays available to the
+    module that IS about wiring. **A real-tmux test cannot use this** — a pane is a child
+    process no patch reaches — so those declare a profile whose `command` is their own
+    recorder, and the recorder answers `plugin list --json` with a covering, enabled entry.
+
+    Given no *case* it returns the patcher instead of entering it, for a module where NO
+    test is about wiring — `setUpModule` starts it and `tearDownModule` stops it, which is
+    one fixture rather than one per class in a file with thirty of them.
+    """
+    from charter import wiring
+
+    patcher = mock.patch.object(wiring, "refusal", lambda p, *, cwd: "")
+    if case is None:
+        return patcher
+    case.enterContext(patcher)
+    return None
 
 
 def isolate_state_dir(case) -> Path:

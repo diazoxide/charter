@@ -122,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preflight: check python/git/glab/auth/ssh/inventory before working.",
     )
     doc_check.add_argument("--json", action="store_true", help="Emit machine-readable results.")
+    # What the SessionStart hook runs, and the reason it needs a flag at all: a hook runs
+    # the same words a person types, so nothing in the process can tell the two apart — and
+    # a tty test would misread `charter doctor --json` and `charter doctor | less` as the
+    # hook. With it, no harness profile is probed (ruling 11) and no git call is made for
+    # one: both are paid at every session start otherwise.
+    doc_check.add_argument("--preflight", action="store_true",
+                           help="Run as the SessionStart hook does: no harness-profile "
+                                "probe and no git call for one. Every other check runs.")
     # The second of the two doors an install may come through (#881); `charter init` is the
     # first. A flag rather than a behaviour, because a preflight that installed software
     # every time it ran would be doing it as a side effect of a question — and `doctor` runs

@@ -26,6 +26,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import Mapping
 
 from .. import __version__
 from .base import WORKSPACE_SCOPE, Deficit, Harness
@@ -172,7 +173,7 @@ def _shadowed_builtins(name: str) -> tuple[str, ...]:
     return tuple(b for b in BUILTIN_PERMISSIONS if matcher.fullmatch(b))
 
 
-def global_dir() -> Path:
+def global_dir(env: Mapping[str, str] | None = None) -> Path:
     """Where opencode reads plugins, commands and config for EVERY project.
 
     Verified by putting a probe in `~/.config/opencode/plugin/` and booting `opencode
@@ -182,8 +183,14 @@ def global_dir() -> Path:
 
     `$XDG_CONFIG_HOME` first, for the same reason `$CODEX_HOME` is honoured: writing to a
     path the tool does not read is indistinguishable from not installing at all.
+
+    *env* is the environment to resolve against, defaulting to this process's, so a harness
+    profile's own `$XDG_CONFIG_HOME` is wired and asked about by one rule. Note what this
+    is NOT: opencode's ACCOUNT moves with `$XDG_DATA_HOME`, so a profile that switches
+    accounts need not move the plugin at all — which is exactly why wiring is detected by
+    asking rather than by reading variable names.
     """
-    xdg = os.environ.get("XDG_CONFIG_HOME")
+    xdg = (os.environ if env is None else env).get("XDG_CONFIG_HOME")
     return (Path(xdg) if xdg else Path.home() / ".config") / "opencode"
 
 
@@ -904,7 +911,7 @@ class OpenCodeHarness(Harness):
             return "current", __version__
         return "moved", f"opencode {SHIM_PATH} → {__version__}"
 
-    def wire(self, root: Path) -> list[tuple[str, str]]:
+    def wire(self, root: Path, *, env: Mapping[str, str] | None = None) -> list[tuple[str, str]]:
         """Install once, where opencode reads for every project.
 
         *root* is ignored: nothing is written into the plane. A plane is somebody's repo,
@@ -912,7 +919,7 @@ class OpenCodeHarness(Harness):
         per-tree design cost, along with a `.git/info/exclude` entry per checkout to hide
         the evidence.
         """
-        g = global_dir()
+        g = global_dir(env)
         # Labels are RELATIVE to the config dir, and say which harness they belong to.
         # An absolute path here is unbounded — a deep home directory turned `init`'s
         # summary into a 130-column line, which is the readability budget #231 set.

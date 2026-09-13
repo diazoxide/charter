@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 
 from . import config, contain, tui, util
-from .harness import codex, registry
+from .harness import registry
 
 
 def _list_profiles() -> None:
@@ -83,34 +83,113 @@ def cmd_harness_list(args) -> int:
     return 0
 
 
+def _resolve(name: str):
+    """*name* as a profile, then as a registry NAME. ``(profile, why it was refused)``.
+
+    Ruling 8, and the order is the whole ruling: a profile named `codex` is what
+    `charter codex` runs, so it has to be what `charter harness install codex` wires. The
+    registry name (`claude-code`) is looked up second so a plane whose operator typed that
+    still reaches the built-in of that kind — nobody's muscle memory is broken by the
+    lookup gaining a first half.
+    """
+    from . import profiles
+    from .harness import registry
+
+    read = profiles.current()
+    found = read.profiles.get(name)
+    if found is not None:
+        return found, ""
+    h = registry.get(name)
+    if h is not None:
+        # The BUILT-IN of that kind, and not merely the last profile of it this plane
+        # declares: a registry name asks for the harness charter knows, and answering it
+        # with somebody's `codex-pinned` would wire a folder they did not name. A built-in
+        # is named after its kind, so this is `read.profiles[<kind>]` whenever a declared
+        # profile has not replaced it — and a replacement IS what that name runs, so it is
+        # the right answer when it has.
+        for q in read.profiles.values():
+            if q.harness == h.name and q.name == q.kind:
+                return q, ""
+    shown = contain.readable(name)
+    return None, next((r.reason for r in read.refused if r.name == shown), "")
+
+
 def cmd_harness_install(args) -> int:
-    """Arm a harness that `init` deliberately will not arm."""
+    """Wire one profile's own config folder — the command every wiring refusal names.
+
+    Five steps, and the order is what keeps charter from running something nobody approved:
+    resolve the name, refuse a declared profile git would carry, ASK before a command the
+    operator has not approved, wire it, then ask the harness whether that worked. The last
+    step is why this exits non-zero on a Codex profile it has just written to: charter can
+    write the `shell_environment_policy` line and nothing else, and a command that reports
+    success over a profile that will still refuse to launch is the "remedy that ends the
+    investigation" `opencode.unvouched` was written against. What is left for Codex is
+    Codex's own commands, and the refusal it ends on names them.
+    """
+    from . import profiles, profiletrust, wiring
+    from .frame import launcher
+
     name = (getattr(args, "name", "") or "").strip()
-    if registry.get(name) is None:
-        util.err(f"unknown harness {name!r} — known: {', '.join(sorted(registry.KINDS))}")
+    p, refused = _resolve(name)
+    if p is None:
+        # Quoted by hand and not with `!r`: `contain.readable` has already escaped the name,
+        # and `repr` would escape its backslashes a second time (`\\u001b`).
+        shown = contain.readable(name)
+        if refused:
+            util.err(f"profile '{shown}' is refused — {refused}")
+        else:
+            known = ", ".join(profiles.current().profiles)
+            util.err(f"no harness or profile named '{shown}' — have: {known}")
         return 2
-    if name != codex.NAME:
-        util.info(f"'{name}' needs no opt-in — `charter init` (or `charter reinit`) writes "
-                  f"its wiring into the plane, because it is scoped to the plane.")
-        return 0
+    shown = contain.readable(p.name)
+    if p.source != profiles.BUILTIN:
+        why = profiles.ignored_refusal(config.ROOT)
+        if why:
+            util.err(f"profile '{shown}' is refused — {why}")
+            return 1
+    state = profiletrust.approval_needed(p)
+    if state:
+        # **Installing runs the profile's own command** (`claude plugin install`), so it is
+        # asked about exactly as a launch is — Task 3's question and Task 3's sentences.
+        # With nobody at a terminal to ask, it is refused the way an open nobody is at is.
+        if not profiletrust.can_ask(sys.stdin, sys.stdout):
+            util.err(f"charter: {profiletrust.UNATTENDED.format(name=shown, state=state)}")
+            return 1
+        r = launcher.answered(p, profiletrust.refusal(p, attended=True),
+                              again=lambda: profiletrust.refusal(p, attended=True))
+        if r is not None:
+            # Branched on the KIND (ruling 27). A decline was answered on the terminal it
+            # was asked on, and exits with the picker's cancel code; a yes charter could not
+            # record (`KIND_RECORD`) or a record that moved under the question refuses.
+            if launcher.already_said(r):
+                return r.exit
+            util.err(f"charter: {r.text}")
+            return 1
 
-    status, detail = codex.install()
-    if status == "malformed":
-        util.err(f"{detail} is not valid TOML — left it completely untouched.")
-        util.info("  Fix it by hand, then re-run. charter never repairs this file.")
-        return 1
-    if status == "doubled":
-        util.err(f"{detail}")
-        util.info("  Both sets are trusted and both run: charter fires twice on every "
-                  "SessionStart, UserPromptSubmit and Bash call. Nothing is wrong; "
-                  "everything is doubled, which is harder to notice.")
-        return 1
-    if status == "present":
-        util.ok(f"Already named: {detail}.")
-        return 0
+    for status, detail in wiring.install(p, config.ROOT):
+        # Already contained by `wiring.install` — a label is a path built out of the
+        # profile's own `env`, which is a file a chat can write (ruling 35).
+        if status == "malformed":
+            util.err(f"{detail} is not valid TOML — left it completely untouched.")
+            util.info("  Fix it by hand, then re-run. charter never repairs this file.")
+            return 1
+        if status == "doubled":
+            util.err(f"{detail}")
+            util.info("  Both sets are trusted and both run: charter fires twice on every "
+                      "SessionStart, UserPromptSubmit and Bash call. Nothing is wrong; "
+                      "everything is doubled, which is harder to notice.")
+            return 1
+        if status == "refused":
+            util.err(f"charter: {detail}")
+            return 1
+        if status in ("unvouched", "unavailable", "unknown", "failed"):
+            util.warn(f"  {detail}")
+        else:
+            util.info(f"  {status}: {detail}")
 
-    util.ok(f"Named the harness in {detail}.")
-    util.info("  Codex's hooks come from the charter plugin — `codex plugin` installs the "
-              "same artifact Claude Code uses. This only sets $CHARTER_HARNESS, which the "
-              "plugin cannot do, so a Codex shell can say which harness it is.")
-    return 0
+    w = wiring.detect(p, cwd=config.ROOT)
+    if w.state == wiring.WIRED:
+        util.ok(f"profile '{shown}' is wired — {wiring.said(w.detail)}")
+        return 0
+    util.err(f"charter: {wiring.sentence(p, w)}")
+    return 1

@@ -19,7 +19,7 @@
           },
           {
             "type": "command",
-            "command": "out=\"$(charter doctor 2>&1)\" || printf 'charter preflight failed - fix before working:\\n%s\\n' \"$out\"",
+            "command": "out=\"$(charter doctor --preflight 2>&1)\" || printf 'charter preflight failed - fix before working:\\n%s\\n' \"$out\"",
             "timeout": 20,
             "statusMessage": "charter preflight (charter doctor)"
           },

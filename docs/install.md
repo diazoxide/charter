@@ -101,6 +101,25 @@ plugin loads nothing until it is enabled. charter will not enable it for you —
 plugin enable charter@charter --scope project` is yours to run, since turning a plugin off
 is a choice and charter does not revert a deliberate edit.
 
+**`harness profiles` and `profile <name>`.** The first row reads this machine's
+`charter.local.toml` and says how many profiles charter found, or why one was refused, or
+that git would commit the file. After it comes one row per profile charter would offer —
+every profile you declared, plus a built-in for each harness whose program is installed —
+answering whether charter's guard actually runs in the config folder that profile names.
+A yellow row names `charter harness install <name>`, which is the same command a refused
+launch prints. They are probed concurrently, each with its own timeout, and a probe that
+raises costs that row and nothing else. A profile you have not approved yet is not probed —
+its row says so and names `charter <name>`, which shows the command and asks — and neither
+is any profile while git would commit `charter.local.toml`. A row too long for the table
+says how much it left out (`… +12 not shown`) rather than stopping mid-word.
+
+**The SessionStart hook runs `charter doctor --preflight`**, which is the same preflight
+with two things left out: it probes no profile and makes no git call for one. A probe is a
+subprocess that writes into somebody's account folder, and the hook's whole budget is 20
+seconds. So the `profile <name>` rows appear only when you run `charter doctor` yourself.
+(Codex trusts hooks by their hash, so Codex users approve that hook once more after this
+release — its command changed.)
+
 **Which Claude Code config folder these rows answer for.** `$CLAUDE_CONFIG_DIR` points Claude
 Code at another folder — the usual way to run a second account — and Claude Code then keeps
 that folder's own plugins, settings and `.claude.json`. Run `charter doctor` from the shell you

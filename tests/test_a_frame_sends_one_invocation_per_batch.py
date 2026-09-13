@@ -59,7 +59,7 @@ from charter import commands_frame, config
 from charter.frame import state, tmuxctl
 
 from tests import _tmuxchain, _tmuxreap
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, wired_as_today
 # At module scope, and that is load-bearing rather than tidy: `test_frame_launcher`
 # captures the developer's real `config.STATE_DIR` at IMPORT time and refuses to run a
 # real `cmd_launch` against it. Imported from inside a test method — after `PersonaIso`
@@ -67,6 +67,25 @@ from tests._isolation import PersonaIso
 # one" and refuse every launch here for a plane nobody owns.
 from tests.test_frame_chat_switch import _FakeServer, _plant
 from tests.test_frame_launcher import _FakeTmux, _launch
+
+
+#: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
+#: launch, and that applies to the built-ins every launch test here starts. In-process the
+#: suite's `claude` guard makes detection read UNKNOWN, so every one of them would refuse
+#: over a fact none of them is about. One fixture for the module, because no test in it is
+#: about wiring; `tests/test_a_profile_is_wired_or_refuses.py` is where that is the subject.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
 
 _HAS_TMUX = shutil.which("tmux") is not None
 

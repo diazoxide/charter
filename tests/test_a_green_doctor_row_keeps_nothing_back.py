@@ -102,7 +102,7 @@ class TheFrameRowStillReachesTheReader(unittest.TestCase):
         self.assertIn("charter frame-resize", r.render())
 
 
-class TheSweepCanActuallyFail(unittest.TestCase):
+class TheSweepCanActuallyFail(PersonaIso):
     """The sweep below has no real violator to find, so this proves it would find one.
 
     Without this, `test_no_check_hides_a_sentence_in_a_hint_it_will_never_print` passes on
@@ -121,7 +121,10 @@ class TheSweepCanActuallyFail(unittest.TestCase):
 
     def test_the_real_check_set_is_not_empty(self):
         """`run_all` returning nothing would satisfy the sweep vacuously, and it is the
-        one input the sweep does not choose for itself."""
+        one input the sweep does not choose for itself.
+
+        `PersonaIso` because `check_names` lists a row per harness profile now, read off
+        `charter.local.toml` — a file `tests/_planeguard` refuses for the real plane."""
         self.assertTrue(doctor.check_names())
 
 

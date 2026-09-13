@@ -40,7 +40,27 @@ from charter.frame import launcher, state, tmuxctl
 from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
 from tests._isolation import (PersonaIso, approve_profile, assert_approved,
                               declare_profiles, make_plane, no_background_refresh,
-                              no_update_check_in)
+                              no_update_check_in, wired_as_today)
+
+
+#: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
+#: launch, and that applies to the built-ins every launch test here starts. In-process the
+#: suite's `claude` guard makes detection read UNKNOWN, so every one of them would refuse
+#: over a fact none of them is about. One fixture for the module, because no test in it is
+#: about wiring; `tests/test_a_profile_is_wired_or_refuses.py` is where that is the subject.
+_WIRED = None
+
+
+def setUpModule():
+    global _WIRED
+    _WIRED = wired_as_today()
+    _WIRED.start()
+
+
+def tearDownModule():
+    if _WIRED is not None:
+        _WIRED.stop()
+
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
@@ -129,12 +149,28 @@ class _ARealChatOnARealServer(PersonaIso):
         (bindir / "claude").write_text(
             f"#!{sys.executable}\n"
             "import json, os, sys, time\n"
+            # **The wiring probe is answered first** (ruling 10). The launcher asks this
+            # binary `plugin list --json` before it execs it, and a recorder that recorded
+            # THAT call would both overwrite the measurement and leave the launch refusing.
+            # `user` scope covers every directory (`plugincache.covers`).
+            "if sys.argv[1:3] == ['plugin', 'list']:\n"
+            "    json.dump([{'id': 'charter@charter', 'scope': 'user', 'enabled': True,\n"
+            "                'installedAt': '2026-09-12T00:00:00Z'}], sys.stdout)\n"
+            "    sys.exit(0)\n"
             "out = os.path.join(os.environ['RECORD_DIR'], 'harness.json')\n"
             "with open(out + '.tmp', 'w') as f:\n"
             "    json.dump({'argv': sys.argv[1:], 'env': dict(os.environ),\n"
             "               'pid': os.getpid()}, f)\n"
             "os.replace(out + '.tmp', out)\n"
-            f"{'sys.exit(' + str(self.EXIT_WITH) + ')' if self.EXIT_WITH is not None else 'time.sleep(300)'}\n")
+            # A beat before the exit, and it is not decoration. `_launch` reports an EARLY
+            # DEATH — the harness's own code, rather than 0 — for a pane that dies while it
+            # is still setting the frame up, and a harness that exits the instant it is
+            # exec'd races that window. Measured on CI (3.12, 2026-09-12): the launch
+            # answered 7 instead of 0 on a loaded runner, having answered 0 on four
+            # interpreters an hour earlier. What this class is about is that the code
+            # TRAVELS, which the assertions below read off the chat's own state; whether it
+            # also arrives through the early-death path is a different test's subject.
+            f"{'time.sleep(1); sys.exit(' + str(self.EXIT_WITH) + ')' if self.EXIT_WITH is not None else 'time.sleep(300)'}\n")
         (bindir / "claude").chmod(0o755)
         self.enterContext(mock.patch.dict(os.environ, {
             # First on the client's `PATH`, ahead of `tests/_claudeguard`'s own fake: the

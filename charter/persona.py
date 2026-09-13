@@ -1458,6 +1458,12 @@ def _skill_roots() -> list:
     The lint's own justification is that a declared skill costs context on every dispatch, so
     a dead entry is paid forever for nothing. That argues for accuracy about what EXISTS, not
     about what happens to be packaged.
+
+    **These are the DEFAULT config folder's, and not a harness profile's** (ruling 16). A
+    profile can point Claude Code at another folder with its own `plugins/` and `skills/`;
+    a persona belongs to the plane and is declared once for every chat on it, so an answer
+    that followed one chat's profile would lint the same persona differently depending on
+    which account asked.
     """
     from pathlib import Path as _P
     home = _P.home() / ".claude"

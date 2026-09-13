@@ -641,10 +641,41 @@ charter.local.toml`, beside what git said.
 
 The check is one `git --no-optional-locks status`, which takes no `index.lock` from a commit
 running beside it. It runs when a person asks — `charter harness list`, `charter doctor` —
-and not when charter merely reads its config. One hook does pay it: the SessionStart hook
-runs `charter doctor`, so on a plane that has `charter.local.toml`, each session start makes
-that one `git status`. `charter doctor`'s `harness profiles` row warns for each refusal
-above, with each state's own fix, and for a `default` that names no profile this machine has.
+and not when charter merely reads its config, and not on a hook path: the SessionStart hook
+runs `charter doctor --preflight`, which skips it. `charter doctor`'s `harness profiles` row
+warns for each refusal above, with each state's own fix, and for a `default` that names no
+profile this machine has.
+
+### The profile is wired
+
+Charter's guard lives in the harness's own config folder, and a profile names another one.
+**A profile whose folder does not carry charter's wiring refuses to launch**, prints what is
+missing and names the command that fixes it. Asking runs the profile's own command, so it
+is asked only once you have approved that command — a new `claude-alt` shows
+`run this? [y/N]` first, and a yes is followed by this, not by a chat:
+
+```
+charter: profile 'claude-alt' is not wired — charter@charter is not installed in
+/Users/you/.claude-alt for /plane/workspaces/w, so a chat on it would run without charter's
+guard. Nothing was started. Wire it: charter harness install claude-alt
+```
+
+**No flag launches one unguarded**, and the rule covers the built-ins: `charter codex` on a
+plane where nobody wired Codex, and `charter opencode` where `init` never wrote the shim,
+refuse the same way. A chat that looks guarded and is not is the same failure whichever
+profile started it.
+
+A probe that cannot answer — it timed out, exited non-zero, or said something charter could
+not read — refuses too, and prints the probe to run by hand. An unknown is not a pass.
+
+Every launch asks freshly, before tmux and again in the pane — a `+`, a tab, `charter
+reopen` and a handoff ask before they open anything, and the pane asks again. It never
+reads the remembered answer under `.charter/`: that file is as writable by a chat as
+`charter.local.toml` is, and it exists to draw rows, not to start chats.
+
+What "wired" means per kind, what each of `init`, `reinit` and `charter harness install`
+does about it, and the measured cost of each probe are in
+[harnesses.md](harnesses.md#per-profile--wired-or-it-refuses-to-start).
 
 ### `default` — bare `charter`
 
