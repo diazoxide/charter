@@ -37,10 +37,10 @@ from unittest import mock
 from charter import commands_frame, config
 from charter.frame import launcher, state, tmuxctl
 
-from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
+from tests import _envguard, _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
 from tests._isolation import (PersonaIso, approve_profile, assert_approved,
                               declare_profiles, make_plane, no_background_refresh,
-                              no_update_check_in, wired_as_today)
+                              wired_as_today)
 
 
 #: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
@@ -122,7 +122,6 @@ class _ARealChatOnARealServer(PersonaIso):
                           f"; this machine has {v}")
         make_plane(self)
         no_background_refresh(self)
-        no_update_check_in(config.ROOT)
         # A launch with no terminal of its own: `attach=False`, the way a tab or a handoff
         # drives it, and the state `os.get_terminal_size()` raising is the seam for.
         _ttyguard.no_terminal()
@@ -182,6 +181,9 @@ class _ARealChatOnARealServer(PersonaIso):
             "PYTHONPATH": os.pathsep.join(
                 [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
             **_gitguard.environment(),
+            # The server this case starts hands its environment to every `charter panel`
+            # in the frame, and a panel on a fresh plane forks a PyPI check without it (#945).
+            **_envguard.stated(),
         }, clear=True))
 
     def _reap_the_server(self) -> None:

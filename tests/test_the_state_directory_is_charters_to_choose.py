@@ -107,11 +107,6 @@ from tests._isolation import PersonaIso
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: A proxy nothing answers, for `APlaneTheCliCanRunIn.child_env`. Port 9 is `discard`, which
-#: neither a developer's machine nor a CI runner serves, so a connection to it is refused at
-#: once rather than timed out.
-_NO_NETWORK = "http://127.0.0.1:9"
-
 #: ``000`` makes a bare mkdir 0777, ``022`` is the default that shipped the defect, ``077``
 #: is the one under which the old code was accidentally right. A fix has to produce the
 #: same private mode under all three — the property is the independence, not the value.
@@ -196,17 +191,12 @@ class APlaneTheCliCanRunIn(unittest.TestCase):
         for var in ("CHARTER_ROOT", "CHARTER_HOME", "CHARTER_PERSONA", "CHARTER_WORKSPACE",
                     "CHARTER_WORKTREES", "CHARTER_CONFIG_HOME"):
             env.pop(var, None)
-        # `charter hook sessionstart` forks `charter _version-check` since #938. The usual
-        # way to stop that, `tests._isolation.no_update_check_in`, plants a lock inside
-        # `.charter/`, and a plane with no `.charter/` yet is this sweep's whole premise. So
-        # the grandchild keeps its fork and loses the network: its one GET goes through a
-        # proxy that refuses the connection, and `update.fetch_and_store` stores nothing it
-        # did not fetch. Measured with a listener in the proxy's place: the request is a
-        # `CONNECT pypi.org:443` to the proxy and nothing else, and it returns None in 0.04s.
-        for var in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
-            env[var] = _NO_NETWORK
-        for var in ("no_proxy", "NO_PROXY"):
-            env.pop(var, None)
+        # `charter hook sessionstart` forks `charter _version-check` since #938. This sweep
+        # could not stop it with a cooldown lock, because a plane with no `.charter/` yet is
+        # its whole premise, so its child used to keep the fork and send the GET through a
+        # proxy that refused it. The suite's `$CHARTER_NO_BACKGROUND_CHECKS` needs no state
+        # directory: it arrives in `dict(os.environ)` above, is not one of the names popped,
+        # and the child forks nothing (#945).
         return env
 
     def plane(self, tag: str) -> Path:

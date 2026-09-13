@@ -83,6 +83,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands, news
+from tests import _envguard
 from tests.test_workflows import _release
 
 #: GitHub's documented maximum for a release body. The refusal reads `body is too long
@@ -994,8 +995,10 @@ class ARefusedRenderStopsTheRelease(unittest.TestCase):
                 "exit 0\n")
             for name in ("python", "gh"):
                 (tmp / "bin" / name).chmod(0o755)
+            # `_envguard.stated()` because the script's `python -m charter` reads as a charter
+            # child to `tests._planeguard`, which cannot see that `python` is the stub (#945).
             env = {"PATH": f"{tmp / 'bin'}:/usr/bin:/bin", "RUNNER_TEMP": str(tmp),
-                   "GH_TOKEN": "stub"}
+                   "GH_TOKEN": "stub", **_envguard.stated()}
             argv = ["bash"] + (["-e"] if errexit else []) + ["-c", self._announce()]
             done = subprocess.run(argv, cwd=tmp, env=env, capture_output=True, text=True)
             asked = log.read_text().splitlines() if log.exists() else []

@@ -51,6 +51,11 @@ class TheOperatorsServerIsNeverReached(unittest.TestCase):
         return caught.exception
 
     def _allowed(self, *words: str, env=None) -> None:
+        # A hand-built environment carries the suite's background-checks switch, or
+        # `BackgroundGrandchild` refuses it before this guard's answer can be read (#945).
+        # Adding one name moves no socket: `_tmux_socket` reads `$TMUX` and `$TMUX_TMPDIR`.
+        if env is not None:
+            env = {**env, "CHARTER_NO_BACKGROUND_CHECKS": "1"}
         subprocess.run([str(self.tmux), *words], env=env, check=True)
         self.assertTrue(self.marker.exists(), "allowed, and yet it did not run")
 

@@ -93,6 +93,17 @@ charter is full of ``except Exception`` fallbacks that would turn this tripwire 
 degraded code path, and `unittest` records a `BaseException` against the test that raised
 it, so the failure keeps its name.
 
+**One charter variable is put BACK, and it is the suite's own.** ``$CHARTER_NO_BACKGROUND_CHECKS``
+is set by :func:`install` right after the scrub (#945), because what it stops happens in a
+generation no guard here can reach: a child charter handed a fresh plane forks its own
+`_version-check`, a GET to PyPI, and `gl-refresh`, the forge client. It is `tests/_gitguard`'s
+move — one redirect every child inherits — and it lives here rather than there for the sake
+of the ordering: set before the scrub it would be scrubbed, and set by a later line in
+`tests/__init__.py` it would depend on nobody moving that line. After the scrub, a
+developer's own export can neither hide it (a blank one) nor stand in for it (theirs, green
+on their machine and absent on a runner). :data:`STATED` is what was put back, so the cases
+asserting that nothing of the shell survives can tell the suite's value from the shell's.
+
 **What this cannot see.** ``os.environb`` shares the same underlying data and bypasses the
 mapping (nothing in charter uses it), and a subprocess resolves its own environment — but
 it inherits this process's, which no longer carries the ambient values, so the two halves
@@ -358,6 +369,34 @@ def scrubbed() -> dict[str, str]:
 
 _SCRUBBED: dict[str, str] = {}
 
+#: The charter variables this suite sets for itself after the scrub, with their values. See
+#: the module docstring. Filled by :func:`install`.
+STATED: dict[str, str] = {}
+
+
+def stated() -> dict[str, str]:
+    """What the suite put back after the scrub, for a child environment built by hand.
+
+    `tests._gitguard.environment()`'s shape, for the same kind of case: a fixture that
+    clears `os.environ` or spells a child's whole ``env=`` splats this in, and
+    `_planeguard.BackgroundGrandchild` stops refusing its charter and tmux children. A copy,
+    so no caller can edit what the next one is handed.
+    """
+    return dict(STATED)
+
+
+def _stated() -> dict[str, str]:
+    """``$CHARTER_NO_BACKGROUND_CHECKS``, named by the module that reads it.
+
+    `charter.util` imports ``os``, ``subprocess``, ``sys``, ``urllib.parse``, ``pathlib`` and
+    ``typing`` and no charter module, so asking it cannot pull `charter.config` in ahead of
+    the scrub — the same reason `session`, `legacyenv` and `tui` can be asked above.
+    ``"1"`` rather than any other value because it is what the documentation tells a person
+    to write.
+    """
+    from charter import util
+    return {util.NO_BACKGROUND_CHECKS: "1"}
+
 
 def install() -> None:
     """Scrub the ambient values, replace `os.environ`, and arm the guard per test.
@@ -385,6 +424,11 @@ def install() -> None:
     for key in [k for k in os.environ if _in_namespace(k)]:
         _SCRUBBED[key] = os.environ[key]
         del os.environ[key]
+
+    # AFTER the loop above, which would otherwise remove it with the shell's — see the module
+    # docstring. A real `putenv`, so every child and every tmux server a test starts has it.
+    STATED.update(_stated())
+    os.environ.update(STATED)
 
     base = os.environ
     os.environ = _GuardedEnviron(base._data, base.encodekey, base.decodekey,

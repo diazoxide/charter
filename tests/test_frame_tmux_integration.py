@@ -107,8 +107,7 @@ from charter.frame import slots as frame_slots
 from charter.frame import state, tmuxctl
 
 from tests import _tmuxreap
-from tests._isolation import (PersonaIso, PlaneIso, make_plane, no_background_refresh,
-                              no_update_check_in, run_hook)
+from tests._isolation import PersonaIso, PlaneIso, make_plane, no_background_refresh, run_hook
 from tests._planeguard import allow_background_children
 # Imported rather than re-declared: a second copy of the stub that keeps a launch's
 # detached `frame-gather` child off the developer's real plane is a copy that can drift
@@ -2724,12 +2723,10 @@ class FourEdgeIntegration(PlaneIso, unittest.TestCase):
         # fork one say so instead of forking it.
         allow_background_children(self)
         (self.tmp / "charter.toml").write_text("")
-        # That declaration lets the newer-charter check #938 added to the gather fork for
-        # real too, in this process and in every `frame-gather` the frame starts: one full
-        # run forked a `_version-check`, a GET to PyPI, from each of this class's four
-        # frames. The lock a real machine already holds stops that without touching the
-        # gather this class is proving.
-        no_update_check_in(self.tmp)
+        # That declaration is about the `frame-gather` child and nothing it forks in turn:
+        # the gather's own newer-charter check and forge refresh stay off, in this process
+        # and in every `frame-gather` the frame starts, because the suite's
+        # `$CHARTER_NO_BACKGROUND_CHECKS` is in the environment they all inherit (#945).
         self.env = dict(os.environ, CHARTER_ROOT=str(self.tmp), CHARTER_WORKSPACE="demo")
         self.env.pop("CHARTER_HOME", None)  # derive STATE_DIR under CHARTER_ROOT, like
                                             # this process's own PersonaIso-isolated config
@@ -6726,10 +6723,6 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
         self.enterContext(mock.patch.dict(
             os.environ, {"PYTHONPATH": _importable_env(os.environ)["PYTHONPATH"]},
             clear=False))
-        # Those panels gather when they find no cache, and the gather starts the
-        # newer-charter check since #938: a `_version-check`, a GET to PyPI, from a child no
-        # guard in this process can see. The lock a real machine holds stops it.
-        no_update_check_in()
 
     def _resize(self, fd: int, cols: int, rows: int) -> None:
         """Change the pty's size the way a terminal emulator does — `TIOCSWINSZ`, which

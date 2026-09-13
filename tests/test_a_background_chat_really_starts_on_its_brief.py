@@ -54,7 +54,7 @@ from charter.frame import layout, state, tmuxctl
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 from tests import _tmuxreap, _tmuxsocket
-from tests._isolation import PersonaIso, make_plane, no_update_check_in, wired_as_today
+from tests._isolation import PersonaIso, make_plane, wired_as_today
 
 
 #: Ruling 10: a profile whose config folder does not carry charter's guard refuses to
@@ -324,7 +324,6 @@ class ABackgroundChatWithItsPanelsMovesNoAttachedClient(_TwoChatsOnARealServer,
 
     def setUp(self):
         super().setUp()
-        no_update_check_in(config.ROOT)
         #: The terminal types a client would not attach with, for the skip that says so.
         self.unattached: list[str] = []
         #: The client attached to each workspace's session, where one would attach.

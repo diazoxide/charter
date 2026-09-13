@@ -74,6 +74,48 @@ uvx --from charter-cp charter <cmd>
 > `charter` as a project name, so the distribution carries a suffix — but everything you
 > type, and everything in the docs, is `charter`.
 
+### What charter reaches on its own, and how to stop it
+
+charter starts two refreshes in the background, so that nothing you look at waits on the
+network:
+
+- **`charter _version-check`**: one unauthenticated GET of PyPI's metadata for
+  `charter-cp`, and on the [dev channel](#4-the-dev-channel--trying-main-without-cutting-a-release)
+  a second of `main`'s head from GitHub's public API. The answer lands in
+  `.charter/cache/update.json`, at most once a day and at most one attempt an hour. The
+  version chip's `↑` and `charter version`'s `latest` row read it.
+- **`charter gl-refresh`**: `gh` or `glab` over every clone in the workspace, for the open
+  change and CI columns, cached in `.charter/cache/glstate.json`.
+
+The status line, the frame's gather and SessionStart start them when their cache is stale.
+On an offline machine, in a CI job, or anywhere you would rather charter did not reach PyPI
+or your forge unasked, switch both off:
+
+```bash
+export CHARTER_NO_BACKGROUND_CHECKS=1
+```
+
+**It is on whenever it holds more than whitespace, `0` and `false` included.** You are asking
+charter not to reach the network, and a word it did not recognise must not read as
+permission. Unset the variable, or set it empty, to turn the refreshes back on.
+
+With it on, neither refresh starts and neither touches `.charter/cache/`. Commands you run
+yourself are not background refreshes, and they still reach the network: `charter update`,
+`charter version bump`, `charter gl-refresh`. What reads the caches shows only what is
+already there. The version chip has no `↑`, a clone that was never refreshed shows no change
+or CI state, and `charter version` says the newer-charter question was not checked instead
+of calling you up to date:
+
+```
+• not checked: $CHARTER_NO_BACKGROUND_CHECKS is set, so charter does not ask in the background. `charter update` asks when you run it.
+```
+
+Set it where every charter process inherits it: your shell profile, or the job's
+environment. A frame's panels are started by a tmux server with the environment that server
+started with, so a server already running when you exported it does not have it. A profile's
+`env` cannot carry it, because charter refuses `CHARTER_*` names there (see
+[control-plane.md](control-plane.md#what-is-refused-and-the-fix)).
+
 ## 2. The Claude Code plugin — charter installs it
 
 This repo also ships as a Claude Code plugin — `.claude-plugin/plugin.json` +

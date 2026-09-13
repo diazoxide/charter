@@ -32,20 +32,23 @@ exit is a tripwire whoever hits it next deletes.
 from __future__ import annotations
 
 import ast
+import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import config, glstate, root, statusline, update
+from charter import config, glstate, root, statusline, update, util
 from tests import _envguard, _planeguard
 # The MODULE, never the class: `from … import RenderNeverCrashesCase` would bind a TestCase
 # subclass in this module's namespace, and `TestLoader` collects by namespace — the borrowed
 # fixture would then run a second time in every suite run, under this file's name.
 from tests import test_statusline_crash_guard
-from tests._isolation import (PersonaIso, isolate_state_dir, make_plane,
+from tests._isolation import (PersonaIso, child_plane_env, isolate_state_dir, make_plane,
                               no_background_refresh)
 
 
@@ -140,7 +143,14 @@ class EitherWayOutWorks(unittest.TestCase):
 
 
 class StoppingTheSpawnerIsTheOtherWayOut(PersonaIso):
-    """`no_background_refresh` — the one spelling of what six modules wrote by hand."""
+    """`no_background_refresh` — the one spelling of what six modules wrote by hand.
+
+    About the spawners, so the suite's ``$CHARTER_NO_BACKGROUND_CHECKS`` is taken away:
+    with it on, both return before the fork this class is measuring (#945)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _planeguard.allow_background_checks(self)
 
     def test_without_it_a_render_path_call_forks(self):
         """The control. `make_plane` gives this case a REAL plane, which is what both
@@ -165,6 +175,185 @@ class StoppingTheSpawnerIsTheOtherWayOut(PersonaIso):
         with self.assertRaises(_planeguard.BackgroundCharterChild):
             glstate.maybe_spawn([self.tmp], "default")
 
+
+#: Spelled, not asked of `charter.util`: these cases pin the documented name.
+_SWITCH = "CHARTER_NO_BACKGROUND_CHECKS"
+
+#: A cwd that cannot exist, so a child the guard lets past fails in the real `Popen` with
+#: `FileNotFoundError` — the proof it was not the guard that stopped it — and runs nothing.
+_NOWHERE = "/nonexistent-so-nothing-can-actually-start"
+
+
+class TheSuiteSwitchesTheChecksOffForEveryChild(unittest.TestCase):
+    """#945, the generation below. `BackgroundCharterChild` refuses a fork in THIS process;
+    a child charter handed a fresh plane forks its own `_version-check` and `gl-refresh`,
+    where no patch reaches. `$CHARTER_NO_BACKGROUND_CHECKS` is set once, for the suite, the
+    way `tests/_gitguard.py` redirects `~/.gitconfig`: every child inherits it, and so does
+    every child of a child and every pane of a tmux server a test starts."""
+
+    def test_this_process_has_it_on(self):
+        self.assertTrue(os.environ.get(_SWITCH, "").strip())
+        self.assertTrue(util.background_checks_off())
+
+    def test_a_child_inherits_it(self):
+        """A real `unsetenv`/`putenv`, not a Python-side value a child never sees."""
+        out = subprocess.run([sys.executable, "-c",
+                              f"import os; print(os.environ.get({_SWITCH!r}, ''))"],
+                             capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(out, os.environ[_SWITCH])
+
+    def test_a_developers_shell_neither_hides_it_nor_stands_in_for_it(self):
+        """The ordering, asked of a fresh import of the `tests` package rather than read off
+        its source. `_envguard` removes every ``CHARTER_*`` name the shell exported; the
+        suite's own value has to arrive after that removal or it is removed with them. A
+        blank export would then HIDE the switch from every child, and a developer who
+        exports it themselves would FAKE it: green on their machine and a real GET to PyPI
+        on a runner that never set it. The same child also has to find the shell's value in
+        `_envguard.scrubbed()`, which is what proves it was removed rather than never there.
+
+        Run from a throwaway plane with ``$PYTHONPATH`` carrying the tree, for
+        `test_no_test_reads_the_operators_shell`'s reason: a child importing this package
+        resolves a plane at import, and the scrub removes any ``$CHARTER_ROOT`` first."""
+        _planeguard.allow_background_checks(self)       # the blank one is refused otherwise
+        probe = ("import json, os, tests; from tests import _envguard;"
+                 f"print(json.dumps([os.environ.get({_SWITCH!r}), "
+                 f"_envguard.scrubbed().get({_SWITCH!r})]))")
+        plane, _ = child_plane_env(self)
+        tree = Path(__file__).resolve().parent.parent
+        for shell in ("", "   ", "a value the developer exported"):
+            with self.subTest(shell=shell):
+                out = subprocess.run(
+                    [sys.executable, "-c", probe],
+                    env={**os.environ, _SWITCH: shell, "PYTHONPATH": str(tree)},
+                    cwd=str(plane), capture_output=True, text=True, check=True)
+                suite, scrubbed = json.loads(out.stdout.splitlines()[-1])
+                self.assertEqual(suite, "1")
+                self.assertEqual(scrubbed, shell)
+
+
+class AChildThatDropsTheSwitchIsRefused(unittest.TestCase):
+    """The redirect alone is a default, and a hand-built ``env=`` walks past a default. So
+    the spawn is refused, the way `AmbientGitConfig` refuses a git child that drops
+    ``$GIT_CONFIG_GLOBAL``: for a charter child, and for a tmux child, whose server hands
+    its own environment to every `charter panel` it starts."""
+
+    def test_a_charter_child_with_a_hand_built_environment_is_refused(self):
+        with self.assertRaises(_planeguard.BackgroundGrandchild):
+            subprocess.Popen(["charter", "hook", "sessionstart"], env={"PATH": "/usr/bin"},
+                             cwd=_NOWHERE)
+
+    def test_a_blank_value_is_dropped_too(self):
+        """Blank is unset to `util.background_checks_off`, so it is unset to the guard."""
+        with self.assertRaises(_planeguard.BackgroundGrandchild):
+            subprocess.Popen(["charter", "panel", "right"], env={**os.environ, _SWITCH: " "},
+                             cwd=_NOWHERE)
+
+    def test_a_charter_child_in_an_emptied_environment_is_refused(self):
+        """`mock.patch.dict(os.environ, clear=True)` and ``env=None`` is the other way to
+        hand a child nothing; the guard asks the environment the child will GET."""
+        with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True), \
+                self.assertRaises(_planeguard.BackgroundGrandchild):
+            subprocess.Popen(["charter", "frame-gather"], cwd=_NOWHERE)
+
+    def test_a_tmux_child_that_drops_it_is_refused(self):
+        with self.assertRaises(_planeguard.BackgroundGrandchild):
+            subprocess.Popen(["tmux", "-L", "charter-945-nothing", "new-session", "-d"],
+                             env={"PATH": "/usr/bin"}, cwd=_NOWHERE)
+
+    def test_the_refusal_names_the_test_the_command_the_switch_and_the_ways_out(self):
+        with self.assertRaises(_planeguard.BackgroundGrandchild) as caught:
+            subprocess.Popen(["charter", "hook", "sessionstart"], env={}, cwd=_NOWHERE)
+        said = str(caught.exception)
+        self.assertIn("test_the_refusal_names_the_test_the_command_the_switch_and_the_ways_out",
+                      said)
+        self.assertIn("charter hook sessionstart", said)
+        self.assertIn(_SWITCH, said)
+        self.assertIn("#945", said)
+        self.assertIn("PyPI", said)                        # what it costs
+        self.assertIn("env=None", said)                    # way out 1
+        self.assertIn("os.environ", said)                  # way out 2
+        self.assertIn("_envguard.stated()", said)          # way out 3
+        self.assertIn("allow_background_checks", said)     # way out 4
+
+    def test_it_is_a_base_exception_so_a_fallback_cannot_eat_it(self):
+        self.assertTrue(issubclass(_planeguard.BackgroundGrandchild, BaseException))
+        self.assertFalse(issubclass(_planeguard.BackgroundGrandchild, Exception))
+
+    def test_a_child_that_carries_it_is_not_refused(self):
+        for env in (None, {**os.environ, "EXTRA": "1"}, {_SWITCH: "1", "PATH": "/usr/bin"}):
+            for argv in (["charter", "hook", "sessionstart"],
+                         ["tmux", "-L", "charter-945-nothing", "new-session", "-d"]):
+                with self.subTest(argv=argv[0], env=None if env is None else sorted(env)):
+                    with self.assertRaises(FileNotFoundError):
+                        subprocess.Popen(argv, env=env, cwd=_NOWHERE)
+
+    def test_the_helpers_own_answer_is_enough_in_a_bare_environment(self):
+        with self.assertRaises(FileNotFoundError):
+            subprocess.Popen(["charter", "hook", "sessionstart"],
+                             env={"PATH": "/usr/bin", **_envguard.stated()}, cwd=_NOWHERE)
+
+    def test_a_program_that_is_neither_may_state_its_own_environment(self):
+        """The boundary: a rule about the two programs that start charter, not a ban on
+        building an environment."""
+        with self.assertRaises(FileNotFoundError):
+            subprocess.Popen(["tar", "--version"], env={}, cwd=_NOWHERE)
+
+    def test_asking_tmux_its_version_starts_no_server(self):
+        """``tmux -V`` prints and exits; nothing it starts can run a panel."""
+        with self.assertRaises(FileNotFoundError):
+            subprocess.Popen(["tmux", "-V"], env={}, cwd=_NOWHERE)
+
+    def test_every_way_tmux_is_told_to_start_a_server_is_refused(self):
+        """A server takes its environment from the client that starts it, and hands it to
+        every pane. tmux starts one for `new-session`, its alias `new`, `start-server` and
+        its alias `start`, any prefix of either name that no other command shares, and a
+        bare `tmux` with no command at all — also when the command follows a `;`."""
+        for words in (["new-session", "-d"], ["new", "-d"], ["new-s"], ["start-server"],
+                      ["start"], ["st"], [], ["-f", "/dev/null"], ["ls", ";", "new-session"],
+                      ["ls;", "new"], ["-2", "-u", "new-session"]):
+            with self.subTest(words=words), \
+                    self.assertRaises(_planeguard.BackgroundGrandchild):
+                subprocess.Popen(["tmux", "-L", "charter-945-nothing", *words],
+                                 env={"PATH": "/usr/bin"}, cwd=_NOWHERE)
+
+    def test_a_command_to_a_server_that_must_already_run_is_not_refused(self):
+        """`cmd_chrome` sets a style on a running frame with a cleared environment: tmux
+        answers "no server running" rather than start one, so no pane can inherit what
+        this child lacks. `new-window` and `new-w` are the names one letter away, and
+        `new-` and `s` are prefixes tmux refuses as ambiguous rather than run."""
+        for words in (["set", "-g", "status", "off"], ["list-sessions"], ["new-window"],
+                      ["new-w"], ["new-"], ["s"], ["kill-server"],
+                      ["send-keys", "new-session"], ["rename-window", "new"]):
+            with self.subTest(words=words), self.assertRaises(FileNotFoundError):
+                subprocess.Popen(["tmux", "-L", "charter-945-nothing", *words],
+                                 env={"PATH": "/usr/bin"}, cwd=_NOWHERE)
+
+
+class ACaseAboutASpawnerTurnsTheSwitchOff(unittest.TestCase):
+    """`allow_background_checks` — the way out for a case whose subject IS a spawner, which
+    with the switch on would return before running anything worth asserting on."""
+
+    def test_it_takes_the_switch_out_of_this_process(self):
+        _planeguard.allow_background_checks(self)
+        self.assertNotIn(_SWITCH, os.environ)
+        self.assertFalse(util.background_checks_off())
+
+    def test_and_lets_a_child_without_it_through(self):
+        _planeguard.allow_background_checks(self)
+        with self.assertRaises(FileNotFoundError):
+            subprocess.Popen(["charter", "hook", "sessionstart"], env={}, cwd=_NOWHERE)
+
+    def test_the_declaration_and_the_switch_come_back_when_the_case_ends(self):
+        before = os.environ[_SWITCH]
+
+        class Declares(unittest.TestCase):
+            def runTest(inner):        # noqa: N805
+                _planeguard.allow_background_checks(inner)
+
+        Declares().run(unittest.TestResult())
+        self.assertEqual(os.environ.get(_SWITCH), before)
+        with self.assertRaises(_planeguard.BackgroundGrandchild):
+            subprocess.Popen(["charter", "hook", "sessionstart"], env={}, cwd=_NOWHERE)
 
 class _ARenderThatOnlyRedirectsTheStateDir(unittest.TestCase):
     """The positive control: the fixture `RenderNeverCrashesCase` had at #944, kept so the
@@ -211,6 +400,10 @@ class ARenderAgainstTheRealPlaneForksNothing(unittest.TestCase):
         — and the clone is a bare ``.git`` DIRECTORY, which is the whole of
         `workspace.is_clone`'s test.
         """
+        # Without the suite's switch, which would otherwise answer this for every case run
+        # here: a crash guard that stopped calling `no_background_refresh` would fork
+        # nothing because the spawners return on their first line, and pass (#945).
+        _planeguard.allow_background_checks(self)
         sentinel = Path(tempfile.mkdtemp(prefix="charter-944-sentinel-")).resolve()
         self.addCleanup(shutil.rmtree, sentinel, True)
         (sentinel / root.MARKER).write_text("schema = 1\n")
@@ -265,6 +458,7 @@ class EveryCharterCharterStartsForItselfIsDetached(PersonaIso):
             raise RuntimeError("no child, thank you")
 
         make_plane(self)
+        _planeguard.allow_background_checks(self)     # or neither spawner gets that far
         with mock.patch("subprocess.Popen", spy):
             call()
         return seen
