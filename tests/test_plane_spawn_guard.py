@@ -507,6 +507,60 @@ class EverySpellingThatReachesCharter(_FakePlane):
         self.refuse(["charter", "--version"])
         self.refuse(["/bin/sh", "-c", f"PATH={bindir}:$PATH charter --version"])
 
+    def test_a_program_is_what_it_resolves_to_whatever_its_arguments_look_like(self):
+        """``["tmux", "-L", <sock>, "attach", …]`` ran charter, when that ``tmux`` was a link
+        to it (#967).
+
+        The resolution above used to be asked only of an argv that reached an interpreter
+        — a ``-c``, a ``-m`` or a ``.py`` — so every other shape was judged by the word
+        written in ``argv[0]``. That is the shape charter's own frame code talks to tmux in,
+        and a ``tmux``, ``git`` or ``ssh`` first on the child's ``PATH`` is what the kernel
+        execs whatever follows it on the command line.
+        """
+        bindir = self.elsewhere / "shims"
+        bindir.mkdir()
+        os.symlink(self.fake, bindir / "tmux")
+        self.stranded["PATH"] = f"{bindir}:{self.stranded.get('PATH', '')}"
+        attach = ["-L", "spawnguard-967", "attach", "-t", "s0"]
+        self.refuse(["tmux", *attach])
+        self.refuse([str(bindir / "tmux"), *attach])
+
+    def test_a_relative_path_entry_is_looked_up_from_the_childs_cwd(self):
+        """``cwd=<plane>, PATH="bin:…"`` with ``<plane>/bin/tmux`` a link to charter: the
+        child ran the link while the guard said "not charter" (#967, found fixing it).
+
+        `Popen` joins each ``PATH`` entry to the name in the parent and tries them AFTER the
+        chdir, so a relative entry — and an empty one, which means the current directory —
+        is the CHILD's directory. `shutil.which` read both against this process's cwd, which
+        is the checkout, and found nothing there. Asked of the plain argv and of the ``-c``
+        shape, which resolved the same wrong way before the gate came out.
+        """
+        (self.real / "bin").mkdir()
+        os.symlink(self.fake, self.real / "bin" / "tmux")
+        os.symlink(self.fake, self.real / "tmux")
+        path = self.stranded.get("PATH", "")
+        # Both FIRST on the PATH: a relative entry after the real one would lose to a real
+        # `tmux` for the child too, and then refusing it would be the guard that is wrong.
+        for entries in (f"bin:{path}", f":{path}"):
+            self.stranded["PATH"] = entries
+            # A socket of its own in both, or `RealTmuxReach` answers first — correctly.
+            for argv in (["tmux", "-L", "spawnguard-967", "attach"],
+                         ["tmux", "-L", "spawnguard-967", "-c", "x"]):
+                with self.subTest(PATH=entries.replace(path, "…"), argv=argv):
+                    self.refuse(argv)
+
+    def test_an_interpreter_under_another_name_is_asked_about_a_script_without_py(self):
+        """The same gap one step in: a ``git`` that is really ``python3``, handed a script
+        whose name carries no ``.py``. No ``-c``, no ``-m``, no suffix — so the old gate
+        never looked, and the interpreter ran charter's import unread."""
+        bindir = self.elsewhere / "shims"
+        bindir.mkdir()
+        os.symlink(sys.executable, bindir / "git")
+        self.stranded["PATH"] = f"{bindir}:{self.stranded.get('PATH', '')}"
+        probe = self.elsewhere / "probe"
+        probe.write_text(f"open({str(self.canary)!r}, 'w').close()\nimport charter\n")
+        self.refuse(["git", str(probe)])
+
     def test_an_env_wrapper_in_front_of_the_binary(self):
         """``env -u X <charter>``. The ``-m charter`` adjacency below would answer the
         other spelling on its own; nothing but reading past `env` answers this one."""
@@ -679,6 +733,100 @@ class SpellingsThatAreNotASpawn(_FakePlane):
                                      cwd=self.real, env=self.stranded)
                 self.assertEqual(p.wait(), 0)
                 self.assertEqual(out.read_text(), "a'b", "the child did not run")
+
+
+class AResolutionThatCannotFinishStillDecides(_FakePlane):
+    """`_program_names` runs inside every `Popen` the suite makes, not only the ones whose
+    argv reaches an interpreter (#967) — so each way a ``PATH`` lookup can fail to finish
+    has to leave the spawn running rather than raise out of `Popen` into a test that never
+    mentioned charter.
+
+    Every case is a real ``touch`` with nothing but a file after it, the shape the old gate
+    never resolved, and asserts the file is there: a guard that refused, or raised, or
+    quietly skipped the spawn all fail it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ran = self.elsewhere / "it-ran"
+        self.stranded = {k: v for k, v in os.environ.items() if k != root.ENV_VAR}
+
+    def touch(self, **kw):
+        kw.setdefault("cwd", self.real)
+        p = subprocess.Popen(["touch", str(self.ran)], stdin=subprocess.DEVNULL, **kw)
+        self.assertEqual(p.wait(), 0)
+        self.assertTrue(self.ran.exists(), "the child did not run")
+
+    def test_an_unreadable_path_entry(self):
+        locked = self.elsewhere / "locked"
+        locked.mkdir()
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o755)   # before the rmtree setUp registered
+        self.touch(env={**self.stranded, "PATH": f"{locked}:{self.stranded['PATH']}"})
+
+    def test_a_dangling_link_first_on_path(self):
+        bindir = self.elsewhere / "shims"
+        bindir.mkdir()
+        os.symlink(self.elsewhere / "gone", bindir / "touch")
+        self.touch(env={**self.stranded, "PATH": f"{bindir}:{self.stranded['PATH']}"})
+
+    def test_relative_and_empty_path_entries(self):
+        self.touch(env={**self.stranded,
+                        "PATH": f"no/such/bin::.:{self.stranded['PATH']}"})
+
+    def test_relative_entries_for_a_child_with_no_cwd_of_its_own(self):
+        """Without ``cwd=`` the child starts where this process is, so that is what the
+        entries are read against — the one case with no child directory to join them to."""
+        self.touch(cwd=None, env={**self.stranded,
+                                  "PATH": f"no/such/bin::.:{self.stranded['PATH']}"})
+
+    def test_a_child_with_no_path_at_all(self):
+        """No ``PATH`` in *env* means `os.defpath` for the child, not this process's."""
+        env = {k: v for k, v in self.stranded.items() if k != "PATH"}
+        self.touch(env=env)
+
+    def test_a_child_that_inherits_this_processs_environment(self):
+        self.touch()
+
+
+class WhatAnArgvCannotSay(_FakePlane):
+    """The guard's ceiling, stated where it costs something rather than left to be
+    discovered — the same shape as
+    `test_an_unlexable_string_that_names_charter_only_glued_to_a_word_is_the_price`.
+
+    An argv guard follows what the KERNEL follows to find a program: a path, the child's
+    ``PATH``, a symlink. It does not follow what the program does once it runs. A shim
+    named ``tmux`` whose body is ``exec charter "$@"`` resolves to itself, and the only way
+    to know it runs charter is to read the script and interpret it — a shell's job, and a
+    guessing game for a guard. #967's own repro is exactly that shim, and it is not refused.
+    `tests._planeguard._program_names` says so in its docstring; a change that reaches
+    further turns this case red and owes that paragraph an edit.
+    """
+
+    def test_a_script_shim_that_execs_charter_under_another_name_is_the_ceiling(self):
+        stranded = {k: v for k, v in os.environ.items() if k != root.ENV_VAR}
+        attach = ["tmux", "-L", "spawnguard-967", "attach", "-t", "s0"]
+
+        # Positive control: the same name as a LINK to the same charter is refused, so the
+        # guard is armed and reading this child's PATH. Without it an allowed spawn below
+        # would pass just as well against a guard that had been deleted.
+        links = self.elsewhere / "links"
+        links.mkdir()
+        os.symlink(self.fake, links / "tmux")
+        with self.assertRaises(_planeguard.RealPlaneSpawn):
+            subprocess.Popen(attach, cwd=self.real, stdin=subprocess.DEVNULL,
+                             env={**stranded, "PATH": f"{links}:{stranded['PATH']}"})
+        self.assertFalse(self.marker.exists())
+
+        shims = self.elsewhere / "shims"
+        shims.mkdir()
+        (shims / "tmux").write_text(f'#!/bin/sh\nexec {shlex.quote(str(self.fake))} "$@"\n')
+        (shims / "tmux").chmod(0o755)
+        p = subprocess.Popen(attach, cwd=self.real, stdin=subprocess.DEVNULL,
+                             env={**stranded, "PATH": f"{shims}:{stranded['PATH']}"})
+        self.assertEqual(p.wait(), 0)
+        self.assertTrue(self.marker.exists(),
+                        "the shim did not reach charter, so this pins nothing about it")
 
 
 class WhatDecidesAnUndecidableShellString(unittest.TestCase):

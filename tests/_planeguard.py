@@ -1122,25 +1122,6 @@ def _module_is_charter(name: str) -> bool:
     return any(low == p or low.startswith(p + ".") for p in _hooks._CHARTER_PROGS)
 
 
-def _reaches_an_interpreter(rest: list[str]) -> bool:
-    """Could this argv tail be an interpreter being handed something that reaches charter?
-
-    ``-c`` (Python source, or a shell command string), ``-m`` (a module) and a ``.py`` file
-    are the three, and they are the only reason the PROGRAM's identity is ever worth
-    resolving off the filesystem. Cheap, and asked first, so :func:`_program_names` does no
-    `realpath` and no ``PATH`` search for the `git`, `tmux` and `gh` children that make up
-    most of what this suite spawns.
-    """
-    for tok in rest:
-        if not tok.startswith("-"):
-            return tok.endswith(".py")
-        if tok.startswith("--"):
-            continue
-        if any(ch in "cm" for ch in tok[1:]):
-            return True
-    return False
-
-
 def _program_names(prog: str, cwd, env) -> list[str]:
     """Every basename *prog* could turn out to name, the word itself first.
 
@@ -1151,9 +1132,35 @@ def _program_names(prog: str, cwd, env) -> list[str]:
     (against the CHILD's cwd, since `Popen` chdirs before it execs), a bare name is looked
     up on the CHILD's ``PATH``, and symlinks are followed to what is really there.
 
+    **Asked of every argv, whatever follows the program** (#967). It used to be asked only
+    when the tail carried a ``-c``, a ``-m`` or a ``.py``, so that the `git` and `tmux`
+    children — most of what this suite spawns — would "pay nothing". They were already
+    paying: :func:`_reaches_a_credential_cli` resolves ``argv[0]`` through this function on
+    every spawn, once each for the vault, forge, git and tmux tripwires, without any gate.
+    What the gate did buy was a way through: ``["tmux", "-L", <sock>, "attach"]``,
+    with that ``tmux`` a link to charter first on the child's ``PATH``, was judged by the
+    word ``tmux``. Measured on 471 spawns across five spawn-heavy modules, median of three
+    runs: dropping the gate, and walking ``PATH`` the way `Popen` does below, moved the whole
+    guard from 517 to 583 microseconds a spawn — one more resolution on top of the four —
+    against a fork and exec of about 1,770.
+
+    **The ceiling: a link is followed, a script is not read.** A ``tmux`` that is a SHELL
+    SCRIPT whose body execs charter resolves to itself, and nothing in an argv says what the
+    script will run — knowing would mean interpreting it, which is a shell's job and not a
+    guard's. That shim is waved through, and
+    `test_a_script_shim_that_execs_charter_under_another_name_is_the_ceiling` pins it so a
+    change that reaches further updates this paragraph beside it. Nothing in `charter/` or
+    `tests/` spawns such a shim today; a test that writes one owes its child a throwaway
+    plane with nothing here to remind it.
+
     Best effort, and deliberately additive: the written name stays in the list, so a
     resolution that fails, points at nothing, or resolves somewhere surprising can only
-    ADD a way to recognise charter, never take one away.
+    ADD a way to recognise charter, never take one away. And it may never raise: it runs
+    inside every `Popen` the suite makes, so whatever the child's ``PATH`` holds — an
+    unreadable entry, a dangling link, a relative or empty entry, no ``PATH``, or no
+    ``env=`` or ``cwd=`` at all —
+    has to leave the written name standing rather than fail a spawn that has nothing to do
+    with charter. `AResolutionThatCannotFinishStillDecides` spawns each of those.
     """
     names = [os.path.basename(prog)]
     try:
@@ -1163,10 +1170,23 @@ def _program_names(prog: str, cwd, env) -> list[str]:
                 where = os.path.join(os.fsdecode(cwd), prog)
             names.append(os.path.basename(os.path.realpath(where)))
         else:
-            path = (env if env is not None else os.environ).get("PATH")
-            found = shutil.which(prog, path=path)
-            if found:
-                names.append(os.path.basename(os.path.realpath(found)))
+            # The lookup `Popen` itself does, not `shutil.which`'s. `Popen` joins every
+            # entry of `os.get_exec_path(env)` to the name HERE and tries each one after the
+            # chdir, so a relative entry — and an empty one, which is the current directory
+            # — names a directory under the CHILD's cwd. `shutil.which` read both from
+            # this process's cwd, which is the checkout: `cwd=<dir>, PATH="bin:…"` with
+            # `<dir>/bin/tmux` a link to charter ran while this answered "tmux" (#967).
+            # `get_exec_path` is also what a child with no ``PATH`` at all searches
+            # (`os.defpath`), where `shutil.which` fell back to this process's ``PATH``.
+            here = os.fsdecode(cwd) if cwd is not None else None
+            for entry in os.get_exec_path(env):
+                entry = os.fsdecode(entry) or os.curdir
+                if here is not None and not os.path.isabs(entry):
+                    entry = os.path.join(here, entry)
+                found = os.path.join(entry, prog)
+                if os.path.isfile(found) and os.access(found, os.X_OK):
+                    names.append(os.path.basename(os.path.realpath(found)))
+                    break
     except (AttributeError, OSError, TypeError, ValueError):
         pass
     return names
@@ -1505,8 +1525,7 @@ def _cmd_launches_charter(parts: list[str], depth: int = 0, cwd=None, env=None) 
     if not parts:
         return False
     rest = parts[1:]
-    names = _program_names(parts[0], cwd, env) if _reaches_an_interpreter(rest) else [
-        os.path.basename(parts[0])]
+    names = _program_names(parts[0], cwd, env)
     if any(_hooks._is_charter(name, parts) for name in names):
         return True
     if any(_is_python(name) for name in names) and _python_launches_charter(rest):
@@ -1790,6 +1809,11 @@ def _guard_spawns() -> None:
     `test_plane_spawn_guard.py` parses every module in `charter/` and `tests/` and fails on
     a call to one of them that is not the two known non-charter uses. The day a charter
     spawn is written that way, that case turns red and this docstring is what it points at.
+
+    Nor does it see through a SCRIPT. A program is followed as far as the kernel follows it
+    — a path, the child's ``PATH``, a symlink — and no further, so a ``tmux`` shim whose
+    body execs charter is waved through (#967). :func:`_program_names` states why, and
+    `WhatAnArgvCannotSay` in the same test module pins it.
     """
     global _SPAWN_GUARDED, _VAULT_CLIS, _FORGE_CLIS, _OPERATOR_TMUX
     if _SPAWN_GUARDED:
