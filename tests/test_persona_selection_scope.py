@@ -226,5 +226,159 @@ class TestCreateUseReportsItTheSameWay(SelectionScopeIso):
             commands_persona.cmd_persona_create(args)
         self.assertIn("this session only", buf.getvalue().lower())
 
+
+#: The chat, as the launcher names it, and what `$CHARTER_SESSION_ID` holds inside it.
+CHAT = "north.1"
+
+
+def _plant_chat(fid: str, *, ws: str = "north") -> None:
+    """Make *fid* a chat charter launched into *ws*, through the production writers.
+
+    `tests/test_a_chat_is_locked_to_the_workspace_it_was_launched_for._plant`'s shape, and
+    for its reason: a hand-written frame directory would measure the fixture, not the record
+    `workspace.launch_lock` reads to decide that this process is a chat.
+    """
+    from charter.frame import state
+    state.frame_dir(fid, create=True)
+    state.record_workspace(fid, ws)
+    state.record_identity(fid, {"CHARTER_HARNESS": "Claude Code",
+                                "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+
+
+def _terminal_pointers() -> list[str]:
+    return (sorted(p.name for p in config.TERMINALS_DIR.glob("*.persona"))
+            if config.TERMINALS_DIR.is_dir() else [])
+
+
+class TestUseInsideAChat(SelectionScopeIso):
+    """`charter persona use`, typed in a chat's shell or run by a sub-agent inside it (#953).
+
+    A chat speaks for no terminal, which `workspace use` settled for the same pointer one
+    noun over (#936) and `frame/switch.py` settled for this very pointer (#411). Every id
+    `session.terminal` could key on inside a frame names something other than this chat: a
+    tmux pane number the next server hands to an unrelated chat, or the `$TERM_SESSION_ID`
+    of the terminal that launched the frame, inherited by every pane on its server.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.persona_("ops")
+        _plant_chat(CHAT)
+
+    def _run(self, fn, **kw) -> tuple[int, str]:
+        import io
+        from contextlib import redirect_stderr
+        from types import SimpleNamespace
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = fn(SimpleNamespace(**kw))
+        return rc, buf.getvalue()
+
+    def _use(self, name: str) -> tuple[int, str]:
+        from charter import commands_persona
+        return self._run(commands_persona.cmd_persona_use, name=name)
+
+    def test_a_chat_on_a_pane_writes_no_pointer_the_next_server_s_pane_reads(self):
+        """Measured before: chat `north.1` on pane `%9` wrote `terminals/-9.persona` = `ops`,
+        and a chat on a later server that drew pane `%9` again resolved `ops` through the
+        terminal rung. tmux numbers panes per server, and charter's private server exits with
+        its last frame, so that second chat is ordinary."""
+        with self.env(CHARTER_SESSION_ID=CHAT, TMUX_PANE="%9"):
+            rc, err = self._use("ops")
+            here = persona.resolve_active()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(here, "ops", "the chat's own commands stopped following the choice")
+        self.assertEqual(_terminal_pointers(), [], "a chat wrote a terminal pointer")
+        _plant_chat("south.1", ws="south")
+        with self.env(CHARTER_SESSION_ID="south.1", TMUX_PANE="%9"):
+            self.assertIsNone(persona.resolve_active(),
+                              "a chat that never chose a persona resolved another chat's")
+
+    def test_the_sentence_says_the_choice_is_this_chat_s_alone(self):
+        """Measured before: "for this terminal (kept across closing/reopening Claude)", beside
+        a pointer no new chat reads. Writing no terminal pointer alone turned it into "this
+        terminal reports no pane id, so a new session starts with no persona", which is false
+        in a chat too: the pane has an id, and that is not why a new chat does not have the
+        choice. `workspace use` says the same thing about the same write (#936)."""
+        self.persona_("steward")
+        (config.ROOT / "charter.toml").write_text(
+            'schema = 1\n\n[persona]\ndefault = "steward"\n')
+        with self.env(CHARTER_SESSION_ID=CHAT, TMUX_PANE="%9"):
+            rc, err = self._use("ops")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active persona set to 'ops' for this chat only — a new chat does not "
+                      "inherit it.", err)
+        self.assertNotIn("kept across closing/reopening", err)
+        self.assertNotIn("reports no pane id", err)
+        # Not "a new chat starts as 'steward'": a chat opened with `--persona`, or by a
+        # handoff that names one, starts as that, so the plane's default is not a promise.
+        self.assertNotIn("steward", err)
+
+    #: What a harness inherits when `charter claude` is typed in Terminal.app or iTerm2 without
+    #: tmux: `commands_frame._frame_env` strips `TMUX` and `TMUX_PANE` and nothing else of this
+    #: kind, and `session.terminal` ranks this variable first.
+    LAUNCHER = "w0t0p0:0A1B2C3D-0953"
+
+    def test_a_chat_leaves_the_terminal_that_launched_it_alone(self):
+        """Measured before: with the launcher's `$TERM_SESSION_ID` inherited, `use ops` here
+        wrote `terminals/<launcher>.persona`, and both another chat on the same server and the
+        launching shell itself then resolved `ops`. That shell had chosen `forge` for itself."""
+        self.persona_("forge")
+        with self.env(TERM_SESSION_ID=self.LAUNCHER):
+            self.assertEqual(persona.set_active("forge"), "terminal",
+                             "the launcher's own pointer was not planted")
+        with self.env(CHARTER_SESSION_ID=CHAT, TERM_SESSION_ID=self.LAUNCHER, TMUX_PANE="%9"):
+            rc, err = self._use("ops")
+        self.assertEqual(rc, 0, err)
+        with self.env(TERM_SESSION_ID=self.LAUNCHER):
+            self.assertEqual(persona.resolve_active(), "forge",
+                             "a chat moved the choice of the terminal that launched it")
+        _plant_chat("south.1", ws="south")
+        with self.env(CHARTER_SESSION_ID="south.1", TERM_SESSION_ID=self.LAUNCHER,
+                      TMUX_PANE="%12"):
+            self.assertNotEqual(persona.resolve_active(), "ops",
+                                "another chat on the same server adopted this chat's choice")
+
+    def test_create_use_in_a_chat_selects_the_same_way(self):
+        """`create --use` goes through the same `set_active`, so it had the same leak and the
+        same sentence; two commands describing one act differently is how a reader learns to
+        distrust both."""
+        from charter import commands_persona
+        with self.env(CHARTER_SESSION_ID=CHAT, TMUX_PANE="%9"):
+            rc, err = self._run(commands_persona.cmd_persona_create,
+                                name="fresh", role="Fresh", vault=None, extends=None,
+                                with_vault=False, use=True, force=False,
+                                delegate_when="fresh work")
+            here = persona.resolve_active()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(here, "fresh")
+        self.assertEqual(_terminal_pointers(), [], "a chat wrote a terminal pointer")
+        self.assertIn("Active persona set to 'fresh' for this chat only — a new chat does not "
+                      "inherit it.", err)
+
+
+class TestUseOutsideAChatIsUnchanged(SelectionScopeIso):
+    """The other side of #953's line. A session id that names no chat is a harness in an
+    ordinary pane, and its pane pointer is the whole point of #255: it is what survives
+    closing and reopening Claude there. `test_a_pane_selection_says_it_survives_a_restart`
+    asserts only the word "terminal", which the no-pane-id sentence also contains, so a fix
+    that wrote no terminal pointer for anyone would have passed it."""
+
+    def test_a_session_in_an_ordinary_pane_still_writes_its_terminal_pointer(self):
+        import io
+        from contextlib import redirect_stderr
+        from types import SimpleNamespace
+        from charter import commands_persona
+        self.persona_("forge")
+        buf = io.StringIO()
+        with self.env(CHARTER_SESSION_ID="s1", TMUX_PANE="%7"), redirect_stderr(buf):
+            rc = commands_persona.cmd_persona_use(SimpleNamespace(name="forge"))
+        self.assertEqual(rc, 0, buf.getvalue())
+        self.assertEqual(_terminal_pointers(), ["-7.persona"])
+        self.assertIn("Active persona set to 'forge' for this terminal (kept across "
+                      "closing/reopening Claude).", buf.getvalue())
+        with self.env(CHARTER_SESSION_ID="s2", TMUX_PANE="%7"):
+            self.assertEqual(persona.resolve_active(), "forge")
+
 if __name__ == "__main__":
     unittest.main()

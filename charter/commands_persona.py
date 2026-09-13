@@ -137,7 +137,7 @@ def cmd_persona_create(args) -> int:
                   f"charter vault add {vault} --provider plain-file --persona {args.name}")
 
     if args.use:
-        scope = persona.set_active(args.name)
+        scope = persona.set_active(args.name, terminal_id=_terminal_for_selection())
         util.ok(f"Active persona set to '{args.name}'{_scope_note(scope)}.")
         _warn_env(args.name)
     return 0
@@ -270,9 +270,21 @@ def _scope_note(scope: str) -> str:
     disagrees with what they picked. Only a terminal pointer survives closing and
     reopening Claude; a session-scoped choice is gone with the session, and what the next
     session starts as is the plane's declared front door, which may be nothing at all.
+
+    **Inside a chat there is a fourth answer** (#953). `use` there writes the chat's session
+    pointer and no terminal pointer (:func:`_terminal_for_selection`), so "kept across
+    closing/reopening Claude" is false, and so is "this terminal reports no pane id": the
+    pane has one, and it is not why a new chat lacks the choice. What is true is that the
+    pointer is keyed on this chat's id, which no other chat resolves by. It does not name
+    what a new chat starts as: one opened with `--persona`, or by a handoff that names a
+    persona, starts as that, so the plane's default would be a guess.
+    `commands_workspace._scope_note` answers the same question for the same write.
     """
     if scope == "terminal":
         return " for this terminal (kept across closing/reopening Claude)"
+    from . import workspace
+    if scope == "session" and workspace.launch_lock():
+        return " for this chat only — a new chat does not inherit it"
     if scope == "session":
         nxt = persona.declared_default() or persona.default_persona()
         starts = f"starts as '{nxt}'" if nxt else "starts with no persona"
@@ -281,11 +293,27 @@ def _scope_note(scope: str) -> str:
     return " for this control plane (no session or pane id to scope it to)"
 
 
+def _terminal_for_selection() -> str | None:
+    """`commands_workspace._terminal_for_selection`, asked for the persona pointer (#953).
+
+    One answer for both nouns, and so one function: the question is whether this process is
+    a chat, and a chat speaks for no terminal whichever pointer it is choosing. Inside a
+    frame `session.terminal` keys on a tmux pane number, which the next server hands to an
+    unrelated chat, or on the launching terminal's `$TERM_SESSION_ID`, which every pane on
+    that server inherits. Measured: `persona use ops` in chat `north.1` on pane `%9` wrote
+    `terminals/-9.persona`, and a chat on a later server that drew `%9` again started as
+    `ops`. A leaked persona pointer reaches further than a workspace one, because
+    `persona._resolved` has no launch-record rung above the terminal to shield a new chat.
+    """
+    from .commands_workspace import _terminal_for_selection as for_a_chat
+    return for_a_chat()
+
+
 def cmd_persona_use(args) -> int:
     if not persona.load(args.name):
         util.err(f"no persona '{args.name}' (create it: charter persona create {args.name})")
         return 1
-    scope = persona.set_active(args.name)
+    scope = persona.set_active(args.name, terminal_id=_terminal_for_selection())
     util.ok(f"Active persona set to '{args.name}'{_scope_note(scope)}.")
     _warn_env(args.name)
     _say_tool_ceiling(args.name)

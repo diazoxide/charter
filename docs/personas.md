@@ -336,6 +336,17 @@ two personas and neither moves the other. Only the terminal pointer survives clo
 reopening Claude, and only when your terminal reports a pane id — `use` says which of the
 two it got, because the difference is one you act on.
 
+**Inside a chat in a charter frame, `use` writes the session pointer only**, and says so:
+`Active persona set to 'ops' for this chat only — a new chat does not inherit it.` The
+session pointer is keyed on the chat's id, so every `charter` command run in the chat, by
+you or by an agent it spawns, resolves that persona. A terminal pointer would be keyed on
+something that is not the chat: a tmux pane number, which the next frame's server hands to
+an unrelated chat, or the `$TERM_SESSION_ID` of the terminal the frame was launched from,
+which every chat on that server inherits. Either way it would be read by a chat, or a
+shell, that never chose the persona. `charter persona create --use` selects the same way.
+`charter workspace use` makes the same choice for the same reason (#936, #953); see
+`docs/workspaces.md` → *Inside a chat*.
+
 A shell with neither a session id nor a pane id (a bare script, say) has nothing to key a
 pointer on. There `use` writes `.charter/active-persona`, the plane-wide local file, which
 is what that file is now for.
@@ -433,7 +444,7 @@ before adding more personas.
 ```
 charter persona list                       # who exists, who's active, vault status
 charter persona show devops                # effective (inheritance-merged) charter
-charter persona use devops                 # active persona for this session + this pane
+charter persona use devops                 # active persona for this session + this pane (in a chat: this chat)
 charter persona default devops             # the plane's front door (charter.toml)
 charter persona secret set API_TOKEN --stdin   # store a credential (never on argv)
 charter persona secret exec --env TOKEN=API_TOKEN -- some-cli   # use it without ever seeing it
