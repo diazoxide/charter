@@ -1236,6 +1236,49 @@ def blank_flag(value: str | None) -> str | None:
     return None
 
 
+#: What `persona use` and the memory commands say to a valid name that defines nothing here.
+#: One spelling, formatted by each of them, so the command that binds a vault to a persona
+#: cannot come to describe the same absence in different words (#1057).
+NO_SUCH_PERSONA = "no persona '{name}' (create it: charter persona create {name})"
+
+#: What `persona create` says to a name outside the alphabet. No create hint, because this
+#: is the refusal that hint would lead to.
+INVALID_NAME = "invalid persona name '{name}' (lowercase letters, digits, '.', '_', '-')"
+
+
+def undefined_flag(value: str | None) -> str | None:
+    """The refusal for a ``--persona`` that names no persona this plane defines, or ``None``
+    when it names one or is not given (#1057).
+
+    For a flag whose value is *recorded* rather than resolved on the spot. `vault add
+    --persona` stored whatever it was given as the vault's owner, and `" "`, `../x` and a
+    misspelling each reported success. Nothing reads the label as a path, so none of them
+    escaped anything. The label is the binding: `vault_of` falls back to the vault tagged
+    with a persona's name, so a vault tagged `devosp` is found for no persona this plane
+    defines, and `devops` goes on asking for a vault it does not have. The typo surfaced as a
+    failed secret read later, in whichever session tried it.
+
+    Three sentences for three fixes, each one a command already says. Whitespace is
+    :func:`blank_flag`'s; a name outside the alphabet is `persona create`'s, and gets no
+    create hint, because `persona create` would refuse it; a valid name is `persona use`'s,
+    hint included. Existence is :func:`load`'s answer, as it is for `persona use`, so a
+    persona that command would refuse is refused here too.
+
+    Empty is no flag, as it is for :func:`blank_flag`.
+    """
+    if not value:
+        return None
+    refused = blank_flag(value)
+    if refused:
+        return refused
+    # Before `load`, which answers None for this too and would reach the create hint.
+    if not valid_name(value):
+        return INVALID_NAME.format(name=contain.one_line(value))
+    if load(value) is None:
+        return NO_SUCH_PERSONA.format(name=value)
+    return None
+
+
 def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
     """``(persona, where it came from)`` — the whole precedence, decided ONCE.
 

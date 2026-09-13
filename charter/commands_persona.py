@@ -65,7 +65,7 @@ _TEMPLATE_DELEGATE = """
 # --------------------------------------------------------------------------- #
 def cmd_persona_create(args) -> int:
     if not persona.valid_name(args.name):
-        util.err(f"invalid persona name '{args.name}' (lowercase letters, digits, '.', '_', '-')")
+        util.err(persona.INVALID_NAME.format(name=args.name))
         return 1
     p = persona.path(args.name)
     if p.exists() and not args.force:
@@ -345,7 +345,7 @@ def _terminal_for_selection() -> str | None:
 
 def cmd_persona_use(args) -> int:
     if not persona.load(args.name):
-        util.err(f"no persona '{args.name}' (create it: charter persona create {args.name})")
+        util.err(persona.NO_SUCH_PERSONA.format(name=args.name))
         return 1
     scope = persona.set_active(args.name, terminal_id=_terminal_for_selection())
     util.ok(f"Active persona set to '{args.name}'{_scope_note(scope)}.")
@@ -1137,7 +1137,7 @@ def _remove_agent(name: str) -> bool:
 # --------------------------------------------------------------------------- #
 def _require(name: str) -> bool:
     if not persona.load(name):
-        util.err(f"no persona '{name}' (create it: charter persona create {name})")
+        util.err(persona.NO_SUCH_PERSONA.format(name=name))
         return False
     return True
 

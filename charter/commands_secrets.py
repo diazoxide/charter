@@ -24,7 +24,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import config, tui, util
+from . import config, contain, persona, tui, util
 from .secrets import base, fingerprint, registry
 
 
@@ -128,6 +128,14 @@ def _unignored_plaintext(configured: str):
 
 
 def cmd_vault_add(args) -> int:
+    # First, before a registry half or a git check is touched, and ahead of `--force`: the
+    # persona is only a label, so an unknown one registered cleanly and tagged the vault for
+    # no persona this plane defines, which showed up much later as a secret read that failed
+    # (#1057). `--force` replaces a registration and is no reason to strand one.
+    refused = persona.undefined_flag(getattr(args, "persona", None))
+    if refused:
+        util.err(refused)
+        return 1
     cfg: dict = {}
     if args.provider == "plain-file":
         cfg["file"] = _portable_file(args.file or config.VAULTS_DIR / f"{args.name}.json")
@@ -313,6 +321,31 @@ def cmd_vault_verify(args) -> int:
     return 0
 
 
+def _persona_cell(label) -> str:
+    """The PERSONA cell: the label as the registry holds it, marked when it names no persona
+    this plane defines (#1057).
+
+    `persona.vault_of` finds a vault by the persona name it is tagged with, so a tag no
+    defined persona carries is found for none of them, and without the mark its row read
+    exactly like a live binding. Such a row still turns up now that `vault add` refuses it:
+    a registration from before that, a hand-edited or merged `vaults.json`, or a persona
+    removed after its vault was bound. Marked rather than failed, because this is the command
+    an operator runs to find it.
+
+    The label goes through `contain.one_line` because it comes out of a file. `tui.pad`
+    would keep a line separator from breaking the row by drawing it as a space, and the cell
+    would then name a persona the registry does not hold. Reading the definition costs one
+    local file per bound row, which is not the per-vault `health()` the column widths below
+    are careful not to wait on.
+    """
+    if not label:
+        return "—"
+    shown = contain.one_line(label)
+    if persona.load(label) is None:
+        return f"{shown} (no such persona)"
+    return shown
+
+
 def cmd_vault_list(args) -> int:
     doc = registry.load_registry()
     vs = registry.vaults(doc)
@@ -339,7 +372,7 @@ def cmd_vault_list(args) -> int:
     # drawing one makes the operator wait for every vault before the header appears. STATUS
     # has nothing to its right, so it needs no width anyway.
     heads = ("VAULT", "PROVIDER", "PERSONA", "SCOPE")
-    body = [(name, vs[name].get("provider", "?"), vs[name].get("persona") or "—",
+    body = [(name, vs[name].get("provider", "?"), _persona_cell(vs[name].get("persona")),
              registry.scope_of(name)) for name in sorted(vs)]
     widths = [tui.column(h, [row[i] for row in body], gap=_GAP)
               for i, h in enumerate(heads)]
