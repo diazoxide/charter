@@ -1140,8 +1140,9 @@ def _program_names(prog: str, cwd, env) -> list[str]:
     What the gate did buy was a way through: ``["tmux", "-L", <sock>, "attach"]``,
     with that ``tmux`` a link to charter first on the child's ``PATH``, was judged by the
     word ``tmux``. Measured on 471 spawns across five spawn-heavy modules, median of three
-    runs: dropping the gate moved the whole guard from 517 to 553 microseconds a spawn, one
-    more resolution on top of the four, against a fork and exec of about 1,760.
+    runs: dropping the gate, and walking ``PATH`` the way `Popen` does below, moved the whole
+    guard from 517 to 583 microseconds a spawn — one more resolution on top of the four —
+    against a fork and exec of about 1,770.
 
     **The ceiling: a link is followed, a script is not read.** A ``tmux`` that is a SHELL
     SCRIPT whose body execs charter resolves to itself, and nothing in an argv says what the
@@ -1156,7 +1157,8 @@ def _program_names(prog: str, cwd, env) -> list[str]:
     resolution that fails, points at nothing, or resolves somewhere surprising can only
     ADD a way to recognise charter, never take one away. And it may never raise: it runs
     inside every `Popen` the suite makes, so whatever the child's ``PATH`` holds — an
-    unreadable entry, a dangling link, a relative or empty entry, or no ``env=`` at all —
+    unreadable entry, a dangling link, a relative or empty entry, no ``PATH``, or no
+    ``env=`` or ``cwd=`` at all —
     has to leave the written name standing rather than fail a spawn that has nothing to do
     with charter. `AResolutionThatCannotFinishStillDecides` spawns each of those.
     """
@@ -1168,10 +1170,23 @@ def _program_names(prog: str, cwd, env) -> list[str]:
                 where = os.path.join(os.fsdecode(cwd), prog)
             names.append(os.path.basename(os.path.realpath(where)))
         else:
-            path = (env if env is not None else os.environ).get("PATH")
-            found = shutil.which(prog, path=path)
-            if found:
-                names.append(os.path.basename(os.path.realpath(found)))
+            # The lookup `Popen` itself does, not `shutil.which`'s. `Popen` joins every
+            # entry of `os.get_exec_path(env)` to the name HERE and tries each one after the
+            # chdir, so a relative entry — and an empty one, which is the current directory
+            # — names a directory under the CHILD's cwd. `shutil.which` read both from
+            # this process's cwd, which is the checkout: `cwd=<dir>, PATH="bin:…"` with
+            # `<dir>/bin/tmux` a link to charter ran while this answered "tmux" (#967).
+            # `get_exec_path` is also what a child with no ``PATH`` at all searches
+            # (`os.defpath`), where `shutil.which` fell back to this process's ``PATH``.
+            here = os.fsdecode(cwd) if cwd is not None else None
+            for entry in os.get_exec_path(env):
+                entry = os.fsdecode(entry) or os.curdir
+                if here is not None and not os.path.isabs(entry):
+                    entry = os.path.join(here, entry)
+                found = os.path.join(entry, prog)
+                if os.path.isfile(found) and os.access(found, os.X_OK):
+                    names.append(os.path.basename(os.path.realpath(found)))
+                    break
     except (AttributeError, OSError, TypeError, ValueError):
         pass
     return names

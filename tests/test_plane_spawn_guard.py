@@ -525,6 +525,30 @@ class EverySpellingThatReachesCharter(_FakePlane):
         self.refuse(["tmux", *attach])
         self.refuse([str(bindir / "tmux"), *attach])
 
+    def test_a_relative_path_entry_is_looked_up_from_the_childs_cwd(self):
+        """``cwd=<plane>, PATH="bin:…"`` with ``<plane>/bin/tmux`` a link to charter: the
+        child ran the link while the guard said "not charter" (#967, found fixing it).
+
+        `Popen` joins each ``PATH`` entry to the name in the parent and tries them AFTER the
+        chdir, so a relative entry — and an empty one, which means the current directory —
+        is the CHILD's directory. `shutil.which` read both against this process's cwd, which
+        is the checkout, and found nothing there. Asked of the plain argv and of the ``-c``
+        shape, which resolved the same wrong way before the gate came out.
+        """
+        (self.real / "bin").mkdir()
+        os.symlink(self.fake, self.real / "bin" / "tmux")
+        os.symlink(self.fake, self.real / "tmux")
+        path = self.stranded.get("PATH", "")
+        # Both FIRST on the PATH: a relative entry after the real one would lose to a real
+        # `tmux` for the child too, and then refusing it would be the guard that is wrong.
+        for entries in (f"bin:{path}", f":{path}"):
+            self.stranded["PATH"] = entries
+            # A socket of its own in both, or `RealTmuxReach` answers first — correctly.
+            for argv in (["tmux", "-L", "spawnguard-967", "attach"],
+                         ["tmux", "-L", "spawnguard-967", "-c", "x"]):
+                with self.subTest(PATH=entries.replace(path, "…"), argv=argv):
+                    self.refuse(argv)
+
     def test_an_interpreter_under_another_name_is_asked_about_a_script_without_py(self):
         """The same gap one step in: a ``git`` that is really ``python3``, handed a script
         whose name carries no ``.py``. No ``-c``, no ``-m``, no suffix — so the old gate
@@ -728,8 +752,8 @@ class AResolutionThatCannotFinishStillDecides(_FakePlane):
         self.stranded = {k: v for k, v in os.environ.items() if k != root.ENV_VAR}
 
     def touch(self, **kw):
-        p = subprocess.Popen(["touch", str(self.ran)], cwd=self.real,
-                             stdin=subprocess.DEVNULL, **kw)
+        kw.setdefault("cwd", self.real)
+        p = subprocess.Popen(["touch", str(self.ran)], stdin=subprocess.DEVNULL, **kw)
         self.assertEqual(p.wait(), 0)
         self.assertTrue(self.ran.exists(), "the child did not run")
 
@@ -749,6 +773,17 @@ class AResolutionThatCannotFinishStillDecides(_FakePlane):
     def test_relative_and_empty_path_entries(self):
         self.touch(env={**self.stranded,
                         "PATH": f"no/such/bin::.:{self.stranded['PATH']}"})
+
+    def test_relative_entries_for_a_child_with_no_cwd_of_its_own(self):
+        """Without ``cwd=`` the child starts where this process is, so that is what the
+        entries are read against — the one case with no child directory to join them to."""
+        self.touch(cwd=None, env={**self.stranded,
+                                  "PATH": f"no/such/bin::.:{self.stranded['PATH']}"})
+
+    def test_a_child_with_no_path_at_all(self):
+        """No ``PATH`` in *env* means `os.defpath` for the child, not this process's."""
+        env = {k: v for k, v in self.stranded.items() if k != "PATH"}
+        self.touch(env=env)
 
     def test_a_child_that_inherits_this_processs_environment(self):
         self.touch()
