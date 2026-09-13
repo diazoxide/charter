@@ -309,6 +309,20 @@ charter persona secret set API_TOKEN --stdin        # resolves the active person
 charter persona secret exec --env TOKEN=API_TOKEN -- some-cli
 ```
 
+`--persona` has to name a persona this plane defines. A vault tagged with any other name is
+found for no persona, so `vault add` refuses it before writing either registry half, with or
+without `--force` and `--share`, and says what `persona use` and `persona create` would:
+
+```
+✗ no persona 'devosp' (create it: charter persona create devosp)
+✗ invalid persona name '../x' (lowercase letters, digits, '.', '_', '-')
+✗ no persona ' ' (a persona name is never only whitespace)
+```
+
+A registration bound before this check existed, or whose persona was removed later, still
+lists. `charter vault list` marks its persona as `ghost (no such persona)` and exits 0
+([#1057](https://github.com/diazoxide/charter/issues/1057)).
+
 ### Binding the identity a vault is read through
 
 `op` authenticates from a single global `OP_SERVICE_ACCOUNT_TOKEN`, but least-privilege

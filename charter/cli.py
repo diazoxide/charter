@@ -1441,7 +1441,8 @@ def _add_vault_parser(sub) -> None:
                           "an item you already curate to adopt it as-is.")
     add.add_argument("--account", help="1Password account to pin to (provider: 1password); "
                                        "needed when signed into more than one.")
-    add.add_argument("--persona", help="Tag this vault for a persona (e.g. devops, qa).")
+    add.add_argument("--persona", help="Tag this vault for a persona (e.g. devops, qa). It "
+                                       "must be one this plane defines.")
     add.add_argument("--env", action="append", metavar="TARGET=SOURCE", default=[],
                      help="Bind the identity this vault is read through: TARGET is the "
                           "variable the CLI reads, SOURCE the one this machine carries it "
