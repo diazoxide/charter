@@ -128,6 +128,110 @@ class Codex(unittest.TestCase):
         self.assertFalse(hasattr(codex, "_WIRING"))
 
 
+def _tree(top: Path) -> dict[str, bytes | None]:
+    """Every path under *top* with its bytes (``None`` for a directory) — what "wrote
+    nothing" is measured against, so a created directory counts as a write too."""
+    return {str(p.relative_to(top)): (None if p.is_dir() else p.read_bytes())
+            for p in sorted(top.rglob("*"))}
+
+
+def _config_dirs(tmp: str) -> dict[str, str]:
+    """Every harness's config dir pointed at *tmp*, by the variable each one reads, so no
+    call here can reach the operator's real `~/.config/opencode`, `~/.claude` or `~/.codex`."""
+    return {"XDG_CONFIG_HOME": tmp, "CLAUDE_CONFIG_DIR": tmp, "CODEX_HOME": tmp}
+
+
+def _older_stamp(g: Path) -> None:
+    p = g / opencode.SHIM_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("// charter-version: 0.0.1\nold body\n")
+
+
+def _foreign_beside_older_stamp(g: Path) -> None:
+    _older_stamp(g)
+    (g / opencode.PLUGIN_DIR / "aaa_boot.ts").write_text("Object.hasOwn = () => false\n")
+
+
+def _not_ours(g: Path) -> None:
+    p = g / opencode.SHIM_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("mine, hands off\n")
+
+
+def _edited(g: Path) -> None:
+    p = g / opencode.SHIM_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"// charter-version: {__version__}\nnot what charter generates\n")
+
+
+#: Each state opencode's shim can be found in, named by what the real call answers there.
+#: The older stamp is the one that matters most: the real call replaces it before asking
+#: whether charter can vouch for the realm, so a dry run that asked of the file as found
+#: would call the plane `manual` where the real call says `moved`.
+SHIM_STATES = {
+    "absent (moved)": lambda g: None,
+    "an older stamp (moved)": _older_stamp,
+    "charter's own (current)": opencode.ensure_shim,
+    "no stamp (manual)": _not_ours,
+    "this version's stamp over another body (manual)": _edited,
+    "an older stamp beside a foreign plugin (manual)": _foreign_beside_older_stamp,
+}
+
+
+class ADryRunIsTheSameAnswerWithoutTheMove(unittest.TestCase):
+    """`upgrade(root, dry_run=True)` is how `doctor` asks (#1039).
+
+    `doctor.check_version_lock` called the writer to get a sentence, so under opencode a
+    diagnosis rewrote the GLOBAL plugin every project on the machine loads. The dry run is
+    `apply_ask_rule`'s shape: the same function and the same judgement, minus the write.
+    Paired with the real call in every state, so the question `doctor` asks and the move
+    `version sync` makes cannot come to disagree about what the plane needs.
+    """
+
+    def test_every_harness_answers_the_real_call_s_status_and_sentence_and_writes_nothing(self):
+        for h in harness.all():
+            for state, arrange in SHIM_STATES.items():
+                with self.subTest(harness=h.name, shim=state), \
+                     tempfile.TemporaryDirectory() as tmp, \
+                     mock.patch.dict(os.environ, _config_dirs(tmp), clear=True):
+                    arrange(opencode.global_dir())
+                    before = _tree(Path(tmp))
+                    would = h.upgrade(Path(tmp), dry_run=True)
+                    self.assertEqual(_tree(Path(tmp)), before,
+                                     f"{h.name}'s dry run wrote under its config dir")
+                    self.assertEqual(would, h.upgrade(Path(tmp)))
+
+    def test_the_shim_writer_s_dry_run_answers_its_real_word_and_writes_nothing(self):
+        """`refresh_shim`'s own contract under the same flag, one layer down: `upgrade` tells
+        only `current` apart from the rest, so a dry-run word that drifted from the real one
+        would change no status there and still mislead the next caller that reads it."""
+        for state, arrange in SHIM_STATES.items():
+            with self.subTest(shim=state), tempfile.TemporaryDirectory() as tmp:
+                g = Path(tmp) / "opencode"
+                arrange(g)
+                before = _tree(Path(tmp))
+                would = opencode.refresh_shim(g, dry_run=True)
+                self.assertEqual(_tree(Path(tmp)), before, "the dry run wrote")
+                self.assertEqual(would, opencode.refresh_shim(g))
+
+    def test_a_missing_shim_is_not_described_as_a_file_charter_will_not_overwrite(self):
+        """`unvouched` answers ``()`` when there is no shim, and `wiring.detect` is written
+        against that. A sentence saying a file that is not there "carries no charter stamp"
+        would send somebody to move aside nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(opencode.unvouched(Path(tmp) / "opencode"), ())
+
+    def test_the_real_call_still_moves_opencode_s_shim(self):
+        """The other side of the flag: `version sync` and `update` move the plane, and a
+        dry run that leaked into them would leave every opencode shim where it was."""
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.dict(os.environ, _config_dirs(tmp), clear=True):
+            g = opencode.global_dir()
+            _older_stamp(g)
+            self.assertEqual(harness.get(harness.OPENCODE).upgrade(Path(tmp))[0], "moved")
+            self.assertTrue(opencode.shim_is_charters(g))
+
+
 class VersionSyncRoutesThroughTheHarness(unittest.TestCase):
     """The defect this member was extracted to remove.
 
@@ -191,6 +295,42 @@ class DoctorNamesTheRightHarnessToo(PersonaIso):
         with tempfile.TemporaryDirectory() as tmp:
             hint = self._hint({"CHARTER_HARNESS": "opencode", "XDG_CONFIG_HOME": tmp})
         self.assertIn("machine-global", hint)
+
+    def test_the_hint_carries_the_answer_of_the_harness_it_is_in(self):
+        """Asking without moving must still ask. Each harness's own way to move THIS plane,
+        from a known literal rather than from the harness under test, so a row that stopped
+        consulting the harness and printed only the shared-install note fails here."""
+        expected = {
+            "claude-code": f"To move THIS plane only: {update.PLUGIN_SYNC_CMD}",
+            "codex": "To move THIS plane only: codex plugin marketplace upgrade charter && "
+                     "codex plugin add charter@charter",
+            "opencode": "carries no charter stamp, so charter will not overwrite it",
+        }
+        for name, sentence in expected.items():
+            with self.subTest(harness=name), tempfile.TemporaryDirectory() as tmp:
+                env = {"CHARTER_HARNESS": name, **_config_dirs(tmp)}
+                with mock.patch.dict(os.environ, env, clear=True):
+                    _not_ours(opencode.global_dir())
+                self.assertIn(sentence, self._hint(env))
+
+    def test_the_row_writes_nothing_under_any_harness_s_config_dir(self):
+        """#1039: the row asked opencode how this plane moves by MOVING it — `upgrade`
+        rewrote the global shim, from a check the SessionStart hook and agents run
+        routinely. A check that writes changes the state it reports. Each shim state the
+        real call would write in, under every harness, so a harness that grows a writer
+        later is held to this the day it is registered."""
+        for h in harness.all():
+            for state in ("absent (moved)", "an older stamp (moved)"):
+                with self.subTest(harness=h.name, shim=state), \
+                     tempfile.TemporaryDirectory() as tmp:
+                    env = {"CHARTER_HARNESS": h.name, **_config_dirs(tmp)}
+                    with mock.patch.dict(os.environ, env, clear=True):
+                        SHIM_STATES[state](opencode.global_dir())
+                    before = _tree(Path(tmp))
+                    self._hint(env)
+                    self.assertEqual(_tree(Path(tmp)), before,
+                                     f"doctor's version lock row wrote under {h.name}'s "
+                                     f"config dir")
 
 
 if __name__ == "__main__":

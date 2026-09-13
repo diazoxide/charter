@@ -534,7 +534,7 @@ def foreign_plugins(tree: Path) -> tuple[str, ...]:
     return tuple(out)
 
 
-def unvouched(tree: Path) -> tuple[str, ...]:
+def unvouched(tree: Path, *, replaced: bool = False) -> tuple[str, ...]:
     """Every reason charter cannot vouch for the plugin realm under *tree*, each a
     sentence naming what to DO about it. Empty when charter can vouch for all of it.
 
@@ -552,11 +552,20 @@ def unvouched(tree: Path) -> tuple[str, ...]:
     already replaced the file by the time this is asked. `doctor` does not write, so for
     `doctor` it is live — and it is the state where "→ charter reinit" was true all along,
     which is what made the invented hint plausible everywhere else.
+
+    ``replaced=True`` says :func:`refresh_shim` replaced an older stamp, or would have in a
+    dry run, so the file is not asked about: a writer finds charter's own bytes there and a
+    dry run must answer what the writer finds. Without it, `upgrade`'s dry run read the older
+    stamp the real call replaces and called a plane `manual` that `version sync` moves
+    (#1039). Not for a shim `refresh_shim` would CREATE: a missing file is already no
+    sentence here (`p.is_file()`), and `wiring.detect` relies on that ``()``, so a second
+    spelling of the same case would only hide either one's deletion from the sweep. The
+    realm is asked about either way, since no write changes it.
     """
     g = Path(tree)
     out: list[str] = []
     p = g / SHIM_PATH
-    if p.is_file() and not shim_is_charters(g):
+    if not replaced and p.is_file() and not shim_is_charters(g):
         stamped = shim_version(g)
         if stamped == __version__:
             out.append(f"{p} is stamped {__version__} but is not what charter generates, "
@@ -576,12 +585,18 @@ def unvouched(tree: Path) -> tuple[str, ...]:
     return tuple(out)
 
 
-def refresh_shim(tree: Path) -> str:
+def refresh_shim(tree: Path, *, dry_run: bool = False) -> str:
     """Regenerate the shim in *tree* when charter can still recognise it as its own.
 
     ``"created"`` (absent), ``"refreshed"`` (an older charter's, replaced), ``"not-ours"``
     (no stamp — left untouched), ``"edited"`` (this version's stamp over a body charter
     did not write — left untouched), ``"current"`` (byte-for-byte what charter generates).
+
+    ``dry_run=True`` returns the same word and writes nothing — "created" and "refreshed"
+    then mean *would be*. The flag skips the two writes and nothing else, rather than a
+    second function answering "would this write", because `doctor` asks through it and a
+    question that is its own implementation drifts from the move `version sync` makes
+    (#1039).
 
     ``"current"`` is decided by :func:`shim_is_charters` and not by the stamp, because the
     stamp is a name and this answer is charter vouching for a file. `ensure_shim` may
@@ -595,7 +610,7 @@ def refresh_shim(tree: Path) -> str:
     """
     p = Path(tree) / SHIM_PATH
     if not p.exists():
-        return ensure_shim(tree) and "created"
+        return "created" if dry_run else (ensure_shim(tree) and "created")
     if shim_is_charters(tree):
         return "current"
     stamped = shim_version(tree)
@@ -603,7 +618,8 @@ def refresh_shim(tree: Path) -> str:
         return "not-ours"
     if stamped == __version__:
         return "edited"
-    p.write_bytes(SHIM_BYTES)
+    if not dry_run:
+        p.write_bytes(SHIM_BYTES)
     return "refreshed"
 
 
@@ -881,7 +897,7 @@ class OpenCodeHarness(Harness):
         """
         return False
 
-    def upgrade(self, root: Path) -> tuple[str, str]:
+    def upgrade(self, root: Path, *, dry_run: bool = False) -> tuple[str, str]:
         """The one harness charter can move itself — via the writer that already exists.
 
         `refresh_shim` is `wire`'s writer, and it already encodes the only judgement that
@@ -901,10 +917,15 @@ class OpenCodeHarness(Harness):
         A realm charter cannot vouch for is ``manual`` too, and it is the case that makes
         "current" a dangerous answer rather than a stale one: the shim can be on this
         version, byte-for-byte, and still be neutered by whatever loaded beside it.
+
+        ``dry_run=True`` is how `doctor` asks (#1039). It called this to word its version
+        lock row and so rewrote the GLOBAL shim, which every project on the machine loads,
+        from a check the SessionStart hook runs. The flag goes to the writer rather than
+        around it, so the answer is the one `version sync` would get, sentence for sentence.
         """
         g = global_dir()
-        got = refresh_shim(g)
-        blocked = unvouched(g)
+        got = refresh_shim(g, dry_run=dry_run)
+        blocked = unvouched(g, replaced=got == "refreshed")
         if blocked:
             return "manual", "; ".join(blocked)
         if got == "current":

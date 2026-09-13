@@ -121,6 +121,9 @@ ceiling, which is why it is written here and not in the table.
 You never have to remember that third column — `charter update` asks the harness you are in
 and names its command (or, for opencode, just moves it). It is written down because a
 column charter fills in from one place is a column that cannot quietly go stale in three.
+`charter doctor` asks the same question for its `version lock` hint and moves nothing, not
+even opencode's plugin: it gets the answer `charter update` would, from the same code with the
+write skipped. Before #1039 a `doctor` under opencode regenerated that global plugin.
 
 One artifact per harness, installed once — nothing is written into the repos you work in.
 `charter doctor` and `charter harness list` print that last column against whichever
