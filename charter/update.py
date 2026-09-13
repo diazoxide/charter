@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -120,17 +121,84 @@ def load() -> dict:
         return {}
 
 
-def _parse(v: str) -> tuple:
-    """Compare versions numerically per component: 0.10.0 is newer than 0.2.0.
+#: A version as PEP 440 spells it, from the regular expression in the PEP's Appendix B, and
+#: nothing wider. Stdlib, because charter has no runtime dependencies (CONTRIBUTING), so
+#: `packaging` is not there to ask.
+#:
+#: **``re.ASCII``, and a strip of only the six characters PEP 440 names.** Without the flag,
+#: ``re.IGNORECASE`` folds Unicode: the KELVIN SIGN is a ``k`` in a local label and a DOTLESS
+#: I (U+0131) completes ``preview``. `str.strip()` would also take a trailing U+2028 LINE
+#: SEPARATOR off. Each would make a version out of a string no installer accepts as one.
+#:
+#: The local label is matched and then never read. See :func:`version_key` for why.
+_PEP_440 = re.compile(r"""
+    v?
+    (?:(?P<epoch>[0-9]+)!)?
+    (?P<release>[0-9]+(?:\.[0-9]+)*)
+    (?:[-_.]?(?P<pre_l>alpha|a|beta|b|preview|pre|c|rc)[-_.]?(?P<pre_n>[0-9]+)?)?
+    (?:-(?P<post_n1>[0-9]+)|[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>[0-9]+)?)?
+    (?:[-_.]?(?P<dev_l>dev)[-_.]?(?P<dev_n>[0-9]+)?)?
+    (?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?
+""", re.VERBOSE | re.IGNORECASE | re.ASCII)
 
-    Anything non-numeric (a dev/rc suffix) sorts low rather than raising — an
-    unparseable version must never make the indicator claim an update.
+#: PEP 440's spellings of the three pre-release phases, in the order the phases come.
+_PRE_PHASE = {"a": 0, "alpha": 0, "b": 1, "beta": 1, "c": 2, "pre": 2, "preview": 2, "rc": 2}
+
+#: What every string that is not a version keys as. Below every version, because an empty
+#: tuple sorts before every tuple with something in it, and equal to every other
+#: non-version, so no caller finds a direction between two strings that have none.
+_NOT_A_VERSION = ()
+
+
+def version_key(v: str | None) -> tuple:
+    """The key that orders charter versions, as PEP 440 orders them. Every comparison of two
+    charter versions goes through this one function, so they cannot disagree.
+
+    It replaced `_parse`, which kept the digits of each dot-separated part and dropped the
+    rest. ``0.60.0rc1`` became ``(0, 60, 1)``, so a release candidate compared newer than
+    its release, and so did ``a``, ``b`` and ``.dev`` (#1050). Nothing had published a
+    pre-release, so no comparison had yet met one. When one did, `charter update`, `version
+    bump`, the status line's arrow and SessionStart's pin would all have got it backwards.
+
+    Numbers compare as numbers (0.10.0 is newer than 0.2.0), and trailing zeros do not
+    count (``0.60`` is ``0.60.0``). Around a release, PEP 440's order:
+    ``X.devN < XaN.devN < XaN < XbN < XrcN < X < X.postN.devN < X.postN``.
+
+    **A local label (``+dev``, ``+local``) does not move a version**, which is not PEP 440's
+    order. `channel.build_label` appends one to the SAME wheel's number to say where the
+    build came from, not that it is a later release, and `_parse` read ``0.61.0+dev`` as
+    ``0.61.0``. No caller is handed a label today, because ``__version__`` carries none; the
+    day one is, it gets the answer it always had.
+
+    **Anything that is not a version sorts below every version and ties with every other
+    one**, ``None`` included. `_parse` promised that too ("an unparseable version must never
+    make the indicator claim an update") and kept it only for strings with no digits in
+    them: ``build7`` read as ``(7,)``. Below, so that a cache or a pin holding junk never
+    reads as newer, and every caller refuses in the direction it already did.
     """
-    out = []
-    for part in (v or "").split("."):
-        digits = "".join(c for c in part if c.isdigit())
-        out.append(int(digits) if digits else -1)
-    return tuple(out)
+    m = _PEP_440.fullmatch((v or "").strip(" \t\n\r\f\v"))
+    if m is None:
+        return _NOT_A_VERSION
+    release = [int(n) for n in m["release"].split(".")]
+    while release and release[-1] == 0:
+        release.pop()
+    if m["post_n1"] is not None:
+        post = int(m["post_n1"])       # ``1.0-1``, PEP 440's implicit post-release
+    elif m["post_l"]:
+        post = int(m["post_n2"] or 0)
+    else:
+        post = None
+    if m["pre_l"]:
+        pre = (_PRE_PHASE[m["pre_l"].lower()], int(m["pre_n"] or 0))
+    elif post is None and m["dev_l"]:
+        pre = (-1,)    # ``X.devN`` comes before ``X``'s first alpha, not after its rc
+    else:
+        pre = (3,)     # a release, or its post-release, comes after every one of its phases
+    # Absent sorts below any number for a post-release and above any number for a
+    # development release: ``X < X.post0``, and ``X.dev0 < X``.
+    return (int(m["epoch"] or 0), tuple(release), pre,
+            -1 if post is None else post,
+            (0, int(m["dev_n"] or 0)) if m["dev_l"] else (1,))
 
 
 #: What the dev channel may say about a build that records no commit, and all it may say.
@@ -284,7 +352,7 @@ def newer_than(current: str) -> str | None:
     if not latest or not current:
         return None
     try:
-        return latest if _parse(latest) > _parse(current) else None
+        return latest if version_key(latest) > version_key(current) else None
     except Exception:
         return None
 
@@ -306,7 +374,7 @@ def latest_display(installed: str) -> str:
     if not latest:
         return "— (not checked yet)"
     try:
-        stale = bool(installed) and _parse(latest) < _parse(installed)
+        stale = bool(installed) and version_key(latest) < version_key(installed)
     except Exception:
         stale = False
     if stale:

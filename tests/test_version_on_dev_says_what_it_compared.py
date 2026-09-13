@@ -87,7 +87,7 @@ class VersionOnDevSaysWhatItCompared(NoNetwork, PersonaIso):
         pin_update_channel(self, "dev")
         # Not vacuous: the fixture is only the report's shape if the cached release really
         # is older than the build running the test.
-        self.assertLess(update._parse(_STALE), update._parse(__version__))
+        self.assertLess(update.version_key(_STALE), update.version_key(__version__))
 
     def _version(self, *, commit):
         with mock.patch("charter.channel.installed_commit", return_value=commit):

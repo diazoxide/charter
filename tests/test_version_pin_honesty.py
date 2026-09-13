@@ -56,6 +56,18 @@ class TestLatestIsNotPresentedAsFactWhenStale(PersonaIso):
         self.assertNotEqual(shown.strip(), "0.26.0")
         self.assertIn("stale", shown.lower())
 
+    def test_a_cached_candidate_for_the_release_you_run_is_behind_you(self):
+        """#1050: ``0.27.2rc1`` read as ``(0, 27, 21)``, above the 0.27.2 running, so the
+        candidate was offered as `latest` beside the release that superseded it."""
+        self._cache("0.27.2rc1")
+        shown = update.latest_display("0.27.2")
+        self.assertIn("stale", shown.lower())
+
+    def test_a_cached_release_is_ahead_of_the_candidate_you_run(self):
+        """The same pair the other way round, which the old reading called stale."""
+        self._cache("0.27.2")
+        self.assertEqual(update.latest_display("0.27.2rc1"), "0.27.2")
+
     def test_it_never_implies_you_are_behind_when_you_are_ahead(self):
         self._cache("0.26.0")
         self.assertIsNone(update.newer_than("0.27.2"))

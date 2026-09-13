@@ -695,7 +695,7 @@ def all() -> list[Entry]:
         return []
     found = [e for e in (_read(p) for p in sorted(d.glob("*.md"))) if e is not None]
     return sorted(found,
-                  key=lambda e: (e.version == UNRELEASED, update._parse(e.version),
+                  key=lambda e: (e.version == UNRELEASED, update.version_key(e.version),
                                  rank(e)))
 
 
@@ -709,10 +709,10 @@ def between(lo: str, hi: str) -> list[Entry]:
     Exclusive at the bottom because *lo* is where you already were: you have seen it.
     """
     try:
-        low, high = update._parse(lo), update._parse(hi)
+        low, high = update.version_key(lo), update.version_key(hi)
     except Exception:
         return []
-    return [e for e in released() if low < update._parse(e.version) <= high]
+    return [e for e in released() if low < update.version_key(e.version) <= high]
 
 
 def for_version(version: str) -> list[Entry]:

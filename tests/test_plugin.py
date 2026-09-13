@@ -288,6 +288,26 @@ class TestVersionSkew(unittest.TestCase):
     def test_a_malformed_version_does_not_crash(self):
         self.assertIsNone(hooks.skew_message("not-a-version"))
 
+    def test_a_plugin_on_the_release_is_newer_than_a_cli_on_its_candidate(self):
+        """#1050. `_parse_version` matched a ``X.Y.Z`` prefix and dropped the rest, so a
+        candidate and its release were one version and this skew was never said."""
+        from unittest import mock
+        with mock.patch.object(hooks, "MIN_PLUGIN_VERSION", "5.0.0rc1"):
+            self.assertIsNotNone(hooks.skew_message("5.0.0"))
+        with mock.patch.object(hooks, "MIN_PLUGIN_VERSION", "5.0.0"):
+            self.assertIsNotNone(hooks.skew_message("5.0.0.post1"))
+
+    def test_a_plugin_on_the_candidate_is_older_than_a_cli_on_its_release(self):
+        """The direction this guard stays silent in, on the same pair."""
+        from unittest import mock
+        with mock.patch.object(hooks, "MIN_PLUGIN_VERSION", "5.0.0"):
+            self.assertIsNone(hooks.skew_message("5.0.0rc1"))
+
+    def test_a_plugin_version_that_is_not_a_version_is_not_read_by_its_prefix(self):
+        """``99.0.0-CANARY`` is not a version, and silence is what this guard says about
+        one. Its prefix made it 99.0.0, loud against every CLI."""
+        self.assertIsNone(hooks.skew_message("99.0.0-CANARY"))
+
 
 class TestSkewReachesTheUser(unittest.TestCase):
     # `hooks.dispatch` runs REAL handlers, and a handler may write plane state — a trace

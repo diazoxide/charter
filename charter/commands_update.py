@@ -36,7 +36,7 @@ import sys
 from pathlib import Path
 
 from . import config, update as _update, util
-from .update import SHARED_INSTALL_NOTE, _parse
+from .update import SHARED_INSTALL_NOTE, version_key
 
 #: The distribution, and the install commands that actually move it.
 #:
@@ -403,7 +403,7 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
     explicit = (getattr(args, "to", None) or "").strip()
     if explicit:
         return explicit, False, None
-    if locked and _parse(installed) < _parse(locked):
+    if locked and version_key(installed) < version_key(locked):
         return locked, False, None    # conforming to a pin somebody chose affects nobody
     latest = _latest()
     if not latest:
@@ -421,7 +421,7 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
         # output of a plane that IS current (#950).
         return None, False, None
     if not locked:
-        if _parse(latest) < _parse(installed):
+        if version_key(latest) < version_key(installed):
             # PyPI's newest is OLDER than what runs: nothing to move to, and saying so is
             # `cmd_update`'s. This is the one place an unasked downgrade could come from:
             # `--to` returned above because a person named the version, a pin only ever
@@ -432,7 +432,7 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
             # the newest release, which is not a move at all.
             return None, False, latest
         return latest, False, latest
-    if _parse(latest) > _parse(installed):
+    if version_key(latest) > version_key(installed):
         if not getattr(args, "bump", False):
             return None, True, latest  # moving past the pin moves the TEAM
         return latest, False, latest
