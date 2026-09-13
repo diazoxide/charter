@@ -3473,7 +3473,7 @@ def cmd_version(args) -> int:
         # release it was built from, so equal numbers here printed "in sync with the lock" for
         # a plane session start refuses. Exit 1, as drift does: the plane is not in the state
         # it asks for, because it asks for two.
-        conflict, *ways = update.pin_beside_dev()
+        conflict, ways, _brief = update.pin_beside_dev()
         util.warn(f"this control plane pins {locked} and follows `{update.DEV_BRANCH}`: "
                   f"{conflict}.")
         for way in ways:
@@ -3546,7 +3546,7 @@ def cmd_version_sync(args) -> int:
         # (#1018). Before the `locked == installed` check too, because a dev build prints
         # the number of the release it was built from, so "already on the locked version"
         # would be a claim about a number and not about which charter this is.
-        conflict, *ways = _update.pin_beside_dev()
+        conflict, ways, _brief = _update.pin_beside_dev()
         util.err(f"refusing to sync this control plane: {conflict}. Nothing was installed.")
         for way in ways:
             util.info(f"  {way}")
@@ -3622,7 +3622,7 @@ def cmd_version_bump(args) -> int:
         # wants is the operator's to say, and each way out is one step. The conflict and
         # both ways out are `pin_beside_dev`'s, which `version sync`, `charter version` and
         # session start print too (#1018).
-        conflict, *ways = update.pin_beside_dev()
+        conflict, ways, _brief = update.pin_beside_dev()
         util.err(f"refusing to pin this control plane: {conflict}. "
                  f"Nothing was installed or written.")
         for way in ways:

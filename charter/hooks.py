@@ -6568,7 +6568,7 @@ def _autosync_version_lock() -> str | None:
             # install record. Every branch below either stays silent or treats the pin as the
             # plane's only request, and the last of them installs it with `sync_to`. A dev
             # plane let through to them gets that silence or that install.
-            conflict, *ways = update.pin_beside_dev()
+            conflict, ways, _brief = update.pin_beside_dev()
             return (f"⬢ charter: this control plane pins {locked} and follows "
                     f"`{update.DEV_BRANCH}`: {conflict}, so nothing was installed. Working on "
                     f"{__version__} — {'; '.join(ways)}")

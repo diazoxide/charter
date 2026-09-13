@@ -1,15 +1,16 @@
 ---
 version: unreleased
-headline: On a dev-channel plane that already carries a pin, `charter version sync` refuses to install it, and every command names the same conflict
+headline: On a dev-channel plane that already carries a pin, `charter version sync` refuses to install it, and every surface names the same conflict
 ---
 
 A plane that declares `[update] channel = "dev"` and pins `[charter] version` asks for two
 different charters. `charter version bump` stopped writing that pair in the previous fix, but
-a plane can still carry one: a pin written before it, a hand edit, an older charter. Three
-commands still read that plane three ways. `charter version sync` installed the pinned
-release over a plane following `main`. `charter version` told you to run that sync. And
-session start said nothing when the pin equalled the version you were running, because a dev
-build prints the number of the release it was built from.
+a plane can still carry one: a pin written before it, a hand edit, an older charter. The
+surfaces that read that plane each said something different. `charter version sync`
+installed the pinned release over a plane following `main`. `charter version` and the status
+line told you to run that sync. `charter doctor` named a plugin update, or called the plane
+in sync. And session start said nothing when the pin equalled the version you were running,
+because a dev build prints the number of the release it was built from.
 
 Now `version sync` refuses before it installs anything or moves this plane's artifact, with
 `--cli` or without, and exits 1:
@@ -22,6 +23,14 @@ Now `version sync` refuses before it installs anything or moves this plane's art
 
 `charter version` prints the same conflict and the same two ways out instead of recommending
 the sync, and exits 1 as it does for drift. Session start says it on every session whatever
-the pin's number, and still installs nothing. `version bump` prints the same lines. If your
+the pin's number, and still installs nothing. `version bump` prints the same lines, and
+`charter doctor`'s `version lock` row warns with them. The status line has one row, so it
+prints a short form of the same words:
+
+```
+⚠ charter 0.61.0 pin + dev channel: two different charters · charter version
+```
+
+If your
 dev plane carries a pin, pick one of the two: the refusal will be there at every session
 start until you do.

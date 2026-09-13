@@ -478,10 +478,18 @@ the harness to move this plane's artifact, and exits 1. `charter version` prints
 instead of `conform this machine: charter version sync`, and exits 1 as it does for drift.
 Session start installs nothing and says the same, **whether or not the pin equals the version
 you are running**. A dev build prints the version of the release it was built from, so equal
-numbers do not mean the plane is on the pinned release. Before #1018, `version sync` installed
-the pinned release over a plane following `main`, `charter version` sent you to that command,
-and a pin equal to the running number drew no word at session start and "in sync with the
-lock" from `charter version`.
+numbers do not mean the plane is on the pinned release. `charter doctor`'s `version lock` row
+warns with the same conflict and puts both ways out in its hint. The status line has room for
+one row, so it prints a short form of the same words:
+
+```
+⚠ charter 0.61.0 pin + dev channel: two different charters · charter version
+```
+
+Before #1018, `version sync` installed the pinned release over a plane following `main`.
+`charter version` and the status line both sent you to that command, and `doctor` named a
+plugin update. A pin equal to the running number got nothing at session start, "in sync with
+the lock" from `charter version` and `plugin in sync` from `doctor`.
 
 ## `[harness]` — profiles, and the default
 

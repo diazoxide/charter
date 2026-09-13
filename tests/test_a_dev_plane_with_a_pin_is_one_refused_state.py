@@ -14,8 +14,13 @@ surfaces still read it three ways:
   build carries the version of the wheel it was built from, so a pin equal to that number
   raised nothing, and the plane carried a contradiction the next release would surface.
 
-All of them now print `update.pin_beside_dev()`, the sentence `version bump` prints, so the
-four cannot describe one plane four ways.
+Two more readers of the pin did the same. **The status line's row** ended `· charter version
+sync`, or drew nothing when the numbers matched. **`doctor.check_version_lock`** called the
+plane `plugin in sync` or `CLI in sync`, or named a plugin update.
+
+All of them now print `update.pin_beside_dev()`, which `version bump` prints too: the
+conflict and both ways out where there is room for them, and its brief form on the status
+line, so no two surfaces describe one plane two ways.
 
 Nothing here reaches the network or installs anything: `NoNetwork` refuses every route out,
 `commands.sync_to` is a recorder, and the harness `version sync` would ask is a recorder too.
@@ -187,12 +192,13 @@ class EverySurfaceSaysTheSameThing(_DevPlaneWithAPin):
     """One state, one sentence, from one function — `update.pin_beside_dev`.
 
     The substring checks above would pass if each surface kept its own wording of the two
-    ways out, and four wordings of one refusal is how the issue began: session start said
+    ways out, and one refusal in several wordings is how the issue began: session start said
     "drop one of the two", `version bump` said "drop the channel and bump again, or pin
     nothing", and `version sync` and `charter version` said nothing about it at all.
     """
 
-    def test_all_four_print_the_conflict_and_both_ways_out_verbatim(self):
+    def test_every_surface_with_room_prints_the_conflict_and_both_ways_out_verbatim(self):
+        from charter import doctor
         self._declare(_AHEAD)
         for inside in (False, True):
             with self.subTest(running_inside=inside), \
@@ -200,7 +206,8 @@ class EverySurfaceSaysTheSameThing(_DevPlaneWithAPin):
                 shared = update.pin_beside_dev()
                 # Not vacuous: the remedy inside the sentence is decided at the call, so a
                 # surface that cached the sentence would print the wrong next step here.
-                self.assertEqual(inside, "pull" in shared[2])
+                self.assertEqual(inside, "pull" in shared.ways[1])
+                check = doctor.check_version_lock()
                 with mock.patch("charter.update.fetch_and_store", return_value=_AHEAD):
                     surfaces = {
                         "version sync": _run(commands.cmd_version_sync,
@@ -209,11 +216,142 @@ class EverySurfaceSaysTheSameThing(_DevPlaneWithAPin):
                         "version bump": _run(commands.cmd_version_bump,
                                              SimpleNamespace(to=None, push=True))[1],
                         "session start": hooks._autosync_version_lock(),
+                        "doctor": f"{check.detail}\n{check.hint}",
                     }
                 for surface, said in surfaces.items():
-                    for line in shared:
+                    for line in (shared.conflict, *shared.ways):
                         self.assertIn(line, said, f"{surface} does not say it")
         self.assertEqual(self.moved, [])
+
+    def test_the_brief_form_is_built_from_the_long_one_s_words(self):
+        """The status line's short row and the long refusal it points at share the phrase
+        a reader will search for, and the brief names the command that prints the rest."""
+        shared = update.pin_beside_dev()
+        self.assertIn("two different charters", shared.conflict)
+        self.assertIn("two different charters", shared.brief)
+        self.assertIn("charter version", shared.brief)
+        self.assertNotIn("sync", shared.brief)
+
+
+class TheStatusLineRowNamesTheConflict(_DevPlaneWithAPin):
+    """`statusline._alerts`, the surface on screen every turn.
+
+    Its pinned-version row compared numbers and ended `· charter version sync`, which on
+    this plane is the command that now refuses. With the pin equal to the running number
+    it drew no row at all, the same silence session start kept.
+    """
+
+    def _row(self) -> str:
+        import subprocess
+        from charter import statusline
+        # The hot path: this renders every turn, so the new row may not start a process
+        # (`NoNetwork` already refuses the network). Recorded rather than raised, so an
+        # `except Exception` in `_alerts` cannot swallow it.
+        spawned: list = []
+        with mock.patch.object(subprocess, "Popen",
+                               side_effect=lambda *a, **k: spawned.append(a) or 1 / 0):
+            rows = [statusline.tui.strip_ansi(a) for a in statusline._alerts("default")]
+        self.assertEqual(spawned, [], "the status line started a process to draw this row")
+        self.assertEqual(self.moved, [], "the status line moved something")
+        pinned = [r for r in rows if "charter" in r and (_AHEAD in r or __version__ in r)]
+        self.assertEqual(len(pinned), 1, rows)
+        return pinned[0]
+
+    def test_a_pin_unequal_to_the_install_is_not_sent_to_version_sync(self):
+        self._declare(_AHEAD)
+        row = self._row()
+        self.assertNotIn("version sync", row)
+        self.assertIn("two different charters", row)
+        self.assertIn(_AHEAD, row)
+
+    def test_a_pin_equal_to_the_install_still_draws_the_row(self):
+        self._declare(__version__)
+        row = self._row()
+        self.assertIn("two different charters", row)
+
+    def test_the_short_form_is_the_shared_one(self):
+        """A status line has no room for both ways out, so it prints the brief form. That
+        form comes from the same call as the long one, so the row cannot describe the plane
+        in words of its own."""
+        self._declare(_AHEAD)
+        self.assertIn(update.pin_beside_dev().brief, self._row())
+
+    def test_a_dev_plane_with_no_pin_draws_no_row(self):
+        """No pin is the state a dev plane is meant to be in, and the alerts render only
+        when real: a row every turn on a healthy plane is how the real ones stop being read."""
+        from charter import statusline
+        (self.tmp / "charter.toml").write_text('schema = 1\n[update]\nchannel = "dev"\n')
+        config.use(self.tmp)
+        rows = [statusline.tui.strip_ansi(a) for a in statusline._alerts("default")]
+        self.assertFalse([r for r in rows if "charters" in r or "pin" in r], rows)
+
+    def test_a_stable_plane_s_drift_row_still_names_version_sync(self):
+        self._declare(_AHEAD, channel="stable")
+        row = self._row()
+        self.assertIn("charter version sync", row)
+        self.assertNotIn("two different charters", row)
+
+
+class DoctorReportsTheConflict(_DevPlaneWithAPin):
+    """`doctor.check_version_lock` compared the pin with the plugin serving this project or,
+    from a bare terminal, with the CLI. On a dev plane that said `plugin in sync` or `CLI in
+    sync` for a plane session start refuses, and otherwise named a plugin update or the
+    shared-install note, both of which move this plane toward the pin."""
+
+    def _check(self, *, plugin: str | None):
+        import json
+        import os
+        from charter import doctor
+        env = {}
+        if plugin is not None:
+            root = self.tmp / "plugin"
+            (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+            (root / ".claude-plugin" / "plugin.json").write_text(
+                json.dumps({"name": "charter", "version": plugin}))
+            env["CLAUDE_PLUGIN_ROOT"] = str(root)
+        with mock.patch.dict(os.environ, env):
+            if plugin is None:
+                os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+            r = doctor.check_version_lock()
+        self.assertEqual(self.moved, [], "doctor moved something")
+        return doctor, r
+
+    def assertTheConflict(self, doctor, r) -> None:
+        # WARN, as this check reports drift: the plane is not in the state it asks for.
+        self.assertEqual(r.status, doctor.WARN, r)
+        self.assertIn("two different charters", r.detail)
+        self.assertIn(update.dev_remedy(), r.hint)
+        self.assertNotIn("sync", f"{r.detail} {r.hint}")
+        self.assertNotIn(update.PLUGIN_SYNC_CMD, r.hint)
+
+    def test_a_plugin_on_the_pinned_version_is_not_called_in_sync(self):
+        self._declare(_AHEAD)
+        self.assertTheConflict(*self._check(plugin=_AHEAD))
+
+    def test_a_plugin_off_the_pin_is_not_sent_to_the_plugin_update(self):
+        self._declare(_AHEAD)
+        self.assertTheConflict(*self._check(plugin="0.0.1"))
+
+    def test_a_bare_terminal_on_the_pinned_number_is_not_called_in_sync(self):
+        self._declare(__version__)
+        self.assertTheConflict(*self._check(plugin=None))
+
+    def test_a_bare_terminal_off_the_pin_is_not_handed_the_shared_install_note(self):
+        self._declare(_AHEAD)
+        self.assertTheConflict(*self._check(plugin=None))
+
+    def test_the_conflict_and_both_ways_out_are_the_shared_ones(self):
+        self._declare(_AHEAD)
+        _, r = self._check(plugin=None)
+        shared = update.pin_beside_dev()
+        self.assertIn(shared.conflict, r.detail)
+        for way in shared.ways:
+            self.assertIn(way, r.hint)
+
+    def test_a_stable_plane_is_still_measured_against_the_plugin(self):
+        self._declare(_AHEAD, channel="stable")
+        doctor, r = self._check(plugin=_AHEAD)
+        self.assertEqual(r.status, doctor.OK, r)
 
 
 if __name__ == "__main__":
