@@ -10,6 +10,7 @@ called: no name is hardcoded anywhere in the engine.
 """
 from __future__ import annotations
 
+import errno
 import io
 import os
 import unittest
@@ -193,6 +194,97 @@ class TestWritingTheDeclaration(DeclaredDefaultIso):
         self.assertIn("personas/.default", out)
         # Naming the file is not enough — it must say the old one no longer decides.
         self.assertIn("ignored", out)
+
+
+class TestClearingSaysWhatHappened(DeclaredDefaultIso):
+    """`--clear` reports what charter removed, not what it was asked to remove (#1010, ADR 0013).
+
+    The declared default persona is the front door every session with nothing chosen walks
+    through, so a clear that silently did not happen keeps routing sessions there after the
+    operator was told it would stop. `workspace default --clear` had the same defect (#955).
+    """
+
+    _plane = TestWritingTheDeclaration._plane
+    _run = TestWritingTheDeclaration._run
+
+    def setUp(self) -> None:
+        super().setUp()
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so a refused write cannot be staged")
+
+    def _clear(self) -> tuple[int, str]:
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = self._run(clear=True)
+        return rc, buf.getvalue()
+
+    def _read_only(self, path) -> None:
+        mode = path.stat().st_mode & 0o777
+        path.chmod(0o500 if path.is_dir() else 0o400)
+        self.addCleanup(path.chmod, mode)
+
+    def test_a_charter_toml_it_could_not_write_is_named_and_exits_non_zero(self):
+        """Measured in #1010 with `charter.toml` read-only: `✓ Cleared the declared default
+        persona`, exit 0, and `declared_default()` still `steward`. `set_default_persona`
+        returned False and nothing asked it."""
+        self._plane()
+        self.make_persona("steward", role="S", vault="none")
+        self._run(name="steward")
+        toml = config.ROOT / "charter.toml"
+        self._read_only(toml)
+        rc, out = self._clear()
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("Cleared", out)
+        self.assertIn(f"could not update {toml}", out)
+        # The OS's words, and no cause of charter's: a read-only file, an unreadable one and a
+        # full disk all land here, and naming one of them is the ADR 0009 failure.
+        self.assertIn(os.strerror(errno.EACCES), out)
+        self.assertNotIn("control plane?", out)
+        self.assertEqual(persona.declared_default(), "steward")
+
+    def test_a_legacy_dotfile_it_could_not_remove_is_named_not_a_traceback(self):
+        """Measured in #1010 with `personas/` read-only: `legacy.unlink()` raised
+        `PermissionError` and the command ended in a traceback. The declaration in
+        charter.toml is gone by then, so the dotfile is what every session with nothing
+        chosen adopts now, and the error names the file that still stands."""
+        self._plane()
+        self.make_persona("steward", role="S", vault="none")
+        self.make_persona("older", role="O", vault="none")
+        self._run(name="steward")
+        legacy = config.PERSONAS_DIR / ".default"
+        legacy.write_text("older\n")
+        self._read_only(config.PERSONAS_DIR)
+        rc, out = self._clear()
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("Cleared", out)
+        self.assertIn(f"could not remove {legacy} ({os.strerror(errno.EACCES)})", out)
+        self.assertIn("which is left in place", out)
+        self.assertEqual(persona.default_persona(), "older")
+
+    def test_a_charter_toml_with_nothing_to_remove_is_not_written_at_all(self):
+        """A clear leaves its emptied `[persona]` header behind, so a plane that clears again
+        has a section and no key. Now that a failed write is reported, rewriting that file
+        unchanged would fail a clear on a read-only charter.toml that had nothing to take out
+        of it, while the one rung that did declare a default, the dotfile, was removable."""
+        self._plane("\n[persona]\n")
+        self.make_persona("older", role="O", vault="none")
+        legacy = config.PERSONAS_DIR / ".default"
+        legacy.write_text("older\n")
+        self._read_only(config.ROOT / "charter.toml")
+        rc, out = self._clear()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Cleared the declared default persona", out)
+        self.assertFalse(legacy.exists())
+
+    def test_with_no_charter_toml_there_is_nothing_to_clear_and_it_says_so(self):
+        """A root with no charter.toml declares nothing in it. Before #1010 that answer came
+        from a `False` nobody read; asking the OS for the file's words must not turn a
+        missing file into a failure the reader is sent to fix."""
+        self.assertFalse((config.ROOT / "charter.toml").exists())
+        rc, out = self._clear()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("No default persona was declared.", out)
+        self.assertNotIn("could not", out)
 
 if __name__ == "__main__":
     unittest.main()
