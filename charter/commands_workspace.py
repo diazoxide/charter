@@ -439,6 +439,26 @@ def cmd_workspace_default(args) -> int:
     never fire.
     """
     name = getattr(args, "name", None)
+    # `--clear` FIRST, as `persona default` has it, and before the name is looked at: it
+    # needs none (#955). Below the show branch, the form a person types —
+    # `charter workspace default --clear` — printed the current default, exited 0 and
+    # removed nothing, so clearing was reachable only by also typing a name nobody checked.
+    if getattr(args, "clear", False):
+        try:
+            removed = workspace.clear_declared_default()
+        except OSError as e:
+            # The OS's own words beside the path, and no cause of charter's: a read-only
+            # `workspaces/` and a directory sitting at that name both land here, and picking
+            # one to name is the ADR 0009 failure. The path is what the reader goes to look at.
+            util.err(f"could not remove {workspace.default_file()} "
+                     f"({e.strerror or e.__class__.__name__}) — the declared default is left "
+                     "as it was.")
+            return 1
+        if removed:
+            util.ok("Cleared the declared default workspace.")
+        else:
+            util.info("No default workspace was declared.")
+        return 0
     if not name:
         cur = workspace.declared_default()
         if cur:
@@ -446,10 +466,6 @@ def cmd_workspace_default(args) -> int:
         else:
             util.info("No declared default — a session with nothing else selected lands on "
                       f"'{config.DEFAULT_WORKSPACE}'. Set one: charter workspace default <ws>")
-        return 0
-    if getattr(args, "clear", False):
-        workspace.clear_declared_default()
-        util.ok("Cleared the declared default workspace.")
         return 0
     # The name FIRST, and separately from "does it exist". `workspace_dir(name).exists()`
     # accepted `../../esc` — the directory is really there, it is simply not a workspace —

@@ -508,11 +508,19 @@ def set_declared_default(name: str) -> None:
     d.write_text(name + "\n")
 
 
-def clear_declared_default() -> None:
+def clear_declared_default() -> bool:
+    """Remove the nomination: ``True`` when a file was removed, ``False`` when there was none.
+
+    Any other ``OSError`` from the unlink PROPAGATES. This swallowed every one, so the command
+    could not tell "removed" from "nothing to remove" from "could not remove", and printed
+    "Cleared" for all three — with `workspaces/` read-only, over a file still there that
+    sessions went on landing on (#955, ADR 0013). A failed unlink removes nothing, so there
+    is no partial state for the caller to read back: the exception is the whole account."""
     try:
         default_file().unlink()
-    except OSError:
-        pass
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def resolve(explicit: str | None = None, session_id: str | None = None,

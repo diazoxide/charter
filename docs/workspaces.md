@@ -179,6 +179,13 @@ paths that name the workspace, so being inside one is not a hint, it is the fact
 `charter workspace current` prints the answer *and the rung that produced it*, which is
 usually the faster question to ask than "which workspace am I in".
 
+The nominated default is written to `workspaces/.default`, a committed file, and
+`charter workspace default` with no name prints it. `charter workspace default --clear`
+removes it and needs no name. It prints `Cleared` only when it removed the file. With
+nothing nominated it says so. When the file cannot be removed it names the file and the
+system's error and exits 1, because sessions with nothing else selected go on landing on
+that workspace.
+
 ## The lock, and how to get out of it
 
 Confirming a workspace **locks the session to it**. A mid-session switch is then refused:

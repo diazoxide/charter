@@ -122,6 +122,60 @@ class TestTheCommand(DefaultCase):
         self.assertEqual(self.resolve(), config.DEFAULT_WORKSPACE)
 
 
+class TestClearingSaysWhatHappened(DefaultCase):
+    """`--clear` reports what charter removed, not what it was asked to remove (#955, ADR 0013).
+
+    The declared default is where a session lands when nothing else has chosen, so a clear
+    that silently did not happen keeps landing sessions there after the operator was told it
+    would stop."""
+
+    def test_clear_needs_no_name(self):
+        """`charter workspace default --clear` is what a person types, and it went to the show
+        branch: it printed the current default, exited 0 and removed nothing. `persona
+        default`, which this command says it mirrors, checks `--clear` first."""
+        self.run_default("alpha")
+        rc, out = self.run_default(clear=True)
+        self.assertEqual(rc, 0)
+        self.assertIsNone(workspace.declared_default(), out)
+        self.assertIn("Cleared", out)
+
+    def test_with_nothing_declared_it_says_so_instead_of_cleared(self):
+        """A missing file was a swallowed `FileNotFoundError`, so "Cleared" printed over a
+        plane that had never declared anything. `persona default --clear` says there was
+        none."""
+        rc, out = self.run_default(clear=True)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("Cleared", out)
+        self.assertIn("No default workspace was declared", out)
+
+    def test_a_name_beside_clear_is_not_what_decides(self):
+        """`persona default ghost --clear` clears and never looks at `ghost`, and this
+        command says it mirrors that one. The name is not validated first, because a clear
+        refused over a name it does not use would be the only form of `--clear` that
+        declined to clear."""
+        self.run_default("alpha")
+        rc, out = self.run_default("no-such-ws", clear=True)
+        self.assertEqual(rc, 0)
+        self.assertIsNone(workspace.declared_default(), out)
+        self.assertIn("Cleared", out)
+
+    def test_a_removal_that_failed_says_so_and_exits_non_zero(self):
+        """Measured in #955 with `workspaces/` read-only: "Cleared" and exit 0, while
+        `workspaces/.default` was still there and sessions still landed on the default. The
+        failure names the file charter could not remove, so the reader can look at it."""
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so this says nothing about the failure")
+        self.run_default("alpha")
+        config.WORKSPACES_DIR.chmod(0o500)
+        self.addCleanup(config.WORKSPACES_DIR.chmod, 0o700)
+        rc, out = self.run_default(clear=True)
+        config.WORKSPACES_DIR.chmod(0o700)
+        self.assertNotEqual(rc, 0, out)
+        self.assertNotIn("Cleared", out)
+        self.assertIn(str(workspace.default_file()), out)
+        self.assertEqual(workspace.declared_default(), "alpha")
+
+
 class TestTheSurfaceSaysWhichRungAnswered(DefaultCase):
     def test_the_declared_default_is_named_as_the_source(self):
         self.run_default("alpha")
