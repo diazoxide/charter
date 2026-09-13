@@ -28,7 +28,7 @@ from unittest import mock
 
 from charter import commands_frame, contain, tui
 from charter.frame import (action, actions, builtin_actions, component, overlay, palette,
-                           state)
+                           state, tmuxctl)
 
 from tests import _tmuxsocket
 from tests._isolation import PersonaIso
@@ -618,7 +618,7 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
                                side_effect=lambda argv, *, fid: started.append(argv)):
             reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
         self.assertEqual(started,
-                         [["tmux", "-L", "charter", "detach-client", "-s", self.FID]])
+                         [tmuxctl.server_argv("charter", "detach-client", "-s", self.FID)])
 
     def test_a_frame_with_no_recorded_server_still_detaches_on_charters_own_socket(self):
         """`_server`'s `or SOCKET` fallback, pinned where it has a consequence.
@@ -638,7 +638,7 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
                                side_effect=lambda argv, *, fid: started.append(argv)):
             reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
         self.assertEqual(started,
-                         [["tmux", "-L", "charter", "detach-client", "-s", self.FID]])
+                         [tmuxctl.server_argv("charter", "detach-client", "-s", self.FID)])
 
     def test_every_action_starts_its_work_in_a_session_of_its_own(self):
         """§4g plus the fact that the palette's pane is killed the instant it has invoked:

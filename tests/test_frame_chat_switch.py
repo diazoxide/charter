@@ -1105,7 +1105,8 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
                          "the target was missing a slot after all, so this is the branch "
                          "that already worked")
         options = [a[-2] for a in self.fake.calls
-                   if _FakeServer._verb(a) == "set-option" and "-u" not in a]
+                   if _FakeServer._verb(a) == "set-option"
+                   and "-u" not in _tmuxchain.command(a)]
         for name in commands_frame._chrome_values():
             self.assertIn(name, options,
                           f"the window's {name} was never asserted on the chat being "

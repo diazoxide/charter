@@ -876,7 +876,7 @@ class TheFloorCannotHavePerPaneEdgesAndIsNotGivenThem(unittest.TestCase):
         named a colour has that colour SET here, edges included, and nothing unset."""
         argvs = commands_frame._resurface_argvs(socket="s", pane_id="%3", chrome="off",
                                                 bg="brightblack", pane_borders=True)
-        self.assertEqual([a for a in argvs if "-u" in a], [])
+        self.assertEqual([a for a in argvs if "-u" in _tmuxchain.command(a)], [])
         # The SHIPPED rule, which is `_resurface_argvs`' own default look: the pane keeps
         # its colour and its edges are hidden in it.
         self.assertIn("fg=brightblack,bg=brightblack", [a[-1] for a in argvs])
@@ -963,7 +963,8 @@ class TheLauncherActuallyArmsTheRulesWithIt(PersonaIso, unittest.TestCase):
     def _per_pane(self, issued, names) -> dict[str, list[str]]:
         out: dict[str, list[str]] = {}
         for a in issued:
-            if "set-option" in a and "-p" in a and "-u" not in a and a[-2] in names:
+            if ("set-option" in a and "-p" in a and "-u" not in _tmuxchain.command(a)
+                    and a[-2] in names):
                 out.setdefault(a[a.index("-t") + 1], []).append(a[-1])
         return out
 
@@ -1381,13 +1382,14 @@ class ARelayoutThatAddsNoPaneStillAssertsTheWindowsOwnOptions(PersonaIso,
         has its own test, so folding it in here would let one of the two stand in for the
         other."""
         return {a[-2]: a[-1] for a in calls
-                if "set-option" in a and flag in a and "-u" not in a
+                if "set-option" in a and flag in a and "-u" not in _tmuxchain.command(a)
                 and a[-2] in commands_frame._chrome_values()}
 
     def test_a_relayout_with_nothing_missing_still_writes_the_window_options(self):
         panels = {"top": "%3", "bottom": "%4"}
         calls = self._calls(panels=panels, want=list(panels))
-        self.assertNotIn("split-window", [a[3] for a in calls if len(a) > 3],
+        self.assertNotIn("split-window",
+                         [_tmuxchain.command(a)[0] for a in calls if _tmuxchain.command(a)],
                          "the fixture split something, so this is the branch that "
                          "already worked")
         self.assertEqual(self._options(calls, "-w"), commands_frame._chrome_values(),

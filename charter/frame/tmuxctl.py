@@ -394,8 +394,33 @@ def server_argv(server: str, *args: str) -> list[str]:
     Nothing is ever joined, here or anywhere downstream of here: a joined string is
     shell-interpreted by tmux and a separate argv is not (pinned against 3.7c, see
     `frame/layout.py`'s module docstring).
+
+    **`-u` on every one of them, because tmux decides what it may PRINT from the client's
+    locale and charter reads what it prints** (#984). Measured on tmux 3.7c with private
+    sockets: a client whose environment names no UTF-8 locale — `$LANG`, `$LC_ALL` and
+    `$LC_CTYPE` all unset, or `LC_ALL=C` even beside a UTF-8 `$LANG` — gets a literal TAB
+    in a `-F` format back as `_`. Five of charter's formats split on that TAB
+    (:data:`_PANE_PID_FORMAT` and four in `commands_frame`), so each row read as one field:
+    `commands_frame._plane_session` answered ``None`` for a session its own launcher had
+    made, and `charter handoff` refused a plane it owned as "probably another plane's". A
+    non-ASCII value was mangled the same way — `@charter_plane` holding `/tmp/plané_x` read
+    back as `/tmp/plan__x`. Only the client's environment decided it, never the server's.
+    `-u` restored both, and so did a UTF-8 `$LANG`, `$LC_ALL` or `$LC_CTYPE` handed to the
+    child; but a locale forced that way was copied into the server's global environment and
+    so into every pane started after it, where `-u` changes nothing but the client carrying
+    it. Here rather than at the readers, because this is the one place every tmux command
+    charter sends is built — a reader added next month is covered the day it is written.
     """
-    return ["tmux", "-S" if is_socket_path(server) else "-L", server, *args]
+    return ["tmux", "-u", "-S" if is_socket_path(server) else "-L", server, *args]
+
+
+#: How many leading elements of a :func:`server_argv` result select the SERVER — everything
+#: before the command. Asked of :func:`server_argv` rather than counted by hand, because
+#: :func:`chain` compares exactly this much of each argv, and the count was a literal `3`
+#: there until `-u` made it four (#984): cut one short, two `-L` names compare equal and
+#: one server's commands are chained onto the other's. The name's own spelling does not
+#: change the count — both branches put one flag and one word before the command.
+_SERVER_PREFIX = len(server_argv("charter"))
 
 
 #: What :func:`live_pane_by_pid` asks of every pane on a server, in ONE call: the pid that
@@ -623,12 +648,12 @@ def chain(argvs: list[list[str]]) -> list[str] | None:
     """
     if not argvs:
         return None
-    head = argvs[0][:3]
+    head = argvs[0][:_SERVER_PREFIX]
     out = list(head)
     for i, argv in enumerate(argvs):
-        if argv[:3] != head:
+        if argv[:_SERVER_PREFIX] != head:
             return None
-        out += ([SEPARATOR] if i else []) + argv[3:]
+        out += ([SEPARATOR] if i else []) + argv[_SERVER_PREFIX:]
     return out
 
 
@@ -961,7 +986,7 @@ class Write(NamedTuple):
     #: The phrase :func:`report_failure` prints for THIS command, if it is ever run on
     #: its own. Required for the same reason :func:`run`'s is.
     action: str
-    #: The full argv, `tmux -L … verb …`, built by :func:`server_argv` like any other.
+    #: The full argv, `tmux -u -L … verb …`, built by :func:`server_argv` like any other.
     argv: list[str]
     #: Whether a non-zero return from this one command is worth printing.
     report: bool = True

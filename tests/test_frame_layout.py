@@ -18,8 +18,9 @@ import unittest
 from unittest import mock
 
 from charter import config, util
-from charter.frame import layout
+from charter.frame import layout, tmuxctl
 from charter.frame.component import Fixed
+from tests import _tmuxchain
 from tests._tmuxsocket import OPERATOR_SOCKET
 
 
@@ -229,7 +230,8 @@ class SessionArgv(unittest.TestCase):
 
     def test_the_socket_is_named(self):
         """One private server, never the operator's. Every command carries `-L`."""
-        self.assertEqual(layout.session_argv(**SESSION)[:3], ["tmux", "-L", "charter"])
+        own = tmuxctl.server_argv("charter")
+        self.assertEqual(layout.session_argv(**SESSION)[:len(own)], own)
 
     def test_it_asks_tmux_to_print_the_pane_id(self):
         """Pins that `session_argv` actually requests the pane id, not merely `-P` in
@@ -279,7 +281,7 @@ class PanelArgvs(unittest.TestCase):
 
     def test_the_socket_is_named_on_every_command(self):
         for cmd in layout.panel_argvs(slots=["top"], **PANELS):
-            self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+            self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv("charter"))
 
     def test_every_split_targets_the_harness_pane_id_not_a_session_index(self):
         """The bug this two-function design exists to prevent (measured against tmux
@@ -752,7 +754,7 @@ class WindowInTheOperatorsServer(unittest.TestCase):
     def test_the_window_is_created_in_the_operators_own_session(self):
         cmd = layout.window_argv(socket=OPERATOR_SOCKET, session="$1",
                                  window="charter-demo-1234", cwd="/work/repo")
-        self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET])
+        self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv(OPERATOR_SOCKET))
         self.assertIn("new-window", cmd)
         self.assertEqual(cmd[cmd.index("-t") + 1], "$1")
         self.assertEqual(cmd[cmd.index("-n") + 1], "charter-demo-1234")
@@ -834,7 +836,7 @@ class WindowInTheOperatorsServer(unittest.TestCase):
                                        cwd="/work/repo"),
                     layout.respawn_argv(socket="/s", harness_pane="%7", env={},
                                         cwd="/work/repo", harness_argv=["claude"])):
-            with self.subTest(cmd=cmd[3]):
+            with self.subTest(cmd=_tmuxchain.command(cmd)[0]):
                 self.assertEqual(cmd[cmd.index("-c") + 1], "/work/repo")
 
 
@@ -867,7 +869,7 @@ class ServerSelection(unittest.TestCase):
         `tmuxctl.server_argv` is the one place that difference turns into `-L` or `-S`."""
         cmds = layout.panel_argvs(slots=["top"], session="f", socket=OPERATOR_SOCKET,
                                   harness_pane="%3")
-        self.assertEqual(cmds[0][:3], ["tmux", "-S", OPERATOR_SOCKET])
+        self.assertEqual(_tmuxchain.head(cmds[0]), tmuxctl.server_argv(OPERATOR_SOCKET))
 
 
 class NothingUnnamedReachesACommandLine(unittest.TestCase):

@@ -27,7 +27,7 @@ from unittest import mock
 
 from charter import commands_frame, config, contain, profiletrust
 from charter.frame import launcher, layout, reopen as reopen_state, state, tmuxctl
-from tests import _gitguard, _tmuxsocket
+from tests import _gitguard, _tmuxchain, _tmuxsocket
 from tests._isolation import (APipe as _APipe, ATerminal as _ATerminal, PersonaIso,
                               Typed as _Typed, approve_every_profile, declare_profiles,
                               make_plane, wired_as_today)
@@ -168,7 +168,7 @@ class _ALaunchNamesAProfile(PersonaIso):
         return rc, err.getvalue()
 
     def _tmux_verbs(self) -> list[str]:
-        return [a[3] for a in self.argvs if len(a) > 3]
+        return [_tmuxchain.command(a)[0] for a in self.argvs if _tmuxchain.command(a)]
 
     def _started(self) -> bool:
         return any("new-window" in a or "new-session" in a for a in self.argvs)

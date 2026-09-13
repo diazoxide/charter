@@ -209,7 +209,7 @@ class ThePaneSaysWhichComponentItIs(PersonaIso, unittest.TestCase):
         argv = commands_frame._panel_slot_argv(socket="s", pane_id="%3", slot="chats")
         self.assertEqual(argv[-4:], ["-t", "%3",
                                      commands_frame._PANEL_SLOT_OPTION, "chats"])
-        self.assertEqual(argv[:6], ["tmux", "-L", "s", "set-option", "-p", "-t"])
+        self.assertEqual(argv[:-4], tmuxctl.server_argv("s", "set-option", "-p"))
 
     def test_the_two_options_are_different_names(self):
         """Two options rather than one value doing both jobs. `conf_text`'s
@@ -282,8 +282,9 @@ class ThePaneSaysWhichComponentItIs(PersonaIso, unittest.TestCase):
                           if commands_frame._PANEL_SLOT_OPTION in c], [],
                          "a name charter would not put on a bind line was written onto "
                          "a pane and will be read back as though charter had meant it")
-        self.assertIn(["tmux", "-L", "s", "set-option", "-p", "-t", "%20",
-                       commands_frame._PANEL_OPTION, commands_frame._PANEL_MARK],
+        self.assertIn(tmuxctl.server_argv("s", "set-option", "-p", "-t", "%20",
+                                          commands_frame._PANEL_OPTION,
+                                          commands_frame._PANEL_MARK),
                       fake.calls, "the pane charter could not name lost its panel mark "
                                   "too, so a click on it now steals the keyboard")
 
@@ -333,8 +334,8 @@ class TheWindowIsAskedNotTheRecord(PersonaIso, unittest.TestCase):
 
         with mock.patch.object(commands_frame.tmuxctl, "run", fake):
             commands_frame._window_panels("s", "%1")
-        self.assertEqual(seen, [["tmux", "-L", "s", "list-panes", "-t", "%1",
-                                 "-F", commands_frame._PANEL_LIST_FORMAT]])
+        self.assertEqual(seen, [tmuxctl.server_argv("s", "list-panes", "-t", "%1",
+                                                    "-F", commands_frame._PANEL_LIST_FORMAT)])
 
     def test_a_marked_pane_answers_with_its_component(self):
         got = self._asked(window={"%1": _pane(charters=False),
@@ -499,7 +500,8 @@ class OnlyWhatCharterSplitIsEverKilled(PersonaIso, unittest.TestCase):
             window={"%1": _pane(charters=False), "%4": _pane("chats")}, want=[])
         self.assertEqual(keep, {})
         self.assertEqual(fake.killed(), ["%4"])
-        order = [c[3] for c in fake.calls if c[3] in ("set-hook", "kill-pane")]
+        verbs = [_tmuxchain.command(c)[0] for c in fake.calls]
+        order = [v for v in verbs if v in ("set-hook", "kill-pane")]
         self.assertEqual(order, ["set-hook", "kill-pane"])
 
 

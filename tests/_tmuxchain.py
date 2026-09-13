@@ -33,27 +33,64 @@ import subprocess
 from charter.frame import tmuxctl
 
 
+#: tmux's own global flags that take a value (`tmux.c`'s getopt string, ``2c:CDdf:lL:NqS:T:uUvV``).
+_VALUED = frozenset({"-c", "-f", "-L", "-S", "-T"})
+
+
+def head(argv: list[str]) -> list[str]:
+    """`tmux` and its own global flags, `-L`/`-S` and the server among them — everything in
+    front of the COMMAND: what `tmuxctl.server_argv` builds, what `tmuxctl.chain` puts in
+    front of a list, and any global flag a builder adds after them.
+
+    **Found by tmux's grammar, not counted.** The suite read this as `argv[:3]`, the length
+    `server_argv` happened to build, until `-u` (#984) made it four — and a count copied
+    into a test goes on answering after it stops being true: a verb read at `[3]` became
+    the server's name, and `"-u" in argv` became true of every command charter sends,
+    because `-u` is also `set-option`'s and `set-hook`'s own flag for a removal. Reading
+    the head off the flags keeps a test asking what tmux would, and keeps it from agreeing
+    with `chain` by sharing `chain`'s own count.
+
+    Only tmux's OWN leading flags are looked at: `select-pane -L` and `capture-pane -S` are
+    a command's flags spelled the same way, and a scan of the whole argv would cut there.
+    A flag that takes a value takes the next word with it — `layout.session_argv` puts
+    `-f <conf>` after the server, and a head that stopped at `-f` would hand the file back
+    as the command.
+    """
+    cut = 1
+    while cut < len(argv) and argv[cut].startswith("-"):
+        cut += 2 if argv[cut] in _VALUED else 1
+    return argv[:cut]
+
+
+def command(argv: list[str]) -> list[str]:
+    """The tmux command *argv* carries, with its own flags — *argv* after :func:`head`.
+
+    What a test means by "the verb" (``command(argv)[0]``) and by "a removal"
+    (``"-u" in command(argv)``), neither of which can be asked of the whole argv any more.
+    """
+    return argv[len(head(argv)):]
+
+
 def commands(argv: list[str]) -> list[list[str]]:
     """One tmux invocation, back into the commands it carries — always at least one.
 
-    The head is the first three elements, which is exactly what `tmuxctl.chain` puts in
-    front and exactly what `tmuxctl.server_argv` builds (`tmux`, `-L`/`-S`, the server);
-    every command in a chain shares it, so every command this hands back carries it too
-    and a fake cannot tell a batched command from a lone one.
+    The head is :func:`head`, which is exactly what `tmuxctl.chain` puts in front; every
+    command in a chain shares it, so every command this hands back carries it too and a
+    fake cannot tell a batched command from a lone one.
 
     A separator is a STANDALONE ``;`` argument and never a character inside another one —
     `tmuxctl.SEPARATOR`'s own measurement, and the reason `@charter_hatch`'s value
     (``select-pane -t %1 ; kill-pane -t %2``, one argv element) survives a round trip
     through here whole.
     """
-    head, out, cur = argv[:3], [], []
-    for part in argv[3:]:
+    front, out, cur = head(argv), [], []
+    for part in command(argv):
         if part == tmuxctl.SEPARATOR:
-            out.append(head + cur)
+            out.append(front + cur)
             cur = []
         else:
             cur.append(part)
-    out.append(head + cur)
+    out.append(front + cur)
     return out
 
 

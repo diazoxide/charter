@@ -53,6 +53,7 @@ from unittest import mock
 
 from charter import commands_frame, config, instance
 from charter.frame import chrome, pane, panel
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 
 #: The frame a plane that has written nothing gets.
@@ -482,7 +483,7 @@ class TheForegroundIsPaintedByTmuxAndNotByARenderer(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             launch = {a[-2]: a[-1] for a in commands_frame._surface_argvs(**kw)}
             live = {a[-2]: a[-1] for a in commands_frame._resurface_argvs(**kw)
-                    if "-u" not in a}
+                    if "-u" not in _tmuxchain.command(a)}
         self.assertEqual(launch, live)
         self.assertEqual(launch["window-style"], "fg=black,bg=brightblack")
 

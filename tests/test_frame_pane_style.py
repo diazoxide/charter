@@ -1679,7 +1679,7 @@ class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCa
         """The sharpest case: `off`'s job is to REMOVE the two options, and those are
         exactly the two a per-pane colour is made of."""
         argvs = self._live(chrome="off", bg="blue")
-        self.assertFalse([a for a in argvs if "-u" in a],
+        self.assertFalse([a for a in argvs if "-u" in _tmuxchain.command(a)],
                          "the pane's own colour was unset by `chrome: off`")
 
     def test_a_pane_with_no_colour_of_its_own_still_gets_the_unsets(self):
@@ -1688,7 +1688,7 @@ class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCa
         argvs = commands_frame._resurface_argvs(socket="s", pane_id="%3", chrome="off")
         self.assertEqual(len(argvs), len(instance.chrome_option_names()))
         for a in argvs:
-            self.assertIn("-u", a)
+            self.assertIn("-u", _tmuxchain.command(a))
 
     def test_the_live_path_and_the_launch_path_agree_about_every_pane(self):
         """The property both functions have to keep, asked across the whole cross-product
@@ -1698,11 +1698,12 @@ class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCa
             for bg in (None, "blue", "brightblack", "default"):
                 with self.subTest(chrome=level, bg=bg):
                     launch = self._launch(chrome=level, bg=bg)
-                    live = [a for a in self._live(chrome=level, bg=bg) if "-u" not in a]
+                    live = [a for a in self._live(chrome=level, bg=bg)
+                            if "-u" not in _tmuxchain.command(a)]
                     self.assertEqual(live, launch)
                     # And the removals only ever name options nothing is setting.
                     for a in self._live(chrome=level, bg=bg):
-                        if "-u" in a:
+                        if "-u" in _tmuxchain.command(a):
                             self.assertNotIn(a[-1], [x[-2] for x in launch])
 
     def test_no_color_still_beats_both(self):
@@ -1711,7 +1712,7 @@ class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCa
                                                     chrome="dark", bg="blue")
         self.assertTrue(argvs, "NO_COLOR on a running frame means the unsets, not silence")
         for a in argvs:
-            self.assertIn("-u", a)
+            self.assertIn("-u", _tmuxchain.command(a))
 
     def test_the_command_itself_asks_each_pane_for_its_own_colour(self):
         """**The wiring, not the helper** — and this is the second time the hand-check has
@@ -1744,7 +1745,7 @@ class TheLiveChromeToggleDoesNotEraseAPanesOwnColour(PersonaIso, unittest.TestCa
                          [["window-style", "bg=brightblack"],
                           ["window-active-style", "bg=black"]])
         # `repos` named no colour: `off` means remove, which is what it must still do.
-        self.assertTrue(all("-u" in a for a in told["%1"]), told["%1"])
+        self.assertTrue(all("-u" in _tmuxchain.command(a) for a in told["%1"]), told["%1"])
 
 
 if __name__ == "__main__":                        # pragma: no cover

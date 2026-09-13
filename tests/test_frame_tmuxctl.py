@@ -337,13 +337,34 @@ class ServerArgv(unittest.TestCase):
     """
 
     def test_a_plain_name_selects_charters_own_private_server(self):
+        """**The one literal of `server_argv`'s whole output in this suite**, with its
+        sibling for `-S` below. Every other test that asserts what charter sends builds its
+        expected argv through `server_argv`, so the next flag here changes these two lines
+        and not ninety-five copies of them across the suite (#984)."""
         self.assertEqual(tmuxctl.server_argv("charter", "list-sessions"),
-                         ["tmux", "-L", "charter", "list-sessions"])
+                         ["tmux", "-u", "-L", "charter", "list-sessions"])
 
     def test_an_absolute_path_selects_the_operators_existing_server(self):
         self.assertEqual(
             tmuxctl.server_argv(OPERATOR_SOCKET, "list-windows", "-a"),
-            ["tmux", "-S", OPERATOR_SOCKET, "list-windows", "-a"])
+            ["tmux", "-u", "-S", OPERATOR_SOCKET, "list-windows", "-a"])
+
+    def test_every_command_is_sent_as_a_utf8_client_whatever_the_locale_says(self):
+        """`-u`, on both spellings, because tmux decides what it may print from the CLIENT's
+        locale and charter reads what it prints (#984).
+
+        Measured on tmux 3.7c with private sockets: a client whose environment names no
+        UTF-8 locale — `$LANG`, `$LC_ALL` and `$LC_CTYPE` all unset, or `LC_ALL=C` even
+        beside a UTF-8 `$LANG` — gets a literal TAB in a `-F` format back as `_`, so every
+        tab-separated format charter reads comes back as one field, and a non-ASCII value
+        (`@charter_plane` holding `/tmp/plané_x`) as `/tmp/plan__x`. `-u`, `LANG=C.UTF-8`,
+        `LC_ALL=C.UTF-8` and `LC_CTYPE=UTF-8` each restored both. `-u` is the one of them
+        that changes nothing but this client: a locale forced through the child's
+        environment was copied into the server's global environment, and so into every
+        pane started after it."""
+        for server in ("charter", OPERATOR_SOCKET):
+            with self.subTest(server=server):
+                self.assertIn("-u", tmuxctl.server_argv(server, "list-panes"))
 
     def test_nothing_is_ever_joined(self):
         """The argv rule, at the one place every tmux command in charter now passes
@@ -361,8 +382,8 @@ class ServerArgv(unittest.TestCase):
         OWNERSHIP question (`is_operator_socket`) now answers for it."""
         own = socket_path("charter")
         self.assertFalse(tmuxctl.is_operator_socket(own, own="charter"))
-        self.assertEqual(tmuxctl.server_argv(own, "list-sessions"),
-                         ["tmux", "-S", own, "list-sessions"])
+        self.assertEqual(tmuxctl.server_argv(own, "list-sessions")[-3:],
+                         ["-S", own, "list-sessions"])
 
 
 class TwoSpellingsOfOneSocket(unittest.TestCase):
@@ -567,8 +588,8 @@ class ChainedCommands(unittest.TestCase):
     def test_the_commands_are_separated_by_tmuxs_own_separator(self):
         argv = tmuxctl.chain([tmuxctl.server_argv("charter", "select-pane", "-t", "%1"),
                               tmuxctl.server_argv("charter", "kill-pane", "-t", "%2")])
-        self.assertEqual(argv, ["tmux", "-L", "charter", "select-pane", "-t", "%1",
-                                ";", "kill-pane", "-t", "%2"])
+        self.assertEqual(argv, tmuxctl.server_argv("charter", "select-pane", "-t", "%1",
+                                                   ";", "kill-pane", "-t", "%2"))
 
     def test_the_server_is_named_once_and_only_once(self):
         argv = tmuxctl.chain([tmuxctl.server_argv("charter", "a"),
@@ -596,6 +617,16 @@ class ChainedCommands(unittest.TestCase):
         self.assertIsNone(tmuxctl.chain([
             tmuxctl.server_argv("charter", "kill-pane", "-t", "%1"),
             tmuxctl.server_argv(OPERATOR_SOCKET, "kill-pane", "-t", "%2")]))
+
+    def test_two_servers_spelled_the_same_way_are_refused_too(self):
+        """**What pins how long the head is.** Two `-L` names differ only in the server's
+        own word, so a head cut one element short compares equal for both — `chain` read
+        `argv[:3]` while `server_argv` built three, and `-u` (#984) made it build four. A
+        head that stopped before the name would chain `charter-elsewhere`'s kill onto
+        charter's own server."""
+        self.assertIsNone(tmuxctl.chain([
+            tmuxctl.server_argv("charter", "kill-pane", "-t", "%1"),
+            tmuxctl.server_argv("charter-elsewhere", "kill-pane", "-t", "%2")]))
 
     def test_nothing_to_chain_is_nothing_to_run(self):
         """`overlay.close_argvs` answers `[]` when it will not build a close at all, and
