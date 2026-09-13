@@ -360,6 +360,12 @@ steward
 An empty `$CHARTER_PERSONA` is not reported, because a frame starts every chat with the
 variable set and empty when the launch pinned no persona.
 
+`--persona` holding only whitespace is refused rather than ignored, because a flag is typed
+for one command and no rung below it is the persona you meant. `charter persona secret` and
+`charter recall` exit 1 with `no persona ' ' (a persona name is never only whitespace)`
+(#1055). Before, `persona secret` said that persona has no vault, and `recall` searched a
+persona named `' '` and found nothing. An empty `--persona ""` still means no flag.
+
 `charter persona use <name>` writes the session *and* terminal pointers, so two panes hold
 two personas and neither moves the other. Only the terminal pointer survives closing and
 reopening Claude, and only when your terminal reports a pane id — `use` says which of the

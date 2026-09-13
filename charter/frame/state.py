@@ -1337,7 +1337,10 @@ def workspace_for(fid: str) -> str:
     property.
     """
     from .. import workspace as ws_mod
-    env = os.environ.get("CHARTER_WORKSPACE", "").strip()
+    # `from_environment`, the one reading of the variable (#1055). This rung stripped it by
+    # hand while `workspace.chosen` did not, and two copies are how the panel and the
+    # commands it draws for came to disagree about `" "`.
+    env = ws_mod.from_environment()
     if ws_mod.valid_name(env):
         return env
     return own_workspace(fid) or ws_mod.resolve()

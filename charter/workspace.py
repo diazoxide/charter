@@ -8,7 +8,8 @@ Which workspace a command acts on is resolved by precedence:
 
 1. an explicit ``--workspace`` flag,
 2. the ``$CHARTER_WORKSPACE`` env var (set at session launch → hard per-session
-   isolation for parallel agents),
+   isolation for parallel agents; empty or only whitespace is unset, not a rung —
+   :func:`from_environment`, #1055),
 3. the **per-Claude-session** pointer (``.charter/sessions/<id>.workspace``),
 4. the **per-terminal** pointer (``.charter/terminals/<id>.workspace``) — a terminal
    pane survives closing/reopening Claude, so a pane keeps its own workspace,
@@ -523,6 +524,41 @@ def clear_declared_default() -> bool:
     return True
 
 
+def from_environment() -> str | None:
+    """The workspace ``$CHARTER_WORKSPACE`` names, or ``None`` when it names none (#1055).
+
+    **Stripped, and what is left empty is unset.** :func:`chosen` used to take the variable
+    as its top rung whenever it was set and strip it only after that, so a value of
+    whitespace chose ``""`` and hid every rung below it: the tree you stand in, the session
+    and terminal pointers, the frame and the nominated default. :func:`resolve` then fell to
+    the built-in `default`, :func:`source` named the variable as what decided, and the
+    SessionStart nudge skipped asking, because the variable counted as a hard pin.
+    `export CHARTER_WORKSPACE=$(…)` over a command that printed only a space or a tab leaves
+    exactly that, and nobody chose it. Empty was already unset —
+    `commands_frame._frame_identity_env` launches every chat with ``CHARTER_WORKSPACE=`` —
+    and this is that rule one character further, the one `persona.from_environment` applies
+    to ``$CHARTER_PERSONA`` (#1048) and `frame.state.workspace_for` already applied to this
+    variable. A name inside the whitespace is that name.
+
+    The one reading of the variable. Every rung that ranks it and every sentence that says
+    it outranks something asks this, because a second copy is how the ladder and the warning
+    about it came to disagree about ``" "``.
+    """
+    return os.environ.get("CHARTER_WORKSPACE", "").strip() or None
+
+
+def blank_in_environment() -> bool:
+    """``$CHARTER_WORKSPACE`` is set to whitespace and nothing else, so
+    :func:`from_environment` ignored it (#1055).
+
+    Worth saying because the operator's export is broken, and resolution going on through the
+    rungs below hides that from them. Empty is not reported: it is what a frame launches every
+    chat with when the launch pinned nothing, so it would be said in every chat about an
+    export nobody wrote.
+    """
+    return bool(os.environ.get("CHARTER_WORKSPACE")) and from_environment() is None
+
+
 def resolve(explicit: str | None = None, session_id: str | None = None,
             cwd=None) -> str:
     """Active workspace by precedence: ``--workspace`` → ``$CHARTER_WORKSPACE`` → **the
@@ -575,9 +611,9 @@ def chosen(explicit: str | None = None, session_id: str | None = None,
     """
     if explicit:
         return explicit
-    env = os.environ.get("CHARTER_WORKSPACE")
+    env = from_environment()
     if env:
-        return env.strip()
+        return env
     here = from_path(cwd)
     if here:
         return here
@@ -621,7 +657,7 @@ def source(explicit: str | None = None, session_id: str | None = None,
     """
     if explicit:
         return "--workspace"
-    if os.environ.get("CHARTER_WORKSPACE"):
+    if from_environment():
         return "$CHARTER_WORKSPACE"
     if from_path(cwd):
         return "cwd"      # must mirror `resolve`'s order, or the status line explains

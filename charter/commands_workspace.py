@@ -172,6 +172,14 @@ def cmd_workspace_current(args) -> int:
     lock = _lock_words(name, workspace.is_locked())
     mode = "LIVE (committed + shared)" if workspace.is_live(name) else "LOCAL (private)"
     util.info(f"{mode} · resolved via {workspace.source()}, {lock}")
+    # After the rung: resolution went on past the variable without a word, so the rung that
+    # decided reads as the operator's choice while their export is what broke (#1055). The
+    # value is not echoed; it is whitespace, and a line separator among it would start a
+    # line of its own.
+    if workspace.blank_in_environment():
+        util.warn("$CHARTER_WORKSPACE is set but holds only whitespace, so charter ignored it "
+                  "and the rungs below it decided. Unset it, or set it to the workspace you "
+                  "meant.")
     vision = workspace.read_vision(name)
     if vision:
         util.info(f"Vision: {vision.splitlines()[0].strip()}")
@@ -1931,9 +1939,14 @@ def cmd_workspace_reinit(args) -> int:
 
 
 def _warn_env_override(name: str) -> None:
-    env = os.environ.get("CHARTER_WORKSPACE")
-    if env and env.strip() != name:
+    # The name resolution ranks, not the raw variable: a blank one outranks nothing, and
+    # warning that `' '` takes precedence sent the operator to a variable that was not
+    # deciding (#1055). The name is bounded to one line because it comes out of a shell, and
+    # a line separator in it would write a line of this output that charter did not.
+    env = workspace.from_environment()
+    if env and env != name:
+        shown = contain.one_line(env)
         util.warn(
-            f"$CHARTER_WORKSPACE='{env}' is set and takes precedence — commands in this "
-            f"session will still act on '{env}', not '{name}'."
+            f"$CHARTER_WORKSPACE='{shown}' is set and takes precedence — commands in this "
+            f"session will still act on '{shown}', not '{name}'."
         )

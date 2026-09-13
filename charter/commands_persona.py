@@ -658,6 +658,10 @@ def cmd_persona_remove(args) -> int:
 # persona-scoped secrets (proxy to the persona's vault)                        #
 # --------------------------------------------------------------------------- #
 def _resolve_vault(args) -> str | None:
+    refused = persona.blank_flag(getattr(args, "persona", None))
+    if refused:
+        util.err(refused)
+        return None
     name = persona.resolve_active(getattr(args, "persona", None))
     if not name:
         util.err("no active persona. Select one: charter persona use <name>  (or pass --persona).")
@@ -707,8 +711,11 @@ def _warn_env(name: str) -> None:
     # deciding (#1048).
     env = persona.from_environment()
     if env and env != name:
-        util.warn(f"$CHARTER_PERSONA='{env}' is set and takes precedence — commands use "
-                  f"'{env}', not '{name}'.")
+        # Bounded to one line: the name comes out of a shell, and a line separator in it
+        # wrote a second line that read as charter's own (#1055).
+        shown = contain.one_line(env)
+        util.warn(f"$CHARTER_PERSONA='{shown}' is set and takes precedence — commands use "
+                  f"'{shown}', not '{name}'.")
 
 
 # --------------------------------------------------------------------------- #

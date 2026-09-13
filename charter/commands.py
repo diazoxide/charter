@@ -3023,7 +3023,13 @@ def cmd_recall(args) -> int:
     """The single memory-fetch gate: search (or list) across every relevant memory base —
     the active workspace's journal, the active persona's own memory, and the shared
     namespace (+ ephemeral with --ephemeral) — with each hit labeled by its source."""
-    from . import recall as rc
+    from . import persona, recall as rc
+    # Before anything is searched: a `--persona` of whitespace searched a persona named
+    # `' '` and reported no memories, over the persona that holds them (#1055).
+    refused = persona.blank_flag(getattr(args, "persona", None))
+    if refused:
+        util.err(refused)
+        return 1
     scopes = list(rc.DEFAULT_SCOPES)
     if getattr(args, "scope", None):
         scopes = [s.strip() for s in args.scope.split(",") if s.strip() in rc.SCOPES]

@@ -3102,7 +3102,8 @@ to declare them on the composite instead.
 ### Picking a workspace when the frame opens
 
 `charter <harness>` used to resolve a workspace silently and go straight in. If **nothing
-chose one** — no `--workspace`, no `$CHARTER_WORKSPACE`, not standing in a workspace tree,
+chose one** — no `--workspace`, no `$CHARTER_WORKSPACE` (empty or only whitespace is none),
+not standing in a workspace tree,
 no per-session or per-terminal pointer, no declared default — it now asks first:
 
 ```
