@@ -329,7 +329,7 @@ declare one. That is deliberate — charter never invents an identity for you.
 
 ### Precedence
 
-Six rungs, highest first. The first one that names an existing persona wins:
+Seven rungs, highest first. The first one that names a persona wins:
 
 | Rung | Where | Scope |
 | --- | --- | --- |
@@ -337,8 +337,12 @@ Six rungs, highest first. The first one that names an existing persona wins:
 | `$CHARTER_PERSONA` | the environment | one shell / one launched session |
 | session pointer | `.charter/sessions/<id>.persona` | this session |
 | terminal pointer | `.charter/terminals/<id>.persona` | this pane, across restarts |
+| plane-wide file | `.charter/active-persona` | a shell with no session or pane id — see below |
 | declared default | `charter.toml` `[persona] default` | the plane, committed |
 | legacy default | `personas/.default` | the plane, committed — see below |
+
+The two committed rungs name a persona only if it exists. The five above them win even when
+the persona they name does not; see *When a selection names a persona that does not exist*.
 
 `charter persona use <name>` writes the session *and* terminal pointers, so two panes hold
 two personas and neither moves the other. Only the terminal pointer survives closing and
@@ -373,6 +377,19 @@ nothing was cleared.` `charter persona remove` in a chat leaves the launching te
 pointer too, because `remove` clears a selection only when the removed persona resolved from
 the plane-wide file.
 
+Outside a chat, `clear` reads back what the shell resolves to in the same way, rather than
+naming a default it did not compare with the rungs above it (#1045):
+
+```
+✓ Active persona cleared.
+• This shell now resolves to 'steward' (via charter.toml).
+```
+
+`$CHARTER_PERSONA` outranks every pointer, so when it is set `clear` still removes the
+pointers but does not call the persona cleared:
+`Persona selection cleared, but $CHARTER_PERSONA outranks every selection and still decides
+in this shell.`, followed by the same readback. Unset the variable to reach the rungs below.
+
 A shell with neither a session id nor a pane id (a bare script, say) has nothing to key a
 pointer on. There `use` writes `.charter/active-persona`, the plane-wide local file, which
 is what that file is now for.
@@ -391,6 +408,38 @@ Rename or delete the persona a plane declares and the declaration resolves to *n
 no identity, rather than a broken one. Two surfaces say so rather than leaving you to notice
 the absence: `charter doctor` reports it (`front door`, a warning, with the fix), and the
 status line carries one row naming the missing persona.
+
+### When a selection names a persona that does not exist
+
+`charter persona remove forge` deletes the definition and leaves every session pointer,
+terminal pointer and plane-wide file that named `forge`. Those sessions go on resolving
+`forge` through their pointer, and **they do not fall back to the plane's default**: the
+pointer records a choice somebody made, and adopting the default in its place would hand the
+session a persona, with its tools and its vault, that nobody chose for it. A session in that
+state has no persona role and no persona tool grants. The same holds for a `$CHARTER_PERSONA`
+that names no persona.
+
+What charter does is say so (#1045):
+
+- **SessionStart** briefs the session that `forge` is selected (and through which rung) and
+  that no persona by that name exists, with the ways out.
+- **`charter persona current`** still prints `forge` on stdout, the name the ladder resolved,
+  and on stderr adds `resolved via session — no persona by that name exists, so no persona is
+  active, and the plane's default does not stand in for it.` with the ways out.
+  **`charter persona list`** says the same on its `Active persona:` line.
+- **`charter persona clear`** reads back a missing persona the same way.
+- **`charter persona create forge`** says how many selections already named `forge` and now
+  select the new persona, by rung: `2 selection(s) already named 'forge' before it existed,
+  and now select it: 1 session pointer(s), 1 terminal pointer(s).` A pointer outlives its
+  session, so some of those may belong to sessions that will never run again.
+
+The ways out depend on the rung:
+
+| Rung holding the name | Ways out |
+| --- | --- |
+| session pointer, or any pointer outside a chat | `charter persona use <persona>`, or `charter persona clear` |
+| terminal pointer or plane-wide file, inside a chat | `charter persona use <persona>` in the chat; `clear` there drops only the chat's own pointer |
+| `$CHARTER_PERSONA` | unset it, or set it to a persona that exists; neither `use` nor `clear` moves it |
 
 ## Routing: handing work to the persona that owns it
 

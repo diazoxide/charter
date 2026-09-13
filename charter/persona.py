@@ -33,6 +33,7 @@ import shutil
 import time
 from itertools import groupby as _groupby
 from pathlib import Path
+from typing import NamedTuple
 
 from . import config, contain, mcpseen
 
@@ -1140,6 +1141,23 @@ def _read_pointer(f: Path | None) -> str | None:
         return None
 
 
+def pointers_naming(name: str) -> dict[str, int]:
+    """How many selections on this machine name *name*, by rung: ``session``, ``terminal``
+    and ``active-file`` (0 or 1), counted through the reader :func:`_resolved` uses.
+
+    Every session's and every terminal's, not this process's: `persona create` asks it
+    because a new persona becomes the selection of every pointer a removed one of that name
+    left behind, in sessions nobody is looking at (#1045). A pointer outlives its session, so
+    some of these may belong to sessions that will never run again, and the count does not
+    pretend to know which.
+    """
+    def count(d: Path) -> int:
+        return sum(1 for f in d.glob("*.persona") if _read_pointer(f) == name)
+    return {"session": count(config.SESSIONS_DIR),
+            "terminal": count(config.TERMINALS_DIR),
+            "active-file": int(_read_pointer(config.ACTIVE_PERSONA_FILE) == name)}
+
+
 def for_session(sid: str) -> str | None:
     """The persona explicitly chosen FOR *sid*, or ``None`` if nobody chose one.
 
@@ -1200,6 +1218,70 @@ def resolve_active(explicit: str | None = None) -> str | None:
 
 def source(explicit: str | None = None) -> str:
     return _resolved(explicit)[1]
+
+
+class Selection(NamedTuple):
+    """What :func:`_resolved` decided, and whether the persona it names is defined here."""
+
+    name: str | None
+    source: str
+    exists: bool
+
+    @property
+    def missing(self) -> bool:
+        """A rung named a persona and there is none — which is not the same as no rung
+        naming anything, where there is nothing to report."""
+        return bool(self.name) and not self.exists
+
+
+def selection(explicit: str | None = None) -> Selection:
+    """``(persona, where it came from, whether that persona exists)``, decided once (#1045).
+
+    **A rung that names a persona that does not exist still wins, and this does not change
+    that.** `persona remove` leaves every session and terminal pointer that named the
+    persona, so those sessions resolve to a name that defines nothing, and every rung below
+    it — the plane's declared default included — stays hidden. Falling through instead would
+    hand the session a persona, with its tool grants and its vault, that nobody chose for
+    it; staying on the name fails toward no role and no grants. What was wrong is that
+    nothing said so, so the answer is carried to every surface that reports a selection
+    rather than each of them checking the name again, and disagreeing about how.
+
+    ``exists`` asks what the two committed rungs already ask before they answer
+    (:func:`declared_default`, :func:`default_persona`), so those two are always ``True``
+    here, and only the rungs a person or a shell wrote can come back ``False``. The name
+    check is not optional: a pointer is a file, and ``../personas/forge`` spells a path
+    where a definition sits without naming a persona. It also answers ``False`` for no name
+    at all, which is why nothing in front of it asks.
+    """
+    name, src = _resolved(explicit)
+    return Selection(name, src, reference_ok(name) and def_path(name).exists())
+
+
+def ways_out(source: str) -> str:
+    """The commands that move a selection held at *source*, as a clause (#1045).
+
+    One answer for every surface that names a missing persona, because the true answer
+    depends on the rung and a second copy would be the one that offered a command that does
+    nothing. Only the rungs :func:`selection` can report missing reach here: the committed
+    two are checked before they answer, and ``--persona`` is not a selection anybody reports.
+
+    ``$CHARTER_PERSONA`` outranks both pointers, so `use` and `clear` leave it deciding. In a
+    chat, `clear` drops the chat's session pointer and nothing else (#1022): the terminal
+    pointer it resolves is keyed on an id the chat inherited, and the plane-wide file on a
+    shell with no ids, so offering `clear` there for either would send the reader to a
+    command that leaves the stale name exactly where it was. Who owns that pointer is not
+    said, because an inherited terminal id can be a launcher's or a recycled pane's, and
+    naming one would be a guess (ADR 0009).
+    """
+    if source == "$CHARTER_PERSONA":
+        return ("unset `$CHARTER_PERSONA`, or set it to a persona that exists; it outranks "
+                "`charter persona use` and `charter persona clear`, so neither moves it")
+    from . import workspace
+    if source != "session" and workspace.launch_lock():
+        return ("`charter persona use <persona>` selects one for this chat; `charter persona "
+                "clear` here drops only this chat's own selection, and this is not it")
+    return ("`charter persona use <persona>` selects one that exists, or `charter persona "
+            "clear` drops the selection")
 
 
 def set_active(name: str, session_id: str | None = None,
