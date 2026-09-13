@@ -21,6 +21,7 @@ Three promises are pinned here, and they pull against each other on purpose:
 
 from __future__ import annotations
 
+import errno
 import io
 import json
 import os
@@ -204,13 +205,22 @@ class TheManifestIsPartOfTheLayout(ManifestCase):
                          "a repair command that contradicts its own error two lines up")
 
     def _unwritable_manifest(self, ws: str):
-        """A manifest path charter refuses to write and nothing else in the workspace.
+        """A manifest write that fails, and nothing else in the workspace.
 
-        A symlink out of the plane, dangling: `contain.writable` refuses the write (#328),
-        `Path.exists` answers False through it, and every other component stays writable —
-        which is what lets a case ask whether the rest of the repair still happened.
+        The publish of `workspace.json` is refused the way a full disk refuses it, and every
+        other component stays writable — which is what lets a case ask whether the rest of the
+        repair still happened. Not a symlink at the manifest's name, which this used to be: that
+        is a link where a baseline file belongs, which `reinit` names in a sentence of its own
+        and never tries to write (#1037), so it no longer reaches the failed write asked about.
         """
-        workspace.manifest_path(ws).symlink_to(self.tmp / "nowhere.json")
+        manifest, real = os.fspath(workspace.manifest_path(ws)), os.replace
+
+        def full_disk(src, dst, *args, **kwargs):
+            if os.fspath(dst) == manifest:
+                raise OSError(errno.ENOSPC, "No space left on device", manifest)
+            return real(src, dst, *args, **kwargs)
+
+        self.enterContext(mock.patch("os.replace", full_disk))
 
     def test_the_rest_of_the_repair_still_lands_when_the_manifest_cannot(self):
         """One component charter cannot write must not swallow the report of the ones it

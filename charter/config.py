@@ -389,7 +389,7 @@ def mkdir_for(p, parents: bool = True) -> None:
 STATE_FILE_MODE = 0o600
 
 
-def _private_fd(p: "Path", *, append: bool) -> int:
+def _private_fd(p: "Path", *, append: bool, exclusive: bool = False) -> int:
     """A descriptor on *p* with `STATE_FILE_MODE` settled on the **inode**, before any
     content of charter's can reach it.
 
@@ -416,6 +416,8 @@ def _private_fd(p: "Path", *, append: bool) -> int:
     and `charter.secrets.registry._write` makes this one, for these reasons.
     """
     flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else 0)
+    if exclusive:
+        flags |= os.O_EXCL   # `create_for`: see there for why a create is never through a link
     fd = os.open(str(p), flags, STATE_FILE_MODE)
     try:
         os.fchmod(fd, STATE_FILE_MODE)
@@ -464,7 +466,9 @@ def open_for(p, mode: str = "w", *, encoding: str | None = "utf-8"):
     the operator's to mode. `mkdir_for` documents the same half.
 
     *mode* is a `open` mode string; only the writing ones reach here. ``"a"`` appends
-    (``O_APPEND``, no truncation), anything else truncates **after** the mode is settled.
+    (``O_APPEND``, no truncation), ``"x"`` creates or raises `FileExistsError`
+    (``O_EXCL``, on both branches — see :func:`create_for`), anything else truncates
+    **after** the mode is settled.
     """
     p = Path(p)
     if not under_state(p):
@@ -485,7 +489,7 @@ def _open_private(p, mode: str = "w", *, encoding: str | None = "utf-8"):
     is right there and wrong everywhere else, which is why it is private and says so.
     """
     append = "a" in mode
-    fd = _private_fd(Path(p), append=append)
+    fd = _private_fd(Path(p), append=append, exclusive="x" in mode)
     try:
         if not append:
             os.ftruncate(fd, 0)     # after the fchmod, never before: see `_private_fd`
@@ -508,6 +512,34 @@ def write_for(p, data) -> None:
     """
     with open_for(p, "wb" if isinstance(data, (bytes, bytearray)) else "w") as f:
         f.write(data)
+
+
+def create_for(p, data) -> bool:
+    """Create *p* holding *data* **only where nothing is at that name** — never through a
+    symlink, never over a file — and say whether it did. :func:`write_for`'s dispatch, with
+    ``O_EXCL``.
+
+    For the writers that create a file only where they found none, and the reason is #1037.
+    "Found none" was asked through the link, `exists()` answers False for a link whose target
+    is gone, and ``open(p, "w")`` then FOLLOWED it and created the target, wherever it pointed:
+    a committed ``workspaces/<ws>/refs/README.md`` link was a teammate's `reinit` creating a
+    file at a path the committer chose. ``O_CREAT | O_EXCL`` fails at a symlink "regardless of
+    the contents of the symbolic link" (POSIX `open`), so the kernel refuses the one shape a
+    check-then-write cannot close — a link planted between the two. Measured on macOS: a plain
+    ``"w"`` created a dangling link's target, and ``"x"`` raised EEXIST and created nothing.
+
+    False, not an exception, for a name that is taken, because both ways to get here are
+    ordinary: the check that sent the caller lost a race to a link, or to another launch
+    scaffolding the same workspace (#893) — and whatever is there now is not this writer's to
+    write over. Only the LAST component is the kernel's to judge; a directory above it is the
+    caller's check, as it is for `contain.write_refusal`.
+    """
+    try:
+        with open_for(p, "xb" if isinstance(data, (bytes, bytearray)) else "x") as f:
+            f.write(data)
+    except FileExistsError:
+        return False
+    return True
 
 
 #: What every temp file this module publishes through is called, appended to a name that

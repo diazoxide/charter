@@ -399,11 +399,24 @@ workspace has and no branches.
 A baseline path charter cannot check — a directory it may not read, a symlink loop — gets
 nothing written into it. `reinit` names it with what clears it, in the words `charter doctor`
 uses for the same path: restoring read access, or fixing the loop at the link that loops.
-The same holds for a workspace's `refs` that is there and is no directory: a symlink whose
-target is gone is named with "removing or repointing that link clears this", and a file is
-named with "moving it out of the way clears this". Charter never removes, repoints or moves
-either, `reinit` exits 0, and neither flags the workspace for a `reinit` that cannot add the
-file.
+The same holds for a workspace's `refs` or `memory` that is there and is no directory: a
+symlink whose target is gone is named with "removing or repointing that link clears this",
+and a file is named with "moving it out of the way clears this". Charter never removes,
+repoints or moves either, `reinit` exits 0, and neither flags the workspace for a `reinit`
+that cannot add the file.
+
+Charter writes nothing through a symlink at a baseline path. A workspace's tree is committed,
+and git keeps a link as a link, so a link there may be somebody else's. A link where a baseline
+file belongs (`workspace.md`, `workspace.json`, `memory/MEMORY.md`, `refs/README.md`) is never
+followed, wherever it points. A link where a directory belongs (`memory`, `refs`) is followed
+only when it lands on a directory inside the plane's data, so a `refs` repointed at shared
+notes in the plane keeps working. Every other link is named with "is a symlink, and charter
+writes nothing through one; replacing it with a real file clears this", or "a real directory"
+where a directory belongs. It gets the same exit 0, and it does not flag the workspace. The
+files themselves are created exclusively as well, so a link that appears between the check and
+the write makes the create fail, not follow the link. The `.charter-structure` stamp is written
+with an open that refuses a link, so it is never written through one either; a stamp that could
+not be written leaves the workspace flagged for `reinit`.
 
 A workspace directory that is itself a symlink loop is named the same way — "fix the symlink
 loop at" its path — by `reinit <name>`, which exits 1, and by `reinit --all`, which counts it

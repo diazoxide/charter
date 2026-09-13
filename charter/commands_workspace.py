@@ -1875,10 +1875,20 @@ def cmd_workspace_reinit(args) -> int:
             # creates nothing beneath either, and removes neither, so the row says which one was
             # found and the repair that is the operator's to make.
             unresolved.add(n)
-            fix = ("is a symlink whose target is not there, and charter writes nothing through "
-                   "it; removing or repointing that link clears this" if code == errno.ENOENT
-                   else "is not a directory, and charter never moves existing content; moving "
-                        "it out of the way clears this")
+            if code == errno.ENOENT:
+                fix = ("is a symlink whose target is not there, and charter writes nothing "
+                       "through it; removing or repointing that link clears this")
+            elif code == errno.ENOTDIR:
+                fix = ("is not a directory, and charter never moves existing content; moving it "
+                       "out of the way clears this")
+            else:
+                # #1037: a link charter will not follow — where the file itself belongs, wherever
+                # it points, or where a directory belongs and it does not land on one inside the
+                # plane. Never "repoint it" for a file: no target makes a file link one charter
+                # writes through. What it becomes is what the layout has at that path.
+                real = "file" if path == workspace.workspace_dir(n) / rel else "directory"
+                fix = (f"is a symlink, and charter writes nothing through one; replacing it with "
+                       f"a real {real} clears this")
             util.warn(f"'{n}': {rel} cannot be created — {path} {fix}.")
         # The BACKFILL half of #884, and the reason it is checked after rather than read
         # off `before`: `workspace.scaffold_manifest` swallows its own failure, because it
@@ -1894,7 +1904,12 @@ def cmd_workspace_reinit(args) -> int:
         # sweep found the conjunct as a survivor and it was right — an equivalent mutant
         # and dead code are one finding.
         there = workspace._exists(workspace.manifest_path(n), follow=True)
-        if there is None:
+        if "workspace.json" in {rel for rel, _path, _code in before["in_the_way"]}:
+            # Named by its `in_the_way` row above, and not written by `scaffold`, which is not a
+            # write that failed (#1037): "could not be written" beside that row said one link twice
+            # in two sentences, and counted the workspace as a repair that went wrong.
+            pass
+        elif there is None:
             # Not "could not be written" (#942 review round 4, minor 2's class): an lstat that
             # fails proves nothing about the file, and that sentence sends somebody to fix a write.
             util.warn(f"'{n}': workspace.json cannot be checked — charter cannot say whether it "
