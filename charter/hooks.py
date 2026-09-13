@@ -368,14 +368,113 @@ _SECRET_CHECKS = (
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
     ("private key (PEM)", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("AWS access key", re.compile(r"AKIA[0-9A-Z]{12,}")),
+    # The lookahead is the rule as it always was — a name, `:` or `=`, six non-blank
+    # characters. `value` is the rest of that line, which is what `_secret_kind` holds up
+    # against a reference, so a real value anywhere after the `:` is still this rule's hit.
     ("credential assignment",
-     re.compile(r"(?i)\b(?:password|passwd|api[_-]?key|apikey|secret|token)\b\s*[:=]\s*['\"]?\S{6,}")),
+     re.compile(r"(?i)\b(?:password|passwd|api[_-]?key|apikey|secret|token)\b\s*[:=]\s*"
+                r"(?=['\"]?\S{6,})(?P<value>[^\n]*)")),
+)
+
+#: One NAME inside a vault reference: a vault, a key, an item, a field, a path segment.
+_REFERENCE_SLOT = r"[A-Za-z0-9_][A-Za-z0-9._-]*"
+
+#: A value that names WHERE a credential lives, in the four spellings charter's own text
+#: uses: a `vault:<vault>/<key>` reference (ADR 0022's spelling), the command that reads one,
+#: `charter secret get <vault> <key>`, and the two URIs a `reference` vault stores and
+#: `docs/secrets.md` documents, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`.
+#: At most one quote or backtick on either side, for `token: "vault:forge/token"` and a
+#: Markdown span that closes after the value. Every slot is a named group, so
+#: :func:`_names_where_a_credential_lives` can ask each one whether it is a name at all.
+#:
+#: The credential-assignment rule refused all four, and so refused the remedy the handoff
+#: brief refusal names (#985). **Matched against the whole value, never searched within it**,
+#: so a real value beside, after or glued to a reference is still a hit, and so is a second
+#: assignment on the same line. A bare `forge/token` is not a reference here — a secret can
+#: hold a slash — and neither is `$(charter secret get …)` or any spelling charter does not
+#: use.
+_VAULT_REFERENCE_RE = re.compile(
+    r"['\"`]?(?:"
+    rf"vault:(?P<vault>{_REFERENCE_SLOT})/(?P<key>{_REFERENCE_SLOT})"
+    rf"|charter secret get (?P<cli_vault>{_REFERENCE_SLOT}) (?P<cli_key>{_REFERENCE_SLOT})"
+    rf"|op://(?P<op_vault>{_REFERENCE_SLOT})/(?P<op_item>{_REFERENCE_SLOT})"
+    rf"/(?P<op_field>{_REFERENCE_SLOT})"
+    rf"|vault://(?P<path>{_REFERENCE_SLOT}(?:/{_REFERENCE_SLOT})*)#(?P<field>{_REFERENCE_SLOT})"
+    r")['\"`]?")
+
+#: The most characters ALL the names of one reference may hold together — every vault, key,
+#: item, field and path segment, without the scheme or the `/`, `#` and space between them —
+#: and still be read as names. Vault, key, item and field names are short words (`forge`,
+#: `DEPLOY_TOKEN`); the credentials this rule exists for are long random runs, a GitHub token
+#: 40 characters, a hex API key 40, a PyPI token over a hundred.
+#:
+#: **On the whole reference, not on each name**, and both halves of that were measured. With no
+#: cap, a live token typed into a reference (`vault:forge/<40 hex>`) passed where the rule had
+#: refused it. With a cap of 32 per name, a longer secret that holds a `/` split into short
+#: names and passed: `vault://<AWS's documented example secret key>#x`, or six 30-character
+#: segments of a `vault://` path (#985's reviews). A total refuses a secret of more than 32
+#: name characters however it is split. The separators are not counted, so a secret holding
+#: k of them passes at up to 32 + k characters: `vault:<16>/<16>` is a 33-character value that
+#: passes. The cost, stated: an ordinary reference whose names add up to more than 32 —
+#: `vault://secret/data/production/payments#stripe_api_key` — is refused as a credential.
+_REFERENCE_NAMES_MAX = 32
+
+#: Prefixes that mark a name as a credential whatever the length, so a short or truncated
+#: token cannot pass as one. Checked on EACH name, since a prefix starts a name. Each is the
+#: fixed prefix its issuer puts on every token of that kind, which is why a real vault or key
+#: name does not start with one:
+_CREDENTIAL_PREFIXES = (
+    "ghp_", "gho_", "ghu_", "ghs_", "ghr_",     # GitHub: classic PAT, OAuth, user, server, refresh
+    "github_pat_",                              # GitHub fine-grained PAT
+    "glpat-",                                   # GitLab personal access token
+    "sk_live_", "sk_test_", "rk_live_",         # Stripe secret and restricted keys
+    "sk-",                                      # OpenAI and Anthropic API keys (`sk-proj-`, `sk-ant-`)
+    "xoxa-", "xoxb-", "xoxp-", "xoxr-", "xoxs-",  # Slack app, bot, user, refresh, session tokens
+    "AIza",                                     # Google API key
+    "pypi-",                                    # PyPI upload token
+    "npm_",                                     # npm access token
+    "hf_",                                      # Hugging Face token
+    "AKIA", "ASIA",                             # AWS access key ids, long-term and temporary
 )
 
 
+def _names_where_a_credential_lives(value: str) -> bool:
+    """Whether *value* is exactly a vault reference whose slots hold names, not a credential.
+
+    The shape alone was the first cut, and it let a token through in any slot — `vault:forge/
+    ghp_…`, `charter secret get forge <40 hex>` — which is the accident this rule is for: an
+    agent inlining a live token where a reference was meant. So the value is an ordinary
+    assignment again when any name starts with one of :data:`_CREDENTIAL_PREFIXES`, or when
+    the names together run past :data:`_REFERENCE_NAMES_MAX`. **The ceiling of that, stated:**
+    a secret of at most 32 name characters, not counting the `/`, `#` or single spaces that
+    separate them, that starts with no listed prefix still reads as names.
+    """
+    m = _VAULT_REFERENCE_RE.fullmatch(value)
+    if not m:
+        return False
+    slots = [s for g, s in m.groupdict().items() if s is not None and g != "path"]
+    if m.group("path") is not None:
+        slots += m.group("path").split("/")
+    return (sum(len(s) for s in slots) <= _REFERENCE_NAMES_MAX
+            and not any(s.startswith(_CREDENTIAL_PREFIXES) for s in slots))
+
+
 def _secret_kind(text: str) -> str | None:
+    """The KIND of secret *text* appears to hold — a label out of :data:`_SECRET_CHECKS` —
+    or ``None``.
+
+    Shared by every caller that refuses one, so the brief `charter handoff` refuses, the
+    memory file PostToolUse warns about and the file `charter save` and `memory-sync` will
+    not commit are one set of shapes. A match that carries a `value` is let through only
+    when that value is exactly a vault reference whose slots are names
+    (:func:`_names_where_a_credential_lives`); every match is asked, so one exempt
+    assignment does not excuse the next.
+    """
     for label, rx in _SECRET_CHECKS:
-        if rx.search(text):
+        for m in rx.finditer(text):
+            value = m.groupdict().get("value")
+            if value is not None and _names_where_a_credential_lives(value.rstrip()):
+                continue
             return label
     return None
 

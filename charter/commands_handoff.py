@@ -61,13 +61,16 @@ NO_SUCH_WORKSPACE = (
 NO_SUCH_PERSONA = (
     "charter handoff: no persona '{p}' — have: {have}. Nothing was opened.")
 #: The kind, never the matched text — `hooks._secret_kind`'s own discipline, reused rather
-#: than a second classifier (plan Open question 20).
+#: than a second classifier (plan Open question 20). The two spellings it recommends are the
+#: two that classifier reads as a reference rather than a value, on a line of their own; a
+#: remedy the refusal refuses sends its reader straight back into it (#985).
 SECRET_BRIEF = (
     "charter handoff: the brief looks like it carries a secret ({kind}) — nothing was "
     "opened. A "
     "brief travels to the new chat as a command-line argument any local process can read "
     "while the harness starts, so it never carries a secret. Name where the credential "
-    "lives (a vault and key) instead of pasting it.")
+    "lives instead of pasting it, as the whole value on its line: `vault:<vault>/<key>`, "
+    "or `charter secret get <vault> <key>`.")
 NOT_IN_A_FRAME = (
     "charter handoff: this shell is not a chat in a charter frame, so there is no frame to "
     "open a chat in the background of — nothing was opened.\n"

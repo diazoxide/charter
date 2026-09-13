@@ -284,7 +284,14 @@ and the marker goes with the directory when that id is reaped.
 - **The brief is a command-line argument.** It reaches the harness as `claude "<brief>"`,
   `codex "<brief>"` or `opencode --prompt "<brief>"`, so any process on this machine that can
   list processes can read it while the harness starts. A brief never carries a secret, and a
-  credential-shaped one is refused by kind before anything opens.
+  credential-shaped one is refused by kind before anything opens. Name where the credential
+  lives instead, as the whole value on its line — `token: vault:forge/token`,
+  ``token: `charter secret get forge token` ``, `token: op://Eng/deploy/token` or
+  `token: vault://secret/data/app#TOKEN` — which is not refused while its names add up to at
+  most 32 characters, not counting the `/`, `#` or single spaces that separate them, and none
+  starts with a known token prefix ([#985](https://github.com/diazoxide/charter/issues/985)).
+  A token typed into one of those names is refused like any other, unless it is that short
+  and unprefixed.
 - **12,288 bytes for the stamped message**, above. The cost, stated: a brief between roughly
   12,200 and 15,800 bytes is refused although tmux would take it.
 - **An opencode chat that reopens empty is not shown its brief.** opencode has no SessionStart

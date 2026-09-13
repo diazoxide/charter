@@ -23,7 +23,7 @@ one thing a hook is allowed to shout about.
 | `PreToolUse` | `Bash` | every guard below except the vault read |
 | `PreToolUse` | `Read\|Grep` | keeps a vault file from being read into context |
 | `PreToolUse` | `Task\|Agent` | notes a dispatch about to happen |
-| `PostToolUse` | `Write\|Edit\|MultiEdit` | the record-memory nudge |
+| `PostToolUse` | `Write\|Edit\|MultiEdit` | the record-memory nudge, and a warning when a memory file looks like it holds a secret (below) |
 | `PostToolUse` | `Skill` | tallies which skills a persona actually invokes |
 | `PostToolUse` | `Task\|Agent` | tallies the dispatch |
 | `Stop`, `SubagentStop` | — | autosave a LIVE workspace |
@@ -642,6 +642,55 @@ There is no second line of defence behind it: nothing scans Bash *output*. What 
 makes a vault not worth reading is the provider — `1password` and `reference` keep the value
 in a system built for custody and resolve it on demand, so there is no plaintext on disk for
 any of the above to print. That is the control; the hook is the guard rail.
+
+## A line that looks like a secret, in memory or a brief
+
+A second guard reads text rather than commands, and four places ask it the same question:
+the `PostToolUse` warning after a write to persona or workspace memory, `charter save` and
+`charter persona memory-sync` before they commit a memory file, and `charter handoff` before
+it sends a brief. Each answer is a **kind**, never the text it matched: an AgentMail key, a
+JWT, a PEM private key, an AWS access key, or a **credential assignment**, which is a
+`password`, `passwd`, `api_key`, `apikey`, `secret` or `token` followed by `:` or `=` and six
+non-blank characters.
+
+**Naming where a credential lives is not a credential assignment.** The brief refusal tells
+you to do exactly that, and the rule used to refuse the answer whenever it was one word:
+`api_key = vault:forge/api-token` and ``token: `charter secret get forge token` `` were both
+refused as credentials ([#985](https://github.com/diazoxide/charter/issues/985)). A value in
+one of the four spellings charter uses is now let through, with at most a quote or backtick
+on each side: `vault:<vault>/<key>`, `charter secret get <vault> <key>`, and the two URIs a
+`reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`.
+Because that happens in the one classifier, all four places give the same answer. **The
+whole value, to the end of its line, has to be the reference, and its names have to look
+like names**. No name may start with a prefix a credential issuer puts on its tokens (`ghp_`,
+`github_pat_`, `glpat-`, `sk_live_`, `sk-`, `xoxb-`, `AIza`, `pypi-`, `npm_`, `hf_`, `AKIA`
+and the rest of `hooks._CREDENTIAL_PREFIXES`). And all the names together — every vault, key,
+item, field and path segment, counted without the scheme or the `/`, `#` and space between
+them — come to **at most 32 characters**. The cap is on the total rather than on each name
+because a secret can hold a `/`: capped per name, AWS's documented example secret key
+written as a `vault://` path split into short segments and passed. So all of these are still
+refused:
+
+- a bare `forge/token`, because a secret can contain a slash;
+- a token typed into any slot of a reference — `vault:forge/ghp_…`,
+  `charter secret get forge <40 hex>`, `op://<token>/item/field` — by its prefix or by the
+  length it adds, which is the accident this rule exists for;
+- a secret of more than 32 name characters however it is split across names, including a
+  `vault://` path of many short segments;
+- a real value beside the reference, glued onto it, or in a second assignment on that line
+  or the next;
+- prose after the reference on the same line;
+- any other spelling, including `$(charter secret get …)`, `op:/…`, an `op://` with more or
+  fewer than three names, and a `vault://` with no `#<field>`.
+
+The four other kinds are checked on the whole text whatever the assignment says:
+`vault:forge/xAKIA…` is still an AWS access key. **The length and prefix rule has a ceiling
+of its own:** a secret of at most 32 name characters, not counting the `/`, `#` or single
+spaces that separate them, that starts with none of those prefixes reads as names and
+passes — so a secret holding k separators passes at up to 32 + k characters, and
+`vault:<16>/<16>` is a 33-character value that passes. And it costs the other way: an ordinary reference whose names add
+up to more than 32 characters, `vault://secret/data/production/payments#stripe_api_key`, is
+refused as a credential.
 
 ## When a guard is wrong
 
