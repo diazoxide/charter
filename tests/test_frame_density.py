@@ -37,7 +37,7 @@ from unittest import mock
 
 from charter import (commands_frame, config, inflight, instance, statusline, tui,
                      util)
-from charter.frame import builtin_actions, gather, layout, panel, slots, state
+from charter.frame import builtin_actions, gather, layout, panel, slots, state, tmuxctl
 from tests import _tmuxchain
 from tests._tmuxsocket import OPERATOR_SOCKET
 
@@ -119,8 +119,11 @@ class _Tmux:
         """Indices of every recorded call containing all of *words* — how an ORDER is
         asserted here, since the thing being pinned is which tmux command ran before
         which, not how many times each ran."""
+        # Asked of the COMMAND, not the whole argv: `-u` is a word every argv charter sends
+        # now carries in its head (#984), and `set-hook -u` is the disarm this is used to
+        # find.
         return [i for i, c in enumerate(self.calls)
-                if all(any(w == part for part in c) for w in words)]
+                if all(any(w == part for part in _tmuxchain.command(c)) for w in words)]
 
 
 class ShippedDefaultsAgree(unittest.TestCase):
@@ -1267,7 +1270,8 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         rc, fake = self._run("minimal", fake=_Tmux(size="40:8"))
         self.assertEqual(rc, 0)
         self.assertEqual(len([c for c in fake.calls if "kill-pane" in c]), 4, fake.calls)
-        unset = [c for c in fake.calls if "window-resized" in c and "-u" in c]
+        unset = [c for c in fake.calls
+                 if "window-resized" in c and "-u" in _tmuxchain.command(c)]
         self.assertEqual(len(unset), 1, fake.calls)
         self.assertEqual(state.panes(self.fid), {})
 
@@ -1580,18 +1584,19 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         still be the whole defect."""
         state.record_server(self.fid, OPERATOR_SOCKET)
         _, fake = self._run("full")
-        armed = [c for c in fake.calls if "pane-died" in c and "-u" not in c]
+        armed = [c for c in fake.calls
+                 if "pane-died" in c and "-u" not in _tmuxchain.command(c)]
         self.assertEqual(len(armed), 1, fake.calls)
         for cmd in armed:
-            self.assertEqual(cmd[:3],
-                             ["tmux", "-S", OPERATOR_SOCKET])
+            self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv(OPERATOR_SOCKET))
             self.assertIn(f"--frame {self.fid}", cmd[-1])
 
     def test_a_new_pane_on_charters_own_server_is_armed_for_respawn(self):
         """The other direction, so the refusal above cannot be satisfied by never arming
         anything anywhere."""
         _, fake = self._run("full")
-        armed = [c for c in fake.calls if "pane-died" in c and "-u" not in c]
+        armed = [c for c in fake.calls
+                 if "pane-died" in c and "-u" not in _tmuxchain.command(c)]
         self.assertEqual(len(armed), 1, fake.calls)
 
     def test_no_session_id_is_not_a_quiet_no_op_any_more(self):

@@ -521,19 +521,20 @@ class Chrome(unittest.TestCase):
         exist — and a chrome setting that lands on a server nobody is looking at is the
         quietest possible way for this fix to do nothing."""
         for cmd in self._argvs(socket=OPERATOR_SOCKET):
-            self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET])
+            self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv(OPERATOR_SOCKET))
             self.assertNotIn("-L", cmd)
         for cmd in self._argvs(socket="charter"):
-            self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+            self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv("charter"))
 
     def test_each_setting_is_a_clean_argv_never_a_joined_string(self):
         """`layout.py`'s never-join-argv rule, which this module is a second citizen of:
         one option, one value, each its own element, nothing tmux re-parses."""
         for cmd in self._argvs():
             self.assertTrue(all(isinstance(a, str) for a in cmd), cmd)
-            self.assertEqual(cmd[3:7], ["set-option", "-w", "-t", "%7"], cmd)
-            self.assertEqual(len(cmd), 9,
-                             f"not `tmux -L X set-option -w -t %7 <opt> <val>`: {cmd}")
+            self.assertEqual(_tmuxchain.command(cmd)[:4], ["set-option", "-w", "-t", "%7"],
+                             cmd)
+            self.assertEqual(len(_tmuxchain.command(cmd)), 6,
+                             f"not `set-option -w -t %7 <opt> <val>`: {cmd}")
             for a in cmd:
                 self.assertNotIn(";", a, cmd)
                 self.assertNotIn(" ", a, cmd)
@@ -634,7 +635,7 @@ class PaneDiedHooks(unittest.TestCase):
             self.assertIsInstance(cmd, list)
             for part in cmd:
                 self.assertIsInstance(part, str)
-            self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+            self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv("charter"))
 
     def test_the_frame_root_is_carried_out_of_band(self):
         """`set-environment` takes the path as ONE argv value — no shell, no tmux
@@ -650,8 +651,8 @@ class PaneDiedHooks(unittest.TestCase):
         root = "/tmp/My Plane's frames $(touch pwned)"
         cmd = commands_frame._exit_path_env_argv(socket="charter", session="demo",
                                                  frame_root=root)
-        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo",
-                              "CHARTER_FRAME_EXIT", root])
+        self.assertEqual(cmd, tmuxctl.server_argv("charter", "set-environment", "-t", "demo",
+                                                  "CHARTER_FRAME_EXIT", root))
 
     def test_the_frame_id_is_carried_to_its_own_palette(self):
         """Without this, `run-shell` fired from a LATER frame sharing `SOCKET` falls
@@ -667,8 +668,8 @@ class PaneDiedHooks(unittest.TestCase):
         every chat's frame id."""
         cmd = commands_frame._session_id_env_argv(socket="charter", session="demo",
                                                   chat="demo.2")
-        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-environment", "-t", "demo",
-                              "CHARTER_SESSION_ID", "demo.2"])
+        self.assertEqual(cmd, tmuxctl.server_argv("charter", "set-environment", "-t", "demo",
+                                                  "CHARTER_SESSION_ID", "demo.2"))
 
 
 class PanelRespawnHook(unittest.TestCase):
@@ -756,7 +757,8 @@ class PanelRespawnHook(unittest.TestCase):
     def test_it_is_a_clean_argv_list_naming_charters_own_socket(self):
         cmd = self._argv()
         self.assertTrue(all(isinstance(a, str) for a in cmd))
-        self.assertEqual(cmd[:4], ["tmux", "-L", "charter", "set-hook"])
+        self.assertEqual(cmd[:len(tmuxctl.server_argv("charter", "set-hook"))],
+                         tmuxctl.server_argv("charter", "set-hook"))
 
     def test_the_operators_socket_is_reached_by_path_and_never_by_name(self):
         """#408's own defect, at the arming end. This function hand-built
@@ -766,8 +768,8 @@ class PanelRespawnHook(unittest.TestCase):
         `-L` from `-S`, and asking it is what makes the two shapes impossible to disagree.
         """
         cmd = self._argv(socket=OPERATOR_SOCKET)
-        self.assertEqual(cmd[:4],
-                         ["tmux", "-S", OPERATOR_SOCKET, "set-hook"])
+        self.assertEqual(cmd[:len(tmuxctl.server_argv(OPERATOR_SOCKET, "set-hook"))],
+                         tmuxctl.server_argv(OPERATOR_SOCKET, "set-hook"))
         self.assertNotIn("-L", cmd)
 
     def test_an_interpreter_path_that_means_something_else_is_not_armed_at_all(self):
@@ -1123,14 +1125,14 @@ class Respawn(PersonaIso, unittest.TestCase):
         fake = _RespawnTmux()
         rc = _respawn(fake, on_argv=True)
         self.assertEqual(rc, 0)
-        self.assertEqual([c[:3] for c in fake.liveness],
-                         [["tmux", "-S", OPERATOR_SOCKET]], fake.calls)
+        self.assertEqual([_tmuxchain.head(c) for c in fake.liveness],
+                         [tmuxctl.server_argv(OPERATOR_SOCKET)], fake.calls)
         self.assertIn("list-windows", fake.liveness[0],
                       "a frame in the operator's tmux is a WINDOW; `list-sessions` "
                       "there asks about sessions that are all theirs")
         self.assertEqual(len(fake.respawns), 1, fake.calls)
-        self.assertEqual(fake.respawns[0][:3],
-                         ["tmux", "-S", OPERATOR_SOCKET])
+        self.assertEqual(_tmuxchain.head(fake.respawns[0]),
+                         tmuxctl.server_argv(OPERATOR_SOCKET))
 
     def test_a_frame_on_charters_own_server_is_still_reached_by_name(self):
         """The other direction, so the test above cannot be satisfied by a `-S` for
@@ -1138,12 +1140,14 @@ class Respawn(PersonaIso, unittest.TestCase):
         question there."""
         fake = _RespawnTmux()
         _respawn(fake, on_argv=True)
-        self.assertEqual(fake.liveness[0][:3], ["tmux", "-L", commands_frame.SOCKET])
+        self.assertEqual(_tmuxchain.head(fake.liveness[0]),
+                         tmuxctl.server_argv(commands_frame.SOCKET))
         # Two questions, both of charter's own server: the chat ids its windows carry
         # (`@charter_chat`), and — for a frame launched by a charter that predates chats
         # and is still a session named by its id — `list-sessions`.
         self.assertTrue(any("list-sessions" in c for c in fake.liveness), fake.liveness)
-        self.assertEqual(fake.respawns[0][:3], ["tmux", "-L", commands_frame.SOCKET])
+        self.assertEqual(_tmuxchain.head(fake.respawns[0]),
+                         tmuxctl.server_argv(commands_frame.SOCKET))
 
     def test_an_operators_server_that_does_not_answer_is_not_respawned_into(self):
         """`_live_windows` answers `None` when the server did not answer at all, which
@@ -1911,7 +1915,7 @@ def _chrome_values(calls: list[list[str]]) -> dict[str, str]:
     """
     out: dict[str, str] = {}
     for cmd in calls:
-        if _is_chrome(cmd) and "-u" not in cmd:
+        if _is_chrome(cmd) and "-u" not in _tmuxchain.command(cmd):
             out[cmd[-2]] = cmd[-1]
     return out
 
@@ -2278,7 +2282,7 @@ class TheSessionIsMarkedWithItsPlane(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(exit_code=0, still_live=True)
         _launch(fake)
         cmd = next(c for c in fake.calls if commands_frame._PLANE_OPTION in c)
-        self.assertEqual(cmd[3:6], ["set-option", "-t", fake.pane_id], cmd)
+        self.assertEqual(_tmuxchain.command(cmd)[:3], ["set-option", "-t", fake.pane_id], cmd)
         self.assertNotIn("-w", cmd)
         self.assertNotIn("-g", cmd)
         self.assertNotIn("-p", cmd)
@@ -2330,8 +2334,8 @@ class ThePlaneOptionIsCheckedWhereItEntersTmux(unittest.TestCase):
 
     def test_an_ordinary_path_is_written_as_a_session_option(self):
         self.assertEqual(self._argv("/home/a/proj/.charter"),
-                         ["tmux", "-L", "charter", "set-option", "-t", "%9",
-                          "@charter_plane", "/home/a/proj/.charter"])
+                         tmuxctl.server_argv("charter", "set-option", "-t", "%9",
+                                             "@charter_plane", "/home/a/proj/.charter"))
 
     def test_a_path_with_a_space_in_it_is_perfectly_fine(self):
         """A space is not a separator in this format and never reaches a shell — the argv
@@ -2357,8 +2361,8 @@ class TheChatOptionIsCheckedWhereItEntersTmux(unittest.TestCase):
     def test_a_chat_is_written_as_a_window_option_on_the_harness_pane(self):
         cmd = commands_frame._chat_option_argv(socket="charter", harness_pane="%9",
                                                chat="demo.2")
-        self.assertEqual(cmd, ["tmux", "-L", "charter", "set-option", "-w", "-t", "%9",
-                               "@charter_chat", "demo.2"])
+        self.assertEqual(cmd, tmuxctl.server_argv("charter", "set-option", "-w", "-t", "%9",
+                                                  "@charter_chat", "demo.2"))
         self.assertNotIn("-g", cmd,
                          "a global write hands every window on this shared server one "
                          "chat's id")
@@ -2492,7 +2496,7 @@ class NothingIsAddedToCarriable(unittest.TestCase):
                                       cwd="/tmp", harness_argv=["codex"],
                                       env={"CHARTER_SESSION_ID": "demo.2",
                                            "CHARTER_HARNESS": "codex"})
-        self.assertEqual(cmd[:3], ["tmux", "-L", "charter"])
+        self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv("charter"))
         self.assertIn("new-window", cmd)
         self.assertEqual(cmd[cmd.index("-n") + 1], "demo.2")
         self.assertEqual(cmd[cmd.index("-t") + 1], "demo")
@@ -2792,7 +2796,7 @@ class Launch(PersonaIso, unittest.TestCase):
         _launch(fake)
         bind = [c for c in fake.calls if "bind-key" in c]
         self.assertEqual(len(bind), 1, "the menu button was not bound exactly once")
-        self.assertEqual(bind[0][3:11],
+        self.assertEqual(_tmuxchain.command(bind[0])[:8],
                          ["bind-key", "-n", "MouseDown3Pane", "if-shell", "-F", "-t",
                           "=", "#{@charter_panel}"])
         self.assertEqual(bind[0][-2], "send-keys -M")
@@ -5108,7 +5112,7 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
         paint still has a way out."""
         self._frame()
         calls = self._open()
-        verbs = [c[3] for c in calls]
+        verbs = [_tmuxchain.command(c)[0] for c in calls]
         # `list-panes` first is #739's sweep: charter asks tmux which panes on this
         # window carry the overlay mark and closes them before splitting another, so a
         # second `F2` reopens the palette rather than stacking an invisible one behind
@@ -5488,8 +5492,8 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertFalse([c for c in fake.calls if "new-session" in c],
                          f"a second server was started: {fake.calls}")
         for cmd in fake.calls:
-            self.assertNotIn("-L", cmd[:3], f"not the operator's own server: {cmd}")
-            self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET], cmd)
+            self.assertNotIn("-L", _tmuxchain.head(cmd), f"not the operator's own server: {cmd}")
+            self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv(OPERATOR_SOCKET), cmd)
 
     def test_the_frame_is_a_window_in_the_operators_own_session(self):
         fake = _FakeOperatorTmux(exit_code=0)
@@ -5593,7 +5597,7 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertTrue(chrome, "no chrome was set at all, so this test measured nothing")
         scopes = set()
         for cmd in chrome:
-            self.assertEqual(cmd[:3], ["tmux", "-S", OPERATOR_SOCKET], cmd)
+            self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv(OPERATOR_SOCKET), cmd)
             scope = cmd[cmd.index("set-option") + 1]
             self.assertIn(scope, ("-w", "-p"), cmd)
             scopes.add(scope)
@@ -5709,7 +5713,8 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         # And nowhere else in the launch either — `-e` is the channel this was leaking
         # through, but the assertion worth making is about the argv, not the channel.
         # A filtered report: the whole of these calls is exactly what must not be printed.
-        leaked = [c[3] for c in fake.calls if "SENTINEL-0xC0FFEE" in " ".join(c)]
+        leaked = [_tmuxchain.command(c)[:1] for c in fake.calls
+                  if "SENTINEL-0xC0FFEE" in " ".join(c)]
         self.assertEqual(leaked, [],
                          f"a decoy value reached the command line of: {leaked}")
 
@@ -5756,8 +5761,8 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         # A filtered projection, never `fake.calls`: this path's argv now carries
         # `$PATH`, and a failure message is not a place to print an environment.
         self.assertEqual(len(armed), 1,
-                         [c[3] for c in fake.calls if len(c) > 3])
-        self.assertEqual(armed[0][:3], ["tmux", "-S", OPERATOR_SOCKET])
+                         [_tmuxchain.command(c)[:1] for c in fake.calls])
+        self.assertEqual(_tmuxchain.head(armed[0]), tmuxctl.server_argv(OPERATOR_SOCKET))
         self.assertEqual(armed[0][armed[0].index("-t") + 1], "%9")
         self.assertIn(f"--frame {_frame_id()}", armed[0][-1])
 
@@ -5774,7 +5779,7 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         fake = _FakeOperatorTmux(exit_code=0, current_chat="op.1",
                                  window_panes={"%1": {"%3": "top"}})
         self.assertEqual(_launch_inside(fake), 0)
-        self.assertIn(["tmux", "-S", OPERATOR_SOCKET, "kill-pane", "-t", "%3"],
+        self.assertIn(tmuxctl.server_argv(OPERATOR_SOCKET, "kill-pane", "-t", "%3"),
                       fake.calls,
                       "the charter chat this launch took the operator off kept its "
                       "panels")
@@ -6086,7 +6091,8 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
             _launch_inside(fake, harness="", rest=["--", "nosuchthing-xyz"])
         captures = [i for i, c in enumerate(fake.calls) if "capture-pane" in c]
         self.assertEqual(len(captures), 1, fake.calls)
-        self.assertEqual(fake.calls[captures[0]][:3], ["tmux", "-S", OPERATOR_SOCKET],
+        self.assertEqual(_tmuxchain.head(fake.calls[captures[0]]),
+                         tmuxctl.server_argv(OPERATOR_SOCKET),
                          "the capture went to a server that is not the one the dead "
                          "pane is on")
         kills = [i for i, c in enumerate(fake.calls) if "kill-window" in c]
@@ -6136,7 +6142,7 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         private = _FakeTmux(exit_code=0)
 
         def _route(cmd, **kw):
-            if "-S" in cmd[:3]:
+            if "-S" in _tmuxchain.head(cmd):
                 return fake(cmd, **kw)
             return private(cmd, **kw)
 

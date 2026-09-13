@@ -28,6 +28,7 @@ import unittest
 
 from charter import commands_frame, config, tui
 from charter.frame import layout, overlay, tmuxctl
+from tests import _tmuxchain
 
 #: The two DEC private modes the overlay turns on and has to turn back off, spelled out
 #: here rather than reached for through `overlay.ENTER`/`overlay.LEAVE`. A constant
@@ -213,7 +214,7 @@ class TheOverlayIsModal(unittest.TestCase):
         # The tmux SUBCOMMAND, not a substring of the whole line: the armed value itself
         # contains the text `select-pane`, and matching on that would make this pass on
         # the arm command alone.
-        names = [c[3] for c in cmds]
+        names = [_tmuxchain.command(c)[0] for c in cmds]
         self.assertLess(names.index("set-option"), names.index("select-pane"), names)
 
 
@@ -895,7 +896,7 @@ class TheEscapeHatch(unittest.TestCase):
     def test_a_refused_pane_id_arms_nothing_rather_than_arming_something_wrong(self):
         self.assertIsNone(overlay.arm_hatch_argv("charter", harness="nope"))
         argv = overlay.arm_hatch_argv("charter", harness="%0")
-        self.assertEqual(argv[:2], ["tmux", "-L"])
+        self.assertEqual(_tmuxchain.head(argv), tmuxctl.server_argv("charter"))
         self.assertIn("set-option", argv)
         self.assertIn("-w", argv)
         self.assertIn(overlay.HATCH_OPTION, argv)
@@ -964,7 +965,7 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
         """
         argv = overlay.open_argv("charter", harness="%0", command=["true"])
         after = argv[argv.index(tmuxctl.SEPARATOR) + 1:]
-        self.assertEqual(after, overlay.mark_argv("charter")[3:])
+        self.assertEqual(after, _tmuxchain.command(overlay.mark_argv("charter")))
         self.assertNotIn("-t", after,
                          "a targeted mark cannot be chained onto the split that makes "
                          "the pane it would target")
@@ -1013,7 +1014,7 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
         it is `tmuxctl.chain`'s rather than a second guard in front of it."""
         self.assertIsNone(overlay.sweep_argv("charter", ()))
         self.assertIsNone(overlay.sweep_argv("charter", ("not-a-pane",)))
-        self.assertEqual(overlay.sweep_argv("charter", ("%4",))[3:],
+        self.assertEqual(_tmuxchain.command(overlay.sweep_argv("charter", ("%4",))),
                          ["kill-pane", "-t", "%4"])
 
     def test_a_target_that_is_not_a_pane_id_opens_nothing(self):
@@ -1087,7 +1088,7 @@ class TheOverlayPaneIsCharterOwn(unittest.TestCase):
         armed value itself contains the text `select-pane`.
         """
         cmds = overlay.close_argvs("charter", harness="%0", overlay_pane="%7")
-        names = [c[3] for c in cmds]
+        names = [_tmuxchain.command(c)[0] for c in cmds]
         self.assertLess(names.index("select-pane"), names.index("kill-pane"), names)
 
     def test_a_refused_overlay_id_kills_nothing_rather_than_naming_the_current_pane(self):

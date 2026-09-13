@@ -114,8 +114,8 @@ class TheLadderAlwaysLandsSomewhere(PersonaIso):
                 self.selected.append(argv[-1])
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-        def interact(argv):
-            self.attached.append(argv[-1])
+        def interact(_server, args):
+            self.attached.append(args[-1])
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run), \
@@ -234,7 +234,7 @@ class TheLadderAlwaysLandsSomewhere(PersonaIso):
                                                             stderr="")), \
                 mock.patch.object(commands_frame.tmuxctl, "interact",
                                   return_value=SimpleNamespace(returncode=3, stdout="",
-                                                               stderr="no")), \
+                                                               stderr="no", args=[])), \
                 mock.patch.object(commands_frame.tmuxctl, "report_failure",
                                   side_effect=lambda *a: reported.append(a[0])):
             self.assertEqual(commands_frame._attach_after_reopen(m, back), 3)

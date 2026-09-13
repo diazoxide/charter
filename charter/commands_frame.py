@@ -4992,10 +4992,9 @@ def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> in
     # operator stays, so a clear on the far side of it would leave the workspace marked for
     # the whole time they were reading it and drop the mark as they left.
     _looked_at(ws)
-    attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", session_id)
-    attached = tmuxctl.interact(attach_cmd)
+    attached = tmuxctl.interact(SOCKET, ["attach", "-t", session_id])
     if attached.returncode != 0:
-        tmuxctl.report_failure("attaching to the frame", attach_cmd, attached)
+        tmuxctl.report_failure("attaching to the frame", attached.args, attached)
         return attached.returncode
     # The same sentence a launch that detached prints, and true for the same reason: this
     # client left, the session did not. Named by the WORKSPACE, because that is what an
@@ -6180,7 +6179,6 @@ def _launch(args) -> int:
                     env=env)
 
     attach = None
-    attach_cmd = None
     refused_to_attach = False
     if code is None:
         if teardown_hook.returncode != 0:
@@ -6285,8 +6283,7 @@ def _launch(args) -> int:
                 # `tmuxctl.interact`, not `tmuxctl.run`: no capture and no timeout — this
                 # IS the operator's own terminal for as long as the harness runs, not an
                 # admin command whose output (or lifetime) charter should own.
-                attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", session)
-                attach = tmuxctl.interact(attach_cmd, env=env)
+                attach = tmuxctl.interact(SOCKET, ["attach", "-t", session], env=env)
 
             code = state.exit_code(fid)
             if code is None:
@@ -6373,7 +6370,7 @@ def _launch(args) -> int:
         # Nothing was recorded, tmux is not still tracking this session, AND `attach`
         # itself reported trouble — surfaced rather than folded into a bare 0, which is
         # precisely the failure this whole module exists to stop happening silently.
-        tmuxctl.report_failure("attaching to the frame", attach_cmd, attach)
+        tmuxctl.report_failure("attaching to the frame", attach.args, attach)
         return attach.returncode
     return 0
 
@@ -10991,10 +10988,9 @@ def _attach_after_reopen(m, back) -> int:
         tmuxctl.run("putting you back on the chat you left",
                     tmuxctl.server_argv(SOCKET, "select-window", "-t", pane_id),
                     report=False)
-    attach_cmd = tmuxctl.server_argv(SOCKET, "attach", "-t", session)
-    attached = tmuxctl.interact(attach_cmd)
+    attached = tmuxctl.interact(SOCKET, ["attach", "-t", session])
     if attached.returncode != 0:
-        tmuxctl.report_failure("attaching to the reopened frame", attach_cmd, attached)
+        tmuxctl.report_failure("attaching to the reopened frame", attached.args, attached)
         return attached.returncode
     return 0
 

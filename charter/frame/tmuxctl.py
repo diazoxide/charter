@@ -382,7 +382,7 @@ def is_socket_path(server: str | None) -> bool:
     return bool(server) and server.startswith("/")
 
 
-def server_argv(server: str, *args: str) -> list[str]:
+def server_argv(server: str, *args: str, interactive: bool = False) -> list[str]:
     """`tmux`, the flags that select ONE server, then *args* — every element separate.
 
     Charter talks to two different servers now, and this is the one place that difference
@@ -394,8 +394,51 @@ def server_argv(server: str, *args: str) -> list[str]:
     Nothing is ever joined, here or anywhere downstream of here: a joined string is
     shell-interpreted by tmux and a separate argv is not (pinned against 3.7c, see
     `frame/layout.py`'s module docstring).
+
+    **`-u` on every command whose output charter captures, because tmux decides what it may
+    PRINT from the client's locale and charter reads what it prints** (#984). Measured on
+    tmux 3.7c and at the 3.2 floor with private
+    sockets: a client whose environment names no UTF-8 locale — `$LANG`, `$LC_ALL` and
+    `$LC_CTYPE` all unset, or `LC_ALL=C` even beside a UTF-8 `$LANG` — gets a literal TAB
+    in a `-F` format back as `_`. Five of charter's formats split on that TAB
+    (:data:`_PANE_PID_FORMAT` and four in `commands_frame`), so each row read as one field:
+    `commands_frame._plane_session` answered ``None`` for a session its own launcher had
+    made, and `charter handoff` refused a plane it owned as "probably another plane's". A
+    non-ASCII value was mangled the same way — `@charter_plane` holding `/tmp/plané_x` read
+    back as `/tmp/plan__x`. Only the client's environment decided it, never the server's.
+    `-u` restored both, and so did a UTF-8 `$LANG`, `$LC_ALL` or `$LC_CTYPE` handed to the
+    child; but a locale forced that way was copied into the server's global environment and
+    so into every pane started after it, where `-u` changes nothing but the client carrying
+    it. Here rather than at the readers, because this is the one place every tmux command
+    charter sends is built — a reader added next month is covered the day it is written.
+
+    **And never on an *interactive* one**, the attach that hands the operator's terminal to
+    tmux — which asks for it through :func:`interact` rather than at each call site, so an
+    attach added later cannot pick the wrong form. There the client's locale is not a
+    reading charter depends on; it is the only thing that says what the TERMINAL can draw.
+    Measured on 3.7c through a pty, with a split pane and a non-ASCII window name: `-u`
+    made the attach byte-identical to a `LANG=C.UTF-8` client whatever the locale said —
+    unset, `LC_ALL=C`, `LANG=en_US.ISO8859-1` alike — so every pane border went out as
+    UTF-8 `│` (`e2 94 82`) where the locale's own answer was the VT100 line-drawing
+    sequence (`ESC ( 0 x`), and `é` as `c3 a9` where it was `_`. A terminal that really is
+    Latin-1 draws each of those border cells as `â` and two control bytes. Without `-u` a
+    UTF-8 terminal whose shell sets no locale still shows `_` for non-ASCII text, which
+    setting `$LANG` fixes; a broken frame on a Latin-1 terminal is one nothing the
+    operator sets could fix.
     """
-    return ["tmux", "-S" if is_socket_path(server) else "-L", server, *args]
+    utf8 = [] if interactive else ["-u"]
+    return ["tmux", *utf8, "-S" if is_socket_path(server) else "-L", server, *args]
+
+
+#: How many leading elements of a :func:`server_argv` result select the SERVER — everything
+#: before the command. Asked of :func:`server_argv` rather than counted by hand, because
+#: :func:`chain` compares exactly this much of each argv, and the count was a literal `3`
+#: there until `-u` made it four (#984): cut one short, two `-L` names compare equal and
+#: one server's commands are chained onto the other's. The name's own spelling does not
+#: change the count — both branches put one flag and one word before the command. The
+#: captured form, because that is the only one ever chained: :func:`interact` runs one
+#: command and builds its own argv.
+_SERVER_PREFIX = len(server_argv("charter"))
 
 
 #: What :func:`live_pane_by_pid` asks of every pane on a server, in ONE call: the pid that
@@ -623,12 +666,12 @@ def chain(argvs: list[list[str]]) -> list[str] | None:
     """
     if not argvs:
         return None
-    head = argvs[0][:3]
+    head = argvs[0][:_SERVER_PREFIX]
     out = list(head)
     for i, argv in enumerate(argvs):
-        if argv[:3] != head:
+        if argv[:_SERVER_PREFIX] != head:
             return None
-        out += ([SEPARATOR] if i else []) + argv[3:]
+        out += ([SEPARATOR] if i else []) + argv[_SERVER_PREFIX:]
     return out
 
 
@@ -961,7 +1004,7 @@ class Write(NamedTuple):
     #: The phrase :func:`report_failure` prints for THIS command, if it is ever run on
     #: its own. Required for the same reason :func:`run`'s is.
     action: str
-    #: The full argv, `tmux -L … verb …`, built by :func:`server_argv` like any other.
+    #: The full argv, `tmux -u -L … verb …`, built by :func:`server_argv` like any other.
     argv: list[str]
     #: Whether a non-zero return from this one command is worth printing.
     report: bool = True
@@ -1056,8 +1099,10 @@ def write_all(joint: str, writes: list[Write], *, env: dict | None = None,
             for w in writes]
 
 
-def interact(argv: list[str], *, env: dict | None = None) -> subprocess.CompletedProcess:
-    """Run one tmux command that OWNS the operator's terminal — no capture, no timeout.
+def interact(server: str, args: list[str], *,
+             env: dict | None = None) -> subprocess.CompletedProcess:
+    """Run one tmux command on *server* that OWNS the operator's terminal — no capture, no
+    timeout. The argv it ran is the result's `args`, for :func:`report_failure`.
 
 `attach` is not an admin command: it IS the session for as long as the harness runs.
     Capturing it would swallow the operator's own screen, and time-boxing it would kill a
@@ -1069,8 +1114,14 @@ def interact(argv: list[str], *, env: dict | None = None) -> subprocess.Complete
     for a keypress. The palette replaced it, and the palette waits in a pane charter owns
     rather than in a tmux command, so this function is back to the one call it was written
     for.
+
+    **It takes the server and the command, not an argv, so the choice of form is made here
+    once** (#984): the argv is :func:`server_argv`'s interactive one, without `-u`, and
+    :func:`server_argv` says what that flag did to an attach on a terminal that is not
+    UTF-8. A caller handing in an argv of its own would be a caller free to hand in the
+    captured form.
     """
-    if not isinstance(argv, list):
-        raise TypeError(f"tmux argv must be a list, got {type(argv).__name__}: {argv!r} "
+    if not isinstance(args, list):
+        raise TypeError(f"tmux argv must be a list, got {type(args).__name__}: {args!r} "
                         "— see frame/layout.py")
-    return subprocess.run(argv, env=env)
+    return subprocess.run(server_argv(server, *args, interactive=True), env=env)

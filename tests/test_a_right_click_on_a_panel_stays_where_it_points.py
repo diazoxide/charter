@@ -71,6 +71,7 @@ from unittest import mock
 from charter import commands_frame
 from charter.frame import tmuxctl
 
+from tests import _tmuxchain
 from tests._tmuxsocket import OPERATOR_SOCKET
 
 #: One real `list-keys -T root` line off a real tmux 3.7c, its `display-menu` cut after the
@@ -190,12 +191,14 @@ class TheBindCharterBuilds(unittest.TestCase):
     def test_the_argv_is_the_one_that_was_measured(self):
         """Every element as a literal, which is this file's sibling's rule (#547): an
         expectation assembled from the same constants the code assembles it from agrees
-        with any of them."""
+        with any of them. The server's head is `tmuxctl.server_argv`'s, and its own literal
+        lives in `test_frame_tmuxctl.ServerArgv` — the one place a new global flag is
+        written down (#984)."""
         self.assertEqual(
             commands_frame._menu_button_argv(socket="charter", default="display-menu -T x"),
-            ["tmux", "-L", "charter", "bind-key", "-n", "MouseDown3Pane",
-             "if-shell", "-F", "-t", "=", "#{@charter_panel}",
-             "send-keys -M", "display-menu -T x"])
+            tmuxctl.server_argv("charter", "bind-key", "-n", "MouseDown3Pane",
+                                "if-shell", "-F", "-t", "=", "#{@charter_panel}",
+                                "send-keys -M", "display-menu -T x"))
 
     def test_a_panel_is_forwarded_to_and_never_selected(self):
         """The true branch is `send-keys -M` ALONE. A `select-pane` that crept back into it
@@ -228,7 +231,7 @@ class TheBindCharterBuilds(unittest.TestCase):
         (`tmuxctl.server_argv`). A socket PATH is the operator's own tmux, and this is the
         head that decides which one a `bind-key` lands on."""
         argv = commands_frame._menu_button_argv(socket=OPERATOR_SOCKET, default="x")
-        self.assertEqual(argv[:3], ["tmux", "-S", OPERATOR_SOCKET])
+        self.assertEqual(_tmuxchain.head(argv), tmuxctl.server_argv(OPERATOR_SOCKET))
 
 
 class TheReadThatJoinsThem(unittest.TestCase):
@@ -252,14 +255,14 @@ class TheReadThatJoinsThem(unittest.TestCase):
         seen, patched = self._answering(_LINE_37C)
         with patched:
             commands_frame._menu_button_bind_argv(socket="charter")
-        self.assertEqual(seen, [["tmux", "-L", "charter", "list-keys", "-T", "root"]])
+        self.assertEqual(seen, [tmuxctl.server_argv("charter", "list-keys", "-T", "root")])
 
     def test_what_the_server_said_becomes_the_else_branch(self):
         seen, patched = self._answering(_LINE_37C)
         with patched:
             argv = commands_frame._menu_button_bind_argv(socket="charter")
         self.assertEqual(argv[-1], _cmd(_LINE_37C))
-        self.assertEqual(argv[3:6], ["bind-key", "-n", "MouseDown3Pane"])
+        self.assertEqual(_tmuxchain.command(argv)[:3], ["bind-key", "-n", "MouseDown3Pane"])
 
     def test_a_server_that_would_not_answer_binds_nothing(self):
         """A wedged or gone server comes back as a return code (`tmuxctl.run` never

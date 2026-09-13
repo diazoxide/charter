@@ -63,6 +63,7 @@ import unittest
 
 from charter import commands_frame, instance
 from charter.frame import overlay, tmuxctl
+from tests import _tmuxchain
 
 
 def _text(*, mouse: bool = True, toggles=None) -> str:
@@ -189,12 +190,13 @@ class ThePaneOptionTheBindReads(unittest.TestCase):
         `tests/test_no_test_bakes_a_uid_into_a_socket_path.py` refuses a `tmux-<uid>` spelt
         into a test file — this case is about the flag, not about where tmux listens."""
         self.assertEqual(
-            commands_frame._panel_mark_argv(socket="charter-x", pane_id="%11")[:3],
-            ["tmux", "-L", "charter-x"])
+            _tmuxchain.head(commands_frame._panel_mark_argv(socket="charter-x",
+                                                            pane_id="%11")),
+            tmuxctl.server_argv("charter-x"))
         self.assertEqual(
-            commands_frame._panel_mark_argv(socket="/nowhere/default",
-                                            pane_id="%11")[:3],
-            ["tmux", "-S", "/nowhere/default"])
+            _tmuxchain.head(commands_frame._panel_mark_argv(socket="/nowhere/default",
+                                                            pane_id="%11")),
+            tmuxctl.server_argv("/nowhere/default"))
 
     def test_the_name_the_bind_reads_is_the_name_the_write_sets(self):
         """One constant, two uses — spelled as a literal on both sides here so that a
@@ -313,7 +315,7 @@ class NeitherMouseKeyIsAComponentsToTake(unittest.TestCase):
                          "the menu button is a WRAP of the server's own binding and "
                          "cannot be a line in a file written before the server is asked")
         argv = commands_frame._menu_button_argv(socket="charter", default="display-menu")
-        self.assertEqual(argv[3:6], ["bind-key", "-n", "MouseDown3Pane"])
+        self.assertEqual(_tmuxchain.command(argv)[:3], ["bind-key", "-n", "MouseDown3Pane"])
 
 
 if __name__ == "__main__":  # pragma: no cover

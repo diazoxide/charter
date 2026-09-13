@@ -44,6 +44,7 @@ from unittest import mock
 
 from charter import commands_frame, instance
 from charter.frame import builtin_actions, chrome as chrome_mod, state
+from tests import _tmuxchain
 from tests._isolation import PersonaIso
 from tests.test_frame_tmux_integration import _HAS_TMUX, _TmuxServerFixture
 
@@ -342,7 +343,8 @@ class TheChromeCommandChangesOneRunningFrame(PersonaIso, unittest.TestCase):
         with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID}, clear=True):
             commands_frame.cmd_chrome(self._args("off"))
         self.assertEqual(state.chrome(self.FID), "off")
-        self.assertTrue(all("-u" in a for a in self.ran), self.ran)
+        self.assertTrue(self.ran, "nothing was issued, so nothing was unset")
+        self.assertTrue(all("-u" in _tmuxchain.command(a) for a in self.ran), self.ran)
 
     def test_no_session_id_says_so_and_still_runs_nothing(self):
         """Records nothing, runs nothing — and, since #734, says so and exits non-zero.
