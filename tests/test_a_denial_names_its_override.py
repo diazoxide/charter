@@ -26,9 +26,17 @@ the agent — and there is deliberately no switch charter can read. That is not 
 **Appended in `_deny`, not at the call sites**, which is the assertion with the most
 value here: the next guard added carries the override without anyone remembering to,
 and the trace tally keys — computed from the reason BEFORE it reaches `_deny` — cannot drift.
-That is not a hypothetical any more: #710, #778, the state-write guard and the chat handoff's
-own A7 each arrived without a row in `DENIALS` below, and each carried the note regardless.
-The rows were added afterwards, so the enumeration says what it claims to.
+#710, #778, the state-write guard and the chat handoff's own A7 each arrived without a row in
+`DENIALS` below, and each carried the note regardless. The README's count of them lagged the
+same way, and so, for the state-write guard, did its entry in `docs/hooks.md` — three
+hand-kept lists, fixed by hand three times (#1000).
+
+**So the set of guards is measured, not remembered.** A guard is a `_deny` call site in
+`charter/hooks.py` — `test_deny_is_the_only_thing_that_emits_a_denial` is what makes that the
+whole set — and :class:`TestTheGuardsAreTheDenyCallSites` reads those sites out of the source,
+drives every row through a spy on `_deny`, and fails naming the line of any site no row reaches.
+A new guard fails this file until it has a row that denies through it, an entry under
+`## The guards` the row names, and the README's count moved to match.
 """
 
 from __future__ import annotations
@@ -36,54 +44,83 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
+import sys
 import unittest
 from pathlib import Path
+from typing import Callable, NamedTuple
+from unittest import mock
 
 from tests._isolation import PersonaIso, run_hook
 from tests.test_hooks import InAControlPlane
 from charter import config, hooks, trace
 
-DOC = Path(__file__).resolve().parents[1] / "docs" / "hooks.md"
+REPO = Path(__file__).resolve().parents[1]
+DOC = REPO / "docs" / "hooks.md"
+README = REPO / "README.md"
 SECTION = "## When a guard is wrong"
+GUARDS_SECTION = "## The guards"
 
-#: Every denial charter can emit, driven end to end through the real handler.
+
+class Denial(NamedTuple):
+    #: The guard's bold lead-in under `## The guards` in `docs/hooks.md`, spelled by hand — a
+    #: title read out of the page would agree with whatever the page says.
+    entry: str
+    handler: Callable[[], int]
+    payload: dict
+
+
+#: Every denial charter can emit, driven end to end through the real handler. Which rows must
+#: exist is not this table's say: `TestTheGuardsAreTheDenyCallSites` holds it to the source.
 DENIALS = {
-    "secret-leak": (hooks.pretooluse,
-                    {"tool_input": {"command": "charter secret get v K --reveal"}}),
-    "vault-read": (hooks.pretooluse_read,
-                   {"tool_name": "Read", "tool_input": {"file_path": ".charter/vaults/d.json"}}),
-    "single-credential": (hooks.pretooluse,
-                          {"tool_input": {"command": "git clone git@github.com:a/b.git"}}),
-    "plane-root-branch": (hooks.pretooluse,
-                          {"tool_input": {"command": "git checkout -b feature"}}),
-    "plane-root-reset": (hooks.pretooluse,
-                         {"tool_input": {"command": "git reset --hard origin/main"}}),
-    "release-floor": (hooks.pretooluse,
-                      {"tool_input": {"command": "gh release create v9.9.9"},
-                       "permission_mode": "bypassPermissions"}),
-    # The two substitution guards. Added late — #710 shipped the first without a row here,
-    # which is the omission this enumeration exists to make impossible: `_deny` gave it the
-    # override note anyway, so nothing was broken and nothing said so either.
-    "forge-substitution": (hooks.pretooluse,
-                           {"tool_input": {"command":
-                                           'gh issue create --body "a `id -un` span"'}}),
-    "charter-substitution": (hooks.pretooluse,
-                             {"tool_input": {"command":
-                                             'charter persona remember "a `id -un` span"'}}),
-    # The handoff guard (A7), added by the chat handoff and enumerated here for the third
-    # time this docstring's story has repeated: it carried the note from `_deny` on the day
-    # it landed, and the row is what makes the enumeration say what it claims to. The
-    # spelling refusal is the cheapest of its four to reach — no `agent_id`, no mode, no
-    # stdin to arrange.
-    "handoff": (hooks.pretooluse,
-                {"tool_input": {"command": "python3 -m charter handoff beta"}}),
-    # The state-write guard, which denies on `Write`/`Edit` rather than on Bash and was
-    # missing here for the same reason the two above were: a row is remembered separately
-    # from the guard, and remembering is what fails.
-    "state-write": (hooks.pretooluse_edit,
-                    {"tool_name": "Write",
-                     "tool_input": {"file_path": ".charter/persona"}}),
+    "secret-leak": Denial("Secret leak", hooks.pretooluse,
+                          {"tool_input": {"command": "charter secret get v K --reveal"}}),
+    "vault-read": Denial("Vault read", hooks.pretooluse_read,
+                         {"tool_name": "Read",
+                          "tool_input": {"file_path": ".charter/vaults/d.json"}}),
+    "single-credential": Denial("One credential", hooks.pretooluse,
+                                {"tool_input": {"command": "git clone git@github.com:a/b.git"}}),
+    "plane-root-branch": Denial("Plane-root branch move", hooks.pretooluse,
+                                {"tool_input": {"command": "git checkout -b feature"}}),
+    "plane-root-reset": Denial("Plane-root history wipe", hooks.pretooluse,
+                               {"tool_input": {"command": "git reset --hard origin/main"}}),
+    "release-floor": Denial("Release floor", hooks.pretooluse,
+                            {"tool_input": {"command": "gh release create v9.9.9"},
+                             "permission_mode": "bypassPermissions"}),
+    "forge-substitution": Denial("Forge body substitution", hooks.pretooluse,
+                                 {"tool_input": {"command":
+                                                 'gh issue create --body "a `id -un` span"'}}),
+    "charter-substitution": Denial("charter's own text substitution", hooks.pretooluse,
+                                   {"tool_input": {"command":
+                                                   'charter persona remember "a `id -un` span"'}}),
+    # A7's spelling refusal is the cheapest of its four to reach — no `agent_id`, no mode, no
+    # stdin to arrange. One row for four refusals, because they are one `_deny` call site.
+    "handoff": Denial("A handoff the prompt cannot stand in front of", hooks.pretooluse,
+                      {"tool_input": {"command": "python3 -m charter handoff beta"}}),
+    # Denies on `Write`/`Edit` rather than on Bash, which is how it went missing from all three
+    # lists at once: nobody looking at the Bash handler saw it.
+    "state-write": Denial("A hand-written state file", hooks.pretooluse_edit,
+                          {"tool_name": "Write",
+                           "tool_input": {"file_path": ".charter/persona"}}),
 }
+
+
+def _deny_call_sites() -> dict[range, str]:
+    """Every `_deny(...)` call in `charter/hooks.py`: the lines it spans, and its first line.
+
+    Read from the AST, not by a regex over the text, so a call split across lines or spelled
+    with different spacing is still one site."""
+    src = Path(hooks.__file__).read_text()
+    lines = src.splitlines()
+    return {range(n.lineno, n.end_lineno + 1): lines[n.lineno - 1].strip()
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_deny"}
+
+
+#: English for a count, as the README spells one. A count past the end of this map fails the
+#: README test with a message, rather than being read as some other number.
+_NUMBER_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+    "fifteen sixteen seventeen eighteen nineteen twenty".split())}
 
 
 def _root_ahead_of_its_upstream(case) -> None:
@@ -126,9 +163,9 @@ SETUP = {"plane-root-reset": _root_ahead_of_its_upstream}
 
 class DenialCase(InAControlPlane):
     def reason(self, name: str, sid: str = "s") -> str:
-        handler, payload = DENIALS[name]
+        row = DENIALS[name]
         SETUP.get(name, lambda _case: None)(self)
-        r = run_hook(handler, {"cwd": str(self.tmp), "session_id": sid, **payload})
+        r = run_hook(row.handler, {"cwd": str(self.tmp), "session_id": sid, **row.payload})
         self.assertIsNotNone(r, f"{name}: fixture never reached the guard")
         out = r["hookSpecificOutput"]
         self.assertEqual("deny", out["permissionDecision"],
@@ -137,12 +174,95 @@ class DenialCase(InAControlPlane):
 
 
 class TestEveryDenialNamesTheOverride(DenialCase):
-    def test_all_ten_of_them(self):
-        """The precondition is the count: ten guards deny, and all ten must say it."""
-        self.assertEqual(10, len(DENIALS))
+    def test_every_one_of_them(self):
+        """No count here: which guards exist is `TestTheGuardsAreTheDenyCallSites`' question,
+        and a number typed into this test is the list that lagged."""
         for name in DENIALS:
             with self.subTest(guard=name):
                 self.assertIn(hooks._OVERRIDE_NOTE, self.reason(name))
+
+
+class TestTheGuardsAreTheDenyCallSites(DenialCase):
+    """#1000. The enumeration above is held to the guards that exist, not to memory.
+
+    The expected set comes from the source — every `_deny` call site in `charter/hooks.py` —
+    and the observed set from running every row with `_deny` spied on, so the two halves are
+    independent: a row cannot vouch for a guard it never reaches, and a guard no row reaches
+    is named by its line."""
+
+    def _site_each_row_reaches(self) -> dict[str, list[range]]:
+        sites = _deny_call_sites()
+        here = Path(hooks.__file__).resolve()
+        real = hooks._deny
+        reached: list[tuple[Path, int]] = []
+
+        def spy(event: str, reason: str) -> int:
+            # Recorded, not asserted: a handler's own `except Exception` would swallow an
+            # assertion raised in here and leave a message about something else.
+            caller = sys._getframe(1)
+            reached.append((Path(caller.f_code.co_filename).resolve(), caller.f_lineno))
+            return real(event, reason)
+
+        out: dict[str, list[range]] = {}
+        with mock.patch.object(hooks, "_deny", spy):
+            for name in DENIALS:
+                reached.clear()
+                self.reason(name, sid=f"site-{name}")
+                self.assertEqual([here] * len(reached), [f for f, _ in reached],
+                                 f"{name}: `_deny` called from outside charter/hooks.py")
+                out[name] = [span for span in sites for _f, line in reached if line in span]
+        return out
+
+    def test_every_guard_has_a_row_that_denies_through_it(self):
+        sites = _deny_call_sites()
+        self.assertTrue(sites, "precondition: no `_deny` call site was found in hooks.py")
+        reached = self._site_each_row_reaches()
+        for name, spans in reached.items():
+            with self.subTest(row=name):
+                self.assertEqual(1, len(spans),
+                                 f"{name}: a row must deny through exactly one guard")
+        covered = {spans[0] for spans in reached.values() if len(spans) == 1}
+        missing = [f"hooks.py:{span.start}: {sites[span]}" for span in sites
+                   if span not in covered]
+        self.assertEqual(
+            [], missing,
+            "a guard with no row in DENIALS — add one whose payload this guard denies, name its "
+            "entry under `## The guards` in docs/hooks.md, and move the README's count")
+
+    def test_no_two_rows_are_the_same_guard(self):
+        """A second row for a guard that already has one would make the count look right while
+        the new guard still has none."""
+        firsts = [spans[0].start for spans in self._site_each_row_reaches().values() if spans]
+        self.assertEqual(len(firsts), len(set(firsts)), "two rows deny through one guard")
+
+    def test_deny_is_only_ever_called_by_name(self):
+        """What makes the call sites the whole set: a `_deny` bound to another name, or passed
+        along as a value, would be a guard this reading cannot see."""
+        tree = ast.parse(Path(hooks.__file__).read_text())
+        called = {id(n.func) for n in ast.walk(tree)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                  and n.func.id == "_deny"}
+        other = [n.lineno for n in ast.walk(tree)
+                 if isinstance(n, ast.Name) and n.id == "_deny" and id(n) not in called]
+        self.assertEqual([], other, "`_deny` referenced without being called")
+
+
+class TestEveryGuardIsDocumented(unittest.TestCase):
+    """The README pointed at `docs/hooks.md` as "the five guards" while ten denied, and the page
+    had no entry for the state-write guard (#999). Both are held to the rows here, and the rows
+    are held to the source."""
+
+    def test_each_row_is_an_entry_under_the_guards_heading_and_nothing_else_is(self):
+        body = DOC.read_text().split(f"\n{GUARDS_SECTION}\n", 1)[1].split("\n## ", 1)[0]
+        entries = [m.group(1).rstrip(".") for m in re.finditer(r"^- \*\*(.+?)\*\*", body, re.M)]
+        self.assertEqual(sorted(row.entry for row in DENIALS.values()), sorted(entries))
+
+    def test_the_readme_counts_the_guards_the_source_has(self):
+        m = re.search(r"\bthe (\w+) guards that deny\b", README.read_text())
+        self.assertIsNotNone(m, "README.md no longer says how many guards deny")
+        self.assertIn(m.group(1), _NUMBER_WORDS, f"README.md spells the count {m.group(1)!r}")
+        self.assertEqual(len(_deny_call_sites()), _NUMBER_WORDS[m.group(1)],
+                         "README.md's count of the guards that deny is not the source's")
 
 
 class TestWhatTheOverrideActuallySays(DenialCase):
@@ -240,9 +360,13 @@ class TestANewGuardCannotForgetIt(PersonaIso):
                          "a denial is emitted outside `_deny`, so it carries no override")
 
     def test_every_deny_call_passes_prose_and_not_a_prebuilt_message(self):
-        """Precondition for the test above: the call sites really do exist and route here."""
+        """Precondition for the test above: the call sites really do exist and route here —
+        every one of them, not "at least six", which is a number an eleventh guard never
+        disturbed (#1000)."""
         calls = re.findall(r"_deny\(\s*\"PreToolUse\"", self._source())
-        self.assertGreaterEqual(len(calls), 6, "precondition: the guards were not found")
+        self.assertTrue(calls, "precondition: the guards were not found")
+        self.assertEqual(len(_deny_call_sites()), len(calls),
+                         "a `_deny` call that is not a PreToolUse denial with its own reason")
 
 
 class TestTheDocumentationExists(unittest.TestCase):
@@ -265,11 +389,22 @@ class TestTheDocumentationExists(unittest.TestCase):
         self.assertIn("terminal", body)
 
     def test_the_section_names_the_narrower_moves_that_come_first(self):
-        """Two guards have a real, narrower answer. Sending someone to a terminal when
+        """Some guards have a real, narrower answer. Sending someone to a terminal when
         `--apply` or an attended re-run is the actual fix would be a worse doc than none."""
         body = self.text.split(SECTION, 1)[1].split("\n## ", 1)[0]
         self.assertIn("attended", body)
         self.assertIn("git-policy --apply", body)
+
+    def test_the_narrower_moves_are_introduced_without_a_count(self):
+        """#1000. "Six guards name a narrower move first" was a count nothing measures. No row
+        and no denial carries whether a guard HAS a narrower move — every denial names a remedy,
+        and which of those this section promotes is the page's own choice — so unlike the
+        README's count of the guards there is no source to hold the number to. A number that
+        cannot be held to anything lags the list under it, so the sentence states none."""
+        body = self.text.split(SECTION, 1)[1].split("\n## ", 1)[0]
+        intro = next(p for p in body.split("\n\n") if "narrower move" in p)
+        counts = "|".join([r"\d+", *_NUMBER_WORDS])
+        self.assertNotRegex(intro, rf"(?i)\b({counts})\s+guards\b")
 
     def test_the_section_names_the_nuclear_option_as_not_an_override(self):
         body = self.text.split(SECTION, 1)[1].split("\n## ", 1)[0]

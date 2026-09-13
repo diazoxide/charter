@@ -79,8 +79,8 @@ def _emit(obj: dict) -> None:
 #: the operator's own shell, which was never inside the boundary: these are `PreToolUse`
 #: hooks on the harness's tools, so running the command yourself works around nothing.
 #:
-#: Appended in :func:`_deny` rather than at the five call sites, for two reasons that are
-#: both about the next guard rather than these five: a sixth carries it without anyone
+#: Appended in :func:`_deny` rather than at each call site, for two reasons that are both
+#: about the next guard rather than the ones already here: it carries the note without anyone
 #: remembering to, and the trace tally keys — derived from the reason BEFORE it gets here —
 #: cannot drift. Appended, never prepended, for the same reason.
 _OVERRIDE_NOTE = (
