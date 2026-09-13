@@ -2544,10 +2544,24 @@ def check_workspace_clones() -> Result:
         return Result(name, OK, detail="no control plane found")
 
     behind: list[str] = []
+    unseen: list[tuple[Path, int | None]] = []
     total = 0
     try:
-        for ws in _workspace.list_workspaces():
-            for clone in _workspace.clones(ws):
+        workspaces = _workspace.list_workspaces()
+        for ws in workspaces:
+            try:
+                found = _workspace.clones(ws)
+            except OSError as e:
+                # One workspace charter cannot list is named, and the others are still read
+                # (#1014) — `gitpolicy.scan`'s shape. Left to the `except` below, it cost the
+                # whole row and hid a stale clone one workspace over: #156's blind spot, from
+                # one `chmod`. `workspaces/` itself still costs the whole row there, since
+                # nothing under it could be counted. No interpreter split reaches this line:
+                # `clones` asks `Path.exists` only of the workspace directory, which its
+                # readable parent answers, and the listing refuses on 3.11–3.14 alike.
+                unseen.append((_workspace.workspace_dir(ws), e.errno))
+                continue
+            for clone in found:
                 total += 1
                 # `@{upstream}` fails cleanly where there is no tracking branch, which is
                 # not a fault — see the docstring.
@@ -2563,16 +2577,30 @@ def check_workspace_clones() -> Result:
         return Result(name, WARN, detail=f"not checked ({e})",
                       hint=_NOT_CHECKED_HINT)
 
+    # What could not be listed is named beside whatever the rest said, with what clears it
+    # (ADR 0009), and the row is never OK while it stands: "none behind" is only true of the
+    # workspaces that were read.
+    named = [p.relative_to(_config.ROOT).as_posix() for p, _ in unseen]
+    unseen_detail = f"; {', '.join(named)} cannot be checked" if unseen else ""
+    cannot = "; ".join(f"{n} cannot be checked — {_workspace.uncheckable_fix(code, p)}"
+                       for n, (p, code) in zip(named, unseen)) + "."
     if not behind:
+        if unseen:
+            return Result(name, WARN,
+                          detail=f"{total} clone(s) across {len(workspaces) - len(unseen)} of "
+                                 f"{len(workspaces)} workspace(s), none behind{unseen_detail}",
+                          hint=cannot)
         if not total:
             return Result(name, OK, detail="no clones in any workspace — nothing to check")
         return Result(name, OK, detail=f"{total} clone(s) across all workspaces, none behind")
     return Result(name, WARN,
-                  detail=", ".join(behind[:4]) + (", …" if len(behind) > 4 else ""),
+                  detail=", ".join(behind[:4]) + (", …" if len(behind) > 4 else "")
+                         + unseen_detail,
                   hint=("→ charter sync --all  (plain `sync` only touches the ACTIVE "
                         "workspace, which is how this stays hidden)  "
                         "Counted from what the last fetch recorded, so it can under-report "
-                        "— never a live query, this runs at SessionStart."))
+                        "— never a live query, this runs at SessionStart.")
+                       + (f"   {cannot}" if unseen else ""))
 
 
 def _mirrored_restrictions() -> dict[str, int]:
@@ -3214,17 +3242,20 @@ def check_memory_indexes() -> Result:
     unindexed_kinds: set[str] = set()
     large_kinds: set[str] = set()
     refused = []
+    unread: list[tuple[Path, int | None]] = []
     for label, mem_dir in bases:
-        try:
-            if not mem_dir.exists():
-                continue
-        except OSError as e:
-            # The same tolerance as the listing above, one read later: `Path.exists` raises on
-            # 3.11–3.13 for a base inside a workspace at mode 000, and once `git auth` stopped
-            # raising over that workspace (#976) this was the line that took `charter doctor`
-            # down instead.
-            return Result("memory indexes", WARN, detail=f"not checked ({e})",
-                          hint=_NOT_CHECKED_HINT)
+        # Asked through `workspace._existence`, not `Path.exists`, which gave two wrong answers
+        # for a base inside a workspace at mode 000 (#1014). On 3.11–3.13 it raised, and
+        # returning `not checked` for that hid every other base with it. On 3.14 it answers
+        # False, so the base was skipped as absent and then counted among the consistent ones —
+        # as was a base that is a symlink loop, on every interpreter. A base charter cannot
+        # check is named, and the rest are still read.
+        there, code = workspace._existence(mem_dir, follow=True)
+        if there is None:
+            unread.append((mem_dir, code))
+            continue
+        if not there:
+            continue
         # Asked FIRST, and reported on its own terms. A refused index answers "nothing is
         # listed", which is what an empty base answers too — so without this the drift
         # numbers below describe a store charter is declining to touch as though it were
@@ -3249,17 +3280,32 @@ def check_memory_indexes() -> Result:
         if n >= _INDEX_LINES_WARN:
             large.append(f"{label} ({n} entries)")
             large_kinds.add("workspace" if label.startswith("ws:") else "persona")
+
+    def row(status: str, detail: str, hint: str = "") -> Result:
+        # Every verdict below is about the bases that were read, so each one says beside it
+        # which were not, with what clears each (ADR 0009) — and none of them is OK while one
+        # is unread. Said after the finding rather than instead of it: the finding is still
+        # true of the bases it describes (#1014).
+        if not unread:
+            return Result("memory indexes", status, detail=detail, hint=hint)
+        named = [p.relative_to(config.ROOT).as_posix() for p, _ in unread]
+        cannot = "; ".join(f"{n} cannot be checked — {workspace.uncheckable_fix(code, p)}"
+                           for n, (p, code) in zip(named, unread)) + "."
+        return Result("memory indexes", WARN,
+                      detail=f"{detail}; {', '.join(named)} cannot be checked",
+                      hint=f"{hint}   {cannot}" if hint else cannot)
+
     if refused:
         # Ahead of drift and growth because it outranks them: those are hygiene, this is a
         # committed file redirecting charter's own writes, and the remedy is to fix that
         # file rather than to run any curation command.
-        return Result("memory indexes", WARN,
-                      detail=f"{len(refused)} index(es) charter will not touch",
-                      hint="; ".join(refused[:2]) + (", …" if len(refused) > 2 else "")
-                           + "  → this is a defect in a committed file: replace the link "
-                             "with a real MEMORY.md")
+        return row(WARN,
+                   detail=f"{len(refused)} index(es) charter will not touch",
+                   hint="; ".join(refused[:2]) + (", …" if len(refused) > 2 else "")
+                        + "  → this is a defect in a committed file: replace the link "
+                          "with a real MEMORY.md")
     if not worst and not large:
-        return Result("memory indexes", OK, detail=f"{len(bases)} base(s) consistent")
+        return row(OK, detail=f"{len(bases) - len(unread)} base(s) consistent")
     hint = ", ".join(worst[:4]) + (", …" if len(worst) > 4 else "")
     if unindexed:
         for kind in sorted(unindexed_kinds):
@@ -3273,10 +3319,8 @@ def check_memory_indexes() -> Result:
                  + "".join(f"  → charter {k} optimize <name>" for k in sorted(large_kinds))
                  + "  (curate; growth is not a defect)")
     if not worst:
-        return Result("memory indexes", WARN,
-                      detail=f"{len(large)} large index(es)", hint=hint)
-    return Result("memory indexes", WARN,
-                  detail=f"{dangling} dangling, {unindexed} unindexed", hint=hint)
+        return row(WARN, detail=f"{len(large)} large index(es)", hint=hint)
+    return row(WARN, detail=f"{dangling} dangling, {unindexed} unindexed", hint=hint)
 
 
 def check_front_door() -> Result:

@@ -17,9 +17,12 @@ ADR 0009 applies to error text.
 
 from __future__ import annotations
 
+import errno
+import os
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from charter import config, doctor, workspace
 from tests._isolation import PersonaIso
@@ -213,6 +216,69 @@ class TestItNeverReachesTheNetwork(StaleCloneCase):
         for c in calls:
             self.assertNotIn("fetch", c, c)
             self.assertNotIn("ls-remote", c, c)
+
+
+class TestOneWorkspaceItCannotReadIsNamed(StaleCloneCase):
+    """One workspace charter cannot list is named with what clears it, and every other
+    workspace's clones are still checked (#1014, ADR 0009). It made the whole row `not checked`,
+    which said nothing of the clones one workspace over — the #156 blind spot, from one
+    `chmod`.
+
+    Asked of the listing, which refuses on every interpreter: `Path.exists` of the workspace
+    directory itself still answers True, so no 3.11–3.13 / 3.14 split reaches this row."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed_origin()
+        self.alpha = self.clone_into("alpha").parent
+        self.web = self.clone_into("beta", "web")
+
+    def refusing_to_list(self, refused: Path):
+        real = Path.iterdir
+
+        def iterdir(self):
+            if self == refused:
+                raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
+            return real(self)
+
+        return mock.patch.object(Path, "iterdir", iterdir)
+
+    def test_with_every_workspace_readable_nothing_is_named(self):
+        """The clause is for a workspace that was not read, and nothing else."""
+        self.advance_origin(2)
+        self.fetch(self.web, 2)
+        r = self.check()
+        self.assertEqual(r.detail, "beta/web (2 behind)")
+        self.assertTrue(r.hint.endswith("this runs at SessionStart."), r.hint)
+
+    def test_it_is_named_and_the_other_workspaces_are_checked(self):
+        with self.refusing_to_list(self.alpha):
+            r = self.check()
+        self.assertEqual(r.status, WARN)
+        self.assertEqual(r.detail, "1 clone(s) across 1 of 2 workspace(s), none behind; "
+                                   "workspaces/alpha cannot be checked")
+        self.assertEqual(r.hint, "workspaces/alpha cannot be checked — restoring read access "
+                                 "to it clears this.")
+
+    def test_a_stale_clone_in_another_workspace_is_still_reported(self):
+        self.advance_origin(2)
+        self.fetch(self.web, 2)
+        with self.refusing_to_list(self.alpha):
+            r = self.check()
+        self.assertEqual(r.status, WARN)
+        self.assertEqual(r.detail, "beta/web (2 behind); workspaces/alpha cannot be checked")
+        self.assertTrue(r.hint.startswith("→ charter sync --all"), r.hint)
+        self.assertTrue(r.hint.endswith("   workspaces/alpha cannot be checked — restoring read "
+                                        "access to it clears this."), r.hint)
+
+    @unittest.skipIf(os.geteuid() == 0, "root lists a directory whatever its mode")
+    def test_a_real_workspace_at_mode_000_beside_a_readable_one(self):
+        self.alpha.chmod(0o000)
+        self.addCleanup(self.alpha.chmod, 0o755)
+        r = self.check()
+        self.assertEqual(r.status, WARN)
+        self.assertEqual(r.detail, "1 clone(s) across 1 of 2 workspace(s), none behind; "
+                                   "workspaces/alpha cannot be checked")
 
 
 class TestItIsWiredIn(StaleCloneCase):

@@ -15,6 +15,7 @@ from the SessionStart hook, which must never block a session.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import os
 import unittest
@@ -124,25 +125,116 @@ class DoctorRunsTheCheck(PersonaIso):
     def test_check_is_wired_into_run_all(self):
         self.assertIn("memory indexes", [r.name for r in doctor.run_all()])
 
-    def test_a_base_whose_existence_cannot_be_checked_is_not_checked_not_raised(self):
-        """#976 on 3.11–3.13: `Path.exists` RAISES for a workspace at mode 000 there, and it
-        raised out of `charter doctor` once the `git auth` row stopped doing so. Injected
-        rather than chmodded, so the guard is pinned on 3.14 too, where `exists` answers False
-        for that workspace instead of raising."""
-        memory = config.WORKSPACES_DIR / "alpha" / "memory"
-        memory.mkdir(parents=True)
-        real = Path.exists
+
+class OneBaseItCannotRead(PersonaIso):
+    """A base inside a workspace charter cannot search is named, and every other base is still
+    checked (#1014, ADR 0009).
+
+    `Path.exists` gave the row two different wrong answers for that base. On 3.11–3.13 it
+    raised, and #1012 turned that into `not checked` for the whole row, so every persona and
+    workspace base went unchecked with it. On 3.14 it answers False, the base was skipped as
+    absent, and the row counted it among the bases it called consistent."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.alpha = config.WORKSPACES_DIR / "alpha"
+        (self.alpha / "memory").mkdir(parents=True)
+        self.beta = config.WORKSPACES_DIR / "beta" / "memory"
+        self.beta.mkdir(parents=True)
+
+    def unsearchable(self, exists_answers):
+        """`alpha` refusing every path inside it, the way a directory at mode 000 does — `stat`
+        of `alpha` itself still answers — with `Path.exists` answering for those paths the way
+        one interpreter does: *exists_answers* is `"raises"` (3.11–3.13) or `False` (3.14). Both
+        are stated rather than left to whichever interpreter runs the suite."""
+        alpha, real_stat, real_lstat, real_exists = self.alpha, os.stat, os.lstat, Path.exists
+
+        def inside(p) -> bool:
+            return isinstance(p, (str, os.PathLike)) and alpha in Path(p).parents
+
+        def refused(p):
+            return PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(p))
+
+        def stat(p, *args, **kwargs):
+            if inside(p):
+                raise refused(p)
+            return real_stat(p, *args, **kwargs)
+
+        def lstat(p, *args, **kwargs):
+            if inside(p):
+                raise refused(p)
+            return real_lstat(p, *args, **kwargs)
 
         def exists(self, *args, **kwargs):
-            if self == memory:
-                raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
-            return real(self, *args, **kwargs)
+            if inside(self):
+                if exists_answers == "raises":
+                    raise refused(self)
+                return exists_answers
+            return real_exists(self, *args, **kwargs)
 
-        with mock.patch.object(Path, "exists", exists):
-            r = doctor.check_memory_indexes()
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(os, "stat", stat))
+        stack.enter_context(mock.patch.object(os, "lstat", lstat))
+        stack.enter_context(mock.patch.object(Path, "exists", exists))
+        return stack
+
+    def test_with_every_base_readable_nothing_is_named(self):
+        """The other side of the line: the clause is for a base that was not read, and a row
+        that grew it over a plane with none would be yellow on every plane."""
+        r = doctor.check_memory_indexes()
+        self.assertEqual((r.status, r.detail, r.hint), (doctor.OK, "3 base(s) consistent", ""))
+
+    def test_it_is_named_on_either_interpreter_and_never_counted_consistent(self):
+        """The 3.14 half was a green row over a base nobody read."""
+        for answers in ("raises", False):
+            with self.subTest(exists=answers):
+                with self.unsearchable(answers):
+                    r = doctor.check_memory_indexes()
+                self.assertEqual(r.status, doctor.WARN)
+                self.assertEqual(r.detail,
+                                 "2 base(s) consistent; workspaces/alpha/memory cannot be checked")
+                self.assertEqual(r.hint, "workspaces/alpha/memory cannot be checked — restoring "
+                                         "read access to it clears this.")
+
+    def test_the_bases_it_can_read_still_report_their_drift(self):
+        """Not checking one base is no reason to stop reporting what another says."""
+        (self.beta / "orphan.md").write_text("# orphan\n\nx\n")
+        (self.beta / "MEMORY.md").write_text("# Memory Index\n\n")
+        for answers in ("raises", False):
+            with self.subTest(exists=answers):
+                with self.unsearchable(answers):
+                    r = doctor.check_memory_indexes()
+                self.assertEqual(r.status, doctor.WARN)
+                self.assertEqual(r.detail, "0 dangling, 1 unindexed; "
+                                           "workspaces/alpha/memory cannot be checked")
+                self.assertTrue(r.hint.startswith("ws:beta (0 dangling, 1 unindexed)"), r.hint)
+                self.assertTrue(r.hint.endswith("workspaces/alpha/memory cannot be checked — "
+                                                "restoring read access to it clears this."), r.hint)
+
+    def test_a_base_that_is_a_symlink_loop_is_told_to_fix_the_loop(self):
+        """`Path.exists` answers False for a loop on every interpreter, so this base was skipped
+        as absent and counted consistent too. No permission bit clears a loop."""
+        (self.alpha / "memory").rmdir()
+        loop = self.alpha / "memory"
+        loop.symlink_to(loop)
+        r = doctor.check_memory_indexes()
         self.assertEqual(r.status, doctor.WARN)
-        self.assertEqual(r.detail, f"not checked ([Errno 13] Permission denied: '{memory}')")
-        self.assertIn("silence means nothing", r.hint)
+        self.assertEqual(r.detail,
+                         "2 base(s) consistent; workspaces/alpha/memory cannot be checked")
+        self.assertEqual(r.hint, f"workspaces/alpha/memory cannot be checked — fix the symlink "
+                                 f"loop at {loop}.")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a directory whatever its mode")
+    def test_a_real_workspace_at_mode_000_beside_a_readable_one(self):
+        """The state #1014 was measured in, on whichever interpreter runs this."""
+        self.alpha.chmod(0o000)
+        self.addCleanup(self.alpha.chmod, 0o755)
+        r = doctor.check_memory_indexes()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail,
+                         "2 base(s) consistent; workspaces/alpha/memory cannot be checked")
+        self.assertEqual(r.hint, "workspaces/alpha/memory cannot be checked — restoring read "
+                                 "access to it clears this.")
 
 
 
