@@ -510,6 +510,12 @@ one-credential guard — would change plane policy with no trace in git.
 - The table's name is letters, digits, `_` and `-`, starting with a letter or digit. No dot:
   a dot in a name broke tmux targets once (#695).
 
+**The file stays beside `charter.toml` when `$CHARTER_HOME` moves the state directory.**
+What charter keeps about your profiles does move with it: the record of each command you
+approved (`harness-profiles-launched.json`) and the wiring cache
+(`cache/harness-wiring.json`). A plane whose state directory moved keeps its profiles and
+asks about each declared one again on its first launch there.
+
 **Every harness is also a built-in profile named after itself** — `claude` runs `claude`,
 with no extra environment — so a plane that declares nothing sees no change. A declared
 profile of the same name replaces it, which is how plain `claude` gets pinned. A built-in

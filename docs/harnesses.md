@@ -69,6 +69,30 @@ refused:
 Then `refused:`, one line per profile charter would not read and why, and a warning while
 git would commit the file.
 
+**A wrapper around a harness is a profile too.** If you reach Claude Code through something
+else — `ccs work`, which picks the account a chat is billed to, or a script that runs a
+binary kept off your `PATH` — declare the wrapper as the command:
+
+```toml
+[harness.claude-ccs]
+kind = "claude"
+command = ["ccs", "work"]
+```
+
+`charter claude-ccs` then runs `ccs work`, your arguments follow it (`charter claude-ccs -p
+hi` runs `ccs work -p hi`, and a reopen hands it `--resume <id>`), and it is still the
+Claude Code harness: the pane carries `$CHARTER_HARNESS`, the workspace layer and a session
+`charter reopen` can resume. `charter frame -- ccs work` runs the same words and forgets all
+three. The program charter looks for before it starts anything is the wrapper — a missing
+`ccs` is refused and named, and a `claude` your `PATH` cannot see is the wrapper's to find.
+
+**The wrapper has to pass its arguments on**, and not only yours: charter asks the harness
+whether its plugin is wired by running the profile's own command with the harness's probe
+after it — `plugin list --json` for Claude Code, `debug config` for opencode (see *Per
+profile — wired, or it refuses to start*, below) — so `ccs work plugin list --json` has to
+reach `claude`. A wrapper that swallows arguments reads as a profile charter could not ask,
+and it refuses to start.
+
 **There is no `charter harness add`.** A profile is added by editing `charter.local.toml`. A
 chat can run a command as easily as it can edit a file, so a command could never stand for
 your approval of what a profile runs; it would only save typing.
